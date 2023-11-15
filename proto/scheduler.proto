@@ -1,0 +1,151 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package scheduler;
+
+service Scheduler {
+  rpc GetVersion(VersionRequest) returns (VersionResponse) {}
+  rpc RunContainer(RunContainerRequest) returns (RunContainerResponse) {}
+  rpc StopContainer(StopContainerRequest) returns (StopContainerResponse) {}
+  // rpc StreamLogs(stream StreamLogRequest) returns (StreamLogResponse);
+  rpc SubscribeWorkerEvents(SubscribeWorkerEventRequest)
+      returns (stream SubscribeWorkerEventResponse);
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+
+  // Task queue endpoints
+  rpc GetTaskStream(GetTaskStreamRequest) returns (stream TaskStreamResponse);
+  rpc GetNextTask(GetNextTaskRequest) returns (GetNextTaskResponse);
+  rpc StartTask(StartTaskRequest) returns (StartTaskResponse);
+  rpc EndTask(EndTaskRequest) returns (EndTaskResponse);
+  rpc MonitorTask(MonitorTaskRequest) returns (stream MonitorTaskResponse);
+}
+
+message VersionRequest {}
+message VersionResponse { string version = 1; }
+
+message RunContainerRequest {
+  string container_id = 1;
+  string mode = 2;
+  repeated string env = 3;
+  repeated string entry_point = 4;
+  string cpu = 5;
+  string memory = 6;
+  string gpu = 7;
+  string image_tag = 10;
+  float schedule_timeout = 12;
+  string identity_id = 13;
+}
+
+message RunContainerResponse {
+  bool success = 3;
+  string error = 4;
+}
+
+message StopContainerRequest { string container_id = 1; }
+
+message StopContainerResponse {
+  bool success = 3;
+  string error = 4;
+}
+
+message AgentInfo {
+  string token = 1;
+  string version = 2;
+  string cloud_provider = 3;
+}
+
+message WorkerPool { string name = 1; }
+
+message Worker {
+  string id = 1;
+  int64 cpu = 2;
+  int64 memory = 3;
+  string gpu_type = 4;
+  string status = 5;
+  string pool_id = 6;
+}
+
+message SubscribeWorkerEventRequest {
+  AgentInfo agent_info = 1;
+  repeated WorkerPool worker_pools = 2;
+}
+
+message SubscribeWorkerEventResponse {
+  Worker worker = 1;
+  WorkerPool workerPool = 2;
+}
+
+message StatusRequest {}
+
+message StatusResponse { string status = 1; }
+
+message StreamLogRequest {
+  string id = 1;
+  string log = 2;
+}
+
+message StreamLogResponse { bool ok = 1; }
+
+message RegisterWorkerRequest {
+  AgentInfo agent_info = 1;
+  Worker worker = 2;
+}
+
+message RegisterWorkerResponse {}
+
+// Task queue messages
+message GetNextTaskRequest {
+  string queue_name = 1;
+  string container_id = 2;
+  string s2s_token = 3;
+}
+
+message GetNextTaskResponse {
+  bytes task = 1;
+  bool task_available = 2;
+}
+
+message GetTaskStreamRequest {
+  string queue_name = 1;
+  string container_id = 2;
+  string s2s_token = 3;
+}
+
+message TaskStreamResponse { bytes task = 1; }
+
+message StartTaskRequest {
+  string task_id = 1;
+  string queue_name = 2;
+  string container_id = 3;
+  string s2s_token = 4;
+}
+
+message StartTaskResponse { bool ok = 1; }
+
+message EndTaskRequest {
+  string task_id = 1;
+  string queue_name = 2;
+  float task_duration = 3;
+  string task_status = 4;
+  string container_id = 5;
+  string container_hostname = 6;
+  float scale_down_delay = 7;
+  string s2s_token = 8;
+}
+
+message EndTaskResponse { bool ok = 1; }
+
+message MonitorTaskRequest {
+  string task_id = 1;
+  string queue_name = 2;
+  string container_id = 3;
+  string s2s_token = 4;
+}
+
+message MonitorTaskResponse {
+  bool ok = 1;
+  bool canceled = 2;
+  bool complete = 3;
+  bool timed_out = 4;
+}

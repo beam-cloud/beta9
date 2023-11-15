@@ -1,0 +1,6 @@
+bin/beam
+tmp/*
+*.gob
+__pycache__
+*.tmp
+.secrets

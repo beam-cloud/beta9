@@ -1,0 +1,117 @@
+package repository
+
+import (
+	"time"
+
+	"github.com/beam-cloud/beam/pkg/types"
+	pb "github.com/beam-cloud/beam/proto"
+)
+
+type SchedulerRepository interface{}
+
+type WorkerRepository interface {
+	GetId() string
+	GetWorkerById(workerId string) (*types.Worker, error)
+	GetAllWorkers() ([]*types.Worker, error)
+	GetAllWorkersInPool(poolId string) ([]*types.Worker, error)
+	AddWorker(w *types.Worker) error
+	ToggleWorkerAvailable(workerId string) error
+	RemoveWorker(w *types.Worker) error
+	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
+	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
+	GetNextContainerRequest(workerId string) (*types.ContainerRequest, error)
+	AddContainerRequestToWorker(workerId string, containerId string, request *types.ContainerRequest) error
+	RemoveContainerRequestFromWorker(workerId string, containerId string) error
+	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
+}
+
+type ContainerRepository interface {
+	GetContainerState(string) (*types.ContainerState, error)
+	SetContainerState(string, *types.ContainerState) error
+	SetContainerExitCode(string, int) error
+	SetContainerAddress(containerId string, addr string) error
+	UpdateContainerStatus(string, types.ContainerStatus, time.Duration) error
+	DeleteContainerState(*types.ContainerRequest) error
+}
+
+type BeamRepository interface {
+	GetAgent(name, identityExternalId string) (*types.Agent, error)
+	GetAgentByToken(token string) (*types.Agent, error)
+	UpdateAgent(agent *types.Agent) (*types.Agent, error)
+	GetDeployments(appId string) ([]types.BeamAppDeployment, error)
+	GetDeployment(appId string, version *uint) (*types.BeamAppDeployment, *types.BeamApp, *types.BeamAppDeploymentPackage, error)
+	GetDeploymentById(appDeploymentId string) (*types.BeamAppDeployment, *types.BeamApp, *types.BeamAppDeploymentPackage, error)
+	GetServe(appId string, serveId string) (*types.BeamAppServe, *types.BeamApp, error)
+	EndServe(appId string, serveId string, identityId string) error
+	UpdateDeployment(appDeploymentId string, status string, errorMsg string) (*types.BeamAppDeployment, error)
+	CreateDeploymentTask(appDeploymentId string, taskId string, taskPolicyRaw []byte) (*types.BeamAppTask, error)
+	CreateServeTask(appDeploymentId string, taskId string, taskPolicyRaw []byte) (*types.BeamAppTask, error)
+	GetAppTask(taskId string) (*types.BeamAppTask, error)
+	UpdateActiveTask(taskId string, status string, identityExternalId string) (*types.BeamAppTask, error)
+	DeleteTask(taskId string) error
+	GetTotalUsageOfUserMs(identity types.Identity) (totalUsageMs float64, err error)
+	RetrieveUserByPk(pk uint) (*types.Identity, error)
+	HasTrialCredits(identity types.Identity) (bool, error)
+	AuthorizeApiKey(clientId string, clientSecret string) (bool, *types.Identity, error)
+	AuthorizeApiKeyWithAppId(appId string, clientId string, clientSecret string) (bool, error)
+	DeploymentRequiresAuthorization(appId string, appVersion string) (bool, error)
+	ServeRequiresAuthorization(appId string, serveId string) (bool, error)
+	AuthorizeServiceToServiceToken(token string) (*types.Identity, bool, error)
+	GetIdentityQuota(identityId string) (*types.IdentityQuota, error)
+}
+
+type RequestBucketRepository interface {
+	GetRequestBucketState() (*types.RequestBucketState, error)
+	GetCurrentActiveContainers() ([]types.ContainerState, error)
+	GetAvailableContainerHost() (*types.AvailableHost, error)
+	GetFailedContainers() (int, error)
+	GetStoppableContainers(deploymentStatus string) ([]string, error)
+	WaitForTaskCompletion(taskId string) (string, error)
+	SetKeepWarm(containerId string, scaleDownDelay float32) error
+}
+
+type TaskRepository interface {
+	StartTask(taskId, queueName, containerId, identityExternalId string) error
+	EndTask(taskId, queueName, containerId, containerHostname, identityExternalId string, taskDuration, scaleDownDelay float64) error
+	MonitorTask(task *types.BeamAppTask, queueName, containerId, identityExternalId string, timeout int64, stream pb.Scheduler_MonitorTaskServer, timeoutCallback func() error) error
+	GetTaskStream(queueName, containerId, identityExternalId string, stream pb.Scheduler_GetTaskStreamServer) error
+	GetNextTask(queueName, containerId, identityExternalId string) ([]byte, error)
+	GetTasksInFlight(queueName, identityExternalId string) (int, error)
+	IncrementTasksInFlight(queueName, identityExternalId string) error
+	DecrementTasksInFlight(queueName, identityExternalId string) error
+}
+
+type WorkerPoolRepository interface {
+	GetPool(name string) (*types.WorkerPoolResource, error)
+	GetPools() ([]types.WorkerPoolResource, error)
+	SetPool(pool *types.WorkerPoolResource) error
+	RemovePool(name string) error
+}
+
+type MetricsStatsdRepository interface {
+	ContainerStarted(containerId string, workerId string, identityId string)
+	ContainerStopped(containerId string, workerId string, identityId string)
+	ContainerRequested(containerId string)
+	ContainerScheduled(containerId string)
+	ContainerDuration(containerId string, workerId string, identityId string, timestampNs int64, duration time.Duration)
+	BeamDeploymentRequestDuration(bucketName string, duration time.Duration)
+	BeamDeploymentRequestStatus(bucketName string, status int)
+	BeamDeploymentRequestCount(bucketName string)
+	WorkerStarted(workerId string)
+	WorkerStopped(workerId string)
+	WorkerDuration(workerId string, timestampNs int64, duration time.Duration)
+}
+
+type MetricsStreamRepository interface {
+	ContainerResourceUsage(usage types.ContainerResourceUsage) error
+}
+
+type IdentityRepository interface {
+	GetIdentityQuota(identityId string) (*types.IdentityQuota, error)
+	SetIdentityQuota(identityId string, quota *types.IdentityQuota) error
+	SetIdentityActiveContainer(identityId string, quota *types.IdentityQuota, containerId string, gpuType string) error
+	ScanAllActiveContainersInIdentity(identityId string, gpuType string) ([]string, error)
+	GetTotalActiveContainersByGpuType(identity, gpuType string) (int, error)
+	DeleteIdentityActiveContainer(containerId string, identity string, gpuType string) error
+	RefreshIdentityActiveContainerKeyExpiration(containerId string, expiry time.Duration) error
+}

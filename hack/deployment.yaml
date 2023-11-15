@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beam
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: beam
+  template:
+    metadata:
+      labels:
+        app: beam
+    spec:
+      containers:
+        - name: beam
+          image: okteto.dev/beam:latest
+          command: ["/workspace/bin/beam"]
+          ports:
+            - name: beam-port
+              containerPort: 1993
+              protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: beam
+spec:
+  selector:
+    app: beam
+  ports:
+    - name: beam-port
+      port: 1993
+      targetPort: 1993
+      protocol: TCP

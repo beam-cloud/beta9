@@ -1,0 +1,14 @@
+dev:
+  beam:
+    image: okteto.dev/beam:latest
+    command: ["/workspace/bin/hotreload.sh"]
+    sync:
+      - ../:/workspace
+    environment:
+      PATH: ${PATH}:/workspace/bin
+      DEFAULT_NAMESPACE: ${OKTETO_NAMESPACE}
+      BUILD_COMMAND: "go build -o /workspace/bin/beam /workspace/cmd/main.go"
+      BUILD_BINARY_PATH: "/workspace/bin/beam"
+      CONFIG_PATH: "/workspace/.secrets"
+    forward:
+      - 1993:1993

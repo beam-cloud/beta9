@@ -1,0 +1,92 @@
+package common
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+)
+
+const (
+	keyspacePrefix string = "__keyspace@0__:"
+)
+
+type KeyEventManager struct {
+	rdb *RedisClient
+}
+
+type KeyEvent struct {
+	Key       string
+	Operation string
+}
+
+const (
+	KeyOperationHSet    string = "hset"
+	KeyOperationSet     string = "set"
+	KeyOperationDel     string = "del"
+	KeyOperationExpire  string = "expire"
+	KeyOperationExpired string = "expired"
+)
+
+func NewKeyEventManager(rdb *RedisClient) (*KeyEventManager, error) {
+	return &KeyEventManager{rdb: rdb}, nil
+}
+
+func (kem *KeyEventManager) fetchExistingKeys(patternPrefix string) ([]string, error) {
+	pattern := fmt.Sprintf("%s*", patternPrefix)
+
+	keys, err := kem.rdb.Scan(context.Background(), pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	trimmedKeys := make([]string, len(keys))
+	for i, key := range keys {
+		trimmedKeys[i] = strings.TrimPrefix(key, patternPrefix)
+	}
+
+	return trimmedKeys, nil
+}
+
+func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
+	existingKeys, err := kem.fetchExistingKeys(patternPrefix)
+	if err != nil {
+		return err
+	}
+
+	for _, key := range existingKeys {
+		keyEventChan <- KeyEvent{
+			Key:       key,
+			Operation: KeyOperationSet,
+		}
+	}
+
+	go func() {
+		pattern := fmt.Sprintf("%s%s*", keyspacePrefix, patternPrefix)
+		messages, errs := kem.rdb.PSubscribe(ctx, pattern)
+
+	retry:
+		for {
+			select {
+			case m := <-messages:
+				key := strings.TrimPrefix(m.Channel, fmt.Sprintf("%s%s", keyspacePrefix, patternPrefix))
+				operation := string(m.Payload)
+
+				keyEventChan <- KeyEvent{
+					Key:       key,
+					Operation: operation,
+				}
+
+			case <-ctx.Done():
+				log.Println("beam: listen for pattern context is done")
+				return
+
+			case err := <-errs:
+				log.Printf("beam: error with key manager subscription: %v", err)
+				break retry
+			}
+		}
+	}()
+
+	return nil
+}
