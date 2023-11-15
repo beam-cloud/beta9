@@ -3,6 +3,7 @@ module github.com/beam-cloud/beam
 go 1.20
 
 require (
+	github.com/NVIDIA/go-nvml v0.12.0-1
 	github.com/alicebob/miniredis/v2 v2.30.5
 	github.com/aws/aws-sdk-go-v2 v1.21.2
 	github.com/aws/aws-sdk-go-v2/config v1.18.34
@@ -11,15 +12,19 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/kinesis v1.20.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.38.3
 	github.com/aws/karpenter v0.18.1
+	github.com/beam-cloud/clip v0.0.0-20230822004255-4ecd939864f9
 	github.com/bsm/redislock v0.9.4
 	github.com/gin-gonic/gin v1.9.1
 	github.com/gofrs/uuid v4.0.0+incompatible
 	github.com/google/uuid v1.3.0
-	github.com/gorilla/mux v1.8.0
 	github.com/joho/godotenv v1.5.1
 	github.com/okteto/okteto v0.0.0-20230808101523-f3d8dab026af
+	github.com/opencontainers/runtime-spec v1.1.0
+	github.com/prometheus/procfs v0.12.0
 	github.com/redis/go-redis/v9 v9.1.0
 	github.com/samber/lo v1.31.0
+	github.com/sirupsen/logrus v1.9.3
+	github.com/slai-labs/go-runc v0.0.0-20230305233714-26541c8f75ec
 	github.com/stretchr/testify v1.8.4
 	github.com/tj/assert v0.0.3
 	google.golang.org/grpc v1.56.0
@@ -33,7 +38,6 @@ require (
 )
 
 require (
-	github.com/BurntSushi/toml v1.3.2 // indirect
 	github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.4.14 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.13.9 // indirect
@@ -49,7 +53,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.15.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.21.3 // indirect
 	github.com/aws/smithy-go v1.15.0 // indirect
-	github.com/beam-cloud/clip v0.0.0-20230822004255-4ecd939864f9 // indirect
 	github.com/briandowns/spinner v1.23.0 // indirect
 	github.com/bytedance/sonic v1.10.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
@@ -101,12 +104,8 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/onsi/ginkgo/v2 v2.11.0 // indirect
 	github.com/onsi/gomega v1.27.10 // indirect
-	github.com/opencontainers/runtime-spec v1.1.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.1.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/prometheus/procfs v0.12.0 // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/slai-labs/go-runc v0.0.0-20230305233714-26541c8f75ec // indirect
 	github.com/tidwall/btree v1.6.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.11 // indirect

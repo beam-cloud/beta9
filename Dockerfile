@@ -15,6 +15,10 @@ FROM build_${BUILD_ENV} as build
 
 WORKDIR /workspace
 
+ARG GITHUB_TOKEN
+RUN echo "machine github.com login beam-cloud password ${GITHUB_TOKEN}" > ~/.netrc
+ENV GOPRIVATE=github.com/beam-cloud/*
+
 COPY go.mod go.sum ./
 RUN go mod download
 
