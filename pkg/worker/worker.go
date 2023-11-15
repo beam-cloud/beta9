@@ -26,10 +26,6 @@ import (
 )
 
 const (
-	WorkerModeAppDeployment   string        = "DEPLOYMENT"
-	WorkerModeAppDevelopment  string        = "DEVELOPMENT"
-	WorkerModeRun             string        = "RUN"
-	WorkerModeServe           string        = "SERVE"
 	RequestProcessingInterval time.Duration = 100 * time.Millisecond
 )
 
@@ -633,11 +629,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec, err := s.newSpecTemplate()
 	if err != nil {
 		return nil, err
-	}
-
-	// Make the container writeable for development mode
-	if request.Mode == WorkerModeAppDevelopment {
-		spec.Root.Readonly = false
 	}
 
 	spec.Process.Cwd = defaultContainerDirectory
