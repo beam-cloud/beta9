@@ -1,6 +1,6 @@
 package cache
 
-type Cache interface {
+type Map interface {
 	Set(string, string) error
 	Get(string) (string, error)
 	Configure()
