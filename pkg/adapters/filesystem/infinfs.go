@@ -248,22 +248,22 @@ func (n *FSNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuse
 	return nil, 0, fs.OK
 }
 
-func (n *FSNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	n.log("Read called with offset: %v", off)
+// func (n *FSNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+// 	n.log("Read called with offset: %v", off)
 
-	// Don't even try to read 0 byte files
-	if n.ifsNode.DataLen == 0 {
-		nRead := 0
-		return fuse.ReadResultData(dest[:nRead]), fs.OK
-	}
+// 	// Don't even try to read 0 byte files
+// 	if n.ifsNode.DataLen == 0 {
+// 		nRead := 0
+// 		return fuse.ReadResultData(dest[:nRead]), fs.OK
+// 	}
 
-	nRead, err := n.filesystem.s.ReadFile(n.ifsNode, dest, off)
-	if err != nil {
-		return nil, syscall.EIO
-	}
+// 	nRead, err := n.filesystem.s.ReadFile(n.ifsNode, dest, off)
+// 	if err != nil {
+// 		return nil, syscall.EIO
+// 	}
 
-	return fuse.ReadResultData(dest[:nRead]), fs.OK
-}
+// 	return fuse.ReadResultData(dest[:nRead]), fs.OK
+// }
 
 func (n *FSNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 	n.log("Readlink called")

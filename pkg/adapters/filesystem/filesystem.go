@@ -6,8 +6,9 @@ type FileSystemOpts struct {
 }
 
 type FileSystem interface {
-	Mount() (func() error, <-chan error, error)
+	Mount(opts FileSystemOpts) (func() error, <-chan error, error)
 	Unmount() error
+	Format() error
 }
 
 type FileSystemStorage interface {
