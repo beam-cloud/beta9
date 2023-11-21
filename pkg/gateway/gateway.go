@@ -23,7 +23,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-type Activator struct {
+type Gateway struct {
 	BaseURL            string
 	RequestBuckets     map[string]types.RequestBucket
 	RequestBucketNames map[string][]string
@@ -57,8 +57,8 @@ func NewWorkBusConnection(host string) (*WorkBus, error) {
 	return &WorkBus{Client: client, Conn: conn}, nil
 }
 
-func NewActivator() (*Activator, error) {
-	redisClient, err := common.NewRedisClient(common.WithClientName("BeamActivator"))
+func NewGateway() (*Gateway, error) {
+	redisClient, err := common.NewRedisClient(common.WithClientName("BeamGateway"))
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func NewActivator() (*Activator, error) {
 	stateStore := common.Store(redisClient)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	activator := &Activator{
+	gateway := &Gateway{
 		stateStore:         stateStore,
 		redisClient:        redisClient,
 		RequestBuckets:     make(map[string]types.RequestBucket),
@@ -113,33 +113,33 @@ func NewActivator() (*Activator, error) {
 
 		// Unload the request bucket first, so we can refresh the deployment state
 		bucketName := common.Names.RequestBucketName(appId, uint(version))
-		activator.unloadRequestBucket(bucketName)
+		gateway.unloadRequestBucket(bucketName)
 
 		// Once the bucket is loaded again, it should have an updated deployment status
 		// The request bucket will then handle the spin down of any containers associated with it
-		_, err := activator.loadDeploymentRequestBucket(bucketName)
+		_, err := gateway.loadDeploymentRequestBucket(bucketName)
 		return err == nil
 	}})
 
-	activator.QueueClient = NewQueueClient(redisClient)
-	activator.BeamRepo = beamRepo
-	activator.metricsRepo = metricsRepo
-	activator.WorkBus = workBus
-	activator.keyEventManager = keyEventManager
-	activator.beatService = beatService
-	activator.eventBus = eventBus
+	gateway.QueueClient = NewQueueClient(redisClient)
+	gateway.BeamRepo = beamRepo
+	gateway.metricsRepo = metricsRepo
+	gateway.WorkBus = workBus
+	gateway.keyEventManager = keyEventManager
+	gateway.beatService = beatService
+	gateway.eventBus = eventBus
 
-	go activator.QueueClient.MonitorTasks(activator.ctx, beamRepo)
-	go activator.keyEventManager.ListenForPattern(activator.ctx, common.RedisKeys.SchedulerContainerState(types.DeploymentContainerPrefix), activator.keyEventChan)
-	go activator.beatService.Run(activator.ctx)
-	go activator.handleDeploymentEvents()
-	go activator.monitorBuckets()
-	go activator.eventBus.ReceiveEvents(activator.ctx)
+	go gateway.QueueClient.MonitorTasks(gateway.ctx, beamRepo)
+	go gateway.keyEventManager.ListenForPattern(gateway.ctx, common.RedisKeys.SchedulerContainerState(types.DeploymentContainerPrefix), gateway.keyEventChan)
+	go gateway.beatService.Run(gateway.ctx)
+	go gateway.handleDeploymentEvents()
+	go gateway.monitorBuckets()
+	go gateway.eventBus.ReceiveEvents(gateway.ctx)
 
-	return activator, nil
+	return gateway, nil
 }
 
-func (a *Activator) monitorBuckets() {
+func (a *Gateway) monitorBuckets() {
 	for {
 		select {
 		case bucketName := <-a.unloadBucketChan:
@@ -150,7 +150,7 @@ func (a *Activator) monitorBuckets() {
 	}
 }
 
-func (a *Activator) handleDeploymentEvents() {
+func (a *Gateway) handleDeploymentEvents() {
 	for {
 		select {
 		case event := <-a.keyEventChan:
@@ -189,7 +189,7 @@ func (a *Activator) handleDeploymentEvents() {
 	}
 }
 
-func (a *Activator) parseAppConfig(config json.RawMessage) (types.BeamAppConfig, error) {
+func (a *Gateway) parseAppConfig(config json.RawMessage) (types.BeamAppConfig, error) {
 	var appConfig types.BeamAppConfig
 	err := json.Unmarshal(config, &appConfig)
 
@@ -231,7 +231,7 @@ func (a *Activator) parseAppConfig(config json.RawMessage) (types.BeamAppConfig,
 }
 
 // Given a bucket name, load request bucket
-func (a *Activator) loadDeploymentRequestBucket(bucketName string) (*types.RequestBucket, error) {
+func (a *Gateway) loadDeploymentRequestBucket(bucketName string) (*types.RequestBucket, error) {
 	requestBucket, ok := a.RequestBuckets[bucketName]
 	if ok {
 		return &requestBucket, nil
@@ -288,14 +288,14 @@ func (a *Activator) loadDeploymentRequestBucket(bucketName string) (*types.Reque
 	if scaleDownDelayS == 0 {
 		switch appDeployment.TriggerType {
 		case common.TriggerTypeCronJob, common.TriggerTypeWebhook:
-			scaleDownDelayS = ActivatorConfig.ScaleDownDelayAsync
+			scaleDownDelayS = GatewayConfig.ScaleDownDelayAsync
 		case common.TriggerTypeRestApi, common.TriggerTypeASGI:
-			scaleDownDelayS = ActivatorConfig.ScaleDownDelaySync
+			scaleDownDelayS = GatewayConfig.ScaleDownDelaySync
 		}
 	}
 
 	if maxPendingTasks == 0 {
-		maxPendingTasks = ActivatorConfig.MaxPendingTasks
+		maxPendingTasks = GatewayConfig.MaxPendingTasks
 	}
 
 	workers := uint(1)
@@ -332,7 +332,7 @@ func (a *Activator) loadDeploymentRequestBucket(bucketName string) (*types.Reque
 	return &bucket, nil
 }
 
-func (a *Activator) loadServeRequestBucket(bucketName string) (*types.RequestBucket, error) {
+func (a *Gateway) loadServeRequestBucket(bucketName string) (*types.RequestBucket, error) {
 	requestBucket, ok := a.RequestBuckets[bucketName]
 	if ok {
 		return &requestBucket, nil
@@ -384,7 +384,7 @@ func (a *Activator) loadServeRequestBucket(bucketName string) (*types.RequestBuc
 }
 
 // Stop monitoring request bucket
-func (a *Activator) unloadRequestBucket(bucketName string) {
+func (a *Gateway) unloadRequestBucket(bucketName string) {
 	requestBucket, ok := a.RequestBuckets[bucketName]
 	if !ok {
 		return
@@ -394,7 +394,7 @@ func (a *Activator) unloadRequestBucket(bucketName string) {
 }
 
 // Retrieve the deployment bucket name from Store
-func (a *Activator) GetDeploymentRequestBucket(appId string, version *types.RequestedVersion) (*types.RequestBucket, error) {
+func (a *Gateway) GetDeploymentRequestBucket(appId string, version *types.RequestedVersion) (*types.RequestBucket, error) {
 	if version.Type == types.DefaultRequestedVersion {
 		bucketName, _ := a.stateStore.GetDefaultDeploymentBucket(appId)
 		bucket, err := a.loadDeploymentRequestBucket(bucketName)
@@ -426,7 +426,7 @@ func (a *Activator) GetDeploymentRequestBucket(appId string, version *types.Requ
 	return bucket, nil
 }
 
-func (a *Activator) GetServeRequestBucket(appId string, serveId string) (*types.RequestBucket, error) {
+func (a *Gateway) GetServeRequestBucket(appId string, serveId string) (*types.RequestBucket, error) {
 	bucketName := common.Names.RequestBucketNameId(appId, serveId)
 	bucket, err := a.loadServeRequestBucket(bucketName)
 	if err != nil {
@@ -436,13 +436,13 @@ func (a *Activator) GetServeRequestBucket(appId string, serveId string) (*types.
 }
 
 // Log request metrics
-func (a *Activator) LogRequest(requestBucketName string, startTime time.Time, ctx *gin.Context) {
+func (a *Gateway) LogRequest(requestBucketName string, startTime time.Time, ctx *gin.Context) {
 	a.metricsRepo.BeamDeploymentRequestDuration(requestBucketName, time.Since(startTime))
 	a.metricsRepo.BeamDeploymentRequestStatus(requestBucketName, ctx.Writer.Status())
 	a.metricsRepo.BeamDeploymentRequestCount(requestBucketName)
 }
 
-func (a *Activator) startProxyServer(port string) error {
+func (a *Gateway) startProxyServer(port string) error {
 	log.Printf("Starting proxy server on port %s", port)
 
 	router := gin.Default()
@@ -453,7 +453,7 @@ func (a *Activator) startProxyServer(port string) error {
 	return router.Run(port)
 }
 
-func (a *Activator) startInternalServer(port string) error {
+func (a *Gateway) startInternalServer(port string) error {
 	log.Printf("Starting internal server on port %s", port)
 
 	router := gin.New()
@@ -471,8 +471,8 @@ func (a *Activator) startInternalServer(port string) error {
 	return router.Run(port)
 }
 
-// Activator entry point
-func (a *Activator) Start() {
+// Gateway entry point
+func (a *Gateway) Start() {
 	errCh := make(chan error)
 	terminationSignal := make(chan os.Signal, 1)
 	defer close(errCh)
@@ -480,11 +480,11 @@ func (a *Activator) Start() {
 
 	go func() {
 		time.Sleep(3 * time.Second)
-		err := a.startInternalServer(ActivatorConfig.InternalPort)
+		err := a.startInternalServer(GatewayConfig.InternalPort)
 		errCh <- fmt.Errorf("internal server error: %v", err)
 	}()
 	go func() {
-		err := a.startProxyServer(ActivatorConfig.ExternalPort)
+		err := a.startProxyServer(GatewayConfig.ExternalPort)
 		errCh <- fmt.Errorf("proxy server error: %v", err)
 	}()
 

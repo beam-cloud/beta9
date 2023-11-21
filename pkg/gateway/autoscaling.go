@@ -169,7 +169,7 @@ func (as *AutoScaler) Start() {
 		default:
 		}
 
-		// If there is a activator:deployment_containers:<app_id> key in the store, use this value instead
+		// If there is a gateway:deployment_containers:<app_id> key in the store, use this value instead
 		// This basically override any autoscaling result calculated above
 		containerCountOverride, err := as.stateStore.MinContainerCount(as.requestBucket.AppId)
 		if err == nil && scaleResult.DesiredContainers != 0 {

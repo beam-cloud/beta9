@@ -18,11 +18,11 @@ var (
 )
 
 var (
-	activatorPrefix                      string = "activator"
-	activatorBucketLock                  string = "activator:bucket_lock:%s"
-	activatorDefaultDeployment           string = "activator:default_deployment:%s"
-	activatorDeploymentMinContainerCount string = "activator:min_containers:%s"
-	activatorAuthKey                     string = "activator:auth:%s:%s"
+	gatewayPrefix                      string = "gateway"
+	gatewayBucketLock                  string = "gateway:bucket_lock:%s"
+	gatewayDefaultDeployment           string = "gateway:default_deployment:%s"
+	gatewayDeploymentMinContainerCount string = "gateway:min_containers:%s"
+	gatewayAuthKey                     string = "gateway:auth:%s:%s"
 )
 
 var (
@@ -157,25 +157,25 @@ func (rk *redisKeys) QueueTaskCancel(identityId, bucketName, taskId string) stri
 	return fmt.Sprintf(queueTaskCancel, identityId, bucketName, taskId)
 }
 
-// Activator keys
-func (rk *redisKeys) ActivatorPrefix() string {
-	return activatorPrefix
+// Gateway keys
+func (rk *redisKeys) GatewayPrefix() string {
+	return gatewayPrefix
 }
 
-func (rk *redisKeys) ActivatorBucketLock(bucketName string) string {
-	return fmt.Sprintf(activatorBucketLock, bucketName)
+func (rk *redisKeys) GatewayBucketLock(bucketName string) string {
+	return fmt.Sprintf(gatewayBucketLock, bucketName)
 }
 
-func (rk *redisKeys) ActivatorDefaultDeployment(appId string) string {
-	return fmt.Sprintf(activatorDefaultDeployment, appId)
+func (rk *redisKeys) GatewayDefaultDeployment(appId string) string {
+	return fmt.Sprintf(gatewayDefaultDeployment, appId)
 }
 
-func (rk *redisKeys) ActivatorAuthKey(appId string, encodedAuthToken string) string {
-	return fmt.Sprintf(activatorAuthKey, appId, encodedAuthToken)
+func (rk *redisKeys) GatewayAuthKey(appId string, encodedAuthToken string) string {
+	return fmt.Sprintf(gatewayAuthKey, appId, encodedAuthToken)
 }
 
-func (rk *redisKeys) ActivatorDeploymentMinContainerCount(appId string) string {
-	return fmt.Sprintf(activatorDeploymentMinContainerCount, appId)
+func (rk *redisKeys) GatewayDeploymentMinContainerCount(appId string) string {
+	return fmt.Sprintf(gatewayDeploymentMinContainerCount, appId)
 }
 
 // Worker keys

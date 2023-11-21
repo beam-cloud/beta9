@@ -281,7 +281,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	log.Printf("<%s> - successfully created spec from request.\n", containerID)
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the trigger type,
-	// Activator will need to directly interact with this pod/container.
+	// Gateway will need to directly interact with this pod/container.
 	containerAddr := fmt.Sprintf("%s:%d", s.podIPAddr, bindPort)
 	err = s.containerRepo.SetContainerAddress(request.ContainerId, containerAddr)
 	if err != nil {

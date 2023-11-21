@@ -15,7 +15,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func NewServeRequestBucket(config RequestBucketConfig, activator *Activator) (types.RequestBucket, error) {
+func NewServeRequestBucket(config RequestBucketConfig, gateway *Gateway) (types.RequestBucket, error) {
 	rb := &ServeRequestBucket{}
 
 	// Configuration
@@ -29,20 +29,20 @@ func NewServeRequestBucket(config RequestBucketConfig, activator *Activator) (ty
 	rb.ImageTag = config.ImageTag
 	rb.ContainerEventChan = make(chan types.ContainerEvent, 1)
 	rb.Containers = make(map[string]bool)
-	rb.unloadBucketChan = activator.unloadBucketChan
+	rb.unloadBucketChan = gateway.unloadBucketChan
 	rb.ScaleDownDelay = nil
 
-	bucketRepo := repository.NewRequestBucketRedisRepository(rb.Name, rb.IdentityId, activator.redisClient, types.RequestBucketTypeServe)
+	bucketRepo := repository.NewRequestBucketRedisRepository(rb.Name, rb.IdentityId, gateway.redisClient, types.RequestBucketTypeServe)
 
 	// Clients
-	rb.rdb = activator.redisClient
-	rb.workBus = activator.WorkBus
-	rb.beamRepo = activator.BeamRepo
+	rb.rdb = gateway.redisClient
+	rb.workBus = gateway.WorkBus
+	rb.beamRepo = gateway.BeamRepo
 	rb.bucketRepo = bucketRepo
-	rb.taskRepo = repository.NewTaskRedisRepository(activator.redisClient)
-	rb.queueClient = activator.QueueClient
+	rb.taskRepo = repository.NewTaskRedisRepository(gateway.redisClient)
+	rb.queueClient = gateway.QueueClient
 
-	bucketLock := common.NewRedisLock(activator.redisClient)
+	bucketLock := common.NewRedisLock(gateway.redisClient)
 
 	bucketCtx, closeBucketFunc := context.WithCancel(context.Background())
 	rb.bucketCtx = bucketCtx

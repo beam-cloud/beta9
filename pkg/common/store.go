@@ -63,24 +63,24 @@ func (ss *StateStore) Get(key string) (string, error) {
 }
 
 // Convenience methods for setting/getting various common things in state
-// We may want to move these out of this package and into the activator at some point
+// We may want to move these out of this package and into the gateway at some point
 func (ss *StateStore) GetDefaultDeploymentBucket(appId string) (string, error) {
-	bucketName, err := ss.Get(RedisKeys.ActivatorDefaultDeployment(appId))
+	bucketName, err := ss.Get(RedisKeys.GatewayDefaultDeployment(appId))
 	return bucketName, err
 }
 
 func (ss *StateStore) SetDefaultDeploymentBucket(appId string, bucketName string) {
-	ss.Set(RedisKeys.ActivatorDefaultDeployment(appId), bucketName)
+	ss.Set(RedisKeys.GatewayDefaultDeployment(appId), bucketName)
 }
 
 func (ss *StateStore) SetAverageTaskDuration(appId string, bucketName string) {
-	ss.Set(RedisKeys.ActivatorDefaultDeployment(appId), bucketName)
+	ss.Set(RedisKeys.GatewayDefaultDeployment(appId), bucketName)
 }
 
 func (ss *StateStore) MinContainerCount(appId string) (int, error) {
 	containerCount := 0
 
-	containerCountKey := RedisKeys.ActivatorDeploymentMinContainerCount(appId)
+	containerCountKey := RedisKeys.GatewayDeploymentMinContainerCount(appId)
 	containerCountKeyExists, err := ss.Exists(containerCountKey)
 	if err != nil || !containerCountKeyExists {
 		return -1, errors.New("min container key not set")
@@ -95,11 +95,11 @@ func (ss *StateStore) MinContainerCount(appId string) (int, error) {
 
 // Check if user is authorized to access an app
 func (ss *StateStore) IsAuthorized(appId string, encodedAuthString string) bool {
-	_, err := ss.Get(RedisKeys.ActivatorAuthKey(appId, encodedAuthString))
+	_, err := ss.Get(RedisKeys.GatewayAuthKey(appId, encodedAuthString))
 	return err == nil
 }
 
 // Authorize user to access an app
 func (ss *StateStore) Authorize(appId string, encodedAuthString string) error {
-	return ss.SetExp(RedisKeys.ActivatorAuthKey(appId, encodedAuthString), "true", 24*60*60) // Authorize user for one day
+	return ss.SetExp(RedisKeys.GatewayAuthKey(appId, encodedAuthString), "true", 24*60*60) // Authorize user for one day
 }

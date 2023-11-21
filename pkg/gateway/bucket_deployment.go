@@ -19,7 +19,7 @@ import (
 
 const IgnoreScalingEventInterval = 15 * time.Second
 
-func NewDeploymentRequestBucket(config DeploymentRequestBucketConfig, activator *Activator) (types.RequestBucket, error) {
+func NewDeploymentRequestBucket(config DeploymentRequestBucketConfig, gateway *Gateway) (types.RequestBucket, error) {
 	rb := &DeploymentRequestBucket{}
 
 	// Configuration
@@ -34,14 +34,14 @@ func NewDeploymentRequestBucket(config DeploymentRequestBucketConfig, activator 
 	rb.Version = config.Version
 	rb.TriggerType = config.TriggerType
 	rb.ImageTag = config.ImageTag
-	rb.AutoScaler = NewAutoscaler(rb, activator.stateStore)
+	rb.AutoScaler = NewAutoscaler(rb, gateway.stateStore)
 	rb.ScaleEventChan = make(chan int, 1)
 	rb.ContainerEventChan = make(chan types.ContainerEvent, 1)
 	rb.Containers = make(map[string]bool)
 	rb.ScaleDownDelay = &config.ScaleDownDelay
 	rb.maxPendingTasks = config.MaxPendingTasks
 	rb.workers = config.Workers
-	rb.unloadBucketChan = activator.unloadBucketChan
+	rb.unloadBucketChan = gateway.unloadBucketChan
 
 	if config.AppConfig.Triggers[0].TaskPolicy != nil {
 		rb.TaskPolicy = config.AppConfig.Triggers[0].TaskPolicy
@@ -57,13 +57,13 @@ func NewDeploymentRequestBucket(config DeploymentRequestBucketConfig, activator 
 	rb.TaskPolicyRaw = taskPolicyRaw
 
 	// Clients
-	rb.workBus = activator.WorkBus
-	rb.beamRepo = activator.BeamRepo
-	rb.bucketRepo = repository.NewRequestBucketRedisRepository(rb.Name, rb.IdentityId, activator.redisClient, types.RequestBucketTypeDeployment)
-	rb.taskRepo = repository.NewTaskRedisRepository(activator.redisClient)
-	rb.queueClient = activator.QueueClient
+	rb.workBus = gateway.WorkBus
+	rb.beamRepo = gateway.BeamRepo
+	rb.bucketRepo = repository.NewRequestBucketRedisRepository(rb.Name, rb.IdentityId, gateway.redisClient, types.RequestBucketTypeDeployment)
+	rb.taskRepo = repository.NewTaskRedisRepository(gateway.redisClient)
+	rb.queueClient = gateway.QueueClient
 
-	bucketLock := common.NewRedisLock(activator.redisClient)
+	bucketLock := common.NewRedisLock(gateway.redisClient)
 
 	bucketCtx, closeBucketFunc := context.WithCancel(context.Background())
 	rb.bucketCtx = bucketCtx
@@ -162,11 +162,11 @@ func (rb *DeploymentRequestBucket) Monitor() {
 }
 
 func (rb *DeploymentRequestBucket) handleScalingEvent(desiredContainers int) error {
-	err := rb.bucketLock.Acquire(rb.bucketCtx, common.RedisKeys.ActivatorBucketLock(rb.Name), common.RedisLockOptions{TtlS: 10, Retries: 0})
+	err := rb.bucketLock.Acquire(rb.bucketCtx, common.RedisKeys.GatewayBucketLock(rb.Name), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
 	}
-	defer rb.bucketLock.Release(common.RedisKeys.ActivatorBucketLock(rb.Name))
+	defer rb.bucketLock.Release(common.RedisKeys.GatewayBucketLock(rb.Name))
 
 	state, err := rb.bucketRepo.GetRequestBucketState()
 	if err != nil {

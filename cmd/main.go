@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/beam-cloud/beam/pkg/gateway"
 	"github.com/beam-cloud/beam/pkg/scheduler"
 )
 
@@ -15,10 +16,17 @@ func main() {
 		log.Fatalf("err creating scheduler svc: %+v\n", err)
 	}
 
+	gw, err := gateway.NewGateway()
+	if err != nil {
+		log.Fatalf("err creating gateway svc: %+v\n", err)
+	}
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM)
 
 	svc.StartServer()
+
+	gw.Start()
 
 	<-stop
 

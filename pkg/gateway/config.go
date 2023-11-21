@@ -10,7 +10,7 @@ type config struct {
 	MaxPendingTasks uint
 }
 
-var ActivatorConfig config = config{
+var GatewayConfig config = config{
 	ExternalPort:        ":2002",
 	InternalPort:        ":2030",
 	LogVerbosity:        "debug",
