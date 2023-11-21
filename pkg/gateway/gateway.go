@@ -192,39 +192,8 @@ func (a *Gateway) handleDeploymentEvents() {
 func (a *Gateway) parseAppConfig(config json.RawMessage) (types.BeamAppConfig, error) {
 	var appConfig types.BeamAppConfig
 	err := json.Unmarshal(config, &appConfig)
-
-	// TODO: this is needed for backwards compatibility with older versions of the SDK
-	// Once everyone is migrated over, it can be removed
-	if err != nil || appConfig.AppSpecVersion != "v3" {
-		var deprecratedAppConfig types.BeamUserAppConfig
-		if err := json.Unmarshal(config, &deprecratedAppConfig); err != nil {
-			return appConfig, err
-		}
-
-		// log.Printf("<%s> Loaded old style config, mapping to new style: %+v\n", bucketName, deprecratedAppConfig)
-		appConfig.Name = deprecratedAppConfig.App.Name
-		appConfig.SdkVersion = nil
-		appConfig.Runtime.Cpu = deprecratedAppConfig.App.Cpu
-		appConfig.Runtime.Memory = deprecratedAppConfig.App.Memory
-		appConfig.Runtime.Gpu = deprecratedAppConfig.App.Gpu
-		appConfig.Runtime.Image.PythonPackages = deprecratedAppConfig.App.PythonPackages
-		appConfig.Runtime.Image.PythonVersion = deprecratedAppConfig.App.PythonVersion
-		appConfig.Runtime.Image.Commands = deprecratedAppConfig.App.Commands
-		appConfig.Mounts = deprecratedAppConfig.Mounts
-		appConfig.Triggers = []types.Trigger{
-			{
-				Outputs:         deprecratedAppConfig.Outputs,
-				Handler:         deprecratedAppConfig.Triggers[0].Handler,
-				Loader:          deprecratedAppConfig.Triggers[0].Loader,
-				TriggerType:     deprecratedAppConfig.Triggers[0].TriggerType,
-				When:            deprecratedAppConfig.Triggers[0].When,
-				CallbackUrl:     deprecratedAppConfig.Triggers[0].CallbackUrl,
-				MaxPendingTasks: &deprecratedAppConfig.Triggers[0].MaxPendingTasks,
-				KeepWarmSeconds: &deprecratedAppConfig.Triggers[0].KeepWarmSeconds,
-				AutoScaling:     &deprecratedAppConfig.AutoScaling,
-			},
-		}
-
+	if err != nil {
+		return appConfig, err
 	}
 
 	return appConfig, nil
@@ -483,6 +452,7 @@ func (a *Gateway) Start() {
 		err := a.startInternalServer(GatewayConfig.InternalPort)
 		errCh <- fmt.Errorf("internal server error: %v", err)
 	}()
+
 	go func() {
 		err := a.startProxyServer(GatewayConfig.ExternalPort)
 		errCh <- fmt.Errorf("proxy server error: %v", err)
