@@ -57,7 +57,7 @@ func NewDeploymentRequestBucket(config DeploymentRequestBucketConfig, gateway *G
 	rb.TaskPolicyRaw = taskPolicyRaw
 
 	// Clients
-	rb.workBus = gateway.WorkBus
+	rb.scheduler = gateway.Scheduler
 	rb.beamRepo = gateway.BeamRepo
 	rb.bucketRepo = repository.NewRequestBucketRedisRepository(rb.Name, rb.IdentityId, gateway.redisClient, types.RequestBucketTypeDeployment)
 	rb.taskRepo = repository.NewTaskRedisRepository(gateway.redisClient)
@@ -222,7 +222,7 @@ func (rb *DeploymentRequestBucket) startContainers(containersToRun int) error {
 			IdentityId: rb.IdentityId,
 		}
 
-		response, err := rb.workBus.Client.RunContainer(rb.bucketCtx, runRequest)
+		response, err := rb.scheduler.Client.RunContainer(rb.bucketCtx, runRequest)
 		if err != nil {
 			return err
 		}

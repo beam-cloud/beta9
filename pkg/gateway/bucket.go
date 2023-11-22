@@ -39,7 +39,7 @@ type RequestBucketBase struct {
 	beamRepo           repository.BeamRepository
 	bucketRepo         repository.RequestBucketRepository
 	taskRepo           repository.TaskRepository
-	workBus            *WorkBus
+	scheduler          *Scheduler
 	bucketLock         *common.RedisLock
 	bucketCtx          context.Context
 	closeFunc          context.CancelFunc
@@ -104,7 +104,7 @@ func (rb *RequestBucketBase) stopContainers(containersToStop int) error {
 			ContainerId: containerId,
 		}
 
-		_, err := rb.workBus.Client.StopContainer(rb.bucketCtx, stopRequest)
+		_, err := rb.scheduler.Client.StopContainer(rb.bucketCtx, stopRequest)
 		if err != nil {
 			log.Printf("<%s> Unable to stop container: %v", rb.Name, err)
 			return err
