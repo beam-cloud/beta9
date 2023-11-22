@@ -1,4 +1,4 @@
-package gateway
+package queue
 
 import (
 	"context"
@@ -22,7 +22,7 @@ const (
 	MaxTaskRetries int = 3
 )
 
-type QueueClient struct {
+type RedisQueueClient struct {
 	rdb *common.RedisClient
 }
 
@@ -38,13 +38,13 @@ var taskMessagePool = sync.Pool{
 	},
 }
 
-func NewQueueClient(rdb *common.RedisClient) *QueueClient {
+func NewRedisQueueClient(rdb *common.RedisClient) *RedisQueueClient {
 	log.Println("Initializing queue client")
-	return &QueueClient{rdb: rdb}
+	return &RedisQueueClient{rdb: rdb}
 }
 
 // Add a new task to the queue
-func (qc *QueueClient) Push(identityId string, queueName string, taskId string, ctx *gin.Context) (string, error) {
+func (qc *RedisQueueClient) Push(identityId string, queueName string, taskId string, ctx *gin.Context) (string, error) {
 	var payload any
 	if ctx != nil {
 		err := ctx.BindJSON(&payload)
@@ -62,7 +62,7 @@ func (qc *QueueClient) Push(identityId string, queueName string, taskId string, 
 	return taskId, nil
 }
 
-func (qc *QueueClient) getTaskMessage(task string) *types.TaskMessage {
+func (qc *RedisQueueClient) getTaskMessage(task string) *types.TaskMessage {
 	msg := taskMessagePool.Get().(*types.TaskMessage)
 	msg.Task = task
 	msg.Args = make([]interface{}, 0)
@@ -71,12 +71,12 @@ func (qc *QueueClient) getTaskMessage(task string) *types.TaskMessage {
 	return msg
 }
 
-func (qc *QueueClient) releaseTaskMessage(v *types.TaskMessage) {
+func (qc *RedisQueueClient) releaseTaskMessage(v *types.TaskMessage) {
 	v.Reset()
 	taskMessagePool.Put(v)
 }
 
-func (qc *QueueClient) delay(taskId string, task string, identityId string, queueName string, args ...interface{}) (*AsyncResult, error) {
+func (qc *RedisQueueClient) delay(taskId string, task string, identityId string, queueName string, args ...interface{}) (*AsyncResult, error) {
 	taskMessage := qc.getTaskMessage(task)
 	taskMessage.ID = taskId
 	taskMessage.Args = args
@@ -98,7 +98,7 @@ func (qc *QueueClient) delay(taskId string, task string, identityId string, queu
 }
 
 // Get queue length
-func (qc *QueueClient) QueueLength(identityId, queueName string) (int64, error) {
+func (qc *RedisQueueClient) QueueLength(identityId, queueName string) (int64, error) {
 	res, err := qc.rdb.LLen(context.TODO(), common.RedisKeys.QueueList(identityId, queueName)).Result()
 	if err != nil {
 		return -1, err
@@ -108,7 +108,7 @@ func (qc *QueueClient) QueueLength(identityId, queueName string) (int64, error) 
 }
 
 // Check if any tasks are running
-func (qc *QueueClient) TaskRunning(identityId, queueName string) (bool, error) {
+func (qc *RedisQueueClient) TaskRunning(identityId, queueName string) (bool, error) {
 	keys, err := qc.rdb.Scan(context.TODO(), common.RedisKeys.QueueTaskClaim(identityId, queueName, "*"))
 	if err != nil {
 		return false, err
@@ -118,7 +118,7 @@ func (qc *QueueClient) TaskRunning(identityId, queueName string) (bool, error) {
 }
 
 // Check how many tasks are running
-func (qc *QueueClient) TasksRunning(identityId, queueName string) (int, error) {
+func (qc *RedisQueueClient) TasksRunning(identityId, queueName string) (int, error) {
 	keys, err := qc.rdb.Scan(context.TODO(), common.RedisKeys.QueueTaskClaim(identityId, queueName, "*"))
 	if err != nil {
 		return -1, err
@@ -128,7 +128,7 @@ func (qc *QueueClient) TasksRunning(identityId, queueName string) (int, error) {
 }
 
 // Get most recent task duration
-func (qc *QueueClient) GetTaskDuration(identityId, queueName string) (float64, error) {
+func (qc *RedisQueueClient) GetTaskDuration(identityId, queueName string) (float64, error) {
 	res, err := qc.rdb.LPop(context.TODO(), common.RedisKeys.QueueTaskDuration(identityId, queueName)).Result()
 	if err != nil {
 		return -1, err
@@ -142,7 +142,7 @@ func (qc *QueueClient) GetTaskDuration(identityId, queueName string) (float64, e
 	return duration, nil
 }
 
-func (qc *QueueClient) SetAverageTaskDuration(identityId, queueName string, duration float64) error {
+func (qc *RedisQueueClient) SetAverageTaskDuration(identityId, queueName string, duration float64) error {
 	err := qc.rdb.Set(context.TODO(), common.RedisKeys.QueueAverageTaskDuration(identityId, queueName), duration, 0).Err()
 	if err != nil {
 		return err
@@ -150,7 +150,7 @@ func (qc *QueueClient) SetAverageTaskDuration(identityId, queueName string, dura
 	return nil
 }
 
-func (qc *QueueClient) GetAverageTaskDuration(identityId, queueName string) (float64, error) {
+func (qc *RedisQueueClient) GetAverageTaskDuration(identityId, queueName string) (float64, error) {
 	res, err := qc.rdb.Get(context.TODO(), common.RedisKeys.QueueAverageTaskDuration(identityId, queueName)).Result()
 	if err != nil {
 		return -1, err
@@ -165,7 +165,7 @@ func (qc *QueueClient) GetAverageTaskDuration(identityId, queueName string) (flo
 }
 
 // Monitor tasks -- if a container is killed unexpectedly, it will automatically be re-added to the queue
-func (qc *QueueClient) MonitorTasks(ctx context.Context, beamRepo repository.BeamRepository) {
+func (qc *RedisQueueClient) MonitorTasks(ctx context.Context, beamRepo repository.BeamRepository) {
 	monitorRate := time.Duration(5) * time.Second
 	ticker := time.NewTicker(monitorRate)
 	defer ticker.Stop()

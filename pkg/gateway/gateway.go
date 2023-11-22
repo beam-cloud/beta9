@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/beam-cloud/beam/pkg/adapters/queue"
 	common "github.com/beam-cloud/beam/pkg/common"
 	"github.com/beam-cloud/beam/pkg/repository"
 	"github.com/beam-cloud/beam/pkg/types"
@@ -31,7 +32,7 @@ type Gateway struct {
 	eventBus           *common.EventBus
 	stateStore         *common.StateStore
 	redisClient        *common.RedisClient
-	QueueClient        *QueueClient
+	QueueClient        queue.TaskQueue
 	BeamRepo           repository.BeamRepository
 	metricsRepo        repository.MetricsStatsdRepository
 	WorkBus            *WorkBus
@@ -121,7 +122,7 @@ func NewGateway() (*Gateway, error) {
 		return err == nil
 	}})
 
-	gateway.QueueClient = NewQueueClient(redisClient)
+	gateway.QueueClient = queue.NewRedisQueueClient(redisClient)
 	gateway.BeamRepo = beamRepo
 	gateway.metricsRepo = metricsRepo
 	gateway.WorkBus = workBus

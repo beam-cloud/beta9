@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beam/pkg/adapters/queue"
 	"github.com/beam-cloud/beam/pkg/common"
 	"github.com/beam-cloud/beam/pkg/repository"
 	"github.com/beam-cloud/beam/pkg/types"
@@ -34,7 +35,7 @@ type RequestBucketBase struct {
 	TaskPolicyRaw      []byte
 	ContainerEventChan chan types.ContainerEvent
 	Containers         map[string]bool
-	queueClient        *QueueClient
+	queueClient        queue.TaskQueue
 	beamRepo           repository.BeamRepository
 	bucketRepo         repository.RequestBucketRepository
 	taskRepo           repository.TaskRepository
