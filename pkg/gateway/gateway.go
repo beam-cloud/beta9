@@ -35,7 +35,7 @@ type Gateway struct {
 	QueueClient        queue.TaskQueue
 	BeamRepo           repository.BeamRepository
 	metricsRepo        repository.MetricsStatsdRepository
-	WorkBus            *WorkBus
+	Scheduler          *Scheduler
 
 	unloadBucketChan chan string
 	keyEventManager  *common.KeyEventManager
@@ -44,18 +44,18 @@ type Gateway struct {
 	cancelFunc       context.CancelFunc
 }
 
-type WorkBus struct {
+type Scheduler struct {
 	Client pb.SchedulerClient
 	Conn   *grpc.ClientConn
 }
 
-func NewWorkBusConnection(host string) (*WorkBus, error) {
+func NewSchedulerConnection(host string) (*Scheduler, error) {
 	conn, err := grpc.Dial(fmt.Sprintf(host, common.Secrets().Get("BEAM_NAMESPACE")), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}
 	client := pb.NewSchedulerClient(conn)
-	return &WorkBus{Client: client, Conn: conn}, nil
+	return &Scheduler{Client: client, Conn: conn}, nil
 }
 
 func NewGateway() (*Gateway, error) {
@@ -85,7 +85,7 @@ func NewGateway() (*Gateway, error) {
 
 	metricsRepo := repository.NewMetricsStatsdRepository()
 
-	workBus, err := NewWorkBusConnection(common.SchedulerHost)
+	scheduler, err := NewSchedulerConnection(common.SchedulerHost)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +125,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.QueueClient = queue.NewRedisQueueClient(redisClient)
 	gateway.BeamRepo = beamRepo
 	gateway.metricsRepo = metricsRepo
-	gateway.WorkBus = workBus
+	gateway.Scheduler = scheduler
 	gateway.keyEventManager = keyEventManager
 	gateway.beatService = beatService
 	gateway.eventBus = eventBus

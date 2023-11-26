@@ -36,7 +36,7 @@ func NewServeRequestBucket(config RequestBucketConfig, gateway *Gateway) (types.
 
 	// Clients
 	rb.rdb = gateway.redisClient
-	rb.workBus = gateway.WorkBus
+	rb.scheduler = gateway.Scheduler
 	rb.beamRepo = gateway.BeamRepo
 	rb.bucketRepo = bucketRepo
 	rb.taskRepo = repository.NewTaskRedisRepository(gateway.redisClient)

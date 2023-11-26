@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-type WorkBusForTest struct {
+type SchedulerForTest struct {
 	Client pb.SchedulerClient
 	Conn   *grpc.ClientConn
 }
@@ -76,7 +76,7 @@ func NewRequestBucketForTest() (*DeploymentRequestBucket, error) {
 	rb.unloadBucketChan = make(chan string)
 
 	// Clients
-	rb.workBus = &WorkBus{}
+	rb.scheduler = &Scheduler{}
 	// rb.beamRepo = beamRepo
 	rb.bucketRepo = repository.NewRequestBucketRedisRepositoryForTest(rb.Name, rb.IdentityId, redisClient)
 	// rb.queueClient = queueClient
