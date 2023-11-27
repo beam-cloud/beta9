@@ -6,8 +6,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/beam-cloud/beam/pkg/gateway"
-	"github.com/beam-cloud/beam/pkg/scheduler"
+	"github.com/beam-cloud/beam/internal/gateway"
+	"github.com/beam-cloud/beam/internal/scheduler"
 )
 
 func main() {
