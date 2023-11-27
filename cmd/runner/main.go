@@ -13,13 +13,13 @@ func loadAndExecutePlugin(pluginPath string, input []byte) ([]byte, error) {
 	// Load the plugin
 	p, err := plugin.Open(pluginPath)
 	if err != nil {
-		log.Fatal("Error loading plugin:", err)
+		log.Fatalf("unable to load plugin: %+v\n", err)
 	}
 
-	// Lookup the symbol (an exported variable in this case)
+	// Lookup the runner symbol
 	symbol, err := p.Lookup("PluginRunner")
 	if err != nil {
-		log.Fatal("Error finding PluginRunner symbol:", err)
+		log.Fatalf("unable to find PluginRunner symbol: %+v\n", err)
 	}
 
 	runner, ok := symbol.(Runner)
