@@ -24,6 +24,7 @@ func (s *StatsdSender) begin() {
 
 		s.uri = fmt.Sprintf("%s:%v", host, port)
 	}
+
 	go s.process()
 }
 

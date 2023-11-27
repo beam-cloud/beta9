@@ -7,8 +7,8 @@ dev:
     environment:
       PATH: ${PATH}:/workspace/bin
       DEFAULT_NAMESPACE: ${OKTETO_NAMESPACE}
-      BUILD_COMMAND: "go build -o /workspace/bin/beam /workspace/cmd/main.go"
-      BUILD_BINARY_PATH: "/workspace/bin/beam"
+      BUILD_COMMAND: "go build -buildmode=plugin -o build.so /workspace/pkg/plugins/build/build.go && go build -buildmode=plugin -o function.so /workspace/pkg/plugins/function/function.go  && go build -o /workspace/bin/beam /workspace/cmd/beam/main.go && go build -o /workspace/bin/runner /workspace/cmd/runner/main.go"
+      BUILD_BINARY_PATH: "/workspace/bin/runner"
       CONFIG_PATH: "/workspace/.secrets"
     forward:
       - 1993:1993
