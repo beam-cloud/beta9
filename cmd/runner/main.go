@@ -10,7 +10,6 @@ type Runner interface {
 }
 
 func loadAndExecutePlugin(pluginPath string, input []byte) ([]byte, error) {
-	// Load the plugin
 	p, err := plugin.Open(pluginPath)
 	if err != nil {
 		log.Fatalf("unable to load plugin: %+v\n", err)
@@ -32,5 +31,5 @@ func loadAndExecutePlugin(pluginPath string, input []byte) ([]byte, error) {
 }
 
 func main() {
-	loadAndExecutePlugin("build.so", []byte{})
+	loadAndExecutePlugin("function.so", []byte{})
 }
