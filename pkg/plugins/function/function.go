@@ -8,7 +8,11 @@ import (
 type FunctionRunner struct{}
 
 const src = `package somecode
-func Bar(s string) string { return s + "-else" }`
+
+func Bar(s string) string {
+	i := 1
+	return s + "-else" 
+}`
 
 func (p *FunctionRunner) Run(input []byte) ([]byte, error) {
 	i := interp.New(interp.Options{})
@@ -25,7 +29,7 @@ func (p *FunctionRunner) Run(input []byte) ([]byte, error) {
 
 	bar := v.Interface().(func(string) string)
 
-	r := bar("something")
+	r := bar("some")
 	println(r)
 	return []byte{}, nil
 }
