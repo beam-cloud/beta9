@@ -5,6 +5,7 @@ go 1.20
 require (
 	github.com/NVIDIA/go-nvml v0.12.0-1
 	github.com/alicebob/miniredis/v2 v2.30.5
+	github.com/asecurityteam/rolling v0.0.0-20230418204413-b4052899307d
 	github.com/aws/aws-sdk-go-v2 v1.21.2
 	github.com/aws/aws-sdk-go-v2/config v1.18.34
 	github.com/aws/aws-sdk-go-v2/credentials v1.13.33
@@ -12,11 +13,13 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/kinesis v1.20.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.38.3
 	github.com/aws/karpenter v0.18.1
+	github.com/beam-cloud/beat v0.0.0-20230914152144-fc1ace1288fc
 	github.com/beam-cloud/clip v0.0.0-20230822004255-4ecd939864f9
 	github.com/bsm/redislock v0.9.4
 	github.com/gin-gonic/gin v1.9.1
 	github.com/gofrs/uuid v4.0.0+incompatible
 	github.com/google/uuid v1.3.0
+	github.com/gorilla/websocket v1.5.1
 	github.com/joho/godotenv v1.5.1
 	github.com/okteto/okteto v0.0.0-20230808101523-f3d8dab026af
 	github.com/opencontainers/runtime-spec v1.1.0
@@ -39,7 +42,6 @@ require (
 
 require (
 	github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a // indirect
-	github.com/asecurityteam/rolling v0.0.0-20230418204413-b4052899307d // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.4.14 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.13.9 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.1.43 // indirect
@@ -54,7 +56,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.15.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.21.3 // indirect
 	github.com/aws/smithy-go v1.15.0 // indirect
-	github.com/beam-cloud/beat v0.0.0-20230914152144-fc1ace1288fc // indirect
 	github.com/briandowns/spinner v1.23.0 // indirect
 	github.com/bytedance/sonic v1.10.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
@@ -81,7 +82,6 @@ require (
 	github.com/google/gnostic v0.6.9 // indirect
 	github.com/google/gofuzz v1.2.0 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
-	github.com/gorilla/websocket v1.5.1 // indirect
 	github.com/hanwen/go-fuse/v2 v2.3.0 // indirect
 	github.com/jackc/chunkreader/v2 v2.0.1 // indirect
 	github.com/jackc/pgconn v1.13.0 // indirect
@@ -112,7 +112,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/tidwall/btree v1.6.0 // indirect
-	github.com/traefik/yaegi v0.15.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.11 // indirect
 	github.com/yuin/gopher-lua v1.1.0 // indirect
