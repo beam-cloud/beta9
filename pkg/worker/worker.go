@@ -26,10 +26,6 @@ import (
 )
 
 const (
-	WorkerModeAppDeployment   string        = "DEPLOYMENT"
-	WorkerModeAppDevelopment  string        = "DEVELOPMENT"
-	WorkerModeRun             string        = "RUN"
-	WorkerModeServe           string        = "SERVE"
 	RequestProcessingInterval time.Duration = 100 * time.Millisecond
 )
 
@@ -285,7 +281,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	log.Printf("<%s> - successfully created spec from request.\n", containerID)
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the trigger type,
-	// Activator will need to directly interact with this pod/container.
+	// Gateway will need to directly interact with this pod/container.
 	containerAddr := fmt.Sprintf("%s:%d", s.podIPAddr, bindPort)
 	err = s.containerRepo.SetContainerAddress(request.ContainerId, containerAddr)
 	if err != nil {
@@ -633,11 +629,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec, err := s.newSpecTemplate()
 	if err != nil {
 		return nil, err
-	}
-
-	// Make the container writeable for development mode
-	if request.Mode == WorkerModeAppDevelopment {
-		spec.Root.Readonly = false
 	}
 
 	spec.Process.Cwd = defaultContainerDirectory

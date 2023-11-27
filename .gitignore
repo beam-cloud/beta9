@@ -1,4 +1,5 @@
 bin/beam
+bin/runner
 tmp/*
 *.gob
 __pycache__
