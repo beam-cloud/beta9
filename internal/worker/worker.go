@@ -94,10 +94,10 @@ func NewWorker() (*Worker, error) {
 	podHostName := os.Getenv("HOSTNAME")
 	isRemote := os.Getenv("WORKER_IS_REMOTE") == "true"
 
-	podIPAddr, err := GetPodIP(isRemote)
-	if err != nil {
-		return nil, err
-	}
+	// podIPAddr, err := GetPodIP(isRemote)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	cpuLimit, err := strconv.ParseInt(os.Getenv("CPU_LIMIT"), 10, 64)
 	if err != nil {
@@ -139,7 +139,7 @@ func NewWorker() (*Worker, error) {
 		runcHandle:           runc.Runc{},
 		containerCudaManager: NewContainerCudaManager(),
 		redisClient:          redisClient,
-		podIPAddr:            podIPAddr,
+		podIPAddr:            "0.0.0.0",
 		imageClient:          imageClient,
 		podHostName:          podHostName,
 		eventBus:             nil,
@@ -167,6 +167,8 @@ func (s *Worker) Run() error {
 
 	lastContainerRequest := time.Now()
 	for {
+		log.Println("hi")
+
 		request, err := s.workerRepo.GetNextContainerRequest(s.workerId)
 		if request != nil && err == nil {
 			lastContainerRequest = time.Now()

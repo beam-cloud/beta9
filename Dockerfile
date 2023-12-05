@@ -24,6 +24,7 @@ RUN go mod download
 
 COPY . .
 
-RUN go build -o /workspace/bin/beam /workspace/cmd/main.go
+RUN go build -o /workspace/bin/beam /workspace/cmd/beam/main.go
+RUN go build -o /workspace/bin/worker /workspace/cmd/worker/main.go
 
 CMD ["tail", "-f", "/dev/null"]
