@@ -1,5 +1,6 @@
 bin/beam
 bin/runner
+bin/worker
 tmp/*
 *.gob
 __pycache__
