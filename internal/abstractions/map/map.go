@@ -1,6 +1,6 @@
 package dmap
 
 type Map interface {
-	Set(string, string) error
-	Get(string) (string, error)
+	Set(string, []byte) error
+	Get(string) ([]byte, error)
 }

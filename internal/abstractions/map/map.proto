@@ -6,6 +6,7 @@ package map;
 
 service MapService {
   rpc MapSet(MapSetRequest) returns (MapSetResponse) {}
+  rpc MapDelete(MapDeleteRequest) returns (MapDeleteResponse) {}
 }
 
 message MapSetRequest {
@@ -14,6 +15,14 @@ message MapSetRequest {
 }
 
 message MapSetResponse {
+  bool ok = 1;
+}
+
+message MapDeleteRequest {
+  string key = 1;
+}
+
+message MapDeleteResponse {
   bool ok = 1;
 }
 

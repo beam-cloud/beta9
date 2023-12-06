@@ -94,7 +94,7 @@ func (g *Gateway) Start() error {
 	grpcServer := grpc.NewServer()
 
 	// Create and register abstractions
-	rm, err := dmap.NewRedisMapService()
+	rm, err := dmap.NewRedisMapService(g.redisClient)
 	if err != nil {
 		return err
 	}
