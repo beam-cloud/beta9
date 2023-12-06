@@ -72,20 +72,20 @@ func (m *RedisMapService) MapKeys(ctx context.Context, in *pb.MapKeysRequest) (*
 	return &pb.MapKeysResponse{Ok: true, Keys: keys}, nil
 }
 
-// Map keys
+// Redis keys
 var (
 	mapPrefix string = "map"
 	mapEntry  string = "map:%s:%s"
 )
 
-var MapKeys = &mapKeys{}
+var Keys = &keys{}
 
-type mapKeys struct{}
+type keys struct{}
 
-func (k *mapKeys) MapPrefix() string {
+func (k *keys) MapPrefix() string {
 	return mapPrefix
 }
 
-func (k *mapKeys) MapEntry(name, key string) string {
+func (k *keys) MapEntry(name, key string) string {
 	return fmt.Sprintf(mapEntry, name, key)
 }
