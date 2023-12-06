@@ -7,6 +7,7 @@ package map;
 service MapService {
   rpc MapSet(MapSetRequest) returns (MapSetResponse) {}
   rpc MapDelete(MapDeleteRequest) returns (MapDeleteResponse) {}
+  rpc MapCount(MapCountRequest) returns (MapCountResponse) {}
 }
 
 message MapSetRequest {
@@ -26,3 +27,11 @@ message MapDeleteResponse {
   bool ok = 1;
 }
 
+message MapCountRequest {
+  string key = 1;
+}
+
+message MapCountResponse {
+  bool ok = 1;
+  uint32 count = 2;
+}

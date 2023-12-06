@@ -26,3 +26,7 @@ func (m *RedisMapService) MapSet(ctx context.Context, in *pb.MapSetRequest) (*pb
 func (m *RedisMapService) MapDelete(ctx context.Context, in *pb.MapDeleteRequest) (*pb.MapDeleteResponse, error) {
 	return &pb.MapDeleteResponse{Ok: false}, nil
 }
+
+func (m *RedisMapService) MapCount(ctx context.Context, in *pb.MapCountRequest) (*pb.MapCountResponse, error) {
+	return &pb.MapCountResponse{Ok: false, Count: 0}, nil
+}
