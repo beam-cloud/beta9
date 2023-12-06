@@ -5,12 +5,15 @@ option go_package = "github.com/beam-cloud/beam/proto";
 package map;
 
 service MapService {
-  rpc Hello(HelloRequest) returns (HelloResponse) {}
+  rpc MapSet(MapSetRequest) returns (MapSetResponse) {}
 }
 
-message HelloRequest {
+message MapSetRequest {
+  string key = 1;
+  bytes value = 2;
 }
 
-message HelloResponse {
+message MapSetResponse {
   bool ok = 1;
 }
+

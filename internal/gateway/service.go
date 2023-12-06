@@ -1,20 +1,19 @@
 package gateway
 
 import (
-	"context"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
+	dmap "github.com/beam-cloud/beam/internal/integrations/map"
 	pb "github.com/beam-cloud/beam/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
 
 type GatewayService struct {
-	pb.UnimplementedMapServiceServer
 	pb.UnimplementedSchedulerServer
 }
 
@@ -29,7 +28,14 @@ func (s *GatewayService) StartServer() error {
 	}
 
 	grpcServer := grpc.NewServer()
-	pb.RegisterMapServiceServer(grpcServer, s)
+
+	// Create and register integration services
+	rm, err := dmap.NewRedisMapService()
+	if err != nil {
+		return err
+	}
+	pb.RegisterMapServiceServer(grpcServer, rm)
+
 	reflection.Register(grpcServer)
 
 	go func() {
@@ -50,9 +56,4 @@ func (s *GatewayService) StartServer() error {
 	log.Println("Termination signal received. Shutting down...")
 
 	return nil
-}
-
-// Hello world
-func (s *GatewayService) Hello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloResponse, error) {
-	return &pb.HelloResponse{Ok: true}, nil
 }

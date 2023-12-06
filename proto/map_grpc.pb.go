@@ -22,7 +22,7 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type MapServiceClient interface {
-	Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
+	MapSet(ctx context.Context, in *MapSetRequest, opts ...grpc.CallOption) (*MapSetResponse, error)
 }
 
 type mapServiceClient struct {
@@ -33,9 +33,9 @@ func NewMapServiceClient(cc grpc.ClientConnInterface) MapServiceClient {
 	return &mapServiceClient{cc}
 }
 
-func (c *mapServiceClient) Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error) {
-	out := new(HelloResponse)
-	err := c.cc.Invoke(ctx, "/map.MapService/Hello", in, out, opts...)
+func (c *mapServiceClient) MapSet(ctx context.Context, in *MapSetRequest, opts ...grpc.CallOption) (*MapSetResponse, error) {
+	out := new(MapSetResponse)
+	err := c.cc.Invoke(ctx, "/map.MapService/MapSet", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func (c *mapServiceClient) Hello(ctx context.Context, in *HelloRequest, opts ...
 // All implementations must embed UnimplementedMapServiceServer
 // for forward compatibility
 type MapServiceServer interface {
-	Hello(context.Context, *HelloRequest) (*HelloResponse, error)
+	MapSet(context.Context, *MapSetRequest) (*MapSetResponse, error)
 	mustEmbedUnimplementedMapServiceServer()
 }
 
@@ -54,8 +54,8 @@ type MapServiceServer interface {
 type UnimplementedMapServiceServer struct {
 }
 
-func (UnimplementedMapServiceServer) Hello(context.Context, *HelloRequest) (*HelloResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Hello not implemented")
+func (UnimplementedMapServiceServer) MapSet(context.Context, *MapSetRequest) (*MapSetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MapSet not implemented")
 }
 func (UnimplementedMapServiceServer) mustEmbedUnimplementedMapServiceServer() {}
 
@@ -70,20 +70,20 @@ func RegisterMapServiceServer(s grpc.ServiceRegistrar, srv MapServiceServer) {
 	s.RegisterService(&MapService_ServiceDesc, srv)
 }
 
-func _MapService_Hello_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(HelloRequest)
+func _MapService_MapSet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MapSetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MapServiceServer).Hello(ctx, in)
+		return srv.(MapServiceServer).MapSet(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/map.MapService/Hello",
+		FullMethod: "/map.MapService/MapSet",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MapServiceServer).Hello(ctx, req.(*HelloRequest))
+		return srv.(MapServiceServer).MapSet(ctx, req.(*MapSetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -96,8 +96,8 @@ var MapService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*MapServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Hello",
-			Handler:    _MapService_Hello_Handler,
+			MethodName: "MapSet",
+			Handler:    _MapService_MapSet_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
