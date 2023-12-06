@@ -6,18 +6,12 @@ import (
 	"errors"
 	"flag"
 	"log"
-	"net"
-	"os"
-	"os/signal"
-	"syscall"
 
 	env "github.com/aws/karpenter/pkg/utils/env"
 	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 )
 
@@ -42,41 +36,11 @@ func NewSchedulerService() (*SchedulerService, error) {
 		return nil, err
 	}
 
+	go Scheduler.processRequests() // Start processing ContainerRequests
+
 	return &SchedulerService{
 		Scheduler: Scheduler,
 	}, nil
-}
-
-func (wbs *SchedulerService) StartServer() error {
-	listener, err := net.Listen("tcp", SchedulerConfig.GrpcServerAddress)
-	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
-	}
-
-	grpcServer := grpc.NewServer()
-	pb.RegisterSchedulerServer(grpcServer, wbs)
-	reflection.Register(grpcServer)
-
-	go wbs.Scheduler.processRequests() // Start processing ContainerRequests
-
-	go func() {
-		err := grpcServer.Serve(listener)
-		if err != nil {
-			log.Printf("Failed to start grpc server: %v\n", err)
-		}
-	}()
-	log.Println("Scheduler grpc server running @", SchedulerConfig.GrpcServerAddress)
-
-	terminationSignal := make(chan os.Signal, 1)
-	defer close(terminationSignal)
-
-	signal.Notify(terminationSignal, os.Interrupt, syscall.SIGTERM)
-
-	<-terminationSignal
-	log.Println("Termination signal received. Shutting down...")
-
-	wbs.Scheduler.redisClient.Close()
-	return nil
 }
 
 // Get Scheduler version
