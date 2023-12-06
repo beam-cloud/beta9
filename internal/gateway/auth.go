@@ -6,13 +6,12 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/types"
 	"github.com/gin-gonic/gin"
 )
 
-func basicAuthMiddleware(beamRepo repository.BeamRepository, stateStore *common.StateStore) gin.HandlerFunc {
+func basicAuthMiddleware(beamRepo repository.BeamRepository) gin.HandlerFunc {
 	versionRegex, err := types.GetAppVersionRegex()
 	if err != nil {
 		log.Fatalf("Failed to compile versioned URL regex: %v", err)
@@ -71,7 +70,7 @@ func basicAuthMiddleware(beamRepo repository.BeamRepository, stateStore *common.
 			return
 		}
 
-		if !authorizeUser(beamRepo, stateStore, auth, appId) {
+		if !authorizeUser(beamRepo, auth, appId) {
 			respondWithError(http.StatusForbidden, "Unauthorized", ctx)
 			return
 		}
@@ -108,7 +107,7 @@ func serviceAuthMiddleware(beamRepo repository.BeamRepository) gin.HandlerFunc {
 	}
 }
 
-func authorizeUser(beamRepo repository.BeamRepository, stateStore *common.StateStore, auth []string, appId string) bool {
+func authorizeUser(beamRepo repository.BeamRepository, auth []string, appId string) bool {
 	payload, _ := base64.StdEncoding.DecodeString(auth[1])
 
 	pair := strings.SplitN(string(payload), ":", 2)
@@ -120,10 +119,10 @@ func authorizeUser(beamRepo repository.BeamRepository, stateStore *common.StateS
 	clientId := pair[0]
 	clientSecret := pair[1]
 
-	encodedBasicAuthString := auth[1] // Used to set auth w/ expiry in the store
-	if stateStore.IsAuthorized(appId, encodedBasicAuthString) {
-		return true
-	}
+	// encodedBasicAuthString := auth[1] // Used to set auth w/ expiry in the store
+	// if stateStore.IsAuthorized(appId, encodedBasicAuthString) {
+	// 	return true
+	// }
 
 	authorized, err := beamRepo.AuthorizeApiKeyWithAppId(appId, clientId, clientSecret)
 	if err != nil || !authorized {
@@ -132,7 +131,7 @@ func authorizeUser(beamRepo repository.BeamRepository, stateStore *common.StateS
 	}
 
 	// Set temporary authorization in store (1 day)
-	stateStore.Authorize(appId, encodedBasicAuthString)
+	// stateStore.Authorize(appId, encodedBasicAuthString)
 	return true
 }
 

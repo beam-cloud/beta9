@@ -20,5 +20,5 @@ func NewRedisMapService() (*RedisMapService, error) {
 }
 
 func (m *RedisMapService) MapSet(ctx context.Context, in *pb.MapSetRequest) (*pb.MapSetResponse, error) {
-	return &pb.MapSetResponse{Ok: true}, nil
+	return &pb.MapSetResponse{Ok: false}, nil
 }
