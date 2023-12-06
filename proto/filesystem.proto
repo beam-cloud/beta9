@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-option go_package = "github.com/beam-cloud/beam/proto";
-
-package filesystem;
-
-service Filesystem {
-}
-

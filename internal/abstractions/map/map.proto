@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package map;
+
+service MapService {
+  rpc MapSet(MapSetRequest) returns (MapSetResponse) {}
+  rpc MapGet(MapGetRequest) returns (MapGetResponse) {}
+  rpc MapDelete(MapDeleteRequest) returns (MapDeleteResponse) {}
+  rpc MapCount(MapCountRequest) returns (MapCountResponse) {}
+  rpc MapKeys(MapKeysRequest) returns (MapKeysResponse) {}
+}
+
+message MapSetRequest {
+  string name = 1;
+  string key = 2;
+  bytes value = 3;
+}
+
+message MapSetResponse {
+  bool ok = 1;
+}
+
+message MapGetRequest {
+  string name = 1;
+  string key = 2;
+}
+
+message MapGetResponse {
+  bool ok = 1;
+  bytes value = 2;
+}
+
+message MapDeleteRequest {
+  string name = 1;
+  string key = 2;
+}
+
+message MapDeleteResponse {
+  bool ok = 1;
+}
+
+message MapCountRequest {
+  string name = 1;
+}
+
+message MapCountResponse {
+  bool ok = 1;
+  uint32 count = 2;
+}
+
+message MapKeysRequest {
+  string name = 1;
+}
+
+message MapKeysResponse {
+  bool ok = 1;
+  repeated string keys = 2;
+}

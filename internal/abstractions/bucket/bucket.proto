@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package bucket;
+
+service BucketService {
+  rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
+}
+
+message PutObjectRequest {
+}
+
+message PutObjectResponse {
+  bool ok = 1;
+}
+
