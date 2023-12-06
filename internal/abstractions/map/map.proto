@@ -9,6 +9,7 @@ service MapService {
   rpc MapGet(MapGetRequest) returns (MapGetResponse) {}
   rpc MapDelete(MapDeleteRequest) returns (MapDeleteResponse) {}
   rpc MapCount(MapCountRequest) returns (MapCountResponse) {}
+  rpc MapKeys(MapKeysRequest) returns (MapKeysResponse) {}
 }
 
 message MapSetRequest {
@@ -31,7 +32,6 @@ message MapGetResponse {
   bytes value = 2;
 }
 
-
 message MapDeleteRequest {
   string name = 1;
   string key = 2;
@@ -48,4 +48,13 @@ message MapCountRequest {
 message MapCountResponse {
   bool ok = 1;
   uint32 count = 2;
+}
+
+message MapKeysRequest {
+  string name = 1;
+}
+
+message MapKeysResponse {
+  bool ok = 1;
+  repeated string keys = 2;
 }

@@ -26,6 +26,7 @@ type MapServiceClient interface {
 	MapGet(ctx context.Context, in *MapGetRequest, opts ...grpc.CallOption) (*MapGetResponse, error)
 	MapDelete(ctx context.Context, in *MapDeleteRequest, opts ...grpc.CallOption) (*MapDeleteResponse, error)
 	MapCount(ctx context.Context, in *MapCountRequest, opts ...grpc.CallOption) (*MapCountResponse, error)
+	MapKeys(ctx context.Context, in *MapKeysRequest, opts ...grpc.CallOption) (*MapKeysResponse, error)
 }
 
 type mapServiceClient struct {
@@ -72,6 +73,15 @@ func (c *mapServiceClient) MapCount(ctx context.Context, in *MapCountRequest, op
 	return out, nil
 }
 
+func (c *mapServiceClient) MapKeys(ctx context.Context, in *MapKeysRequest, opts ...grpc.CallOption) (*MapKeysResponse, error) {
+	out := new(MapKeysResponse)
+	err := c.cc.Invoke(ctx, "/map.MapService/MapKeys", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MapServiceServer is the server API for MapService service.
 // All implementations must embed UnimplementedMapServiceServer
 // for forward compatibility
@@ -80,6 +90,7 @@ type MapServiceServer interface {
 	MapGet(context.Context, *MapGetRequest) (*MapGetResponse, error)
 	MapDelete(context.Context, *MapDeleteRequest) (*MapDeleteResponse, error)
 	MapCount(context.Context, *MapCountRequest) (*MapCountResponse, error)
+	MapKeys(context.Context, *MapKeysRequest) (*MapKeysResponse, error)
 	mustEmbedUnimplementedMapServiceServer()
 }
 
@@ -98,6 +109,9 @@ func (UnimplementedMapServiceServer) MapDelete(context.Context, *MapDeleteReques
 }
 func (UnimplementedMapServiceServer) MapCount(context.Context, *MapCountRequest) (*MapCountResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method MapCount not implemented")
+}
+func (UnimplementedMapServiceServer) MapKeys(context.Context, *MapKeysRequest) (*MapKeysResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MapKeys not implemented")
 }
 func (UnimplementedMapServiceServer) mustEmbedUnimplementedMapServiceServer() {}
 
@@ -184,6 +198,24 @@ func _MapService_MapCount_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MapService_MapKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MapKeysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MapServiceServer).MapKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/map.MapService/MapKeys",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MapServiceServer).MapKeys(ctx, req.(*MapKeysRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MapService_ServiceDesc is the grpc.ServiceDesc for MapService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -206,6 +238,10 @@ var MapService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MapCount",
 			Handler:    _MapService_MapCount_Handler,
+		},
+		{
+			MethodName: "MapKeys",
+			Handler:    _MapService_MapKeys_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

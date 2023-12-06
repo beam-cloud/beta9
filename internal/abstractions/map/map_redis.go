@@ -34,3 +34,7 @@ func (m *RedisMapService) MapDelete(ctx context.Context, in *pb.MapDeleteRequest
 func (m *RedisMapService) MapCount(ctx context.Context, in *pb.MapCountRequest) (*pb.MapCountResponse, error) {
 	return &pb.MapCountResponse{Ok: false, Count: 0}, nil
 }
+
+func (m *RedisMapService) MapKeys(ctx context.Context, in *pb.MapKeysRequest) (*pb.MapKeysResponse, error) {
+	return &pb.MapKeysResponse{Ok: false, Keys: []string{"test", "test2"}}, nil
+}

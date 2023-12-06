@@ -11,4 +11,5 @@ type MapService interface {
 	MapGet(ctx context.Context, in *pb.MapGetRequest) (*pb.MapGetResponse, error)
 	MapDelete(ctx context.Context, in *pb.MapDeleteRequest) (*pb.MapDeleteResponse, error)
 	MapCount(ctx context.Context, in *pb.MapCountRequest) (*pb.MapCountResponse, error)
+	MapKeys(ctx context.Context, in *pb.MapKeysRequest) (*pb.MapKeysResponse, error)
 }
