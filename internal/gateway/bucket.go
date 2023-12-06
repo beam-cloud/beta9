@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/adapters/queue"
 	"github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/integrations/queue"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"

@@ -6,15 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/adapters/queue"
 	common "github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/integrations/queue"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
@@ -140,30 +137,30 @@ func NewGateway() (*Gateway, error) {
 	return gateway, nil
 }
 
-func (a *Gateway) monitorBuckets() {
+func (g *Gateway) monitorBuckets() {
 	for {
 		select {
-		case bucketName := <-a.unloadBucketChan:
-			a.unloadRequestBucket(bucketName)
-		case <-a.ctx.Done():
+		case bucketName := <-g.unloadBucketChan:
+			g.unloadRequestBucket(bucketName)
+		case <-g.ctx.Done():
 			return
 		}
 	}
 }
 
-func (a *Gateway) handleDeploymentEvents() {
+func (g *Gateway) handleDeploymentEvents() {
 	for {
 		select {
-		case event := <-a.keyEventChan:
+		case event := <-g.keyEventChan:
 			containerId := fmt.Sprintf("%s%s", types.DeploymentContainerPrefix, event.Key)
 			operation := event.Operation
 
 			containerIdParts := strings.Split(containerId, "-")
 			bucketName := strings.Join(containerIdParts[1:3], "-")
 
-			bucket, ok := a.RequestBuckets[bucketName]
+			bucket, ok := g.RequestBuckets[bucketName]
 			if !ok {
-				_bucket, err := a.loadDeploymentRequestBucket(bucketName)
+				_bucket, err := g.loadDeploymentRequestBucket(bucketName)
 				bucket = *_bucket
 				if err != nil {
 					continue
@@ -184,13 +181,13 @@ func (a *Gateway) handleDeploymentEvents() {
 					Change:      -1,
 				}
 			}
-		case <-a.ctx.Done():
+		case <-g.ctx.Done():
 			return
 		}
 	}
 }
 
-func (a *Gateway) parseAppConfig(config json.RawMessage) (types.BeamAppConfig, error) {
+func (g *Gateway) parseAppConfig(config json.RawMessage) (types.BeamAppConfig, error) {
 	var appConfig types.BeamAppConfig
 	err := json.Unmarshal(config, &appConfig)
 	if err != nil {
@@ -201,8 +198,8 @@ func (a *Gateway) parseAppConfig(config json.RawMessage) (types.BeamAppConfig, e
 }
 
 // Given a bucket name, load request bucket
-func (a *Gateway) loadDeploymentRequestBucket(bucketName string) (*types.RequestBucket, error) {
-	requestBucket, ok := a.RequestBuckets[bucketName]
+func (g *Gateway) loadDeploymentRequestBucket(bucketName string) (*types.RequestBucket, error) {
+	requestBucket, ok := g.RequestBuckets[bucketName]
 	if ok {
 		return &requestBucket, nil
 	}
@@ -219,17 +216,17 @@ func (a *Gateway) loadDeploymentRequestBucket(bucketName string) (*types.Request
 	}
 
 	version := uint(version64)
-	appDeployment, app, deploymentPackage, err := a.BeamRepo.GetDeployment(appId, &version)
+	appDeployment, app, deploymentPackage, err := g.BeamRepo.GetDeployment(appId, &version)
 	if err != nil || appDeployment == nil {
 		return nil, err
 	}
 
-	identity, err := a.BeamRepo.RetrieveUserByPk(app.IdentityId)
+	identity, err := g.BeamRepo.RetrieveUserByPk(app.IdentityId)
 	if err != nil || identity == nil {
 		return nil, err
 	}
 
-	appConfig, err := a.parseAppConfig(deploymentPackage.Config)
+	appConfig, err := g.parseAppConfig(deploymentPackage.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -291,19 +288,19 @@ func (a *Gateway) loadDeploymentRequestBucket(bucketName string) (*types.Request
 		Workers:           workers,
 	}
 
-	bucket, err := NewDeploymentRequestBucket(config, a)
+	bucket, err := NewDeploymentRequestBucket(config, g)
 	if err != nil {
 		return nil, err
 	}
 
-	a.RequestBuckets[bucketName] = bucket
+	g.RequestBuckets[bucketName] = bucket
 
 	log.Printf("Watching app <%s>", bucketName)
 	return &bucket, nil
 }
 
-func (a *Gateway) loadServeRequestBucket(bucketName string) (*types.RequestBucket, error) {
-	requestBucket, ok := a.RequestBuckets[bucketName]
+func (g *Gateway) loadServeRequestBucket(bucketName string) (*types.RequestBucket, error) {
+	requestBucket, ok := g.RequestBuckets[bucketName]
 	if ok {
 		return &requestBucket, nil
 	}
@@ -315,18 +312,18 @@ func (a *Gateway) loadServeRequestBucket(bucketName string) (*types.RequestBucke
 
 	appId := splitBucketName[0]
 	serveId := splitBucketName[1]
-	appServe, app, err := a.BeamRepo.GetServe(appId, serveId)
+	appServe, app, err := g.BeamRepo.GetServe(appId, serveId)
 
 	if err != nil || appServe == nil {
 		return nil, err
 	}
 
-	identity, err := a.BeamRepo.RetrieveUserByPk(app.IdentityId)
+	identity, err := g.BeamRepo.RetrieveUserByPk(app.IdentityId)
 	if err != nil || identity == nil {
 		return nil, err
 	}
 
-	appConfig, err := a.parseAppConfig(appServe.Config)
+	appConfig, err := g.parseAppConfig(appServe.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -342,32 +339,32 @@ func (a *Gateway) loadServeRequestBucket(bucketName string) (*types.RequestBucke
 		ImageTag:    appServe.ImageTag,
 	}
 
-	bucket, err := NewServeRequestBucket(config, a)
+	bucket, err := NewServeRequestBucket(config, g)
 	if err != nil {
 		return nil, err
 	}
 
-	a.RequestBuckets[bucketName] = bucket
+	g.RequestBuckets[bucketName] = bucket
 
 	log.Printf("Watching app <%s>", bucketName)
 	return &bucket, nil
 }
 
 // Stop monitoring request bucket
-func (a *Gateway) unloadRequestBucket(bucketName string) {
-	requestBucket, ok := a.RequestBuckets[bucketName]
+func (g *Gateway) unloadRequestBucket(bucketName string) {
+	requestBucket, ok := g.RequestBuckets[bucketName]
 	if !ok {
 		return
 	}
 	requestBucket.Close()
-	delete(a.RequestBuckets, bucketName)
+	delete(g.RequestBuckets, bucketName)
 }
 
 // Retrieve the deployment bucket name from Store
-func (a *Gateway) GetDeploymentRequestBucket(appId string, version *types.RequestedVersion) (*types.RequestBucket, error) {
+func (g *Gateway) GetDeploymentRequestBucket(appId string, version *types.RequestedVersion) (*types.RequestBucket, error) {
 	if version.Type == types.DefaultRequestedVersion {
-		bucketName, _ := a.stateStore.GetDefaultDeploymentBucket(appId)
-		bucket, err := a.loadDeploymentRequestBucket(bucketName)
+		bucketName, _ := g.stateStore.GetDefaultDeploymentBucket(appId)
+		bucket, err := g.loadDeploymentRequestBucket(bucketName)
 		if err != nil {
 			return nil, fmt.Errorf("default bucket <%v> not found in cache or database: %v", bucketName, err)
 		}
@@ -375,12 +372,12 @@ func (a *Gateway) GetDeploymentRequestBucket(appId string, version *types.Reques
 	}
 
 	if version.Type == types.LatestRequestedVersion {
-		deployment, _, _, err := a.BeamRepo.GetDeployment(appId, nil)
+		deployment, _, _, err := g.BeamRepo.GetDeployment(appId, nil)
 		if err != nil {
 			return nil, fmt.Errorf("latest version not found in database: %v", err)
 		}
 		bucketName := common.Names.RequestBucketName(appId, deployment.Version)
-		bucket, err := a.loadDeploymentRequestBucket(bucketName)
+		bucket, err := g.loadDeploymentRequestBucket(bucketName)
 		if err != nil {
 			return nil, fmt.Errorf("bucket <%v> not found in cache or database: %v", bucketName, err)
 		}
@@ -389,16 +386,16 @@ func (a *Gateway) GetDeploymentRequestBucket(appId string, version *types.Reques
 
 	// When version is any other value, we assume it is a specific version, so lets get it
 	bucketName := common.Names.RequestBucketName(appId, version.Value)
-	bucket, err := a.loadDeploymentRequestBucket(bucketName)
+	bucket, err := g.loadDeploymentRequestBucket(bucketName)
 	if err != nil {
 		return nil, fmt.Errorf("bucket <%v> not found in cache or database: %v", bucketName, err)
 	}
 	return bucket, nil
 }
 
-func (a *Gateway) GetServeRequestBucket(appId string, serveId string) (*types.RequestBucket, error) {
+func (g *Gateway) GetServeRequestBucket(appId string, serveId string) (*types.RequestBucket, error) {
 	bucketName := common.Names.RequestBucketNameId(appId, serveId)
-	bucket, err := a.loadServeRequestBucket(bucketName)
+	bucket, err := g.loadServeRequestBucket(bucketName)
 	if err != nil {
 		return nil, fmt.Errorf("bucket <%v> not found in cache or database: %v", bucketName, err)
 	}
@@ -406,69 +403,76 @@ func (a *Gateway) GetServeRequestBucket(appId string, serveId string) (*types.Re
 }
 
 // Log request metrics
-func (a *Gateway) LogRequest(requestBucketName string, startTime time.Time, ctx *gin.Context) {
-	a.metricsRepo.BeamDeploymentRequestDuration(requestBucketName, time.Since(startTime))
-	a.metricsRepo.BeamDeploymentRequestStatus(requestBucketName, ctx.Writer.Status())
-	a.metricsRepo.BeamDeploymentRequestCount(requestBucketName)
+func (g *Gateway) LogRequest(requestBucketName string, startTime time.Time, ctx *gin.Context) {
+	g.metricsRepo.BeamDeploymentRequestDuration(requestBucketName, time.Since(startTime))
+	g.metricsRepo.BeamDeploymentRequestStatus(requestBucketName, ctx.Writer.Status())
+	g.metricsRepo.BeamDeploymentRequestCount(requestBucketName)
 }
 
-func (a *Gateway) startProxyServer(port string) error {
+func (g *Gateway) startProxyServer(port string) error {
 	log.Printf("Starting proxy server on port %s", port)
 
 	router := gin.Default()
 
 	// appGroup := router.Group("/")
-	// apiv1.NewAppGroup(appGroup, a, basicAuthMiddleware(a.BeamRepo, a.stateStore))
+	// apiv1.NewAppGroup(appGroup, a, basicAuthMiddleware(g.BeamRepo, g.stateStore))
 
 	return router.Run(port)
 }
 
-func (a *Gateway) startInternalServer(port string) error {
+func (g *Gateway) startInternalServer(port string) error {
 	log.Printf("Starting internal server on port %s", port)
 
 	router := gin.New()
 	router.Use(common.LoggingMiddlewareGin(), gin.Recovery())
 
 	// appGroup := router.Group("/")
-	// apiv1.NewAppGroup(appGroup, a, serviceAuthMiddleware(a.BeamRepo))
+	// apiv1.NewAppGroup(appGroup, a, serviceAuthMiddleware(g.BeamRepo))
 
 	// healthGroup := router.Group("/healthz")
-	// apiv1.NewHealthGroup(healthGroup, a.redisClient)
+	// apiv1.NewHealthGroup(healthGroup, g.redisClient)
 
 	// scheduleGroup := router.Group("/schedule")
-	// apiv1.NewScheduleGroup(scheduleGroup, a.beatService, serviceAuthMiddleware(a.BeamRepo))
+	// apiv1.NewScheduleGroup(scheduleGroup, g.beatService, serviceAuthMiddleware(g.BeamRepo))
 
 	return router.Run(port)
 }
 
 // Gateway entry point
-func (a *Gateway) Start() {
-	errCh := make(chan error)
-	terminationSignal := make(chan os.Signal, 1)
-	defer close(errCh)
-	defer close(terminationSignal)
-
-	go func() {
-		time.Sleep(3 * time.Second)
-		err := a.startInternalServer(GatewayConfig.InternalPort)
-		errCh <- fmt.Errorf("internal server error: %v", err)
-	}()
-
-	go func() {
-		err := a.startProxyServer(GatewayConfig.ExternalPort)
-		errCh <- fmt.Errorf("proxy server error: %v", err)
-	}()
-
-	signal.Notify(terminationSignal, os.Interrupt, syscall.SIGTERM)
-
-	select {
-	case <-terminationSignal:
-		log.Print("Termination signal received. ")
-	case err := <-errCh:
-		log.Printf("An error has occured: %v ", err)
+func (g *Gateway) Start() {
+	gw, err := NewGatewayService()
+	if err != nil {
+		return
 	}
-	log.Println("Shutting down...")
 
-	a.cancelFunc()
-	a.redisClient.Close()
+	gw.StartServer()
+
+	// errCh := make(chan error)
+	// terminationSignal := make(chan os.Signal, 1)
+	// defer close(errCh)
+	// defer close(terminationSignal)
+
+	// go func() {
+	// 	time.Sleep(3 * time.Second)
+	// 	err := g.startInternalServer(GatewayConfig.InternalPort)
+	// 	errCh <- fmt.Errorf("internal server error: %v", err)
+	// }()
+
+	// go func() {
+	// 	err := g.startProxyServer(GatewayConfig.ExternalPort)
+	// 	errCh <- fmt.Errorf("proxy server error: %v", err)
+	// }()
+
+	// signal.Notify(terminationSignal, os.Interrupt, syscall.SIGTERM)
+
+	// select {
+	// case <-terminationSignal:
+	// 	log.Print("Termination signal received. ")
+	// case err := <-errCh:
+	// 	log.Printf("An error has occured: %v ", err)
+	// }
+	// log.Println("Shutting down...")
+
+	// g.cancelFunc()
+	// g.redisClient.Close()
 }

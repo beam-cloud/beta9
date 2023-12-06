@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package map;
+
+service MapService {
+  rpc Hello(HelloRequest) returns (HelloResponse) {}
+}
+
+message HelloRequest {
+}
+
+message HelloResponse {
+  bool ok = 1;
+}
