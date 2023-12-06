@@ -6,21 +6,35 @@ package map;
 
 service MapService {
   rpc MapSet(MapSetRequest) returns (MapSetResponse) {}
+  rpc MapGet(MapGetRequest) returns (MapGetResponse) {}
   rpc MapDelete(MapDeleteRequest) returns (MapDeleteResponse) {}
   rpc MapCount(MapCountRequest) returns (MapCountResponse) {}
 }
 
 message MapSetRequest {
-  string key = 1;
-  bytes value = 2;
+  string name = 1;
+  string key = 2;
+  bytes value = 3;
 }
 
 message MapSetResponse {
   bool ok = 1;
 }
 
+message MapGetRequest {
+  string name = 1;
+  string key = 2;
+}
+
+message MapGetResponse {
+  bool ok = 1;
+  bytes value = 2;
+}
+
+
 message MapDeleteRequest {
-  string key = 1;
+  string name = 1;
+  string key = 2;
 }
 
 message MapDeleteResponse {
@@ -28,7 +42,7 @@ message MapDeleteResponse {
 }
 
 message MapCountRequest {
-  string key = 1;
+  string name = 1;
 }
 
 message MapCountResponse {

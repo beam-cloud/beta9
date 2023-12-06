@@ -23,6 +23,7 @@ const _ = grpc.SupportPackageIsVersion7
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type MapServiceClient interface {
 	MapSet(ctx context.Context, in *MapSetRequest, opts ...grpc.CallOption) (*MapSetResponse, error)
+	MapGet(ctx context.Context, in *MapGetRequest, opts ...grpc.CallOption) (*MapGetResponse, error)
 	MapDelete(ctx context.Context, in *MapDeleteRequest, opts ...grpc.CallOption) (*MapDeleteResponse, error)
 	MapCount(ctx context.Context, in *MapCountRequest, opts ...grpc.CallOption) (*MapCountResponse, error)
 }
@@ -38,6 +39,15 @@ func NewMapServiceClient(cc grpc.ClientConnInterface) MapServiceClient {
 func (c *mapServiceClient) MapSet(ctx context.Context, in *MapSetRequest, opts ...grpc.CallOption) (*MapSetResponse, error) {
 	out := new(MapSetResponse)
 	err := c.cc.Invoke(ctx, "/map.MapService/MapSet", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *mapServiceClient) MapGet(ctx context.Context, in *MapGetRequest, opts ...grpc.CallOption) (*MapGetResponse, error) {
+	out := new(MapGetResponse)
+	err := c.cc.Invoke(ctx, "/map.MapService/MapGet", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -67,6 +77,7 @@ func (c *mapServiceClient) MapCount(ctx context.Context, in *MapCountRequest, op
 // for forward compatibility
 type MapServiceServer interface {
 	MapSet(context.Context, *MapSetRequest) (*MapSetResponse, error)
+	MapGet(context.Context, *MapGetRequest) (*MapGetResponse, error)
 	MapDelete(context.Context, *MapDeleteRequest) (*MapDeleteResponse, error)
 	MapCount(context.Context, *MapCountRequest) (*MapCountResponse, error)
 	mustEmbedUnimplementedMapServiceServer()
@@ -78,6 +89,9 @@ type UnimplementedMapServiceServer struct {
 
 func (UnimplementedMapServiceServer) MapSet(context.Context, *MapSetRequest) (*MapSetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method MapSet not implemented")
+}
+func (UnimplementedMapServiceServer) MapGet(context.Context, *MapGetRequest) (*MapGetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MapGet not implemented")
 }
 func (UnimplementedMapServiceServer) MapDelete(context.Context, *MapDeleteRequest) (*MapDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method MapDelete not implemented")
@@ -112,6 +126,24 @@ func _MapService_MapSet_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MapServiceServer).MapSet(ctx, req.(*MapSetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MapService_MapGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MapGetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MapServiceServer).MapGet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/map.MapService/MapGet",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MapServiceServer).MapGet(ctx, req.(*MapGetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -162,6 +194,10 @@ var MapService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MapSet",
 			Handler:    _MapService_MapSet_Handler,
+		},
+		{
+			MethodName: "MapGet",
+			Handler:    _MapService_MapGet_Handler,
 		},
 		{
 			MethodName: "MapDelete",

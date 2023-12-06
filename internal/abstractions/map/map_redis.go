@@ -23,6 +23,10 @@ func (m *RedisMapService) MapSet(ctx context.Context, in *pb.MapSetRequest) (*pb
 	return &pb.MapSetResponse{Ok: true}, nil
 }
 
+func (m *RedisMapService) MapGet(ctx context.Context, in *pb.MapGetRequest) (*pb.MapGetResponse, error) {
+	return &pb.MapGetResponse{Ok: true, Value: []byte{}}, nil
+}
+
 func (m *RedisMapService) MapDelete(ctx context.Context, in *pb.MapDeleteRequest) (*pb.MapDeleteResponse, error) {
 	return &pb.MapDeleteResponse{Ok: false}, nil
 }
