@@ -86,7 +86,7 @@ func NewGateway() (*Gateway, error) {
 
 // Gateway entry point
 func (g *Gateway) Start() error {
-	listener, err := net.Listen("tcp", "0.0.0.0:1993")
+	listener, err := net.Listen("tcp", GatewayConfig.GrpcServerAddress)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
@@ -118,7 +118,7 @@ func (g *Gateway) Start() error {
 		}
 	}()
 
-	log.Println("Gateway grpc server running @", "0.0.0.0:1993")
+	log.Println("Gateway grpc server running @", GatewayConfig.GrpcServerAddress)
 
 	terminationSignal := make(chan os.Signal, 1)
 	defer close(terminationSignal)

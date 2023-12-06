@@ -4,26 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"log"
 
-	env "github.com/aws/karpenter/pkg/utils/env"
 	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
-
-var opts = SchedulerOpts{}
-
-func init() {
-	flag.StringVar(&opts.Addr, "addr", env.WithDefaultString("DEFAULT_ADDRESS", SchedulerConfig.GrpcServerAddress), "Default address to bind Scheduler server to.")
-}
-
-type SchedulerOpts struct {
-	Addr string
-}
 
 type SchedulerService struct {
 	pb.UnimplementedSchedulerServer
