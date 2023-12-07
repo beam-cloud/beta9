@@ -20,6 +20,8 @@ spec:
             - name: beam-port
               containerPort: 1993
               protocol: TCP
+          securityContext:
+            privileged: true
 ---
 apiVersion: v1
 kind: Service
