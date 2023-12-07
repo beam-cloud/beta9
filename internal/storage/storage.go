@@ -13,4 +13,5 @@ What do we need the storage interface to look like?
 
 type Storage interface {
 	Mount(path string) error
+	Format(fsName string) error
 }
