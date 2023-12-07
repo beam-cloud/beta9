@@ -24,6 +24,9 @@ RUN go mod download
 
 COPY . .
 
+RUN apt-get update && apt-get install -y curl git
+RUN curl -sSL https://d.juicefs.com/install | sh -
+
 RUN go build -o /workspace/bin/beam /workspace/cmd/beam/main.go
 RUN go build -o /workspace/bin/worker /workspace/cmd/worker/main.go
 
