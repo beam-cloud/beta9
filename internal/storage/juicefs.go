@@ -24,7 +24,6 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		localPath,
 	)
 
-	// Start the command in a new goroutine
 	go func() {
 		output, err := s.mountCmd.CombinedOutput()
 		if err != nil {
