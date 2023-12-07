@@ -22,8 +22,8 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type GatewayServiceClient interface {
-	VerifyBuild(ctx context.Context, in *VerifyBuildRequest, opts ...grpc.CallOption) (*VerifyBuildResponse, error)
-	Build(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (GatewayService_BuildClient, error)
+	VerifyBuild(ctx context.Context, in *VerifyImageBuildRequest, opts ...grpc.CallOption) (*VerifyImageBuildResponse, error)
+	Build(ctx context.Context, in *ImageBuildRequest, opts ...grpc.CallOption) (GatewayService_BuildClient, error)
 }
 
 type gatewayServiceClient struct {
@@ -34,8 +34,8 @@ func NewGatewayServiceClient(cc grpc.ClientConnInterface) GatewayServiceClient {
 	return &gatewayServiceClient{cc}
 }
 
-func (c *gatewayServiceClient) VerifyBuild(ctx context.Context, in *VerifyBuildRequest, opts ...grpc.CallOption) (*VerifyBuildResponse, error) {
-	out := new(VerifyBuildResponse)
+func (c *gatewayServiceClient) VerifyBuild(ctx context.Context, in *VerifyImageBuildRequest, opts ...grpc.CallOption) (*VerifyImageBuildResponse, error) {
+	out := new(VerifyImageBuildResponse)
 	err := c.cc.Invoke(ctx, "/gateway.GatewayService/VerifyBuild", in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -43,7 +43,7 @@ func (c *gatewayServiceClient) VerifyBuild(ctx context.Context, in *VerifyBuildR
 	return out, nil
 }
 
-func (c *gatewayServiceClient) Build(ctx context.Context, in *BuildRequest, opts ...grpc.CallOption) (GatewayService_BuildClient, error) {
+func (c *gatewayServiceClient) Build(ctx context.Context, in *ImageBuildRequest, opts ...grpc.CallOption) (GatewayService_BuildClient, error) {
 	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[0], "/gateway.GatewayService/Build", opts...)
 	if err != nil {
 		return nil, err
@@ -59,7 +59,7 @@ func (c *gatewayServiceClient) Build(ctx context.Context, in *BuildRequest, opts
 }
 
 type GatewayService_BuildClient interface {
-	Recv() (*BuildResponse, error)
+	Recv() (*ImageBuildResponse, error)
 	grpc.ClientStream
 }
 
@@ -67,8 +67,8 @@ type gatewayServiceBuildClient struct {
 	grpc.ClientStream
 }
 
-func (x *gatewayServiceBuildClient) Recv() (*BuildResponse, error) {
-	m := new(BuildResponse)
+func (x *gatewayServiceBuildClient) Recv() (*ImageBuildResponse, error) {
+	m := new(ImageBuildResponse)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
@@ -79,8 +79,8 @@ func (x *gatewayServiceBuildClient) Recv() (*BuildResponse, error) {
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
 type GatewayServiceServer interface {
-	VerifyBuild(context.Context, *VerifyBuildRequest) (*VerifyBuildResponse, error)
-	Build(*BuildRequest, GatewayService_BuildServer) error
+	VerifyBuild(context.Context, *VerifyImageBuildRequest) (*VerifyImageBuildResponse, error)
+	Build(*ImageBuildRequest, GatewayService_BuildServer) error
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -88,10 +88,10 @@ type GatewayServiceServer interface {
 type UnimplementedGatewayServiceServer struct {
 }
 
-func (UnimplementedGatewayServiceServer) VerifyBuild(context.Context, *VerifyBuildRequest) (*VerifyBuildResponse, error) {
+func (UnimplementedGatewayServiceServer) VerifyBuild(context.Context, *VerifyImageBuildRequest) (*VerifyImageBuildResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method VerifyBuild not implemented")
 }
-func (UnimplementedGatewayServiceServer) Build(*BuildRequest, GatewayService_BuildServer) error {
+func (UnimplementedGatewayServiceServer) Build(*ImageBuildRequest, GatewayService_BuildServer) error {
 	return status.Errorf(codes.Unimplemented, "method Build not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
@@ -108,7 +108,7 @@ func RegisterGatewayServiceServer(s grpc.ServiceRegistrar, srv GatewayServiceSer
 }
 
 func _GatewayService_VerifyBuild_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(VerifyBuildRequest)
+	in := new(VerifyImageBuildRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -120,13 +120,13 @@ func _GatewayService_VerifyBuild_Handler(srv interface{}, ctx context.Context, d
 		FullMethod: "/gateway.GatewayService/VerifyBuild",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).VerifyBuild(ctx, req.(*VerifyBuildRequest))
+		return srv.(GatewayServiceServer).VerifyBuild(ctx, req.(*VerifyImageBuildRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _GatewayService_Build_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(BuildRequest)
+	m := new(ImageBuildRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func _GatewayService_Build_Handler(srv interface{}, stream grpc.ServerStream) er
 }
 
 type GatewayService_BuildServer interface {
-	Send(*BuildResponse) error
+	Send(*ImageBuildResponse) error
 	grpc.ServerStream
 }
 
@@ -142,7 +142,7 @@ type gatewayServiceBuildServer struct {
 	grpc.ServerStream
 }
 
-func (x *gatewayServiceBuildServer) Send(m *BuildResponse) error {
+func (x *gatewayServiceBuildServer) Send(m *ImageBuildResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 

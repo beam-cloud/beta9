@@ -5,11 +5,11 @@ option go_package = "github.com/beam-cloud/beam/proto";
 package gateway;
 
 service GatewayService {
-  rpc VerifyBuild(VerifyBuildRequest) returns (VerifyBuildResponse) {}
-  rpc Build(BuildRequest) returns (stream BuildResponse) {}
+  rpc VerifyBuild(VerifyImageBuildRequest) returns (VerifyImageBuildResponse) {}
+  rpc Build(ImageBuildRequest) returns (stream ImageBuildResponse) {}
 }
 
-message VerifyBuildRequest {
+message VerifyImageBuildRequest {
   string python_version = 1;
   repeated string python_packages = 2;
   repeated string commands = 3;
@@ -17,13 +17,13 @@ message VerifyBuildRequest {
   string existing_image_uri = 5;
 }
 
-message VerifyBuildResponse {
+message VerifyImageBuildResponse {
   string image_tag = 1;
   bool valid = 2;
   bool exists = 3;
 }
 
-message BuildRequest {
+message ImageBuildRequest {
   string image_tag = 1;
 
   // These parameters are used for a "beam" managed image
@@ -39,7 +39,7 @@ message BuildRequest {
   optional string existing_image_creds = 7;
 }
 
-message BuildResponse {
+message ImageBuildResponse {
   string image_tag = 1;
   string msg = 2;
   bool done = 3;
