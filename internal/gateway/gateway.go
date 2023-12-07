@@ -12,6 +12,7 @@ import (
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
+	"github.com/beam-cloud/beam/internal/storage"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
 	beat "github.com/beam-cloud/beat/pkg"
@@ -28,6 +29,7 @@ type Gateway struct {
 	redisClient *common.RedisClient
 	BeamRepo    repository.BeamRepository
 	metricsRepo repository.MetricsStatsdRepository
+	Storage     storage.Storage
 
 	unloadBucketChan chan string
 	keyEventManager  *common.KeyEventManager
@@ -42,6 +44,23 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
+	Storage, err := storage.NewJuiceFsStorage()
+	if err != nil {
+		return nil, err
+	}
+
+	// Format filesystem
+	err = Storage.Format(GatewayConfig.DefaultFilesystemName)
+	if err != nil {
+		log.Fatalf("Unable to format filesystem: %+v\n", err)
+	}
+
+	// Mount filesystem
+	err = Storage.Mount(GatewayConfig.DefaultFilesystemPath)
+	if err != nil {
+		log.Fatalf("Unable to mount filesystem: %+v\n", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	gateway := &Gateway{
 		redisClient:      redisClient,
@@ -49,6 +68,7 @@ func NewGateway() (*Gateway, error) {
 		cancelFunc:       cancel,
 		keyEventChan:     make(chan common.KeyEvent),
 		unloadBucketChan: make(chan string),
+		Storage:          Storage,
 	}
 
 	beamRepo, err := repository.NewBeamPostgresRepository()
