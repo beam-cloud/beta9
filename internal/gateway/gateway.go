@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
-	"github.com/beam-cloud/beam/internal/abstractions/queue"
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
@@ -27,7 +26,6 @@ type Gateway struct {
 	beatService *beat.BeatService
 	eventBus    *common.EventBus
 	redisClient *common.RedisClient
-	QueueClient queue.TaskQueue
 	BeamRepo    repository.BeamRepository
 	metricsRepo repository.MetricsStatsdRepository
 
@@ -70,13 +68,11 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	gateway.QueueClient = queue.NewRedisQueueClient(redisClient)
 	gateway.BeamRepo = beamRepo
 	gateway.metricsRepo = metricsRepo
 	gateway.keyEventManager = keyEventManager
 	gateway.beatService = beatService
 
-	go gateway.QueueClient.MonitorTasks(gateway.ctx, beamRepo)
 	go gateway.keyEventManager.ListenForPattern(gateway.ctx, common.RedisKeys.SchedulerContainerState(types.DeploymentContainerPrefix), gateway.keyEventChan)
 	go gateway.beatService.Run(gateway.ctx)
 	// go gateway.eventBus.ReceiveEvents(gateway.ctx)
