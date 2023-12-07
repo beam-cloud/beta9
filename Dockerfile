@@ -25,6 +25,14 @@ RUN go mod download
 COPY . .
 
 RUN apt-get update && apt-get install -y curl git
+
+# Install FUSE
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    fuse3 libfuse3-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install JuiceFS
 RUN curl -sSL https://d.juicefs.com/install | sh -
 
 RUN go build -o /workspace/bin/beam /workspace/cmd/beam/main.go
