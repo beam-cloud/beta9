@@ -2,9 +2,9 @@ syntax = "proto3";
 
 option go_package = "github.com/beam-cloud/beam/proto";
 
-package imageservice;
+package gateway;
 
-service ImageService {
+service GatewayService {
   rpc VerifyBuild(VerifyBuildRequest) returns (VerifyBuildResponse) {}
   rpc Build(BuildRequest) returns (stream BuildResponse) {}
 }

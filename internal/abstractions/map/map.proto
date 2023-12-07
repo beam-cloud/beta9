@@ -18,9 +18,7 @@ message MapSetRequest {
   bytes value = 3;
 }
 
-message MapSetResponse {
-  bool ok = 1;
-}
+message MapSetResponse { bool ok = 1; }
 
 message MapGetRequest {
   string name = 1;
@@ -37,22 +35,16 @@ message MapDeleteRequest {
   string key = 2;
 }
 
-message MapDeleteResponse {
-  bool ok = 1;
-}
+message MapDeleteResponse { bool ok = 1; }
 
-message MapCountRequest {
-  string name = 1;
-}
+message MapCountRequest { string name = 1; }
 
 message MapCountResponse {
   bool ok = 1;
   uint32 count = 2;
 }
 
-message MapKeysRequest {
-  string name = 1;
-}
+message MapKeysRequest { string name = 1; }
 
 message MapKeysResponse {
   bool ok = 1;
