@@ -6,6 +6,9 @@ protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=
 protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ./cache.proto
 
 # Generate code for abstractions
+protoc -I ../internal/abstractions/image/ --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ../internal/abstractions/image/image.proto
+protoc -I ../internal/abstractions/image/ --python_betterproto_out=../../beam-sdk/src/beam/clients/  ../internal/abstractions/image/image.proto
+
 protoc -I ../internal/abstractions/map/ --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ../internal/abstractions/map/map.proto
 protoc -I ../internal/abstractions/map/ --python_betterproto_out=../../beam-sdk/src/beam/clients/  ../internal/abstractions/map/map.proto
 

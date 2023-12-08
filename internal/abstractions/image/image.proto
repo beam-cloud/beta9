@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package image;
+
+service ImageService {
+  rpc VerifyImageBuild(VerifyImageBuildRequest)
+      returns (VerifyImageBuildResponse) {}
+  rpc BuildImage(BuildImageRequest) returns (stream BuildImageResponse) {}
+}
+
+message VerifyImageBuildRequest {
+  string python_version = 1;
+  repeated string python_packages = 2;
+  repeated string commands = 3;
+  bool force_rebuild = 4;
+  string existing_image_uri = 5;
+}
+
+message VerifyImageBuildResponse {
+  string image_tag = 1;
+  bool valid = 2;
+  bool exists = 3;
+}
+
+message BuildImageRequest {
+  string image_tag = 1;
+
+  // These parameters are used for a "beam" managed image
+  string python_version = 2;
+  repeated string python_packages = 3;
+  repeated string commands = 4;
+
+  // These parameters are used for an existing image
+  string existing_image_uri = 5; // URI for an existing image in the format
+  // "docker://image-repo-name:tag"
+
+  string existing_image_creds = 6;
+}
+
+message BuildImageResponse {
+  string image_tag = 1;
+  string msg = 2;
+  bool done = 3;
+  bool success = 4;
+}
