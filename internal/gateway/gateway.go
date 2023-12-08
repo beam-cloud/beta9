@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/beam-cloud/beam/internal/abstractions/image"
 	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/repository"
@@ -115,6 +116,12 @@ func (g *Gateway) Start() error {
 		return err
 	}
 	pb.RegisterMapServiceServer(grpcServer, rm)
+
+	is, err := image.NewRuncImageService(context.TODO())
+	if err != nil {
+		return err
+	}
+	pb.RegisterImageServiceServer(grpcServer, is)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService()

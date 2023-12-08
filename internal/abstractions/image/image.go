@@ -19,7 +19,7 @@ type RuncImageService struct {
 	builder *Builder
 }
 
-func NewRuncImageService(ctx context.Context) (ImageService, error) {
+func NewRuncImageService(ctx context.Context) (*RuncImageService, error) {
 	builder, err := NewBuilder()
 	if err != nil {
 		return nil, err
