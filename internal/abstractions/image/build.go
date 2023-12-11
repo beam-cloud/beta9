@@ -527,6 +527,8 @@ func (b *Builder) createContainerBundle(containerId, baseImageName, baseImageTag
 	b.cacheLock.Lock()
 	defer b.cacheLock.Unlock()
 
+	log.Println("we're creating the container bundle here...")
+
 	cacheDir := b.getBaseImageCacheDir(baseImageName, baseImageTag)
 	imagePath := filepath.Join(b.userImageBuildPath, userImageTag)
 

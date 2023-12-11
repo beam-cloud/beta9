@@ -24,14 +24,14 @@ import (
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
 
-	BaseURL     string
-	beatService *beat.BeatService
-	eventBus    *common.EventBus
-	redisClient *common.RedisClient
-	BeamRepo    repository.BeamRepository
-	metricsRepo repository.MetricsStatsdRepository
-	Storage     storage.Storage
-
+	BaseURL          string
+	beatService      *beat.BeatService
+	eventBus         *common.EventBus
+	redisClient      *common.RedisClient
+	BeamRepo         repository.BeamRepository
+	metricsRepo      repository.MetricsStatsdRepository
+	Storage          storage.Storage
+	Scheduler        *scheduler.Scheduler
 	unloadBucketChan chan string
 	keyEventManager  *common.KeyEventManager
 	keyEventChan     chan common.KeyEvent
@@ -41,6 +41,11 @@ type Gateway struct {
 
 func NewGateway() (*Gateway, error) {
 	redisClient, err := common.NewRedisClient(common.WithClientName("BeamGateway"))
+	if err != nil {
+		return nil, err
+	}
+
+	Scheduler, err := scheduler.NewScheduler()
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +75,7 @@ func NewGateway() (*Gateway, error) {
 		keyEventChan:     make(chan common.KeyEvent),
 		unloadBucketChan: make(chan string),
 		Storage:          Storage,
+		Scheduler:        Scheduler,
 	}
 
 	beamRepo, err := repository.NewBeamPostgresRepository()
@@ -117,6 +123,7 @@ func (g *Gateway) Start() error {
 	}
 	pb.RegisterMapServiceServer(grpcServer, rm)
 
+	// Register image service
 	is, err := image.NewRuncImageService(context.TODO())
 	if err != nil {
 		return err

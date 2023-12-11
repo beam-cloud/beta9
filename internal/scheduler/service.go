@@ -56,7 +56,6 @@ func (wbs *SchedulerService) RunContainer(ctx context.Context, in *pb.RunContain
 
 	err = wbs.Scheduler.Run(&types.ContainerRequest{
 		ContainerId:     in.ContainerId,
-		Mode:            in.Mode,
 		EntryPoint:      in.EntryPoint,
 		Env:             in.Env,
 		Cpu:             cpuRequest,
