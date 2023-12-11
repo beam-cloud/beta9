@@ -63,7 +63,6 @@ func (wbs *SchedulerService) RunContainer(ctx context.Context, in *pb.RunContain
 		Gpu:             in.Gpu,
 		ImageTag:        in.ImageTag,
 		ScheduleTimeout: float64(in.ScheduleTimeout),
-		IdentityId:      in.IdentityId,
 	})
 
 	if err != nil {

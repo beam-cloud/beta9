@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/scheduler"
 	pb "github.com/beam-cloud/beam/proto"
 )
 
@@ -16,11 +17,12 @@ type ImageService interface {
 
 type RuncImageService struct {
 	pb.UnimplementedImageServiceServer
-	builder *Builder
+	builder   *Builder
+	scheduler *scheduler.Scheduler
 }
 
-func NewRuncImageService(ctx context.Context) (*RuncImageService, error) {
-	builder, err := NewBuilder()
+func NewRuncImageService(ctx context.Context, scheduler *scheduler.Scheduler) (*RuncImageService, error) {
+	builder, err := NewBuilder(scheduler)
 	if err != nil {
 		return nil, err
 	}

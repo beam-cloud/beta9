@@ -18,21 +18,19 @@ func NewMetricsStatsdRepository() *MetricsStatsd {
 	}
 }
 
-func (m *MetricsStatsd) ContainerStarted(containerId string, workerId string, identityId string) {
+func (m *MetricsStatsd) ContainerStarted(containerId string, workerId string) {
 	m.statSender.StatGaugeTags(types.ContainerLifecycleStatsKey, int(time.Now().UnixMilli()), map[string]string{
 		"container_id": containerId,
 		"worker_id":    workerId,
 		"status":       types.ContainerStatusStarted,
-		"identity_id":  identityId,
 	})
 }
 
-func (m *MetricsStatsd) ContainerStopped(containerId string, workerId string, identityId string) {
+func (m *MetricsStatsd) ContainerStopped(containerId string, workerId string) {
 	m.statSender.StatGaugeTags(types.ContainerLifecycleStatsKey, int(time.Now().UnixMilli()), map[string]string{
 		"container_id": containerId,
 		"worker_id":    workerId,
 		"status":       types.ContainerStatusStopped,
-		"identity_id":  identityId,
 	})
 }
 
@@ -50,10 +48,9 @@ func (m *MetricsStatsd) ContainerScheduled(containerId string) {
 	})
 }
 
-func (m *MetricsStatsd) ContainerDuration(containerId string, workerId string, identityId string, timestampNs int64, duration time.Duration) {
+func (m *MetricsStatsd) ContainerDuration(containerId string, workerId string, timestampNs int64, duration time.Duration) {
 	m.statSender.StatGaugeTags(types.ContainerDurationStatsKey, int(duration.Milliseconds()), map[string]string{
 		"container_id": containerId,
-		"identity_id":  identityId,
 		"worker_id":    workerId,
 		"timestamp_ns": fmt.Sprintf("%d", timestampNs),
 	})

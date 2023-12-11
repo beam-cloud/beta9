@@ -124,7 +124,7 @@ func (g *Gateway) Start() error {
 	pb.RegisterMapServiceServer(grpcServer, rm)
 
 	// Register image service
-	is, err := image.NewRuncImageService(context.TODO())
+	is, err := image.NewRuncImageService(context.TODO(), g.Scheduler)
 	if err != nil {
 		return err
 	}

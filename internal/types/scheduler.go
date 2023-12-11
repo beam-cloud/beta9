@@ -62,7 +62,6 @@ type ContainerRequest struct {
 	ImageTag        string    `json:"image_tag"`
 	Timestamp       time.Time `json:"timestamp"`
 	ScheduleTimeout float64   `json:"schedule_timeout"`
-	IdentityId      string    `json:"identity_id"`
 	OnScheduleChan  chan bool `json:"-"`
 	Agent           string    `json:"agent"`
 }

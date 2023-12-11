@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/scheduler"
+	"github.com/beam-cloud/beam/internal/types"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 
@@ -39,6 +41,7 @@ type Builder struct {
 	baseImageCachePath string
 	userImageBuildPath string
 	runcHandle         runc.Runc
+	scheduler          *scheduler.Scheduler
 	puller             *ImagePuller
 	cacheLock          sync.Mutex
 	baseConfigSpec     specs.Spec
@@ -64,7 +67,7 @@ type BaseImageCacheOpt struct {
 	Copies         int
 }
 
-func NewBuilder() (*Builder, error) {
+func NewBuilder(scheduler *scheduler.Scheduler) (*Builder, error) {
 	userImageBuildPath := "test" // filepath.Join(ImageServiceConfig.UserImageBuildPath)
 	baseImageCachePath := "test" // filepath.Join(ImageServiceConfig.BaseImageCachePath)
 
@@ -103,6 +106,7 @@ func NewBuilder() (*Builder, error) {
 		baseImageCachePath: baseImageCachePath,
 		userImageBuildPath: userImageBuildPath,
 		runcHandle:         runc.Runc{},
+		scheduler:          scheduler,
 		puller:             puller,
 		cacheLock:          sync.Mutex{},
 		baseConfigSpec:     baseConfigSpec,
@@ -263,68 +267,76 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}()
 	}
 
-	startTime := time.Now()
-	overlay, containerId, err := b.startBuildContainer(ctx, opts)
-	if err != nil {
-		log.Printf("failed to start container <%v>: %v", containerId, err)
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
-		return err
-	}
+	b.scheduler.Run(&types.ContainerRequest{
+		ContainerId: "test",
+		EntryPoint:  []string{"sleep", "10000"},
+		Env:         []string{},
+		Cpu:         1000,
+		Memory:      1024,
+	})
 
-	defer func() {
-		err := b.stopBuildContainer(ctx, containerId)
-		if err != nil {
-			log.Printf("unable to delete container<%s>: %v\n", containerId, err)
-		}
+	// startTime := time.Now()
+	// overlay, containerId, err := b.startBuildContainer(ctx, opts)
+	// if err != nil {
+	// 	log.Printf("failed to start container <%v>: %v", containerId, err)
+	// 	outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
+	// 	return err
+	// }
 
-		time.Sleep(time.Second * 1) // Give container a second to shut down
-		overlay.Cleanup()
-	}()
+	// defer func() {
+	// 	err := b.stopBuildContainer(ctx, containerId)
+	// 	if err != nil {
+	// 		log.Printf("unable to delete container<%s>: %v\n", containerId, err)
+	// 	}
 
-	log.Printf("container <%v> start took %v", containerId, time.Since(startTime))
+	// 	time.Sleep(time.Second * 1) // Give container a second to shut down
+	// 	overlay.Cleanup()
+	// }()
 
-	bundlePath := overlay.TopLayerPath()
-	err = b.generateRequirementsFile(bundlePath, opts)
-	if err != nil {
-		log.Printf("failed to generate python requirements for container <%v>: %v", containerId, err)
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
-		return err
-	}
+	// log.Printf("container <%v> start took %v", containerId, time.Since(startTime))
 
-	pipInstallCmd := fmt.Sprintf("%s -m pip install -r %s", opts.PythonVersion, filepath.Join("/", requirementsFilename))
-	opts.Commands = append(opts.Commands, pipInstallCmd)
+	// bundlePath := overlay.TopLayerPath()
+	// err = b.generateRequirementsFile(bundlePath, opts)
+	// if err != nil {
+	// 	log.Printf("failed to generate python requirements for container <%v>: %v", containerId, err)
+	// 	outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
+	// 	return err
+	// }
 
-	log.Printf("container <%v> building with options: %+v", containerId, opts)
-	startTime = time.Now()
+	// pipInstallCmd := fmt.Sprintf("%s -m pip install -r %s", opts.PythonVersion, filepath.Join("/", requirementsFilename))
+	// opts.Commands = append(opts.Commands, pipInstallCmd)
 
-	// Detect if python3.x is installed in the container, if not install it
-	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	if err := b.execute(ctx, containerId, checkPythonVersionCmd, opts, nil); err != nil {
-		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...", opts.PythonVersion)}
-		installCmd := b.getPythonInstallCommand(opts.PythonVersion)
-		opts.Commands = append([]string{installCmd}, opts.Commands...)
-	}
+	// log.Printf("container <%v> building with options: %+v", containerId, opts)
+	// startTime = time.Now()
 
-	for _, cmd := range opts.Commands {
-		if cmd == "" {
-			continue
-		}
+	// // Detect if python3.x is installed in the container, if not install it
+	// checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
+	// if err := b.execute(ctx, containerId, checkPythonVersionCmd, opts, nil); err != nil {
+	// 	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...", opts.PythonVersion)}
+	// 	installCmd := b.getPythonInstallCommand(opts.PythonVersion)
+	// 	opts.Commands = append([]string{installCmd}, opts.Commands...)
+	// }
 
-		if err := b.execute(ctx, containerId, cmd, opts, outputChan); err != nil {
-			log.Printf("failed to execute command for container <%v>: \"%v\" - %v", containerId, cmd, err)
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
-			return err
-		}
-	}
-	log.Printf("container <%v> build took %v", containerId, time.Since(startTime))
+	// for _, cmd := range opts.Commands {
+	// 	if cmd == "" {
+	// 		continue
+	// 	}
 
-	// Archive and push image to registry
-	err = b.archiveImage(ctx, bundlePath, containerId, opts, outputChan)
-	if err != nil {
-		return err
-	}
+	// 	if err := b.execute(ctx, containerId, cmd, opts, outputChan); err != nil {
+	// 		log.Printf("failed to execute command for container <%v>: \"%v\" - %v", containerId, cmd, err)
+	// 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
+	// 		return err
+	// 	}
+	// }
+	// log.Printf("container <%v> build took %v", containerId, time.Since(startTime))
 
-	outputChan <- common.OutputMsg{Done: true, Success: true, Msg: "Build complete."}
+	// // Archive and push image to registry
+	// err = b.archiveImage(ctx, bundlePath, containerId, opts, outputChan)
+	// if err != nil {
+	// 	return err
+	// }
+
+	// outputChan <- common.OutputMsg{Done: true, Success: true, Msg: "Build complete."}
 	return nil
 }
 

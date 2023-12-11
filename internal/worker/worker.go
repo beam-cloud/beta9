@@ -120,8 +120,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	identityRepo := repo.NewIdentityRedisRepository(redisClient)
-	containerRepo := repo.NewContainerRedisRepository(redisClient, identityRepo)
+	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	statsdRepo := repo.NewMetricsStatsdRepository()
 
@@ -344,7 +343,6 @@ func (s *Worker) SpawnAsync(request *types.ContainerRequest, bundlePath string, 
 
 				containerLogger.WithFields(logrus.Fields{
 					"container_id": containerId,
-					"identity_id":  request.IdentityId,
 					"task_id":      msg.TaskID,
 				}).Info(msg.Message)
 
@@ -359,7 +357,6 @@ func (s *Worker) SpawnAsync(request *types.ContainerRequest, bundlePath string, 
 				// Fallback in case the message was not JSON
 				containerLogger.WithFields(logrus.Fields{
 					"container_id": containerId,
-					"identity_id":  request.IdentityId,
 				}).Info(o.Msg)
 
 				log.Printf("<%s> - %s\n", containerId, o.Msg)
@@ -533,8 +530,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(request, done)
-	s.workerMetrics.ContainerStarted(containerId, request.IdentityId)
-	defer s.workerMetrics.ContainerStopped(containerId, request.IdentityId)
+	s.workerMetrics.ContainerStarted(containerId)
+	defer s.workerMetrics.ContainerStopped(containerId)
 
 	pidChan := make(chan int, 1)
 	go s.workerMetrics.EmitResourceUsage(request, pidChan, done)

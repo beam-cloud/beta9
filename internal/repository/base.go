@@ -89,11 +89,11 @@ type WorkerPoolRepository interface {
 }
 
 type MetricsStatsdRepository interface {
-	ContainerStarted(containerId string, workerId string, identityId string)
-	ContainerStopped(containerId string, workerId string, identityId string)
+	ContainerStarted(containerId string, workerId string)
+	ContainerStopped(containerId string, workerId string)
 	ContainerRequested(containerId string)
 	ContainerScheduled(containerId string)
-	ContainerDuration(containerId string, workerId string, identityId string, timestampNs int64, duration time.Duration)
+	ContainerDuration(containerId string, workerId string, timestampNs int64, duration time.Duration)
 	BeamDeploymentRequestDuration(bucketName string, duration time.Duration)
 	BeamDeploymentRequestStatus(bucketName string, status int)
 	BeamDeploymentRequestCount(bucketName string)
