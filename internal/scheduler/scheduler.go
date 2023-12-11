@@ -107,35 +107,6 @@ func (wb *Scheduler) Run(request *types.ContainerRequest) error {
 	return wb.addRequestToBacklog(request)
 }
 
-func (wb *Scheduler) RunSync(request *types.ContainerRequest) error {
-	log.Printf("Received RunSync request: %+v\n", request)
-
-	request.Timestamp = time.Now()
-	request.OnScheduleChan = make(chan bool, 1)
-
-	containerState, err := wb.containerRepo.GetContainerState(request.ContainerId)
-	if err == nil {
-		switch types.ContainerStatus(containerState.Status) {
-		case types.ContainerStatusPending, types.ContainerStatusRunning:
-			return &types.ContainerAlreadyScheduledError{Msg: "a container with this id is already running or pending"}
-		default:
-			// Do nothing
-		}
-	}
-
-	wb.metricsRepo.ContainerRequested(request.ContainerId)
-
-	err = wb.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
-		Status:      types.ContainerStatusPending,
-		ScheduledAt: time.Now().Unix(),
-	})
-	if err != nil {
-		return err
-	}
-
-	return wb.addRequestToBacklog(request)
-}
-
 func (wb *Scheduler) Stop(containerId string) error {
 	log.Printf("Received STOP request: %s\n", containerId)
 
