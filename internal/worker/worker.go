@@ -166,7 +166,7 @@ func (s *Worker) Run() error {
 
 	lastContainerRequest := time.Now()
 	for {
-		log.Println("hi")
+		log.Println("hi?")
 
 		request, err := s.workerRepo.GetNextContainerRequest(s.workerId)
 		if request != nil && err == nil {

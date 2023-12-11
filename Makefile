@@ -1,7 +1,7 @@
 imageVersion := latest
 
 build:
-	okteto build --build-arg BUILD_ENV=okteto --build-arg GITHUB_TOKEN=${GITHUB_TOKEN} -f ./Dockerfile -t okteto.dev/beam:$(imageVersion)
+	okteto build --build-arg BUILD_ENV=okteto --build-arg GITHUB_TOKEN=${GITHUB_TOKEN} -f ./docker/Dockerfile.beam -t okteto.dev/beam:$(imageVersion)
 
 start:
 	cd hack; okteto up --file okteto.yml
@@ -16,7 +16,7 @@ protocol:
 	cd proto && ./gen.sh
 
 worker:
-	okteto build --build-arg BUILD_ENV=okteto --build-arg GITHUB_TOKEN=${GITHUB_TOKEN} -f ./Dockerfile -t okteto.dev/beam:$(imageVersion)
+	okteto build --build-arg BUILD_ENV=okteto --build-arg GITHUB_TOKEN=${GITHUB_TOKEN} -f ./docker/Dockerfile.worker -t okteto.dev/beam-worker:$(imageVersion)
 	make delete-workers
 
 delete-workers:
