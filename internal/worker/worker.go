@@ -30,11 +30,9 @@ const (
 )
 
 type Worker struct {
-	apiClient            *ApiClient
 	cpuLimit             int64
 	memoryLimit          int64
 	gpuType              string
-	isRemote             bool
 	podIPAddr            string
 	podHostName          string
 	userImagePath        string
@@ -92,12 +90,11 @@ func NewWorker() (*Worker, error) {
 	gpuType := os.Getenv("GPU_TYPE")
 	workerId := os.Getenv("WORKER_ID")
 	podHostName := os.Getenv("HOSTNAME")
-	isRemote := os.Getenv("WORKER_IS_REMOTE") == "true"
 
-	// podIPAddr, err := GetPodIP(isRemote)
-	// if err != nil {
-	// 	return nil, err
-	// }
+	podIPAddr, err := GetPodIP()
+	if err != nil {
+		return nil, err
+	}
 
 	cpuLimit, err := strconv.ParseInt(os.Getenv("CPU_LIMIT"), 10, 64)
 	if err != nil {
@@ -134,15 +131,13 @@ func NewWorker() (*Worker, error) {
 		cpuLimit:             cpuLimit,
 		memoryLimit:          memoryLimit,
 		gpuType:              gpuType,
-		isRemote:             isRemote,
 		runcHandle:           runc.Runc{},
 		containerCudaManager: NewContainerCudaManager(),
 		redisClient:          redisClient,
-		podIPAddr:            "0.0.0.0",
+		podIPAddr:            podIPAddr,
 		imageClient:          imageClient,
 		podHostName:          podHostName,
 		eventBus:             nil,
-		apiClient:            NewApiClient(os.Getenv("WORKER_S2S_TOKEN")),
 		workerId:             workerId,
 		containerLock:        sync.Mutex{},
 		containerWg:          sync.WaitGroup{},
@@ -534,6 +529,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	pidChan := make(chan int, 1)
 	go s.workerMetrics.EmitResourceUsage(request, pidChan, done)
 
+	// TODO: create container and then accept run commands
+
 	// Invoke runc process (launch the container)
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
 		OutputWriter: outputWriter,
@@ -558,25 +555,14 @@ func (s *Worker) deleteTemporaryDirectories(request *types.ContainerRequest) {
 	}
 }
 
-func (s *Worker) getContainerConfig(request *types.ContainerRequest) (*ContainerConfigResponse, error) {
-	response, err := s.apiClient.GetContainerConfig(&ContainerConfigRequest{
-		ContainerId: request.ContainerId,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return response, nil
-}
-
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, containerConfig *ContainerConfigResponse, options *ContainerOptions) []string {
 	env := []string{
 		fmt.Sprintf("IDENTITY_ID=%s", containerConfig.IdentityId),
 		fmt.Sprintf("S2S_TOKEN=%s", containerConfig.S2SToken),
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
 		fmt.Sprintf("BEAM_NAMESPACE=%s", os.Getenv("BEAM_NAMESPACE")),
-		fmt.Sprintf("BEAM_SCHEDULER_HOST=%s", os.Getenv("BEAM_SCHEDULER_HOST")),
-		fmt.Sprintf("BEAM_SCHEDULER_PORT=%s", os.Getenv("BEAM_SCHEDULER_PORT")),
+		fmt.Sprintf("BEAM_GATEWAY_HOST=%s", os.Getenv("BEAM_GATEWAY_HOST")),
+		fmt.Sprintf("BEAM_GATEWAY_PORT=%s", os.Getenv("BEAM_GATEWAY_PORT")),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("STATSD_HOST=%s", os.Getenv("STATSD_HOST")),
@@ -629,11 +615,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
 
-	containerConfig, err := s.getContainerConfig(request)
-	if err != nil {
-		return nil, err
-	}
-
+	var containerConfig *ContainerConfigResponse = nil
 	if containerConfig == nil {
 		return nil, errors.New("invalid container config")
 	}
@@ -780,5 +762,5 @@ func (s *Worker) shutdown() error {
 
 	s.workerMetrics.Shutdown()
 	s.cancel()
-	return s.redisClient.Close()
+	return nil
 }

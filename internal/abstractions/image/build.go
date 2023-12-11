@@ -22,7 +22,6 @@ import (
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 
-	"github.com/drgrib/iter"
 	"github.com/google/shlex"
 	"github.com/google/uuid"
 	"github.com/mitchellh/hashstructure/v2"
@@ -158,45 +157,6 @@ func (b *Builder) GetImageTag(opts *BuildOpts) (string, error) {
 	return fmt.Sprintf("%016x", hash), nil
 }
 
-// Monitor store of cached, unmodified, base images
-func (b *Builder) MonitorBaseImageCache(ctx context.Context, opt BaseImageCacheOpt) {
-	cacheDir := b.getBaseImageCacheDir(opt.ImageName, opt.ImageTag)
-
-	ticker := time.NewTicker(monitorImageCacheInterval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		directories, _ := os.ReadDir(cacheDir)
-		copies := len(directories)
-
-		if copies >= opt.Copies {
-			continue
-		}
-
-		log.Printf("image <%v:%v> has %v copies, unpacking %v more", opt.ImageName, opt.ImageTag, copies, opt.Copies-copies)
-
-		copiesToUnpack := opt.Copies - copies
-		for range iter.N(copiesToUnpack) {
-
-			err := b.unpackIntoCache(cacheDir, opt.ImageName, opt.ImageTag)
-			if err != nil {
-				log.Printf("unable to unpack image: %v - pulling another image", err)
-
-				source := fmt.Sprintf("%s/%s:%s", opt.SourceRegistry, opt.ImageName, opt.ImageTag)
-				dest := fmt.Sprintf("oci:%s:%s", opt.ImageName, opt.ImageTag)
-
-				err := b.puller.Pull(ctx, source, dest, nil)
-				if err != nil {
-					log.Println(err)
-					continue
-				}
-
-				continue
-			}
-		}
-	}
-}
-
 type CustomBaseImage struct {
 	SourceRegistry string
 	ImageName      string
@@ -273,6 +233,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		Env:         []string{},
 		Cpu:         1000,
 		Memory:      1024,
+		ImageTag:    "something",
 	})
 
 	// startTime := time.Now()

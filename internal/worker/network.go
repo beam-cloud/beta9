@@ -42,19 +42,9 @@ func GetPodFQDN() (string, error) {
 	return dnsName, nil
 }
 
-// GetPodIP gets the IP from the tailscale interface or from the POD_IP env var.
+// GetPodIP gets the IP from the POD_IP env var.
 // Returns an error if it fails to retrieve an IP.
-func GetPodIP(isRemote bool) (string, error) {
-	if isRemote {
-		// TODO: test updating a tailscale daemonset to see if the interface changes
-		addr, err := getIPFromInterface("tailscale0")
-		if err != nil {
-			return "", err
-		}
-
-		return addr, nil
-	}
-
+func GetPodIP() (string, error) {
 	return getIPFromEnv("POD_IP")
 }
 
