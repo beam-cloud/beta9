@@ -22,7 +22,6 @@ import (
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 
-	"github.com/google/shlex"
 	"github.com/google/uuid"
 	"github.com/mitchellh/hashstructure/v2"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -610,36 +609,6 @@ func (b *Builder) startBuildContainer(ctx context.Context, opts *BuildOpts) (*co
 	}
 
 	return overlay, containerId, err
-}
-
-// Execute an arbitary command inside a running container
-func (b *Builder) execute(ctx context.Context, containerId string, cmd string, opts *BuildOpts, outputChan chan common.OutputMsg) error {
-	cmd = fmt.Sprintf("bash -c '%s'", cmd)
-	parsedCmd, err := shlex.Split(cmd)
-	if err != nil {
-		return err
-	}
-
-	process := b.baseConfigSpec.Process
-	process.Env = append(process.Env, "DEBIAN_FRONTEND=noninteractive")
-	process.Args = parsedCmd
-	process.Cwd = defaultWorkingDirectory
-
-	outputWriter := common.NewOutputWriter(func(s string) {
-		if outputChan != nil {
-			outputChan <- common.OutputMsg{
-				Msg:     strings.TrimSuffix(string(s), "\n"),
-				Done:    false,
-				Success: false,
-			}
-		} else {
-			log.Print(s)
-		}
-	})
-
-	return b.runcHandle.Exec(ctx, containerId, *process, &runc.ExecOpts{
-		OutputWriter: outputWriter,
-	})
 }
 
 // Generate a unique identifier
