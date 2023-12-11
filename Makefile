@@ -14,3 +14,10 @@ secrets:
 
 protocol:
 	cd proto && ./gen.sh
+
+worker:
+	okteto build --build-arg BUILD_ENV=okteto --build-arg GITHUB_TOKEN=${GITHUB_TOKEN} -f ./Dockerfile -t okteto.dev/beam:$(imageVersion)
+	make delete-workers
+
+delete-workers:
+	./bin/delete_workers.sh
