@@ -21,3 +21,8 @@ worker:
 
 delete-workers:
 	./bin/delete_workers.sh
+
+runner:
+	okteto build --build-arg GITHUB_TOKEN=${GITHUB_TOKEN} -f ./docker/runner/Dockerfile.py38 --target py38 -t okteto.dev/beam-runner:py38-latest
+	okteto build --build-arg GITHUB_TOKEN=${GITHUB_TOKEN} -f ./docker/runner/Dockerfile.py39 --target py39 -t okteto.dev/beam-runner:py39-latest
+	okteto build --build-arg GITHUB_TOKEN=${GITHUB_TOKEN} -f ./docker/runner/Dockerfile.py310 --target py310 -t okteto.dev/beam-runner:py310-latest
