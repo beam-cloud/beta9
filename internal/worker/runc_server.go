@@ -40,7 +40,6 @@ func NewRunCServer() (*RunCServer, error) {
 	}, nil
 }
 
-// Worker entry point
 func (s *RunCServer) Start() error {
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", defaultContainerServerPort))
 	if err != nil {

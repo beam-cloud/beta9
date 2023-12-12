@@ -296,6 +296,13 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
+
+	// TODO: refactor this -- do we need two separate keys in redis?
+	containerServerAddr := fmt.Sprintf("%s:%d", s.podIPAddr, defaultContainerServerPort)
+	err = s.containerRepo.SetContainerServer(request.ContainerId, containerServerAddr)
+	if err != nil {
+		return err
+	}
 	log.Printf("<%s> - set container address.\n", containerID)
 
 	// Start the container
