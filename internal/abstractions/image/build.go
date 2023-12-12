@@ -235,6 +235,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		ImageTag:    "something",
 	})
 
+	// TODO: wait for container to build
+
 	// startTime := time.Now()
 	// overlay, containerId, err := b.startBuildContainer(ctx, opts)
 	// if err != nil {
