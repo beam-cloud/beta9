@@ -8,14 +8,31 @@ import (
 	"github.com/beam-cloud/clip/pkg/clip"
 )
 
+const awsCredentialProviderName = "aws"
+
 type ImageClient struct {
 	registry       *common.ImageRegistry
 	legacyRegistry *common.ImageRegistry
 	cacheClient    *CacheClient
+	puller         *ImagePuller
 }
 
 func NewImageClient() (*ImageClient, error) {
-	var err error = nil
+	// Configure image registry credentials
+	var provider CredentialProvider
+
+	providerName := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_CREDENTIAL_PROVIDER", "aws")
+	if providerName == awsCredentialProviderName {
+		provider = &AWSCredentialProvider{}
+	} else {
+		provider = &DockerCredentialProvider{}
+	}
+
+	puller, err := NewImagePuller(provider)
+	if err != nil {
+		return nil, err
+	}
+
 	storeName := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_REGISTRY_STORE", "s3")
 	registry, err := common.NewImageRegistry(storeName)
 	if err != nil {
@@ -40,12 +57,13 @@ func NewImageClient() (*ImageClient, error) {
 		registry:       registry,
 		legacyRegistry: legacyRegistry,
 		cacheClient:    cacheClient,
+		puller:         puller,
 	}, nil
 }
 
 const imageAvailableFilename = "IMAGE_AVAILABLE"
 
-func (c *ImageClient) Pull(imageTag string) error {
+func (c *ImageClient) PullLazy(imageTag string) error {
 	localCachePath := fmt.Sprintf("%s/%s.cache", imagePath, imageTag)
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", imagePath, imageTag, c.registry.ImageFileExtension)
 

@@ -5,7 +5,6 @@ import (
 	"crypto/sha1"
 	_ "embed"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -13,7 +12,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beam/internal/common"
@@ -24,13 +22,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mitchellh/hashstructure/v2"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
 	"github.com/opencontainers/umoci/oci/casext"
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
-	runc "github.com/slai-labs/go-runc"
 )
 
 const awsCredentialProviderName = "aws"
@@ -38,11 +34,8 @@ const awsCredentialProviderName = "aws"
 type Builder struct {
 	baseImageCachePath string
 	userImageBuildPath string
-	runcHandle         runc.Runc
 	scheduler          *scheduler.Scheduler
-	puller             *ImagePuller
 	cacheLock          sync.Mutex
-	baseConfigSpec     specs.Spec
 	registry           *common.ImageRegistry
 }
 
@@ -72,28 +65,6 @@ func NewBuilder(scheduler *scheduler.Scheduler) (*Builder, error) {
 	os.MkdirAll(baseImageCachePath, os.ModePerm)
 	os.MkdirAll(userImageBuildPath, os.ModePerm)
 
-	var baseConfigSpec specs.Spec
-	specTemplate := strings.TrimSpace(string(baseRuncConfigRaw))
-	err := json.Unmarshal([]byte(specTemplate), &baseConfigSpec)
-	if err != nil {
-		return nil, err
-	}
-
-	// Configure image registry credentials
-	var provider CredentialProvider
-
-	providerName := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_CREDENTIAL_PROVIDER", "aws")
-	if providerName == awsCredentialProviderName {
-		provider = &AWSCredentialProvider{}
-	} else {
-		provider = &DockerCredentialProvider{}
-	}
-
-	puller, err := NewImagePuller(provider)
-	if err != nil {
-		return nil, err
-	}
-
 	storeName := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_REGISTRY_STORE", "s3")
 	registry, err := common.NewImageRegistry(storeName)
 	if err != nil {
@@ -103,11 +74,8 @@ func NewBuilder(scheduler *scheduler.Scheduler) (*Builder, error) {
 	return &Builder{
 		baseImageCachePath: baseImageCachePath,
 		userImageBuildPath: userImageBuildPath,
-		runcHandle:         runc.Runc{},
 		scheduler:          scheduler,
-		puller:             puller,
 		cacheLock:          sync.Mutex{},
-		baseConfigSpec:     baseConfigSpec,
 		registry:           registry,
 	}, nil
 }
@@ -118,8 +86,6 @@ var (
 	requirementsFilename         string        = "requirements.txt"
 	monitorImageCacheInterval    time.Duration = time.Duration(10) * time.Second
 	baseImageCacheLocation       string        = "nonsense" // ImageServiceConfig.BaseImageCachePath
-	//go:embed base_runc_config.json
-	baseRuncConfigRaw string
 	//go:embed base_requirements.txt
 	basePythonRequirements string
 )
@@ -225,25 +191,28 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			}
 		}()
 	}
+	imgTag, err := b.GetImageTag(opts)
+	if err != nil {
+		return err
+	}
 
-	b.scheduler.Run(&types.ContainerRequest{
+	// Step one - run an interactive container for the image build
+	err = b.scheduler.Run(&types.ContainerRequest{
 		ContainerId: "test",
 		EntryPoint:  []string{"sleep", "10000"},
 		Env:         []string{},
 		Cpu:         1000,
 		Memory:      1024,
-		ImageTag:    "something",
+		ImageName:   "beam-runner",
+		ImageTag:    imgTag,
+		Mode:        types.ContainerModeInteractive,
 	})
+	if err != nil {
+		return err
+	}
 
-	// TODO: wait for container to build
-
-	// startTime := time.Now()
-	// overlay, containerId, err := b.startBuildContainer(ctx, opts)
-	// if err != nil {
-	// 	log.Printf("failed to start container <%v>: %v", containerId, err)
-	// 	outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
-	// 	return err
-	// }
+	// Step two - connect to the worker
+	// Poll for container to be up, and get container it is on
 
 	// defer func() {
 	// 	err := b.stopBuildContainer(ctx, containerId)
@@ -329,18 +298,18 @@ func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, ou
 	}
 
 	cacheDir := b.getBaseImageCacheDir(baseImage.ImageName, baseImage.ImageTag)
-	dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
+	// dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
 
-	creds := "" //fmt.Sprintf("%s:%s", common.Secrets().Get("DOCKERHUB_USERNAME"), common.Secrets().Get("DOCKERHUB_PASSWORD"))
-	if opts.ExistingImageCreds != nil {
-		creds = *opts.ExistingImageCreds
-	}
+	// creds := "" //fmt.Sprintf("%s:%s", common.Secrets().Get("DOCKERHUB_USERNAME"), common.Secrets().Get("DOCKERHUB_PASSWORD"))
+	// if opts.ExistingImageCreds != nil {
+	// 	creds = *opts.ExistingImageCreds
+	// }
 
-	err = b.puller.Pull(ctx, fmt.Sprintf("docker://%s", opts.ExistingImageUri), dest, &creds)
-	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
-		return err
-	}
+	// err = b.puller.Pull(ctx, fmt.Sprintf("docker://%s", opts.ExistingImageUri), dest, &creds)
+	// if err != nil {
+	// 	outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
+	// 	return err
+	// }
 
 	err = b.unpackIntoCache(cacheDir, baseImage.ImageName, baseImage.ImageTag)
 	if err != nil {
@@ -456,18 +425,18 @@ func (b *Builder) archiveImage(ctx context.Context, bundlePath string, container
 }
 
 // Kill and remove a runc container
-func (b *Builder) stopBuildContainer(ctx context.Context, containerId string) error {
-	log.Printf("container <%v> being terminated and deleted", containerId)
+// func (b *Builder) stopBuildContainer(ctx context.Context, containerId string) error {
+// 	log.Printf("container <%v> being terminated and deleted", containerId)
 
-	err := b.runcHandle.Kill(ctx, containerId, int(syscall.SIGTERM), &runc.KillOpts{All: true})
-	if err != nil {
-		return err
-	}
+// 	err := b.runcHandle.Kill(ctx, containerId, int(syscall.SIGTERM), &runc.KillOpts{All: true})
+// 	if err != nil {
+// 		return err
+// 	}
 
-	return b.runcHandle.Delete(ctx, containerId, &runc.DeleteOpts{
-		Force: true,
-	})
-}
+// 	return b.runcHandle.Delete(ctx, containerId, &runc.DeleteOpts{
+// 		Force: true,
+// 	})
+// }
 
 func (b *Builder) unpackIntoCache(cacheDir string, imageName string, imageTag string) error {
 	log.Printf("unpacking: %v:%v", imageName, imageTag)
@@ -497,56 +466,54 @@ func (b *Builder) getCachedImagePath(cacheDir string) (string, error) {
 }
 
 // Copy cached image to a location where it can be modified by an external user
-func (b *Builder) createContainerBundle(containerId, baseImageName, baseImageTag, userImageTag string) (*common.ContainerOverlay, error) {
-	b.cacheLock.Lock()
-	defer b.cacheLock.Unlock()
+// func (b *Builder) createContainerBundle(containerId, baseImageName, baseImageTag, userImageTag string) (*common.ContainerOverlay, error) {
+// 	b.cacheLock.Lock()
+// 	defer b.cacheLock.Unlock()
 
-	log.Println("we're creating the container bundle here...")
+// 	cacheDir := b.getBaseImageCacheDir(baseImageName, baseImageTag)
+// 	imagePath := filepath.Join(b.userImageBuildPath, userImageTag)
 
-	cacheDir := b.getBaseImageCacheDir(baseImageName, baseImageTag)
-	imagePath := filepath.Join(b.userImageBuildPath, userImageTag)
+// 	selectedImagePath, err := b.getCachedImagePath(cacheDir)
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	selectedImagePath, err := b.getCachedImagePath(cacheDir)
-	if err != nil {
-		return nil, err
-	}
+// 	// Remove any old image overlay with the same path
+// 	err = os.RemoveAll(imagePath)
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	// Remove any old image overlay with the same path
-	err = os.RemoveAll(imagePath)
-	if err != nil {
-		return nil, err
-	}
+// 	err = os.MkdirAll(imagePath, os.ModePerm)
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	err = os.MkdirAll(imagePath, os.ModePerm)
-	if err != nil {
-		return nil, err
-	}
+// 	// Setup a new overlayfs to build the image in
+// 	overlay := common.NewContainerOverlay(containerId, selectedImagePath, imagePath, selectedImagePath)
+// 	err = overlay.Setup()
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	// Setup a new overlayfs to build the image in
-	overlay := common.NewContainerOverlay(containerId, selectedImagePath, imagePath, selectedImagePath)
-	err = overlay.Setup()
-	if err != nil {
-		return nil, err
-	}
+// 	tempConfig := b.baseConfigSpec
+// 	tempConfig.Hooks.Prestart = nil
+// 	tempConfig.Process.Terminal = false
+// 	tempConfig.Process.Args = []string{"tail", "-f", "/dev/null"}
+// 	tempConfig.Root.Readonly = false
 
-	tempConfig := b.baseConfigSpec
-	tempConfig.Hooks.Prestart = nil
-	tempConfig.Process.Terminal = false
-	tempConfig.Process.Args = []string{"tail", "-f", "/dev/null"}
-	tempConfig.Root.Readonly = false
+// 	file, err := json.MarshalIndent(tempConfig, "", " ")
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	file, err := json.MarshalIndent(tempConfig, "", " ")
-	if err != nil {
-		return nil, err
-	}
+// 	// Preserve initial config file in the bundle
+// 	os.Rename(filepath.Join(overlay.TopLayerPath(), "config.json"), filepath.Join(overlay.TopLayerPath(), "initial_config.json"))
 
-	// Preserve initial config file in the bundle
-	os.Rename(filepath.Join(overlay.TopLayerPath(), "config.json"), filepath.Join(overlay.TopLayerPath(), "initial_config.json"))
-
-	configPath := filepath.Join(overlay.TopLayerPath(), "config.json")
-	err = os.WriteFile(configPath, file, 0644)
-	return overlay, err
-}
+// 	configPath := filepath.Join(overlay.TopLayerPath(), "config.json")
+// 	err = os.WriteFile(configPath, file, 0644)
+// 	return overlay, err
+// }
 
 // Unpack an image from OCI format -> rootfs bundle
 func (b *Builder) unpack(baseImageName string, baseImageTag string, cacheDir string, bundleId string) error {
@@ -588,30 +555,30 @@ func (b *Builder) unpack(baseImageName string, baseImageTag string, cacheDir str
 }
 
 // Start a new container using the selected base image
-func (b *Builder) startBuildContainer(ctx context.Context, opts *BuildOpts) (*common.ContainerOverlay, string, error) {
-	containerId := b.uuid()
+// func (b *Builder) startBuildContainer(ctx context.Context, opts *BuildOpts) (*common.ContainerOverlay, string, error) {
+// 	containerId := b.uuid()
 
-	overlay, err := b.createContainerBundle(containerId, opts.BaseImageName, opts.BaseImageTag, opts.UserImageTag)
-	if err != nil {
-		return nil, containerId, err
-	}
+// 	overlay, err := b.createContainerBundle(containerId, opts.BaseImageName, opts.BaseImageTag, opts.UserImageTag)
+// 	if err != nil {
+// 		return nil, containerId, err
+// 	}
 
-	status, err := b.runcHandle.Run(ctx, containerId, overlay.TopLayerPath(), &runc.CreateOpts{
-		Detach: true,
-	})
+// 	status, err := b.runcHandle.Run(ctx, containerId, overlay.TopLayerPath(), &runc.CreateOpts{
+// 		Detach: true,
+// 	})
 
-	if err != nil {
-		overlay.Cleanup()
-		return nil, containerId, err
-	}
+// 	if err != nil {
+// 		overlay.Cleanup()
+// 		return nil, containerId, err
+// 	}
 
-	if status != 0 {
-		overlay.Cleanup()
-		return nil, "", fmt.Errorf("unable to start container: %d", status)
-	}
+// 	if status != 0 {
+// 		overlay.Cleanup()
+// 		return nil, "", fmt.Errorf("unable to start container: %d", status)
+// 	}
 
-	return overlay, containerId, err
-}
+// 	return overlay, containerId, err
+// }
 
 // Generate a unique identifier
 func (b *Builder) uuid() string {

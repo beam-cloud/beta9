@@ -96,6 +96,8 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	log.Println("POD IP ADDRESS: ", podIPAddr)
+
 	cpuLimit, err := strconv.ParseInt(os.Getenv("CPU_LIMIT"), 10, 64)
 	if err != nil {
 		return nil, err
@@ -217,12 +219,11 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerID := request.ContainerId
 	bundlePath := filepath.Join(s.userImagePath, request.ImageTag)
 
-	log.Printf("<%s> - pulling image: %s\n", containerID, request.ImageTag)
-	err := s.imageClient.Pull(request.ImageTag)
+	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, request.ImageTag)
+	err := s.imageClient.PullLazy(request.ImageTag)
 	if err != nil {
 		return err
 	}
-	log.Printf("<%s> - successfully pulled image: %s\n", containerID, request.ImageTag)
 
 	// Every 30 seconds, update container status
 	go func() {

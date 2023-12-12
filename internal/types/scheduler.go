@@ -65,6 +65,7 @@ type ContainerRequest struct {
 	Cpu             int64     `json:"cpu"`
 	Memory          int64     `json:"memory"`
 	Gpu             string    `json:"gpu"`
+	ImageName       string    `json:"image_name"`
 	ImageTag        string    `json:"image_tag"`
 	Timestamp       time.Time `json:"timestamp"`
 	ScheduleTimeout float64   `json:"schedule_timeout"`
