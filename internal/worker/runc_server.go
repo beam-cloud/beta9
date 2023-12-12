@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
-	"os/signal"
 	"strings"
 	"syscall"
 
@@ -19,7 +17,8 @@ import (
 )
 
 const (
-	defaultWorkingDirectory string = "/workspace"
+	defaultWorkingDirectory    string = "/workspace"
+	defaultContainerServerPort int    = 1000
 )
 
 type RunCServer struct {
@@ -43,7 +42,7 @@ func NewRunCServer() (*RunCServer, error) {
 
 // Worker entry point
 func (s *RunCServer) Start() error {
-	listener, err := net.Listen("tcp", "0.0.0.0:1000")
+	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", defaultContainerServerPort))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
@@ -65,12 +64,6 @@ func (s *RunCServer) Start() error {
 		}
 	}()
 
-	terminationSignal := make(chan os.Signal, 1)
-	defer close(terminationSignal)
-
-	signal.Notify(terminationSignal, os.Interrupt, syscall.SIGTERM)
-
-	<-terminationSignal
 	return nil
 }
 

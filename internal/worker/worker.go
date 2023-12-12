@@ -37,6 +37,7 @@ type Worker struct {
 	podHostName          string
 	userImagePath        string
 	runcHandle           runc.Runc
+	runcServer           *RunCServer
 	containerCudaManager *ContainerCudaManager
 	redisClient          *common.RedisClient
 	imageClient          *ImageClient
@@ -96,8 +97,6 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	log.Println("POD IP ADDRESS: ", podIPAddr)
-
 	cpuLimit, err := strconv.ParseInt(os.Getenv("CPU_LIMIT"), 10, 64)
 	if err != nil {
 		return nil, err
@@ -118,6 +117,11 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	runcServer, err := NewRunCServer()
+	if err != nil {
+		return nil, err
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
@@ -125,6 +129,9 @@ func NewWorker() (*Worker, error) {
 
 	workerMetrics := NewWorkerMetrics(ctx, podHostName, statsdRepo, workerRepo, repo.NewMetricsStreamRepository(ctx))
 	workerMetrics.InitNvml()
+
+	// Start runc server - provides a grpc interface to interact with running containers
+	runcServer.Start()
 
 	return &Worker{
 		ctx:                  ctx,
@@ -134,6 +141,7 @@ func NewWorker() (*Worker, error) {
 		memoryLimit:          memoryLimit,
 		gpuType:              gpuType,
 		runcHandle:           runc.Runc{},
+		runcServer:           runcServer,
 		containerCudaManager: NewContainerCudaManager(),
 		redisClient:          redisClient,
 		podIPAddr:            podIPAddr,
@@ -218,6 +226,12 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerID := request.ContainerId
 	bundlePath := filepath.Join(s.userImagePath, request.ImageTag)
+
+	// TODO: handle grpc connection with caller
+	if request.Mode == types.ContainerModeInteractive {
+		log.Printf("REQUEST: %+v\n", request)
+		return nil
+	}
 
 	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, request.ImageTag)
 	err := s.imageClient.PullLazy(request.ImageTag)

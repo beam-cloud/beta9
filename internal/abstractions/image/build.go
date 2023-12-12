@@ -29,7 +29,11 @@ import (
 	"github.com/pkg/errors"
 )
 
-const awsCredentialProviderName = "aws"
+const (
+	buildContainerPrefix        string = "build-"
+	defaultBuildContainerCpu    int64  = 1000
+	defaultBuildContainerMemory int64  = 1024
+)
 
 type Builder struct {
 	baseImageCachePath string
@@ -85,7 +89,6 @@ var (
 	requiredContainerDirectories []string      = []string{"/workspace", "/volumes", "/snapshot", "/outputs", "/packages"}
 	requirementsFilename         string        = "requirements.txt"
 	monitorImageCacheInterval    time.Duration = time.Duration(10) * time.Second
-	baseImageCacheLocation       string        = "nonsense" // ImageServiceConfig.BaseImageCachePath
 	//go:embed base_requirements.txt
 	basePythonRequirements string
 )
@@ -183,29 +186,29 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 	}
 
-	imgTag, err := b.GetImageTag(opts)
-	if err != nil {
-		return err
-	}
-
 	log.Printf("build opts: %+v\n", opts)
 
 	// Step one - run an interactive container for the image build
-	err = b.scheduler.Run(&types.ContainerRequest{
-		ContainerId: "test",
+	err := b.scheduler.Run(&types.ContainerRequest{
+		ContainerId: b.genContainerId(),
 		Env:         []string{},
-		Cpu:         1000,
-		Memory:      1024,
+		Cpu:         defaultBuildContainerCpu,
+		Memory:      defaultBuildContainerMemory,
 		ImageName:   opts.BaseImageName,
-		ImageTag:    imgTag,
+		ImageTag:    opts.BaseImageTag,
 		Mode:        types.ContainerModeInteractive,
 	})
 	if err != nil {
 		return err
 	}
 
-	// Step two - connect to the worker
+	// Step two - connect to the worker that is running the container...?
 	// Poll for container to be up, and get container it is on
+
+	// imgTag, err := b.GetImageTag(opts)
+	// if err != nil {
+	// 	return err
+	// }
 
 	// defer func() {
 	// 	err := b.stopBuildContainer(ctx, containerId)
@@ -264,6 +267,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	return nil
 }
 
+func (b *Builder) genContainerId() string {
+	return fmt.Sprintf("%s%s", buildContainerPrefix, uuid.New().String()[:8])
+}
+
 func (b *Builder) extractPackageName(pkg string) string {
 	// Handle Git URLs
 	if strings.HasPrefix(pkg, "git+") || strings.HasPrefix(pkg, "-e git+") {
@@ -290,7 +297,6 @@ func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, ou
 		return err
 	}
 
-	cacheDir := b.getBaseImageCacheDir(baseImage.ImageName, baseImage.ImageTag)
 	// dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
 
 	// creds := "" //fmt.Sprintf("%s:%s", common.Secrets().Get("DOCKERHUB_USERNAME"), common.Secrets().Get("DOCKERHUB_PASSWORD"))
@@ -304,11 +310,11 @@ func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, ou
 	// 	return err
 	// }
 
-	err = b.unpackIntoCache(cacheDir, baseImage.ImageName, baseImage.ImageTag)
-	if err != nil {
-		log.Printf("unable to unpack image: %v", err)
-		return err
-	}
+	// err = b.unpackIntoCache(cacheDir, baseImage.ImageName, baseImage.ImageTag)
+	// if err != nil {
+	// 	log.Printf("unable to unpack image: %v", err)
+	// 	return err
+	// }
 
 	opts.BaseImageName = baseImage.ImageName
 	opts.BaseImageTag = baseImage.ImageTag
@@ -436,11 +442,6 @@ func (b *Builder) unpackIntoCache(cacheDir string, imageName string, imageTag st
 	bundleId := b.uuid()
 	err := b.unpack(imageName, imageTag, cacheDir, bundleId)
 	return err
-}
-
-// Return location of cached, unpacked images on disk (or in memory)
-func (b *Builder) getBaseImageCacheDir(imageName string, imageTag string) string {
-	return filepath.Join(baseImageCacheLocation, imageName, imageTag)
 }
 
 func (b *Builder) getCachedImagePath(cacheDir string) (string, error) {

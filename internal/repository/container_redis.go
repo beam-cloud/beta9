@@ -157,3 +157,7 @@ func (cr *ContainerRedisRepository) DeleteContainerState(request *types.Containe
 func (cr *ContainerRedisRepository) SetContainerAddress(containerId string, addr string) error {
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerHost(containerId), addr, 0).Err()
 }
+
+func (cr *ContainerRedisRepository) SetContainerServer(containerId string, addr string) error {
+	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerHost(containerId), addr, 0).Err()
+}

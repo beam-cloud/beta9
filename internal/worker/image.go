@@ -23,9 +23,12 @@ const (
 /*
 
 What are the things that have be completed here:
- - we first check if we can pull the image lazily
- - we do this with a combination of the base image and the image tag
-
+ - first, check if we can mount the image lazily
+ - if we cannot mount the image lazily, try to pull the image directly into /dev/shm
+ - then, unpack the image in /dev/shm
+ - then, archive the image into a clip, and upload it directly.
+ - then,
+ -
 */
 
 type ImageClient struct {
