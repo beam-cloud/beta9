@@ -687,7 +687,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			linkPath := filepath.Join(containerConfig.WorkspacePath, filepath.Base(m.MountPath))
 			err = forceSymlink(m.MountPath, linkPath)
 			if err != nil {
-				log.Printf("Symlink Error: %v", err)
+				log.Printf("unable to symlink volume: %v", err)
 			}
 		}
 
