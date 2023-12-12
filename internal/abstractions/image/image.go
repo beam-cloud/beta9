@@ -99,9 +99,6 @@ func (is *RuncImageService) getBaseImageTag(pythonVersion string) string {
 	var baseImageTag string
 
 	switch pythonVersion {
-	case "python3.7":
-		baseImageTag = fmt.Sprintf("py37-%s", common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_TAG"))
-
 	case "python3.8":
 		baseImageTag = fmt.Sprintf("py38-%s", common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_TAG"))
 

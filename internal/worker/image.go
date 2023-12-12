@@ -1,20 +1,42 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
 
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/clip/pkg/clip"
+	runc "github.com/slai-labs/go-runc"
 )
 
-const awsCredentialProviderName = "aws"
+const (
+	imagePullCommand          string = "skopeo"
+	awsCredentialProviderName string = "aws"
+	imageCachePath            string = "/dev/shm/images"
+	imageAvailableFilename    string = "IMAGE_AVAILABLE"
+)
+
+/*
+
+What are the things that have be completed here:
+ - we first check if we can pull the image lazily
+ - we do this with a combination of the base image and the image tag
+
+*/
 
 type ImageClient struct {
 	registry       *common.ImageRegistry
-	legacyRegistry *common.ImageRegistry
 	cacheClient    *CacheClient
-	puller         *ImagePuller
+	ImagePath      string
+	PullCommand    string
+	PdeathSignal   syscall.Signal
+	CommandTimeout int
+	Debug          bool
+	Creds          string
 }
 
 func NewImageClient() (*ImageClient, error) {
@@ -28,18 +50,8 @@ func NewImageClient() (*ImageClient, error) {
 		provider = &DockerCredentialProvider{}
 	}
 
-	puller, err := NewImagePuller(provider)
-	if err != nil {
-		return nil, err
-	}
-
 	storeName := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_REGISTRY_STORE", "s3")
 	registry, err := common.NewImageRegistry(storeName)
-	if err != nil {
-		return nil, err
-	}
-
-	legacyRegistry, err := common.NewImageRegistry(common.S3LegacyImageRegistryStoreName)
 	if err != nil {
 		return nil, err
 	}
@@ -53,15 +65,24 @@ func NewImageClient() (*ImageClient, error) {
 		}
 	}
 
+	baseImagePath := filepath.Join(imageCachePath)
+	os.MkdirAll(baseImagePath, os.ModePerm)
+
+	creds, err := provider.GetAuthString()
+	if err != nil {
+		return nil, err
+	}
+
 	return &ImageClient{
 		registry:       registry,
-		legacyRegistry: legacyRegistry,
 		cacheClient:    cacheClient,
-		puller:         puller,
+		ImagePath:      baseImagePath,
+		PullCommand:    imagePullCommand,
+		CommandTimeout: -1,
+		Debug:          false,
+		Creds:          creds,
 	}, nil
 }
-
-const imageAvailableFilename = "IMAGE_AVAILABLE"
 
 func (c *ImageClient) PullLazy(imageTag string) error {
 	localCachePath := fmt.Sprintf("%s/%s.cache", imagePath, imageTag)
@@ -92,4 +113,54 @@ func (c *ImageClient) PullLazy(imageTag string) error {
 	}
 
 	return nil
+}
+
+func (i *ImageClient) Pull(context context.Context, source string, dest string, creds *string) error {
+	args := []string{"copy", source, dest}
+
+	args = append(args, i.args(creds)...)
+	cmd := exec.CommandContext(context, i.PullCommand, args...)
+	cmd.Env = os.Environ()
+	cmd.Dir = i.ImagePath
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	ec, err := i.startCommand(cmd)
+	if err != nil {
+		return err
+	}
+
+	status, err := runc.Monitor.Wait(cmd, ec)
+	if err == nil && status != 0 {
+		err = fmt.Errorf("unable to pull base image: %s", source)
+	}
+
+	return err
+}
+
+func (i *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
+	if i.PdeathSignal != 0 {
+		return runc.Monitor.StartLocked(cmd)
+	}
+	return runc.Monitor.Start(cmd)
+}
+
+func (i *ImageClient) args(creds *string) (out []string) {
+	if creds != nil && *creds != "" {
+		out = append(out, "--src-creds", *creds)
+	} else if creds != nil && *creds == "" {
+		out = append(out, "--src-no-creds")
+	} else {
+		out = append(out, "--src-creds", i.Creds)
+	}
+
+	if i.CommandTimeout > 0 {
+		out = append(out, "--command-timeout", fmt.Sprintf("%d", i.CommandTimeout))
+	}
+
+	if i.Debug {
+		out = append(out, "--debug")
+	}
+
+	return out
 }

@@ -181,29 +181,22 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		if err != nil {
 			return err
 		}
-
-		// Remove custom base image after build completes
-		defer func() {
-			cacheDir := b.getBaseImageCacheDir(opts.BaseImageName, opts.BaseImageTag)
-			err := os.RemoveAll(cacheDir)
-			if err != nil {
-				log.Printf("error removing custom image cache dir: %+v\n", err)
-			}
-		}()
 	}
+
 	imgTag, err := b.GetImageTag(opts)
 	if err != nil {
 		return err
 	}
 
+	log.Printf("build opts: %+v\n", opts)
+
 	// Step one - run an interactive container for the image build
 	err = b.scheduler.Run(&types.ContainerRequest{
 		ContainerId: "test",
-		EntryPoint:  []string{"sleep", "10000"},
 		Env:         []string{},
 		Cpu:         1000,
 		Memory:      1024,
-		ImageName:   "beam-runner",
+		ImageName:   opts.BaseImageName,
 		ImageTag:    imgTag,
 		Mode:        types.ContainerModeInteractive,
 	})
