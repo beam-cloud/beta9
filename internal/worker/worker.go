@@ -597,6 +597,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
+	spec.Root.Readonly = false
 
 	// Create local workspace path so we can symlink volumes before the container starts
 	os.MkdirAll(containerConfig.WorkspacePath, os.FileMode(0755))
