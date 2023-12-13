@@ -201,9 +201,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return errors.New("container not running")
 	}
 
-	_, err = client.Exec(containerId, "echo \"hi\"")
-	if err != nil {
-		return err
+	for i := 1; i <= 100; i++ {
+		_, err = client.Exec(containerId, "echo \"hi\"")
+		if err != nil {
+			return err
+		}
+
+		time.Sleep(time.Millisecond * 500)
 	}
 
 	// imgTag, err := b.GetImageTag(opts)
