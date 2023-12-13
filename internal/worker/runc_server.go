@@ -108,3 +108,32 @@ func (s *RunCServer) RunCStatus(ctx context.Context, in *pb.RunCStatusRequest) (
 		Running: state.Status == "running",
 	}, nil
 }
+
+// func (s *RunCServer) RunCStreamLogs(req *pb.RunCStreamLogsRequest, stream pb.RunCService_RunCStreamLogsServer) error {
+// 	logReader, err := s.runcHandle.GetLogReader(req.ContainerId)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	defer logReader.Close()
+
+// 	buffer := make([]byte, 4096) // Adjust buffer size as needed
+// 	for {
+// 		n, err := logReader.Read(buffer)
+// 		if err == io.EOF {
+// 			break
+// 		}
+// 		if err != nil {
+// 			return err
+// 		}
+
+// 		logEntry := &pb.RunCLogEntry{
+// 			Msg: string(buffer[:n]),
+// 		}
+
+// 		if err := stream.Send(logEntry); err != nil {
+// 			return err
+// 		}
+// 	}
+
+// 	return nil
+// }

@@ -167,18 +167,16 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 	}
 
-	log.Printf("build opts: %+v\n", opts)
-
 	containerId := b.genContainerId()
-	// Step one - run an interactive container for the image build
 	err := b.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env:         []string{},
 		Cpu:         defaultBuildContainerCpu,
 		Memory:      defaultBuildContainerMemory,
 		ImageName:   opts.BaseImageName,
-		ImageTag:    opts.BaseImageTag,
+		ImageTag:    "0d286944826913d9", //opts.BaseImageTag,
 		Mode:        types.ContainerModeInteractive,
+		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 	})
 	if err != nil {
 		return err

@@ -4,19 +4,15 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/sirupsen/logrus"
 
 	common "github.com/beam-cloud/beam/internal/common"
 	repo "github.com/beam-cloud/beam/internal/repository"
@@ -26,7 +22,8 @@ import (
 )
 
 const (
-	RequestProcessingInterval time.Duration = 100 * time.Millisecond
+	RequestProcessingInterval     time.Duration = 100 * time.Millisecond
+	ContainerStatusUpdateInterval time.Duration = 30 * time.Second
 )
 
 type Worker struct {
@@ -43,10 +40,11 @@ type Worker struct {
 	imageClient          *ImageClient
 	workerId             string
 	runningContainers    map[string]*ContainerInstance
-	containerLock        sync.Mutex
 	eventBus             *common.EventBus
+	containerLock        sync.Mutex
 	containerWg          sync.WaitGroup
 	containerRepo        repo.ContainerRepository
+	containerLogger      *ContainerLogger
 	workerMetrics        *WorkerMetrics
 	completedRequests    chan *types.ContainerRequest
 	stopContainerChan    chan string
@@ -68,12 +66,6 @@ type ContainerInstance struct {
 type ContainerOptions struct {
 	BindPort    int
 	InitialSpec *specs.Spec
-}
-
-type MessageOutputStruct struct {
-	Level   string  `json:"level"`
-	Message string  `json:"message"`
-	TaskID  *string `json:"task_id"`
 }
 
 var (
@@ -122,16 +114,19 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	err = runcServer.Start()
+	if err != nil {
+		return nil, err
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
+
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	statsdRepo := repo.NewMetricsStatsdRepository()
 
 	workerMetrics := NewWorkerMetrics(ctx, podHostName, statsdRepo, workerRepo, repo.NewMetricsStreamRepository(ctx))
 	workerMetrics.InitNvml()
-
-	// Start runc server - provides a grpc interface to interact with running containers
-	runcServer.Start()
 
 	return &Worker{
 		ctx:                  ctx,
@@ -152,6 +147,7 @@ func NewWorker() (*Worker, error) {
 		containerLock:        sync.Mutex{},
 		containerWg:          sync.WaitGroup{},
 		containerRepo:        containerRepo,
+		containerLogger:      &ContainerLogger{},
 		workerMetrics:        workerMetrics,
 		workerRepo:           workerRepo,
 		runningContainers:    make(map[string]*ContainerInstance),
@@ -234,10 +230,10 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		return err
 	}
 
-	if request.Mode == types.ContainerModeInteractive {
-		log.Printf("REQUEST: %+v\n", request)
-		return nil
-	}
+	// if request.Mode == types.ContainerModeInteractive {
+	// 	log.Printf("REQUEST: %+v\n", request)
+	// 	return nil
+	// }
 
 	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, request.ImageTag)
 	err = s.imageClient.PullLazy(request.ImageTag)
@@ -246,35 +242,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 
 	// Every 30 seconds, update container status
-	go func() {
-		for {
-			time.Sleep(30 * time.Second)
-
-			s.containerLock.Lock()
-			_, ok := s.runningContainers[containerID]
-			s.containerLock.Unlock()
-
-			if !ok {
-				return
-			}
-
-			// Stop container if it is "orphaned" - meaning it's running but has no associated state
-			if _, err := s.containerRepo.GetContainerState(containerID); err != nil {
-				if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-					log.Printf("<%s> - container state not found, stopping container\n", containerID)
-					s.stopContainerChan <- containerID
-					return
-				}
-			}
-
-			err = s.containerRepo.UpdateContainerStatus(containerID, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
-			if err != nil {
-				log.Printf("<%s> - unable to update container state: %v\n", containerID, err)
-			}
-
-			log.Printf("<%s> - container still running: %s\n", containerID, request.ImageTag)
-		}
-	}()
+	go s.updateContainerStatus(request)
 
 	bindPort, err := GetRandomFreePort()
 	if err != nil {
@@ -314,77 +282,50 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	return nil
 }
 
+func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
+	for {
+		time.Sleep(ContainerStatusUpdateInterval)
+
+		s.containerLock.Lock()
+		_, ok := s.runningContainers[request.ContainerId]
+		s.containerLock.Unlock()
+
+		if !ok {
+			return nil
+		}
+
+		// Stop container if it is "orphaned" - meaning it's running but has no associated state
+		if _, err := s.containerRepo.GetContainerState(request.ContainerId); err != nil {
+			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
+				log.Printf("<%s> - container state not found, stopping container\n", request.ContainerId)
+				s.stopContainerChan <- request.ContainerId
+				return nil
+			}
+		}
+
+		err := s.containerRepo.UpdateContainerStatus(request.ContainerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
+		if err != nil {
+			log.Printf("<%s> - unable to update container state: %v\n", request.ContainerId, err)
+		}
+
+		log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageTag)
+	}
+}
+
 // Invoke a runc container using a predefined config spec
 func (s *Worker) SpawnAsync(request *types.ContainerRequest, bundlePath string, spec *specs.Spec) error {
-	containerId := request.ContainerId
 	outputChan := make(chan common.OutputMsg)
 
-	// RX and print stdout/stderr from spawned container
-	logFilePath := path.Join(containerLogsPath, fmt.Sprintf("%s.log", containerId))
-	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err != nil {
-		return fmt.Errorf("failed to create container log file: %w", err)
-	}
-
-	// Create a new logger
-	containerLogger := logrus.New()
-	containerLogger.SetOutput(logFile)
-	containerLogger.SetFormatter(&logrus.JSONFormatter{})
-
 	// Handle stdout/stderr from spawned container
-	go func() {
-		defer logFile.Close()
+	go s.containerLogger.StartLogging(request.ContainerId, outputChan)
 
-		for o := range outputChan {
-			dec := json.NewDecoder(strings.NewReader(o.Msg))
-			msgDecoded := false
-
-			for {
-				var msg MessageOutputStruct
-
-				err := dec.Decode(&msg)
-				if err != nil {
-					/*
-						Either the json parsing ends with an EOF error indicating that the
-						JSON string is complete, or with a json decode error indicating that
-						the JSON string is invalid. In either case, we can break out of the
-						decode loop and continue processing the next message.
-					*/
-					break
-				}
-
-				msgDecoded = true
-
-				containerLogger.WithFields(logrus.Fields{
-					"container_id": containerId,
-					"task_id":      msg.TaskID,
-				}).Info(msg.Message)
-
-				if msg.TaskID != nil {
-					log.Printf("<%s>:<%s> - %s\n", containerId, *msg.TaskID, msg.Message)
-				} else if msg.Message != "" {
-					log.Printf("<%s> - %s\n", containerId, msg.Message)
-				}
-			}
-
-			if !msgDecoded && o.Msg != "" {
-				// Fallback in case the message was not JSON
-				containerLogger.WithFields(logrus.Fields{
-					"container_id": containerId,
-				}).Info(o.Msg)
-
-				log.Printf("<%s> - %s\n", containerId, o.Msg)
-			}
-
-		}
-	}()
-
-	s.containerWg.Add(1)
+	go s.containerWg.Add(1)
 	go s.spawn(request, bundlePath, spec, outputChan)
 
 	return nil
 }
 
+// stopContainer stops a running container by containerId, if it exists on this worker
 func (s *Worker) stopContainer(event *common.Event) bool {
 	s.containerLock.Lock()
 	defer s.containerLock.Unlock()
@@ -454,7 +395,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	s.completedRequests <- request
 }
 
-// Spawn a container using runc binary
+// spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec *specs.Spec, outputChan chan common.OutputMsg) {
 	s.workerRepo.AddContainerRequestToWorker(s.workerId, request.ContainerId, request)
 	defer s.workerRepo.RemoveContainerRequestFromWorker(s.workerId, request.ContainerId)
@@ -550,14 +491,19 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	pidChan := make(chan int, 1)
 	go s.workerMetrics.EmitResourceUsage(request, pidChan, done)
 
-	// TODO: create container and then accept run commands
-
 	// Invoke runc process (launch the container)
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
 		OutputWriter: outputWriter,
 		ConfigPath:   configPath,
 		Started:      pidChan,
 	})
+
+	// Send last log message since the container has exited
+	outputChan <- common.OutputMsg{
+		Msg:     "",
+		Done:    true,
+		Success: err == nil,
+	}
 
 	if err != nil {
 		containerErr = err
@@ -633,9 +579,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
 
-	var containerConfig *ContainerConfigResponse = nil
-	if containerConfig == nil {
-		return nil, errors.New("invalid container config")
+	var containerConfig *ContainerConfigResponse = &ContainerConfigResponse{
+		WorkspacePath: defaultWorkingDirectory,
 	}
 
 	env := s.getContainerEnvironment(request, containerConfig, options)
