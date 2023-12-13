@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/beam-cloud/beam/internal/common"
@@ -22,10 +21,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mitchellh/hashstructure/v2"
-	"github.com/opencontainers/umoci"
-	"github.com/opencontainers/umoci/oci/cas/dir"
-	"github.com/opencontainers/umoci/oci/casext"
-	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 )
 
@@ -36,11 +31,8 @@ const (
 )
 
 type Builder struct {
-	baseImageCachePath string
-	userImageBuildPath string
-	scheduler          *scheduler.Scheduler
-	cacheLock          sync.Mutex
-	registry           *common.ImageRegistry
+	scheduler *scheduler.Scheduler
+	registry  *common.ImageRegistry
 }
 
 type BuildOpts struct {
@@ -63,12 +55,6 @@ type BaseImageCacheOpt struct {
 }
 
 func NewBuilder(scheduler *scheduler.Scheduler) (*Builder, error) {
-	userImageBuildPath := "test" // filepath.Join(ImageServiceConfig.UserImageBuildPath)
-	baseImageCachePath := "test" // filepath.Join(ImageServiceConfig.BaseImageCachePath)
-
-	os.MkdirAll(baseImageCachePath, os.ModePerm)
-	os.MkdirAll(userImageBuildPath, os.ModePerm)
-
 	storeName := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_REGISTRY_STORE", "s3")
 	registry, err := common.NewImageRegistry(storeName)
 	if err != nil {
@@ -76,19 +62,14 @@ func NewBuilder(scheduler *scheduler.Scheduler) (*Builder, error) {
 	}
 
 	return &Builder{
-		baseImageCachePath: baseImageCachePath,
-		userImageBuildPath: userImageBuildPath,
-		scheduler:          scheduler,
-		cacheLock:          sync.Mutex{},
-		registry:           registry,
+		scheduler: scheduler,
+		registry:  registry,
 	}, nil
 }
 
 var (
-	defaultWorkingDirectory      string        = "/workspace"
-	requiredContainerDirectories []string      = []string{"/workspace", "/volumes", "/snapshot", "/outputs", "/packages"}
-	requirementsFilename         string        = "requirements.txt"
-	monitorImageCacheInterval    time.Duration = time.Duration(10) * time.Second
+	requirementsFilename      string        = "requirements.txt"
+	monitorImageCacheInterval time.Duration = time.Duration(10) * time.Second
 	//go:embed base_requirements.txt
 	basePythonRequirements string
 )
@@ -352,13 +333,6 @@ func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, ou
 	return nil
 }
 
-// Clean up a build after completion (either failed or successful)
-func (b *Builder) Clean(opts *BuildOpts) error {
-	log.Printf("cleaning up: %+v", opts)
-	imagePath := fmt.Sprintf("%s/%s", b.userImageBuildPath, opts.UserImageTag)
-	return os.RemoveAll(imagePath)
-}
-
 // Check if an image already exists in the registry
 func (b *Builder) Exists(ctx context.Context, imageTag string) bool {
 	return b.registry.Exists(ctx, imageTag)
@@ -444,12 +418,12 @@ func (b *Builder) archiveImage(ctx context.Context, bundlePath string, container
 // 	})
 // }
 
-func (b *Builder) unpackIntoCache(cacheDir string, imageName string, imageTag string) error {
-	log.Printf("unpacking: %v:%v", imageName, imageTag)
-	bundleId := b.uuid()
-	err := b.unpack(imageName, imageTag, cacheDir, bundleId)
-	return err
-}
+// func (b *Builder) unpackIntoCache(cacheDir string, imageName string, imageTag string) error {
+// 	log.Printf("unpacking: %v:%v", imageName, imageTag)
+// 	bundleId := b.uuid()
+// 	err := b.unpack(imageName, imageTag, cacheDir, bundleId)
+// 	return err
+// }
 
 func (b *Builder) getCachedImagePath(cacheDir string) (string, error) {
 	directories, _ := os.ReadDir(cacheDir)
@@ -515,45 +489,6 @@ func (b *Builder) getCachedImagePath(cacheDir string) (string, error) {
 // 	err = os.WriteFile(configPath, file, 0644)
 // 	return overlay, err
 // }
-
-// Unpack an image from OCI format -> rootfs bundle
-func (b *Builder) unpack(baseImageName string, baseImageTag string, cacheDir string, bundleId string) error {
-	var unpackOptions layer.UnpackOptions
-	var meta umoci.Meta
-	meta.Version = umoci.MetaVersion
-
-	unpackOptions.KeepDirlinks = true
-	unpackOptions.MapOptions = meta.MapOptions
-
-	// Get a reference to the CAS.
-	baseImagePath := fmt.Sprintf("%s/%s", b.baseImageCachePath, baseImageName)
-	engine, err := dir.Open(baseImagePath)
-	if err != nil {
-		return errors.Wrap(err, "open CAS")
-	}
-	defer engine.Close()
-
-	engineExt := casext.NewEngine(engine)
-	defer engineExt.Close()
-
-	tmpBundlePath := filepath.Join(cacheDir, "_"+bundleId)
-	bundlePath := filepath.Join(cacheDir, bundleId)
-	err = umoci.Unpack(engineExt, baseImageTag, tmpBundlePath, unpackOptions)
-	if err == nil {
-		for _, dir := range requiredContainerDirectories {
-			fullPath := filepath.Join(tmpBundlePath, "rootfs", dir)
-			err := os.MkdirAll(fullPath, 0755)
-			if err != nil {
-				errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
-				return err
-			}
-		}
-
-		return os.Rename(tmpBundlePath, bundlePath)
-	}
-
-	return err
-}
 
 // Start a new container using the selected base image
 // func (b *Builder) startBuildContainer(ctx context.Context, opts *BuildOpts) (*common.ContainerOverlay, string, error) {

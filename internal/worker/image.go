@@ -10,6 +10,11 @@ import (
 
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/clip/pkg/clip"
+	"github.com/opencontainers/umoci"
+	"github.com/opencontainers/umoci/oci/cas/dir"
+	"github.com/opencontainers/umoci/oci/casext"
+	"github.com/opencontainers/umoci/oci/layer"
+	"github.com/pkg/errors"
 	runc "github.com/slai-labs/go-runc"
 )
 
@@ -19,6 +24,8 @@ const (
 	imageCachePath            string = "/dev/shm/images"
 	imageAvailableFilename    string = "IMAGE_AVAILABLE"
 )
+
+var requiredContainerDirectories []string = []string{"/workspace", "/volumes", "/snapshot", "/outputs", "/packages"}
 
 /*
 
@@ -166,4 +173,42 @@ func (i *ImageClient) args(creds *string) (out []string) {
 	}
 
 	return out
+}
+
+func (i *ImageClient) unpack(baseImageName string, baseImageTag string, cacheDir string, bundleId string) error {
+	var unpackOptions layer.UnpackOptions
+	var meta umoci.Meta
+	meta.Version = umoci.MetaVersion
+
+	unpackOptions.KeepDirlinks = true
+	unpackOptions.MapOptions = meta.MapOptions
+
+	// Get a reference to the CAS.
+	baseImagePath := fmt.Sprintf("%s/%s", imageCachePath, baseImageName)
+	engine, err := dir.Open(baseImagePath)
+	if err != nil {
+		return errors.Wrap(err, "open CAS")
+	}
+	defer engine.Close()
+
+	engineExt := casext.NewEngine(engine)
+	defer engineExt.Close()
+
+	tmpBundlePath := filepath.Join(cacheDir, "_"+bundleId)
+	bundlePath := filepath.Join(cacheDir, bundleId)
+	err = umoci.Unpack(engineExt, baseImageTag, tmpBundlePath, unpackOptions)
+	if err == nil {
+		for _, dir := range requiredContainerDirectories {
+			fullPath := filepath.Join(tmpBundlePath, "rootfs", dir)
+			err := os.MkdirAll(fullPath, 0755)
+			if err != nil {
+				errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
+				return err
+			}
+		}
+
+		return os.Rename(tmpBundlePath, bundlePath)
+	}
+
+	return err
 }

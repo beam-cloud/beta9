@@ -70,8 +70,6 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		ExistingImageUri: in.ExistingImageUri,
 	}
 
-	defer is.builder.Clean(buildOptions)
-
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
 	go is.builder.Build(ctx, buildOptions, outputChan)
