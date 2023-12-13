@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion7
 
 const (
 	RunCService_RunCKill_FullMethodName = "/runc.RunCService/RunCKill"
+	RunCService_RunCExec_FullMethodName = "/runc.RunCService/RunCExec"
 )
 
 // RunCServiceClient is the client API for RunCService service.
@@ -27,6 +28,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type RunCServiceClient interface {
 	RunCKill(ctx context.Context, in *RunCKillRequest, opts ...grpc.CallOption) (*RunCKillResponse, error)
+	RunCExec(ctx context.Context, in *RunCExecRequest, opts ...grpc.CallOption) (*RunCExecResponse, error)
 }
 
 type runCServiceClient struct {
@@ -46,11 +48,21 @@ func (c *runCServiceClient) RunCKill(ctx context.Context, in *RunCKillRequest, o
 	return out, nil
 }
 
+func (c *runCServiceClient) RunCExec(ctx context.Context, in *RunCExecRequest, opts ...grpc.CallOption) (*RunCExecResponse, error) {
+	out := new(RunCExecResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCExec_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RunCServiceServer is the server API for RunCService service.
 // All implementations must embed UnimplementedRunCServiceServer
 // for forward compatibility
 type RunCServiceServer interface {
 	RunCKill(context.Context, *RunCKillRequest) (*RunCKillResponse, error)
+	RunCExec(context.Context, *RunCExecRequest) (*RunCExecResponse, error)
 	mustEmbedUnimplementedRunCServiceServer()
 }
 
@@ -60,6 +72,9 @@ type UnimplementedRunCServiceServer struct {
 
 func (UnimplementedRunCServiceServer) RunCKill(context.Context, *RunCKillRequest) (*RunCKillResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunCKill not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCExec(context.Context, *RunCExecRequest) (*RunCExecResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCExec not implemented")
 }
 func (UnimplementedRunCServiceServer) mustEmbedUnimplementedRunCServiceServer() {}
 
@@ -92,6 +107,24 @@ func _RunCService_RunCKill_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RunCService_RunCExec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCExecRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCExec(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCExec_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCExec(ctx, req.(*RunCExecRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RunCService_ServiceDesc is the grpc.ServiceDesc for RunCService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -102,6 +135,10 @@ var RunCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RunCKill",
 			Handler:    _RunCService_RunCKill_Handler,
+		},
+		{
+			MethodName: "RunCExec",
+			Handler:    _RunCService_RunCExec_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

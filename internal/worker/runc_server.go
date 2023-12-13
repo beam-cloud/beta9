@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 
+	pb "github.com/beam-cloud/beam/proto"
+
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/google/shlex"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -24,6 +26,7 @@ const (
 type RunCServer struct {
 	runcHandle     runc.Runc
 	baseConfigSpec specs.Spec
+	pb.UnimplementedRunCServiceServer
 }
 
 func NewRunCServer() (*RunCServer, error) {
@@ -47,14 +50,7 @@ func (s *RunCServer) Start() error {
 	}
 
 	grpcServer := grpc.NewServer()
-
-	// Register scheduler
-	// s, err := scheduler.NewSchedulerService()
-	// if err != nil {
-	// 	return err
-	// }
-
-	// pb.RegisterSchedulerServer(grpcServer, s)
+	pb.RegisterRunCServiceServer(grpcServer, s)
 
 	go func() {
 		err := grpcServer.Serve(listener)
@@ -66,20 +62,22 @@ func (s *RunCServer) Start() error {
 	return nil
 }
 
-func (s *RunCServer) Kill(ctx context.Context, containerId string) error {
-	err := s.runcHandle.Kill(ctx, containerId, int(syscall.SIGTERM), &runc.KillOpts{
+func (s *RunCServer) RunCKill(ctx context.Context, in *pb.RunCKillRequest) (*pb.RunCKillResponse, error) {
+	err := s.runcHandle.Kill(ctx, in.ContainerId, int(syscall.SIGTERM), &runc.KillOpts{
 		All: true,
 	})
 
-	return err
+	return &pb.RunCKillResponse{
+		Ok: true,
+	}, err
 }
 
 // Execute an arbitary command inside a running container
-func (s *RunCServer) Exec(ctx context.Context, containerId string, cmd string, outputChan chan common.OutputMsg) error {
-	cmd = fmt.Sprintf("bash -c '%s'", cmd)
+func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.RunCExecResponse, error) {
+	cmd := fmt.Sprintf("bash -c '%s'", in.Cmd)
 	parsedCmd, err := shlex.Split(cmd)
 	if err != nil {
-		return err
+		return &pb.RunCExecResponse{}, err
 	}
 
 	process := s.baseConfigSpec.Process
@@ -88,18 +86,12 @@ func (s *RunCServer) Exec(ctx context.Context, containerId string, cmd string, o
 	process.Cwd = defaultWorkingDirectory
 
 	outputWriter := common.NewOutputWriter(func(s string) {
-		if outputChan != nil {
-			outputChan <- common.OutputMsg{
-				Msg:     strings.TrimSuffix(string(s), "\n"),
-				Done:    false,
-				Success: false,
-			}
-		} else {
-			log.Print(s)
-		}
+		log.Println("Output from exec: ", s)
 	})
 
-	return s.runcHandle.Exec(ctx, containerId, *process, &runc.ExecOpts{
+	err = s.runcHandle.Exec(ctx, in.ContainerId, *process, &runc.ExecOpts{
 		OutputWriter: outputWriter,
 	})
+
+	return &pb.RunCExecResponse{}, err
 }

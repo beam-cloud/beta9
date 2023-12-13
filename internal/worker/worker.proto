@@ -6,8 +6,16 @@ package runc;
 
 service RunCService {
   rpc RunCKill(RunCKillRequest) returns (RunCKillResponse) {}
+  rpc RunCExec(RunCExecRequest) returns (RunCExecResponse) {}
 }
 
 message RunCKillRequest { string container_id = 1; }
 
 message RunCKillResponse { bool ok = 1; }
+
+message RunCExecRequest {
+  string container_id = 1;
+  string cmd = 2;
+}
+
+message RunCExecResponse {}
