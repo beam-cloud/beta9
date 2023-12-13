@@ -192,14 +192,19 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	log.Printf("client: %+v\n", client)
 	r, err := client.Status(containerId)
 	if err != nil {
-		log.Println("err: ", err)
 		return err
 	}
 
-	log.Println("Container running: ", r.Running)
+	if !r.Running {
+		return errors.New("container not running")
+	}
+
+	_, err = client.Exec(containerId, "echo \"hi\"")
+	if err != nil {
+		return err
+	}
 
 	// imgTag, err := b.GetImageTag(opts)
 	// if err != nil {

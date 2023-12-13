@@ -39,8 +39,8 @@ type Worker struct {
 	redisClient          *common.RedisClient
 	imageClient          *ImageClient
 	workerId             string
-	runningContainers    map[string]*ContainerInstance
 	eventBus             *common.EventBus
+	containers           *common.SafeMap[*ContainerInstance]
 	containerLock        sync.Mutex
 	containerWg          sync.WaitGroup
 	containerRepo        repo.ContainerRepository
@@ -54,13 +54,14 @@ type Worker struct {
 }
 
 type ContainerInstance struct {
-	Id         string
-	BundlePath string
-	Overlay    *common.ContainerOverlay
-	Spec       *specs.Spec
-	Err        error
-	ExitCode   int
-	Port       int
+	Id           string
+	BundlePath   string
+	Overlay      *common.ContainerOverlay
+	Spec         *specs.Spec
+	Err          error
+	ExitCode     int
+	Port         int
+	OutputWriter *common.OutputWriter
 }
 
 type ContainerOptions struct {
@@ -144,13 +145,13 @@ func NewWorker() (*Worker, error) {
 		podHostName:          podHostName,
 		eventBus:             nil,
 		workerId:             workerId,
+		containers:           common.NewSafeMap[*ContainerInstance](),
 		containerLock:        sync.Mutex{},
 		containerWg:          sync.WaitGroup{},
 		containerRepo:        containerRepo,
 		containerLogger:      &ContainerLogger{},
 		workerMetrics:        workerMetrics,
 		workerRepo:           workerRepo,
-		runningContainers:    make(map[string]*ContainerInstance),
 		completedRequests:    make(chan *types.ContainerRequest, 1000),
 		stopContainerChan:    make(chan string, 1000),
 	}, nil
@@ -174,8 +175,8 @@ func (s *Worker) Run() error {
 
 			s.containerLock.Lock()
 
-			_, ok := s.runningContainers[containerId]
-			if !ok {
+			_, exists := s.containers.Get(containerId)
+			if !exists {
 				log.Printf("<%s> - running container.\n", containerId)
 
 				err := s.RunContainer(request)
@@ -212,7 +213,7 @@ func (s *Worker) Run() error {
 
 // Only exit if there are no containers running, and no containers have recently been spun up on this worker
 func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
-	if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && len(s.runningContainers) == 0 {
+	if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containers.Len() == 0 {
 		return true
 	}
 	return false
@@ -287,10 +288,10 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 		time.Sleep(ContainerStatusUpdateInterval)
 
 		s.containerLock.Lock()
-		_, ok := s.runningContainers[request.ContainerId]
+		_, exists := s.containers.Get(request.ContainerId)
 		s.containerLock.Unlock()
 
-		if !ok {
+		if !exists {
 			return nil
 		}
 
@@ -333,7 +334,7 @@ func (s *Worker) stopContainer(event *common.Event) bool {
 	containerId := event.Args["container_id"].(string)
 
 	var err error = nil
-	if _, containerExists := s.runningContainers[containerId]; containerExists {
+	if _, containerExists := s.containers.Get(containerId); containerExists {
 		log.Printf("<%s> - received stop container event.\n", containerId)
 		s.stopContainerChan <- containerId
 	}
@@ -345,7 +346,7 @@ func (s *Worker) processStopContainerEvents() {
 	for containerId := range s.stopContainerChan {
 		log.Printf("<%s> - stopping container.\n", containerId)
 
-		if _, containerExists := s.runningContainers[containerId]; !containerExists {
+		if _, containerExists := s.containers.Get(containerId); !containerExists {
 			continue
 		}
 
@@ -385,7 +386,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	s.containerLock.Lock()
 	defer s.containerLock.Unlock()
 
-	delete(s.runningContainers, containerId)
+	s.containers.Delete(containerId)
 
 	err := s.containerRepo.DeleteContainerState(request)
 	if err != nil {
@@ -418,14 +419,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		s.terminateContainer(containerId, request, &exitCode, &containerErr)
 	}()
 
-	outputWriter := common.NewOutputWriter(func(s string) {
-		outputChan <- common.OutputMsg{
-			Msg:     strings.TrimSuffix(string(s), "\n"),
-			Done:    false,
-			Success: false,
-		}
-	})
-
 	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
 		Id:         containerId,
@@ -433,8 +426,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		Overlay:    common.NewContainerOverlay(containerId, bundlePath, baseConfigPath, filepath.Join(bundlePath, "rootfs")),
 		Spec:       spec,
 		ExitCode:   -1,
+		OutputWriter: common.NewOutputWriter(func(s string) {
+			outputChan <- common.OutputMsg{
+				Msg:     strings.TrimSuffix(string(s), "\n"),
+				Done:    false,
+				Success: false,
+			}
+		}),
 	}
-	s.runningContainers[containerId] = containerInstance
+	s.containers.Set(containerId, containerInstance)
 
 	go func() {
 		time.Sleep(time.Second)
@@ -442,8 +442,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		s.containerLock.Lock()
 		defer s.containerLock.Unlock()
 
-		_, ok := s.runningContainers[containerId]
-		if !ok {
+		_, exists := s.containers.Get(containerId)
+		if !exists {
 			return
 		}
 
@@ -493,7 +493,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 	// Invoke runc process (launch the container)
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
-		OutputWriter: outputWriter,
+		OutputWriter: containerInstance.OutputWriter,
 		ConfigPath:   configPath,
 		Started:      pidChan,
 	})
