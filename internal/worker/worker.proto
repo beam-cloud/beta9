@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package runc;
+
+service RunCService {
+  rpc RunCKill(RunCKillRequest) returns (RunCKillResponse) {}
+}
+
+message RunCKillRequest { string container_id = 1; }
+
+message RunCKillResponse { bool ok = 1; }

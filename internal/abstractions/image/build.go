@@ -202,6 +202,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
+	client, err := NewRunCClient("0.0.0.0:1000", "")
+	if err != nil {
+		return err
+	}
+
+	log.Printf("client: %+v\n", client)
+
 	// Step two - connect to the worker that is running the container...?
 	// Poll for container to be up, and get container it is on
 

@@ -16,7 +16,7 @@ type RunCClient struct {
 	ServiceUrl   string
 	ServiceToken string
 	conn         *grpc.ClientConn
-	client       pb.CacheClient
+	client       pb.RunCServiceClient
 }
 
 func NewRunCClient(serviceUrl, serviceToken string) (*RunCClient, error) {
@@ -59,7 +59,7 @@ func (c *RunCClient) connect() error {
 	}
 
 	c.conn = conn
-	c.client = pb.NewCacheClient(conn)
+	c.client = pb.NewRunCServiceClient(conn)
 	return nil
 }
 
