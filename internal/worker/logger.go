@@ -19,7 +19,7 @@ type ContainerLogMessage struct {
 }
 
 type ContainerLogger struct {
-	buffer []byte
+	containerInstances *common.SafeMap[*ContainerInstance]
 }
 
 func (r *ContainerLogger) Write(buffer []byte) (int64, error) {

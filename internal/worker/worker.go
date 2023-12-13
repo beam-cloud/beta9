@@ -40,7 +40,7 @@ type Worker struct {
 	imageClient          *ImageClient
 	workerId             string
 	eventBus             *common.EventBus
-	containers           *common.SafeMap[*ContainerInstance]
+	containerInstances   *common.SafeMap[*ContainerInstance]
 	containerLock        sync.Mutex
 	containerWg          sync.WaitGroup
 	containerRepo        repo.ContainerRepository
@@ -81,6 +81,8 @@ var (
 )
 
 func NewWorker() (*Worker, error) {
+	containerInstances := common.NewSafeMap[*ContainerInstance]()
+
 	gpuType := os.Getenv("GPU_TYPE")
 	workerId := os.Getenv("WORKER_ID")
 	podHostName := os.Getenv("HOSTNAME")
@@ -110,7 +112,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	runcServer, err := NewRunCServer()
+	runcServer, err := NewRunCServer(containerInstances)
 	if err != nil {
 		return nil, err
 	}
@@ -145,15 +147,17 @@ func NewWorker() (*Worker, error) {
 		podHostName:          podHostName,
 		eventBus:             nil,
 		workerId:             workerId,
-		containers:           common.NewSafeMap[*ContainerInstance](),
+		containerInstances:   containerInstances,
 		containerLock:        sync.Mutex{},
 		containerWg:          sync.WaitGroup{},
 		containerRepo:        containerRepo,
-		containerLogger:      &ContainerLogger{},
-		workerMetrics:        workerMetrics,
-		workerRepo:           workerRepo,
-		completedRequests:    make(chan *types.ContainerRequest, 1000),
-		stopContainerChan:    make(chan string, 1000),
+		containerLogger: &ContainerLogger{
+			containerInstances: containerInstances,
+		},
+		workerMetrics:     workerMetrics,
+		workerRepo:        workerRepo,
+		completedRequests: make(chan *types.ContainerRequest, 1000),
+		stopContainerChan: make(chan string, 1000),
 	}, nil
 }
 
@@ -175,7 +179,7 @@ func (s *Worker) Run() error {
 
 			s.containerLock.Lock()
 
-			_, exists := s.containers.Get(containerId)
+			_, exists := s.containerInstances.Get(containerId)
 			if !exists {
 				log.Printf("<%s> - running container.\n", containerId)
 
@@ -213,7 +217,7 @@ func (s *Worker) Run() error {
 
 // Only exit if there are no containers running, and no containers have recently been spun up on this worker
 func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
-	if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containers.Len() == 0 {
+	if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
 		return true
 	}
 	return false
@@ -288,7 +292,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 		time.Sleep(ContainerStatusUpdateInterval)
 
 		s.containerLock.Lock()
-		_, exists := s.containers.Get(request.ContainerId)
+		_, exists := s.containerInstances.Get(request.ContainerId)
 		s.containerLock.Unlock()
 
 		if !exists {
@@ -334,7 +338,7 @@ func (s *Worker) stopContainer(event *common.Event) bool {
 	containerId := event.Args["container_id"].(string)
 
 	var err error = nil
-	if _, containerExists := s.containers.Get(containerId); containerExists {
+	if _, containerExists := s.containerInstances.Get(containerId); containerExists {
 		log.Printf("<%s> - received stop container event.\n", containerId)
 		s.stopContainerChan <- containerId
 	}
@@ -346,7 +350,7 @@ func (s *Worker) processStopContainerEvents() {
 	for containerId := range s.stopContainerChan {
 		log.Printf("<%s> - stopping container.\n", containerId)
 
-		if _, containerExists := s.containers.Get(containerId); !containerExists {
+		if _, containerExists := s.containerInstances.Get(containerId); !containerExists {
 			continue
 		}
 
@@ -386,7 +390,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	s.containerLock.Lock()
 	defer s.containerLock.Unlock()
 
-	s.containers.Delete(containerId)
+	s.containerInstances.Delete(containerId)
 
 	err := s.containerRepo.DeleteContainerState(request)
 	if err != nil {
@@ -434,7 +438,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 			}
 		}),
 	}
-	s.containers.Set(containerId, containerInstance)
+	s.containerInstances.Set(containerId, containerInstance)
 
 	go func() {
 		time.Sleep(time.Second)
@@ -442,7 +446,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		s.containerLock.Lock()
 		defer s.containerLock.Unlock()
 
-		_, exists := s.containers.Get(containerId)
+		_, exists := s.containerInstances.Get(containerId)
 		if !exists {
 			return
 		}

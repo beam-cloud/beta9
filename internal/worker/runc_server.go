@@ -27,9 +27,10 @@ type RunCServer struct {
 	runcHandle     runc.Runc
 	baseConfigSpec specs.Spec
 	pb.UnimplementedRunCServiceServer
+	containerInstances *common.SafeMap[*ContainerInstance]
 }
 
-func NewRunCServer() (*RunCServer, error) {
+func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance]) (*RunCServer, error) {
 	var baseConfigSpec specs.Spec
 	specTemplate := strings.TrimSpace(string(baseRuncConfigRaw))
 	err := json.Unmarshal([]byte(specTemplate), &baseConfigSpec)
@@ -38,8 +39,9 @@ func NewRunCServer() (*RunCServer, error) {
 	}
 
 	return &RunCServer{
-		runcHandle:     runc.Runc{},
-		baseConfigSpec: baseConfigSpec,
+		runcHandle:         runc.Runc{},
+		baseConfigSpec:     baseConfigSpec,
+		containerInstances: containerInstances,
 	}, nil
 }
 
@@ -85,12 +87,13 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 	process.Args = parsedCmd
 	process.Cwd = defaultWorkingDirectory
 
-	outputWriter := common.NewOutputWriter(func(s string) {
-		log.Println("Output from exec: ", s)
-	})
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCExecResponse{Ok: false}, nil
+	}
 
 	err = s.runcHandle.Exec(ctx, in.ContainerId, *process, &runc.ExecOpts{
-		OutputWriter: outputWriter,
+		OutputWriter: instance.OutputWriter,
 	})
 
 	return &pb.RunCExecResponse{}, err
