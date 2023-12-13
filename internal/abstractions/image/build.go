@@ -173,7 +173,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		Memory:      defaultBuildContainerMemory,
 		ImageName:   opts.BaseImageName,
 		ImageTag:    "0d286944826913d9", //opts.BaseImageTag,
-		Mode:        types.ContainerModeInteractive,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 	})
 	if err != nil {

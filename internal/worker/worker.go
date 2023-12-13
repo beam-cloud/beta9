@@ -235,11 +235,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		return err
 	}
 
-	// if request.Mode == types.ContainerModeInteractive {
-	// 	log.Printf("REQUEST: %+v\n", request)
-	// 	return nil
-	// }
-
 	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, request.ImageTag)
 	err = s.imageClient.PullLazy(request.ImageTag)
 	if err != nil {

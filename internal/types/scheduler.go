@@ -8,11 +8,6 @@ import (
 type WorkerStatus string
 
 const (
-	ContainerModeExecute     string = "EXECUTE"
-	ContainerModeInteractive string = "INTERACTIVE"
-)
-
-const (
 	WorkerStatusAvailable WorkerStatus = "available"
 	WorkerStatusPending   WorkerStatus = "pending"
 )
@@ -59,7 +54,6 @@ type ContainerState struct {
 
 type ContainerRequest struct {
 	ContainerId     string    `json:"container_id"`
-	Mode            string    `json:"mode"`
 	EntryPoint      []string  `json:"entry_point"`
 	Env             []string  `json:"env"`
 	Cpu             int64     `json:"cpu"`
