@@ -169,9 +169,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	log.Printf("build opts: %+v\n", opts)
 
+	containerId := b.genContainerId()
 	// Step one - run an interactive container for the image build
 	err := b.scheduler.Run(&types.ContainerRequest{
-		ContainerId: b.genContainerId(),
+		ContainerId: containerId,
 		Env:         []string{},
 		Cpu:         defaultBuildContainerCpu,
 		Memory:      defaultBuildContainerMemory,
@@ -183,32 +184,29 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	client, err := NewRunCClient("0.0.0.0:1000", "")
+	hostname, err := b.scheduler.ContainerRepo.GetWorkerHostname(containerId)
+	if err != nil {
+		return err
+	}
+
+	client, err := common.NewRunCClient(hostname, "")
 	if err != nil {
 		return err
 	}
 
 	log.Printf("client: %+v\n", client)
+	r, err := client.Status(containerId)
+	if err != nil {
+		log.Println("err: ", err)
+		return err
+	}
 
-	// Step two - connect to the worker that is running the container...?
-	// Poll for container to be up, and get container it is on
+	log.Println("Container running: ", r.Running)
 
 	// imgTag, err := b.GetImageTag(opts)
 	// if err != nil {
 	// 	return err
 	// }
-
-	// defer func() {
-	// 	err := b.stopBuildContainer(ctx, containerId)
-	// 	if err != nil {
-	// 		log.Printf("unable to delete container<%s>: %v\n", containerId, err)
-	// 	}
-
-	// 	time.Sleep(time.Second * 1) // Give container a second to shut down
-	// 	overlay.Cleanup()
-	// }()
-
-	// log.Printf("container <%v> start took %v", containerId, time.Since(startTime))
 
 	// bundlePath := overlay.TopLayerPath()
 	// err = b.generateRequirementsFile(bundlePath, opts)
@@ -515,9 +513,3 @@ func (b *Builder) getCachedImagePath(cacheDir string) (string, error) {
 
 // 	return overlay, containerId, err
 // }
-
-// Generate a unique identifier
-func (b *Builder) uuid() string {
-	splitUUID := strings.Split(uuid.New().String(), "-")
-	return splitUUID[len(splitUUID)-1]
-}

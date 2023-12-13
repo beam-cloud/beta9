@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -97,9 +98,8 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 	}
 	defer cr.lock.Release(common.RedisKeys.SchedulerContainerLock(containerId))
 
-	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
-
 	// Get current state
+	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
 	res, err := cr.rdb.HGetAll(context.TODO(), stateKey).Result()
 	if err != nil {
 		return err
@@ -159,5 +159,28 @@ func (cr *ContainerRedisRepository) SetContainerAddress(containerId string, addr
 }
 
 func (cr *ContainerRedisRepository) SetContainerServer(containerId string, addr string) error {
-	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerHost(containerId), addr, 0).Err()
+	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerServer(containerId), addr, 0).Err()
+}
+
+func (cr *ContainerRedisRepository) GetWorkerHostname(containerId string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	var hostname string = ""
+	var err error
+
+	ticker := time.NewTicker(1 * time.Second) // Retry every second
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", errors.New("timeout reached while trying to get worker hostname")
+		case <-ticker.C:
+			hostname, err = cr.rdb.Get(ctx, common.RedisKeys.SchedulerContainerServer(containerId)).Result()
+			if err == nil && canConnectToHost(hostname, 1*time.Second) {
+				return hostname, nil
+			}
+		}
+	}
 }

@@ -227,14 +227,20 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerID := request.ContainerId
 	bundlePath := filepath.Join(s.userImagePath, request.ImageTag)
 
-	// TODO: handle grpc connection with caller
+	// TODO: move this down
+	containerServerAddr := fmt.Sprintf("%s:%d", s.podIPAddr, defaultContainerServerPort)
+	err := s.containerRepo.SetContainerServer(request.ContainerId, containerServerAddr)
+	if err != nil {
+		return err
+	}
+
 	if request.Mode == types.ContainerModeInteractive {
 		log.Printf("REQUEST: %+v\n", request)
 		return nil
 	}
 
 	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, request.ImageTag)
-	err := s.imageClient.PullLazy(request.ImageTag)
+	err = s.imageClient.PullLazy(request.ImageTag)
 	if err != nil {
 		return err
 	}
@@ -293,13 +299,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	// Gateway will need to directly interact with this pod/container.
 	containerAddr := fmt.Sprintf("%s:%d", s.podIPAddr, bindPort)
 	err = s.containerRepo.SetContainerAddress(request.ContainerId, containerAddr)
-	if err != nil {
-		return err
-	}
-
-	// TODO: refactor this -- do we need two separate keys in redis?
-	containerServerAddr := fmt.Sprintf("%s:%d", s.podIPAddr, defaultContainerServerPort)
-	err = s.containerRepo.SetContainerServer(request.ContainerId, containerServerAddr)
 	if err != nil {
 		return err
 	}

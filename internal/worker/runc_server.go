@@ -95,3 +95,16 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 
 	return &pb.RunCExecResponse{}, err
 }
+
+func (s *RunCServer) RunCStatus(ctx context.Context, in *pb.RunCStatusRequest) (*pb.RunCStatusResponse, error) {
+	state, err := s.runcHandle.State(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.RunCStatusResponse{
+			Running: false,
+		}, nil
+	}
+
+	return &pb.RunCStatusResponse{
+		Running: state.Status == "running",
+	}, nil
+}

@@ -1,4 +1,4 @@
-package image
+package common
 
 import (
 	"context"
@@ -72,4 +72,20 @@ func AuthInterceptor(token string) grpc.UnaryClientInterceptor {
 		newCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 		return invoker(newCtx, method, req, reply, cc, opts...)
 	}
+}
+
+func (c *RunCClient) Status(containerId string) (*pb.RunCStatusResponse, error) {
+	resp, err := c.client.RunCStatus(context.TODO(), &pb.RunCStatusRequest{ContainerId: containerId})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) Exec(containerId, cmd string) (*pb.RunCExecResponse, error) {
+	resp, err := c.client.RunCExec(context.TODO(), &pb.RunCExecRequest{ContainerId: containerId, Cmd: cmd})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
 }

@@ -7,6 +7,8 @@ package runc;
 service RunCService {
   rpc RunCKill(RunCKillRequest) returns (RunCKillResponse) {}
   rpc RunCExec(RunCExecRequest) returns (RunCExecResponse) {}
+  rpc RunCStatus(RunCStatusRequest) returns (RunCStatusResponse) {}
+  rpc RunCStreamLogs(RunCStreamLogsRequest) returns (stream RunCLogEntry) {}
 }
 
 message RunCKillRequest { string container_id = 1; }
@@ -18,4 +20,12 @@ message RunCExecRequest {
   string cmd = 2;
 }
 
-message RunCExecResponse {}
+message RunCExecResponse { bool ok = 1; }
+
+message RunCStatusRequest { string container_id = 1; }
+
+message RunCStatusResponse { bool running = 1; }
+
+message RunCStreamLogsRequest { string container_id = 1; }
+
+message RunCLogEntry { string msg = 1; }

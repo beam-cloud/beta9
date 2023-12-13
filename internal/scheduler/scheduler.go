@@ -22,7 +22,7 @@ type Scheduler struct {
 	workerRepo        repo.WorkerRepository
 	workerPoolManager *WorkerPoolManager
 	requestBacklog    *RequestBacklog
-	containerRepo     repo.ContainerRepository
+	ContainerRepo     repo.ContainerRepository
 	taskRepo          repo.TaskRepository
 	beamRepo          repo.BeamRepository
 	metricsRepo       repo.MetricsStatsdRepository
@@ -71,7 +71,7 @@ func NewScheduler() (*Scheduler, error) {
 		workerRepo:        workerRepo,
 		workerPoolManager: workerPoolManager,
 		requestBacklog:    requestBacklog,
-		containerRepo:     containerRepo,
+		ContainerRepo:     containerRepo,
 		taskRepo:          taskRepo,
 		metricsRepo:       repo.NewMetricsStatsdRepository(),
 		redisClient:       redisClient,
@@ -84,7 +84,7 @@ func (wb *Scheduler) Run(request *types.ContainerRequest) error {
 	request.Timestamp = time.Now()
 	request.OnScheduleChan = make(chan bool, 1)
 
-	containerState, err := wb.containerRepo.GetContainerState(request.ContainerId)
+	containerState, err := wb.ContainerRepo.GetContainerState(request.ContainerId)
 	if err == nil {
 		switch types.ContainerStatus(containerState.Status) {
 		case types.ContainerStatusPending, types.ContainerStatusRunning:
@@ -96,7 +96,7 @@ func (wb *Scheduler) Run(request *types.ContainerRequest) error {
 
 	wb.metricsRepo.ContainerRequested(request.ContainerId)
 
-	err = wb.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
+	err = wb.ContainerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
 		Status:      types.ContainerStatusPending,
 		ScheduledAt: time.Now().Unix(),
 	})
@@ -110,7 +110,7 @@ func (wb *Scheduler) Run(request *types.ContainerRequest) error {
 func (wb *Scheduler) Stop(containerId string) error {
 	log.Printf("Received STOP request: %s\n", containerId)
 
-	err := wb.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
+	err := wb.ContainerRepo.UpdateContainerStatus(containerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	if err != nil {
 		return err
 	}

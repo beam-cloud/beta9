@@ -33,6 +33,7 @@ type ContainerRepository interface {
 	SetContainerServer(containerId string, addr string) error
 	UpdateContainerStatus(string, types.ContainerStatus, time.Duration) error
 	DeleteContainerState(*types.ContainerRequest) error
+	GetWorkerHostname(containerId string) (string, error)
 }
 
 type BeamRepository interface {
