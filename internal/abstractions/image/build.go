@@ -16,8 +16,6 @@ import (
 	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
-	"github.com/beam-cloud/clip/pkg/clip"
-	clipCommon "github.com/beam-cloud/clip/pkg/common"
 
 	"github.com/google/uuid"
 	"github.com/mitchellh/hashstructure/v2"
@@ -201,21 +199,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return errors.New("container not running")
 	}
 
-	for i := 1; i <= 100; i++ {
-		_, err = client.Exec(containerId, "echo \"hi\"")
-		if err != nil {
-			return err
-		}
-
-		time.Sleep(time.Millisecond * 500)
-	}
-
 	// imgTag, err := b.GetImageTag(opts)
 	// if err != nil {
 	// 	return err
 	// }
 
-	// bundlePath := overlay.TopLayerPath()
 	// err = b.generateRequirementsFile(bundlePath, opts)
 	// if err != nil {
 	// 	log.Printf("failed to generate python requirements for container <%v>: %v", containerId, err)
@@ -226,37 +214,38 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	// pipInstallCmd := fmt.Sprintf("%s -m pip install -r %s", opts.PythonVersion, filepath.Join("/", requirementsFilename))
 	// opts.Commands = append(opts.Commands, pipInstallCmd)
 
-	// log.Printf("container <%v> building with options: %+v", containerId, opts)
-	// startTime = time.Now()
+	log.Printf("container <%v> building with options: %+v", containerId, opts)
+	startTime := time.Now()
 
-	// // Detect if python3.x is installed in the container, if not install it
-	// checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	// if err := b.execute(ctx, containerId, checkPythonVersionCmd, opts, nil); err != nil {
-	// 	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...", opts.PythonVersion)}
-	// 	installCmd := b.getPythonInstallCommand(opts.PythonVersion)
-	// 	opts.Commands = append([]string{installCmd}, opts.Commands...)
-	// }
+	// Detect if python3.x is installed in the container, if not install it
+	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
+	if _, err := client.Exec(containerId, checkPythonVersionCmd); err != nil {
+		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...", opts.PythonVersion)}
+		installCmd := b.getPythonInstallCommand(opts.PythonVersion)
+		opts.Commands = append([]string{installCmd}, opts.Commands...)
+	}
 
-	// for _, cmd := range opts.Commands {
-	// 	if cmd == "" {
-	// 		continue
-	// 	}
+	for _, cmd := range opts.Commands {
+		if cmd == "" {
+			continue
+		}
 
-	// 	if err := b.execute(ctx, containerId, cmd, opts, outputChan); err != nil {
-	// 		log.Printf("failed to execute command for container <%v>: \"%v\" - %v", containerId, cmd, err)
-	// 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
-	// 		return err
-	// 	}
-	// }
-	// log.Printf("container <%v> build took %v", containerId, time.Since(startTime))
+		if _, err := client.Exec(containerId, cmd); err != nil {
+			log.Printf("failed to execute command for container <%v>: \"%v\" - %v", containerId, cmd, err)
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
+			return err
+		}
+	}
 
-	// // Archive and push image to registry
+	log.Printf("container <%v> build took %v", containerId, time.Since(startTime))
+
+	// Archive and push image to registry
 	// err = b.archiveImage(ctx, bundlePath, containerId, opts, outputChan)
 	// if err != nil {
 	// 	return err
 	// }
 
-	// outputChan <- common.OutputMsg{Done: true, Success: true, Msg: "Build complete."}
+	outputChan <- common.OutputMsg{Done: true, Success: true, Msg: "Build complete."}
 	return nil
 }
 
@@ -359,53 +348,6 @@ func (b *Builder) generateRequirementsFile(bundlePath string, opts *BuildOpts) e
 		return err
 	}
 
-	return nil
-}
-
-// Generate and upload archived version of the image for distribution
-func (b *Builder) archiveImage(ctx context.Context, bundlePath string, containerId string, opts *BuildOpts, outputChan chan common.OutputMsg) error {
-	startTime := time.Now()
-
-	archiveName := fmt.Sprintf("%s.%s", opts.UserImageTag, b.registry.ImageFileExtension)
-	archivePath := filepath.Join(filepath.Dir(bundlePath), archiveName)
-
-	var err error = nil
-	archiveStore := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_REGISTRY_STORE", "s3")
-	switch archiveStore {
-	case "s3":
-		err = clip.CreateAndUploadArchive(clip.CreateOptions{
-			InputPath:  bundlePath,
-			OutputPath: archivePath,
-		}, &clipCommon.S3StorageInfo{
-			Bucket: common.Secrets().Get("BEAM_IMAGESERVICE_IMAGE_REGISTRY_S3_BUCKET"),
-			Region: common.Secrets().Get("BEAM_IMAGESERVICE_IMAGE_REGISTRY_S3_REGION"),
-			Key:    fmt.Sprintf("%s.clip", opts.UserImageTag),
-		})
-	case "local":
-		err = clip.CreateArchive(clip.CreateOptions{
-			InputPath:  bundlePath,
-			OutputPath: archivePath,
-		})
-	}
-
-	if err != nil {
-		log.Printf("unable to create archive: %v\n", err)
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to archive image."}
-		return err
-	}
-	log.Printf("container <%v> archive took %v", containerId, time.Since(startTime))
-
-	// Push the archive to a registry
-	startTime = time.Now()
-	err = b.registry.Push(ctx, archivePath, opts.UserImageTag)
-	if err != nil {
-		log.Printf("failed to push image for container <%v>: %v", containerId, err)
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to push image."}
-		return err
-	}
-
-	log.Printf("container <%v> push took %v", containerId, time.Since(startTime))
-	log.Printf("container <%v> build completed successfully", containerId)
 	return nil
 }
 

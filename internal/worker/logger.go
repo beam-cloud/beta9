@@ -22,10 +22,6 @@ type ContainerLogger struct {
 	containerInstances *common.SafeMap[*ContainerInstance]
 }
 
-func (r *ContainerLogger) Write(buffer []byte) (int64, error) {
-	return 0, nil
-}
-
 func (r *ContainerLogger) Read(containerId string, buffer []byte) (int64, error) {
 	return 0, nil
 }

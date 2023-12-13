@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
+	"time"
 
 	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	pb "github.com/beam-cloud/beam/proto"
+	"github.com/beam-cloud/clip/pkg/clip"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
 )
 
 type ImageService interface {
@@ -89,6 +93,53 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	}
 
 	log.Println("Success: ", lastMessage.Success)
+	return nil
+}
+
+// Generate and upload archived version of the image for distribution
+func (b *Builder) Archive(ctx context.Context, bundlePath string, containerId string, opts *BuildOpts, outputChan chan common.OutputMsg) error {
+	startTime := time.Now()
+
+	archiveName := fmt.Sprintf("%s.%s", opts.UserImageTag, b.registry.ImageFileExtension)
+	archivePath := filepath.Join(filepath.Dir(bundlePath), archiveName)
+
+	var err error = nil
+	archiveStore := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_REGISTRY_STORE", "s3")
+	switch archiveStore {
+	case "s3":
+		err = clip.CreateAndUploadArchive(clip.CreateOptions{
+			InputPath:  bundlePath,
+			OutputPath: archivePath,
+		}, &clipCommon.S3StorageInfo{
+			Bucket: common.Secrets().Get("BEAM_IMAGESERVICE_IMAGE_REGISTRY_S3_BUCKET"),
+			Region: common.Secrets().Get("BEAM_IMAGESERVICE_IMAGE_REGISTRY_S3_REGION"),
+			Key:    fmt.Sprintf("%s.clip", opts.UserImageTag),
+		})
+	case "local":
+		err = clip.CreateArchive(clip.CreateOptions{
+			InputPath:  bundlePath,
+			OutputPath: archivePath,
+		})
+	}
+
+	if err != nil {
+		log.Printf("unable to create archive: %v\n", err)
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to archive image."}
+		return err
+	}
+	log.Printf("container <%v> archive took %v", containerId, time.Since(startTime))
+
+	// Push the archive to a registry
+	startTime = time.Now()
+	err = b.registry.Push(ctx, archivePath, opts.UserImageTag)
+	if err != nil {
+		log.Printf("failed to push image for container <%v>: %v", containerId, err)
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to push image."}
+		return err
+	}
+
+	log.Printf("container <%v> push took %v", containerId, time.Since(startTime))
+	log.Printf("container <%v> build completed successfully", containerId)
 	return nil
 }
 
