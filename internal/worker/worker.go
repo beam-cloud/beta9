@@ -435,7 +435,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	s.containerInstances.Set(containerId, containerInstance)
 
 	// Handle stdout/stderr from spawned container
-	go s.containerLogger.StartLogging(request.ContainerId, outputChan)
+	go s.containerLogger.CaptureLogs(request.ContainerId, outputChan)
 
 	go func() {
 		time.Sleep(time.Second)

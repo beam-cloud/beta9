@@ -27,7 +27,7 @@ func (r *ContainerLogger) Read(containerId string, buffer []byte) (int64, error)
 	return 0, nil
 }
 
-func (r *ContainerLogger) StartLogging(containerId string, outputChan chan common.OutputMsg) error {
+func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common.OutputMsg) error {
 	logFilePath := path.Join(containerLogsPath, fmt.Sprintf("%s.log", containerId))
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
