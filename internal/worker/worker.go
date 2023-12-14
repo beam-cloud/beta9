@@ -602,22 +602,22 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	// Create local workspace path so we can symlink volumes before the container starts
 	os.MkdirAll(containerConfig.WorkspacePath, os.FileMode(0755))
 
-	// Create tmp directories in host so that we can bind them to container
-	for _, dir := range containerTmpDirs {
-		containerTmpDir := filepath.Join(dir, request.ContainerId, dir) // NOTE: Cleanup this logic where the prefix and suffix are the same
-		err = os.MkdirAll(containerTmpDir, 0755)
-		if err != nil {
-			log.Printf("<%s> - failed to create %s directory: %v\n", request.ContainerId, dir, err)
-			return nil, err
-		}
+	// // Create tmp directories in host so that we can bind them to container
+	// for _, dir := range containerTmpDirs {
+	// 	containerTmpDir := filepath.Join(dir, request.ContainerId, dir) // NOTE: Cleanup this logic where the prefix and suffix are the same
+	// 	err = os.MkdirAll(containerTmpDir, 0755)
+	// 	if err != nil {
+	// 		log.Printf("<%s> - failed to create %s directory: %v\n", request.ContainerId, dir, err)
+	// 		return nil, err
+	// 	}
 
-		spec.Mounts = append(spec.Mounts, specs.Mount{
-			Type:        "bind",
-			Source:      containerTmpDir,
-			Destination: dir,
-			Options:     []string{"bind", "mode=755", "nosuid", "strictatime", "rslave"},
-		})
-	}
+	// 	spec.Mounts = append(spec.Mounts, specs.Mount{
+	// 		Type:        "bind",
+	// 		Source:      containerTmpDir,
+	// 		Destination: dir,
+	// 		Options:     []string{"bind", "mode=755", "nosuid", "strictatime", "rslave"},
+	// 	})
+	// }
 
 	// Add bind mounts to runc spec
 	for _, m := range containerConfig.Mounts {
