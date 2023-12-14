@@ -113,10 +113,11 @@ func (c *RunCClient) StreamLogs(ctx context.Context, containerId string, outputC
 				return fmt.Errorf("error receiving from log stream: %w", err)
 			}
 
-			outputChan <- OutputMsg{Msg: logEntry.Msg}
+			if logEntry.Msg != "" {
+				outputChan <- OutputMsg{Msg: logEntry.Msg}
+				fmt.Println(logEntry.Msg)
+			}
 
-			// Process log entry
-			fmt.Println(logEntry.Msg)
 		}
 	}
 }
