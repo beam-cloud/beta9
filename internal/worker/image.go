@@ -221,7 +221,7 @@ func (i *ImageClient) unpack(baseImageName string, baseImageTag string, cacheDir
 }
 
 // Generate and upload archived version of the image for distribution
-func (i *ImageClient) Archive(ctx context.Context, bundlePath string, containerId string, imageTag string, outputChan chan common.OutputMsg) error {
+func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageTag string, outputChan chan common.OutputMsg) error {
 	startTime := time.Now()
 
 	archiveName := fmt.Sprintf("%s.%s", imageTag, i.registry.ImageFileExtension)
@@ -251,18 +251,18 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, containerI
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to archive image."}
 		return err
 	}
-	log.Printf("container <%v> archive took %v", containerId, time.Since(startTime))
+	log.Printf("container <%v> archive took %v", imageTag, time.Since(startTime))
 
 	// Push the archive to a registry
 	startTime = time.Now()
 	err = i.registry.Push(ctx, archivePath, imageTag)
 	if err != nil {
-		log.Printf("failed to push image for container <%v>: %v", containerId, err)
+		log.Printf("failed to push image for image <%v>: %v", imageTag, err)
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to push image."}
 		return err
 	}
 
-	log.Printf("container <%v> push took %v", containerId, time.Since(startTime))
-	log.Printf("container <%v> build completed successfully", containerId)
+	log.Printf("container <%v> push took %v", imageTag, time.Since(startTime))
+	log.Printf("container <%v> build completed successfully", imageTag)
 	return nil
 }
