@@ -40,7 +40,7 @@ ARG GITHUB_TOKEN
 RUN echo "machine github.com login beam-cloud password ${GITHUB_TOKEN}" > ~/.netrc
 
 RUN rm /etc/apt/sources.list.d/cuda.list && apt-get update && apt-get install -y wget git curl \
-    libseccomp-dev libsndfile1 libsndfile1-dev \
+    libseccomp-dev libsndfile1 libsndfile1-dev libgpgme-dev \
     libaio-dev asciidoc xmlto libzmq3-dev iptables \
     build-essential git libprotobuf-dev libprotobuf-c-dev \
     protobuf-c-compiler protobuf-compiler \
