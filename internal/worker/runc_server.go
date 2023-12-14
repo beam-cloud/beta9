@@ -98,7 +98,9 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 		OutputWriter: instance.OutputWriter,
 	})
 
-	return &pb.RunCExecResponse{}, err
+	return &pb.RunCExecResponse{
+		Ok: err == nil,
+	}, nil
 }
 
 func (s *RunCServer) RunCStatus(ctx context.Context, in *pb.RunCStatusRequest) (*pb.RunCStatusResponse, error) {

@@ -215,11 +215,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go client.StreamLogs(ctx, containerId, outputChan)
 
-	// imgTag, err := b.GetImageTag(opts)
-	// if err != nil {
-	// 	return err
-	// }
-
 	// err = b.generateRequirementsFile(bundlePath, opts)
 	// if err != nil {
 	// 	log.Printf("failed to generate python requirements for container <%v>: %v", containerId, err)
@@ -246,7 +241,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			continue
 		}
 
-		if _, err := client.Exec(containerId, cmd); err != nil {
+		if r, err := client.Exec(containerId, cmd); !r.Ok || err != nil {
 			log.Printf("failed to execute command for container <%v>: \"%v\" - %v", containerId, cmd, err)
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
 			return err
