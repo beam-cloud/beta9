@@ -129,7 +129,7 @@ func (c *ImageClient) PullLazy(imageTag string) error {
 	return nil
 }
 
-func (i *ImageClient) Pull(context context.Context, source string, dest string, creds *string) error {
+func (i *ImageClient) PullAndArchive(context context.Context, source string, dest string, creds *string) error {
 	args := []string{"copy", source, dest}
 
 	args = append(args, i.args(creds)...)

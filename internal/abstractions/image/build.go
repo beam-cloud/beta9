@@ -172,7 +172,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		Cpu:         defaultBuildContainerCpu,
 		Memory:      defaultBuildContainerMemory,
 		ImageName:   opts.BaseImageName,
-		ImageTag:    "0d286944826913d9", //opts.BaseImageTag,
+		ImageTag:    opts.BaseImageTag,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 	})
 	if err != nil {
