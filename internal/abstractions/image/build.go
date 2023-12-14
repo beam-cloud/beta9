@@ -403,29 +403,3 @@ func (b *Builder) getCachedImagePath(cacheDir string) (string, error) {
 
 	return "", errors.New("image not found")
 }
-
-// Start a new container using the selected base image
-// func (b *Builder) startBuildContainer(ctx context.Context, opts *BuildOpts) (*common.ContainerOverlay, string, error) {
-// 	containerId := b.uuid()
-
-// 	overlay, err := b.createContainerBundle(containerId, opts.BaseImageName, opts.BaseImageTag, opts.UserImageTag)
-// 	if err != nil {
-// 		return nil, containerId, err
-// 	}
-
-// 	status, err := b.runcHandle.Run(ctx, containerId, overlay.TopLayerPath(), &runc.CreateOpts{
-// 		Detach: true,
-// 	})
-
-// 	if err != nil {
-// 		overlay.Cleanup()
-// 		return nil, containerId, err
-// 	}
-
-// 	if status != 0 {
-// 		overlay.Cleanup()
-// 		return nil, "", fmt.Errorf("unable to start container: %d", status)
-// 	}
-
-// 	return overlay, containerId, err
-// }
