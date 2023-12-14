@@ -213,6 +213,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return errors.New("container not running")
 	}
 
+	go client.StreamLogs(ctx, containerId, outputChan)
+
 	// imgTag, err := b.GetImageTag(opts)
 	// if err != nil {
 	// 	return err

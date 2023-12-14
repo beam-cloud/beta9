@@ -77,8 +77,10 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 			}
 		}
 
-		// Write logs to in-memory log buffer as well
-		instance.LogBuffer.Write([]byte(o.Msg))
+		if o.Msg != "" {
+			// Write logs to in-memory log buffer as well
+			instance.LogBuffer.Write([]byte(o.Msg))
+		}
 
 		// Fallback in case the message was not JSON
 		if !msgDecoded && o.Msg != "" {

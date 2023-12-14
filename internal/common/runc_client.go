@@ -3,6 +3,8 @@ package common
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
+	"io"
 	"strings"
 
 	pb "github.com/beam-cloud/beam/proto"
@@ -88,4 +90,33 @@ func (c *RunCClient) Exec(containerId, cmd string) (*pb.RunCExecResponse, error)
 		return resp, err
 	}
 	return resp, nil
+}
+
+func (c *RunCClient) StreamLogs(ctx context.Context, containerId string, outputChan chan OutputMsg) error {
+	stream, err := c.client.RunCStreamLogs(ctx, &pb.RunCStreamLogsRequest{ContainerId: containerId})
+	if err != nil {
+		return fmt.Errorf("error creating log stream: %w", err)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		default:
+			logEntry, err := stream.Recv()
+			if err == io.EOF {
+				return nil
+			}
+
+			if err != nil {
+				return fmt.Errorf("error receiving from log stream: %w", err)
+			}
+
+			outputChan <- OutputMsg{Msg: logEntry.Msg}
+
+			// Process log entry
+			fmt.Println(logEntry.Msg)
+		}
+	}
 }
