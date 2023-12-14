@@ -129,7 +129,10 @@ func (c *ImageClient) PullLazy(imageTag string) error {
 	return nil
 }
 
-func (i *ImageClient) PullAndArchive(context context.Context, source string, dest string, creds *string) error {
+func (i *ImageClient) PullAndArchive(context context.Context, sourceRegistry string, imageName, imageTag string, creds *string) error {
+	source := fmt.Sprintf("%s/%s:%s", sourceRegistry, imageName, imageTag)
+	dest := fmt.Sprintf("oci:%s:%s", imageName, imageTag)
+
 	args := []string{"copy", source, dest}
 
 	args = append(args, i.args(creds)...)
