@@ -243,7 +243,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 		if r, err := client.Exec(containerId, cmd); !r.Ok || err != nil {
 			log.Printf("failed to execute command for container <%v>: \"%v\" - %v", containerId, cmd, err)
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
+
+			errMsg := ""
+			if err != nil {
+				errMsg = err.Error()
+			}
+
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: errMsg}
 			return err
 		}
 	}
@@ -397,56 +403,6 @@ func (b *Builder) getCachedImagePath(cacheDir string) (string, error) {
 
 	return "", errors.New("image not found")
 }
-
-// Copy cached image to a location where it can be modified by an external user
-// func (b *Builder) createContainerBundle(containerId, baseImageName, baseImageTag, userImageTag string) (*common.ContainerOverlay, error) {
-// 	b.cacheLock.Lock()
-// 	defer b.cacheLock.Unlock()
-
-// 	cacheDir := b.getBaseImageCacheDir(baseImageName, baseImageTag)
-// 	imagePath := filepath.Join(b.userImageBuildPath, userImageTag)
-
-// 	selectedImagePath, err := b.getCachedImagePath(cacheDir)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	// Remove any old image overlay with the same path
-// 	err = os.RemoveAll(imagePath)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	err = os.MkdirAll(imagePath, os.ModePerm)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	// Setup a new overlayfs to build the image in
-// 	overlay := common.NewContainerOverlay(containerId, selectedImagePath, imagePath, selectedImagePath)
-// 	err = overlay.Setup()
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	tempConfig := b.baseConfigSpec
-// 	tempConfig.Hooks.Prestart = nil
-// 	tempConfig.Process.Terminal = false
-// 	tempConfig.Process.Args = []string{"tail", "-f", "/dev/null"}
-// 	tempConfig.Root.Readonly = false
-
-// 	file, err := json.MarshalIndent(tempConfig, "", " ")
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	// Preserve initial config file in the bundle
-// 	os.Rename(filepath.Join(overlay.TopLayerPath(), "config.json"), filepath.Join(overlay.TopLayerPath(), "initial_config.json"))
-
-// 	configPath := filepath.Join(overlay.TopLayerPath(), "config.json")
-// 	err = os.WriteFile(configPath, file, 0644)
-// 	return overlay, err
-// }
 
 // Start a new container using the selected base image
 // func (b *Builder) startBuildContainer(ctx context.Context, opts *BuildOpts) (*common.ContainerOverlay, string, error) {
