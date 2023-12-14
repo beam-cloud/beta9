@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -39,6 +40,11 @@ func (r *ContainerLogger) StartLogging(containerId string, outputChan chan commo
 	f.SetOutput(logFile)
 	f.SetFormatter(&logrus.JSONFormatter{})
 
+	instance, exists := r.containerInstances.Get(containerId)
+	if !exists {
+		return errors.New("container not found")
+	}
+
 	for o := range outputChan {
 		dec := json.NewDecoder(strings.NewReader(o.Msg))
 		msgDecoded := false
@@ -70,6 +76,9 @@ func (r *ContainerLogger) StartLogging(containerId string, outputChan chan commo
 				log.Printf("<%s> - %s\n", containerId, msg.Message)
 			}
 		}
+
+		// Write logs to in-memory log buffer as well
+		instance.LogBuffer.Write([]byte(o.Msg))
 
 		// Fallback in case the message was not JSON
 		if !msgDecoded && o.Msg != "" {

@@ -189,12 +189,27 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	r, err := client.Status(containerId)
-	if err != nil {
-		return err
+	start := time.Now()
+	buildContainerRunning := false
+	for {
+		r, err := client.Status(containerId)
+		if err != nil {
+			return err
+		}
+
+		if r.Running {
+			buildContainerRunning = true
+			break
+		}
+
+		if time.Since(start) > 5*time.Second {
+			return errors.New("timeout: container not running after 5 seconds")
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	if !r.Running {
+	if !buildContainerRunning {
 		return errors.New("container not running")
 	}
 

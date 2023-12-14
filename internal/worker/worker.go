@@ -62,6 +62,7 @@ type ContainerInstance struct {
 	ExitCode     int
 	Port         int
 	OutputWriter *common.OutputWriter
+	LogBuffer    *common.LogBuffer
 }
 
 type ContainerOptions struct {
@@ -316,9 +317,6 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 func (s *Worker) SpawnAsync(request *types.ContainerRequest, bundlePath string, spec *specs.Spec) error {
 	outputChan := make(chan common.OutputMsg)
 
-	// Handle stdout/stderr from spawned container
-	go s.containerLogger.StartLogging(request.ContainerId, outputChan)
-
 	go s.containerWg.Add(1)
 	go s.spawn(request, bundlePath, spec, outputChan)
 
@@ -432,8 +430,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 				Success: false,
 			}
 		}),
+		LogBuffer: common.NewLogBuffer(),
 	}
 	s.containerInstances.Set(containerId, containerInstance)
+
+	// Handle stdout/stderr from spawned container
+	go s.containerLogger.StartLogging(request.ContainerId, outputChan)
 
 	go func() {
 		time.Sleep(time.Second)
