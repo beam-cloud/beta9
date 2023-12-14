@@ -25,18 +25,16 @@ message VerifyImageBuildResponse {
 }
 
 message BuildImageRequest {
-  string image_tag = 1;
-
   // These parameters are used for a "beam" managed image
-  string python_version = 2;
-  repeated string python_packages = 3;
-  repeated string commands = 4;
+  string python_version = 1;
+  repeated string python_packages = 2;
+  repeated string commands = 3;
 
   // These parameters are used for an existing image
-  string existing_image_uri = 5; // URI for an existing image in the format
+  string existing_image_uri = 4; // URI for an existing image in the format
   // "docker://image-repo-name:tag"
 
-  string existing_image_creds = 6;
+  string existing_image_creds = 5;
 }
 
 message BuildImageResponse {

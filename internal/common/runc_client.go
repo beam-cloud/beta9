@@ -115,9 +115,7 @@ func (c *RunCClient) StreamLogs(ctx context.Context, containerId string, outputC
 
 			if logEntry.Msg != "" {
 				outputChan <- OutputMsg{Msg: logEntry.Msg}
-				fmt.Println(logEntry.Msg)
 			}
-
 		}
 	}
 }
