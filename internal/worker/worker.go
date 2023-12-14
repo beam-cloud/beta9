@@ -270,6 +270,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
+
 	log.Printf("<%s> - successfully created spec from request.\n", containerID)
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the trigger type,

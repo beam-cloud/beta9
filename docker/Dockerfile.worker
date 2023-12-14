@@ -11,7 +11,7 @@ FROM --platform=linux/x86_64 nvidia/cuda:12.2.0-base-ubuntu20.04 as build_releas
 WORKDIR /workspace
 
 # The first stage builds the worker & bootstrap executables
-FROM --platform=linux/x86_64 golang:1.19 AS builder
+FROM --platform=linux/x86_64 golang:1.18 AS builder
 
 ARG GITHUB_TOKEN
 RUN echo "machine github.com login beam-cloud password ${GITHUB_TOKEN}" > ~/.netrc
@@ -22,11 +22,12 @@ WORKDIR /workspace
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 
+RUN apt-get update && apt-get install git \
+    libseccomp-dev curl nano skopeo -y
+
 COPY . .
 RUN mkdir -p /workspace/bin
 RUN go build -v -o /usr/local/bin/worker /workspace/cmd/worker/main.go
-
-RUN apt-get update && apt-get install skopeo -y
 
 # Second stage configures the outer container
 FROM build_${BUILD_ENV} as build
