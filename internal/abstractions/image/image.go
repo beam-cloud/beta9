@@ -69,13 +69,6 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		ExistingImageUri: in.ExistingImageUri,
 	}
 
-	imageId, err := is.builder.GetImageId(buildOptions)
-	if err != nil {
-		return err
-	}
-
-	buildOptions.ImageId = imageId
-
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
 
@@ -83,7 +76,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 	var lastMessage common.OutputMsg
 	for o := range outputChan {
-		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: imageId}); err != nil {
+		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: ""}); err != nil {
 			log.Println("failed to complete build: ", err)
 			lastMessage = o
 			break

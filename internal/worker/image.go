@@ -120,7 +120,7 @@ func (c *ImageClient) PullLazy(imageId string) error {
 	return nil
 }
 
-func (i *ImageClient) PullSourceImage(context context.Context, sourceImage string, creds *string) error {
+func (i *ImageClient) PullAndArchiveImage(context context.Context, sourceImage string, creds *string) error {
 	baseImage, err := i.extractImageNameAndTag(sourceImage)
 	if err != nil {
 		return err

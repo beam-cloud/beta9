@@ -42,7 +42,6 @@ type BuildOpts struct {
 	Commands           []string
 	ExistingImageUri   string
 	ExistingImageCreds *string
-	ImageId            string
 	ForceRebuild       bool
 }
 
@@ -170,15 +169,23 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		opts.BaseImageRegistry = os.Getenv("BEAM_RUNNER_BASE_IMAGE_REGISTRY")
 	}
 
-	sourceImage := fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageRegistry)
+	baseImageId, err := b.GetImageId(&BuildOpts{
+		BaseImageRegistry: opts.BaseImageRegistry,
+		BaseImageName:     opts.BaseImageName,
+		BaseImageTag:      opts.BaseImageTag})
+	if err != nil {
+		return err
+	}
+
+	sourceImage := fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
 
 	containerId := b.genContainerId()
-	err := b.scheduler.Run(&types.ContainerRequest{
+	err = b.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env:         []string{},
 		Cpu:         defaultBuildContainerCpu,
 		Memory:      defaultBuildContainerMemory,
-		ImageId:     opts.ImageId,
+		ImageId:     baseImageId,
 		SourceImage: &sourceImage,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 	})
