@@ -121,13 +121,13 @@ func (c *ImageClient) PullLazy(imageId string) error {
 }
 
 func (i *ImageClient) PullAndArchive(context context.Context, sourceImage *string, creds *string) error {
-	dest := fmt.Sprintf("oci:%s:%s", *sourceImage, "hi")
-	args := []string{"copy", *sourceImage, dest}
-
 	baseImage, err := i.extractImageNameAndTag((*sourceImage))
 	if err != nil {
 		return err
 	}
+
+	dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
+	args := []string{"copy", *sourceImage, dest}
 
 	args = append(args, i.args(creds)...)
 	cmd := exec.CommandContext(context, i.PullCommand, args...)

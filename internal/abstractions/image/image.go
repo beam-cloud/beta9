@@ -69,15 +69,17 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		ExistingImageUri: in.ExistingImageUri,
 	}
 
-	ctx := stream.Context()
-	outputChan := make(chan common.OutputMsg)
-
-	go is.builder.Build(ctx, buildOptions, outputChan)
-
 	imageId, err := is.builder.GetImageId(buildOptions)
 	if err != nil {
 		return err
 	}
+
+	buildOptions.ImageId = imageId
+
+	ctx := stream.Context()
+	outputChan := make(chan common.OutputMsg)
+
+	go is.builder.Build(ctx, buildOptions, outputChan)
 
 	var lastMessage common.OutputMsg
 	for o := range outputChan {

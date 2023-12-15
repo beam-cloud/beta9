@@ -34,6 +34,7 @@ type Builder struct {
 }
 
 type BuildOpts struct {
+	BaseImageRegistry  string
 	BaseImageName      string
 	BaseImageTag       string
 	PythonVersion      string
@@ -41,6 +42,7 @@ type BuildOpts struct {
 	Commands           []string
 	ExistingImageUri   string
 	ExistingImageCreds *string
+	ImageId            string
 	ForceRebuild       bool
 }
 
@@ -157,7 +159,6 @@ func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 
 // Build user image
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
-	var registry string = ""
 	if opts.ExistingImageUri != "" {
 		err := b.handleCustomBaseImage(ctx, opts, outputChan)
 		if err != nil {
@@ -165,12 +166,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 	}
 
-	if registry == "" {
-		registry = os.Getenv("BEAM_RUNNER_BASE_IMAGE_REGISTRY")
+	if opts.BaseImageRegistry == "" {
+		opts.BaseImageRegistry = os.Getenv("BEAM_RUNNER_BASE_IMAGE_REGISTRY")
 	}
 
-	// source := fmt.Sprintf("%s/%s:%s", registry, imageName, imageTag)
-	// dest := fmt.Sprintf("oci:%s:%s", imageName, imageTag)
+	sourceImage := fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageRegistry)
 
 	containerId := b.genContainerId()
 	err := b.scheduler.Run(&types.ContainerRequest{
@@ -178,8 +178,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		Env:         []string{},
 		Cpu:         defaultBuildContainerCpu,
 		Memory:      defaultBuildContainerMemory,
-		ImageId:     "",
-		SourceImage: nil, // TODO: replace this with the real source registry (only used during custom base images)
+		ImageId:     opts.ImageId,
+		SourceImage: &sourceImage,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 	})
 	if err != nil {
@@ -309,18 +309,7 @@ func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, ou
 	// 	creds = *opts.ExistingImageCreds
 	// }
 
-	// err = b.puller.Pull(ctx, fmt.Sprintf("docker://%s", opts.ExistingImageUri), dest, &creds)
-	// if err != nil {
-	// 	outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
-	// 	return err
-	// }
-
-	// err = b.unpackIntoCache(cacheDir, baseImage.ImageName, baseImage.ImageTag)
-	// if err != nil {
-	// 	log.Printf("unable to unpack image: %v", err)
-	// 	return err
-	// }
-
+	opts.BaseImageRegistry = baseImage.SourceRegistry
 	opts.BaseImageName = baseImage.ImageName
 	opts.BaseImageTag = baseImage.ImageTag
 
