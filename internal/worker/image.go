@@ -120,14 +120,14 @@ func (c *ImageClient) PullLazy(imageId string) error {
 	return nil
 }
 
-func (i *ImageClient) PullSourceImage(context context.Context, sourceImage *string, creds *string) error {
-	baseImage, err := i.extractImageNameAndTag((*sourceImage))
+func (i *ImageClient) PullSourceImage(context context.Context, sourceImage string, creds *string) error {
+	baseImage, err := i.extractImageNameAndTag(sourceImage)
 	if err != nil {
 		return err
 	}
 
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
-	args := []string{"copy", *sourceImage, dest}
+	args := []string{"copy", sourceImage, dest}
 
 	args = append(args, i.args(creds)...)
 	cmd := exec.CommandContext(context, i.PullCommand, args...)
@@ -143,7 +143,7 @@ func (i *ImageClient) PullSourceImage(context context.Context, sourceImage *stri
 
 	status, err := runc.Monitor.Wait(cmd, ec)
 	if err == nil && status != 0 {
-		err = fmt.Errorf("unable to pull base image: %s", *sourceImage)
+		err = fmt.Errorf("unable to pull base image: %s", sourceImage)
 	}
 
 	err = i.unpack(baseImage.ImageName, baseImage.ImageName, imagePath, fmt.Sprintf("%s:%s", baseImage.ImageName, baseImage.ImageName))

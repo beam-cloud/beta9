@@ -239,7 +239,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	err = s.imageClient.PullLazy(request.ImageId)
 	if err != nil && request.SourceImage != nil {
 		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerID, *request.SourceImage)
-		err = s.imageClient.PullSourceImage(context.TODO(), request.SourceImage, nil)
+		err = s.imageClient.PullSourceImage(context.TODO(), *request.SourceImage, nil)
 	}
 
 	if err != nil {
