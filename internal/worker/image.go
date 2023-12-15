@@ -31,17 +31,6 @@ const (
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes", "/snapshot", "/outputs", "/packages"}
 
-/*
-
-What are the things that have be completed here:
- - first, check if we can mount the image lazily
- - if we cannot mount the image lazily, try to pull the image directly into /dev/shm
- - then, unpack the image in /dev/shm
- - then, archive the image into a clip, and upload it directly.
- - then,
- -
-*/
-
 type ImageClient struct {
 	registry       *common.ImageRegistry
 	cacheClient    *CacheClient

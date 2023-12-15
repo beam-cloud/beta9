@@ -29,6 +29,24 @@ COPY . .
 RUN mkdir -p /workspace/bin
 RUN go build -v -o /usr/local/bin/worker /workspace/cmd/worker/main.go
 
+# Skopeo build
+FROM golang:1.18 AS skopeo-build
+
+WORKDIR /usr/src/skopeo
+
+ARG SKOPEO_VERSION="1.8.0"
+RUN curl -fsSL "https://github.com/containers/skopeo/archive/v${SKOPEO_VERSION}.tar.gz" \
+  | tar -xzf - --strip-components=1
+
+RUN CGO_ENABLED=0 DISABLE_DOCS=1 make BUILDTAGS=containers_image_openpgp GO_DYN_FLAGS=
+
+RUN ./bin/skopeo --version
+
+FROM scratch AS skopeo-rootfs
+
+COPY --from=skopeo-build /usr/src/skopeo/bin/skopeo /usr/local/bin/
+COPY --from=skopeo-build /usr/src/skopeo/default-policy.json /etc/containers/policy.json
+
 # Second stage configures the outer container
 FROM build_${BUILD_ENV} as build
 
@@ -40,7 +58,7 @@ ARG GITHUB_TOKEN
 RUN echo "machine github.com login beam-cloud password ${GITHUB_TOKEN}" > ~/.netrc
 
 RUN rm /etc/apt/sources.list.d/cuda.list && apt-get update && apt-get install -y wget git curl \
-    libseccomp-dev libsndfile1 libsndfile1-dev libgpgme-dev \
+    libseccomp-dev libsndfile1 libsndfile1-dev \
     libaio-dev asciidoc xmlto libzmq3-dev iptables \
     build-essential git libprotobuf-dev libprotobuf-c-dev \
     protobuf-c-compiler protobuf-compiler \
@@ -72,5 +90,5 @@ RUN git clone https://github.com/beam-cloud/nvidia-container-toolkit.git
 RUN cd /workspace/nvidia-container-toolkit && make build && make binaries
 RUN cp /workspace/nvidia-container-toolkit/nvidia-container-runtime* /usr/bin/
 
-COPY --from=builder /usr/bin/skopeo /usr/bin/skopeo
+COPY --from=skopeo-rootfs / /
 COPY --from=builder /usr/local/bin/worker /usr/local/bin/worker
