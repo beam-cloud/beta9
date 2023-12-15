@@ -12,12 +12,12 @@ func TestExtractImageNameAndTag(t *testing.T) {
 
 	tests := []struct {
 		imageURI      string
-		expected      CustomBaseImage
+		expected      BaseImage
 		expectedError error
 	}{
 		{
 			imageURI: "docker.io/registry1/docker-image:v1",
-			expected: CustomBaseImage{
+			expected: BaseImage{
 				SourceRegistry: "docker.io/registry1",
 				ImageName:      "docker-image",
 				ImageTag:       "v1",
@@ -26,7 +26,7 @@ func TestExtractImageNameAndTag(t *testing.T) {
 		},
 		{
 			imageURI: "docker.io/registry1/docker-image",
-			expected: CustomBaseImage{
+			expected: BaseImage{
 				SourceRegistry: "docker.io/registry1",
 				ImageName:      "docker-image",
 				ImageTag:       "latest",
@@ -35,12 +35,12 @@ func TestExtractImageNameAndTag(t *testing.T) {
 		},
 		{
 			imageURI:      "",
-			expected:      CustomBaseImage{},
+			expected:      BaseImage{},
 			expectedError: errors.New("invalid image URI format"),
 		},
 		{
 			imageURI: "ubuntu:22.04",
-			expected: CustomBaseImage{
+			expected: BaseImage{
 				SourceRegistry: "docker.io",
 				ImageName:      "ubuntu",
 				ImageTag:       "22.04",

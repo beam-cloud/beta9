@@ -534,8 +534,8 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, contai
 	return env
 }
 
-func (s *Worker) readBundleConfig(imageTag string) (*specs.Spec, error) {
-	imageConfigPath := filepath.Join(s.userImagePath, imageTag, "initial_config.json")
+func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
+	imageConfigPath := filepath.Join(s.userImagePath, imageId, "initial_config.json")
 
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
