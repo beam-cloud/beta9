@@ -120,7 +120,7 @@ func (c *ImageClient) PullLazy(imageId string) error {
 	return nil
 }
 
-func (i *ImageClient) PullAndArchiveImage(context context.Context, sourceImage string, creds *string) error {
+func (i *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds *string) error {
 	baseImage, err := i.extractImageNameAndTag(sourceImage)
 	if err != nil {
 		return err
@@ -130,7 +130,7 @@ func (i *ImageClient) PullAndArchiveImage(context context.Context, sourceImage s
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
 
 	args = append(args, i.args(creds)...)
-	cmd := exec.CommandContext(context, i.PullCommand, args...)
+	cmd := exec.CommandContext(ctx, i.PullCommand, args...)
 	cmd.Env = os.Environ()
 	cmd.Dir = i.ImagePath
 	cmd.Stdout = os.Stdout
@@ -146,8 +146,13 @@ func (i *ImageClient) PullAndArchiveImage(context context.Context, sourceImage s
 		err = fmt.Errorf("unable to pull base image: %s", sourceImage)
 	}
 
-	err = i.unpack(baseImage.ImageName, baseImage.ImageTag, imagePath, fmt.Sprintf("%s:%s", baseImage.ImageName, baseImage.ImageTag))
-	return err
+	bundlePath := filepath.Join(imagePath, imageId)
+	err = i.unpack(baseImage.ImageName, baseImage.ImageTag, bundlePath)
+	if err != nil {
+		return err
+	}
+
+	return i.Archive(ctx, bundlePath, imageId)
 }
 
 func (i *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
@@ -205,7 +210,7 @@ func (i *ImageClient) args(creds *string) (out []string) {
 	return out
 }
 
-func (i *ImageClient) unpack(baseImageName string, baseImageTag string, cacheDir string, bundleId string) error {
+func (i *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePath string) error {
 	var unpackOptions layer.UnpackOptions
 	var meta umoci.Meta
 	meta.Version = umoci.MetaVersion
@@ -224,8 +229,7 @@ func (i *ImageClient) unpack(baseImageName string, baseImageTag string, cacheDir
 	engineExt := casext.NewEngine(engine)
 	defer engineExt.Close()
 
-	tmpBundlePath := filepath.Join(cacheDir, "_"+bundleId)
-	bundlePath := filepath.Join(cacheDir, bundleId)
+	tmpBundlePath := filepath.Join(bundlePath + "_")
 	err = umoci.Unpack(engineExt, baseImageTag, tmpBundlePath, unpackOptions)
 	if err == nil {
 		for _, dir := range requiredContainerDirectories {
@@ -244,10 +248,10 @@ func (i *ImageClient) unpack(baseImageName string, baseImageTag string, cacheDir
 }
 
 // Generate and upload archived version of the image for distribution
-func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageTag string, outputChan chan common.OutputMsg) error {
+func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId string) error {
 	startTime := time.Now()
 
-	archiveName := fmt.Sprintf("%s.%s", imageTag, i.registry.ImageFileExtension)
+	archiveName := fmt.Sprintf("%s.%s", imageId, i.registry.ImageFileExtension)
 	archivePath := filepath.Join(filepath.Dir(bundlePath), archiveName)
 
 	var err error = nil
@@ -260,7 +264,7 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageTag s
 		}, &clipCommon.S3StorageInfo{
 			Bucket: common.Secrets().Get("BEAM_IMAGESERVICE_IMAGE_REGISTRY_S3_BUCKET"),
 			Region: common.Secrets().Get("BEAM_IMAGESERVICE_IMAGE_REGISTRY_S3_REGION"),
-			Key:    fmt.Sprintf("%s.clip", imageTag),
+			Key:    fmt.Sprintf("%s.clip", imageId),
 		})
 	case "local":
 		err = clip.CreateArchive(clip.CreateOptions{
@@ -271,21 +275,21 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageTag s
 
 	if err != nil {
 		log.Printf("unable to create archive: %v\n", err)
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to archive image."}
+		// outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to archive image."}
 		return err
 	}
-	log.Printf("container <%v> archive took %v", imageTag, time.Since(startTime))
+	log.Printf("container <%v> archive took %v", imageId, time.Since(startTime))
 
 	// Push the archive to a registry
 	startTime = time.Now()
-	err = i.registry.Push(ctx, archivePath, imageTag)
+	err = i.registry.Push(ctx, archivePath, imageId)
 	if err != nil {
-		log.Printf("failed to push image for image <%v>: %v", imageTag, err)
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to push image."}
+		log.Printf("failed to push image for image <%v>: %v", imageId, err)
+		// outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to push image."}
 		return err
 	}
 
-	log.Printf("container <%v> push took %v", imageTag, time.Since(startTime))
-	log.Printf("container <%v> build completed successfully", imageTag)
+	log.Printf("container <%v> push took %v", imageId, time.Since(startTime))
+	log.Printf("container <%v> build completed successfully", imageId)
 	return nil
 }
