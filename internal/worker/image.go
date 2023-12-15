@@ -146,7 +146,7 @@ func (i *ImageClient) PullAndArchiveImage(context context.Context, sourceImage s
 		err = fmt.Errorf("unable to pull base image: %s", sourceImage)
 	}
 
-	err = i.unpack(baseImage.ImageName, baseImage.ImageName, imagePath, fmt.Sprintf("%s:%s", baseImage.ImageName, baseImage.ImageTag))
+	err = i.unpack(baseImage.ImageName, baseImage.ImageTag, imagePath, fmt.Sprintf("%s:%s", baseImage.ImageName, baseImage.ImageTag))
 	return err
 }
 
@@ -177,12 +177,6 @@ func (i *ImageClient) extractImageNameAndTag(sourceImage string) (image.BaseImag
 	if matches[4] != "" {
 		imageTag = matches[4]
 	}
-
-	log.Printf("BASE IMAGE: %+v\n", image.BaseImage{
-		SourceRegistry: sourceRegistry,
-		ImageName:      imageName,
-		ImageTag:       imageTag,
-	})
 
 	return image.BaseImage{
 		SourceRegistry: sourceRegistry,
