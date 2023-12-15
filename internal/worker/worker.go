@@ -237,12 +237,13 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, *request.SourceImage)
 	err = s.imageClient.PullLazy(request.ImageId)
+	if err != nil && request.SourceImage != nil {
+		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerID, *request.SourceImage)
+		err = s.imageClient.PullSourceImage(context.TODO(), request.SourceImage, nil)
+	}
+
 	if err != nil {
-		log.Printf("<%s> - lazy-pull failed, pulling image directly: %s\n", containerID, *request.SourceImage)
-		err = s.imageClient.PullAndArchive(context.TODO(), request.SourceImage, nil)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 
 	// Every 30 seconds, update container status
