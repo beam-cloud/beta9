@@ -36,7 +36,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 	var valid bool = true
 	var exists bool
 
-	imageTag, err := is.builder.GetImageTag(&BuildOpts{
+	imageId, err := is.builder.GetImageId(&BuildOpts{
 		BaseImageName:    common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_NAME"),
 		BaseImageTag:     is.getBaseImageTag(in.PythonVersion),
 		PythonVersion:    in.PythonVersion,
@@ -48,12 +48,12 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		valid = false
 	}
 
-	exists = is.builder.Exists(ctx, imageTag)
+	exists = is.builder.Exists(ctx, imageId)
 
 	return &pb.VerifyImageBuildResponse{
-		ImageTag: imageTag,
-		Exists:   exists,
-		Valid:    valid,
+		ImageId: imageId,
+		Exists:  exists,
+		Valid:   valid,
 	}, nil
 }
 
@@ -69,21 +69,19 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		ExistingImageUri: in.ExistingImageUri,
 	}
 
-	imageTag, err := is.builder.GetImageTag(buildOptions)
-	if err != nil {
-		return err
-	}
-
-	buildOptions.UserImageTag = imageTag
-
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
 
 	go is.builder.Build(ctx, buildOptions, outputChan)
 
+	imageId, err := is.builder.GetImageId(buildOptions)
+	if err != nil {
+		return err
+	}
+
 	var lastMessage common.OutputMsg
 	for o := range outputChan {
-		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageTag: imageTag}); err != nil {
+		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: imageId}); err != nil {
 			log.Println("failed to complete build: ", err)
 			lastMessage = o
 			break

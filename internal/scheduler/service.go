@@ -61,7 +61,7 @@ func (wbs *SchedulerService) RunContainer(ctx context.Context, in *pb.RunContain
 		Cpu:             cpuRequest,
 		Memory:          memoryRequest,
 		Gpu:             in.Gpu,
-		ImageTag:        in.ImageTag,
+		ImageId:         in.ImageId,
 		ScheduleTimeout: float64(in.ScheduleTimeout),
 	})
 

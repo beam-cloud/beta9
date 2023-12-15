@@ -7,9 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 
+	"github.com/beam-cloud/beam/internal/abstractions/image"
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
@@ -87,9 +89,9 @@ func NewImageClient() (*ImageClient, error) {
 	}, nil
 }
 
-func (c *ImageClient) PullLazy(imageTag string) error {
-	localCachePath := fmt.Sprintf("%s/%s.cache", imagePath, imageTag)
-	remoteArchivePath := fmt.Sprintf("%s/%s.%s", imagePath, imageTag, c.registry.ImageFileExtension)
+func (c *ImageClient) PullLazy(imageId string) error {
+	localCachePath := fmt.Sprintf("%s/%s.cache", imagePath, imageId)
+	remoteArchivePath := fmt.Sprintf("%s/%s.%s", imagePath, imageId, c.registry.ImageFileExtension)
 
 	var err error = nil
 	if _, err := os.Stat(remoteArchivePath); err != nil {
@@ -98,7 +100,7 @@ func (c *ImageClient) PullLazy(imageTag string) error {
 
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           remoteArchivePath,
-		MountPoint:            fmt.Sprintf("%s/%s", imagePath, imageTag),
+		MountPoint:            fmt.Sprintf("%s/%s", imagePath, imageId),
 		Verbose:               false,
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
@@ -118,11 +120,14 @@ func (c *ImageClient) PullLazy(imageTag string) error {
 	return nil
 }
 
-func (i *ImageClient) PullAndArchive(context context.Context, sourceRegistry string, imageName, imageTag string, creds *string) error {
-	source := fmt.Sprintf("%s/%s:%s", sourceRegistry, imageName, imageTag)
-	dest := fmt.Sprintf("oci:%s:%s", imageName, imageTag)
+func (i *ImageClient) PullAndArchive(context context.Context, sourceImage *string, creds *string) error {
+	dest := fmt.Sprintf("oci:%s:%s", *sourceImage, "hi")
+	args := []string{"copy", *sourceImage, dest}
 
-	args := []string{"copy", source, dest}
+	baseImage, err := i.extractImageNameAndTag((*sourceImage))
+	if err != nil {
+		return err
+	}
 
 	args = append(args, i.args(creds)...)
 	cmd := exec.CommandContext(context, i.PullCommand, args...)
@@ -138,9 +143,10 @@ func (i *ImageClient) PullAndArchive(context context.Context, sourceRegistry str
 
 	status, err := runc.Monitor.Wait(cmd, ec)
 	if err == nil && status != 0 {
-		err = fmt.Errorf("unable to pull base image: %s", source)
+		err = fmt.Errorf("unable to pull base image: %s", *sourceImage)
 	}
 
+	err = i.unpack(baseImage.ImageName, baseImage.ImageName, imagePath, fmt.Sprintf("%s:%s", baseImage.ImageName, baseImage.ImageName))
 	return err
 }
 
@@ -149,6 +155,34 @@ func (i *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
 		return runc.Monitor.StartLocked(cmd)
 	}
 	return runc.Monitor.Start(cmd)
+}
+
+func (i *ImageClient) extractImageNameAndTag(sourceImage string) (image.BaseImage, error) {
+	re := regexp.MustCompile(`^(([^/]+/[^/]+)/)?([^:]+):?(.*)$`)
+	matches := re.FindStringSubmatch(sourceImage)
+
+	if matches == nil {
+		return image.BaseImage{}, errors.New("invalid image URI format")
+	}
+
+	// Use default source registry if not specified
+	sourceRegistry := "docker.io"
+	if matches[2] != "" {
+		sourceRegistry = matches[2]
+	}
+
+	imageName := matches[3]
+	imageTag := "latest"
+
+	if matches[4] != "" {
+		imageTag = matches[4]
+	}
+
+	return image.BaseImage{
+		SourceRegistry: sourceRegistry,
+		ImageName:      imageName,
+		ImageTag:       imageTag,
+	}, nil
 }
 
 func (i *ImageClient) args(creds *string) (out []string) {

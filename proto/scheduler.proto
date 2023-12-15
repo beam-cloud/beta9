@@ -31,7 +31,7 @@ message RunContainerRequest {
   string cpu = 4;
   string memory = 5;
   string gpu = 6;
-  string image_tag = 10;
+  string image_id = 10;
   float schedule_timeout = 12;
 }
 

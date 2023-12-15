@@ -36,7 +36,6 @@ type Builder struct {
 type BuildOpts struct {
 	BaseImageName      string
 	BaseImageTag       string
-	UserImageTag       string
 	PythonVersion      string
 	PythonPackages     []string
 	Commands           []string
@@ -72,7 +71,7 @@ var (
 	basePythonRequirements string
 )
 
-type ImageTagHash struct {
+type ImageIdHash struct {
 	BaseImageName   string
 	BaseImageTag    string
 	UserImageTag    string
@@ -82,12 +81,12 @@ type ImageTagHash struct {
 	CommandListHash string
 }
 
-func (b *Builder) GetImageTag(opts *BuildOpts) (string, error) {
+func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 	h := sha1.New()
 	h.Write([]byte(strings.Join(opts.Commands, "-")))
 	commandListHash := hex.EncodeToString(h.Sum(nil))
 
-	bodyToHash := &ImageTagHash{
+	bodyToHash := &ImageIdHash{
 		BaseImageName:   opts.BaseImageName,
 		BaseImageTag:    opts.BaseImageTag,
 		PythonVersion:   opts.PythonVersion,
@@ -104,7 +103,7 @@ func (b *Builder) GetImageTag(opts *BuildOpts) (string, error) {
 	return fmt.Sprintf("%016x", hash), nil
 }
 
-type CustomBaseImage struct {
+type BaseImage struct {
 	SourceRegistry string
 	ImageName      string
 	ImageTag       string
@@ -112,12 +111,12 @@ type CustomBaseImage struct {
 
 // Extracts the image name and tag from a given Docker image URI.
 // Returns an error if the URI is invalid.
-func (b *Builder) extractImageNameAndTag(imageURI string) (CustomBaseImage, error) {
+func (b *Builder) extractImageNameAndTag(imageURI string) (BaseImage, error) {
 	re := regexp.MustCompile(`^(([^/]+/[^/]+)/)?([^:]+):?(.*)$`)
 	matches := re.FindStringSubmatch(imageURI)
 
 	if matches == nil {
-		return CustomBaseImage{}, errors.New("invalid image URI format")
+		return BaseImage{}, errors.New("invalid image URI format")
 	}
 
 	// Use default source registry if not specified
@@ -133,7 +132,7 @@ func (b *Builder) extractImageNameAndTag(imageURI string) (CustomBaseImage, erro
 		imageTag = matches[4]
 	}
 
-	return CustomBaseImage{
+	return BaseImage{
 		SourceRegistry: sourceRegistry,
 		ImageName:      imageName,
 		ImageTag:       imageTag,
@@ -158,6 +157,7 @@ func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 
 // Build user image
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
+	var registry string = ""
 	if opts.ExistingImageUri != "" {
 		err := b.handleCustomBaseImage(ctx, opts, outputChan)
 		if err != nil {
@@ -165,14 +165,21 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 	}
 
+	if registry == "" {
+		registry = os.Getenv("BEAM_RUNNER_BASE_IMAGE_REGISTRY")
+	}
+
+	// source := fmt.Sprintf("%s/%s:%s", registry, imageName, imageTag)
+	// dest := fmt.Sprintf("oci:%s:%s", imageName, imageTag)
+
 	containerId := b.genContainerId()
 	err := b.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env:         []string{},
 		Cpu:         defaultBuildContainerCpu,
 		Memory:      defaultBuildContainerMemory,
-		ImageName:   opts.BaseImageName,
-		ImageTag:    opts.BaseImageTag,
+		ImageId:     "",
+		SourceImage: nil, // TODO: replace this with the real source registry (only used during custom base images)
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 	})
 	if err != nil {
@@ -297,7 +304,6 @@ func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, ou
 	}
 
 	// dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
-
 	// creds := "" //fmt.Sprintf("%s:%s", common.Secrets().Get("DOCKERHUB_USERNAME"), common.Secrets().Get("DOCKERHUB_PASSWORD"))
 	// if opts.ExistingImageCreds != nil {
 	// 	creds = *opts.ExistingImageCreds
@@ -345,8 +351,8 @@ func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, ou
 }
 
 // Check if an image already exists in the registry
-func (b *Builder) Exists(ctx context.Context, imageTag string) bool {
-	return b.registry.Exists(ctx, imageTag)
+func (b *Builder) Exists(ctx context.Context, imageId string) bool {
+	return b.registry.Exists(ctx, imageId)
 }
 
 // Generate a python requirements file to install into the image

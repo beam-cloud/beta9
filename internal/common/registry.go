@@ -61,20 +61,20 @@ func NewImageRegistry(storeName string) (*ImageRegistry, error) {
 	}, nil
 }
 
-func (r *ImageRegistry) Exists(ctx context.Context, imageTag string) bool {
-	return r.store.Exists(ctx, fmt.Sprintf("%s.%s", imageTag, r.ImageFileExtension))
+func (r *ImageRegistry) Exists(ctx context.Context, imageId string) bool {
+	return r.store.Exists(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
 }
 
-func (r *ImageRegistry) Push(ctx context.Context, localPath string, imageTag string) error {
-	return r.store.Put(ctx, localPath, fmt.Sprintf("%s.%s", imageTag, r.ImageFileExtension))
+func (r *ImageRegistry) Push(ctx context.Context, localPath string, imageId string) error {
+	return r.store.Put(ctx, localPath, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
 }
 
-func (r *ImageRegistry) Pull(ctx context.Context, localPath string, imageTag string) error {
-	return r.store.Get(ctx, fmt.Sprintf("%s.%s", imageTag, r.ImageFileExtension), localPath)
+func (r *ImageRegistry) Pull(ctx context.Context, localPath string, imageId string) error {
+	return r.store.Get(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension), localPath)
 }
 
-func (r *ImageRegistry) Size(ctx context.Context, imageTag string) (int64, error) {
-	return r.store.Size(ctx, fmt.Sprintf("%s.%s", imageTag, r.ImageFileExtension))
+func (r *ImageRegistry) Size(ctx context.Context, imageId string) (int64, error) {
+	return r.store.Size(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
 }
 
 type ObjectStore interface {

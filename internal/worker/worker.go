@@ -226,7 +226,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerID := request.ContainerId
-	bundlePath := filepath.Join(s.userImagePath, request.ImageTag)
+	bundlePath := filepath.Join(s.userImagePath, request.ImageId)
 
 	// TODO: move this down
 	containerServerAddr := fmt.Sprintf("%s:%d", s.podIPAddr, defaultContainerServerPort)
@@ -235,15 +235,11 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		return err
 	}
 
-	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, request.ImageTag)
-	err = s.imageClient.PullLazy(request.ImageTag)
+	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, *request.SourceImage)
+	err = s.imageClient.PullLazy(request.ImageId)
 	if err != nil {
-		log.Printf("<%s> - lazy-pull failed, pulling directly: %s:%s\n", containerID, request.ImageName, request.ImageTag)
-
-		log.Println("image name: ", request.ImageName)
-		log.Println("image tag: ", request.ImageTag)
-
-		err = s.imageClient.PullAndArchive(context.TODO(), "", request.ImageName, request.ImageTag, nil)
+		log.Printf("<%s> - lazy-pull failed, pulling image directly: %s:%s\n", containerID, *request.SourceImage)
+		err = s.imageClient.PullAndArchive(context.TODO(), request.SourceImage, nil)
 		if err != nil {
 			return err
 		}
@@ -259,7 +255,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	log.Printf("<%s> - acquired port: %d\n", containerID, bindPort)
 
 	// Read spec from bundle
-	initialBundleSpec, _ := s.readBundleConfig(request.ImageTag)
+	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
 
 	// Generate dynamic runc spec for this container
 	spec, err := s.specFromRequest(request, &ContainerOptions{
@@ -317,7 +313,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			log.Printf("<%s> - unable to update container state: %v\n", request.ContainerId, err)
 		}
 
-		log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageTag)
+		log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
 	}
 }
 
