@@ -377,13 +377,6 @@ func (b *Builder) generateRequirementsFile(bundlePath string, opts *BuildOpts) e
 // 	})
 // }
 
-// func (b *Builder) unpackIntoCache(cacheDir string, imageName string, imageTag string) error {
-// 	log.Printf("unpacking: %v:%v", imageName, imageTag)
-// 	bundleId := b.uuid()
-// 	err := b.unpack(imageName, imageTag, cacheDir, bundleId)
-// 	return err
-// }
-
 func (b *Builder) getCachedImagePath(cacheDir string) (string, error) {
 	directories, _ := os.ReadDir(cacheDir)
 
