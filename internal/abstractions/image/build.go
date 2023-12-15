@@ -178,8 +178,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	sourceImage := fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
-
 	containerId := b.genContainerId()
+
 	err = b.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env:         []string{},
@@ -383,18 +383,3 @@ func (b *Builder) generateRequirementsFile(bundlePath string, opts *BuildOpts) e
 // 		Force: true,
 // 	})
 // }
-
-func (b *Builder) getCachedImagePath(cacheDir string) (string, error) {
-	directories, _ := os.ReadDir(cacheDir)
-
-	for _, dir := range directories {
-		if strings.HasPrefix("_", dir.Name()) {
-			continue
-		}
-
-		selectedImagePath := filepath.Join(cacheDir, dir.Name())
-		return selectedImagePath, nil
-	}
-
-	return "", errors.New("image not found")
-}
