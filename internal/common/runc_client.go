@@ -119,3 +119,12 @@ func (c *RunCClient) StreamLogs(ctx context.Context, containerId string, outputC
 		}
 	}
 }
+
+func (c *RunCClient) Archive(containerId, imageId string) error {
+	_, err := c.client.RunCArchive(context.TODO(), &pb.RunCArchiveRequest{ContainerId: containerId})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

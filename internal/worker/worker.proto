@@ -9,6 +9,7 @@ service RunCService {
   rpc RunCExec(RunCExecRequest) returns (RunCExecResponse) {}
   rpc RunCStatus(RunCStatusRequest) returns (RunCStatusResponse) {}
   rpc RunCStreamLogs(RunCStreamLogsRequest) returns (stream RunCLogEntry) {}
+  rpc RunCArchive(RunCArchiveRequest) returns (RunCArchiveResponse) {}
 }
 
 message RunCKillRequest { string container_id = 1; }
@@ -29,3 +30,7 @@ message RunCStatusResponse { bool running = 1; }
 message RunCStreamLogsRequest { string container_id = 1; }
 
 message RunCLogEntry { string msg = 1; }
+
+message RunCArchiveRequest { string container_id = 1; }
+
+message RunCArchiveResponse { bool ok = 1; }

@@ -152,6 +152,10 @@ func (i *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 		return err
 	}
 
+	defer func() {
+		os.RemoveAll(bundlePath)
+	}()
+
 	return i.Archive(ctx, bundlePath, imageId)
 }
 
@@ -251,8 +255,12 @@ func (i *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePa
 func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId string) error {
 	startTime := time.Now()
 
-	archiveName := fmt.Sprintf("%s.%s", imageId, i.registry.ImageFileExtension)
+	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, i.registry.ImageFileExtension)
 	archivePath := filepath.Join(filepath.Dir(bundlePath), archiveName)
+
+	defer func() {
+		os.RemoveAll(archivePath)
+	}()
 
 	var err error = nil
 	archiveStore := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_REGISTRY_STORE", "s3")
@@ -290,6 +298,5 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}
 
 	log.Printf("container <%v> push took %v", imageId, time.Since(startTime))
-	log.Printf("container <%v> build completed successfully", imageId)
 	return nil
 }

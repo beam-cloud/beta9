@@ -143,3 +143,22 @@ func (s *RunCServer) RunCStreamLogs(req *pb.RunCStreamLogsRequest, stream pb.Run
 
 	return nil
 }
+
+func (s *RunCServer) RunCArchive(ctx context.Context, in *pb.RunCArchiveRequest) (*pb.RunCArchiveResponse, error) {
+	state, err := s.runcHandle.State(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.RunCArchiveResponse{
+			Ok: false,
+		}, nil
+	}
+
+	if state.Status != "running" {
+		return &pb.RunCArchiveResponse{
+			Ok: false,
+		}, nil
+	}
+
+	return &pb.RunCArchiveResponse{
+		Ok: true,
+	}, nil
+}

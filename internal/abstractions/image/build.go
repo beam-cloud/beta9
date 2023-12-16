@@ -203,6 +203,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
+	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Waiting for build container to start..."}
 	start := time.Now()
 	buildContainerRunning := false
 	for {
@@ -216,14 +217,15 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			break
 		}
 
-		if time.Since(start) > 5*time.Second {
-			return errors.New("timeout: container not running after 5 seconds")
+		if time.Since(start) > 180*time.Second {
+			return errors.New("timeout: container not running after 180 seconds")
 		}
 
 		time.Sleep(100 * time.Millisecond)
 	}
 
 	if !buildContainerRunning {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to connect to build container."}
 		return errors.New("container not running")
 	}
 
@@ -267,16 +269,20 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			return err
 		}
 	}
-
 	log.Printf("container <%v> build took %v", containerId, time.Since(startTime))
 
-	// Archive and push image to registry
-	// err = b.archiveImage(ctx, bundlePath, containerId, opts, outputChan)
-	// if err != nil {
-	// 	return err
-	// }
+	imageId, err := b.GetImageId(opts)
+	if err != nil {
+		return err
+	}
 
-	outputChan <- common.OutputMsg{Done: true, Success: true, Msg: "Build complete."}
+	err = client.Archive(containerId, imageId)
+	if err != nil {
+		return err
+	}
+
+	time.Sleep(time.Second * 10)
+	outputChan <- common.OutputMsg{Done: true, Success: true}
 	return nil
 }
 
