@@ -71,9 +71,13 @@ func (s *RunCServer) RunCKill(ctx context.Context, in *pb.RunCKillRequest) (*pb.
 		All: true,
 	})
 
+	err = s.runcHandle.Delete(ctx, in.ContainerId, &runc.DeleteOpts{
+		Force: true,
+	})
+
 	return &pb.RunCKillResponse{
-		Ok: true,
-	}, err
+		Ok: err == nil,
+	}, nil
 }
 
 // Execute an arbitary command inside a running container

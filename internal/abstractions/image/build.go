@@ -203,6 +203,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
+	defer client.Kill(containerId) // Kill and remove container after the build completes
+
 	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Waiting for build container to start..."}
 	start := time.Now()
 	buildContainerRunning := false
@@ -265,6 +267,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 				errMsg = err.Error()
 			}
 
+			time.Sleep(time.Second * 10)
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: errMsg}
 			return err
 		}
@@ -375,17 +378,3 @@ func (b *Builder) generateRequirementsFile(bundlePath string, opts *BuildOpts) e
 
 	return nil
 }
-
-// Kill and remove a runc container
-// func (b *Builder) stopBuildContainer(ctx context.Context, containerId string) error {
-// 	log.Printf("container <%v> being terminated and deleted", containerId)
-
-// 	err := b.runcHandle.Kill(ctx, containerId, int(syscall.SIGTERM), &runc.KillOpts{All: true})
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	return b.runcHandle.Delete(ctx, containerId, &runc.DeleteOpts{
-// 		Force: true,
-// 	})
-// }
