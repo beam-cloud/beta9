@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package runc;
+
+service RunCService {
+  rpc RunCKill(RunCKillRequest) returns (RunCKillResponse) {}
+  rpc RunCExec(RunCExecRequest) returns (RunCExecResponse) {}
+  rpc RunCStatus(RunCStatusRequest) returns (RunCStatusResponse) {}
+  rpc RunCStreamLogs(RunCStreamLogsRequest) returns (stream RunCLogEntry) {}
+  rpc RunCArchive(RunCArchiveRequest) returns (RunCArchiveResponse) {}
+}
+
+message RunCKillRequest { string container_id = 1; }
+
+message RunCKillResponse { bool ok = 1; }
+
+message RunCExecRequest {
+  string container_id = 1;
+  string cmd = 2;
+}
+
+message RunCExecResponse { bool ok = 1; }
+
+message RunCStatusRequest { string container_id = 1; }
+
+message RunCStatusResponse { bool running = 1; }
+
+message RunCStreamLogsRequest { string container_id = 1; }
+
+message RunCLogEntry { string msg = 1; }
+
+message RunCArchiveRequest {
+  string container_id = 1;
+  string image_id = 2;
+}
+
+message RunCArchiveResponse { bool ok = 1; }

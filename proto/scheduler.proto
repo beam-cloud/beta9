@@ -26,15 +26,13 @@ message VersionResponse { string version = 1; }
 
 message RunContainerRequest {
   string container_id = 1;
-  string mode = 2;
-  repeated string env = 3;
-  repeated string entry_point = 4;
-  string cpu = 5;
-  string memory = 6;
-  string gpu = 7;
-  string image_tag = 10;
+  repeated string env = 2;
+  repeated string entry_point = 3;
+  string cpu = 4;
+  string memory = 5;
+  string gpu = 6;
+  string image_id = 10;
   float schedule_timeout = 12;
-  string identity_id = 13;
 }
 
 message RunContainerResponse {

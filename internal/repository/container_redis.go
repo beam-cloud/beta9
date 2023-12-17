@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,15 +12,15 @@ import (
 )
 
 type ContainerRedisRepository struct {
-	rdb          *common.RedisClient
-	lock         *common.RedisLock
-	identityRepo IdentityRepository
+	rdb  *common.RedisClient
+	lock *common.RedisLock
 }
 
-func NewContainerRedisRepository(r *common.RedisClient, ir IdentityRepository) ContainerRepository {
+func NewContainerRedisRepository(r *common.RedisClient) ContainerRepository {
 	lock := common.NewRedisLock(r)
-	return &ContainerRedisRepository{rdb: r, lock: lock, identityRepo: ir}
+	return &ContainerRedisRepository{rdb: r, lock: lock}
 }
+
 func (cr *ContainerRedisRepository) GetContainerState(containerId string) (*types.ContainerState, error) {
 	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
@@ -97,9 +98,8 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 	}
 	defer cr.lock.Release(common.RedisKeys.SchedulerContainerLock(containerId))
 
-	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
-
 	// Get current state
+	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
 	res, err := cr.rdb.HGetAll(context.TODO(), stateKey).Result()
 	if err != nil {
 		return err
@@ -127,7 +127,7 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 		return fmt.Errorf("failed to set container state ttl <%v>: %w", stateKey, err)
 	}
 
-	return cr.identityRepo.RefreshIdentityActiveContainerKeyExpiration(containerId, expiry)
+	return nil
 }
 
 func (cr *ContainerRedisRepository) DeleteContainerState(request *types.ContainerRequest) error {
@@ -151,9 +151,36 @@ func (cr *ContainerRedisRepository) DeleteContainerState(request *types.Containe
 		return fmt.Errorf("failed to delete container host <%v>: %w", hostKey, err)
 	}
 
-	return cr.identityRepo.DeleteIdentityActiveContainer(containerId, request.IdentityId, request.Gpu)
+	return nil
 }
 
 func (cr *ContainerRedisRepository) SetContainerAddress(containerId string, addr string) error {
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerHost(containerId), addr, 0).Err()
+}
+
+func (cr *ContainerRedisRepository) SetContainerWorkerHostname(containerId string, addr string) error {
+	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerContainerHost(containerId), addr, 0).Err()
+}
+
+func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	var hostname string = ""
+	var err error
+
+	ticker := time.NewTicker(1 * time.Second) // Retry every second
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", errors.New("timeout reached while trying to get worker hostname")
+		case <-ticker.C:
+			hostname, err = cr.rdb.Get(ctx, common.RedisKeys.SchedulerWorkerContainerHost(containerId)).Result()
+			if err == nil && canConnectToHost(hostname, 1*time.Second) {
+				return hostname, nil
+			}
+		}
+	}
 }

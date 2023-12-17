@@ -4,19 +4,15 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/sirupsen/logrus"
 
 	common "github.com/beam-cloud/beam/internal/common"
 	repo "github.com/beam-cloud/beam/internal/repository"
@@ -26,28 +22,29 @@ import (
 )
 
 const (
-	RequestProcessingInterval time.Duration = 100 * time.Millisecond
+	RequestProcessingInterval     time.Duration = 100 * time.Millisecond
+	ContainerStatusUpdateInterval time.Duration = 30 * time.Second
 )
 
 type Worker struct {
-	apiClient            *ApiClient
 	cpuLimit             int64
 	memoryLimit          int64
 	gpuType              string
-	isRemote             bool
 	podIPAddr            string
 	podHostName          string
 	userImagePath        string
 	runcHandle           runc.Runc
+	runcServer           *RunCServer
 	containerCudaManager *ContainerCudaManager
 	redisClient          *common.RedisClient
 	imageClient          *ImageClient
 	workerId             string
-	runningContainers    map[string]*ContainerInstance
-	containerLock        sync.Mutex
 	eventBus             *common.EventBus
+	containerInstances   *common.SafeMap[*ContainerInstance]
+	containerLock        sync.Mutex
 	containerWg          sync.WaitGroup
 	containerRepo        repo.ContainerRepository
+	containerLogger      *ContainerLogger
 	workerMetrics        *WorkerMetrics
 	completedRequests    chan *types.ContainerRequest
 	stopContainerChan    chan string
@@ -57,13 +54,15 @@ type Worker struct {
 }
 
 type ContainerInstance struct {
-	Id         string
-	BundlePath string
-	Overlay    *common.ContainerOverlay
-	Spec       *specs.Spec
-	Err        error
-	ExitCode   int
-	Port       int
+	Id           string
+	BundlePath   string
+	Overlay      *common.ContainerOverlay
+	Spec         *specs.Spec
+	Err          error
+	ExitCode     int
+	Port         int
+	OutputWriter *common.OutputWriter
+	LogBuffer    *common.LogBuffer
 }
 
 type ContainerOptions struct {
@@ -71,33 +70,27 @@ type ContainerOptions struct {
 	InitialSpec *specs.Spec
 }
 
-type MessageOutputStruct struct {
-	Level   string  `json:"level"`
-	Message string  `json:"message"`
-	TaskID  *string `json:"task_id"`
-}
-
 var (
 	//go:embed base_runc_config.json
 	baseRuncConfigRaw          string
-	imagePath                  string   = "/images"
-	containerLogsPath          string   = "/var/log/worker"
-	baseConfigPath             string   = "/tmp"
-	defaultContainerDirectory  string   = "/workspace"
-	defaultWorkerSpindownTimeS float64  = 300 // 5 minutes
-	containerTmpDirs           []string = []string{"/tmp", "/task"}
+	imagePath                  string  = "/images"
+	containerLogsPath          string  = "/var/log/worker"
+	baseConfigPath             string  = "/tmp"
+	defaultContainerDirectory  string  = "/workspace"
+	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
 )
 
 func NewWorker() (*Worker, error) {
+	containerInstances := common.NewSafeMap[*ContainerInstance]()
+
 	gpuType := os.Getenv("GPU_TYPE")
 	workerId := os.Getenv("WORKER_ID")
 	podHostName := os.Getenv("HOSTNAME")
-	isRemote := os.Getenv("WORKER_IS_REMOTE") == "true"
 
-	// podIPAddr, err := GetPodIP(isRemote)
-	// if err != nil {
-	// 	return nil, err
-	// }
+	podIPAddr, err := GetPodIP()
+	if err != nil {
+		return nil, err
+	}
 
 	cpuLimit, err := strconv.ParseInt(os.Getenv("CPU_LIMIT"), 10, 64)
 	if err != nil {
@@ -119,9 +112,19 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	runcServer, err := NewRunCServer(containerInstances, imageClient)
+	if err != nil {
+		return nil, err
+	}
+
+	err = runcServer.Start()
+	if err != nil {
+		return nil, err
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
-	identityRepo := repo.NewIdentityRedisRepository(redisClient)
-	containerRepo := repo.NewContainerRedisRepository(redisClient, identityRepo)
+
+	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	statsdRepo := repo.NewMetricsStatsdRepository()
 
@@ -135,24 +138,26 @@ func NewWorker() (*Worker, error) {
 		cpuLimit:             cpuLimit,
 		memoryLimit:          memoryLimit,
 		gpuType:              gpuType,
-		isRemote:             isRemote,
 		runcHandle:           runc.Runc{},
+		runcServer:           runcServer,
 		containerCudaManager: NewContainerCudaManager(),
 		redisClient:          redisClient,
-		podIPAddr:            "0.0.0.0",
+		podIPAddr:            podIPAddr,
 		imageClient:          imageClient,
 		podHostName:          podHostName,
 		eventBus:             nil,
-		apiClient:            NewApiClient(os.Getenv("WORKER_S2S_TOKEN")),
 		workerId:             workerId,
+		containerInstances:   containerInstances,
 		containerLock:        sync.Mutex{},
 		containerWg:          sync.WaitGroup{},
 		containerRepo:        containerRepo,
-		workerMetrics:        workerMetrics,
-		workerRepo:           workerRepo,
-		runningContainers:    make(map[string]*ContainerInstance),
-		completedRequests:    make(chan *types.ContainerRequest, 1000),
-		stopContainerChan:    make(chan string, 1000),
+		containerLogger: &ContainerLogger{
+			containerInstances: containerInstances,
+		},
+		workerMetrics:     workerMetrics,
+		workerRepo:        workerRepo,
+		completedRequests: make(chan *types.ContainerRequest, 1000),
+		stopContainerChan: make(chan string, 1000),
 	}, nil
 }
 
@@ -167,8 +172,6 @@ func (s *Worker) Run() error {
 
 	lastContainerRequest := time.Now()
 	for {
-		log.Println("hi")
-
 		request, err := s.workerRepo.GetNextContainerRequest(s.workerId)
 		if request != nil && err == nil {
 			lastContainerRequest = time.Now()
@@ -176,8 +179,8 @@ func (s *Worker) Run() error {
 
 			s.containerLock.Lock()
 
-			_, ok := s.runningContainers[containerId]
-			if !ok {
+			_, exists := s.containerInstances.Get(containerId)
+			if !exists {
 				log.Printf("<%s> - running container.\n", containerId)
 
 				err := s.RunContainer(request)
@@ -214,7 +217,7 @@ func (s *Worker) Run() error {
 
 // Only exit if there are no containers running, and no containers have recently been spun up on this worker
 func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
-	if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && len(s.runningContainers) == 0 {
+	if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
 		return true
 	}
 	return false
@@ -223,45 +226,30 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerID := request.ContainerId
-	bundlePath := filepath.Join(s.userImagePath, request.ImageTag)
+	bundlePath := filepath.Join(s.userImagePath, request.ImageId)
 
-	log.Printf("<%s> - pulling image: %s\n", containerID, request.ImageTag)
-	err := s.imageClient.Pull(request.ImageTag)
+	hostname := fmt.Sprintf("%s:%d", s.podIPAddr, defaultWorkerServerPort)
+	err := s.containerRepo.SetContainerWorkerHostname(request.ContainerId, hostname)
 	if err != nil {
 		return err
 	}
-	log.Printf("<%s> - successfully pulled image: %s\n", containerID, request.ImageTag)
+
+	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, request.ImageId)
+	err = s.imageClient.PullLazy(request.ImageId)
+	if err != nil && request.SourceImage != nil {
+		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerID, *request.SourceImage)
+		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, nil)
+		if err == nil {
+			err = s.imageClient.PullLazy(request.ImageId)
+		}
+	}
+
+	if err != nil {
+		return err
+	}
 
 	// Every 30 seconds, update container status
-	go func() {
-		for {
-			time.Sleep(30 * time.Second)
-
-			s.containerLock.Lock()
-			_, ok := s.runningContainers[containerID]
-			s.containerLock.Unlock()
-
-			if !ok {
-				return
-			}
-
-			// Stop container if it is "orphaned" - meaning it's running but has no associated state
-			if _, err := s.containerRepo.GetContainerState(containerID); err != nil {
-				if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-					log.Printf("<%s> - container state not found, stopping container\n", containerID)
-					s.stopContainerChan <- containerID
-					return
-				}
-			}
-
-			err = s.containerRepo.UpdateContainerStatus(containerID, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
-			if err != nil {
-				log.Printf("<%s> - unable to update container state: %v\n", containerID, err)
-			}
-
-			log.Printf("<%s> - container still running: %s\n", containerID, request.ImageTag)
-		}
-	}()
+	go s.updateContainerStatus(request)
 
 	bindPort, err := GetRandomFreePort()
 	if err != nil {
@@ -270,7 +258,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	log.Printf("<%s> - acquired port: %d\n", containerID, bindPort)
 
 	// Read spec from bundle
-	initialBundleSpec, _ := s.readBundleConfig(request.ImageTag)
+	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
 
 	// Generate dynamic runc spec for this container
 	spec, err := s.specFromRequest(request, &ContainerOptions{
@@ -280,6 +268,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
+
 	log.Printf("<%s> - successfully created spec from request.\n", containerID)
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the trigger type,
@@ -301,79 +290,47 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	return nil
 }
 
+func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
+	for {
+		time.Sleep(ContainerStatusUpdateInterval)
+
+		s.containerLock.Lock()
+		_, exists := s.containerInstances.Get(request.ContainerId)
+		s.containerLock.Unlock()
+
+		if !exists {
+			return nil
+		}
+
+		// Stop container if it is "orphaned" - meaning it's running but has no associated state
+		if _, err := s.containerRepo.GetContainerState(request.ContainerId); err != nil {
+			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
+				log.Printf("<%s> - container state not found, stopping container\n", request.ContainerId)
+				s.stopContainerChan <- request.ContainerId
+				return nil
+			}
+		}
+
+		err := s.containerRepo.UpdateContainerStatus(request.ContainerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
+		if err != nil {
+			log.Printf("<%s> - unable to update container state: %v\n", request.ContainerId, err)
+		}
+
+		log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
+	}
+}
+
 // Invoke a runc container using a predefined config spec
 func (s *Worker) SpawnAsync(request *types.ContainerRequest, bundlePath string, spec *specs.Spec) error {
-	containerId := request.ContainerId
 	outputChan := make(chan common.OutputMsg)
 
-	// RX and print stdout/stderr from spawned container
-	logFilePath := path.Join(containerLogsPath, fmt.Sprintf("%s.log", containerId))
-	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err != nil {
-		return fmt.Errorf("failed to create container log file: %w", err)
-	}
-
-	// Create a new logger
-	containerLogger := logrus.New()
-	containerLogger.SetOutput(logFile)
-	containerLogger.SetFormatter(&logrus.JSONFormatter{})
-
-	// Handle stdout/stderr from spawned container
-	go func() {
-		defer logFile.Close()
-
-		for o := range outputChan {
-			dec := json.NewDecoder(strings.NewReader(o.Msg))
-			msgDecoded := false
-
-			for {
-				var msg MessageOutputStruct
-
-				err := dec.Decode(&msg)
-				if err != nil {
-					/*
-						Either the json parsing ends with an EOF error indicating that the
-						JSON string is complete, or with a json decode error indicating that
-						the JSON string is invalid. In either case, we can break out of the
-						decode loop and continue processing the next message.
-					*/
-					break
-				}
-
-				msgDecoded = true
-
-				containerLogger.WithFields(logrus.Fields{
-					"container_id": containerId,
-					"identity_id":  request.IdentityId,
-					"task_id":      msg.TaskID,
-				}).Info(msg.Message)
-
-				if msg.TaskID != nil {
-					log.Printf("<%s>:<%s> - %s\n", containerId, *msg.TaskID, msg.Message)
-				} else if msg.Message != "" {
-					log.Printf("<%s> - %s\n", containerId, msg.Message)
-				}
-			}
-
-			if !msgDecoded && o.Msg != "" {
-				// Fallback in case the message was not JSON
-				containerLogger.WithFields(logrus.Fields{
-					"container_id": containerId,
-					"identity_id":  request.IdentityId,
-				}).Info(o.Msg)
-
-				log.Printf("<%s> - %s\n", containerId, o.Msg)
-			}
-
-		}
-	}()
-
-	s.containerWg.Add(1)
+	go s.containerWg.Add(1)
 	go s.spawn(request, bundlePath, spec, outputChan)
 
 	return nil
 }
 
+// stopContainer stops a running container by containerId, if it exists on this worker
 func (s *Worker) stopContainer(event *common.Event) bool {
 	s.containerLock.Lock()
 	defer s.containerLock.Unlock()
@@ -381,7 +338,7 @@ func (s *Worker) stopContainer(event *common.Event) bool {
 	containerId := event.Args["container_id"].(string)
 
 	var err error = nil
-	if _, containerExists := s.runningContainers[containerId]; containerExists {
+	if _, containerExists := s.containerInstances.Get(containerId); containerExists {
 		log.Printf("<%s> - received stop container event.\n", containerId)
 		s.stopContainerChan <- containerId
 	}
@@ -393,7 +350,7 @@ func (s *Worker) processStopContainerEvents() {
 	for containerId := range s.stopContainerChan {
 		log.Printf("<%s> - stopping container.\n", containerId)
 
-		if _, containerExists := s.runningContainers[containerId]; !containerExists {
+		if _, containerExists := s.containerInstances.Get(containerId); !containerExists {
 			continue
 		}
 
@@ -433,7 +390,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	s.containerLock.Lock()
 	defer s.containerLock.Unlock()
 
-	delete(s.runningContainers, containerId)
+	s.containerInstances.Delete(containerId)
 
 	err := s.containerRepo.DeleteContainerState(request)
 	if err != nil {
@@ -443,11 +400,10 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	s.completedRequests <- request
 }
 
-// Spawn a container using runc binary
+// spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec *specs.Spec, outputChan chan common.OutputMsg) {
 	s.workerRepo.AddContainerRequestToWorker(s.workerId, request.ContainerId, request)
 	defer s.workerRepo.RemoveContainerRequestFromWorker(s.workerId, request.ContainerId)
-	defer s.deleteTemporaryDirectories(request)
 
 	var containerErr error = nil
 
@@ -466,14 +422,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		s.terminateContainer(containerId, request, &exitCode, &containerErr)
 	}()
 
-	outputWriter := common.NewOutputWriter(func(s string) {
-		outputChan <- common.OutputMsg{
-			Msg:     strings.TrimSuffix(string(s), "\n"),
-			Done:    false,
-			Success: false,
-		}
-	})
-
 	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
 		Id:         containerId,
@@ -481,8 +429,19 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		Overlay:    common.NewContainerOverlay(containerId, bundlePath, baseConfigPath, filepath.Join(bundlePath, "rootfs")),
 		Spec:       spec,
 		ExitCode:   -1,
+		OutputWriter: common.NewOutputWriter(func(s string) {
+			outputChan <- common.OutputMsg{
+				Msg:     strings.TrimSuffix(string(s), "\n"),
+				Done:    false,
+				Success: false,
+			}
+		}),
+		LogBuffer: common.NewLogBuffer(),
 	}
-	s.runningContainers[containerId] = containerInstance
+	s.containerInstances.Set(containerId, containerInstance)
+
+	// Handle stdout/stderr from spawned container
+	go s.containerLogger.CaptureLogs(request.ContainerId, outputChan)
 
 	go func() {
 		time.Sleep(time.Second)
@@ -490,8 +449,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		s.containerLock.Lock()
 		defer s.containerLock.Unlock()
 
-		_, ok := s.runningContainers[containerId]
-		if !ok {
+		_, exists := s.containerInstances.Get(containerId)
+		if !exists {
 			return
 		}
 
@@ -533,18 +492,25 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(request, done)
-	s.workerMetrics.ContainerStarted(containerId, request.IdentityId)
-	defer s.workerMetrics.ContainerStopped(containerId, request.IdentityId)
+	s.workerMetrics.ContainerStarted(containerId)
+	defer s.workerMetrics.ContainerStopped(containerId)
 
 	pidChan := make(chan int, 1)
 	go s.workerMetrics.EmitResourceUsage(request, pidChan, done)
 
 	// Invoke runc process (launch the container)
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
-		OutputWriter: outputWriter,
+		OutputWriter: containerInstance.OutputWriter,
 		ConfigPath:   configPath,
 		Started:      pidChan,
 	})
+
+	// Send last log message since the container has exited
+	outputChan <- common.OutputMsg{
+		Msg:     "",
+		Done:    true,
+		Success: err == nil,
+	}
 
 	if err != nil {
 		containerErr = err
@@ -556,34 +522,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 }
 
-func (s *Worker) deleteTemporaryDirectories(request *types.ContainerRequest) {
-	for _, dir := range containerTmpDirs {
-		containerTmpDir := filepath.Join(dir, request.ContainerId, dir) // NOTE: Cleanup this logic where the prefix and suffix are the same
-		os.RemoveAll(containerTmpDir)
-	}
-}
-
-func (s *Worker) getContainerConfig(request *types.ContainerRequest) (*ContainerConfigResponse, error) {
-	response, err := s.apiClient.GetContainerConfig(&ContainerConfigRequest{
-		ContainerId: request.ContainerId,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return response, nil
-}
-
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, containerConfig *ContainerConfigResponse, options *ContainerOptions) []string {
 	env := []string{
 		fmt.Sprintf("IDENTITY_ID=%s", containerConfig.IdentityId),
 		fmt.Sprintf("S2S_TOKEN=%s", containerConfig.S2SToken),
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
-		fmt.Sprintf("BEAM_NAMESPACE=%s", os.Getenv("BEAM_NAMESPACE")),
-		fmt.Sprintf("BEAM_API_BASE_URL=%s", os.Getenv("BEAMAPI_BASE_URL")),
-		fmt.Sprintf("BACKEND_BASE_URL=%s", os.Getenv("BACKEND_BASE_URL")),
-		fmt.Sprintf("BEAM_WORKBUS_HOST=%s", os.Getenv("BEAM_WORKBUS_HOST")),
-		fmt.Sprintf("BEAM_WORKBUS_PORT=%s", os.Getenv("BEAM_WORKBUS_PORT")),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("STATSD_HOST=%s", os.Getenv("STATSD_HOST")),
@@ -594,8 +537,8 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, contai
 	return env
 }
 
-func (s *Worker) readBundleConfig(imageTag string) (*specs.Spec, error) {
-	imageConfigPath := filepath.Join(s.userImagePath, imageTag, "initial_config.json")
+func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
+	imageConfigPath := filepath.Join(s.userImagePath, imageId, "initial_config.json")
 
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
@@ -636,13 +579,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
 
-	containerConfig, err := s.getContainerConfig(request)
-	if err != nil {
-		return nil, err
-	}
-
-	if containerConfig == nil {
-		return nil, errors.New("invalid container config")
+	var containerConfig *ContainerConfigResponse = &ContainerConfigResponse{
+		WorkspacePath: defaultWorkingDirectory,
 	}
 
 	env := s.getContainerEnvironment(request, containerConfig, options)
@@ -660,26 +598,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
+	spec.Root.Readonly = false
 
 	// Create local workspace path so we can symlink volumes before the container starts
 	os.MkdirAll(containerConfig.WorkspacePath, os.FileMode(0755))
-
-	// Create tmp directories in host so that we can bind them to container
-	for _, dir := range containerTmpDirs {
-		containerTmpDir := filepath.Join(dir, request.ContainerId, dir) // NOTE: Cleanup this logic where the prefix and suffix are the same
-		err = os.MkdirAll(containerTmpDir, 0755)
-		if err != nil {
-			log.Printf("<%s> - failed to create %s directory: %v\n", request.ContainerId, dir, err)
-			return nil, err
-		}
-
-		spec.Mounts = append(spec.Mounts, specs.Mount{
-			Type:        "bind",
-			Source:      containerTmpDir,
-			Destination: dir,
-			Options:     []string{"bind", "mode=755", "nosuid", "strictatime", "rslave"},
-		})
-	}
 
 	// Add bind mounts to runc spec
 	for _, m := range containerConfig.Mounts {
@@ -693,7 +615,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			linkPath := filepath.Join(containerConfig.WorkspacePath, filepath.Base(m.MountPath))
 			err = forceSymlink(m.MountPath, linkPath)
 			if err != nil {
-				log.Printf("Symlink Error: %v", err)
+				log.Printf("unable to symlink volume: %v", err)
 			}
 		}
 
@@ -787,5 +709,5 @@ func (s *Worker) shutdown() error {
 
 	s.workerMetrics.Shutdown()
 	s.cancel()
-	return s.redisClient.Close()
+	return nil
 }

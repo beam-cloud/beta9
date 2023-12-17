@@ -43,19 +43,17 @@ func (wm *WorkerMetrics) WorkerStopped() {
 	wm.metricsRepo.WorkerStopped(wm.workerId)
 }
 
-func (wm *WorkerMetrics) ContainerStarted(containerId string, identityId string) {
+func (wm *WorkerMetrics) ContainerStarted(containerId string) {
 	wm.metricsRepo.ContainerStarted(
 		containerId,
 		wm.workerId,
-		identityId,
 	)
 }
 
-func (wm *WorkerMetrics) ContainerStopped(containerId string, identityId string) {
+func (wm *WorkerMetrics) ContainerStopped(containerId string) {
 	wm.metricsRepo.ContainerStopped(
 		containerId,
 		wm.workerId,
-		identityId,
 	)
 }
 
@@ -167,11 +165,11 @@ func (wm *WorkerMetrics) EmitContainerUsage(request *types.ContainerRequest, don
 	for {
 		select {
 		case <-ticker.C:
-			wm.metricsRepo.ContainerDuration(request.ContainerId, wm.workerId, request.IdentityId, time.Now().UnixNano(), time.Since(cursorTime))
+			wm.metricsRepo.ContainerDuration(request.ContainerId, wm.workerId, time.Now().UnixNano(), time.Since(cursorTime))
 			cursorTime = time.Now()
 		case <-done:
 			// Consolidate any remaining time
-			wm.metricsRepo.ContainerDuration(request.ContainerId, wm.workerId, request.IdentityId, time.Now().UnixNano(), time.Since(cursorTime))
+			wm.metricsRepo.ContainerDuration(request.ContainerId, wm.workerId, time.Now().UnixNano(), time.Since(cursorTime))
 			return
 		}
 	}

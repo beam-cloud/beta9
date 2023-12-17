@@ -56,15 +56,13 @@ func (wbs *SchedulerService) RunContainer(ctx context.Context, in *pb.RunContain
 
 	err = wbs.Scheduler.Run(&types.ContainerRequest{
 		ContainerId:     in.ContainerId,
-		Mode:            in.Mode,
 		EntryPoint:      in.EntryPoint,
 		Env:             in.Env,
 		Cpu:             cpuRequest,
 		Memory:          memoryRequest,
 		Gpu:             in.Gpu,
-		ImageTag:        in.ImageTag,
+		ImageId:         in.ImageId,
 		ScheduleTimeout: float64(in.ScheduleTimeout),
-		IdentityId:      in.IdentityId,
 	})
 
 	if err != nil {

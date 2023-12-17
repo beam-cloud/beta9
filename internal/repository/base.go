@@ -32,6 +32,8 @@ type ContainerRepository interface {
 	SetContainerAddress(containerId string, addr string) error
 	UpdateContainerStatus(string, types.ContainerStatus, time.Duration) error
 	DeleteContainerState(*types.ContainerRequest) error
+	SetContainerWorkerHostname(containerId string, addr string) error
+	GetContainerWorkerHostname(containerId string) (string, error)
 }
 
 type BeamRepository interface {
@@ -89,11 +91,11 @@ type WorkerPoolRepository interface {
 }
 
 type MetricsStatsdRepository interface {
-	ContainerStarted(containerId string, workerId string, identityId string)
-	ContainerStopped(containerId string, workerId string, identityId string)
+	ContainerStarted(containerId string, workerId string)
+	ContainerStopped(containerId string, workerId string)
 	ContainerRequested(containerId string)
 	ContainerScheduled(containerId string)
-	ContainerDuration(containerId string, workerId string, identityId string, timestampNs int64, duration time.Duration)
+	ContainerDuration(containerId string, workerId string, timestampNs int64, duration time.Duration)
 	BeamDeploymentRequestDuration(bucketName string, duration time.Duration)
 	BeamDeploymentRequestStatus(bucketName string, status int)
 	BeamDeploymentRequestCount(bucketName string)
@@ -104,14 +106,4 @@ type MetricsStatsdRepository interface {
 
 type MetricsStreamRepository interface {
 	ContainerResourceUsage(usage types.ContainerResourceUsage) error
-}
-
-type IdentityRepository interface {
-	GetIdentityQuota(identityId string) (*types.IdentityQuota, error)
-	SetIdentityQuota(identityId string, quota *types.IdentityQuota) error
-	SetIdentityActiveContainer(identityId string, quota *types.IdentityQuota, containerId string, gpuType string) error
-	ScanAllActiveContainersInIdentity(identityId string, gpuType string) ([]string, error)
-	GetTotalActiveContainersByGpuType(identity, gpuType string) (int, error)
-	DeleteIdentityActiveContainer(containerId string, identity string, gpuType string) error
-	RefreshIdentityActiveContainerKeyExpiration(containerId string, expiry time.Duration) error
 }

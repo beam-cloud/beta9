@@ -22,11 +22,10 @@ type Scheduler struct {
 	workerRepo        repo.WorkerRepository
 	workerPoolManager *WorkerPoolManager
 	requestBacklog    *RequestBacklog
-	containerRepo     repo.ContainerRepository
+	ContainerRepo     repo.ContainerRepository
 	taskRepo          repo.TaskRepository
 	beamRepo          repo.BeamRepository
 	metricsRepo       repo.MetricsStatsdRepository
-	identityRepo      repo.IdentityRepository
 	eventBus          *common.EventBus
 	redisClient       *common.RedisClient
 }
@@ -42,8 +41,7 @@ func NewScheduler() (*Scheduler, error) {
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 	taskRepo := repo.NewTaskRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
-	identityRepo := repo.NewIdentityRedisRepository(redisClient)
-	containerRepo := repo.NewContainerRedisRepository(redisClient, identityRepo)
+	containerRepo := repo.NewContainerRedisRepository(redisClient)
 
 	controllerFactory := KubernetesWorkerPoolControllerFactory()
 	controllerFactoryConfig, err := NewKubernetesWorkerPoolControllerConfig(workerRepo)
@@ -73,10 +71,9 @@ func NewScheduler() (*Scheduler, error) {
 		workerRepo:        workerRepo,
 		workerPoolManager: workerPoolManager,
 		requestBacklog:    requestBacklog,
-		containerRepo:     containerRepo,
+		ContainerRepo:     containerRepo,
 		taskRepo:          taskRepo,
 		metricsRepo:       repo.NewMetricsStatsdRepository(),
-		identityRepo:      identityRepo,
 		redisClient:       redisClient,
 	}, nil
 }
@@ -87,7 +84,7 @@ func (wb *Scheduler) Run(request *types.ContainerRequest) error {
 	request.Timestamp = time.Now()
 	request.OnScheduleChan = make(chan bool, 1)
 
-	containerState, err := wb.containerRepo.GetContainerState(request.ContainerId)
+	containerState, err := wb.ContainerRepo.GetContainerState(request.ContainerId)
 	if err == nil {
 		switch types.ContainerStatus(containerState.Status) {
 		case types.ContainerStatusPending, types.ContainerStatusRunning:
@@ -99,18 +96,11 @@ func (wb *Scheduler) Run(request *types.ContainerRequest) error {
 
 	wb.metricsRepo.ContainerRequested(request.ContainerId)
 
-	err = wb.quotaCheck(request)
-	if err != nil {
-		log.Printf("Unable to schedule request for container %s: %v\n", request.ContainerId, err)
-		return err
-	}
-
-	err = wb.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
+	err = wb.ContainerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
 		Status:      types.ContainerStatusPending,
 		ScheduledAt: time.Now().Unix(),
 	})
 	if err != nil {
-		wb.identityRepo.DeleteIdentityActiveContainer(request.IdentityId, request.ContainerId, request.Gpu)
 		return err
 	}
 
@@ -120,7 +110,7 @@ func (wb *Scheduler) Run(request *types.ContainerRequest) error {
 func (wb *Scheduler) Stop(containerId string) error {
 	log.Printf("Received STOP request: %s\n", containerId)
 
-	err := wb.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
+	err := wb.ContainerRepo.UpdateContainerStatus(containerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	if err != nil {
 		return err
 	}
@@ -134,42 +124,6 @@ func (wb *Scheduler) Stop(containerId string) error {
 	})
 	if err != nil {
 		log.Printf("Could not stop container: %+v\n", err)
-		return err
-	}
-
-	return nil
-}
-
-func (wb *Scheduler) quotaCheck(request *types.ContainerRequest) error {
-	// First try to get the cached quota
-	gpu := strings.ToLower(types.NO_GPU.String())
-	if request.Gpu != "" {
-		gpu = strings.ToLower(request.Gpu)
-	}
-
-	quota, err := wb.identityRepo.GetIdentityQuota(request.IdentityId)
-	if err != nil {
-		return err
-	}
-
-	if quota == nil {
-		quota, err = wb.beamRepo.GetIdentityQuota(request.IdentityId)
-		if err != nil {
-			return err
-		}
-
-		if quota == nil {
-			return &types.QuotaDoesNotExistError{}
-		}
-
-		err = wb.identityRepo.SetIdentityQuota(request.IdentityId, quota)
-		if err != nil {
-			return err
-		}
-	}
-
-	err = wb.identityRepo.SetIdentityActiveContainer(request.IdentityId, quota, request.ContainerId, gpu)
-	if err != nil {
 		return err
 	}
 
@@ -217,7 +171,7 @@ func (wb *Scheduler) getHostedController(request *types.ContainerRequest) (Worke
 func (wb *Scheduler) getRemoteController(request *types.ContainerRequest) (WorkerPoolController, error) {
 	agentName := request.Agent
 
-	agent, err := wb.beamRepo.GetAgent(agentName, request.IdentityId)
+	agent, err := wb.beamRepo.GetAgent(agentName, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get agent <%s> from database: %v", agentName, err)
 	}

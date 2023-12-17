@@ -1,0 +1,21 @@
+FROM --platform=linux/x86_64 ubuntu:20.04 as py39_base
+
+WORKDIR /workspace
+
+ENV DEBIAN_FRONTEND=noninteractive 
+
+RUN apt-get update && apt-get install -y software-properties-common curl --allow-unauthenticated 
+RUN add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -y --allow-unauthenticated \
+    git python3-future python-dev python3.9 python3-pip python3.9-distutils python3.9-dev
+
+RUN python3.9 -m pip install --upgrade distlib setuptools pip
+
+RUN rm /usr/bin/python && rm /usr/bin/python3 && ln -s /usr/bin/python3.9 /usr/bin/python && ln -s /usr/bin/python3.9 /usr/bin/python3
+
+RUN apt-get autoclean -y && apt-get autoremove -y && apt-get clean -y && rm -rf /usr/share/doc && rm -rf /root/.cache/* && rm -rf /var/lib/apt/lists/*
+RUN mkdir /volumes && mkdir /snapshot && mkdir /outputs && mkdir /packages
+RUN rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
+
+FROM --platform=linux/x86_64 ubuntu:20.04 as py39
+ENV NVIDIA_VISIBLE_DEVICES=all
+COPY --from=py39_base / /

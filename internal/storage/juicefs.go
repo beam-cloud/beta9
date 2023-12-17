@@ -31,7 +31,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		}
 	}()
 
-	log.Printf("Juicefs filesystem is being mounted to: '%s'\n", localPath)
+	log.Printf("JuiceFs filesystem is being mounted to: '%s'\n", localPath)
 	return nil
 }
 
