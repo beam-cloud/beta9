@@ -30,9 +30,10 @@ type RunCServer struct {
 	baseConfigSpec specs.Spec
 	pb.UnimplementedRunCServiceServer
 	containerInstances *common.SafeMap[*ContainerInstance]
+	imageClient        *ImageClient
 }
 
-func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance]) (*RunCServer, error) {
+func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], imageClient *ImageClient) (*RunCServer, error) {
 	var baseConfigSpec specs.Spec
 	specTemplate := strings.TrimSpace(string(baseRuncConfigRaw))
 	err := json.Unmarshal([]byte(specTemplate), &baseConfigSpec)
@@ -44,6 +45,7 @@ func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance]) (*Run
 		runcHandle:         runc.Runc{},
 		baseConfigSpec:     baseConfigSpec,
 		containerInstances: containerInstances,
+		imageClient:        imageClient,
 	}, nil
 }
 
@@ -162,7 +164,14 @@ func (s *RunCServer) RunCArchive(ctx context.Context, in *pb.RunCArchiveRequest)
 		}, nil
 	}
 
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCArchiveResponse{
+			Ok: false,
+		}, nil
+	}
+
 	return &pb.RunCArchiveResponse{
-		Ok: true,
+		Ok: s.imageClient.Archive(ctx, instance.Overlay.TopLayerPath(), in.ImageId) == nil,
 	}, nil
 }

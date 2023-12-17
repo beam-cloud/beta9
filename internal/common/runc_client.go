@@ -129,7 +129,10 @@ func (c *RunCClient) StreamLogs(ctx context.Context, containerId string, outputC
 }
 
 func (c *RunCClient) Archive(containerId, imageId string) error {
-	_, err := c.client.RunCArchive(context.TODO(), &pb.RunCArchiveRequest{ContainerId: containerId})
+	_, err := c.client.RunCArchive(context.TODO(), &pb.RunCArchiveRequest{
+		ContainerId: containerId,
+		ImageId:     imageId,
+	})
 	if err != nil {
 		return err
 	}

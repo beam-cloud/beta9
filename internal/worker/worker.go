@@ -112,7 +112,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	runcServer, err := NewRunCServer(containerInstances)
+	runcServer, err := NewRunCServer(containerInstances, imageClient)
 	if err != nil {
 		return nil, err
 	}

@@ -31,6 +31,9 @@ message RunCStreamLogsRequest { string container_id = 1; }
 
 message RunCLogEntry { string msg = 1; }
 
-message RunCArchiveRequest { string container_id = 1; }
+message RunCArchiveRequest {
+  string container_id = 1;
+  string image_id = 2;
+}
 
 message RunCArchiveResponse { bool ok = 1; }
