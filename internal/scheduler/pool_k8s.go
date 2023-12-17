@@ -530,12 +530,8 @@ func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string,
 			Value: common.Secrets().Get("WORKER_S2S_TOKEN"),
 		},
 		{
-			Name:  "BEAMAPI_BASE_URL",
-			Value: common.Secrets().Get("BEAM_WORKER_BEAMAPI_BASE_URL"),
-		},
-		{
-			Name:  "BACKEND_BASE_URL",
-			Value: common.Secrets().Get("BEAM_WORKER_BACKEND_BASE_URL"),
+			Name:  "BEAM_RUNNER_BASE_IMAGE_REGISTRY",
+			Value: common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_REGISTRY"),
 		},
 		{
 			Name: "POD_IP",
@@ -558,12 +554,12 @@ func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string,
 			Value: common.Secrets().Get("BEAM_CACHE_URL"),
 		},
 		{
-			Name:  "BEAM_scheduler_HOST",
-			Value: common.Secrets().Get("BEAM_scheduler_HOST"),
+			Name:  "BEAM_SCHEDULER_HOST",
+			Value: common.Secrets().Get("BEAM_SCHEDULER_HOST"),
 		},
 		{
-			Name:  "BEAM_scheduler_PORT",
-			Value: common.Secrets().Get("BEAM_scheduler_PORT"),
+			Name:  "BEAM_SCHEDULER_PORT",
+			Value: common.Secrets().Get("BEAM_SCHEDULER_PORT"),
 		},
 		{
 			Name:  "STATSD_HOST",

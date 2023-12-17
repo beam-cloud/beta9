@@ -10,7 +10,6 @@ import (
 )
 
 func main() {
-
 	gw, err := gateway.NewGateway()
 	if err != nil {
 		log.Fatalf("err creating gateway svc: %+v\n", err)

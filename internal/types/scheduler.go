@@ -54,16 +54,15 @@ type ContainerState struct {
 
 type ContainerRequest struct {
 	ContainerId     string    `json:"container_id"`
-	Mode            string    `json:"mode"`
 	EntryPoint      []string  `json:"entry_point"`
 	Env             []string  `json:"env"`
 	Cpu             int64     `json:"cpu"`
 	Memory          int64     `json:"memory"`
 	Gpu             string    `json:"gpu"`
-	ImageTag        string    `json:"image_tag"`
+	SourceImage     *string   `json:"source_image"`
+	ImageId         string    `json:"image_id"`
 	Timestamp       time.Time `json:"timestamp"`
 	ScheduleTimeout float64   `json:"schedule_timeout"`
-	IdentityId      string    `json:"identity_id"`
 	OnScheduleChan  chan bool `json:"-"`
 	Agent           string    `json:"agent"`
 }

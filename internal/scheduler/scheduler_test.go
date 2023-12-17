@@ -60,9 +60,8 @@ func NewschedulerForTest() (*Scheduler, error) {
 		workerRepo:        workerRepo,
 		workerPoolManager: workerPoolManager,
 		metricsRepo:       repo.NewMetricsStatsdRepositoryForTest(),
-		identityRepo:      repo.NewIdentityRedisRepositoryForTest(rdb),
 		requestBacklog:    requestBacklog,
-		containerRepo:     containerRepo,
+		ContainerRepo:     containerRepo,
 	}, nil
 }
 
@@ -142,24 +141,14 @@ func TestRunContainer(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 
-	wb.identityRepo.SetIdentityQuota(
-		"test-identity",
-		&types.IdentityQuota{
-			CpuConcurrencyLimit: 30,
-			GpuConcurrencyLimit: 1000,
-		},
-	)
-
 	// Schedule a container
 	err = wb.Run(&types.ContainerRequest{
-		IdentityId:  "test-identity",
 		ContainerId: "test-container",
 	})
 	assert.Nil(t, err)
 
 	// Make sure you can't schedule a container with the same ID twice
 	err = wb.Run(&types.ContainerRequest{
-		IdentityId:  "test-identity",
 		ContainerId: "test-container",
 	})
 
@@ -176,32 +165,21 @@ func TestProcessRequests(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 
-	wb.identityRepo.SetIdentityQuota(
-		"test-identity",
-		&types.IdentityQuota{
-			CpuConcurrencyLimit: 30,
-			GpuConcurrencyLimit: 1000,
-		},
-	)
-
 	// Prepare some requests to process.
 	requests := []*types.ContainerRequest{
 		{
-			IdentityId:  "test-identity",
 			ContainerId: uuid.New().String(),
 			Cpu:         1000,
 			Memory:      2000,
 			Gpu:         "A10G",
 		},
 		{
-			IdentityId:  "test-identity",
 			ContainerId: uuid.New().String(),
 			Cpu:         1000,
 			Memory:      2000,
 			Gpu:         "T4",
 		},
 		{
-			IdentityId:  "test-identity",
 			ContainerId: uuid.New().String(),
 			Cpu:         1000,
 			Memory:      2000,

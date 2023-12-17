@@ -46,8 +46,3 @@ func NewMetricsStatsdRepositoryForTest() MetricsStatsdRepository {
 		),
 	}
 }
-
-func NewIdentityRedisRepositoryForTest(rdb *common.RedisClient) IdentityRepository {
-	lock := common.NewRedisLock(rdb)
-	return &IdentityRedisRepository{rdb: rdb, lock: lock}
-}
