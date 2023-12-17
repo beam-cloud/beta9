@@ -44,13 +44,6 @@ type BuildOpts struct {
 	ForceRebuild       bool
 }
 
-type BaseImageCacheOpt struct {
-	SourceRegistry string
-	ImageName      string
-	ImageTag       string
-	Copies         int
-}
-
 func NewBuilder(scheduler *scheduler.Scheduler) (*Builder, error) {
 	storeName := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_REGISTRY_STORE", "s3")
 	registry, err := common.NewImageRegistry(storeName)
