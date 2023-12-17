@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -233,15 +232,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go client.StreamLogs(ctx, containerId, outputChan)
 
-	// err = b.generateRequirementsFile(bundlePath, opts)
-	// if err != nil {
-	// 	log.Printf("failed to generate python requirements for container <%v>: %v", containerId, err)
-	// 	outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
-	// 	return err
-	// }
-
-	// pipInstallCmd := fmt.Sprintf("%s -m pip install -r %s", opts.PythonVersion, filepath.Join("/", requirementsFilename))
-	// opts.Commands = append(opts.Commands, pipInstallCmd)
+	// Generate the pip install command and prepend it to the commands list
+	pipInstallCmd := b.generatePipInstallCommand(opts)
+	opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
 
 	log.Printf("container <%v> building with options: %+v", containerId, opts)
 	startTime := time.Now()
@@ -360,21 +353,7 @@ func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
 }
 
-// Generate a python requirements file to install into the image
-func (b *Builder) generateRequirementsFile(bundlePath string, opts *BuildOpts) error {
-	requirementsFileBody := strings.Join(opts.PythonPackages, "\n")
-	requirementsFilePath := filepath.Join(bundlePath, "rootfs", requirementsFilename)
-
-	f, err := os.Create(requirementsFilePath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	_, err = f.WriteString(requirementsFileBody)
-	if err != nil {
-		return err
-	}
-
-	return nil
+func (b *Builder) generatePipInstallCommand(opts *BuildOpts) string {
+	packages := strings.Join(opts.PythonPackages, " ")
+	return fmt.Sprintf("%s -m pip install %s", opts.PythonVersion, packages)
 }
