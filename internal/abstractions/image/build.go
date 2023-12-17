@@ -239,8 +239,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	go client.StreamLogs(ctx, containerId, outputChan)
 
 	// Generate the pip install command and prepend it to the commands list
-	pipInstallCmd := b.generatePipInstallCommand(opts)
-	opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
+	if len(opts.PythonPackages) > 0 {
+		pipInstallCmd := b.generatePipInstallCommand(opts)
+		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
+	}
 
 	log.Printf("container <%v> building with options: %+v", containerId, opts)
 	startTime := time.Now()
