@@ -34,7 +34,6 @@ func NewRuncImageService(ctx context.Context, scheduler *scheduler.Scheduler) (*
 
 func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
 	var valid bool = true
-	var exists bool
 
 	imageId, err := is.builder.GetImageId(&BuildOpts{
 		BaseImageName:    common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_NAME"),
@@ -48,11 +47,9 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		valid = false
 	}
 
-	exists = is.builder.Exists(ctx, imageId)
-
 	return &pb.VerifyImageBuildResponse{
 		ImageId: imageId,
-		Exists:  exists,
+		Exists:  is.builder.Exists(ctx, imageId),
 		Valid:   valid,
 	}, nil
 }

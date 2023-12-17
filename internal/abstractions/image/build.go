@@ -226,6 +226,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	imageId, err := b.GetImageId(opts)
+	if err != nil {
+		return err
+	}
+
 	if !buildContainerRunning {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to connect to build container."}
 		return errors.New("container not running")
@@ -261,24 +266,17 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 				errMsg = err.Error()
 			}
 
-			time.Sleep(time.Second * 10)
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: errMsg}
 			return err
 		}
 	}
 	log.Printf("container <%v> build took %v", containerId, time.Since(startTime))
 
-	imageId, err := b.GetImageId(opts)
-	if err != nil {
-		return err
-	}
-
 	err = client.Archive(containerId, imageId)
 	if err != nil {
 		return err
 	}
 
-	time.Sleep(time.Second * 10)
 	outputChan <- common.OutputMsg{Done: true, Success: true}
 	return nil
 }
