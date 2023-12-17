@@ -228,9 +228,8 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerID := request.ContainerId
 	bundlePath := filepath.Join(s.userImagePath, request.ImageId)
 
-	// TODO: move this down
-	containerServerAddr := fmt.Sprintf("%s:%d", s.podIPAddr, defaultContainerServerPort)
-	err := s.containerRepo.SetContainerServer(request.ContainerId, containerServerAddr)
+	hostname := fmt.Sprintf("%s:%d", s.podIPAddr, defaultWorkerServerPort)
+	err := s.containerRepo.SetContainerWorkerHostname(request.ContainerId, hostname)
 	if err != nil {
 		return err
 	}

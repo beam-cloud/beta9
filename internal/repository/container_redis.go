@@ -158,11 +158,11 @@ func (cr *ContainerRedisRepository) SetContainerAddress(containerId string, addr
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerHost(containerId), addr, 0).Err()
 }
 
-func (cr *ContainerRedisRepository) SetContainerServer(containerId string, addr string) error {
+func (cr *ContainerRedisRepository) SetContainerWorkerHostname(containerId string, addr string) error {
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerServer(containerId), addr, 0).Err()
 }
 
-func (cr *ContainerRedisRepository) GetWorkerHostname(containerId string) (string, error) {
+func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

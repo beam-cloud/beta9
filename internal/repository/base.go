@@ -30,10 +30,10 @@ type ContainerRepository interface {
 	SetContainerState(string, *types.ContainerState) error
 	SetContainerExitCode(string, int) error
 	SetContainerAddress(containerId string, addr string) error
-	SetContainerServer(containerId string, addr string) error
 	UpdateContainerStatus(string, types.ContainerStatus, time.Duration) error
 	DeleteContainerState(*types.ContainerRequest) error
-	GetWorkerHostname(containerId string) (string, error)
+	SetContainerWorkerHostname(containerId string, addr string) error
+	GetContainerWorkerHostname(containerId string) (string, error)
 }
 
 type BeamRepository interface {

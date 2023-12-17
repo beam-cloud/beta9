@@ -192,7 +192,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	hostname, err := b.scheduler.ContainerRepo.GetWorkerHostname(containerId)
+	hostname, err := b.scheduler.ContainerRepo.GetContainerWorkerHostname(containerId)
 	if err != nil {
 		return err
 	}
