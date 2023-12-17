@@ -197,6 +197,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
+	// TODO: replace placeholder service token
 	client, err := common.NewRunCClient(hostname, "")
 	if err != nil {
 		return err
@@ -312,7 +313,6 @@ func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, ou
 		return err
 	}
 
-	// dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
 	// creds := "" //fmt.Sprintf("%s:%s", common.Secrets().Get("DOCKERHUB_USERNAME"), common.Secrets().Get("DOCKERHUB_PASSWORD"))
 	// if opts.ExistingImageCreds != nil {
 	// 	creds = *opts.ExistingImageCreds
@@ -321,9 +321,6 @@ func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, ou
 	opts.BaseImageRegistry = baseImage.SourceRegistry
 	opts.BaseImageName = baseImage.ImageName
 	opts.BaseImageTag = baseImage.ImageTag
-
-	// TODO: ensure required dependencies are always mounted at runtime
-	// in worker so we don't have to override the packages here
 
 	// Override any specified python packages with base requirements (to ensure we have what need in the image)
 	baseRequirementsSlice := strings.Split(strings.TrimSpace(basePythonRequirements), "\n")

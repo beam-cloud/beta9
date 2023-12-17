@@ -107,13 +107,3 @@ type MetricsStatsdRepository interface {
 type MetricsStreamRepository interface {
 	ContainerResourceUsage(usage types.ContainerResourceUsage) error
 }
-
-type IdentityRepository interface {
-	GetIdentityQuota(identityId string) (*types.IdentityQuota, error)
-	SetIdentityQuota(identityId string, quota *types.IdentityQuota) error
-	SetIdentityActiveContainer(identityId string, quota *types.IdentityQuota, containerId string, gpuType string) error
-	ScanAllActiveContainersInIdentity(identityId string, gpuType string) ([]string, error)
-	GetTotalActiveContainersByGpuType(identity, gpuType string) (int, error)
-	DeleteIdentityActiveContainer(containerId string, identity string, gpuType string) error
-	RefreshIdentityActiveContainerKeyExpiration(containerId string, expiry time.Duration) error
-}
