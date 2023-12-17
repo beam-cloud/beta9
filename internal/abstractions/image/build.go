@@ -311,11 +311,6 @@ func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, ou
 		return err
 	}
 
-	// creds := "" //fmt.Sprintf("%s:%s", common.Secrets().Get("DOCKERHUB_USERNAME"), common.Secrets().Get("DOCKERHUB_PASSWORD"))
-	// if opts.ExistingImageCreds != nil {
-	// 	creds = *opts.ExistingImageCreds
-	// }
-
 	opts.BaseImageRegistry = baseImage.SourceRegistry
 	opts.BaseImageName = baseImage.ImageName
 	opts.BaseImageTag = baseImage.ImageTag

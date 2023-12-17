@@ -8,6 +8,7 @@ import (
 	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	pb "github.com/beam-cloud/beam/proto"
+	"github.com/pkg/errors"
 )
 
 type ImageService interface {
@@ -85,7 +86,13 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		}
 	}
 
-	log.Println("build succeeded: ", lastMessage.Success)
+	if !lastMessage.Success {
+		log.Println("build failed")
+		return errors.New("build failed")
+	}
+
+	log.Println("build completed successfuly")
+
 	return nil
 }
 
