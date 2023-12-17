@@ -159,7 +159,7 @@ func (cr *ContainerRedisRepository) SetContainerAddress(containerId string, addr
 }
 
 func (cr *ContainerRedisRepository) SetContainerWorkerHostname(containerId string, addr string) error {
-	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerServer(containerId), addr, 0).Err()
+	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerContainerHost(containerId), addr, 0).Err()
 }
 
 func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId string) (string, error) {
@@ -177,7 +177,7 @@ func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId strin
 		case <-ctx.Done():
 			return "", errors.New("timeout reached while trying to get worker hostname")
 		case <-ticker.C:
-			hostname, err = cr.rdb.Get(ctx, common.RedisKeys.SchedulerContainerServer(containerId)).Result()
+			hostname, err = cr.rdb.Get(ctx, common.RedisKeys.SchedulerWorkerContainerHost(containerId)).Result()
 			if err == nil && canConnectToHost(hostname, 1*time.Second) {
 				return hostname, nil
 			}

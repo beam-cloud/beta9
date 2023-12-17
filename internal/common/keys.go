@@ -5,17 +5,17 @@ import (
 )
 
 var (
-	schedulerPrefix            string = "scheduler:"
-	schedulerContainerRequests string = "scheduler:container_requests"
-	schedulerWorkerLock        string = "scheduler:worker:lock:%s"
-	schedulerWorkerRequests    string = "scheduler:worker:requests:%s"
-	schedulerWorkerState       string = "scheduler:worker:state:%s"
-	schedulerContainerConfig   string = "scheduler:container:config:%s"
-	schedulerContainerState    string = "scheduler:container:state:%s"
-	schedulerContainerHost     string = "scheduler:container:host:%s"
-	schedulerContainerServer   string = "scheduler:container:server:%s"
-	schedulerContainerLock     string = "scheduler:container:lock:%s"
-	schedulerContainerExitCode string = "scheduler:container:exit_code:%s"
+	schedulerPrefix              string = "scheduler:"
+	schedulerContainerRequests   string = "scheduler:container_requests"
+	schedulerWorkerLock          string = "scheduler:worker:lock:%s"
+	schedulerWorkerRequests      string = "scheduler:worker:requests:%s"
+	schedulerWorkerState         string = "scheduler:worker:state:%s"
+	schedulerContainerConfig     string = "scheduler:container:config:%s"
+	schedulerContainerState      string = "scheduler:container:state:%s"
+	schedulerContainerHost       string = "scheduler:container:host:%s"
+	schedulerWorkerContainerHost string = "scheduler:container:worker_host:%s"
+	schedulerContainerLock       string = "scheduler:container:lock:%s"
+	schedulerContainerExitCode   string = "scheduler:container:exit_code:%s"
 )
 
 var (
@@ -101,8 +101,8 @@ func (rk *redisKeys) SchedulerContainerHost(containerId string) string {
 	return fmt.Sprintf(schedulerContainerHost, containerId)
 }
 
-func (rk *redisKeys) SchedulerContainerServer(containerId string) string {
-	return fmt.Sprintf(schedulerContainerServer, containerId)
+func (rk *redisKeys) SchedulerWorkerContainerHost(containerId string) string {
+	return fmt.Sprintf(schedulerWorkerContainerHost, containerId)
 }
 
 func (rk *redisKeys) SchedulerContainerExitCode(containerId string) string {
