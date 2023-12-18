@@ -45,8 +45,7 @@ type ImageClient struct {
 }
 
 func NewImageClient() (*ImageClient, error) {
-	// Configure image registry credentials
-	var provider CredentialProvider
+	var provider CredentialProvider // Configure image registry credentials
 
 	providerName := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_CREDENTIAL_PROVIDER", "aws")
 	if providerName == awsCredentialProviderName {

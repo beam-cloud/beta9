@@ -29,16 +29,6 @@ func NewContainerRedisRepositoryForTest(rdb *common.RedisClient) ContainerReposi
 	return &ContainerRedisRepository{rdb: rdb, lock: lock}
 }
 
-func NewRequestBucketRedisRepositoryForTest(name string, identityId string, rdb *common.RedisClient) RequestBucketRepository {
-	lock := common.NewRedisLock(rdb)
-	return &RequestBucketRedisRepository{
-		rdb:        rdb,
-		lock:       lock,
-		name:       name,
-		identityId: identityId,
-	}
-}
-
 func NewMetricsStatsdRepositoryForTest() MetricsStatsdRepository {
 	return &MetricsStatsd{
 		statSender: common.InitStatsdSender(

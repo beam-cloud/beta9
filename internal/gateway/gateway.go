@@ -18,7 +18,6 @@ import (
 	pb "github.com/beam-cloud/beam/proto"
 	beat "github.com/beam-cloud/beat/pkg"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 )
 
 type Gateway struct {
@@ -137,9 +136,6 @@ func (g *Gateway) Start() error {
 	}
 
 	pb.RegisterSchedulerServer(grpcServer, s)
-
-	// Turn on reflection
-	reflection.Register(grpcServer)
 
 	go func() {
 		err := grpcServer.Serve(listener)

@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	buildContainerPrefix        string = "build-"
-	defaultBuildContainerCpu    int64  = 1000
-	defaultBuildContainerMemory int64  = 1024
+	buildContainerPrefix          string        = "build-"
+	defaultBuildContainerCpu      int64         = 1000
+	defaultBuildContainerMemory   int64         = 1024
+	defaultContainerSpinupTimeout time.Duration = 180 * time.Second
 )
 
 type Builder struct {
@@ -42,13 +43,6 @@ type BuildOpts struct {
 	ExistingImageUri   string
 	ExistingImageCreds *string
 	ForceRebuild       bool
-}
-
-type BaseImageCacheOpt struct {
-	SourceRegistry string
-	ImageName      string
-	ImageTag       string
-	Copies         int
 }
 
 func NewBuilder(scheduler *scheduler.Scheduler) (*Builder, error) {
@@ -107,52 +101,6 @@ type BaseImage struct {
 	SourceRegistry string
 	ImageName      string
 	ImageTag       string
-}
-
-// Extracts the image name and tag from a given Docker image URI.
-// Returns an error if the URI is invalid.
-func (b *Builder) extractImageNameAndTag(imageURI string) (BaseImage, error) {
-	re := regexp.MustCompile(`^(([^/]+/[^/]+)/)?([^:]+):?(.*)$`)
-	matches := re.FindStringSubmatch(imageURI)
-
-	if matches == nil {
-		return BaseImage{}, errors.New("invalid image URI format")
-	}
-
-	// Use default source registry if not specified
-	sourceRegistry := "docker.io"
-	if matches[2] != "" {
-		sourceRegistry = matches[2]
-	}
-
-	imageName := matches[3]
-	imageTag := "latest"
-
-	if matches[4] != "" {
-		imageTag = matches[4]
-	}
-
-	return BaseImage{
-		SourceRegistry: sourceRegistry,
-		ImageName:      imageName,
-		ImageTag:       imageTag,
-	}, nil
-}
-
-func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
-	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common curl git"
-	components := []string{
-		"python3-future",
-		pythonVersion,
-		fmt.Sprintf("%s-distutils", pythonVersion),
-		fmt.Sprintf("%s-dev", pythonVersion),
-	}
-
-	installCmd := strings.Join(components, " ")
-	installPipCmd := fmt.Sprintf("curl -sS https://bootstrap.pypa.io/get-pip.py | %s", pythonVersion)
-	postInstallCmd := fmt.Sprintf("rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/%s /usr/bin/python && ln -s /usr/bin/%s /usr/bin/python3 && %s", pythonVersion, pythonVersion, installPipCmd)
-
-	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
 }
 
 // Build user image
@@ -219,7 +167,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			break
 		}
 
-		if time.Since(start) > 180*time.Second {
+		if time.Since(start) > defaultContainerSpinupTimeout {
 			return errors.New("timeout: container not running after 180 seconds")
 		}
 
@@ -276,6 +224,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	err = client.Archive(containerId, imageId)
 	if err != nil {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
 		return err
 	}
 
@@ -343,6 +292,52 @@ func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, ou
 // Check if an image already exists in the registry
 func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
+}
+
+// Extracts the image name and tag from a given Docker image URI.
+// Returns an error if the URI is invalid.
+func (b *Builder) extractImageNameAndTag(imageURI string) (BaseImage, error) {
+	re := regexp.MustCompile(`^(([^/]+/[^/]+)/)?([^:]+):?(.*)$`)
+	matches := re.FindStringSubmatch(imageURI)
+
+	if matches == nil {
+		return BaseImage{}, errors.New("invalid image URI format")
+	}
+
+	// Use default source registry if not specified
+	sourceRegistry := "docker.io"
+	if matches[2] != "" {
+		sourceRegistry = matches[2]
+	}
+
+	imageName := matches[3]
+	imageTag := "latest"
+
+	if matches[4] != "" {
+		imageTag = matches[4]
+	}
+
+	return BaseImage{
+		SourceRegistry: sourceRegistry,
+		ImageName:      imageName,
+		ImageTag:       imageTag,
+	}, nil
+}
+
+func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
+	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common curl git"
+	components := []string{
+		"python3-future",
+		pythonVersion,
+		fmt.Sprintf("%s-distutils", pythonVersion),
+		fmt.Sprintf("%s-dev", pythonVersion),
+	}
+
+	installCmd := strings.Join(components, " ")
+	installPipCmd := fmt.Sprintf("curl -sS https://bootstrap.pypa.io/get-pip.py | %s", pythonVersion)
+	postInstallCmd := fmt.Sprintf("rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/%s /usr/bin/python && ln -s /usr/bin/%s /usr/bin/python3 && %s", pythonVersion, pythonVersion, installPipCmd)
+
+	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
 }
 
 func (b *Builder) generatePipInstallCommand(opts *BuildOpts) string {

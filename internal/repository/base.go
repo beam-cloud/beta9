@@ -62,16 +62,6 @@ type BeamRepository interface {
 	GetIdentityQuota(identityId string) (*types.IdentityQuota, error)
 }
 
-type RequestBucketRepository interface {
-	GetRequestBucketState() (*types.RequestBucketState, error)
-	GetCurrentActiveContainers() ([]types.ContainerState, error)
-	GetAvailableContainerHost() (*types.AvailableHost, error)
-	GetFailedContainers() (int, error)
-	GetStoppableContainers(deploymentStatus string) ([]string, error)
-	WaitForTaskCompletion(taskId string) (string, error)
-	SetKeepWarm(containerId string, scaleDownDelay float32) error
-}
-
 type TaskRepository interface {
 	StartTask(taskId, queueName, containerId, identityExternalId string) error
 	EndTask(taskId, queueName, containerId, containerHostname, identityExternalId string, taskDuration, scaleDownDelay float64) error
