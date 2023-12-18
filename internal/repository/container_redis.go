@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/beam-cloud/beam/internal/common"
@@ -160,6 +161,15 @@ func (cr *ContainerRedisRepository) SetContainerAddress(containerId string, addr
 
 func (cr *ContainerRedisRepository) SetContainerWorkerHostname(containerId string, addr string) error {
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerContainerHost(containerId), addr, 0).Err()
+}
+
+func canConnectToHost(host string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", host, timeout)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId string) (string, error) {
