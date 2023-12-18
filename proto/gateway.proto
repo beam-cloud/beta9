@@ -5,9 +5,9 @@ option go_package = "github.com/beam-cloud/beam/proto";
 package gateway;
 
 service GatewayService {
-  rpc SyncObjects(SyncObjectsRequest) returns (SyncObjectsResponse) {}
+  rpc PutObjects(PutObjectsRequest) returns (PutObjectsResponse) {}
 }
 
-message SyncObjectsRequest {}
+message PutObjectsRequest {}
 
-message SyncObjectsResponse {}
+message PutObjectsResponse {}

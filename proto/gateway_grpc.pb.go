@@ -19,14 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	GatewayService_SyncObjects_FullMethodName = "/gateway.GatewayService/SyncObjects"
+	GatewayService_PutObjects_FullMethodName = "/gateway.GatewayService/PutObjects"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type GatewayServiceClient interface {
-	SyncObjects(ctx context.Context, in *SyncObjectsRequest, opts ...grpc.CallOption) (*SyncObjectsResponse, error)
+	PutObjects(ctx context.Context, in *PutObjectsRequest, opts ...grpc.CallOption) (*PutObjectsResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -37,9 +37,9 @@ func NewGatewayServiceClient(cc grpc.ClientConnInterface) GatewayServiceClient {
 	return &gatewayServiceClient{cc}
 }
 
-func (c *gatewayServiceClient) SyncObjects(ctx context.Context, in *SyncObjectsRequest, opts ...grpc.CallOption) (*SyncObjectsResponse, error) {
-	out := new(SyncObjectsResponse)
-	err := c.cc.Invoke(ctx, GatewayService_SyncObjects_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) PutObjects(ctx context.Context, in *PutObjectsRequest, opts ...grpc.CallOption) (*PutObjectsResponse, error) {
+	out := new(PutObjectsResponse)
+	err := c.cc.Invoke(ctx, GatewayService_PutObjects_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ func (c *gatewayServiceClient) SyncObjects(ctx context.Context, in *SyncObjectsR
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
 type GatewayServiceServer interface {
-	SyncObjects(context.Context, *SyncObjectsRequest) (*SyncObjectsResponse, error)
+	PutObjects(context.Context, *PutObjectsRequest) (*PutObjectsResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -58,8 +58,8 @@ type GatewayServiceServer interface {
 type UnimplementedGatewayServiceServer struct {
 }
 
-func (UnimplementedGatewayServiceServer) SyncObjects(context.Context, *SyncObjectsRequest) (*SyncObjectsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SyncObjects not implemented")
+func (UnimplementedGatewayServiceServer) PutObjects(context.Context, *PutObjectsRequest) (*PutObjectsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutObjects not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -74,20 +74,20 @@ func RegisterGatewayServiceServer(s grpc.ServiceRegistrar, srv GatewayServiceSer
 	s.RegisterService(&GatewayService_ServiceDesc, srv)
 }
 
-func _GatewayService_SyncObjects_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SyncObjectsRequest)
+func _GatewayService_PutObjects_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutObjectsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).SyncObjects(ctx, in)
+		return srv.(GatewayServiceServer).PutObjects(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_SyncObjects_FullMethodName,
+		FullMethod: GatewayService_PutObjects_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).SyncObjects(ctx, req.(*SyncObjectsRequest))
+		return srv.(GatewayServiceServer).PutObjects(ctx, req.(*PutObjectsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -100,8 +100,8 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*GatewayServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "SyncObjects",
-			Handler:    _GatewayService_SyncObjects_Handler,
+			MethodName: "PutObjects",
+			Handler:    _GatewayService_PutObjects_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
