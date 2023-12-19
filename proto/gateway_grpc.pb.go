@@ -7,7 +7,10 @@
 package proto
 
 import (
+	context "context"
 	grpc "google.golang.org/grpc"
+	codes "google.golang.org/grpc/codes"
+	status "google.golang.org/grpc/status"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -15,12 +18,19 @@ import (
 // Requires gRPC-Go v1.32.0 or later.
 const _ = grpc.SupportPackageIsVersion7
 
-const ()
+const (
+	GatewayService_HeadObject_FullMethodName          = "/gateway.GatewayService/HeadObject"
+	GatewayService_PutObject_FullMethodName           = "/gateway.GatewayService/PutObject"
+	GatewayService_PutAndExtractObject_FullMethodName = "/gateway.GatewayService/PutAndExtractObject"
+)
 
 // GatewayServiceClient is the client API for GatewayService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type GatewayServiceClient interface {
+	HeadObject(ctx context.Context, in *HeadObjectRequest, opts ...grpc.CallOption) (*HeadObjectResponse, error)
+	PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error)
+	PutAndExtractObject(ctx context.Context, in *PutAndExtractObjectRequest, opts ...grpc.CallOption) (*PutAndExtractObjectResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -31,10 +41,40 @@ func NewGatewayServiceClient(cc grpc.ClientConnInterface) GatewayServiceClient {
 	return &gatewayServiceClient{cc}
 }
 
+func (c *gatewayServiceClient) HeadObject(ctx context.Context, in *HeadObjectRequest, opts ...grpc.CallOption) (*HeadObjectResponse, error) {
+	out := new(HeadObjectResponse)
+	err := c.cc.Invoke(ctx, GatewayService_HeadObject_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error) {
+	out := new(PutObjectResponse)
+	err := c.cc.Invoke(ctx, GatewayService_PutObject_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) PutAndExtractObject(ctx context.Context, in *PutAndExtractObjectRequest, opts ...grpc.CallOption) (*PutAndExtractObjectResponse, error) {
+	out := new(PutAndExtractObjectResponse)
+	err := c.cc.Invoke(ctx, GatewayService_PutAndExtractObject_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
 type GatewayServiceServer interface {
+	HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error)
+	PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error)
+	PutAndExtractObject(context.Context, *PutAndExtractObjectRequest) (*PutAndExtractObjectResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -42,6 +82,15 @@ type GatewayServiceServer interface {
 type UnimplementedGatewayServiceServer struct {
 }
 
+func (UnimplementedGatewayServiceServer) HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HeadObject not implemented")
+}
+func (UnimplementedGatewayServiceServer) PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutObject not implemented")
+}
+func (UnimplementedGatewayServiceServer) PutAndExtractObject(context.Context, *PutAndExtractObjectRequest) (*PutAndExtractObjectResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutAndExtractObject not implemented")
+}
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
 // UnsafeGatewayServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -55,13 +104,80 @@ func RegisterGatewayServiceServer(s grpc.ServiceRegistrar, srv GatewayServiceSer
 	s.RegisterService(&GatewayService_ServiceDesc, srv)
 }
 
+func _GatewayService_HeadObject_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HeadObjectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).HeadObject(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_HeadObject_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).HeadObject(ctx, req.(*HeadObjectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_PutObject_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutObjectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).PutObject(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_PutObject_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).PutObject(ctx, req.(*PutObjectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_PutAndExtractObject_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutAndExtractObjectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).PutAndExtractObject(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_PutAndExtractObject_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).PutAndExtractObject(ctx, req.(*PutAndExtractObjectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var GatewayService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "gateway.GatewayService",
 	HandlerType: (*GatewayServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
-	Streams:     []grpc.StreamDesc{},
-	Metadata:    "gateway.proto",
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "HeadObject",
+			Handler:    _GatewayService_HeadObject_Handler,
+		},
+		{
+			MethodName: "PutObject",
+			Handler:    _GatewayService_PutObject_Handler,
+		},
+		{
+			MethodName: "PutAndExtractObject",
+			Handler:    _GatewayService_PutAndExtractObject_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "gateway.proto",
 }

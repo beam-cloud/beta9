@@ -134,8 +134,16 @@ func (g *Gateway) Start() error {
 	if err != nil {
 		return err
 	}
-
 	pb.RegisterSchedulerServer(grpcServer, s)
+
+	// Register gateway services
+	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction yet)
+	gws, err := NewGatewayService(g)
+	if err != nil {
+		return err
+	}
+
+	pb.RegisterGatewayServiceServer(grpcServer, gws)
 
 	go func() {
 		err := grpcServer.Serve(listener)
