@@ -5,7 +5,7 @@ from grpclib.client import Channel
 from beam.abstractions.base import BaseAbstraction, GatewayConfig, get_gateway_config
 from beam.clients.image import BuildImageResponse, ImageServiceStub, VerifyImageBuildResponse
 from beam.terminal import Terminal
-from beam.v1.type import (
+from beam.type import (
     PythonVersion,
 )
 

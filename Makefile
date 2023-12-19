@@ -1,5 +1,8 @@
 imageVersion := latest
 
+init:
+	cd sdk && poetry install
+
 build:
 	okteto build --build-arg BUILD_ENV=okteto --build-arg GITHUB_TOKEN=${GITHUB_TOKEN} -f ./docker/Dockerfile.beam -t okteto.dev/beam:$(imageVersion)
 
