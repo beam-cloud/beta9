@@ -6,19 +6,46 @@ package gateway;
 
 service GatewayService {
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
-  rpc PutObject(PutObjectRequest) returns (PutObjectsResponse) {}
+  rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
   rpc PutAndExtractObject(PutAndExtractObjectRequest)
       returns (PutAndExtractObjectResponse) {}
 }
 
-message HeadObjectRequest {}
+message ObjectMetadata {
+  string name = 1;
+  string type = 2;
+  int64 size = 3;
+}
 
-message HeadObjectResponse {}
+message HeadObjectRequest { string object_id = 1; }
 
-message PutObjectRequest {}
+message HeadObjectResponse {
+  bool ok = 1;
+  bool exists = 2;
+  ObjectMetadata object_metadata = 3;
+  string error_msg = 4;
+}
 
-message PutObjectsResponse {}
+message PutObjectRequest {
+  bytes object_content = 1;
+  ObjectMetadata object_metadata = 2;
+  bool overwrite = 3;
+}
 
-message PutAndExtractObjectRequest {}
+message PutObjectResponse {
+  bool ok = 1;
+  string object_id = 2;
+  string error_msg = 3;
+}
 
-message PutAndExtractObjectResponse {}
+message PutAndExtractObjectRequest {
+  bytes object_content = 1;
+  ObjectMetadata object_metadata = 2;
+  string destination = 3;
+}
+
+message PutAndExtractObjectResponse {
+  bool ok = 1;
+  string object_id = 2;
+  string error_msg = 3;
+}

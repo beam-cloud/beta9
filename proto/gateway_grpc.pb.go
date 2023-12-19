@@ -29,7 +29,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type GatewayServiceClient interface {
 	HeadObject(ctx context.Context, in *HeadObjectRequest, opts ...grpc.CallOption) (*HeadObjectResponse, error)
-	PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectsResponse, error)
+	PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error)
 	PutAndExtractObject(ctx context.Context, in *PutAndExtractObjectRequest, opts ...grpc.CallOption) (*PutAndExtractObjectResponse, error)
 }
 
@@ -50,8 +50,8 @@ func (c *gatewayServiceClient) HeadObject(ctx context.Context, in *HeadObjectReq
 	return out, nil
 }
 
-func (c *gatewayServiceClient) PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectsResponse, error) {
-	out := new(PutObjectsResponse)
+func (c *gatewayServiceClient) PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error) {
+	out := new(PutObjectResponse)
 	err := c.cc.Invoke(ctx, GatewayService_PutObject_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -73,7 +73,7 @@ func (c *gatewayServiceClient) PutAndExtractObject(ctx context.Context, in *PutA
 // for forward compatibility
 type GatewayServiceServer interface {
 	HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error)
-	PutObject(context.Context, *PutObjectRequest) (*PutObjectsResponse, error)
+	PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error)
 	PutAndExtractObject(context.Context, *PutAndExtractObjectRequest) (*PutAndExtractObjectResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
@@ -85,7 +85,7 @@ type UnimplementedGatewayServiceServer struct {
 func (UnimplementedGatewayServiceServer) HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method HeadObject not implemented")
 }
-func (UnimplementedGatewayServiceServer) PutObject(context.Context, *PutObjectRequest) (*PutObjectsResponse, error) {
+func (UnimplementedGatewayServiceServer) PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PutObject not implemented")
 }
 func (UnimplementedGatewayServiceServer) PutAndExtractObject(context.Context, *PutAndExtractObjectRequest) (*PutAndExtractObjectResponse, error) {
