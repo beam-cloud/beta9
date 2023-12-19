@@ -14,7 +14,7 @@ type LogBuffer struct {
 
 func NewLogBuffer() *LogBuffer {
 	lb := &LogBuffer{
-		writeChan: make(chan []byte, 1024), // Buffered channel
+		writeChan: make(chan []byte, 2048),
 	}
 
 	go lb.processWrites()
