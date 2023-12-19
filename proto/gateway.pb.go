@@ -20,14 +20,14 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type PutObjectsRequest struct {
+type HeadObjectRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 }
 
-func (x *PutObjectsRequest) Reset() {
-	*x = PutObjectsRequest{}
+func (x *HeadObjectRequest) Reset() {
+	*x = HeadObjectRequest{}
 	if protoimpl.UnsafeEnabled {
 		mi := &file_gateway_proto_msgTypes[0]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -35,13 +35,13 @@ func (x *PutObjectsRequest) Reset() {
 	}
 }
 
-func (x *PutObjectsRequest) String() string {
+func (x *HeadObjectRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PutObjectsRequest) ProtoMessage() {}
+func (*HeadObjectRequest) ProtoMessage() {}
 
-func (x *PutObjectsRequest) ProtoReflect() protoreflect.Message {
+func (x *HeadObjectRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_gateway_proto_msgTypes[0]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -53,9 +53,85 @@ func (x *PutObjectsRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PutObjectsRequest.ProtoReflect.Descriptor instead.
-func (*PutObjectsRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use HeadObjectRequest.ProtoReflect.Descriptor instead.
+func (*HeadObjectRequest) Descriptor() ([]byte, []int) {
 	return file_gateway_proto_rawDescGZIP(), []int{0}
+}
+
+type HeadObjectResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+}
+
+func (x *HeadObjectResponse) Reset() {
+	*x = HeadObjectResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_gateway_proto_msgTypes[1]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *HeadObjectResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HeadObjectResponse) ProtoMessage() {}
+
+func (x *HeadObjectResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[1]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HeadObjectResponse.ProtoReflect.Descriptor instead.
+func (*HeadObjectResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{1}
+}
+
+type PutObjectRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+}
+
+func (x *PutObjectRequest) Reset() {
+	*x = PutObjectRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_gateway_proto_msgTypes[2]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *PutObjectRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutObjectRequest) ProtoMessage() {}
+
+func (x *PutObjectRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[2]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutObjectRequest.ProtoReflect.Descriptor instead.
+func (*PutObjectRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{2}
 }
 
 type PutObjectsResponse struct {
@@ -67,7 +143,7 @@ type PutObjectsResponse struct {
 func (x *PutObjectsResponse) Reset() {
 	*x = PutObjectsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[1]
+		mi := &file_gateway_proto_msgTypes[3]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -80,7 +156,7 @@ func (x *PutObjectsResponse) String() string {
 func (*PutObjectsResponse) ProtoMessage() {}
 
 func (x *PutObjectsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[1]
+	mi := &file_gateway_proto_msgTypes[3]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -93,25 +169,118 @@ func (x *PutObjectsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutObjectsResponse.ProtoReflect.Descriptor instead.
 func (*PutObjectsResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{1}
+	return file_gateway_proto_rawDescGZIP(), []int{3}
+}
+
+type PutAndExtractObjectRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+}
+
+func (x *PutAndExtractObjectRequest) Reset() {
+	*x = PutAndExtractObjectRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_gateway_proto_msgTypes[4]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *PutAndExtractObjectRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutAndExtractObjectRequest) ProtoMessage() {}
+
+func (x *PutAndExtractObjectRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[4]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutAndExtractObjectRequest.ProtoReflect.Descriptor instead.
+func (*PutAndExtractObjectRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{4}
+}
+
+type PutAndExtractObjectResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+}
+
+func (x *PutAndExtractObjectResponse) Reset() {
+	*x = PutAndExtractObjectResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_gateway_proto_msgTypes[5]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *PutAndExtractObjectResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PutAndExtractObjectResponse) ProtoMessage() {}
+
+func (x *PutAndExtractObjectResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[5]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PutAndExtractObjectResponse.ProtoReflect.Descriptor instead.
+func (*PutAndExtractObjectResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{5}
 }
 
 var File_gateway_proto protoreflect.FileDescriptor
 
 var file_gateway_proto_rawDesc = []byte{
 	0x0a, 0x0d, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x12,
-	0x07, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x22, 0x13, 0x0a, 0x11, 0x50, 0x75, 0x74, 0x4f,
-	0x62, 0x6a, 0x65, 0x63, 0x74, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x22, 0x14, 0x0a,
-	0x12, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f,
-	0x6e, 0x73, 0x65, 0x32, 0x59, 0x0a, 0x0e, 0x47, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x53, 0x65,
-	0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x47, 0x0a, 0x0a, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65,
-	0x63, 0x74, 0x73, 0x12, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x50, 0x75,
-	0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a,
-	0x1b, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a,
-	0x65, 0x63, 0x74, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x42, 0x22,
-	0x5a, 0x20, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x62, 0x65, 0x61,
-	0x6d, 0x2d, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x61, 0x6d, 0x2f, 0x70, 0x72, 0x6f,
-	0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x07, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x22, 0x13, 0x0a, 0x11, 0x48, 0x65, 0x61, 0x64,
+	0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x22, 0x14, 0x0a,
+	0x12, 0x48, 0x65, 0x61, 0x64, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x22, 0x12, 0x0a, 0x10, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74,
+	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x22, 0x14, 0x0a, 0x12, 0x50, 0x75, 0x74, 0x4f, 0x62,
+	0x6a, 0x65, 0x63, 0x74, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x1c, 0x0a,
+	0x1a, 0x50, 0x75, 0x74, 0x41, 0x6e, 0x64, 0x45, 0x78, 0x74, 0x72, 0x61, 0x63, 0x74, 0x4f, 0x62,
+	0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x22, 0x1d, 0x0a, 0x1b, 0x50,
+	0x75, 0x74, 0x41, 0x6e, 0x64, 0x45, 0x78, 0x74, 0x72, 0x61, 0x63, 0x74, 0x4f, 0x62, 0x6a, 0x65,
+	0x63, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x32, 0x84, 0x02, 0x0a, 0x0e, 0x47,
+	0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x47, 0x0a,
+	0x0a, 0x48, 0x65, 0x61, 0x64, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x12, 0x1a, 0x2e, 0x67, 0x61,
+	0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x48, 0x65, 0x61, 0x64, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74,
+	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61,
+	0x79, 0x2e, 0x48, 0x65, 0x61, 0x64, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x45, 0x0a, 0x09, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a,
+	0x65, 0x63, 0x74, 0x12, 0x19, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x50, 0x75,
+	0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b,
+	0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65,
+	0x63, 0x74, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x62, 0x0a,
+	0x13, 0x50, 0x75, 0x74, 0x41, 0x6e, 0x64, 0x45, 0x78, 0x74, 0x72, 0x61, 0x63, 0x74, 0x4f, 0x62,
+	0x6a, 0x65, 0x63, 0x74, 0x12, 0x23, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x50,
+	0x75, 0x74, 0x41, 0x6e, 0x64, 0x45, 0x78, 0x74, 0x72, 0x61, 0x63, 0x74, 0x4f, 0x62, 0x6a, 0x65,
+	0x63, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x24, 0x2e, 0x67, 0x61, 0x74, 0x65,
+	0x77, 0x61, 0x79, 0x2e, 0x50, 0x75, 0x74, 0x41, 0x6e, 0x64, 0x45, 0x78, 0x74, 0x72, 0x61, 0x63,
+	0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22,
+	0x00, 0x42, 0x22, 0x5a, 0x20, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f,
+	0x62, 0x65, 0x61, 0x6d, 0x2d, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x61, 0x6d, 0x2f,
+	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -126,16 +295,24 @@ func file_gateway_proto_rawDescGZIP() []byte {
 	return file_gateway_proto_rawDescData
 }
 
-var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_gateway_proto_goTypes = []interface{}{
-	(*PutObjectsRequest)(nil),  // 0: gateway.PutObjectsRequest
-	(*PutObjectsResponse)(nil), // 1: gateway.PutObjectsResponse
+	(*HeadObjectRequest)(nil),           // 0: gateway.HeadObjectRequest
+	(*HeadObjectResponse)(nil),          // 1: gateway.HeadObjectResponse
+	(*PutObjectRequest)(nil),            // 2: gateway.PutObjectRequest
+	(*PutObjectsResponse)(nil),          // 3: gateway.PutObjectsResponse
+	(*PutAndExtractObjectRequest)(nil),  // 4: gateway.PutAndExtractObjectRequest
+	(*PutAndExtractObjectResponse)(nil), // 5: gateway.PutAndExtractObjectResponse
 }
 var file_gateway_proto_depIdxs = []int32{
-	0, // 0: gateway.GatewayService.PutObjects:input_type -> gateway.PutObjectsRequest
-	1, // 1: gateway.GatewayService.PutObjects:output_type -> gateway.PutObjectsResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
+	0, // 0: gateway.GatewayService.HeadObject:input_type -> gateway.HeadObjectRequest
+	2, // 1: gateway.GatewayService.PutObject:input_type -> gateway.PutObjectRequest
+	4, // 2: gateway.GatewayService.PutAndExtractObject:input_type -> gateway.PutAndExtractObjectRequest
+	1, // 3: gateway.GatewayService.HeadObject:output_type -> gateway.HeadObjectResponse
+	3, // 4: gateway.GatewayService.PutObject:output_type -> gateway.PutObjectsResponse
+	5, // 5: gateway.GatewayService.PutAndExtractObject:output_type -> gateway.PutAndExtractObjectResponse
+	3, // [3:6] is the sub-list for method output_type
+	0, // [0:3] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -148,7 +325,7 @@ func file_gateway_proto_init() {
 	}
 	if !protoimpl.UnsafeEnabled {
 		file_gateway_proto_msgTypes[0].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*PutObjectsRequest); i {
+			switch v := v.(*HeadObjectRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -160,7 +337,55 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[1].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*HeadObjectResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_gateway_proto_msgTypes[2].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*PutObjectRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_gateway_proto_msgTypes[3].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*PutObjectsResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_gateway_proto_msgTypes[4].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*PutAndExtractObjectRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_gateway_proto_msgTypes[5].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*PutAndExtractObjectResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -178,7 +403,7 @@ func file_gateway_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_gateway_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
