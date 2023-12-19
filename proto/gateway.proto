@@ -13,8 +13,7 @@ service GatewayService {
 
 message ObjectMetadata {
   string name = 1;
-  string type = 2;
-  int64 size = 3;
+  int64 size = 2;
 }
 
 message HeadObjectRequest { string object_id = 1; }
