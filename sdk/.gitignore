@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.benchmarks/
+.pytest_cache/
+dist/
+.python-version
+.ruff_cache/
+.DS_Store
+./tests/fixtures/customer_apps
+test.py
+something/

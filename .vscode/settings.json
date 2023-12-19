@@ -1,8 +1,12 @@
 {
     "[python]": {
-        "editor.defaultFormatter": "ms-python.black-formatter"
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.fixAll.ruff": "explicit",
+          "source.organizeImports.ruff": "explicit"
+        }
     },
-    "python.formatting.provider": "none",
     "[proto3]": {
         "editor.defaultFormatter": "xaver.clang-format",
         "editor.formatOnSave": true

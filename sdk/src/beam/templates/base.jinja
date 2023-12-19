@@ -1,0 +1,33 @@
+"""
+Get started with our docs, https://docs.beam.cloud
+"""
+from beam import App, Runtime
+
+app = App(
+    "{{ name }}",
+    runtime=Runtime(
+        cpu={{ cpu }},
+        memory="{{ memory }}",
+    )
+)
+
+{% if trigger -%}
+# Triggers determine how your app is deployed
+{%- endif %}
+{% if trigger == "webhook" -%}
+@app.task_queue()
+{% elif trigger == "rest_api" -%}
+@app.rest_api()
+{% elif trigger == "cron_job" -%}
+@app.schedule(when="every 1d")
+{% elif trigger == "run" -%}
+@app.run()
+{% else -%}
+{%- endif -%}
+def hello_world(**inputs):
+    print("After deploying, you'll see these logs in the web dashboard 👀")
+    return {"response": "hello world"}
+
+if __name__ == "__main__":
+    text = "Testing 123"
+    hello_world(text=text)
