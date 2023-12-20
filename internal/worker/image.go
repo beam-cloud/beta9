@@ -255,7 +255,7 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	startTime := time.Now()
 
 	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, i.registry.ImageFileExtension)
-	archivePath := filepath.Join("tmp", archiveName)
+	archivePath := filepath.Join("/tmp", archiveName)
 
 	defer func() {
 		os.RemoveAll(archivePath)
