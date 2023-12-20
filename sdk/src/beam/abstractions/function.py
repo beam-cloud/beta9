@@ -1,4 +1,4 @@
-from typing import Callable, Union
+from typing import Any, Callable, Union
 
 from grpclib.client import Channel
 
@@ -6,6 +6,36 @@ from beam.abstractions.base import GatewayConfig, get_gateway_config
 from beam.abstractions.image import Image
 from beam.clients.gateway import GatewayServiceStub
 from beam.sync import FileSyncer, SyncResult
+
+
+class CallableWrapper:
+    def __init__(self, func: Callable, parent: Any):
+        self.func = func
+        self.parent = parent
+
+    def __call__(self, *args, **kwargs):
+        if not self.parent.image_available and not self.parent.image.build():
+            return
+
+        self.parent.image_available = True
+
+        sync_result: Union[SyncResult, None] = None
+        if not self.parent.files_synced:
+            sync_result = self.parent.syncer.sync()
+
+            if sync_result and sync_result.success:
+                self.parent.files_synced = True
+                self.parent.object_id = sync_result.object_id
+            else:
+                return
+
+        return self.func(*args, **kwargs)
+
+    def local(self, *args, **kwargs) -> Any:
+        return self.func(*args, **kwargs)
+
+    def remote(self, *args, **kwargs) -> Any:
+        return self(*args, **kwargs)
 
 
 class Function:
@@ -25,26 +55,7 @@ class Function:
         self.syncer: FileSyncer = FileSyncer(self.stub)
 
     def __call__(self, func):
-        def _closure(*args, **kwargs) -> Callable:
-            if not self.image_available and not self.image.build():
-                return
-
-            self.image_available = True
-
-            sync_result: Union[SyncResult, None] = None
-            if not self.files_synced:
-                sync_result = self.syncer.sync()
-
-                if sync_result.success:
-                    self.files_synced = True
-                    self.object_id = sync_result.object_id
-                else:
-                    return
-
-            result = func(*args, **kwargs)
-            return result
-
-        return _closure
+        return CallableWrapper(func, self)
 
     def __del__(self):
         self.channel.close()
