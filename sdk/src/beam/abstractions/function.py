@@ -98,8 +98,9 @@ class _CallableWrapper:
 
     def _invoke_remote(self, *, args: bytes, handler: str):
         Terminal.header("Running function")
-        print("Image ID:", self.parent.image_id)
-        print("Object ID:", self.parent.object_id)
+
+        Terminal.detail(f"Image ID: {self.parent.image_id}")
+        Terminal.detail(f"Object ID: {self.parent.object_id}")
 
         async def _call() -> FunctionInvokeResponse:
             last_response: Union[None, FunctionInvokeResponse] = None

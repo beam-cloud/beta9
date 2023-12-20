@@ -82,10 +82,10 @@ class Image(BaseAbstraction):
     def build(self) -> ImageBuildResult:
         Terminal.header("Building image")
 
-        exists, r = self.exists()
+        exists, exists_response = self.exists()
         if exists:
             Terminal.header("Using cached image")
-            return ImageBuildResult(success=True, image_id=r.image_id)
+            return ImageBuildResult(success=True, image_id=exists_response.image_id)
 
         async def _build_async() -> BuildImageResponse:
             last_response: Union[None, BuildImageResponse] = None
