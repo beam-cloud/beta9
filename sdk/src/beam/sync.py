@@ -17,7 +17,7 @@ from beam.terminal import Terminal
 IGNORE_FILE_NAME = ".beamignore"
 
 
-class SyncResult(NamedTuple):
+class FileSyncResult(NamedTuple):
     success: bool = False
     object_id: str = ""
 
@@ -67,7 +67,7 @@ class FileSyncer:
                 if not self._should_ignore(file_path):
                     yield file_path
 
-    def sync(self) -> SyncResult:
+    def sync(self) -> FileSyncResult:
         Terminal.header("Syncing files")
 
         self.ignore_patterns = self._read_ignore_file()
@@ -102,13 +102,13 @@ class FileSyncer:
                     )
                 )
         elif head_response.exists and head_response.ok:
-            return SyncResult(success=True, object_id=object_id)
+            return FileSyncResult(success=True, object_id=object_id)
 
         os.remove(temp_zip_name)
 
         if not put_response.ok:
             Terminal.header("File sync failed ☠️")
-            return SyncResult(success=False, object_id=put_response.object_id)
+            return FileSyncResult(success=False, object_id=put_response.object_id)
 
         Terminal.header("Files synced")
-        return SyncResult(success=True, object_id=put_response.object_id)
+        return FileSyncResult(success=True, object_id=put_response.object_id)
