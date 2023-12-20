@@ -35,7 +35,7 @@ class Function:
 
 
 class _CallableWrapper:
-    def __init__(self, func: Callable, parent: Any):
+    def __init__(self, func: Callable, parent: Function):
         self.func: Callable = func
         self.parent: Function = parent
 
