@@ -4,7 +4,7 @@ import hashlib
 import os
 import uuid
 import zipfile
-from typing import Generator, Union
+from typing import Generator, NamedTuple, Union
 
 from beam.clients.gateway import (
     GatewayServiceStub,
@@ -15,6 +15,11 @@ from beam.clients.gateway import (
 from beam.terminal import Terminal
 
 IGNORE_FILE_NAME = ".beamignore"
+
+
+class SyncResult(NamedTuple):
+    success: bool = False
+    object_id: str = ""
 
 
 class FileSyncer:
@@ -101,7 +106,7 @@ class FileSyncer:
 
         if not put_response.ok:
             Terminal.header("File sync failed ☠️")
-            return False
+            return SyncResult(success=False, object_id=put_response.object_id)
 
         Terminal.header("Files synced")
-        return True
+        return SyncResult(success=True, object_id=put_response.object_id)
