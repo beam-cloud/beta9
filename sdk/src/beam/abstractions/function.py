@@ -1,11 +1,11 @@
-from typing import Callable
+from typing import Callable, Union
 
 from grpclib.client import Channel
 
 from beam.abstractions.base import GatewayConfig, get_gateway_config
 from beam.abstractions.image import Image
 from beam.clients.gateway import GatewayServiceStub
-from beam.sync import FileSyncer
+from beam.sync import FileSyncer, SyncResult
 
 
 class Function:
@@ -13,6 +13,7 @@ class Function:
         self.image: Image = image
         self.image_available: bool = False
         self.files_synced: bool = False
+        self.object_id: str = ""
 
         config: GatewayConfig = get_gateway_config()
         self.channel: Channel = Channel(
@@ -30,10 +31,15 @@ class Function:
 
             self.image_available = True
 
-            if not self.files_synced and not self.syncer.sync():
-                return
+            sync_result: Union[SyncResult, None] = None
+            if not self.files_synced:
+                sync_result = self.syncer.sync()
 
-            self.files_synced = True
+                if sync_result.success:
+                    self.files_synced = True
+                    self.object_id = sync_result.object_id
+                else:
+                    return
 
             result = func(*args, **kwargs)
             return result

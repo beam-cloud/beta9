@@ -101,6 +101,8 @@ class FileSyncer:
                         object_metadata=metadata,
                     )
                 )
+        elif head_response.exists and head_response.ok:
+            return SyncResult(success=True, object_id=object_id)
 
         os.remove(temp_zip_name)
 
