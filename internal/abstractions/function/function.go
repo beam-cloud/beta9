@@ -66,7 +66,15 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 }
 
 func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {
-	return &pb.FunctionGetArgsResponse{}, nil
+	value, err := fs.rdb.Get(context.TODO(), Keys.FunctionArgs(in.InvocationId)).Bytes()
+	if err != nil {
+		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, err
+	}
+
+	return &pb.FunctionGetArgsResponse{
+		Ok:   true,
+		Args: value,
+	}, nil
 }
 
 func (fs *RunCFunctionService) genInvocationId() string {

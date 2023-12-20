@@ -6,7 +6,11 @@ from grpclib.client import Channel
 
 from beam.abstractions.base import BaseAbstraction, GatewayConfig, get_gateway_config
 from beam.abstractions.image import Image
-from beam.clients.function import FunctionInvokeResponse, FunctionServiceStub
+from beam.clients.function import (
+    FunctionGetArgsResponse,
+    FunctionInvokeResponse,
+    FunctionServiceStub,
+)
 from beam.clients.gateway import GatewayServiceStub
 from beam.sync import FileSyncer, FileSyncResult
 from beam.terminal import Terminal
@@ -40,7 +44,21 @@ class Function(BaseAbstraction):
 
     def remote(self):
         invocation_id = os.getenv("INVOCATION_ID")
+        if invocation_id is None:
+            return
+
         print("Invocation ID: ", invocation_id)
+
+        r: FunctionGetArgsResponse = self.run_sync(
+            self.function_stub.function_get_args(invocation_id=invocation_id)
+        )
+
+        if not r.ok:
+            return
+
+        args: dict = cloudpickle.loads(r.args)
+        print(args)
+
         # TODO: load the handler module and pass args
         pass
 
