@@ -422,11 +422,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		s.terminateContainer(containerId, request, &exitCode, &containerErr)
 	}()
 
+	// For images that have a rootfs, set that as the root path, otherwise, assume config files are in the rootfs themselves
+	rootPath := filepath.Join(bundlePath, "rootfs")
+	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
+		rootPath = bundlePath
+	}
+
 	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
 		Id:         containerId,
 		BundlePath: bundlePath,
-		Overlay:    common.NewContainerOverlay(containerId, bundlePath, baseConfigPath, filepath.Join(bundlePath, "rootfs")),
+		Overlay:    common.NewContainerOverlay(containerId, bundlePath, baseConfigPath, rootPath),
 		Spec:       spec,
 		ExitCode:   -1,
 		OutputWriter: common.NewOutputWriter(func(s string) {

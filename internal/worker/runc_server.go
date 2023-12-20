@@ -173,16 +173,6 @@ func (s *RunCServer) RunCArchive(ctx context.Context, in *pb.RunCArchiveRequest)
 		}, nil
 	}
 
-	topLayerPath := instance.Overlay.TopLayerPath()
-	rootfsPath := filepath.Join(topLayerPath, "rootfs")
-
-	// Create the rootfs directory
-	if err := os.Mkdir(rootfsPath, 0755); err != nil {
-		return &pb.RunCArchiveResponse{
-			Ok: false,
-		}, err
-	}
-
 	// Copy initial config file from the base image bundle
 	err = copyFile(filepath.Join(instance.BundlePath, "config.json"), filepath.Join(instance.Overlay.TopLayerPath(), "initial_config.json"))
 	if err != nil {
@@ -196,7 +186,6 @@ func (s *RunCServer) RunCArchive(ctx context.Context, in *pb.RunCArchiveRequest)
 	tempConfig.Process.Terminal = false
 	tempConfig.Process.Args = []string{"tail", "-f", "/dev/null"}
 	tempConfig.Root.Readonly = false
-	tempConfig.Root.Path = "/"
 
 	file, err := json.MarshalIndent(tempConfig, "", " ")
 	if err != nil {
