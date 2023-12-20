@@ -37,6 +37,9 @@ class CallableWrapper:
     def remote(self, *args, **kwargs) -> Any:
         return self(*args, **kwargs)
 
+    def map(self):
+        raise NotImplementedError
+
 
 class Function:
     def __init__(self, image: Image = Image()) -> None:
