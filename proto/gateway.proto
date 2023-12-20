@@ -7,8 +7,6 @@ package gateway;
 service GatewayService {
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
   rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
-  rpc PutAndExtractObject(PutAndExtractObjectRequest)
-      returns (PutAndExtractObjectResponse) {}
 }
 
 message ObjectMetadata {
@@ -32,18 +30,6 @@ message PutObjectRequest {
 }
 
 message PutObjectResponse {
-  bool ok = 1;
-  string object_id = 2;
-  string error_msg = 3;
-}
-
-message PutAndExtractObjectRequest {
-  bytes object_content = 1;
-  ObjectMetadata object_metadata = 2;
-  string destination = 3;
-}
-
-message PutAndExtractObjectResponse {
   bool ok = 1;
   string object_id = 2;
   string error_msg = 3;

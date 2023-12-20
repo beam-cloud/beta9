@@ -26,16 +26,10 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 }
 
 func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectRequest) (*pb.PutObjectResponse, error) {
+	log.Println("metadata:", in.ObjectMetadata)
+
+	// TODO: implement PutObject
 	return &pb.PutObjectResponse{
-		Ok: true,
-	}, nil
-}
-
-func (gws *GatewayService) PutAndExtractObject(ctx context.Context, in *pb.PutAndExtractObjectRequest) (*pb.PutAndExtractObjectResponse, error) {
-	log.Println(in.ObjectMetadata)
-
-	// TODO: implement PutAndExtractObject
-	return &pb.PutAndExtractObjectResponse{
 		Ok: true,
 	}, nil
 }
