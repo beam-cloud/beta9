@@ -112,4 +112,4 @@ class Image(BaseAbstraction):
         self.channel.close()
 
     def remote(self):
-        pass
+        raise NotImplementedError

@@ -74,8 +74,8 @@ class Map(BaseAbstraction):
 
         return _generate_items()
 
-    def remote(self):
-        raise NotImplementedError
-
     def __del__(self):
         self.channel.close()
+
+    def remote(self):
+        raise NotImplementedError
