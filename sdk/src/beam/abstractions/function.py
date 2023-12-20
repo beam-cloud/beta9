@@ -28,14 +28,14 @@ class Function:
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
 
     def __call__(self, func):
-        return _CallableWrapper(self.function_stub, func, self)
+        return _CallableWrapper(func, self)
 
     def __del__(self):
         self.channel.close()
 
 
 class _CallableWrapper:
-    def __init__(self, stub: FunctionServiceStub, func: Callable, parent: Any):
+    def __init__(self, func: Callable, parent: Any):
         self.func: Callable = func
         self.parent: Function = parent
 
