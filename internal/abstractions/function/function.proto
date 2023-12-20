@@ -13,7 +13,7 @@ message FunctionInvokeRequest {
   string object_id = 1;
   string image_id = 2;
   bytes args = 3;
-  string entry_point = 4;
+  string handler = 4;
 }
 
 message FunctionInvokeResponse {

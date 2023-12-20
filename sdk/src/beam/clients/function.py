@@ -13,7 +13,7 @@ class FunctionInvokeRequest(betterproto.Message):
     object_id: str = betterproto.string_field(1)
     image_id: str = betterproto.string_field(2)
     args: bytes = betterproto.bytes_field(3)
-    entry_point: str = betterproto.string_field(4)
+    handler: str = betterproto.string_field(4)
 
 
 @dataclass
@@ -30,13 +30,13 @@ class FunctionServiceStub(betterproto.ServiceStub):
         object_id: str = "",
         image_id: str = "",
         args: bytes = b"",
-        entry_point: str = "",
+        handler: str = "",
     ) -> AsyncGenerator[FunctionInvokeResponse, None]:
         request = FunctionInvokeRequest()
         request.object_id = object_id
         request.image_id = image_id
         request.args = args
-        request.entry_point = entry_point
+        request.handler = handler
 
         async for response in self._unary_stream(
             "/function.FunctionService/FunctionInvoke",

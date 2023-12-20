@@ -3,14 +3,14 @@ from typing import Any, Callable, Union
 import cloudpickle
 from grpclib.client import Channel
 
-from beam.abstractions.base import GatewayConfig, get_gateway_config
+from beam.abstractions.base import BaseAbstraction, GatewayConfig, get_gateway_config
 from beam.abstractions.image import Image
 from beam.clients.function import FunctionServiceStub
 from beam.clients.gateway import GatewayServiceStub
 from beam.sync import FileSyncer, FileSyncResult
 
 
-class Function:
+class Function(BaseAbstraction):
     def __init__(self, image: Image = Image()) -> None:
         self.image: Image = image
         self.image_available: bool = False
@@ -33,6 +33,10 @@ class Function:
 
     def __del__(self):
         self.channel.close()
+
+    def remote(self):
+        # TODO: load the handler module and pass args
+        pass
 
 
 class _CallableWrapper:
@@ -67,7 +71,7 @@ class _CallableWrapper:
             object_id=self.parent.object_id,
             image_id=self.parent.image_id,
             args=args,
-            entry_point="test.test.test",
+            handler="test.test.test",
         )
 
         return  # self.func()
