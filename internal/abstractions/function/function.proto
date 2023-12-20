@@ -24,5 +24,8 @@ message FunctionInvokeResponse {
   uint32 exit_code = 3;
 }
 
-message FunctionGetArgsRequest {}
-message FunctionGetArgsResponse {}
+message FunctionGetArgsRequest { string invocation_id = 1; }
+message FunctionGetArgsResponse {
+  bool ok = 1;
+  bytes args = 2;
+}

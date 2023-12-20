@@ -25,12 +25,13 @@ class FunctionInvokeResponse(betterproto.Message):
 
 @dataclass
 class FunctionGetArgsRequest(betterproto.Message):
-    pass
+    invocation_id: str = betterproto.string_field(1)
 
 
 @dataclass
 class FunctionGetArgsResponse(betterproto.Message):
-    pass
+    ok: bool = betterproto.bool_field(1)
+    args: bytes = betterproto.bytes_field(2)
 
 
 class FunctionServiceStub(betterproto.ServiceStub):
@@ -55,8 +56,11 @@ class FunctionServiceStub(betterproto.ServiceStub):
         ):
             yield response
 
-    async def function_get_args(self) -> FunctionGetArgsResponse:
+    async def function_get_args(
+        self, *, invocation_id: str = ""
+    ) -> FunctionGetArgsResponse:
         request = FunctionGetArgsRequest()
+        request.invocation_id = invocation_id
 
         return await self._unary_unary(
             "/function.FunctionService/FunctionGetArgs",

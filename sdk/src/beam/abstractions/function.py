@@ -1,3 +1,4 @@
+import os
 from typing import Any, Callable, Union
 
 import cloudpickle
@@ -38,6 +39,8 @@ class Function(BaseAbstraction):
         self.channel.close()
 
     def remote(self):
+        invocation_id = os.getenv("INVOCATION_ID")
+        print("Invocation ID: ", invocation_id)
         # TODO: load the handler module and pass args
         pass
 
