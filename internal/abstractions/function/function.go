@@ -9,6 +9,7 @@ import (
 	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	pb "github.com/beam-cloud/beam/proto"
+	"github.com/google/uuid"
 )
 
 type FunctionService interface {
@@ -32,7 +33,9 @@ func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, schedu
 func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
 	log.Printf("incoming function run request: %+v", in)
 
-	invocationId := "test"
+	invocationId := fs.genInvocationId()
+
+	// TODO: make args expire after 10 minutes
 	err := fs.rdb.Set(context.TODO(), Keys.FunctionArgs(invocationId), in.Args, 0).Err()
 	if err != nil {
 		stream.Send(&pb.FunctionInvokeResponse{Output: "Failed", Done: true, ExitCode: 1})
@@ -64,6 +67,10 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 
 func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {
 	return &pb.FunctionGetArgsResponse{}, nil
+}
+
+func (fs *RunCFunctionService) genInvocationId() string {
+	return uuid.New().String()[:8]
 }
 
 // Redis keys
