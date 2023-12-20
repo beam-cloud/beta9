@@ -16,6 +16,7 @@ class Function:
         self.image_available: bool = False
         self.files_synced: bool = False
         self.object_id: str = ""
+        self.image_id: str = ""
 
         config: GatewayConfig = get_gateway_config()
         self.channel: Channel = Channel(
@@ -63,7 +64,10 @@ class _CallableWrapper:
         )
 
         self.parent.function_stub.function_invoke(
-            object_id="", image_id="", args=args, entry_point="test.test.test"
+            object_id=self.parent.object_id,
+            image_id=self.parent.image_id,
+            args=args,
+            entry_point="test.test.test",
         )
 
         return  # self.func()
