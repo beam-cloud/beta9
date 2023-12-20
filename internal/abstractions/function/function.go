@@ -59,7 +59,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		Cpu:         defaultFunctionContainerCpu,
 		Memory:      defaultFunctionContainerMemory,
 		ImageId:     in.ImageId,
-		EntryPoint:  []string{"tail", "-m", "beam.abstractions.test"},
+		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 	})
 	if err != nil {
 		return err

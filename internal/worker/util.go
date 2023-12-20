@@ -2,6 +2,7 @@ package worker
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 )
 
@@ -14,4 +15,12 @@ func forceSymlink(source, link string) error {
 	}
 
 	return os.Symlink(source, link)
+}
+
+func copyFile(src, dst string) error {
+	input, err := ioutil.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return ioutil.WriteFile(dst, input, 0644)
 }
