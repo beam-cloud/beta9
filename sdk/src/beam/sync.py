@@ -67,7 +67,7 @@ class FileSyncer:
                 if not self._should_ignore(file_path):
                     yield file_path
 
-    def sync(self) -> bool:
+    def sync(self) -> SyncResult:
         Terminal.header("Syncing files")
 
         self.ignore_patterns = self._read_ignore_file()
