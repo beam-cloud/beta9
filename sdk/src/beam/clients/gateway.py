@@ -41,20 +41,6 @@ class PutObjectResponse(betterproto.Message):
     error_msg: str = betterproto.string_field(3)
 
 
-@dataclass
-class PutAndExtractObjectRequest(betterproto.Message):
-    object_content: bytes = betterproto.bytes_field(1)
-    object_metadata: "ObjectMetadata" = betterproto.message_field(2)
-    destination: str = betterproto.string_field(3)
-
-
-@dataclass
-class PutAndExtractObjectResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    object_id: str = betterproto.string_field(2)
-    error_msg: str = betterproto.string_field(3)
-
-
 class GatewayServiceStub(betterproto.ServiceStub):
     async def head_object(self, *, object_id: str = "") -> HeadObjectResponse:
         request = HeadObjectRequest()
@@ -83,23 +69,4 @@ class GatewayServiceStub(betterproto.ServiceStub):
             "/gateway.GatewayService/PutObject",
             request,
             PutObjectResponse,
-        )
-
-    async def put_and_extract_object(
-        self,
-        *,
-        object_content: bytes = b"",
-        object_metadata: Optional["ObjectMetadata"] = None,
-        destination: str = "",
-    ) -> PutAndExtractObjectResponse:
-        request = PutAndExtractObjectRequest()
-        request.object_content = object_content
-        if object_metadata is not None:
-            request.object_metadata = object_metadata
-        request.destination = destination
-
-        return await self._unary_unary(
-            "/gateway.GatewayService/PutAndExtractObject",
-            request,
-            PutAndExtractObjectResponse,
         )

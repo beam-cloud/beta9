@@ -4,17 +4,22 @@ import hashlib
 import os
 import uuid
 import zipfile
-from typing import Any, Generator, Union
+from typing import Generator, NamedTuple, Union
 
 from beam.clients.gateway import (
     GatewayServiceStub,
     HeadObjectResponse,
     ObjectMetadata,
-    PutAndExtractObjectResponse,
+    PutObjectResponse,
 )
 from beam.terminal import Terminal
 
 IGNORE_FILE_NAME = ".beamignore"
+
+
+class SyncResult(NamedTuple):
+    success: bool = False
+    object_id: str = ""
 
 
 class FileSyncer:
@@ -62,10 +67,7 @@ class FileSyncer:
                 if not self._should_ignore(file_path):
                     yield file_path
 
-    def _run_sync(self, coroutine) -> Any:
-        return self.loop.run_until_complete(coroutine)
-
-    def sync(self) -> bool:
+    def sync(self) -> SyncResult:
         Terminal.header("Syncing files")
 
         self.ignore_patterns = self._read_ignore_file()
@@ -85,19 +87,18 @@ class FileSyncer:
             size = len(object_content)
             object_id = hashlib.sha256(f.read()).hexdigest()
 
-        head_response: HeadObjectResponse = self._run_sync(
+        head_response: HeadObjectResponse = self.loop.run_until_complete(
             self.gateway_stub.head_object(object_id=object_id)
         )
-        put_response: Union[PutAndExtractObjectResponse, None] = None
+        put_response: Union[PutObjectResponse, None] = None
         if not head_response.exists:
             metadata = ObjectMetadata(name=object_id, size=size)
 
             with Terminal.progress("Uploading"):
-                put_response: PutAndExtractObjectResponse = self._run_sync(
-                    self.gateway_stub.put_and_extract_object(
+                put_response: PutObjectResponse = self.loop.run_until_complete(
+                    self.gateway_stub.put_object(
                         object_content=object_content,
                         object_metadata=metadata,
-                        destination=f"/data/objects/{object_id}",
                     )
                 )
 
@@ -105,7 +106,7 @@ class FileSyncer:
 
         if not put_response.ok:
             Terminal.header("File sync failed ☠️")
-            return False
+            return SyncResult(success=False, object_id=put_response.object_id)
 
         Terminal.header("Files synced")
-        return True
+        return SyncResult(success=True, object_id=put_response.object_id)

@@ -19,9 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	GatewayService_HeadObject_FullMethodName          = "/gateway.GatewayService/HeadObject"
-	GatewayService_PutObject_FullMethodName           = "/gateway.GatewayService/PutObject"
-	GatewayService_PutAndExtractObject_FullMethodName = "/gateway.GatewayService/PutAndExtractObject"
+	GatewayService_HeadObject_FullMethodName = "/gateway.GatewayService/HeadObject"
+	GatewayService_PutObject_FullMethodName  = "/gateway.GatewayService/PutObject"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -30,7 +29,6 @@ const (
 type GatewayServiceClient interface {
 	HeadObject(ctx context.Context, in *HeadObjectRequest, opts ...grpc.CallOption) (*HeadObjectResponse, error)
 	PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error)
-	PutAndExtractObject(ctx context.Context, in *PutAndExtractObjectRequest, opts ...grpc.CallOption) (*PutAndExtractObjectResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -59,22 +57,12 @@ func (c *gatewayServiceClient) PutObject(ctx context.Context, in *PutObjectReque
 	return out, nil
 }
 
-func (c *gatewayServiceClient) PutAndExtractObject(ctx context.Context, in *PutAndExtractObjectRequest, opts ...grpc.CallOption) (*PutAndExtractObjectResponse, error) {
-	out := new(PutAndExtractObjectResponse)
-	err := c.cc.Invoke(ctx, GatewayService_PutAndExtractObject_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
 type GatewayServiceServer interface {
 	HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error)
 	PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error)
-	PutAndExtractObject(context.Context, *PutAndExtractObjectRequest) (*PutAndExtractObjectResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -87,9 +75,6 @@ func (UnimplementedGatewayServiceServer) HeadObject(context.Context, *HeadObject
 }
 func (UnimplementedGatewayServiceServer) PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PutObject not implemented")
-}
-func (UnimplementedGatewayServiceServer) PutAndExtractObject(context.Context, *PutAndExtractObjectRequest) (*PutAndExtractObjectResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method PutAndExtractObject not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -140,24 +125,6 @@ func _GatewayService_PutObject_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_PutAndExtractObject_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PutAndExtractObjectRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(GatewayServiceServer).PutAndExtractObject(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: GatewayService_PutAndExtractObject_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).PutAndExtractObject(ctx, req.(*PutAndExtractObjectRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -172,10 +139,6 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PutObject",
 			Handler:    _GatewayService_PutObject_Handler,
-		},
-		{
-			MethodName: "PutAndExtractObject",
-			Handler:    _GatewayService_PutAndExtractObject_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
