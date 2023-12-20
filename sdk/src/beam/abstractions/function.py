@@ -5,13 +5,16 @@ from grpclib.client import Channel
 
 from beam.abstractions.base import BaseAbstraction, GatewayConfig, get_gateway_config
 from beam.abstractions.image import Image
-from beam.clients.function import FunctionServiceStub
+from beam.clients.function import FunctionInvokeResponse, FunctionServiceStub
 from beam.clients.gateway import GatewayServiceStub
 from beam.sync import FileSyncer, FileSyncResult
+from beam.terminal import Terminal
 
 
 class Function(BaseAbstraction):
     def __init__(self, image: Image = Image()) -> None:
+        super().__init__()
+
         self.image: Image = image
         self.image_available: bool = False
         self.files_synced: bool = False
@@ -67,14 +70,37 @@ class _CallableWrapper:
             }
         )
 
-        self.parent.function_stub.function_invoke(
-            object_id=self.parent.object_id,
-            image_id=self.parent.image_id,
-            args=args,
-            handler="test.test.test",
-        )
+        return self._invoke_remote(args)
 
-        return  # self.func()
+    def _invoke_remote(self, args: bytes):
+        Terminal.header("Running function")
+
+        async def _call() -> FunctionInvokeResponse:
+            last_response: Union[None, FunctionInvokeResponse] = None
+
+            async for r in self.parent.function_stub.function_invoke(
+                object_id=self.parent.object_id,
+                image_id=self.parent.image_id,
+                args=args,
+                handler="test.test.test",
+            ):
+                Terminal.detail(r.output)
+
+                if r.done:
+                    last_response = r
+                    break
+
+            return last_response
+
+        with Terminal.progress("Working..."):
+            last_response: FunctionInvokeResponse = self.parent.loop.run_until_complete(_call())
+
+        if not last_response.done:
+            Terminal.error("Function failed ☠️")
+            return False
+
+        Terminal.header("Function complete 🎉")
+        return True
 
     def local(self, *args, **kwargs) -> Any:
         return self.func(*args, **kwargs)
