@@ -16,8 +16,6 @@ type GatewayService struct {
 }
 
 func NewGatewayService(gw *Gateway) (*GatewayService, error) {
-	os.MkdirAll(GatewayConfig.DefaultObjectPath, 0644)
-
 	return &GatewayService{
 		gw: gw,
 	}, nil
@@ -56,6 +54,8 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 }
 
 func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectRequest) (*pb.PutObjectResponse, error) {
+	os.MkdirAll(GatewayConfig.DefaultObjectPath, 0644)
+
 	hash := sha256.Sum256(in.ObjectContent)
 	objectId := hex.EncodeToString(hash[:])
 	filePath := path.Join(GatewayConfig.DefaultObjectPath, objectId)
