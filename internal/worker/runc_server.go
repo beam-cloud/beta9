@@ -196,6 +196,7 @@ func (s *RunCServer) RunCArchive(ctx context.Context, in *pb.RunCArchiveRequest)
 	tempConfig.Process.Terminal = false
 	tempConfig.Process.Args = []string{"tail", "-f", "/dev/null"}
 	tempConfig.Root.Readonly = false
+	tempConfig.Root.Path = "/"
 
 	file, err := json.MarshalIndent(tempConfig, "", " ")
 	if err != nil {
