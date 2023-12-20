@@ -19,7 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	FunctionService_FunctionInvoke_FullMethodName = "/function.FunctionService/FunctionInvoke"
+	FunctionService_FunctionInvoke_FullMethodName  = "/function.FunctionService/FunctionInvoke"
+	FunctionService_FunctionGetArgs_FullMethodName = "/function.FunctionService/FunctionGetArgs"
 )
 
 // FunctionServiceClient is the client API for FunctionService service.
@@ -27,6 +28,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type FunctionServiceClient interface {
 	FunctionInvoke(ctx context.Context, in *FunctionInvokeRequest, opts ...grpc.CallOption) (FunctionService_FunctionInvokeClient, error)
+	FunctionGetArgs(ctx context.Context, in *FunctionGetArgsRequest, opts ...grpc.CallOption) (*FunctionGetArgsResponse, error)
 }
 
 type functionServiceClient struct {
@@ -69,11 +71,21 @@ func (x *functionServiceFunctionInvokeClient) Recv() (*FunctionInvokeResponse, e
 	return m, nil
 }
 
+func (c *functionServiceClient) FunctionGetArgs(ctx context.Context, in *FunctionGetArgsRequest, opts ...grpc.CallOption) (*FunctionGetArgsResponse, error) {
+	out := new(FunctionGetArgsResponse)
+	err := c.cc.Invoke(ctx, FunctionService_FunctionGetArgs_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FunctionServiceServer is the server API for FunctionService service.
 // All implementations must embed UnimplementedFunctionServiceServer
 // for forward compatibility
 type FunctionServiceServer interface {
 	FunctionInvoke(*FunctionInvokeRequest, FunctionService_FunctionInvokeServer) error
+	FunctionGetArgs(context.Context, *FunctionGetArgsRequest) (*FunctionGetArgsResponse, error)
 	mustEmbedUnimplementedFunctionServiceServer()
 }
 
@@ -83,6 +95,9 @@ type UnimplementedFunctionServiceServer struct {
 
 func (UnimplementedFunctionServiceServer) FunctionInvoke(*FunctionInvokeRequest, FunctionService_FunctionInvokeServer) error {
 	return status.Errorf(codes.Unimplemented, "method FunctionInvoke not implemented")
+}
+func (UnimplementedFunctionServiceServer) FunctionGetArgs(context.Context, *FunctionGetArgsRequest) (*FunctionGetArgsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FunctionGetArgs not implemented")
 }
 func (UnimplementedFunctionServiceServer) mustEmbedUnimplementedFunctionServiceServer() {}
 
@@ -118,13 +133,36 @@ func (x *functionServiceFunctionInvokeServer) Send(m *FunctionInvokeResponse) er
 	return x.ServerStream.SendMsg(m)
 }
 
+func _FunctionService_FunctionGetArgs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FunctionGetArgsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FunctionServiceServer).FunctionGetArgs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FunctionService_FunctionGetArgs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FunctionServiceServer).FunctionGetArgs(ctx, req.(*FunctionGetArgsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FunctionService_ServiceDesc is the grpc.ServiceDesc for FunctionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var FunctionService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "function.FunctionService",
 	HandlerType: (*FunctionServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "FunctionGetArgs",
+			Handler:    _FunctionService_FunctionGetArgs_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "FunctionInvoke",

@@ -7,6 +7,8 @@ package function;
 service FunctionService {
   rpc FunctionInvoke(FunctionInvokeRequest)
       returns (stream FunctionInvokeResponse) {}
+  rpc FunctionGetArgs(FunctionGetArgsRequest)
+      returns (FunctionGetArgsResponse) {}
 }
 
 message FunctionInvokeRequest {
@@ -21,3 +23,6 @@ message FunctionInvokeResponse {
   bool done = 2;
   uint32 exit_code = 3;
 }
+
+message FunctionGetArgsRequest {}
+message FunctionGetArgsResponse {}

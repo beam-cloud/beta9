@@ -23,6 +23,16 @@ class FunctionInvokeResponse(betterproto.Message):
     exit_code: int = betterproto.uint32_field(3)
 
 
+@dataclass
+class FunctionGetArgsRequest(betterproto.Message):
+    pass
+
+
+@dataclass
+class FunctionGetArgsResponse(betterproto.Message):
+    pass
+
+
 class FunctionServiceStub(betterproto.ServiceStub):
     async def function_invoke(
         self,
@@ -44,3 +54,12 @@ class FunctionServiceStub(betterproto.ServiceStub):
             FunctionInvokeResponse,
         ):
             yield response
+
+    async def function_get_args(self) -> FunctionGetArgsResponse:
+        request = FunctionGetArgsRequest()
+
+        return await self._unary_unary(
+            "/function.FunctionService/FunctionGetArgs",
+            request,
+            FunctionGetArgsResponse,
+        )
