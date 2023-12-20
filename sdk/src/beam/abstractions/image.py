@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import List, NamedTuple, Optional, Tuple, Union
 
 from grpclib.client import Channel
 
@@ -8,6 +8,11 @@ from beam.terminal import Terminal
 from beam.type import (
     PythonVersion,
 )
+
+
+class ImageBuildResult(NamedTuple):
+    success: bool = False
+    image_id: str = ""
 
 
 class Image(BaseAbstraction):
@@ -62,7 +67,7 @@ class Image(BaseAbstraction):
         )
         self.stub: ImageServiceStub = ImageServiceStub(self.channel)
 
-    def exists(self) -> bool:
+    def exists(self) -> Tuple[bool, ImageBuildResult]:
         r: VerifyImageBuildResponse = self.run_sync(
             self.stub.verify_image_build(
                 python_packages=self.python_packages,
@@ -72,14 +77,15 @@ class Image(BaseAbstraction):
                 existing_image_uri=self.base_image,
             )
         )
-        return r.exists
+        return (r.exists, ImageBuildResult(success=r.exists, image_id=r.image_id))
 
-    def build(self) -> bool:
+    def build(self) -> ImageBuildResult:
         Terminal.header("Building image")
 
-        if self.exists():
+        exists, r = self.exists()
+        if exists:
             Terminal.header("Using cached image")
-            return True
+            return ImageBuildResult(success=True, image_id=r.image_id)
 
         async def _build_async() -> BuildImageResponse:
             last_response: Union[None, BuildImageResponse] = None
@@ -103,10 +109,10 @@ class Image(BaseAbstraction):
 
         if not last_response.success:
             Terminal.error("Build failed ☠️")
-            return False
+            return ImageBuildResult(success=False)
 
         Terminal.header("Build complete 🎉")
-        return True
+        return ImageBuildResult(success=True, image_id=last_response.image_id)
 
     def __del__(self):
         self.channel.close()

@@ -5,14 +5,14 @@ import cloudpickle
 from grpclib.client import Channel
 
 from beam.abstractions.base import BaseAbstraction, GatewayConfig, get_gateway_config
-from beam.abstractions.image import Image
+from beam.abstractions.image import Image, ImageBuildResult
 from beam.clients.function import (
     FunctionGetArgsResponse,
     FunctionInvokeResponse,
     FunctionServiceStub,
 )
 from beam.clients.gateway import GatewayServiceStub
-from beam.sync import FileSyncer, FileSyncResult
+from beam.sync import FileSyncer
 from beam.terminal import Terminal
 
 
@@ -69,16 +69,19 @@ class _CallableWrapper:
         self.parent: Function = parent
 
     def __call__(self, *args, **kwargs):
-        if not self.parent.image_available and not self.parent.image.build():
-            return
+        if not self.parent.image_available:
+            image_build_result: ImageBuildResult = self.parent.image.build()
 
-        self.parent.image_available = True
+            if image_build_result and image_build_result.success:
+                self.parent.image_available = True
+                self.parent.image_id = image_build_result.image_id
+            else:
+                return
 
-        sync_result: Union[FileSyncResult, None] = None
         if not self.parent.files_synced:
             sync_result = self.parent.syncer.sync()
 
-            if sync_result and sync_result.success:
+            if sync_result.success:
                 self.parent.files_synced = True
                 self.parent.object_id = sync_result.object_id
             else:
@@ -91,10 +94,12 @@ class _CallableWrapper:
             }
         )
 
-        return self._invoke_remote(args)
+        return self._invoke_remote(args=args, handler="test.test.test")
 
-    def _invoke_remote(self, args: bytes):
+    def _invoke_remote(self, *, args: bytes, handler: str):
         Terminal.header("Running function")
+        print("Image ID:", self.parent.image_id)
+        print("Object ID:", self.parent.object_id)
 
         async def _call() -> FunctionInvokeResponse:
             last_response: Union[None, FunctionInvokeResponse] = None
@@ -103,7 +108,7 @@ class _CallableWrapper:
                 object_id=self.parent.object_id,
                 image_id=self.parent.image_id,
                 args=args,
-                handler="test.test.test",
+                handler=handler,
             ):
                 Terminal.detail(r.output)
 
