@@ -3,6 +3,7 @@ package function
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 
 	"github.com/beam-cloud/beam/internal/common"
@@ -18,16 +19,25 @@ type FunctionService interface {
 type RunCFunctionService struct {
 	pb.UnimplementedFunctionServiceServer
 	scheduler *scheduler.Scheduler
+	rdb       *common.RedisClient
 }
 
-func NewRuncFunctionService(ctx context.Context, scheduler *scheduler.Scheduler) (*RunCFunctionService, error) {
+func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, scheduler *scheduler.Scheduler) (*RunCFunctionService, error) {
 	return &RunCFunctionService{
 		scheduler: scheduler,
+		rdb:       rdb,
 	}, nil
 }
 
 func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
 	log.Printf("incoming function run request: %+v", in)
+
+	invocationId := "test"
+	err := fs.rdb.Set(context.TODO(), Keys.FunctionArgs(invocationId), in.Args, 0).Err()
+	if err != nil {
+		stream.Send(&pb.FunctionInvokeResponse{Output: "Failed", Done: true, ExitCode: 1})
+		return errors.New("unable to store function args")
+	}
 
 	// ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
@@ -54,4 +64,27 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 
 func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {
 	return &pb.FunctionGetArgsResponse{}, nil
+}
+
+// Redis keys
+var (
+	functionPrefix string = "function"
+	functionArgs   string = "function:%s:args"
+	functionResult string = "function:%s:result"
+)
+
+var Keys = &keys{}
+
+type keys struct{}
+
+func (k *keys) FunctionPrefix() string {
+	return functionPrefix
+}
+
+func (k *keys) FunctionArgs(invocationId string) string {
+	return fmt.Sprintf(functionArgs, invocationId)
+}
+
+func (k *keys) FunctionResult(invocationId string) string {
+	return fmt.Sprintf(functionResult, invocationId)
 }
