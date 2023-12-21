@@ -1,9 +1,9 @@
 import asyncio
 from asyncio import AbstractEventLoop
-from typing import Any, Union
+from typing import Any, Coroutine, Union
 
 
-def run_sync(coroutine, loop: Union[AbstractEventLoop, None]) -> Any:
+def run_sync(coroutine: Coroutine, loop: Union[AbstractEventLoop, None] = None) -> Any:
     if loop is None:
         loop = asyncio.get_event_loop()
 
