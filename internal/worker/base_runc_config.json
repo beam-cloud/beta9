@@ -203,7 +203,7 @@
 		{
 			"destination": "/usr/local/lib/python3.8/dist-packages/beam",
 			"type": "bind",
-			"source": "/workspace/beam",
+			"source": "/workspace/sdk",
 			"options": [
 				"ro",
 				"rbind",
@@ -216,7 +216,7 @@
 		{
 			"destination": "/usr/local/lib/python3.9/dist-packages/beam",
 			"type": "bind",
-			"source": "/workspace/beam",
+			"source": "/workspace/sdk",
 			"options": [
 				"ro",
 				"rbind",
@@ -229,7 +229,7 @@
 		{
 			"destination": "/usr/local/lib/python3.10/dist-packages/beam",
 			"type": "bind",
-			"source": "/workspace/beam",
+			"source": "/workspace/sdk",
 			"options": [
 				"ro",
 				"rbind",

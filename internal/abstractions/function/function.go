@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/scheduler"
@@ -14,9 +15,10 @@ import (
 )
 
 const (
-	functionContainerPrefix        string = "function-"
-	defaultFunctionContainerCpu    int64  = 1000
-	defaultFunctionContainerMemory int64  = 1024
+	functionContainerPrefix        string        = "function-"
+	defaultFunctionContainerCpu    int64         = 1000
+	defaultFunctionContainerMemory int64         = 1024
+	functionArgsExpirationTimeout  time.Duration = 60 * time.Second
 )
 
 type FunctionService interface {
@@ -43,8 +45,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	invocationId := fs.genInvocationId()
 	containerId := fs.genContainerId(invocationId)
 
-	// TODO: make args expire after 10 minutes
-	err := fs.rdb.Set(context.TODO(), Keys.FunctionArgs(invocationId), in.Args, 0).Err()
+	err := fs.rdb.Set(context.TODO(), Keys.FunctionArgs(invocationId), in.Args, functionArgsExpirationTimeout).Err()
 	if err != nil {
 		stream.Send(&pb.FunctionInvokeResponse{Output: "Failed", Done: true, ExitCode: 1})
 		return errors.New("unable to store function args")
@@ -59,7 +60,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		Cpu:         defaultFunctionContainerCpu,
 		Memory:      defaultFunctionContainerMemory,
 		ImageId:     in.ImageId,
-		EntryPoint:  []string{in.PythonVersion, "-m", "beam.abstractions.function"},
+		EntryPoint:  []string{in.PythonVersion, "-m", "beam.entry.function"},
 	})
 	if err != nil {
 		return err

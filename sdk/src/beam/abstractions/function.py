@@ -138,7 +138,3 @@ class _CallableWrapper:
 
     def map(self):
         raise NotImplementedError
-
-
-if __name__ == "__main__":
-    print("hello world")
