@@ -422,7 +422,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		s.terminateContainer(containerId, request, &exitCode, &containerErr)
 	}()
 
-	// For images that have a rootfs, set that as the root path, otherwise, assume config files are in the rootfs themselves
+	// For images that have a rootfs, set that as the root path
+	// otherwise, assume runc config files are in the rootfs themselves
 	rootPath := filepath.Join(bundlePath, "rootfs")
 	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
 		rootPath = bundlePath

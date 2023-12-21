@@ -1,19 +1,17 @@
-import os
 from typing import Any, Callable, Union
 
 import cloudpickle
 from grpclib.client import Channel
 
+from beam import terminal
 from beam.abstractions.base import BaseAbstraction, GatewayConfig, get_gateway_config
 from beam.abstractions.image import Image, ImageBuildResult
 from beam.clients.function import (
-    FunctionGetArgsResponse,
     FunctionInvokeResponse,
     FunctionServiceStub,
 )
 from beam.clients.gateway import GatewayServiceStub
 from beam.sync import FileSyncer
-from beam.terminal import Terminal
 
 
 class Function(BaseAbstraction):
@@ -41,30 +39,6 @@ class Function(BaseAbstraction):
 
     def __del__(self):
         self.channel.close()
-
-    def remote(self):
-        invocation_id = os.getenv("INVOCATION_ID")
-        if invocation_id is None:
-            return
-
-        import time
-
-        for i in range(5):
-            print("I is: ", i)
-            time.sleep(1.0)
-
-        r: FunctionGetArgsResponse = self.run_sync(
-            self.function_stub.function_get_args(invocation_id=invocation_id)
-        )
-
-        if not r.ok:
-            return
-
-        args: dict = cloudpickle.loads(r.args)
-        print(args)
-
-        # TODO: load the handler module and pass args
-        pass
 
 
 class _CallableWrapper:
@@ -95,16 +69,16 @@ class _CallableWrapper:
             {
                 "args": args,
                 "kwargs": kwargs,
-            }
+            },
         )
 
         return self._invoke_remote(args=args, handler="test.test.test")
 
     def _invoke_remote(self, *, args: bytes, handler: str):
-        Terminal.header("Running function")
+        terminal.header("Running function")
 
-        Terminal.detail(f"Image ID: {self.parent.image_id}")
-        Terminal.detail(f"Object ID: {self.parent.object_id}")
+        terminal.detail(f"Image ID: {self.parent.image_id}")
+        terminal.detail(f"Object ID: {self.parent.object_id}")
 
         async def _call() -> FunctionInvokeResponse:
             last_response: Union[None, FunctionInvokeResponse] = None
@@ -116,7 +90,7 @@ class _CallableWrapper:
                 handler=handler,
                 python_version=self.parent.image.python_version,
             ):
-                Terminal.detail(r.output)
+                terminal.detail(r.output)
 
                 if r.done:
                     last_response = r
@@ -124,14 +98,14 @@ class _CallableWrapper:
 
             return last_response
 
-        with Terminal.progress("Working..."):
+        with terminal.progress("Working..."):
             last_response: FunctionInvokeResponse = self.parent.loop.run_until_complete(_call())
 
         if not last_response.done:
-            Terminal.error("Function failed ☠️")
+            terminal.error("Function failed ☠️")
             return False
 
-        Terminal.header("Function complete 🎉")
+        terminal.header("Function complete 🎉")
         return True
 
     def local(self, *args, **kwargs) -> Any:

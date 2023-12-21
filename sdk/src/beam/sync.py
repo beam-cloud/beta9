@@ -6,13 +6,13 @@ import uuid
 import zipfile
 from typing import Generator, NamedTuple, Union
 
+from beam import terminal
 from beam.clients.gateway import (
     GatewayServiceStub,
     HeadObjectResponse,
     ObjectMetadata,
     PutObjectResponse,
 )
-from beam.terminal import Terminal
 
 IGNORE_FILE_NAME = ".beamignore"
 
@@ -33,7 +33,7 @@ class FileSyncer:
         self.gateway_stub: GatewayServiceStub = gateway_stub
 
     def _read_ignore_file(self) -> list:
-        Terminal.detail(f"Reading {IGNORE_FILE_NAME} file")
+        terminal.detail(f"Reading {IGNORE_FILE_NAME} file")
 
         ignore_file = os.path.join(self.root_dir, IGNORE_FILE_NAME)
         patterns = []
@@ -56,7 +56,7 @@ class FileSyncer:
         return False
 
     def _collect_files(self) -> Generator[str, None, None]:
-        Terminal.detail(f"Collecting files from {self.root_dir}")
+        terminal.detail(f"Collecting files from {self.root_dir}")
 
         for root, dirs, files in os.walk(self.root_dir):
             dirs[:] = [d for d in dirs if not self._should_ignore(os.path.join(root, d))]
@@ -68,7 +68,7 @@ class FileSyncer:
                     yield file_path
 
     def sync(self) -> FileSyncResult:
-        Terminal.header("Syncing files")
+        terminal.header("Syncing files")
 
         self.ignore_patterns = self._read_ignore_file()
         temp_zip_name = f"/tmp/{uuid.uuid4()}"
@@ -76,7 +76,7 @@ class FileSyncer:
         with zipfile.ZipFile(temp_zip_name, "w") as zipf:
             for file in self._collect_files():
                 zipf.write(file, os.path.relpath(file, self.root_dir))
-                Terminal.detail(f"Added {file}")
+                terminal.detail(f"Added {file}")
 
         object_id = None
         size = 0
@@ -94,7 +94,7 @@ class FileSyncer:
         if not head_response.exists:
             metadata = ObjectMetadata(name=object_id, size=size)
 
-            with Terminal.progress("Uploading"):
+            with terminal.progress("Uploading"):
                 put_response: PutObjectResponse = self.loop.run_until_complete(
                     self.gateway_stub.put_object(
                         object_content=object_content,
@@ -107,8 +107,8 @@ class FileSyncer:
         os.remove(temp_zip_name)
 
         if not put_response.ok:
-            Terminal.header("File sync failed ☠️")
+            terminal.header("File sync failed ☠️")
             return FileSyncResult(success=False, object_id=put_response.object_id)
 
-        Terminal.header("Files synced")
+        terminal.header("Files synced")
         return FileSyncResult(success=True, object_id=put_response.object_id)

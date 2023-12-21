@@ -76,6 +76,3 @@ class Map(BaseAbstraction):
 
     def __del__(self):
         self.channel.close()
-
-    def remote(self):
-        raise NotImplementedError

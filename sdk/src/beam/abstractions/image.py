@@ -2,9 +2,9 @@ from typing import List, NamedTuple, Optional, Tuple, Union
 
 from grpclib.client import Channel
 
+from beam import terminal
 from beam.abstractions.base import BaseAbstraction, GatewayConfig, get_gateway_config
 from beam.clients.image import BuildImageResponse, ImageServiceStub, VerifyImageBuildResponse
-from beam.terminal import Terminal
 from beam.type import (
     PythonVersion,
 )
@@ -80,11 +80,11 @@ class Image(BaseAbstraction):
         return (r.exists, ImageBuildResult(success=r.exists, image_id=r.image_id))
 
     def build(self) -> ImageBuildResult:
-        Terminal.header("Building image")
+        terminal.header("Building image")
 
         exists, exists_response = self.exists()
         if exists:
-            Terminal.header("Using cached image")
+            terminal.header("Using cached image")
             return ImageBuildResult(success=True, image_id=exists_response.image_id)
 
         async def _build_async() -> BuildImageResponse:
@@ -96,7 +96,7 @@ class Image(BaseAbstraction):
                 commands=self.commands,
                 existing_image_uri=self.base_image,
             ):
-                Terminal.detail(r.msg)
+                terminal.detail(r.msg)
 
                 if r.done:
                     last_response = r
@@ -104,18 +104,15 @@ class Image(BaseAbstraction):
 
             return last_response
 
-        with Terminal.progress("Working..."):
+        with terminal.progress("Working..."):
             last_response: BuildImageResponse = self.loop.run_until_complete(_build_async())
 
         if not last_response.success:
-            Terminal.error("Build failed ☠️")
+            terminal.error("Build failed ☠️")
             return ImageBuildResult(success=False)
 
-        Terminal.header("Build complete 🎉")
+        terminal.header("Build complete 🎉")
         return ImageBuildResult(success=True, image_id=last_response.image_id)
 
     def __del__(self):
         self.channel.close()
-
-    def remote(self):
-        raise NotImplementedError
