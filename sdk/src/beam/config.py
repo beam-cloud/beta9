@@ -1,0 +1,27 @@
+import os
+from typing import NamedTuple
+
+from grpclib.client import Channel
+
+
+class GatewayConfig(NamedTuple):
+    host: str = "0.0.0.0"
+    port: int = 1993
+
+
+def get_gateway_config() -> GatewayConfig:
+    host = os.getenv("BEAM_GATEWAY_HOST", "0.0.0.0")
+    port = os.getenv("BEAM_GATEWAY_PORT", 1993)
+
+    # TODO: add token to this
+    config = GatewayConfig(host=host, port=port)
+    return config
+
+
+def get_gateway_channel() -> Channel:
+    config: GatewayConfig = get_gateway_config()
+    return Channel(
+        host=config.host,
+        port=config.port,
+        ssl=True if config.port == 443 else False,
+    )

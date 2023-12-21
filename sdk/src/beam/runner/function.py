@@ -1,32 +1,20 @@
-import asyncio
 import os
 import sys
-from asyncio import AbstractEventLoop
 
 import cloudpickle
 from grpclib.client import Channel
 
-from beam.abstractions.base import GatewayConfig, get_gateway_config
+from beam.aio import run_sync
 from beam.clients.function import (
     FunctionGetArgsResponse,
     FunctionServiceStub,
 )
 from beam.clients.gateway import GatewayServiceStub
-
-
-def run_sync(loop: AbstractEventLoop, coroutine):
-    return loop.run_until_complete(coroutine)
-
+from beam.config import get_gateway_channel
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
+    channel: Channel = get_gateway_channel()
 
-    config: GatewayConfig = get_gateway_config()
-    channel: Channel = Channel(
-        host=config.host,
-        port=config.port,
-        ssl=True if config.port == 443 else False,
-    )
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
 
@@ -35,7 +23,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     r: FunctionGetArgsResponse = run_sync(
-        loop, function_stub.function_get_args(invocation_id=invocation_id)
+        function_stub.function_get_args(invocation_id=invocation_id),
     )
     if not r.ok:
         sys.exit(1)
