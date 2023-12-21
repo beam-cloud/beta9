@@ -25,7 +25,10 @@ RUN go mod download && go mod verify
 RUN apt-get update && apt-get install git \
     libseccomp-dev curl nano skopeo -y
 
-COPY . .
+COPY internal /workspace/internal
+COPY cmd /workspace/cmd
+COPY proto /workspace/proto
+
 RUN mkdir -p /workspace/bin
 RUN go build -v -o /usr/local/bin/worker /workspace/cmd/worker/main.go
 
@@ -91,5 +94,5 @@ RUN cd /workspace/nvidia-container-toolkit && make build && make binaries
 RUN cp /workspace/nvidia-container-toolkit/nvidia-container-runtime* /usr/bin/
 
 COPY --from=skopeo-rootfs / /
-COPY ./sdk/src/beam /workspace/sdk
 COPY --from=builder /usr/local/bin/worker /usr/local/bin/worker
+COPY ./sdk/src/beam /workspace/sdk
