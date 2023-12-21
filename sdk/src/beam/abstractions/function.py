@@ -110,6 +110,7 @@ class _CallableWrapper:
                 image_id=self.parent.image_id,
                 args=args,
                 handler=handler,
+                python_version=self.parent.image.python_version,
             ):
                 Terminal.detail(r.output)
 
@@ -137,3 +138,7 @@ class _CallableWrapper:
 
     def map(self):
         raise NotImplementedError
+
+
+if __name__ == "__main__":
+    print("hello world")

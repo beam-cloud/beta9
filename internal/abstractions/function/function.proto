@@ -16,6 +16,7 @@ message FunctionInvokeRequest {
   string image_id = 2;
   bytes args = 3;
   string handler = 4;
+  string python_version = 5;
 }
 
 message FunctionInvokeResponse {

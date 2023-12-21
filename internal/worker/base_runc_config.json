@@ -199,6 +199,45 @@
 				"nodev",
 				"rw"
 			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.8/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/beam",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.9/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/beam",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.10/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/beam",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
 		}
 	],
 	"hooks": {

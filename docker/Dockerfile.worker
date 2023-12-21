@@ -91,4 +91,5 @@ RUN cd /workspace/nvidia-container-toolkit && make build && make binaries
 RUN cp /workspace/nvidia-container-toolkit/nvidia-container-runtime* /usr/bin/
 
 COPY --from=skopeo-rootfs / /
+COPY ./sdk/src/beam /workspace/beam
 COPY --from=builder /usr/local/bin/worker /usr/local/bin/worker

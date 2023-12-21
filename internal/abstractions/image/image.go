@@ -92,7 +92,6 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	}
 
 	log.Println("build completed successfully")
-
 	return nil
 }
 
