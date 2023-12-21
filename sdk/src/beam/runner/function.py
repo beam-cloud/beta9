@@ -34,14 +34,6 @@ if __name__ == "__main__":
     if invocation_id is None:
         sys.exit(1)
 
-    """
-        Load any grpc classes we need
-        use import lib to load their code from distributed storage
-        run their function
-        exit
-
-    """
-
     r: FunctionGetArgsResponse = run_sync(
         loop, function_stub.function_get_args(invocation_id=invocation_id)
     )

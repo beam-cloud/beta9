@@ -1,9 +1,8 @@
 from typing import Any
 
 import cloudpickle
-from grpclib.client import Channel
 
-from beam.abstractions.base import BaseAbstraction, GatewayConfig, get_gateway_config
+from beam.abstractions.base import BaseAbstraction
 from beam.clients.map import (
     MapCountResponse,
     MapDeleteResponse,
@@ -18,14 +17,7 @@ class Map(BaseAbstraction):
     def __init__(self, *, name: str) -> None:
         super().__init__()
 
-        config: GatewayConfig = get_gateway_config()
-
         self.name: str = name
-        self.channel: Channel = Channel(
-            host=config.host,
-            port=config.port,
-            ssl=True if config.port == 443 else False,
-        )
         self.stub: MapServiceStub = MapServiceStub(self.channel)
 
     def set(self, key: str, value: Any) -> bool:
@@ -73,6 +65,3 @@ class Map(BaseAbstraction):
                     yield (key, value)
 
         return _generate_items()
-
-    def __del__(self):
-        self.channel.close()

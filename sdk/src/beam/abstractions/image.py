@@ -1,9 +1,7 @@
 from typing import List, NamedTuple, Optional, Tuple, Union
 
-from grpclib.client import Channel
-
 from beam import terminal
-from beam.abstractions.base import BaseAbstraction, GatewayConfig, get_gateway_config
+from beam.abstractions.base import BaseAbstraction
 from beam.clients.image import BuildImageResponse, ImageServiceStub, VerifyImageBuildResponse
 from beam.type import (
     PythonVersion,
@@ -58,13 +56,6 @@ class Image(BaseAbstraction):
         self.commands = commands
         self.base_image = base_image
         self.base_image_creds = None
-
-        config: GatewayConfig = get_gateway_config()
-        self.channel: Channel = Channel(
-            host=config.host,
-            port=config.port,
-            ssl=True if config.port == 443 else False,
-        )
         self.stub: ImageServiceStub = ImageServiceStub(self.channel)
 
     def exists(self) -> Tuple[bool, ImageBuildResult]:
@@ -113,6 +104,3 @@ class Image(BaseAbstraction):
 
         terminal.header("Build complete 🎉")
         return ImageBuildResult(success=True, image_id=last_response.image_id)
-
-    def __del__(self):
-        self.channel.close()

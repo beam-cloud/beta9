@@ -1,10 +1,9 @@
 from typing import Any, Callable, Union
 
 import cloudpickle
-from grpclib.client import Channel
 
 from beam import terminal
-from beam.abstractions.base import BaseAbstraction, GatewayConfig, get_gateway_config
+from beam.abstractions.base import BaseAbstraction
 from beam.abstractions.image import Image, ImageBuildResult
 from beam.clients.function import (
     FunctionInvokeResponse,
@@ -24,21 +23,12 @@ class Function(BaseAbstraction):
         self.object_id: str = ""
         self.image_id: str = ""
 
-        config: GatewayConfig = get_gateway_config()
-        self.channel: Channel = Channel(
-            host=config.host,
-            port=config.port,
-            ssl=True if config.port == 443 else False,
-        )
         self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
 
     def __call__(self, func):
         return _CallableWrapper(func, self)
-
-    def __del__(self):
-        self.channel.close()
 
 
 class _CallableWrapper:

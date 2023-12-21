@@ -3,13 +3,25 @@ import os
 from abc import ABC
 from typing import NamedTuple
 
+from grpclib.client import Channel
+
 
 class BaseAbstraction(ABC):
     def __init__(self) -> None:
         self.loop = asyncio.get_event_loop()
 
+        config: GatewayConfig = get_gateway_config()
+        self.channel: Channel = Channel(
+            host=config.host,
+            port=config.port,
+            ssl=True if config.port == 443 else False,
+        )
+
     def run_sync(self, coroutine):
         return self.loop.run_until_complete(coroutine)
+
+    def __del__(self):
+        self.channel.close()
 
 
 class GatewayConfig(NamedTuple):
