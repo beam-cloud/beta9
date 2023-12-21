@@ -15,7 +15,9 @@ import (
 	"time"
 
 	common "github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/gateway"
 	repo "github.com/beam-cloud/beam/internal/repository"
+	"github.com/beam-cloud/beam/internal/storage"
 	types "github.com/beam-cloud/beam/internal/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/slai-labs/go-runc"
@@ -49,6 +51,7 @@ type Worker struct {
 	completedRequests    chan *types.ContainerRequest
 	stopContainerChan    chan string
 	workerRepo           repo.WorkerRepository
+	storage              storage.Storage
 	ctx                  context.Context
 	cancel               func()
 }
@@ -122,6 +125,21 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	storage, err := storage.NewJuiceFsStorage()
+	if err != nil {
+		return nil, err
+	}
+
+	err = storage.Format(gateway.GatewayConfig.DefaultFilesystemName)
+	if err != nil {
+		log.Fatalf("Unable to format filesystem: %+v\n", err)
+	}
+
+	err = storage.Mount(gateway.GatewayConfig.DefaultFilesystemPath)
+	if err != nil {
+		log.Fatalf("Unable to mount filesystem: %+v\n", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
@@ -158,6 +176,7 @@ func NewWorker() (*Worker, error) {
 		workerRepo:        workerRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
 		stopContainerChan: make(chan string, 1000),
+		storage:           storage,
 	}, nil
 }
 
