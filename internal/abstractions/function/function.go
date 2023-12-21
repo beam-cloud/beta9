@@ -63,7 +63,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		Cpu:        defaultFunctionContainerCpu,
 		Memory:     defaultFunctionContainerMemory,
 		ImageId:    in.ImageId,
-		EntryPoint: []string{in.PythonVersion, "-m", "beam.entry.function"},
+		EntryPoint: []string{in.PythonVersion, "-m", "beam.runner.function"},
 	})
 	if err != nil {
 		return err
