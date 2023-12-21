@@ -1,4 +1,5 @@
 import asyncio
+import os
 from abc import ABC, abstractmethod
 from typing import NamedTuple
 
@@ -21,5 +22,7 @@ class GatewayConfig(NamedTuple):
 
 
 def get_gateway_config() -> GatewayConfig:
-    config = GatewayConfig()
+    host = os.getenv("BEAM_GATEWAY_HOST", "0.0.0.0")
+    port = os.getenv("BEAM_GATEWAY_PORT", 1993)
+    config = GatewayConfig(host=host, port=port)
     return config

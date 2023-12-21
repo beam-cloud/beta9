@@ -18,7 +18,7 @@ const (
 	functionContainerPrefix        string        = "function-"
 	defaultFunctionContainerCpu    int64         = 1000
 	defaultFunctionContainerMemory int64         = 1024
-	functionArgsExpirationTimeout  time.Duration = 60 * time.Second
+	functionArgsExpirationTimeout  time.Duration = 600 * time.Second
 )
 
 type FunctionService interface {
@@ -58,6 +58,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		ContainerId: containerId,
 		Env: []string{
 			fmt.Sprintf("INVOCATION_ID=%s", invocationId),
+			"PYTHONUNBUFFERED=1",
 		},
 		Cpu:        defaultFunctionContainerCpu,
 		Memory:     defaultFunctionContainerMemory,
@@ -104,7 +105,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {
 	value, err := fs.rdb.Get(context.TODO(), Keys.FunctionArgs(in.InvocationId)).Bytes()
 	if err != nil {
-		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, err
+		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, nil
 	}
 
 	return &pb.FunctionGetArgsResponse{

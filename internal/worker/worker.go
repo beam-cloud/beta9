@@ -537,6 +537,8 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, contai
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("STATSD_HOST=%s", os.Getenv("STATSD_HOST")),
 		fmt.Sprintf("STATSD_PORT=%s", os.Getenv("STATSD_PORT")),
+		fmt.Sprintf("BEAM_GATEWAY_HOST=%s", os.Getenv("BEAM_GATEWAY_HOST")),
+		fmt.Sprintf("BEAM_GATEWAY_PORT=%s", os.Getenv("BEAM_GATEWAY_PORT")),
 	}
 	env = append(env, containerConfig.Env...)
 	env = append(env, request.Env...)
