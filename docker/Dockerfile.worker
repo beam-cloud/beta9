@@ -93,6 +93,9 @@ RUN git clone https://github.com/beam-cloud/nvidia-container-toolkit.git
 RUN cd /workspace/nvidia-container-toolkit && make build && make binaries
 RUN cp /workspace/nvidia-container-toolkit/nvidia-container-runtime* /usr/bin/
 
+# Install JuiceFS
+RUN curl -sSL https://d.juicefs.com/install | sh -
+
 COPY --from=skopeo-rootfs / /
 COPY --from=builder /usr/local/bin/worker /usr/local/bin/worker
 COPY ./sdk/src/beam /workspace/sdk
