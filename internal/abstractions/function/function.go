@@ -51,20 +51,35 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return errors.New("unable to store function args")
 	}
 
-	// ctx := stream.Context()
+	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
 
 	err = fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
-		Env:         []string{},
-		Cpu:         defaultFunctionContainerCpu,
-		Memory:      defaultFunctionContainerMemory,
-		ImageId:     in.ImageId,
-		EntryPoint:  []string{in.PythonVersion, "-m", "beam.entry.function"},
+		Env: []string{
+			fmt.Sprintf("INVOCATION_ID=%s", invocationId),
+		},
+		Cpu:        defaultFunctionContainerCpu,
+		Memory:     defaultFunctionContainerMemory,
+		ImageId:    in.ImageId,
+		EntryPoint: []string{in.PythonVersion, "-m", "beam.entry.function"},
 	})
 	if err != nil {
 		return err
 	}
+
+	hostname, err := fs.scheduler.ContainerRepo.GetContainerWorkerHostname(containerId)
+	if err != nil {
+		return err
+	}
+
+	// TODO: replace placeholder service token
+	client, err := common.NewRunCClient(hostname, "")
+	if err != nil {
+		return err
+	}
+
+	go client.StreamLogs(ctx, containerId, outputChan)
 
 	var lastMessage common.OutputMsg
 	for o := range outputChan {

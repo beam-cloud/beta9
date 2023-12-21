@@ -43,6 +43,12 @@ class Function(BaseAbstraction):
         self.channel.close()
 
     def remote(self):
+        import time
+
+        for i in range(1000):
+            print("I is: ", i)
+            time.sleep(1.0)
+
         invocation_id = os.getenv("INVOCATION_ID")
         if invocation_id is None:
             return
