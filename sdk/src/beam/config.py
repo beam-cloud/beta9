@@ -1,7 +1,8 @@
+import functools
 import os
 import sys
 from contextlib import contextmanager
-from typing import NamedTuple
+from typing import Any, Callable, NamedTuple
 
 from grpclib.client import Channel
 
@@ -44,3 +45,12 @@ def runner_context():
 
         if exit_code != 0:
             sys.exit(exit_code)
+
+
+def with_runner_context(func: Callable) -> Callable:
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with runner_context() as c:
+            return func(*args, **kwargs, channel=c)
+
+    return wrapper
