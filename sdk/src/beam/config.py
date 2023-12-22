@@ -1,4 +1,6 @@
 import os
+import sys
+from contextlib import contextmanager
 from typing import NamedTuple
 
 from grpclib.client import Channel
@@ -25,3 +27,20 @@ def get_gateway_channel() -> Channel:
         port=config.port,
         ssl=True if config.port == 443 else False,
     )
+
+
+@contextmanager
+def runner_context():
+    exit_code = 0
+
+    try:
+        channel: Channel = get_gateway_channel()
+        yield channel
+    except SystemExit as exc:
+        exit_code = exc.code
+        raise
+    finally:
+        channel.close()
+
+        if exit_code != 0:
+            sys.exit(exit_code)
