@@ -16,7 +16,7 @@ from beam.sync import FileSyncer
 
 
 class Function(BaseAbstraction):
-    def __init__(self, image: Image = Image()) -> None:
+    def __init__(self, image: Image = Image(), cpu: int = 100, memory: int = 128, gpu="") -> None:
         super().__init__()
 
         self.image: Image = image
@@ -24,6 +24,9 @@ class Function(BaseAbstraction):
         self.files_synced: bool = False
         self.object_id: str = ""
         self.image_id: str = ""
+        self.cpu = cpu
+        self.memory = memory
+        self.gpu = gpu
 
         self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
@@ -93,6 +96,9 @@ class _CallableWrapper:
                 args=args,
                 handler=handler,
                 python_version=self.parent.image.python_version,
+                cpu=self.parent.cpu,
+                memory=self.parent.memory,
+                gpu=self.parent.gpu,
             ):
                 terminal.detail(r.output)
 

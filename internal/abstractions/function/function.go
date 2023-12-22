@@ -28,6 +28,7 @@ const (
 type FunctionService interface {
 	FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error
 	FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error)
+	FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error)
 }
 
 type RunCFunctionService struct {
@@ -72,6 +73,15 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return fmt.Errorf("failed to unzip object file: %v", err)
 	}
 
+	// Don't allow negative compute requests
+	if in.Cpu <= 0 {
+		in.Cpu = defaultFunctionContainerCpu
+	}
+
+	if in.Memory <= 0 {
+		in.Memory = defaultFunctionContainerMemory
+	}
+
 	err = fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env: []string{
@@ -79,8 +89,9 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 			fmt.Sprintf("HANDLER=%s", in.Handler),
 			"PYTHONUNBUFFERED=1",
 		},
-		Cpu:        defaultFunctionContainerCpu,
-		Memory:     defaultFunctionContainerMemory,
+		Cpu:        in.Cpu,
+		Memory:     in.Memory,
+		Gpu:        in.Gpu,
 		ImageId:    in.ImageId,
 		EntryPoint: []string{in.PythonVersion, "-m", "beam.runner.function"},
 		Mounts: []types.Mount{

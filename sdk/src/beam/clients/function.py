@@ -15,6 +15,9 @@ class FunctionInvokeRequest(betterproto.Message):
     args: bytes = betterproto.bytes_field(3)
     handler: str = betterproto.string_field(4)
     python_version: str = betterproto.string_field(5)
+    cpu: int = betterproto.int64_field(6)
+    memory: int = betterproto.int64_field(7)
+    gpu: str = betterproto.string_field(8)
 
 
 @dataclass
@@ -57,6 +60,9 @@ class FunctionServiceStub(betterproto.ServiceStub):
         args: bytes = b"",
         handler: str = "",
         python_version: str = "",
+        cpu: int = 0,
+        memory: int = 0,
+        gpu: str = "",
     ) -> AsyncGenerator[FunctionInvokeResponse, None]:
         request = FunctionInvokeRequest()
         request.object_id = object_id
@@ -64,6 +70,9 @@ class FunctionServiceStub(betterproto.ServiceStub):
         request.args = args
         request.handler = handler
         request.python_version = python_version
+        request.cpu = cpu
+        request.memory = memory
+        request.gpu = gpu
 
         async for response in self._unary_stream(
             "/function.FunctionService/FunctionInvoke",
