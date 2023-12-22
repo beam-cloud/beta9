@@ -130,7 +130,7 @@ func (g *Gateway) Start() error {
 	pb.RegisterImageServiceServer(grpcServer, is)
 
 	// Register function service
-	fs, err := function.NewRuncFunctionService(context.TODO(), g.redisClient, g.Scheduler)
+	fs, err := function.NewRuncFunctionService(context.TODO(), g.redisClient, g.Scheduler, g.keyEventManager)
 	if err != nil {
 		return err
 	}

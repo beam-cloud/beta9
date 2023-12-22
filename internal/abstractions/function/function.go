@@ -33,14 +33,16 @@ type FunctionService interface {
 
 type RunCFunctionService struct {
 	pb.UnimplementedFunctionServiceServer
-	scheduler *scheduler.Scheduler
-	rdb       *common.RedisClient
+	scheduler       *scheduler.Scheduler
+	keyEventManager *common.KeyEventManager
+	rdb             *common.RedisClient
 }
 
-func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, scheduler *scheduler.Scheduler) (*RunCFunctionService, error) {
+func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, scheduler *scheduler.Scheduler, keyEventManager *common.KeyEventManager) (*RunCFunctionService, error) {
 	return &RunCFunctionService{
-		scheduler: scheduler,
-		rdb:       rdb,
+		scheduler:       scheduler,
+		rdb:             rdb,
+		keyEventManager: keyEventManager,
 	}, nil
 }
 
@@ -58,6 +60,9 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
+	keyEventChan := make(chan common.KeyEvent)
+
+	go fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
 
 	// Check if object exists & unzip
 	objectFilePath := path.Join(types.DefaultObjectPath, in.ObjectId)
@@ -115,16 +120,31 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 
 	go client.StreamLogs(ctx, containerId, outputChan)
 
-	var lastMessage common.OutputMsg
-	for o := range outputChan {
-		if err := stream.Send(&pb.FunctionInvokeResponse{Output: o.Msg, Done: o.Done}); err != nil {
-			lastMessage = o
-			break
-		}
+	return fs.handleStreams(ctx, stream, outputChan, keyEventChan)
+}
 
-		if o.Done {
-			lastMessage = o
-			break
+func (fs *RunCFunctionService) handleStreams(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, outputChan chan common.OutputMsg, keyEventChan chan common.KeyEvent) error {
+	var lastMessage common.OutputMsg
+
+_stream:
+	for {
+		select {
+		case o := <-outputChan:
+			if err := stream.Send(&pb.FunctionInvokeResponse{Output: o.Msg, Done: o.Done}); err != nil {
+				lastMessage = o
+				break
+			}
+
+			if o.Done {
+				lastMessage = o
+				break _stream
+			}
+		case <-keyEventChan:
+			if err := stream.Send(&pb.FunctionInvokeResponse{Done: true}); err != nil {
+				break
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 
