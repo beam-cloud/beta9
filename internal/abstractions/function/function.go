@@ -92,7 +92,6 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		Env: []string{
 			fmt.Sprintf("INVOCATION_ID=%s", invocationId),
 			fmt.Sprintf("HANDLER=%s", in.Handler),
-			"PYTHONUNBUFFERED=1",
 		},
 		Cpu:        in.Cpu,
 		Memory:     in.Memory,
