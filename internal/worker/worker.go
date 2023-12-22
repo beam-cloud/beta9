@@ -394,11 +394,9 @@ func (s *Worker) terminateContainer(containerId string, request *types.Container
 		*exitCode = 1
 	}
 
-	if *exitCode != 0 {
-		err := s.containerRepo.SetContainerExitCode(containerId, *exitCode)
-		if err != nil {
-			log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
-		}
+	err := s.containerRepo.SetContainerExitCode(containerId, *exitCode)
+	if err != nil {
+		log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
 	}
 
 	defer s.containerWg.Done()
