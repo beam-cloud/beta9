@@ -145,7 +145,7 @@ _stream:
 			}
 		case <-keyEventChan:
 			result, _ := fs.rdb.Get(context.TODO(), Keys.FunctionResult(invocationId)).Bytes()
-			if err := stream.Send(&pb.FunctionInvokeResponse{Done: true, Result: result}); err != nil {
+			if err := stream.Send(&pb.FunctionInvokeResponse{Done: true, Result: result, ExitCode: 0}); err != nil {
 				break
 			}
 		case <-ctx.Done():

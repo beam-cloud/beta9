@@ -111,7 +111,7 @@ class _CallableWrapper:
         with terminal.progress("Working..."):
             last_response: FunctionInvokeResponse = self.parent.loop.run_until_complete(_call())
 
-        if not last_response.done:
+        if not last_response.done or last_response.exit_code != 0:
             terminal.error("Function failed ☠️")
             return None
 
