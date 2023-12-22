@@ -100,7 +100,8 @@ class _CallableWrapper:
                 memory=self.parent.memory,
                 gpu=self.parent.gpu,
             ):
-                terminal.detail(r.output)
+                if r.output != "":
+                    terminal.detail(r.output)
 
                 if r.done:
                     last_response = r
