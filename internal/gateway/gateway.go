@@ -15,7 +15,6 @@ import (
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/storage"
-	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
 	beat "github.com/beam-cloud/beat/pkg"
 	"google.golang.org/grpc"
@@ -100,7 +99,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.keyEventManager = keyEventManager
 	gateway.beatService = beatService
 
-	go gateway.keyEventManager.ListenForPattern(gateway.ctx, common.RedisKeys.SchedulerContainerState(types.DeploymentContainerPrefix), gateway.keyEventChan)
+	// go gateway.keyEventManager.ListenForPattern(gateway.ctx, common.RedisKeys.SchedulerContainerState(types.DeploymentContainerPrefix), gateway.keyEventChan)
 	go gateway.beatService.Run(gateway.ctx)
 	// go gateway.eventBus.ReceiveEvents(gateway.ctx)
 

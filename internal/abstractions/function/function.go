@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"time"
 
 	"github.com/beam-cloud/beam/internal/common"
@@ -57,7 +58,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	outputChan := make(chan common.OutputMsg)
 
 	// Check if object exists & unzip
-	objectFilePath := fmt.Sprintf("/data/objects/%s", in.ObjectId)
+	objectFilePath := path.Join(types.DefaultObjectPath, in.ObjectId)
 	if _, err := os.Stat(objectFilePath); os.IsNotExist(err) {
 		stream.Send(&pb.FunctionInvokeResponse{Done: true, ExitCode: 1})
 		return errors.New("object file does not exist")
@@ -76,7 +77,6 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 			fmt.Sprintf("INVOCATION_ID=%s", invocationId),
 			fmt.Sprintf("HANDLER=%s", in.Handler),
 			"PYTHONUNBUFFERED=1",
-			"IS_REMOTE=true",
 		},
 		Cpu:        defaultFunctionContainerCpu,
 		Memory:     defaultFunctionContainerMemory,
