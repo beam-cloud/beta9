@@ -531,7 +531,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 	// Send last log message since the container has exited
 	outputChan <- common.OutputMsg{
-		Msg:     "",
+		Msg:     err.Error(),
 		Done:    true,
 		Success: err == nil,
 	}
