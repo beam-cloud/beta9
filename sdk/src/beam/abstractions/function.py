@@ -1,3 +1,5 @@
+import inspect
+import os
 from typing import Any, Callable, Union
 
 import cloudpickle
@@ -37,6 +39,10 @@ class _CallableWrapper:
         self.parent: Function = parent
 
     def __call__(self, *args, **kwargs):
+        remote = os.getenv("IS_REMOTE")
+        if remote == "true":
+            return self.local(self, *args, **kwargs)
+
         if not self.parent.image_available:
             image_build_result: ImageBuildResult = self.parent.image.build()
 
@@ -55,6 +61,17 @@ class _CallableWrapper:
             else:
                 return
 
+        # Determine module / function name
+        module = inspect.getmodule(self.func)
+        if module:
+            module_file = os.path.basename(module.__file__)
+            module_name = os.path.splitext(module_file)[0]
+        else:
+            module_name = "__main__"
+
+        function_name = self.func.__name__
+        handler = f"{module_name}:{function_name}"
+
         args = cloudpickle.dumps(
             {
                 "args": args,
@@ -62,13 +79,10 @@ class _CallableWrapper:
             },
         )
 
-        return self._invoke_remote(args=args, handler="test.test.test")
+        return self._invoke_remote(args=args, handler=handler)
 
     def _invoke_remote(self, *, args: bytes, handler: str):
         terminal.header("Running function")
-
-        terminal.detail(f"Image ID: {self.parent.image_id}")
-        terminal.detail(f"Object ID: {self.parent.object_id}")
 
         async def _call() -> FunctionInvokeResponse:
             last_response: Union[None, FunctionInvokeResponse] = None

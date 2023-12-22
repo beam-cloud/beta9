@@ -632,7 +632,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	os.MkdirAll(containerConfig.WorkspacePath, os.FileMode(0755))
 
 	// Add bind mounts to runc spec
-	for _, m := range containerConfig.Mounts {
+	for _, m := range request.Mounts {
 		mode := "rw"
 		if m.ReadOnly {
 			mode = "r"

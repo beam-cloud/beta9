@@ -19,3 +19,9 @@ type ContainerResourceUsage struct {
 	GpuMemoryTotal    int64  `json:"GpuMemoryTotal"`
 	GpuType           string `json:"GpuType"`
 }
+
+type Mount struct {
+	LocalPath string `json:"local_path"`
+	MountPath string `json:"mount_path"`
+	ReadOnly  bool   `json:"read_only"`
+}

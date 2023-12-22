@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/beam-cloud/beam/internal/common"
@@ -12,6 +13,7 @@ import (
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
 	"github.com/google/uuid"
+	"github.com/mholt/archiver/v3"
 )
 
 const (
@@ -54,16 +56,35 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
 
+	// Check if object exists & unzip
+	objectFilePath := fmt.Sprintf("/data/objects/%s", in.ObjectId)
+	if _, err := os.Stat(objectFilePath); os.IsNotExist(err) {
+		stream.Send(&pb.FunctionInvokeResponse{Done: true, ExitCode: 1})
+		return errors.New("object file does not exist")
+	}
+
+	destPath := fmt.Sprintf("/data/function/%s", invocationId)
+	zip := archiver.NewZip()
+	if err := zip.Unarchive(objectFilePath, destPath); err != nil {
+		stream.Send(&pb.FunctionInvokeResponse{Done: true, ExitCode: 1})
+		return fmt.Errorf("failed to unzip object file: %v", err)
+	}
+
 	err = fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env: []string{
 			fmt.Sprintf("INVOCATION_ID=%s", invocationId),
+			fmt.Sprintf("HANDLER=%s", in.Handler),
 			"PYTHONUNBUFFERED=1",
+			"IS_REMOTE=true",
 		},
 		Cpu:        defaultFunctionContainerCpu,
 		Memory:     defaultFunctionContainerMemory,
 		ImageId:    in.ImageId,
 		EntryPoint: []string{in.PythonVersion, "-m", "beam.runner.function"},
+		Mounts: []types.Mount{
+			{LocalPath: fmt.Sprintf("/data/function/%s", invocationId), MountPath: "/code", ReadOnly: true},
+		},
 	})
 	if err != nil {
 		return err
