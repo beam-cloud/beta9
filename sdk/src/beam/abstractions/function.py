@@ -113,10 +113,10 @@ class _CallableWrapper:
 
         if not last_response.done:
             terminal.error("Function failed ☠️")
-            return False
+            return None
 
         terminal.header("Function complete 🎉")
-        return True
+        return cloudpickle.loads(last_response.result)
 
     def local(self, *args, **kwargs) -> Any:
         return self.func(*args, **kwargs)

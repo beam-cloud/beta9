@@ -120,10 +120,14 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 
 	go client.StreamLogs(ctx, containerId, outputChan)
 
-	return fs.handleStreams(ctx, stream, outputChan, keyEventChan)
+	return fs.handleStreams(ctx, stream, invocationId, containerId, outputChan, keyEventChan)
 }
 
-func (fs *RunCFunctionService) handleStreams(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, outputChan chan common.OutputMsg, keyEventChan chan common.KeyEvent) error {
+func (fs *RunCFunctionService) handleStreams(ctx context.Context,
+	stream pb.FunctionService_FunctionInvokeServer,
+	invocationId string, containerId string,
+	outputChan chan common.OutputMsg, keyEventChan chan common.KeyEvent) error {
+
 	var lastMessage common.OutputMsg
 
 _stream:
@@ -140,7 +144,8 @@ _stream:
 				break _stream
 			}
 		case <-keyEventChan:
-			if err := stream.Send(&pb.FunctionInvokeResponse{Done: true}); err != nil {
+			result, _ := fs.rdb.Get(context.TODO(), Keys.FunctionResult(invocationId)).Bytes()
+			if err := stream.Send(&pb.FunctionInvokeResponse{Done: true, Result: result}); err != nil {
 				break
 			}
 		case <-ctx.Done():

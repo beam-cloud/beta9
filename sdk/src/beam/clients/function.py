@@ -25,6 +25,7 @@ class FunctionInvokeResponse(betterproto.Message):
     output: str = betterproto.string_field(1)
     done: bool = betterproto.bool_field(2)
     exit_code: int = betterproto.uint32_field(3)
+    result: bytes = betterproto.bytes_field(4)
 
 
 @dataclass

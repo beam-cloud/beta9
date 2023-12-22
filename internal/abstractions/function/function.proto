@@ -28,6 +28,7 @@ message FunctionInvokeResponse {
   string output = 1;
   bool done = 2;
   uint32 exit_code = 3;
+  bytes result = 4;
 }
 
 message FunctionGetArgsRequest { string invocation_id = 1; }
