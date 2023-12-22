@@ -39,9 +39,9 @@ class _CallableWrapper:
         self.parent: Function = parent
 
     def __call__(self, *args, **kwargs):
-        remote = os.getenv("IS_REMOTE")
-        if remote == "true":
-            return self.local(self, *args, **kwargs)
+        invocation_id = os.getenv("INVOCATION_ID")
+        if invocation_id:
+            return self.local(*args, **kwargs)
 
         if not self.parent.image_available:
             image_build_result: ImageBuildResult = self.parent.image.build()
@@ -113,7 +113,7 @@ class _CallableWrapper:
         return True
 
     def local(self, *args, **kwargs) -> Any:
-        return self.func(1)  # , kwargs)  # , **kwargs)
+        return self.func(*args, **kwargs)
 
     def remote(self, *args, **kwargs) -> Any:
         return self(*args, **kwargs)

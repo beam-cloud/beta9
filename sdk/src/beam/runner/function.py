@@ -51,7 +51,7 @@ def main(channel: Channel):
         raise RunnerException()
 
     args: dict = cloudpickle.loads(r.args)
-    handler(args.get("args", ()), args.get("kwargs", {}))
+    handler(*args.get("args", ()), **args.get("kwargs", {}))
 
 
 if __name__ == "__main__":
