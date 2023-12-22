@@ -529,9 +529,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		Started:      pidChan,
 	})
 
+	errMessage := ""
+	if err != nil {
+		errMessage = err.Error()
+	}
+
 	// Send last log message since the container has exited
 	outputChan <- common.OutputMsg{
-		Msg:     err.Error(),
+		Msg:     errMessage,
 		Done:    true,
 		Success: err == nil,
 	}
