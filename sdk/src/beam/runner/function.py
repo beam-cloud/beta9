@@ -52,7 +52,7 @@ def main(channel: Channel):
 
     result = cloudpickle.dumps(result)
     set_result_resp: FunctionSetResultResponse = run_sync(
-        function_stub.function_set_result(invocation_id=invocation_id, exit_code=0, result=result),
+        function_stub.function_set_result(invocation_id=invocation_id, result=result),
     )
     if not set_result_resp.ok:
         raise RunnerException()

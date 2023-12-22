@@ -39,11 +39,7 @@ message FunctionGetArgsResponse {
 
 message FunctionSetResultRequest {
   string invocation_id = 1;
-  uint32 exit_code = 2;
-  bytes result = 3;
+  bytes result = 2;
 }
 
-message FunctionSetResultResponse {
-  bool ok = 1;
-  bytes args = 2;
-}
+message FunctionSetResultResponse { bool ok = 1; }
