@@ -10,6 +10,7 @@ from beam.aio import run_sync
 from beam.clients.function import (
     FunctionGetArgsResponse,
     FunctionServiceStub,
+    FunctionSetResultResponse,
 )
 from beam.config import with_runner_context
 from beam.exceptions import RunnerException
@@ -40,14 +41,21 @@ def main(channel: Channel):
         raise RunnerException()
 
     handler = _load_handler()
-    r: FunctionGetArgsResponse = run_sync(
+    get_args_resp: FunctionGetArgsResponse = run_sync(
         function_stub.function_get_args(invocation_id=invocation_id),
     )
-    if not r.ok:
+    if not get_args_resp.ok:
         raise RunnerException()
 
-    args: dict = cloudpickle.loads(r.args)
-    handler(*args.get("args", ()), **args.get("kwargs", {}))
+    args: dict = cloudpickle.loads(get_args_resp.args)
+    result = handler(*args.get("args", ()), **args.get("kwargs", {}))
+
+    result = cloudpickle.dumps(result)
+    set_result_resp: FunctionSetResultResponse = run_sync(
+        function_stub.function_set_result(invocation_id=invocation_id, exit_code=0, result=result),
+    )
+    if not set_result_resp.ok:
+        raise RunnerException()
 
 
 if __name__ == "__main__":
