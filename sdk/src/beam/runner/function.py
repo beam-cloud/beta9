@@ -1,6 +1,7 @@
 import importlib
 import os
 import sys
+import traceback
 from typing import Callable
 
 import cloudpickle
@@ -28,6 +29,7 @@ def _load_handler() -> Callable:
         method = getattr(target_module, func)
         return method
     except BaseException:
+        print(traceback.format_exc())
         raise RunnerException()
 
 
@@ -49,7 +51,7 @@ def main(channel: Channel):
         raise RunnerException()
 
     args: dict = cloudpickle.loads(r.args)
-    handler(*args["args"], **args["kwargs"])
+    handler(args.get("args", ()), args.get("kwargs", {}))
 
 
 if __name__ == "__main__":

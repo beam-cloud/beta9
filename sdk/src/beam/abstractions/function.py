@@ -113,7 +113,7 @@ class _CallableWrapper:
         return True
 
     def local(self, *args, **kwargs) -> Any:
-        return self.func(*args, **kwargs)
+        return self.func(1)  # , kwargs)  # , **kwargs)
 
     def remote(self, *args, **kwargs) -> Any:
         return self(*args, **kwargs)
