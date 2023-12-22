@@ -1,7 +1,6 @@
 import importlib
 import os
 import sys
-import traceback
 from typing import Callable
 
 import cloudpickle
@@ -29,15 +28,12 @@ def _load_handler() -> Callable:
         method = getattr(target_module, func)
         return method
     except BaseException:
-        print(traceback.format_exc())
         raise RunnerException()
 
 
 @with_runner_context
 def main(channel: Channel):
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
-
-    print(os.listdir("/code"))
 
     invocation_id = os.getenv("INVOCATION_ID")
     if not invocation_id:
