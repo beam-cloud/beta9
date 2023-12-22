@@ -35,6 +35,19 @@ class FunctionGetArgsResponse(betterproto.Message):
     args: bytes = betterproto.bytes_field(2)
 
 
+@dataclass
+class FunctionSetResultRequest(betterproto.Message):
+    invocation_id: str = betterproto.string_field(1)
+    exit_code: int = betterproto.uint32_field(2)
+    result: bytes = betterproto.bytes_field(3)
+
+
+@dataclass
+class FunctionSetResultResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    args: bytes = betterproto.bytes_field(2)
+
+
 class FunctionServiceStub(betterproto.ServiceStub):
     async def function_invoke(
         self,
@@ -69,4 +82,18 @@ class FunctionServiceStub(betterproto.ServiceStub):
             "/function.FunctionService/FunctionGetArgs",
             request,
             FunctionGetArgsResponse,
+        )
+
+    async def function_set_result(
+        self, *, invocation_id: str = "", exit_code: int = 0, result: bytes = b""
+    ) -> FunctionSetResultResponse:
+        request = FunctionSetResultRequest()
+        request.invocation_id = invocation_id
+        request.exit_code = exit_code
+        request.result = result
+
+        return await self._unary_unary(
+            "/function.FunctionService/FunctionSetResult",
+            request,
+            FunctionSetResultResponse,
         )

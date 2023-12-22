@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	FunctionService_FunctionInvoke_FullMethodName  = "/function.FunctionService/FunctionInvoke"
-	FunctionService_FunctionGetArgs_FullMethodName = "/function.FunctionService/FunctionGetArgs"
+	FunctionService_FunctionInvoke_FullMethodName    = "/function.FunctionService/FunctionInvoke"
+	FunctionService_FunctionGetArgs_FullMethodName   = "/function.FunctionService/FunctionGetArgs"
+	FunctionService_FunctionSetResult_FullMethodName = "/function.FunctionService/FunctionSetResult"
 )
 
 // FunctionServiceClient is the client API for FunctionService service.
@@ -29,6 +30,7 @@ const (
 type FunctionServiceClient interface {
 	FunctionInvoke(ctx context.Context, in *FunctionInvokeRequest, opts ...grpc.CallOption) (FunctionService_FunctionInvokeClient, error)
 	FunctionGetArgs(ctx context.Context, in *FunctionGetArgsRequest, opts ...grpc.CallOption) (*FunctionGetArgsResponse, error)
+	FunctionSetResult(ctx context.Context, in *FunctionSetResultRequest, opts ...grpc.CallOption) (*FunctionSetResultResponse, error)
 }
 
 type functionServiceClient struct {
@@ -80,12 +82,22 @@ func (c *functionServiceClient) FunctionGetArgs(ctx context.Context, in *Functio
 	return out, nil
 }
 
+func (c *functionServiceClient) FunctionSetResult(ctx context.Context, in *FunctionSetResultRequest, opts ...grpc.CallOption) (*FunctionSetResultResponse, error) {
+	out := new(FunctionSetResultResponse)
+	err := c.cc.Invoke(ctx, FunctionService_FunctionSetResult_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FunctionServiceServer is the server API for FunctionService service.
 // All implementations must embed UnimplementedFunctionServiceServer
 // for forward compatibility
 type FunctionServiceServer interface {
 	FunctionInvoke(*FunctionInvokeRequest, FunctionService_FunctionInvokeServer) error
 	FunctionGetArgs(context.Context, *FunctionGetArgsRequest) (*FunctionGetArgsResponse, error)
+	FunctionSetResult(context.Context, *FunctionSetResultRequest) (*FunctionSetResultResponse, error)
 	mustEmbedUnimplementedFunctionServiceServer()
 }
 
@@ -98,6 +110,9 @@ func (UnimplementedFunctionServiceServer) FunctionInvoke(*FunctionInvokeRequest,
 }
 func (UnimplementedFunctionServiceServer) FunctionGetArgs(context.Context, *FunctionGetArgsRequest) (*FunctionGetArgsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method FunctionGetArgs not implemented")
+}
+func (UnimplementedFunctionServiceServer) FunctionSetResult(context.Context, *FunctionSetResultRequest) (*FunctionSetResultResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FunctionSetResult not implemented")
 }
 func (UnimplementedFunctionServiceServer) mustEmbedUnimplementedFunctionServiceServer() {}
 
@@ -151,6 +166,24 @@ func _FunctionService_FunctionGetArgs_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FunctionService_FunctionSetResult_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FunctionSetResultRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FunctionServiceServer).FunctionSetResult(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FunctionService_FunctionSetResult_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FunctionServiceServer).FunctionSetResult(ctx, req.(*FunctionSetResultRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FunctionService_ServiceDesc is the grpc.ServiceDesc for FunctionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -161,6 +194,10 @@ var FunctionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "FunctionGetArgs",
 			Handler:    _FunctionService_FunctionGetArgs_Handler,
+		},
+		{
+			MethodName: "FunctionSetResult",
+			Handler:    _FunctionService_FunctionSetResult_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

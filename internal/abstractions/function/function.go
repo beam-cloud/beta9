@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	functionContainerPrefix        string        = "function-"
-	defaultFunctionContainerCpu    int64         = 1000
-	defaultFunctionContainerMemory int64         = 1024
-	functionArgsExpirationTimeout  time.Duration = 600 * time.Second
+	functionContainerPrefix         string        = "function-"
+	defaultFunctionContainerCpu     int64         = 100
+	defaultFunctionContainerMemory  int64         = 128
+	functionArgsExpirationTimeout   time.Duration = 600 * time.Second
+	functionResultExpirationTimeout time.Duration = 600 * time.Second
 )
 
 type FunctionService interface {
@@ -132,6 +133,17 @@ func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.Funct
 	return &pb.FunctionGetArgsResponse{
 		Ok:   true,
 		Args: value,
+	}, nil
+}
+
+func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error) {
+	err := fs.rdb.Set(context.TODO(), Keys.FunctionResult(in.InvocationId), in.Result, functionResultExpirationTimeout).Err()
+	if err != nil {
+		return &pb.FunctionSetResultResponse{Ok: false}, nil
+	}
+
+	return &pb.FunctionSetResultResponse{
+		Ok: true,
 	}, nil
 }
 

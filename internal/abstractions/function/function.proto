@@ -9,6 +9,8 @@ service FunctionService {
       returns (stream FunctionInvokeResponse) {}
   rpc FunctionGetArgs(FunctionGetArgsRequest)
       returns (FunctionGetArgsResponse) {}
+  rpc FunctionSetResult(FunctionSetResultRequest)
+      returns (FunctionSetResultResponse) {}
 }
 
 message FunctionInvokeRequest {
@@ -27,6 +29,17 @@ message FunctionInvokeResponse {
 
 message FunctionGetArgsRequest { string invocation_id = 1; }
 message FunctionGetArgsResponse {
+  bool ok = 1;
+  bytes args = 2;
+}
+
+message FunctionSetResultRequest {
+  string invocation_id = 1;
+  uint32 exit_code = 2;
+  bytes result = 3;
+}
+
+message FunctionSetResultResponse {
   bool ok = 1;
   bytes args = 2;
 }
