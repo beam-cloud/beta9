@@ -15,9 +15,11 @@ from beam.clients.function import (
 from beam.config import with_runner_context
 from beam.exceptions import RunnerException
 
+USER_CODE_VOLUME = "/mnt/code"
+
 
 def _load_handler() -> Callable:
-    sys.path.insert(0, "/code")
+    sys.path.insert(0, USER_CODE_VOLUME)
 
     handler = os.getenv("HANDLER")
     if not handler:

@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	DefaultObjectPath        string        = "/data/objects"
-	DefaultFilesystemPath    string        = "/data"
-	FailedContainerThreshold int           = 3
-	RequestTimeoutDurationS  time.Duration = 175 * time.Second
+	DefaultExtractedObjectPath string        = "/data/unpacked"
+	DefaultObjectPath          string        = "/data/objects"
+	DefaultFilesystemPath      string        = "/data"
+	FailedContainerThreshold   int           = 3
+	RequestTimeoutDurationS    time.Duration = 175 * time.Second
 )
 
 type RequestBucketType uint

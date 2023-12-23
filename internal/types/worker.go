@@ -9,6 +9,7 @@ const (
 	WorkerLifecycleStatsKey        string        = "beam.worker.usage.spawner.lifecycle"
 	WorkerDurationStatsKey         string        = "beam.worker.usage.spawner.duration"
 	WorkerDurationEmissionInterval time.Duration = 30 * time.Second
+	WorkerUserCodeVolume           string        = "/mnt/code"
 )
 
 type ContainerResourceUsage struct {

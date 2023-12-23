@@ -64,18 +64,9 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 
 	go fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
 
-	// Check if object exists & unzip
-	objectFilePath := path.Join(types.DefaultObjectPath, in.ObjectId)
-	if _, err := os.Stat(objectFilePath); os.IsNotExist(err) {
-		stream.Send(&pb.FunctionInvokeResponse{Done: true, ExitCode: 1})
-		return errors.New("object file does not exist")
-	}
-
-	destPath := fmt.Sprintf("/data/function/%s", invocationId)
-	zip := archiver.NewZip()
-	if err := zip.Unarchive(objectFilePath, destPath); err != nil {
-		stream.Send(&pb.FunctionInvokeResponse{Done: true, ExitCode: 1})
-		return fmt.Errorf("failed to unzip object file: %v", err)
+	err = fs.extractObjectFile(in.ObjectId, stream)
+	if err != nil {
+		return err
 	}
 
 	// Don't allow negative compute requests
@@ -99,7 +90,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		ImageId:    in.ImageId,
 		EntryPoint: []string{in.PythonVersion, "-m", "beam.runner.function"},
 		Mounts: []types.Mount{
-			{LocalPath: fmt.Sprintf("/data/function/%s", invocationId), MountPath: "/code", ReadOnly: true},
+			{LocalPath: path.Join(types.DefaultExtractedObjectPath, in.ObjectId), MountPath: types.WorkerUserCodeVolume, ReadOnly: true},
 		},
 	})
 	if err != nil {
@@ -154,6 +145,29 @@ _stream:
 
 	if !lastMessage.Success {
 		return errors.New("function invocation failed")
+	}
+
+	return nil
+}
+
+func (fs *RunCFunctionService) extractObjectFile(objectId string, stream pb.FunctionService_FunctionInvokeServer) error {
+	destPath := path.Join(types.DefaultExtractedObjectPath, objectId)
+	if _, err := os.Stat(destPath); !os.IsNotExist(err) {
+		// Folder already exists, so skip extraction
+		return nil
+	}
+
+	// Check if the object file exists
+	objectFilePath := path.Join(types.DefaultObjectPath, objectId)
+	if _, err := os.Stat(objectFilePath); os.IsNotExist(err) {
+		stream.Send(&pb.FunctionInvokeResponse{Done: true, ExitCode: 1})
+		return errors.New("object file does not exist")
+	}
+
+	zip := archiver.NewZip()
+	if err := zip.Unarchive(objectFilePath, destPath); err != nil {
+		stream.Send(&pb.FunctionInvokeResponse{Done: true, ExitCode: 1})
+		return fmt.Errorf("failed to unzip object file: %v", err)
 	}
 
 	return nil
