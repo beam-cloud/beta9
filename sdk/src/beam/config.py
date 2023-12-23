@@ -40,6 +40,8 @@ def runner_context():
     except SystemExit as exc:
         exit_code = exc.code
         raise
+    except BaseException:
+        exit_code = 1
     finally:
         channel.close()
 
