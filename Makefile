@@ -1,7 +1,11 @@
 SHELL := /bin/bash
 imageVersion := latest
 
-init:
+setup:
+	make k3d-up beam-runner beam-worker beam
+	kubectl delete pod -l app=beam
+
+setup-sdk:
 	poetry install -C sdk
 
 k3d-up:
