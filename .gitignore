@@ -6,4 +6,8 @@ tmp/*
 __pycache__
 *.tmp
 .secrets
-.venv/
+.k3d
+.venv
+venv
+.python-version
+.DS_Store

@@ -21,6 +21,8 @@ class PythonVersion(str, Enum):
     Python38 = "python3.8"
     Python39 = "python3.9"
     Python310 = "python3.10"
+    Python311 = "python3.11"
+    Python312 = "python3.12"
 
 
 class GpuType(str, Enum):

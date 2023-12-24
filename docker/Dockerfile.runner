@@ -1,0 +1,181 @@
+# syntax=docker/dockerfile:1.6
+FROM ubuntu:20.04 as ubuntu
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN <<EOT
+apt-get update
+apt-get install -y software-properties-common curl git
+add-apt-repository ppa:deadsnakes/ppa
+apt-get update
+EOT
+
+
+# Python 3.12
+# ========================
+FROM ubuntu as py312
+
+WORKDIR /workspace
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    NVIDIA_VISIBLE_DEVICES=all
+
+RUN <<EOT
+set -eux
+
+# Install python and dependencies
+apt-get install -y python3.12 python3.12-dev python3.12-distutils
+
+# Get the latest pip version
+curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
+python3.12 -m pip install --upgrade distlib setuptools pip
+
+# Set default python
+rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/python3.12 /usr/bin/python && ln -s /usr/bin/python3.12 /usr/bin/python3
+
+# Clean up
+apt-get clean -y
+apt-get autoremove -y
+rm -rf /var/lib/apt/lists/*
+rm -rf /usr/share/doc
+rm -rf /root/.cache/*
+rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
+EOT
+
+VOLUME ["/volumes", "/snapshot", "/outputs", "/packages"]
+
+
+# Python 3.11
+# ========================
+FROM ubuntu as py311
+
+WORKDIR /workspace
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    NVIDIA_VISIBLE_DEVICES=all
+
+RUN <<EOT
+set -eux
+
+# Install python and dependencies
+apt-get install -y python3.11 python3.11-dev python3.11-distutils
+
+# Get the latest pip version
+curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+python3.11 -m pip install --upgrade distlib setuptools pip
+
+# Set default python
+rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/python3.11 /usr/bin/python && ln -s /usr/bin/python3.11 /usr/bin/python3
+
+# Clean up
+apt-get clean -y
+apt-get autoremove -y
+rm -rf /var/lib/apt/lists/*
+rm -rf /usr/share/doc
+rm -rf /root/.cache/*
+rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
+EOT
+
+VOLUME ["/volumes", "/snapshot", "/outputs", "/packages"]
+
+
+# Python 3.10
+# ========================
+FROM ubuntu as py310
+
+WORKDIR /workspace
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    NVIDIA_VISIBLE_DEVICES=all
+
+RUN <<EOT
+set -eux
+
+# Install python and dependencies
+apt-get install -y python3.10 python3.10-dev python3.10-distutils
+
+# Get the latest pip version
+curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
+python3.10 -m pip install --upgrade distlib setuptools pip
+
+# Set default python
+rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/python3.10 /usr/bin/python && ln -s /usr/bin/python3.10 /usr/bin/python3
+
+# Clean up
+apt-get clean -y
+apt-get autoremove -y
+rm -rf /var/lib/apt/lists/*
+rm -rf /usr/share/doc
+rm -rf /root/.cache/*
+rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
+EOT
+
+VOLUME ["/volumes", "/snapshot", "/outputs", "/packages"]
+
+
+# Python 3.9
+# ========================
+FROM ubuntu as py39
+
+WORKDIR /workspace
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    NVIDIA_VISIBLE_DEVICES=all
+
+RUN <<EOT
+set -eux
+
+# Install python and dependencies
+apt-get install -y python3.9 python3.9-dev python3.9-distutils
+
+# Get the latest pip version
+curl -sS https://bootstrap.pypa.io/get-pip.py | python3.9
+python3.9 -m pip install --upgrade distlib setuptools pip
+
+# Set default python
+rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/python3.9 /usr/bin/python && ln -s /usr/bin/python3.9 /usr/bin/python3
+
+# Clean up
+apt-get clean -y
+apt-get autoremove -y
+rm -rf /var/lib/apt/lists/*
+rm -rf /usr/share/doc
+rm -rf /root/.cache/*
+rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
+EOT
+
+VOLUME ["/volumes", "/snapshot", "/outputs", "/packages"]
+
+
+# Python 3.8
+# ========================
+FROM ubuntu as py38
+
+WORKDIR /workspace
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    NVIDIA_VISIBLE_DEVICES=all
+
+RUN <<EOT
+set -eux
+
+# Install python and dependencies
+apt-get install -y python3.8 python3.8-dev python3.8-distutils
+
+# Get the latest pip version
+curl -sS https://bootstrap.pypa.io/get-pip.py | python3.8
+python3.8 -m pip install --upgrade distlib setuptools pip
+
+# Set default python
+rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/python3.8 /usr/bin/python && ln -s /usr/bin/python3.8 /usr/bin/python3
+
+# Clean up
+apt-get clean -y
+apt-get autoremove -y
+rm -rf /var/lib/apt/lists/*
+rm -rf /usr/share/doc
+rm -rf /root/.cache/*
+rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
+EOT
+
+VOLUME ["/volumes", "/snapshot", "/outputs", "/packages"]

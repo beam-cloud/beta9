@@ -1,0 +1,20 @@
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: localstack
+  namespace: beam
+spec:
+  repo: https://localstack.github.io/helm-charts
+  chart: localstack
+  createNamespace: false
+  version: 0.6.5
+  valuesContent: |-
+    extraEnvVars:
+    - name: SERVICES
+      value: "kinesis,s3"
+    persistence:
+      enabled: true
+      storageClass: local-path
+      accessModes:
+      - ReadWriteOnce
+      size: 50Gi

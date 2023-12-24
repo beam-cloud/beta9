@@ -23,7 +23,7 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 
-	runc "github.com/slai-labs/go-runc"
+	runc "github.com/beam-cloud/go-runc"
 )
 
 const (
@@ -45,6 +45,7 @@ type ImageClient struct {
 	CommandTimeout int
 	Debug          bool
 	Creds          string
+	VerifyTLS      bool
 }
 
 func NewImageClient() (*ImageClient, error) {
@@ -62,6 +63,8 @@ func NewImageClient() (*ImageClient, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	verifyTLS := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_TLS_VERIFY", "true") != "false"
 
 	cacheUrl, cacheUrlSet := os.LookupEnv("BEAM_CACHE_URL")
 	var cacheClient *CacheClient = nil
@@ -88,6 +91,7 @@ func NewImageClient() (*ImageClient, error) {
 		CommandTimeout: -1,
 		Debug:          false,
 		Creds:          creds,
+		VerifyTLS:      verifyTLS,
 	}, nil
 }
 
@@ -145,6 +149,10 @@ func (i *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
+
+	if !i.VerifyTLS {
+		args = append(args, []string{"--src-tls-verify=false", "--dest-tls-verify=false"}...)
+	}
 
 	args = append(args, i.args(creds)...)
 	cmd := exec.CommandContext(ctx, i.PullCommand, args...)
@@ -303,17 +311,17 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 		// outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to archive image."}
 		return err
 	}
-	log.Printf("container <%v> archive took %v", imageId, time.Since(startTime))
+	log.Printf("container <%v> archive took %v\n", imageId, time.Since(startTime))
 
 	// Push the archive to a registry
 	startTime = time.Now()
 	err = i.registry.Push(ctx, archivePath, imageId)
 	if err != nil {
-		log.Printf("failed to push image for image <%v>: %v", imageId, err)
+		log.Printf("failed to push image for image <%v>: %v\n", imageId, err)
 		// outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to push image."}
 		return err
 	}
 
-	log.Printf("container <%v> push took %v", imageId, time.Since(startTime))
+	log.Printf("container <%v> push took %v\n", imageId, time.Since(startTime))
 	return nil
 }

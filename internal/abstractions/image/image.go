@@ -74,7 +74,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 	var lastMessage common.OutputMsg
 	for o := range outputChan {
-		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: ""}); err != nil {
+		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId}); err != nil {
 			log.Println("failed to complete build: ", err)
 			lastMessage = o
 			break
@@ -108,6 +108,12 @@ func (is *RuncImageService) getBaseImageTag(pythonVersion string) string {
 
 	case "python3.10":
 		baseImageTag = fmt.Sprintf("py310-%s", common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_TAG"))
+
+	case "python3.11":
+		baseImageTag = fmt.Sprintf("py311-%s", common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_TAG"))
+
+	case "python3.12":
+		baseImageTag = fmt.Sprintf("py312-%s", common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_TAG"))
 	}
 
 	return baseImageTag

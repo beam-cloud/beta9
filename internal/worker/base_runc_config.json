@@ -1,5 +1,5 @@
 {
-	"ociVersion": "1.0.2-dev",
+	"ociVersion": "1.1.0+dev",
 	"process": {
 		"terminal": false,
 		"user": {
@@ -238,6 +238,32 @@
 				"noexec",
 				"nodev"
 			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.11/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.12/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
 		}
 	],
 	"hooks": {
@@ -246,7 +272,7 @@
 				"path": "/usr/bin/nvidia-container-runtime-hook",
 				"args": [
 					"/usr/bin/nvidia-container-runtime-hook",
-					"-ociconfig"
+					"-config"
 				]
 			}
 		]

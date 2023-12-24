@@ -77,10 +77,10 @@ func NewGateway() (*Gateway, error) {
 		Scheduler:        Scheduler,
 	}
 
-	beamRepo, err := repository.NewBeamPostgresRepository()
-	if err != nil {
-		return nil, err
-	}
+	// beamRepo, err := repository.NewBeamPostgresRepository()
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	metricsRepo := repository.NewMetricsStatsdRepository()
 
@@ -94,7 +94,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	gateway.BeamRepo = beamRepo
+	// gateway.BeamRepo = beamRepo
 	gateway.metricsRepo = metricsRepo
 	gateway.keyEventManager = keyEventManager
 	gateway.beatService = beatService
