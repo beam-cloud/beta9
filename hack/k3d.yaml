@@ -24,7 +24,7 @@ registries:
   create:
     name: registry.beam.lan
     host: "0.0.0.0"
-    hostPort: "5000"
+    hostPort: "6000"
     volumes:
     - $PWD/.k3d/registry:/var/lib/registry
 
