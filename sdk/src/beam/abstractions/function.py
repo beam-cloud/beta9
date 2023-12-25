@@ -1,6 +1,7 @@
+import asyncio
 import inspect
 import os
-from typing import Any, Callable, Union
+from typing import Any, Callable, Iterable, Union
 
 import cloudpickle
 
@@ -22,6 +23,7 @@ class Function(BaseAbstraction):
         self.image: Image = image
         self.image_available: bool = False
         self.files_synced: bool = False
+        self.runtime_ready: bool = False
         self.object_id: str = ""
         self.image_id: str = ""
         self.cpu = cpu
@@ -41,11 +43,7 @@ class _CallableWrapper:
         self.func: Callable = func
         self.parent: Function = parent
 
-    def __call__(self, *args, **kwargs):
-        invocation_id = os.getenv("INVOCATION_ID")
-        if invocation_id:
-            return self.local(*args, **kwargs)
-
+    def _prepare_runtime(self) -> bool:
         if not self.parent.image_available:
             image_build_result: ImageBuildResult = self.parent.image.build()
 
@@ -53,7 +51,7 @@ class _CallableWrapper:
                 self.parent.image_available = True
                 self.parent.image_id = image_build_result.image_id
             else:
-                return
+                return False
 
         if not self.parent.files_synced:
             sync_result = self.parent.syncer.sync()
@@ -62,10 +60,24 @@ class _CallableWrapper:
                 self.parent.files_synced = True
                 self.parent.object_id = sync_result.object_id
             else:
-                return
+                return False
 
-        # Determine module / function name
-        module = inspect.getmodule(self.func)
+        self.parent.runtime_ready = True
+        return True
+
+    def __call__(self, *args, **kwargs) -> Any:
+        invocation_id = os.getenv("INVOCATION_ID")
+        if invocation_id:
+            return self.local(*args, **kwargs)
+
+        if not self.parent.runtime_ready and not self._prepare_runtime():
+            return
+
+        with terminal.progress("Working..."):
+            return self.parent.run_sync(self._call_remote(*args, **kwargs))
+
+    async def _call_remote(self, *args, **kwargs) -> Any:
+        module = inspect.getmodule(self.func)  # Determine module / function name
         if module:
             module_file = os.path.basename(module.__file__)
             module_name = os.path.splitext(module_file)[0]
@@ -82,35 +94,25 @@ class _CallableWrapper:
             },
         )
 
-        return self._invoke_remote(args=args, handler=handler)
-
-    def _invoke_remote(self, *, args: bytes, handler: str):
         terminal.header("Running function")
+        last_response: Union[None, FunctionInvokeResponse] = None
 
-        async def _call() -> FunctionInvokeResponse:
-            last_response: Union[None, FunctionInvokeResponse] = None
+        async for r in self.parent.function_stub.function_invoke(
+            object_id=self.parent.object_id,
+            image_id=self.parent.image_id,
+            args=args,
+            handler=handler,
+            python_version=self.parent.image.python_version,
+            cpu=self.parent.cpu,
+            memory=self.parent.memory,
+            gpu=self.parent.gpu,
+        ):
+            if r.output != "":
+                terminal.detail(r.output)
 
-            async for r in self.parent.function_stub.function_invoke(
-                object_id=self.parent.object_id,
-                image_id=self.parent.image_id,
-                args=args,
-                handler=handler,
-                python_version=self.parent.image.python_version,
-                cpu=self.parent.cpu,
-                memory=self.parent.memory,
-                gpu=self.parent.gpu,
-            ):
-                if r.output != "":
-                    terminal.detail(r.output)
-
-                if r.done:
-                    last_response = r
-                    break
-
-            return last_response
-
-        with terminal.progress("Working..."):
-            last_response: FunctionInvokeResponse = self.parent.loop.run_until_complete(_call())
+            if r.done:
+                last_response = r
+                break
 
         if not last_response.done or last_response.exit_code != 0:
             terminal.error("Function failed ☠️")
@@ -125,5 +127,22 @@ class _CallableWrapper:
     def remote(self, *args, **kwargs) -> Any:
         return self(*args, **kwargs)
 
-    def map(self):
-        raise NotImplementedError
+    def map(self, inputs: Iterable):
+        if not self.parent.runtime_ready and not self._prepare_runtime():
+            return
+
+        async def _gather_tasks():
+            return [
+                await task
+                for task in asyncio.as_completed([self._call_remote(input) for input in inputs])
+            ]
+
+        nested_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(nested_loop)
+        try:
+            results = nested_loop.run_until_complete(_gather_tasks())
+        finally:
+            asyncio.set_event_loop(self.parent.loop)
+            nested_loop.close()
+
+        return results

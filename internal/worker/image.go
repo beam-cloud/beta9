@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
+	"github.com/moby/sys/mountinfo"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
 	"github.com/opencontainers/umoci/oci/casext"
@@ -29,6 +31,7 @@ const (
 	awsCredentialProviderName string = "aws"
 	imageCachePath            string = "/dev/shm/images"
 	imageAvailableFilename    string = "IMAGE_AVAILABLE"
+	imageMountLockFilename    string = "IMAGE_MOUNT_LOCK"
 )
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes", "/snapshot", "/outputs", "/packages"}
@@ -105,6 +108,21 @@ func (c *ImageClient) PullLazy(imageId string) error {
 		ContentCache:          c.cacheClient,
 		ContentCacheAvailable: c.cacheClient != nil,
 	}
+
+	// Check if mount point is already in use
+	if mounted, _ := mountinfo.Mounted(mountOptions.MountPoint); mounted {
+		log.Println("Already mounted.")
+		return nil
+	}
+
+	// Attempt to acquire the lock
+	fileLock := NewFileLock(path.Join(c.ImagePath, imageId, imageMountLockFilename))
+	if err := fileLock.Acquire(); err != nil {
+		fmt.Printf("Unable to acquire mount lock: %v\n", err)
+		return err
+	}
+	fmt.Println("Mount lock acquired")
+	defer fileLock.Release()
 
 	startServer, _, err := clip.MountArchive(*mountOptions)
 	if err != nil {
