@@ -26,6 +26,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/mholt/archiver/v3 v3.5.1
 	github.com/mitchellh/hashstructure/v2 v2.0.2
+	github.com/moby/sys/mountinfo v0.7.1
 	github.com/okteto/okteto v0.0.0-20231222160652-094ca6b3fca8
 	github.com/opencontainers/runtime-spec v1.1.0
 	github.com/opencontainers/umoci v0.4.7
