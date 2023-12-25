@@ -125,7 +125,6 @@ func (c *ImageClient) PullLazy(imageId string) error {
 		fmt.Printf("Unable to acquire mount lock: %v\n", err)
 		return err
 	}
-	fmt.Println("Mount lock acquired")
 	defer fileLock.Release()
 
 	startServer, _, err := clip.MountArchive(*mountOptions)

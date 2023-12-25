@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN <<EOT
 apt-get update
-apt-get install -y software-properties-common curl git
+apt-get install -y software-properties-common curl git gcc python3-dev
 add-apt-repository ppa:deadsnakes/ppa
 apt-get update
 EOT
@@ -20,6 +20,8 @@ WORKDIR /workspace
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all
 
+COPY ./internal/abstractions/image/base_requirements.txt /workspace/requirements.txt
+
 RUN <<EOT
 set -eux
 
@@ -29,6 +31,7 @@ apt-get install -y python3.12 python3.12-dev python3.12-distutils
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
 python3.12 -m pip install --upgrade distlib setuptools pip
+python3.12 -m pip install -r /workspace/requirements.txt
 
 # Set default python
 rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/python3.12 /usr/bin/python && ln -s /usr/bin/python3.12 /usr/bin/python3
@@ -54,6 +57,8 @@ WORKDIR /workspace
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all
 
+COPY ./internal/abstractions/image/base_requirements.txt /workspace/requirements.txt
+
 RUN <<EOT
 set -eux
 
@@ -63,6 +68,7 @@ apt-get install -y python3.11 python3.11-dev python3.11-distutils
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
 python3.11 -m pip install --upgrade distlib setuptools pip
+python3.11 -m pip install -r /workspace/requirements.txt
 
 # Set default python
 rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/python3.11 /usr/bin/python && ln -s /usr/bin/python3.11 /usr/bin/python3
@@ -88,6 +94,8 @@ WORKDIR /workspace
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all
 
+COPY ./internal/abstractions/image/base_requirements.txt /workspace/requirements.txt
+
 RUN <<EOT
 set -eux
 
@@ -97,6 +105,7 @@ apt-get install -y python3.10 python3.10-dev python3.10-distutils
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
 python3.10 -m pip install --upgrade distlib setuptools pip
+python3.10 -m pip install -r /workspace/requirements.txt
 
 # Set default python
 rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/python3.10 /usr/bin/python && ln -s /usr/bin/python3.10 /usr/bin/python3
@@ -122,6 +131,8 @@ WORKDIR /workspace
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all
 
+COPY ./internal/abstractions/image/base_requirements.txt /workspace/requirements.txt
+
 RUN <<EOT
 set -eux
 
@@ -131,6 +142,7 @@ apt-get install -y python3.9 python3.9-dev python3.9-distutils
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.9
 python3.9 -m pip install --upgrade distlib setuptools pip
+python3.9 -m pip install -r /workspace/requirements.txt
 
 # Set default python
 rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/python3.9 /usr/bin/python && ln -s /usr/bin/python3.9 /usr/bin/python3
@@ -156,6 +168,8 @@ WORKDIR /workspace
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all
 
+COPY ./internal/abstractions/image/base_requirements.txt /workspace/requirements.txt
+
 RUN <<EOT
 set -eux
 
@@ -165,6 +179,7 @@ apt-get install -y python3.8 python3.8-dev python3.8-distutils
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.8
 python3.8 -m pip install --upgrade distlib setuptools pip
+python3.8 -m pip install -r /workspace/requirements.txt
 
 # Set default python
 rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/python3.8 /usr/bin/python && ln -s /usr/bin/python3.8 /usr/bin/python3

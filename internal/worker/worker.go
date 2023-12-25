@@ -635,7 +635,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	for _, m := range request.Mounts {
 		mode := "rw"
 		if m.ReadOnly {
-			mode = "r"
+			mode = "ro"
 		}
 
 		if strings.HasPrefix(m.MountPath, "/volumes") {
