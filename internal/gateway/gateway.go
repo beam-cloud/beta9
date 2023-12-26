@@ -107,7 +107,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.keyEventManager = keyEventManager
 	gateway.beatService = beatService
 
-	gateway.BackendRepo.GetAllUsers(context.TODO())
+	gateway.BackendRepo.GetAllIdentities(context.TODO())
 
 	// go gateway.keyEventManager.ListenForPattern(gateway.ctx, common.RedisKeys.SchedulerContainerState(types.DeploymentContainerPrefix), gateway.keyEventChan)
 	go gateway.beatService.Run(gateway.ctx)

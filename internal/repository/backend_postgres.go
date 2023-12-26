@@ -33,8 +33,8 @@ func NewBackendPostgresRepository() (*PostgresBackendRepository, error) {
 	}, nil
 }
 
-func (r *PostgresBackendRepository) GetAllUsers(ctx context.Context) ([]types.User, error) {
-	var users []types.User
+func (r *PostgresBackendRepository) GetAllIdentities(ctx context.Context) ([]types.Identity, error) {
+	var users []types.Identity
 	err := r.client.SelectContext(ctx, &users, "SELECT * FROM users")
 	if err != nil {
 		log.Println("err: ", err)

@@ -38,7 +38,7 @@ type ContainerRepository interface {
 }
 
 type BackendRepository interface {
-	GetAllUsers(ctx context.Context) ([]types.User, error)
+	GetAllIdentities(ctx context.Context) ([]types.Identity, error)
 }
 
 type BeamRepository interface {
