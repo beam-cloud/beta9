@@ -1,9 +1,12 @@
 from typing import Any
-from typing_extensions import SupportsIndex
 import cloudpickle
 
 from grpclib.client import Channel
-from beam.abstractions.base import BaseAbstraction, GatewayConfig, get_gateway_config
+from beam.abstractions.base import BaseAbstraction
+from beam.config import (
+    GatewayConfig,
+    get_gateway_config
+)
 
 from beam.clients.queue import (
     SimpleQueueServiceStub
@@ -32,13 +35,13 @@ class SimpleQueue(BaseAbstraction):
     def __del__(self):
         self.channel.close()
     
-    def enqueue(self, value: str) -> bool:
+    def enqueue(self, value: Any) -> bool:
         r = self.run_sync(
             self.stub.enqueue(name=self.name, value=cloudpickle.dumps(value))
         )
         return r.ok
     
-    def dequeue(self) -> str:
+    def dequeue(self) -> Any:
         r = self.run_sync(
             self.stub.dequeue(name=self.name)
         )
@@ -60,7 +63,7 @@ class SimpleQueue(BaseAbstraction):
         
         return r.empty if r.ok else True
     
-    def peek(self) -> str:
+    def peek(self) -> Any:
         r = self.run_sync(
             self.stub.peek(name=self.name)
         )
