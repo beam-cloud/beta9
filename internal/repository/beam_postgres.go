@@ -17,10 +17,6 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-const (
-	UserTrialCreditDuration = time.Duration(10) * time.Hour
-)
-
 var client *gorm.DB
 
 type PostgresBeamRepository struct {
@@ -503,13 +499,6 @@ func (c *PostgresBeamRepository) AuthorizeApiKey(clientId, clientSecret string) 
 		return false, &apiKey.Identity, nil
 	}
 
-	if !apiKey.Identity.HasPaidPlan() {
-		hasCredits, err := c.HasTrialCredits(apiKey.Identity)
-		if !hasCredits {
-			return false, &apiKey.Identity, err
-		}
-	}
-
 	return true, &apiKey.Identity, nil
 }
 
@@ -609,15 +598,6 @@ func (c *PostgresBeamRepository) AuthorizeServiceToServiceToken(token string) (*
 	}
 
 	return nil, false, nil
-}
-
-func (c *PostgresBeamRepository) HasTrialCredits(identity types.Identity) (bool, error) {
-	totalUsage, err := c.GetTotalUsageOfUserMs(identity)
-	if err != nil {
-		return false, fmt.Errorf("unable to get trial time remaining: %v", err)
-	}
-
-	return time.Duration(totalUsage)*time.Millisecond < UserTrialCreditDuration, nil
 }
 
 func objectId() string {
