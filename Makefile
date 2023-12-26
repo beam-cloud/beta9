@@ -17,11 +17,11 @@ k3d-down:
 	k3d cluster delete --config hack/k3d.yaml
 
 beam:
-	docker build . --target build --platform=linux/amd64 --secret id=github-token,src=<(echo -n ${GITHUB_TOKEN}) -f ./docker/Dockerfile.beam -t localhost:5000/beam:$(imageVersion)
+	docker build . --target build --secret id=github-token,src=<(echo -n ${GITHUB_TOKEN}) -f ./docker/Dockerfile.beam -t localhost:5000/beam:$(imageVersion)
 	docker push localhost:5000/beam:$(imageVersion)
 
 beam-worker:
-	docker build . --target final --platform=linux/amd64 --build-arg BASE_STAGE=dev --secret id=github-token,src=<(echo -n ${GITHUB_TOKEN}) -f ./docker/Dockerfile.worker -t localhost:5000/beam-worker:$(imageVersion)
+	docker build . --target final --build-arg BASE_STAGE=dev --secret id=github-token,src=<(echo -n ${GITHUB_TOKEN}) -f ./docker/Dockerfile.worker -t localhost:5000/beam-worker:$(imageVersion)
 	docker push localhost:5000/beam-worker:latest
 	bin/delete_workers.sh
 
