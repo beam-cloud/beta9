@@ -192,7 +192,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
 	}
 
-	log.Printf("container <%v> building with options: %+v", containerId, opts)
+	log.Printf("container <%v> building with options: %+v\n", containerId, opts)
 	startTime := time.Now()
 
 	// Detect if python3.x is installed in the container, if not install it
@@ -209,7 +209,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 
 		if r, err := client.Exec(containerId, cmd); !r.Ok || err != nil {
-			log.Printf("failed to execute command for container <%v>: \"%v\" - %v", containerId, cmd, err)
+			log.Printf("failed to execute command for container <%v>: \"%v\" - %v\n", containerId, cmd, err)
 
 			errMsg := ""
 			if err != nil {
@@ -220,7 +220,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			return err
 		}
 	}
-	log.Printf("container <%v> build took %v", containerId, time.Since(startTime))
+	log.Printf("container <%v> build took %v\n", containerId, time.Since(startTime))
 
 	err = client.Archive(containerId, imageId)
 	if err != nil {
@@ -228,7 +228,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	outputChan <- common.OutputMsg{Done: true, Success: true}
+	outputChan <- common.OutputMsg{Done: true, Success: true, ImageId: imageId}
 	return nil
 }
 
@@ -342,5 +342,5 @@ func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 
 func (b *Builder) generatePipInstallCommand(opts *BuildOpts) string {
 	packages := strings.Join(opts.PythonPackages, " ")
-	return fmt.Sprintf("%s -m pip install %s", opts.PythonVersion, packages)
+	return fmt.Sprintf("%s -m pip install --root-user-action=ignore %s", opts.PythonVersion, packages)
 }

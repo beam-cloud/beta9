@@ -79,7 +79,7 @@ class Image(BaseAbstraction):
             return ImageBuildResult(success=True, image_id=exists_response.image_id)
 
         async def _build_async() -> BuildImageResponse:
-            last_response: Union[None, BuildImageResponse] = None
+            last_response = BuildImageResponse()
 
             async for r in self.stub.build_image(
                 python_packages=self.python_packages,
@@ -99,7 +99,7 @@ class Image(BaseAbstraction):
             last_response: BuildImageResponse = self.loop.run_until_complete(_build_async())
 
         if not last_response.success:
-            terminal.error("Build failed ☠️")
+            terminal.error("Build failed ❌")
             return ImageBuildResult(success=False)
 
         terminal.header("Build complete 🎉")

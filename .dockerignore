@@ -1,1 +1,10 @@
-bin/*
+*
+!cmd
+!internal
+!proto
+!go.mod
+!go.sum
+!sdk
+!.secrets
+**/__pycache__
+*.pyc

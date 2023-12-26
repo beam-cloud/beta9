@@ -19,8 +19,8 @@ import (
 	repo "github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/storage"
 	types "github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/slai-labs/go-runc"
 )
 
 const (
@@ -523,20 +523,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	go s.workerMetrics.EmitResourceUsage(request, pidChan, done)
 
 	// Invoke runc process (launch the container)
+	// This will return exit code 137 even if the container is stopped gracefully. We don't know why.
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
 		OutputWriter: containerInstance.OutputWriter,
 		ConfigPath:   configPath,
 		Started:      pidChan,
 	})
 
-	errMessage := ""
-	if err != nil {
-		errMessage = err.Error()
-	}
-
 	// Send last log message since the container has exited
 	outputChan <- common.OutputMsg{
-		Msg:     errMessage,
+		Msg:     "",
 		Done:    true,
 		Success: err == nil,
 	}
@@ -639,7 +635,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	for _, m := range request.Mounts {
 		mode := "rw"
 		if m.ReadOnly {
-			mode = "r"
+			mode = "ro"
 		}
 
 		if strings.HasPrefix(m.MountPath, "/volumes") {

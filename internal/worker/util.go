@@ -62,5 +62,12 @@ func (fl *FileLock) Release() error {
 
 	err = fl.file.Close()
 	fl.file = nil
-	return err
+
+	err = os.Remove(fl.path)
+	if err != nil {
+		return fmt.Errorf("failed to delete lock file: %v", err)
+	}
+
+	fl.file = nil
+	return nil
 }

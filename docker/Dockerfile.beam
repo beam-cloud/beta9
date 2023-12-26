@@ -1,40 +1,38 @@
-ARG BUILD_ENV=release
+FROM golang:1.21 as base
 
-# Post-build stage (okteto)
-FROM --platform=linux/x86_64 golang:latest as build_okteto
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends fuse3 && \
+    curl -sSL https://d.juicefs.com/install | sh -
 
-ONBUILD COPY .secrets /workspace/.secrets
 
-# Post-build stage (release)
-FROM --platform=linux/x86_64 golang:latest as build_release
-
-WORKDIR /workspace
-
-# Build stage
-FROM build_${BUILD_ENV} as build
+# Target used in development environments
+FROM base as build
 
 WORKDIR /workspace
 
-ARG GITHUB_TOKEN
-RUN echo "machine github.com login beam-cloud password ${GITHUB_TOKEN}" > ~/.netrc
+RUN apt install -y libfuse3-dev && \
+    go install github.com/cosmtrek/air@latest
+
 ENV GOPRIVATE=github.com/beam-cloud/*
-
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=secret,id=github-token,required=true \
+    echo "machine github.com login beam-cloud password $(cat /run/secrets/github-token)" > /root/.netrc && \
+    go mod download && go mod verify
 
 COPY . .
 
-RUN apt-get update && apt-get install -y curl git
-
-# Install FUSE
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    fuse3 libfuse3-dev && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install JuiceFS
-RUN curl -sSL https://d.juicefs.com/install | sh -
-
 RUN go build -o /workspace/bin/beam /workspace/cmd/beam/main.go
+
+
+# Target used in production-like environments
+FROM base AS release
+
+WORKDIR /workspace
+
+RUN apt autoclean
+
+COPY --from=build /usr/local/bin/beam /usr/local/bin/
+
+ENV GIN_MODE=release
 
 CMD ["tail", "-f", "/dev/null"]

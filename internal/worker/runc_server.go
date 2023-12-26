@@ -16,9 +16,9 @@ import (
 	pb "github.com/beam-cloud/beam/proto"
 
 	common "github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/go-runc"
 	"github.com/google/shlex"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/slai-labs/go-runc"
 	"google.golang.org/grpc"
 )
 

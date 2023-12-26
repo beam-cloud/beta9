@@ -16,3 +16,9 @@ vendor
 
 # dlv binary
 __debug_bin
+
+# project folders
+venv
+.venv
+.k3d
+.python-version
