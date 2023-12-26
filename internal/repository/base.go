@@ -36,6 +36,9 @@ type ContainerRepository interface {
 	GetContainerWorkerHostname(containerId string) (string, error)
 }
 
+type BackendRepository interface {
+}
+
 type BeamRepository interface {
 	GetAgent(name, identityExternalId string) (*types.Agent, error)
 	GetAgentByToken(token string) (*types.Agent, error)
