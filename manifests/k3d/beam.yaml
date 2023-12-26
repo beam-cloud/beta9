@@ -169,3 +169,26 @@ spec:
         notify-keyspace-events AKE
       persistence:
         size: 1Gi
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: postgres
+  namespace: beam
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: postgresql
+  createNamespace: false
+  version: 13.2.25
+  valuesContent: |-
+    global:
+      postgresql:
+        auth:
+          username: root
+          password: password
+          database: main
+    volumePermissions:
+      enabled: true
+    persistence:
+      enabled: true
+      size: 1Gi
