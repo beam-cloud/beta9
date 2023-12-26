@@ -127,24 +127,21 @@ class _CallableWrapper:
     def remote(self, *args, **kwargs) -> Any:
         return self(*args, **kwargs)
 
+    def _gather_and_yield_results(self, inputs: Iterable):
+        async def gather_async():
+            tasks = [asyncio.create_task(self._call_remote(input)) for input in inputs]
+            for task in asyncio.as_completed(tasks):
+                yield await task
+
+        async_gen = gather_async()
+        while True:
+            try:
+                yield self.parent.loop.run_until_complete(async_gen.__anext__())
+            except StopAsyncIteration:
+                break
+
     def map(self, inputs: Iterable):
         if not self.parent.runtime_ready and not self._prepare_runtime():
             return
 
-        # Gather asynchronous tasks and yield results synchronously
-        def _gather_and_yield_results():
-            loop = asyncio.get_event_loop()
-
-            async def gather_async():
-                tasks = [asyncio.create_task(self._call_remote(input)) for input in inputs]
-                for task in asyncio.as_completed(tasks):
-                    yield await task
-
-            async_gen = gather_async()
-            while True:
-                try:
-                    yield loop.run_until_complete(async_gen.__anext__())
-                except StopAsyncIteration:
-                    break
-
-        return _gather_and_yield_results()
+        return self._gather_and_yield_results(inputs)
