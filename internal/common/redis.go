@@ -46,6 +46,7 @@ type redisCmdable interface {
 	LLen(ctx context.Context, key string) *redis.IntCmd
 	LPop(ctx context.Context, key string) *redis.StringCmd
 	Ping(ctx context.Context) *redis.StatusCmd
+	LRange(ctx context.Context, key string, start, stop int64) *redis.StringSliceCmd
 	PSubscribe(ctx context.Context, channels ...string) *redis.PubSub
 	Publish(ctx context.Context, channel string, message interface{}) *redis.IntCmd
 	RPush(ctx context.Context, key string, values ...interface{}) *redis.IntCmd
@@ -204,6 +205,10 @@ func (r *RedisClient) Scan(ctx context.Context, pattern string) ([]string, error
 	}
 
 	return keys, nil
+}
+
+func (r *RedisClient) LRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
+	return r.redisCmdable.LRange(ctx, key, start, stop).Result()
 }
 
 func (r *RedisClient) Publish(ctx context.Context, channel string, message interface{}) *redis.IntCmd {
