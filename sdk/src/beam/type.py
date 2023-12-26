@@ -1,13 +1,6 @@
 from enum import Enum
 
 
-class TriggerType(str, Enum):
-    Webhook = "webhook"
-    RestAPI = "rest_api"
-    Schedule = "cron_job"
-    ASGI = "asgi"
-
-
 class PythonVersion(str, Enum):
     """
     An enum that defines versions of Python.
@@ -28,6 +21,8 @@ class PythonVersion(str, Enum):
     Python38 = "python3.8"
     Python39 = "python3.9"
     Python310 = "python3.10"
+    Python311 = "python3.11"
+    Python312 = "python3.12"
 
 
 class GpuType(str, Enum):
@@ -92,11 +87,3 @@ class AutoscalingType(str, Enum):
     """
 
     MaxRequestLatency = "max_request_latency"
-
-
-class BeamSerializeMode:
-    Deploy = "deploy"
-    Start = "start"
-    Run = "run"
-    Stop = "stop"
-    Serve = "serve"

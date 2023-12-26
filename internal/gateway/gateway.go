@@ -8,13 +8,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/beam-cloud/beam/internal/abstractions/function"
 	"github.com/beam-cloud/beam/internal/abstractions/image"
 	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/storage"
-	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
 	beat "github.com/beam-cloud/beat/pkg"
 	"google.golang.org/grpc"
@@ -77,10 +77,10 @@ func NewGateway() (*Gateway, error) {
 		Scheduler:        Scheduler,
 	}
 
-	beamRepo, err := repository.NewBeamPostgresRepository()
-	if err != nil {
-		return nil, err
-	}
+	// beamRepo, err := repository.NewBeamPostgresRepository()
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	metricsRepo := repository.NewMetricsStatsdRepository()
 
@@ -94,12 +94,12 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	gateway.BeamRepo = beamRepo
+	// gateway.BeamRepo = beamRepo
 	gateway.metricsRepo = metricsRepo
 	gateway.keyEventManager = keyEventManager
 	gateway.beatService = beatService
 
-	go gateway.keyEventManager.ListenForPattern(gateway.ctx, common.RedisKeys.SchedulerContainerState(types.DeploymentContainerPrefix), gateway.keyEventChan)
+	// go gateway.keyEventManager.ListenForPattern(gateway.ctx, common.RedisKeys.SchedulerContainerState(types.DeploymentContainerPrefix), gateway.keyEventChan)
 	go gateway.beatService.Run(gateway.ctx)
 	// go gateway.eventBus.ReceiveEvents(gateway.ctx)
 
@@ -128,6 +128,13 @@ func (g *Gateway) Start() error {
 		return err
 	}
 	pb.RegisterImageServiceServer(grpcServer, is)
+
+	// Register function service
+	fs, err := function.NewRuncFunctionService(context.TODO(), g.redisClient, g.Scheduler, g.keyEventManager)
+	if err != nil {
+		return err
+	}
+	pb.RegisterFunctionServiceServer(grpcServer, fs)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService()

@@ -8,15 +8,17 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 
 	pb "github.com/beam-cloud/beam/proto"
 
 	common "github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/go-runc"
 	"github.com/google/shlex"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/slai-labs/go-runc"
 	"google.golang.org/grpc"
 )
 
@@ -166,6 +168,33 @@ func (s *RunCServer) RunCArchive(ctx context.Context, in *pb.RunCArchiveRequest)
 
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
+		return &pb.RunCArchiveResponse{
+			Ok: false,
+		}, nil
+	}
+
+	// Copy initial config file from the base image bundle
+	err = copyFile(filepath.Join(instance.BundlePath, "config.json"), filepath.Join(instance.Overlay.TopLayerPath(), "initial_config.json"))
+	if err != nil {
+		return &pb.RunCArchiveResponse{
+			Ok: false,
+		}, nil
+	}
+
+	tempConfig := s.baseConfigSpec
+	tempConfig.Hooks.Prestart = nil
+	tempConfig.Process.Terminal = false
+	tempConfig.Process.Args = []string{"tail", "-f", "/dev/null"}
+	tempConfig.Root.Readonly = false
+
+	file, err := json.MarshalIndent(tempConfig, "", " ")
+	if err != nil {
+		return nil, err
+	}
+
+	configPath := filepath.Join(instance.Overlay.TopLayerPath(), "config.json")
+	err = os.WriteFile(configPath, file, 0644)
+	if err != nil {
 		return &pb.RunCArchiveResponse{
 			Ok: false,
 		}, nil

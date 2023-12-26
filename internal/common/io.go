@@ -4,6 +4,7 @@ type OutputMsg struct {
 	Msg     string
 	Done    bool
 	Success bool
+	ImageId string
 }
 
 type OutputWriter struct {

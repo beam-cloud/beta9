@@ -15,10 +15,12 @@ import (
 	"time"
 
 	common "github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/gateway"
 	repo "github.com/beam-cloud/beam/internal/repository"
+	"github.com/beam-cloud/beam/internal/storage"
 	types "github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/slai-labs/go-runc"
 )
 
 const (
@@ -49,6 +51,7 @@ type Worker struct {
 	completedRequests    chan *types.ContainerRequest
 	stopContainerChan    chan string
 	workerRepo           repo.WorkerRepository
+	storage              storage.Storage
 	ctx                  context.Context
 	cancel               func()
 }
@@ -122,6 +125,21 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	storage, err := storage.NewJuiceFsStorage()
+	if err != nil {
+		return nil, err
+	}
+
+	err = storage.Format(gateway.GatewayConfig.DefaultFilesystemName)
+	if err != nil {
+		log.Fatalf("Unable to format filesystem: %+v\n", err)
+	}
+
+	err = storage.Mount(gateway.GatewayConfig.DefaultFilesystemPath)
+	if err != nil {
+		log.Fatalf("Unable to mount filesystem: %+v\n", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
@@ -158,6 +176,7 @@ func NewWorker() (*Worker, error) {
 		workerRepo:        workerRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
 		stopContainerChan: make(chan string, 1000),
+		storage:           storage,
 	}, nil
 }
 
@@ -375,11 +394,9 @@ func (s *Worker) terminateContainer(containerId string, request *types.Container
 		*exitCode = 1
 	}
 
-	if *exitCode != 0 {
-		err := s.containerRepo.SetContainerExitCode(containerId, *exitCode)
-		if err != nil {
-			log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
-		}
+	err := s.containerRepo.SetContainerExitCode(containerId, *exitCode)
+	if err != nil {
+		log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
 	}
 
 	defer s.containerWg.Done()
@@ -422,11 +439,18 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		s.terminateContainer(containerId, request, &exitCode, &containerErr)
 	}()
 
+	// For images that have a rootfs, set that as the root path
+	// otherwise, assume runc config files are in the rootfs themselves
+	rootPath := filepath.Join(bundlePath, "rootfs")
+	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
+		rootPath = bundlePath
+	}
+
 	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
 		Id:         containerId,
 		BundlePath: bundlePath,
-		Overlay:    common.NewContainerOverlay(containerId, bundlePath, baseConfigPath, filepath.Join(bundlePath, "rootfs")),
+		Overlay:    common.NewContainerOverlay(containerId, bundlePath, baseConfigPath, rootPath),
 		Spec:       spec,
 		ExitCode:   -1,
 		OutputWriter: common.NewOutputWriter(func(s string) {
@@ -499,6 +523,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	go s.workerMetrics.EmitResourceUsage(request, pidChan, done)
 
 	// Invoke runc process (launch the container)
+	// This will return exit code 137 even if the container is stopped gracefully. We don't know why.
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
 		OutputWriter: containerInstance.OutputWriter,
 		ConfigPath:   configPath,
@@ -531,6 +556,9 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, contai
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("STATSD_HOST=%s", os.Getenv("STATSD_HOST")),
 		fmt.Sprintf("STATSD_PORT=%s", os.Getenv("STATSD_PORT")),
+		fmt.Sprintf("BEAM_GATEWAY_HOST=%s", os.Getenv("BEAM_GATEWAY_HOST")),
+		fmt.Sprintf("BEAM_GATEWAY_PORT=%s", os.Getenv("BEAM_GATEWAY_PORT")),
+		"PYTHONUNBUFFERED=1",
 	}
 	env = append(env, containerConfig.Env...)
 	env = append(env, request.Env...)
@@ -604,10 +632,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	os.MkdirAll(containerConfig.WorkspacePath, os.FileMode(0755))
 
 	// Add bind mounts to runc spec
-	for _, m := range containerConfig.Mounts {
+	for _, m := range request.Mounts {
 		mode := "rw"
 		if m.ReadOnly {
-			mode = "r"
+			mode = "ro"
 		}
 
 		if strings.HasPrefix(m.MountPath, "/volumes") {

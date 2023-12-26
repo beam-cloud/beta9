@@ -1,0 +1,42 @@
+---
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: beam
+image: docker.io/rancher/k3s:v1.28.4-k3s2
+servers: 1
+agents: 1
+
+ports:
+- port: 1993:80
+  nodeFilters:
+  - loadbalancer
+
+volumes:
+- volume: $PWD/manifests:k3s-manifests-custom
+  nodeFilters:
+  - server:0
+- volume: $PWD/.k3d/storage:k3s-storage
+  nodeFilters:
+  - servers:*
+
+registries:
+  create:
+    name: registry.beam.lan
+    host: "0.0.0.0"
+    hostPort: "5000"
+    volumes:
+    - $PWD/.k3d/registry:/var/lib/registry
+
+options:
+  k3d:
+    wait: true
+    timeout: "60s"
+  k3s:
+    extraArgs:
+    - arg: "--tls-san=beam.lan"
+      nodeFilters:
+      - server:*
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    switchCurrentContext: true

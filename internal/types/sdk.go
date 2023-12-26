@@ -242,10 +242,3 @@ func (t *Trigger) AsString() string {
 	}
 	return string(bytes)
 }
-
-type Mount struct {
-	Name      string `json:"name"`
-	LocalPath string `json:"local_path"`
-	AppPath   string `json:"app_path"`
-	MountType string `json:"mount_type"`
-}

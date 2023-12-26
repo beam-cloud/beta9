@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"syscall"
@@ -15,13 +16,14 @@ import (
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
+	"github.com/moby/sys/mountinfo"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
 	"github.com/opencontainers/umoci/oci/casext"
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 
-	runc "github.com/slai-labs/go-runc"
+	runc "github.com/beam-cloud/go-runc"
 )
 
 const (
@@ -29,6 +31,7 @@ const (
 	awsCredentialProviderName string = "aws"
 	imageCachePath            string = "/dev/shm/images"
 	imageAvailableFilename    string = "IMAGE_AVAILABLE"
+	imageMountLockFilename    string = "IMAGE_MOUNT_LOCK"
 )
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes", "/snapshot", "/outputs", "/packages"}
@@ -42,6 +45,7 @@ type ImageClient struct {
 	CommandTimeout int
 	Debug          bool
 	Creds          string
+	VerifyTLS      bool
 }
 
 func NewImageClient() (*ImageClient, error) {
@@ -59,6 +63,8 @@ func NewImageClient() (*ImageClient, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	verifyTLS := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_TLS_VERIFY", "true") != "false"
 
 	cacheUrl, cacheUrlSet := os.LookupEnv("BEAM_CACHE_URL")
 	var cacheClient *CacheClient = nil
@@ -85,6 +91,7 @@ func NewImageClient() (*ImageClient, error) {
 		CommandTimeout: -1,
 		Debug:          false,
 		Creds:          creds,
+		VerifyTLS:      verifyTLS,
 	}, nil
 }
 
@@ -105,6 +112,20 @@ func (c *ImageClient) PullLazy(imageId string) error {
 		ContentCache:          c.cacheClient,
 		ContentCacheAvailable: c.cacheClient != nil,
 	}
+
+	// Check if mount point is already in use
+	if mounted, _ := mountinfo.Mounted(mountOptions.MountPoint); mounted {
+		log.Println("Already mounted.")
+		return nil
+	}
+
+	// Attempt to acquire the lock
+	fileLock := NewFileLock(path.Join(imagePath, fmt.Sprintf("%s_%s", imageId, imageMountLockFilename)))
+	if err := fileLock.Acquire(); err != nil {
+		fmt.Printf("Unable to acquire mount lock: %v\n", err)
+		return err
+	}
+	defer fileLock.Release()
 
 	startServer, _, err := clip.MountArchive(*mountOptions)
 	if err != nil {
@@ -127,6 +148,10 @@ func (i *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
+
+	if !i.VerifyTLS {
+		args = append(args, []string{"--src-tls-verify=false", "--dest-tls-verify=false"}...)
+	}
 
 	args = append(args, i.args(creds)...)
 	cmd := exec.CommandContext(ctx, i.PullCommand, args...)
@@ -255,7 +280,7 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	startTime := time.Now()
 
 	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, i.registry.ImageFileExtension)
-	archivePath := filepath.Join(filepath.Dir(bundlePath), archiveName)
+	archivePath := filepath.Join("/tmp", archiveName)
 
 	defer func() {
 		os.RemoveAll(archivePath)
@@ -285,17 +310,17 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 		// outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to archive image."}
 		return err
 	}
-	log.Printf("container <%v> archive took %v", imageId, time.Since(startTime))
+	log.Printf("container <%v> archive took %v\n", imageId, time.Since(startTime))
 
 	// Push the archive to a registry
 	startTime = time.Now()
 	err = i.registry.Push(ctx, archivePath, imageId)
 	if err != nil {
-		log.Printf("failed to push image for image <%v>: %v", imageId, err)
+		log.Printf("failed to push image for image <%v>: %v\n", imageId, err)
 		// outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to push image."}
 		return err
 	}
 
-	log.Printf("container <%v> push took %v", imageId, time.Since(startTime))
+	log.Printf("container <%v> push took %v\n", imageId, time.Since(startTime))
 	return nil
 }

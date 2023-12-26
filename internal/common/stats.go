@@ -47,8 +47,6 @@ func (s *StatsdSender) process() {
 		if conn, err := net.Dial("udp", s.uri); err == nil {
 			io.WriteString(conn, msg)
 			conn.Close()
-		} else {
-			log.Println(err)
 		}
 	}
 }

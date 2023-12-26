@@ -1,13 +1,16 @@
-from typing import List, Optional, Union
+from typing import List, NamedTuple, Optional, Tuple, Union
 
-from grpclib.client import Channel
-
-from beam.abstractions.base import BaseAbstraction, GatewayConfig, get_gateway_config
+from beam import terminal
+from beam.abstractions.base import BaseAbstraction
 from beam.clients.image import BuildImageResponse, ImageServiceStub, VerifyImageBuildResponse
-from beam.terminal import Terminal
 from beam.type import (
     PythonVersion,
 )
+
+
+class ImageBuildResult(NamedTuple):
+    success: bool = False
+    image_id: str = ""
 
 
 class Image(BaseAbstraction):
@@ -53,16 +56,9 @@ class Image(BaseAbstraction):
         self.commands = commands
         self.base_image = base_image
         self.base_image_creds = None
-
-        config: GatewayConfig = get_gateway_config()
-        self.channel: Channel = Channel(
-            host=config.host,
-            port=config.port,
-            ssl=True if config.port == 443 else False,
-        )
         self.stub: ImageServiceStub = ImageServiceStub(self.channel)
 
-    def exists(self) -> bool:
+    def exists(self) -> Tuple[bool, ImageBuildResult]:
         r: VerifyImageBuildResponse = self.run_sync(
             self.stub.verify_image_build(
                 python_packages=self.python_packages,
@@ -72,17 +68,18 @@ class Image(BaseAbstraction):
                 existing_image_uri=self.base_image,
             )
         )
-        return r.exists
+        return (r.exists, ImageBuildResult(success=r.exists, image_id=r.image_id))
 
-    def build(self) -> bool:
-        Terminal.header("Building image")
+    def build(self) -> ImageBuildResult:
+        terminal.header("Building image")
 
-        if self.exists():
-            Terminal.header("Using cached image")
-            return True
+        exists, exists_response = self.exists()
+        if exists:
+            terminal.header("Using cached image")
+            return ImageBuildResult(success=True, image_id=exists_response.image_id)
 
         async def _build_async() -> BuildImageResponse:
-            last_response: Union[None, BuildImageResponse] = None
+            last_response = BuildImageResponse()
 
             async for r in self.stub.build_image(
                 python_packages=self.python_packages,
@@ -90,7 +87,7 @@ class Image(BaseAbstraction):
                 commands=self.commands,
                 existing_image_uri=self.base_image,
             ):
-                Terminal.detail(r.msg)
+                terminal.detail(r.msg)
 
                 if r.done:
                     last_response = r
@@ -98,18 +95,12 @@ class Image(BaseAbstraction):
 
             return last_response
 
-        with Terminal.progress("Working..."):
+        with terminal.progress("Working..."):
             last_response: BuildImageResponse = self.loop.run_until_complete(_build_async())
 
         if not last_response.success:
-            Terminal.error("Build failed ☠️")
-            return False
+            terminal.error("Build failed ❌")
+            return ImageBuildResult(success=False)
 
-        Terminal.header("Build complete 🎉")
-        return True
-
-    def __del__(self):
-        self.channel.close()
-
-    def remote(self):
-        pass
+        terminal.header("Build complete 🎉")
+        return ImageBuildResult(success=True, image_id=last_response.image_id)
