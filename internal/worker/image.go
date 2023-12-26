@@ -115,7 +115,6 @@ func (c *ImageClient) PullLazy(imageId string) error {
 
 	// Check if mount point is already in use
 	if mounted, _ := mountinfo.Mounted(mountOptions.MountPoint); mounted {
-		log.Println("Already mounted.")
 		return nil
 	}
 
