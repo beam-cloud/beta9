@@ -131,18 +131,20 @@ class _CallableWrapper:
         if not self.parent.runtime_ready and not self._prepare_runtime():
             return
 
-        async def _gather_tasks():
-            return [
-                await task
-                for task in asyncio.as_completed([self._call_remote(input) for input in inputs])
-            ]
+        # Gather asynchronous tasks and yield results synchronously
+        def _gather_and_yield_results():
+            loop = asyncio.get_event_loop()
 
-        nested_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(nested_loop)
-        try:
-            results = nested_loop.run_until_complete(_gather_tasks())
-        finally:
-            asyncio.set_event_loop(self.parent.loop)
-            nested_loop.close()
+            async def gather_async():
+                tasks = [asyncio.create_task(self._call_remote(input)) for input in inputs]
+                for task in asyncio.as_completed(tasks):
+                    yield await task
 
-        return results
+            async_gen = gather_async()
+            while True:
+                try:
+                    yield loop.run_until_complete(async_gen.__anext__())
+                except StopAsyncIteration:
+                    break
+
+        return _gather_and_yield_results()
