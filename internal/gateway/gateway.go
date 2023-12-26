@@ -28,6 +28,7 @@ type Gateway struct {
 	beatService      *beat.BeatService
 	eventBus         *common.EventBus
 	redisClient      *common.RedisClient
+	BackendRepo      repository.BackendRepository
 	BeamRepo         repository.BeamRepository
 	metricsRepo      repository.MetricsStatsdRepository
 	Storage          storage.Storage
@@ -83,6 +84,11 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
+	backendRepo, err := repository.NewBackendPostgresRepository()
+	if err != nil {
+		return nil, err
+	}
+
 	metricsRepo := repository.NewMetricsStatsdRepository()
 
 	beatService, err := beat.NewBeatService()
@@ -95,10 +101,13 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
+	gateway.BackendRepo = backendRepo
 	gateway.BeamRepo = beamRepo
 	gateway.metricsRepo = metricsRepo
 	gateway.keyEventManager = keyEventManager
 	gateway.beatService = beatService
+
+	gateway.BackendRepo.GetAllUsers(context.TODO())
 
 	// go gateway.keyEventManager.ListenForPattern(gateway.ctx, common.RedisKeys.SchedulerContainerState(types.DeploymentContainerPrefix), gateway.keyEventChan)
 	go gateway.beatService.Run(gateway.ctx)

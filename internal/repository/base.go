@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"time"
 
 	"github.com/beam-cloud/beam/internal/types"
@@ -37,6 +38,7 @@ type ContainerRepository interface {
 }
 
 type BackendRepository interface {
+	GetAllUsers(ctx context.Context) ([]types.User, error)
 }
 
 type BeamRepository interface {

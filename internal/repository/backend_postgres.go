@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/types"
@@ -36,6 +37,7 @@ func (r *PostgresBackendRepository) GetAllUsers(ctx context.Context) ([]types.Us
 	var users []types.User
 	err := r.client.SelectContext(ctx, &users, "SELECT * FROM users")
 	if err != nil {
+		log.Println("err: ", err)
 		return nil, err
 	}
 
