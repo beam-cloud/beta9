@@ -53,7 +53,6 @@ type BeamRepository interface {
 	DeleteTask(taskId string) error
 	GetTotalUsageOfUserMs(identity types.Identity) (totalUsageMs float64, err error)
 	RetrieveUserByPk(pk uint) (*types.Identity, error)
-	HasTrialCredits(identity types.Identity) (bool, error)
 	AuthorizeApiKey(clientId string, clientSecret string) (bool, *types.Identity, error)
 	AuthorizeApiKeyWithAppId(appId string, clientId string, clientSecret string) (bool, error)
 	DeploymentRequiresAuthorization(appId string, appVersion string) (bool, error)
