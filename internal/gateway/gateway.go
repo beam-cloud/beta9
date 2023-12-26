@@ -11,6 +11,7 @@ import (
 	"github.com/beam-cloud/beam/internal/abstractions/function"
 	"github.com/beam-cloud/beam/internal/abstractions/image"
 	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
+	dqueue "github.com/beam-cloud/beam/internal/abstractions/queue"
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
@@ -121,6 +122,12 @@ func (g *Gateway) Start() error {
 		return err
 	}
 	pb.RegisterMapServiceServer(grpcServer, rm)
+
+	rq, err := dqueue.NewSimpleRedisQueueService(g.redisClient)
+	if err != nil {
+		return err
+	}
+	pb.RegisterSimpleQueueServiceServer(grpcServer, rq)
 
 	// Register image service
 	is, err := image.NewRuncImageService(context.TODO(), g.Scheduler)
