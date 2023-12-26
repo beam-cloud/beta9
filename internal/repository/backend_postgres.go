@@ -47,7 +47,6 @@ func (r *PostgresBackendRepository) migrate() error {
 		return err
 	}
 
-	// Run migrations
 	if err := goose.Up(r.client.DB, "./"); err != nil {
 		return err
 	}
