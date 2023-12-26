@@ -6,9 +6,11 @@ import (
 	"log"
 
 	"github.com/beam-cloud/beam/internal/common"
+	_ "github.com/beam-cloud/beam/internal/repository/backend_postgres_migrations"
 	"github.com/beam-cloud/beam/internal/types"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
+	"github.com/pressly/goose/v3"
 )
 
 type PostgresBackendRepository struct {
@@ -28,18 +30,38 @@ func NewBackendPostgresRepository() (*PostgresBackendRepository, error) {
 		return nil, err
 	}
 
-	return &PostgresBackendRepository{
+	repo := &PostgresBackendRepository{
 		client: db,
-	}, nil
+	}
+
+	// Run migrations
+	if err := repo.migrate(); err != nil {
+		log.Fatalf("failed to run backend migrations: %v", err)
+	}
+
+	return repo, nil
+}
+
+func (r *PostgresBackendRepository) migrate() error {
+	if err := goose.SetDialect("postgres"); err != nil {
+		return err
+	}
+
+	// Run migrations
+	if err := goose.Up(r.client.DB, "./"); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *PostgresBackendRepository) GetAllIdentities(ctx context.Context) ([]types.Identity, error) {
-	var users []types.Identity
-	err := r.client.SelectContext(ctx, &users, "SELECT * FROM users")
+	var identities []types.Identity
+	err := r.client.SelectContext(ctx, &identities, "SELECT * FROM identity_identity")
 	if err != nil {
 		log.Println("err: ", err)
 		return nil, err
 	}
 
-	return users, nil
+	return identities, nil
 }
