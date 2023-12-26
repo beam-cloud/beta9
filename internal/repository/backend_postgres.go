@@ -58,7 +58,6 @@ func (r *PostgresBackendRepository) GetAllIdentities(ctx context.Context) ([]typ
 	var identities []types.Identity
 	err := r.client.SelectContext(ctx, &identities, "SELECT * FROM identity_identity")
 	if err != nil {
-		log.Println("err: ", err)
 		return nil, err
 	}
 
