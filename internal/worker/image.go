@@ -120,12 +120,11 @@ func (c *ImageClient) PullLazy(imageId string) error {
 	}
 
 	// Attempt to acquire the lock
-	fileLock := NewFileLock(path.Join(c.ImagePath, imageId, imageMountLockFilename))
+	fileLock := NewFileLock(path.Join(imagePath, fmt.Sprintf("%s_%s", imageId, imageMountLockFilename)))
 	if err := fileLock.Acquire(); err != nil {
 		fmt.Printf("Unable to acquire mount lock: %v\n", err)
 		return err
 	}
-	fmt.Println("Mount lock acquired")
 	defer fileLock.Release()
 
 	startServer, _, err := clip.MountArchive(*mountOptions)

@@ -27,7 +27,7 @@ beam-worker:
 
 beam-runner:
 	for target in py312 py311 py310 py39 py38; do \
-		docker build . --target $$target --secret id=github-token,src=<(echo -n ${GITHUB_TOKEN}) -f ./docker/Dockerfile.runner -t localhost:5000/beam-runner:$$target-latest; \
+		docker build . --target $$target --platform=linux/amd64 --secret id=github-token,src=<(echo -n ${GITHUB_TOKEN}) -f ./docker/Dockerfile.runner -t localhost:5000/beam-runner:$$target-latest; \
 		docker push localhost:5000/beam-runner:$$target-latest; \
 	done
 
