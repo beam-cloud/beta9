@@ -1,0 +1,17 @@
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: juicefs-redis
+  namespace: beam
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: redis
+  createNamespace: false
+  version: 18.6.1
+  valuesContent: |-
+    architecture: standalone
+    auth:
+      enabled: false
+    master:
+      persistence:
+        size: 1Gi

@@ -1,0 +1,171 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: beam
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: beam-role
+  namespace: beam
+rules:
+- apiGroups:
+  - '*'
+  resources:
+  - '*'
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: beam-role-binding
+  namespace: beam
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: beam-role
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: beam
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beam
+  namespace: beam
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: beam
+  template:
+    metadata:
+      labels:
+        app: beam
+    spec:
+      containers:
+      - name: beam
+        image: registry.beam.lan:5000/beam:latest
+        command:
+        - /workspace/bin/beam
+        ports:
+        - name: grpc
+          containerPort: 1993
+          protocol: TCP
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: images
+          mountPath: /images
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+      volumes:
+      - name: images
+        persistentVolumeClaim:
+          claimName: images
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: images
+  namespace: beam
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: worker-data
+  namespace: beam
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: beam
+  namespace: beam
+spec:
+  selector:
+    app: beam
+  ports:
+  - name: grpc
+    port: 1993
+    targetPort: 1993
+    protocol: TCP
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: beam
+  namespace: beam
+spec:
+  entryPoints:
+  - web
+  routes:
+  - match: HostSNI(`*`)
+    kind: Rule
+    services:
+    - name: beam
+      port: 1993
+---
+apiVersion: beam.cloud/v1
+kind: WorkerPool
+metadata:
+  name: beam-cpu
+  namespace: beam
+spec:
+  # jobSpec:
+  #   nodeSelector:
+  #     node-label-key: node-label-value
+  poolSizing:
+    defaultWorkerCpu: 1000m
+    defaultWorkerGpuType: ""
+    defaultWorkerMemory: 1Gi
+    minFreeCpu: 1000m
+    minFreeGpu: 0
+    minFreeMemory: 1Gi
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: redis
+  namespace: beam
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: redis
+  createNamespace: false
+  version: 18.6.1
+  valuesContent: |-
+    architecture: standalone
+    auth:
+      enabled: false
+    master:
+      configuration: |
+        activedefrag yes
+        notify-keyspace-events AKE
+      persistence:
+        size: 1Gi

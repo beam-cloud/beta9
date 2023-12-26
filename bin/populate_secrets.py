@@ -36,7 +36,7 @@ def _generate_secrets_file():
         okteto_docker_password = okteto_context["token"]
     except BaseException:
         okteto_docker_username = okteto_namespace
-        okteto_docker_password = os.environ["OKTETO_DOCKER_PASSWORD"]
+        okteto_docker_password = os.environ.get("OKTETO_DOCKER_PASSWORD", "")
 
     # populate template values
     populated_template = (

@@ -554,12 +554,12 @@ func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string,
 			Value: common.Secrets().Get("BEAM_CACHE_URL"),
 		},
 		{
-			Name:  "BEAM_SCHEDULER_HOST",
-			Value: common.Secrets().Get("BEAM_SCHEDULER_HOST"),
+			Name:  "BEAM_GATEWAY_HOST",
+			Value: common.Secrets().Get("BEAM_GATEWAY_HOST"),
 		},
 		{
-			Name:  "BEAM_SCHEDULER_PORT",
-			Value: common.Secrets().Get("BEAM_SCHEDULER_PORT"),
+			Name:  "BEAM_GATEWAY_PORT",
+			Value: common.Secrets().Get("BEAM_GATEWAY_PORT"),
 		},
 		{
 			Name:  "STATSD_HOST",

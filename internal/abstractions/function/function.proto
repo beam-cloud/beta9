@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package function;
+
+service FunctionService {
+  rpc FunctionInvoke(FunctionInvokeRequest)
+      returns (stream FunctionInvokeResponse) {}
+  rpc FunctionGetArgs(FunctionGetArgsRequest)
+      returns (FunctionGetArgsResponse) {}
+  rpc FunctionSetResult(FunctionSetResultRequest)
+      returns (FunctionSetResultResponse) {}
+}
+
+message FunctionInvokeRequest {
+  string object_id = 1;
+  string image_id = 2;
+  bytes args = 3;
+  string handler = 4;
+  string python_version = 5;
+  int64 cpu = 6;
+  int64 memory = 7;
+  string gpu = 8;
+}
+
+message FunctionInvokeResponse {
+  string output = 1;
+  bool done = 2;
+  uint32 exit_code = 3;
+  bytes result = 4;
+}
+
+message FunctionGetArgsRequest { string invocation_id = 1; }
+message FunctionGetArgsResponse {
+  bool ok = 1;
+  bytes args = 2;
+}
+
+message FunctionSetResultRequest {
+  string invocation_id = 1;
+  bytes result = 2;
+}
+
+message FunctionSetResultResponse { bool ok = 1; }

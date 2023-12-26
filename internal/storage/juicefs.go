@@ -31,12 +31,12 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		}
 	}()
 
-	log.Printf("JuiceFs filesystem is being mounted to: '%s'\n", localPath)
+	log.Printf("JuiceFS filesystem is being mounted to: '%s'\n", localPath)
 	return nil
 }
 
 func (s *JuiceFsStorage) Format(fsName string) error {
-	log.Printf("Formatting juicefs filesystem with name: '%s'\n", fsName)
+	log.Printf("Formatting JuiceFS filesystem with name: '%s'\n", fsName)
 
 	cmd := exec.Command(
 		"juicefs",
@@ -54,7 +54,7 @@ func (s *JuiceFsStorage) Format(fsName string) error {
 		return fmt.Errorf("error executing juicefs format: %v, output: %s", err, string(output))
 	}
 
-	log.Printf("Juicefs filesystem formatted: '%s'\n", fsName)
+	log.Printf("JuiceFS filesystem formatted: '%s'\n", fsName)
 	return nil
 }
 
@@ -66,6 +66,6 @@ func (s *JuiceFsStorage) Unmount(localPath string) error {
 		return fmt.Errorf("error executing juicefs umount: %v, output: %s", err, string(output))
 	}
 
-	log.Printf("Juicefs filesystem unmounted from: '%s'\n", localPath)
+	log.Printf("JuiceFS filesystem unmounted from: '%s'\n", localPath)
 	return nil
 }

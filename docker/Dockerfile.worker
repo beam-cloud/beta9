@@ -1,94 +1,107 @@
-ARG BUILD_ENV=release
+# syntax=docker/dockerfile:1.6
+ARG BASE_STAGE=dev
 
-# Post-build stage (okteto)
-FROM --platform=linux/x86_64 nvidia/cuda:12.2.0-base-ubuntu20.04 as build_okteto
+FROM golang:1.21-bullseye AS golang
 
-ONBUILD COPY .secrets /workspace/.secrets
+RUN --mount=type=secret,id=github-token,required=true <<EOT
+set -eux
+apt-get update
+apt-get install -y --no-install-recommends curl git
+echo "machine github.com login beam-cloud password $(cat /run/secrets/github-token)" > /root/.netrc
+EOT
 
-# Post-build stage (release)
-FROM --platform=linux/x86_64 nvidia/cuda:12.2.0-base-ubuntu20.04 as build_release
+
+# Skopeo
+# ========================
+FROM golang AS skopeo
 
 WORKDIR /workspace
 
-# The first stage builds the worker & bootstrap executables
-FROM --platform=linux/x86_64 golang:1.18 AS builder
+ENV CGO_ENABLED="0"  \
+    DISABLE_DOCS="1" \
+    GO_DYN_FLAGS=""  \
+    BUILDTAGS="containers_image_openpgp"
 
-ARG GITHUB_TOKEN
-RUN echo "machine github.com login beam-cloud password ${GITHUB_TOKEN}" > ~/.netrc
-ENV GOPRIVATE=github.com/beam-cloud/*
+RUN <<EOT
+set -eux
+git clone https://github.com/containers/skopeo.git .
+make
+make install
+/usr/local/bin/skopeo --version
+EOT
+
+
+# RUNC
+# ========================
+FROM golang AS runc
+
+WORKDIR /workspace
+
+RUN apt-get install -y --no-install-recommends libseccomp-dev
+
+RUN <<EOT
+set -eux
+git clone https://github.com/beam-cloud/runc.git .
+make
+make install
+/usr/local/sbin/runc --version
+EOT
+
+
+# Beam Worker
+# ========================
+FROM golang AS worker
 
 WORKDIR /workspace
 
 COPY go.mod go.sum ./
-RUN go mod download && go mod verify
-
-RUN apt-get update && apt-get install git \
-    libseccomp-dev curl nano skopeo -y
+RUN go mod download
 
 COPY . .
-RUN mkdir -p /workspace/bin
-RUN go build -v -o /usr/local/bin/worker /workspace/cmd/worker/main.go
+RUN GOPRIVATE=github.com/beam-cloud/* \
+    go build -o /usr/local/bin/worker ./cmd/worker/main.go
 
-# Skopeo build
-FROM golang:1.18 AS skopeo-build
 
-WORKDIR /usr/src/skopeo
+# NVIDIA CUDA - Final Stage
+# ========================
+FROM nvidia/cuda:12.3.1-base-ubuntu20.04 AS release
+FROM release AS dev
+ONBUILD COPY .secrets /workspace/.secrets
 
-ARG SKOPEO_VERSION="1.8.0"
-RUN curl -fsSL "https://github.com/containers/skopeo/archive/v${SKOPEO_VERSION}.tar.gz" \
-  | tar -xzf - --strip-components=1
-
-RUN CGO_ENABLED=0 DISABLE_DOCS=1 make BUILDTAGS=containers_image_openpgp GO_DYN_FLAGS=
-
-RUN ./bin/skopeo --version
-
-FROM scratch AS skopeo-rootfs
-
-COPY --from=skopeo-build /usr/src/skopeo/bin/skopeo /usr/local/bin/
-COPY --from=skopeo-build /usr/src/skopeo/default-policy.json /etc/containers/policy.json
-
-# Second stage configures the outer container
-FROM build_${BUILD_ENV} as build
+FROM ${BASE_STAGE} AS final
 
 WORKDIR /workspace
 
-ARG DEBIAN_FRONTEND=noninteractive
-ARG GITHUB_TOKEN
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends --no-install-recommends curl gpg fuse3
 
-RUN echo "machine github.com login beam-cloud password ${GITHUB_TOKEN}" > ~/.netrc
+RUN <<EOT
+set -eux
 
-RUN rm /etc/apt/sources.list.d/cuda.list && apt-get update && apt-get install -y wget git curl \
-    libseccomp-dev libsndfile1 libsndfile1-dev \
-    libaio-dev asciidoc xmlto libzmq3-dev iptables \
-    build-essential git libprotobuf-dev libprotobuf-c-dev \
-    protobuf-c-compiler protobuf-compiler \
-    pkg-config libbsd-dev iproute2 \
-    libnftnl-dev libcap-dev libnet1-dev libnl-3-dev \
-    python3 python3.8 python3-distutils python3-pip
+# JuiceFS
+curl -sSL https://d.juicefs.com/install | sh -
 
-COPY --from=golang:1.20 /usr/local/go/ /usr/local/go/
-ENV PATH="/usr/local/go/bin:${PATH}"
+# nvidia-container-toolkit repo
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+echo 'deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH) /' > /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-# Build & install runc container runtime
-RUN git clone https://github.com/slai-labs/runc.git && cd /workspace/runc && make && make install
+# criu repo
+curl -fsSL https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04/Release.key | gpg --dearmor -o /usr/share/keyrings/criu.gpg
+echo 'deb [signed-by=/usr/share/keyrings/criu.gpg] https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04 /' > /etc/apt/sources.list.d/criu.list
 
-# Build & install criu
-RUN python3 -m pip install protobuf==3.19.0
-RUN git clone https://github.com/checkpoint-restore/criu.git
-RUN cd criu && make && make install
+apt-get update
+apt-get install -y --no-install-recommends nvidia-container-runtime criu
+apt-get remove -y curl gpg
+apt-get clean
+apt-get autoremove -y
+apt-get autopurge -y
+rm -rf /var/lib/apt/lists/* /var/log/*
+EOT
 
-# Install nvidia container runtime
-RUN curl -s -L https://nvidia.github.io/nvidia-container-runtime/gpgkey | \
-    apt-key add -
-RUN curl -s -L https://nvidia.github.io/nvidia-container-runtime/ubuntu20.04/nvidia-container-runtime.list | \
-    tee /etc/apt/sources.list.d/nvidia-container-runtime.list
-RUN  apt-get update && apt-get install -y nvidia-container-runtime fuse3 libfuse3-dev && \
-    rm -rf /var/lib/apt/lists/*
+COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
+COPY --from=skopeo /usr/local/bin/skopeo /usr/local/bin/skopeo
+COPY --from=skopeo /workspace/default-policy.json /etc/containers/policy.json
+COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
+COPY ./sdk/src/beam /workspace/sdk
 
-# Build custom nvidia-container runtime hook
-RUN git clone https://github.com/beam-cloud/nvidia-container-toolkit.git
-RUN cd /workspace/nvidia-container-toolkit && make build && make binaries
-RUN cp /workspace/nvidia-container-toolkit/nvidia-container-runtime* /usr/bin/
-
-COPY --from=skopeo-rootfs / /
-COPY --from=builder /usr/local/bin/worker /usr/local/bin/worker
+VOLUME ["/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu"]

@@ -1,25 +1,20 @@
 import asyncio
-from abc import ABC, abstractmethod
-from typing import NamedTuple
+from abc import ABC
+from asyncio import AbstractEventLoop
+from typing import Any, Coroutine
+
+from grpclib.client import Channel
+
+from beam.config import get_gateway_channel
 
 
 class BaseAbstraction(ABC):
     def __init__(self) -> None:
-        self.loop = asyncio.get_event_loop()
+        self.loop: AbstractEventLoop = asyncio.get_event_loop()
+        self.channel: Channel = get_gateway_channel()
 
-    def run_sync(self, coroutine):
+    def run_sync(self, coroutine: Coroutine) -> Any:
         return self.loop.run_until_complete(coroutine)
 
-    @abstractmethod
-    def remote(self):
-        raise NotImplementedError
-
-
-class GatewayConfig(NamedTuple):
-    host: str = "0.0.0.0"
-    port: int = 1993
-
-
-def get_gateway_config() -> GatewayConfig:
-    config = GatewayConfig()
-    return config
+    def __del__(self) -> None:
+        self.channel.close()

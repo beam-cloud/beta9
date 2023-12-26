@@ -12,3 +12,5 @@ grpcio==1.57.0
 httpx==0.24.1
 bson==0.5.10
 psutil==5.9.6
+cloudpickle==3.0.0
+rich==13.7.0
