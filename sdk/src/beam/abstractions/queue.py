@@ -12,6 +12,8 @@ from beam.clients.queue import (
     SimpleQueueServiceStub
 )
 
+class SimpleQueueInternalServerError(Exception):
+    pass
 
 class SimpleQueue(BaseAbstraction):
     def __init__(self, *, name: str) -> None:
@@ -19,11 +21,6 @@ class SimpleQueue(BaseAbstraction):
         
         config: GatewayConfig = get_gateway_config()
         self.name: str = name
-        self.channel: Channel = Channel(
-            host=config.host,
-            port=config.port,
-            ssl=True if config.port == 443 else False,
-        )
         self.stub: SimpleQueueServiceStub = SimpleQueueServiceStub(self.channel)
     
     def __len__(self):
@@ -39,14 +36,18 @@ class SimpleQueue(BaseAbstraction):
         r = self.run_sync(
             self.stub.enqueue(name=self.name, value=cloudpickle.dumps(value))
         )
-        return r.ok
+        
+        if not r.ok:
+            raise SimpleQueueInternalServerError
+        
+        return True
     
     def dequeue(self) -> Any:
         r = self.run_sync(
             self.stub.dequeue(name=self.name)
         )
         if not r.ok:
-            return None
+            return SimpleQueueInternalServerError
         
         if len(r.value) > 0 :
             return cloudpickle.loads(r.value)
@@ -59,7 +60,7 @@ class SimpleQueue(BaseAbstraction):
         )
         
         if not r.ok:
-            raise Exception("Error checking if queue is empty")
+            raise SimpleQueueInternalServerError
         
         return r.empty if r.ok else True
     
@@ -69,7 +70,7 @@ class SimpleQueue(BaseAbstraction):
         )
         
         if not r.ok:
-            return None
+            raise SimpleQueueInternalServerError
         
         if len(r.value) > 0 :
             return cloudpickle.loads(r.value)
