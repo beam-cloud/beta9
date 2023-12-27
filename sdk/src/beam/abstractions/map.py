@@ -1,7 +1,7 @@
-from typing import Any
-
 import cloudpickle
 
+from typing import Any
+from beam.exceptions import grpc_debug
 from beam.abstractions.base import BaseAbstraction
 from beam.clients.map import (
     MapCountResponse,
@@ -13,6 +13,7 @@ from beam.clients.map import (
 )
 
 
+@grpc_debug()
 class Map(BaseAbstraction):
     def __init__(self, *, name: str) -> None:
         super().__init__()
