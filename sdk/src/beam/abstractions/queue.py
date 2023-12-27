@@ -3,7 +3,7 @@ from typing import Any
 import cloudpickle
 
 from beam.abstractions.base import BaseAbstraction
-from beam.clients.queue import SimpleQueueServiceStub
+from beam.clients.simplequeue import SimpleQueueServiceStub
 
 
 class SimpleQueueInternalServerError(Exception):

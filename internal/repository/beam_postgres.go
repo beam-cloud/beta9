@@ -425,7 +425,7 @@ func (c *PostgresBeamRepository) GetTotalUsageOfUserMs(identity types.Identity) 
 	var identityConditions []string
 	args := make([]interface{}, 0)
 
-	err = c.client.Where(&types.BeamApp{IdentityId: identity.ID}).Find(&beamApps).Error
+	err = c.client.Where(&types.BeamApp{IdentityId: uint(identity.ID)}).Find(&beamApps).Error
 	if err != nil {
 		return 0, err
 	}

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"time"
 
 	"github.com/beam-cloud/beam/internal/types"
@@ -34,6 +35,10 @@ type ContainerRepository interface {
 	DeleteContainerState(*types.ContainerRequest) error
 	SetContainerWorkerHostname(containerId string, addr string) error
 	GetContainerWorkerHostname(containerId string) (string, error)
+}
+
+type BackendRepository interface {
+	GetAllIdentities(ctx context.Context) ([]types.Identity, error)
 }
 
 type BeamRepository interface {

@@ -62,7 +62,7 @@ class SimpleQueueServiceStub(betterproto.ServiceStub):
         request.value = value
 
         return await self._unary_unary(
-            "/queue.SimpleQueueService/Enqueue",
+            "/simplequeue.SimpleQueueService/Enqueue",
             request,
             SimpleQueueEnqueueResponse,
         )
@@ -75,7 +75,7 @@ class SimpleQueueServiceStub(betterproto.ServiceStub):
         request.value = value
 
         return await self._unary_unary(
-            "/queue.SimpleQueueService/Dequeue",
+            "/simplequeue.SimpleQueueService/Dequeue",
             request,
             SimpleQueueDequeueResponse,
         )
@@ -85,7 +85,7 @@ class SimpleQueueServiceStub(betterproto.ServiceStub):
         request.name = name
 
         return await self._unary_unary(
-            "/queue.SimpleQueueService/Peek",
+            "/simplequeue.SimpleQueueService/Peek",
             request,
             SimpleQueuePeekResponse,
         )
@@ -95,7 +95,7 @@ class SimpleQueueServiceStub(betterproto.ServiceStub):
         request.name = name
 
         return await self._unary_unary(
-            "/queue.SimpleQueueService/Empty",
+            "/simplequeue.SimpleQueueService/Empty",
             request,
             SimpleQueueEmptyResponse,
         )
@@ -105,7 +105,7 @@ class SimpleQueueServiceStub(betterproto.ServiceStub):
         request.name = name
 
         return await self._unary_unary(
-            "/queue.SimpleQueueService/Size",
+            "/simplequeue.SimpleQueueService/Size",
             request,
             SimpleQueueSizeResponse,
         )
