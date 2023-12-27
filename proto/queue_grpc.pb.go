@@ -19,11 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	SimpleQueueService_Enqueue_FullMethodName = "/dqueue.SimpleQueueService/Enqueue"
-	SimpleQueueService_Dequeue_FullMethodName = "/dqueue.SimpleQueueService/Dequeue"
-	SimpleQueueService_Peek_FullMethodName    = "/dqueue.SimpleQueueService/Peek"
-	SimpleQueueService_Empty_FullMethodName   = "/dqueue.SimpleQueueService/Empty"
-	SimpleQueueService_Size_FullMethodName    = "/dqueue.SimpleQueueService/Size"
+	SimpleQueueService_Enqueue_FullMethodName = "/simplequeue.SimpleQueueService/Enqueue"
+	SimpleQueueService_Dequeue_FullMethodName = "/simplequeue.SimpleQueueService/Dequeue"
+	SimpleQueueService_Peek_FullMethodName    = "/simplequeue.SimpleQueueService/Peek"
+	SimpleQueueService_Empty_FullMethodName   = "/simplequeue.SimpleQueueService/Empty"
+	SimpleQueueService_Size_FullMethodName    = "/simplequeue.SimpleQueueService/Size"
 )
 
 // SimpleQueueServiceClient is the client API for SimpleQueueService service.
@@ -228,7 +228,7 @@ func _SimpleQueueService_Size_Handler(srv interface{}, ctx context.Context, dec 
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var SimpleQueueService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "dqueue.SimpleQueueService",
+	ServiceName: "simplequeue.SimpleQueueService",
 	HandlerType: (*SimpleQueueServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{

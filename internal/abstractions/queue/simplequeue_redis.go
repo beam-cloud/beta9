@@ -1,4 +1,4 @@
-package dqueue
+package simplequeue
 
 import (
 	"context"
