@@ -12,6 +12,8 @@ func init() {
 
 func upCreateTables(tx *sql.Tx) error {
 	createStatements := []string{
+		`CREATE TYPE deployment_status AS ENUM ('STOPPED', 'RUNNING', 'ERROR', 'PENDING');`,
+
 		`CREATE TABLE IF NOT EXISTS identity (
 			id SERIAL PRIMARY KEY,
 			external_id VARCHAR(255) UNIQUE NOT NULL,
@@ -43,7 +45,7 @@ func upCreateTables(tx *sql.Tx) error {
 			id SERIAL PRIMARY KEY,
 			external_id VARCHAR(255) UNIQUE NOT NULL,
 			version INT NOT NULL,
-			status VARCHAR(255) NOT NULL,
+			status deployment_status NOT NULL DEFAULT 'PENDING',
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);`,
@@ -81,6 +83,7 @@ func downDropTables(tx *sql.Tx) error {
 		"DROP TABLE IF EXISTS task;",
 		"DROP TABLE IF EXISTS identity_token;",
 		"DROP TABLE IF EXISTS identity;",
+		"DROP TYPE IF EXISTS deployment_status;",
 	}
 
 	// Run drop statements in reverse order of creation to handle dependencies.

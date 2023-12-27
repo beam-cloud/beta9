@@ -55,7 +55,7 @@ func (r *PostgresBackendRepository) migrate() error {
 
 func (r *PostgresBackendRepository) GetAllIdentities(ctx context.Context) ([]types.Identity, error) {
 	var identities []types.Identity
-	err := r.client.SelectContext(ctx, &identities, "SELECT * FROM identity_identity")
+	err := r.client.SelectContext(ctx, &identities, "SELECT * FROM identity")
 	if err != nil {
 		return nil, err
 	}
