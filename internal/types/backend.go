@@ -20,6 +20,7 @@ type Token struct {
 	CreatedAt  time.Time `db:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at"`
 	Active     bool      `db:"active"`
+	ContextID  uint      `db:"context_id"` // Foreign key to Context
 }
 
 type Volume struct {
@@ -71,10 +72,9 @@ type Stub struct {
 	ID        uint      `db:"id"`
 	Name      string    `db:"name"`
 	Type      string    `db:"type"`
-	Service   string    `db:"service"`
 	Config    string    `db:"config"`
-	ObjectID  uint      `db:"object_id"` // Foreign key to Object
-	ContextID uint      `db:"context_id"`
+	ObjectID  uint      `db:"object_id"`  // Foreign key to Object
+	ContextID uint      `db:"context_id"` // Foreign key to Context
 	CreatedAt time.Time `db:"created_at"`
 	UpdatedAt time.Time `db:"updated_at"`
 }
