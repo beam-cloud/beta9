@@ -123,7 +123,7 @@ func (g *Gateway) Start() error {
 	}
 	pb.RegisterMapServiceServer(grpcServer, rm)
 
-	rq, err := dqueue.NewSimpleRedisQueueService(g.redisClient)
+	rq, err := dqueue.NewRedisSimpleQueueService(g.redisClient)
 	if err != nil {
 		return err
 	}
