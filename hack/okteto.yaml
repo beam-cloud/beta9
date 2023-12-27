@@ -14,3 +14,4 @@ dev:
       CONFIG_PATH: /workspace/.secrets
     forward:
     - 1993:1993
+    - 5432:postgres-postgresql:5432

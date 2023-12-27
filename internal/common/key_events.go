@@ -78,7 +78,6 @@ func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix 
 				}
 
 			case <-ctx.Done():
-				log.Println("beam: listen for pattern context is done")
 				return
 
 			case err := <-errs:
