@@ -29,7 +29,7 @@ func upCreateTables(tx *sql.Tx) error {
             key VARCHAR(255) NOT NULL,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            active BOOLEAN NOT NULL
+            active BOOLEAN NOT NULL,
             context_id INT REFERENCES context(id)
         );`,
 
@@ -50,6 +50,18 @@ func upCreateTables(tx *sql.Tx) error {
             context_id INT REFERENCES context(id)
         );`,
 
+		`CREATE TABLE IF NOT EXISTS stub (
+            id SERIAL PRIMARY KEY,
+            external_id VARCHAR(255) UNIQUE NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            type stub_type NOT NULL,
+            config JSON NOT NULL,
+            object_id INT REFERENCES object(id),
+            context_id INT REFERENCES context(id),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );`,
+
 		`CREATE TABLE IF NOT EXISTS deployment (
             id SERIAL PRIMARY KEY,
             external_id VARCHAR(255) UNIQUE NOT NULL,
@@ -68,18 +80,6 @@ func upCreateTables(tx *sql.Tx) error {
             ended_at TIMESTAMP WITH TIME ZONE,
             context_id INT REFERENCES context(id),
             stub_id INT REFERENCES stub(id)
-        );`,
-
-		`CREATE TABLE IF NOT EXISTS stub (
-            id SERIAL PRIMARY KEY,
-            external_id VARCHAR(255) UNIQUE NOT NULL,
-            name VARCHAR(255) NOT NULL,
-            type stub_type NOT NULL,
-            config JSON NOT NULL,
-            object_id INT REFERENCES object(id),
-            context_id INT REFERENCES context(id),
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );`,
 	}
 
