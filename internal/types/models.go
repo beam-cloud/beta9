@@ -107,6 +107,31 @@ func (BeamAppTask) TableName() string {
 	return "beam_app_task"
 }
 
+type Identity struct {
+	ID          uint `gorm:"primarykey"`
+	ExternalId  string
+	AccountType string
+}
+
+func (Identity) TableName() string {
+	return "identity_identity"
+}
+
+// TODO: should get this from the database
+func (i *Identity) HasPaidPlan() bool {
+	switch i.AccountType {
+	case "DEVELOPER":
+		fallthrough
+	case "TEAM":
+		fallthrough
+	case "SEAT_BASED_TEAM":
+		fallthrough
+	case "SEAT_BASED_TEAM_V2":
+		return true
+	}
+	return false
+}
+
 type IdentityApiKey struct {
 	ID           uint `gorm:"primarykey"`
 	ExternalId   string

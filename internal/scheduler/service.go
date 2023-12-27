@@ -195,7 +195,7 @@ func (wbs *SchedulerService) GetNextTask(ctx context.Context, in *pb.GetNextTask
 		}, nil
 	}
 
-	task, err := wbs.Scheduler.taskRepo.GetNextTask(in.QueueName, in.ContainerId, identity.ExternalID)
+	task, err := wbs.Scheduler.taskRepo.GetNextTask(in.QueueName, in.ContainerId, identity.ExternalId)
 	if task != nil && err == nil {
 		taskAvailable = true
 	}
@@ -212,7 +212,7 @@ func (wbs *SchedulerService) GetTaskStream(req *pb.GetTaskStreamRequest, stream 
 		return err
 	}
 
-	return wbs.Scheduler.taskRepo.GetTaskStream(req.QueueName, req.ContainerId, identity.ExternalID, stream)
+	return wbs.Scheduler.taskRepo.GetTaskStream(req.QueueName, req.ContainerId, identity.ExternalId, stream)
 }
 
 func (wbs *SchedulerService) StartTask(ctx context.Context, in *pb.StartTaskRequest) (*pb.StartTaskResponse, error) {
@@ -221,14 +221,14 @@ func (wbs *SchedulerService) StartTask(ctx context.Context, in *pb.StartTaskRequ
 		return nil, errors.New("invalid s2s token")
 	}
 
-	_, err = wbs.Scheduler.beamRepo.UpdateActiveTask(in.TaskId, types.BeamAppTaskStatusRunning, identity.ExternalID)
+	_, err = wbs.Scheduler.beamRepo.UpdateActiveTask(in.TaskId, types.BeamAppTaskStatusRunning, identity.ExternalId)
 	if err != nil {
 		return &pb.StartTaskResponse{
 			Ok: false,
 		}, nil
 	}
 
-	err = wbs.Scheduler.taskRepo.StartTask(in.TaskId, in.QueueName, in.ContainerId, identity.ExternalID)
+	err = wbs.Scheduler.taskRepo.StartTask(in.TaskId, in.QueueName, in.ContainerId, identity.ExternalId)
 	return &pb.StartTaskResponse{
 		Ok: err == nil,
 	}, nil
@@ -240,14 +240,14 @@ func (wbs *SchedulerService) EndTask(ctx context.Context, in *pb.EndTaskRequest)
 		return nil, errors.New("invalid s2s token")
 	}
 
-	err = wbs.Scheduler.taskRepo.EndTask(in.TaskId, in.QueueName, in.ContainerId, in.ContainerHostname, identity.ExternalID, float64(in.TaskDuration), float64(in.ScaleDownDelay))
+	err = wbs.Scheduler.taskRepo.EndTask(in.TaskId, in.QueueName, in.ContainerId, in.ContainerHostname, identity.ExternalId, float64(in.TaskDuration), float64(in.ScaleDownDelay))
 	if err != nil {
 		return &pb.EndTaskResponse{
 			Ok: false,
 		}, nil
 	}
 
-	_, err = wbs.Scheduler.beamRepo.UpdateActiveTask(in.TaskId, in.TaskStatus, identity.ExternalID)
+	_, err = wbs.Scheduler.beamRepo.UpdateActiveTask(in.TaskId, in.TaskStatus, identity.ExternalId)
 	if err != nil {
 		return &pb.EndTaskResponse{
 			Ok: false,
@@ -280,7 +280,7 @@ func (wbs *SchedulerService) MonitorTask(req *pb.MonitorTaskRequest, stream pb.S
 		_, err = wbs.Scheduler.beamRepo.UpdateActiveTask(
 			task.TaskId,
 			types.BeamAppTaskStatusTimeout,
-			identity.ExternalID,
+			identity.ExternalId,
 		)
 		if err != nil {
 			return err
@@ -293,7 +293,7 @@ func (wbs *SchedulerService) MonitorTask(req *pb.MonitorTaskRequest, stream pb.S
 		task,
 		req.QueueName,
 		req.ContainerId,
-		identity.ExternalID,
+		identity.ExternalId,
 		int64(taskPolicy.Timeout),
 		stream,
 		timeoutCallback,

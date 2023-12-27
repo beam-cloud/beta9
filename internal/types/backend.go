@@ -5,31 +5,29 @@ import (
 	"time"
 )
 
-type Identity struct {
+type Context struct {
 	ID         uint      `db:"id"`
+	Name       string    `db:"name"`
 	ExternalID string    `db:"external_id"`
 	CreatedAt  time.Time `db:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at"`
-	Active     bool      `db:"active"`
 }
 
-type IdentityToken struct {
+type Token struct {
 	ID         uint      `db:"id"`
 	ExternalID string    `db:"external_id"`
 	Key        string    `db:"key"`
 	CreatedAt  time.Time `db:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at"`
 	Active     bool      `db:"active"`
-	IdentityID uint      `db:"identity_id"` // Foreign key to Identity
 }
 
-type Task struct {
-	ID         uint         `db:"id"`
-	ExternalID string       `db:"external_id"`
-	CreatedAt  time.Time    `db:"created_at"`
-	StartedAt  time.Time    `db:"started_at"`
-	EndedAt    sql.NullTime `db:"ended_at"`   // Can be NULL if the task hasn't ended
-	ContextID  uint         `db:"context_id"` // Foreign key to Context
+type Volume struct {
+	ID         uint      `db:"id"`
+	ExternalID string    `db:"external_id"`
+	Name       string    `db:"name"`
+	CreatedAt  time.Time `db:"created_at"`
+	ContextID  uint      `db:"context_id"` // Foreign key to Context
 }
 
 const (
@@ -47,21 +45,7 @@ type Deployment struct {
 	CreatedAt  time.Time `db:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at"`
 	ContextID  uint      `db:"context_id"` // Foreign key to Context
-}
-
-const (
-	ContextTypeDeployment string = "DEPLOYMENT"
-	ContextTypeFunction   string = "FUNCTION"
-)
-
-type Context struct {
-	ID         uint      `db:"id"`
-	ExternalID string    `db:"external_id"`
-	Type       string    `db:"type"`
-	Name       string    `db:"name"`
-	CreatedAt  time.Time `db:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at"`
-	ObjectID   uint      `db:"object_id"` // Foreign key to Object
+	StubID     uint      `db:"stub_id"`    // Foreign key to Stub
 }
 
 type Object struct {
@@ -70,11 +54,27 @@ type Object struct {
 	Hash       string    `db:"hash"`
 	Size       int64     `db:"size"`
 	CreatedAt  time.Time `db:"created_at"`
+	ContextID  uint      `db:"context_id"` // Foreign key to Context
 }
 
-type Volume struct {
-	ID         uint      `db:"id"`
-	ExternalID string    `db:"external_id"`
-	Name       string    `db:"name"`
-	CreatedAt  time.Time `db:"created_at"`
+type Task struct {
+	ID         uint         `db:"id"`
+	ExternalID string       `db:"external_id"`
+	CreatedAt  time.Time    `db:"created_at"`
+	StartedAt  time.Time    `db:"started_at"`
+	EndedAt    sql.NullTime `db:"ended_at"`   // Can be NULL if the task hasn't ended
+	ContextID  uint         `db:"context_id"` // Foreign key to Context
+	StubID     uint         `db:"stub_id"`    // Foreign key to Stub
+}
+
+type Stub struct {
+	ID        uint      `db:"id"`
+	Name      string    `db:"name"`
+	Type      string    `db:"type"`
+	Service   string    `db:"service"`
+	Config    string    `db:"config"`
+	ObjectID  uint      `db:"object_id"` // Foreign key to Object
+	ContextID uint      `db:"context_id"`
+	CreatedAt time.Time `db:"created_at"`
+	UpdatedAt time.Time `db:"updated_at"`
 }
