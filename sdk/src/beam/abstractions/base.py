@@ -6,8 +6,10 @@ from typing import Any, Coroutine
 from grpclib.client import Channel
 
 from beam.config import get_gateway_channel
+from beam.exceptions import grpc_debug
 
 
+@grpc_debug()
 class BaseAbstraction(ABC):
     def __init__(self) -> None:
         self.loop: AbstractEventLoop = asyncio.get_event_loop()

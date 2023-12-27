@@ -4,14 +4,12 @@ import cloudpickle
 
 from beam.abstractions.base import BaseAbstraction
 from beam.clients.queue import SimpleQueueServiceStub
-from beam.exceptions import grpc_debug
 
 
 class SimpleQueueInternalServerError(Exception):
     pass
 
 
-@grpc_debug()
 class SimpleQueue(BaseAbstraction):
     def __init__(self, *, name: str) -> None:
         super().__init__()
