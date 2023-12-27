@@ -34,7 +34,6 @@ func NewBackendPostgresRepository() (*PostgresBackendRepository, error) {
 		client: db,
 	}
 
-	// Run migrations
 	if err := repo.migrate(); err != nil {
 		log.Fatalf("failed to run backend migrations: %v", err)
 	}

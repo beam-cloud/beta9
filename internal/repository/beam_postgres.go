@@ -612,7 +612,7 @@ func (c *PostgresBeamRepository) GetAgent(name, identityExternalId string) (*typ
 	var a types.Agent
 	var i types.Identity
 
-	result := c.client.Where(&types.Identity{ExternalId: identityExternalId}).Take(&i)
+	result := c.client.Where(&types.Identity{ExternalID: identityExternalId}).Take(&i)
 	if result.Error != nil && errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return nil, result.Error
 	}
