@@ -21,6 +21,17 @@ func NewGatewayService(gw *Gateway) (*GatewayService, error) {
 	}, nil
 }
 
+func (gws *GatewayService) Configure(ctx context.Context, in *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
+	// TODO: check if token exists
+	// if token exists, update name of context
+	// if not, create context, and then create a token
+	// if context exists
+	return &pb.ConfigureResponse{
+		Ok:    true,
+		Token: "",
+	}, nil
+}
+
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
 	filePath := path.Join(GatewayConfig.DefaultObjectPath, in.ObjectId)
 

@@ -62,3 +62,8 @@ func (r *PostgresBackendRepository) GetAllIdentities(ctx context.Context) ([]typ
 
 	return identities, nil
 }
+
+func (r *PostgresBackendRepository) CreateObject(ctx context.Context) (types.Object, error) {
+	var object types.Object
+	return object, nil
+}
