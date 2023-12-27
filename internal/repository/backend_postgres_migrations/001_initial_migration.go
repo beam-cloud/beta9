@@ -36,7 +36,7 @@ func upCreateTables(tx *sql.Tx) error {
 		`CREATE TABLE IF NOT EXISTS object (
 			id SERIAL PRIMARY KEY,
 			external_id VARCHAR(255) UNIQUE NOT NULL,
-			hash VARCHAR(255) NOT NULL,
+			hash VARCHAR(255) NOT NULL UNIQUE,
 			size BIGINT NOT NULL,
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);`,
@@ -44,7 +44,7 @@ func upCreateTables(tx *sql.Tx) error {
 		`CREATE TABLE IF NOT EXISTS context (
 			id SERIAL PRIMARY KEY,
 			external_id VARCHAR(255) UNIQUE NOT NULL,
-			name VARCHAR(255) NOT NULL,
+			name VARCHAR(255) NOT NULL UNIQUE,
 			type context_type NOT NULL,
 			object_id INT REFERENCES object(id),
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
