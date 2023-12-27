@@ -12,7 +12,8 @@ func init() {
 
 func upCreateTables(tx *sql.Tx) error {
 	createStatements := []string{
-		`CREATE TYPE deployment_status AS ENUM ('STOPPED', 'RUNNING', 'ERROR', 'PENDING');`,
+		`CREATE TYPE deployment_status AS ENUM ('STOPPED', 'READY', 'ERROR', 'PENDING');`,
+		`CREATE TYPE context_type AS ENUM ('DEPLOYMENT', 'FUNCTION');`,
 
 		`CREATE TABLE IF NOT EXISTS identity (
 			id SERIAL PRIMARY KEY,
@@ -32,13 +33,31 @@ func upCreateTables(tx *sql.Tx) error {
 			identity_id INT REFERENCES identity(id)
 		);`,
 
+		`CREATE TABLE IF NOT EXISTS object (
+			id SERIAL PRIMARY KEY,
+			external_id VARCHAR(255) UNIQUE NOT NULL,
+			hash VARCHAR(255) NOT NULL,
+			size BIGINT NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		);`,
+
+		`CREATE TABLE IF NOT EXISTS context (
+			id SERIAL PRIMARY KEY,
+			external_id VARCHAR(255) UNIQUE NOT NULL,
+			name VARCHAR(255) NOT NULL,
+			type context_type NOT NULL,
+			object_id INT REFERENCES object(id),
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		);`,
+
 		`CREATE TABLE IF NOT EXISTS task (
 			id SERIAL PRIMARY KEY,
 			external_id VARCHAR(255) UNIQUE NOT NULL,
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 			started_at TIMESTAMP WITH TIME ZONE,
 			ended_at TIMESTAMP WITH TIME ZONE,
-			active BOOLEAN NOT NULL
+			context_id INT REFERENCES context(id)
 		);`,
 
 		`CREATE TABLE IF NOT EXISTS deployment (
@@ -46,16 +65,9 @@ func upCreateTables(tx *sql.Tx) error {
 			external_id VARCHAR(255) UNIQUE NOT NULL,
 			version INT NOT NULL,
 			status deployment_status NOT NULL DEFAULT 'PENDING',
+			context_id INT REFERENCES context(id),
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-		);`,
-
-		`CREATE TABLE IF NOT EXISTS object (
-			id SERIAL PRIMARY KEY,
-			external_id VARCHAR(255) UNIQUE NOT NULL,
-			hash VARCHAR(255) NOT NULL,
-			size BIGINT NOT NULL,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);`,
 
 		`CREATE TABLE IF NOT EXISTS volume (
@@ -81,9 +93,11 @@ func downDropTables(tx *sql.Tx) error {
 		"DROP TABLE IF EXISTS object;",
 		"DROP TABLE IF EXISTS deployment;",
 		"DROP TABLE IF EXISTS task;",
+		"DROP TABLE IF EXISTS context;",
 		"DROP TABLE IF EXISTS identity_token;",
 		"DROP TABLE IF EXISTS identity;",
 		"DROP TYPE IF EXISTS deployment_status;",
+		"DROP TYPE IF EXISTS context_type;",
 	}
 
 	// Run drop statements in reverse order of creation to handle dependencies.
