@@ -9,20 +9,20 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type SimpleRedisQueueService struct {
+type RedisSimpleQueueService struct {
 	pb.UnimplementedSimpleQueueServiceServer
 
 	rdb *common.RedisClient
 }
 
-func NewRedisSimpleQueueService(rdb *common.RedisClient) (*SimpleRedisQueueService, error) {
-	return &SimpleRedisQueueService{
+func NewRedisSimpleQueueService(rdb *common.RedisClient) (*RedisSimpleQueueService, error) {
+	return &RedisSimpleQueueService{
 		rdb: rdb,
 	}, nil
 }
 
 // Simple queue service implementations
-func (s *SimpleRedisQueueService) Enqueue(ctx context.Context, in *pb.SimpleQueueEnqueueRequest) (*pb.SimpleQueueEnqueueResponse, error) {
+func (s *RedisSimpleQueueService) Enqueue(ctx context.Context, in *pb.SimpleQueueEnqueueRequest) (*pb.SimpleQueueEnqueueResponse, error) {
 	queueName := Keys.QueueName(in.Name)
 
 	err := s.rdb.RPush(context.TODO(), queueName, in.Value).Err()
@@ -37,7 +37,7 @@ func (s *SimpleRedisQueueService) Enqueue(ctx context.Context, in *pb.SimpleQueu
 	}, nil
 }
 
-func (s *SimpleRedisQueueService) Dequeue(ctx context.Context, in *pb.SimpleQueueDequeueRequest) (*pb.SimpleQueueDequeueResponse, error) {
+func (s *RedisSimpleQueueService) Dequeue(ctx context.Context, in *pb.SimpleQueueDequeueRequest) (*pb.SimpleQueueDequeueResponse, error) {
 	queueName := Keys.QueueName(in.Name)
 
 	value, err := s.rdb.LPop(context.TODO(), queueName).Bytes()
@@ -59,7 +59,7 @@ func (s *SimpleRedisQueueService) Dequeue(ctx context.Context, in *pb.SimpleQueu
 	}, nil
 }
 
-func (s *SimpleRedisQueueService) Peek(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueuePeekResponse, error) {
+func (s *RedisSimpleQueueService) Peek(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueuePeekResponse, error) {
 	queueName := Keys.QueueName(in.Name)
 
 	res, err := s.rdb.LRange(context.TODO(), queueName, 0, 0)
@@ -81,7 +81,7 @@ func (s *SimpleRedisQueueService) Peek(ctx context.Context, in *pb.SimpleQueueRe
 	}, nil
 }
 
-func (s *SimpleRedisQueueService) Empty(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueueEmptyResponse, error) {
+func (s *RedisSimpleQueueService) Empty(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueueEmptyResponse, error) {
 	queueName := Keys.QueueName(in.Name)
 
 	length, err := s.rdb.LLen(context.TODO(), queueName).Result()
@@ -105,7 +105,7 @@ func (s *SimpleRedisQueueService) Empty(ctx context.Context, in *pb.SimpleQueueR
 	}, nil
 }
 
-func (s *SimpleRedisQueueService) Size(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueueSizeResponse, error) {
+func (s *RedisSimpleQueueService) Size(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueueSizeResponse, error) {
 	queueName := Keys.QueueName(in.Name)
 
 	length, err := s.rdb.LLen(context.TODO(), queueName).Result()
