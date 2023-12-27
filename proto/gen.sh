@@ -18,3 +18,6 @@ protoc -I ../internal/abstractions/map/ --python_betterproto_out=../sdk/src/beam
 
 protoc -I ../internal/abstractions/function/ --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ../internal/abstractions/function/function.proto
 protoc -I ../internal/abstractions/function/ --python_betterproto_out=../sdk/src/beam/clients/  ../internal/abstractions/function/function.proto
+
+protoc -I ../internal/abstractions/queue/ --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ../internal/abstractions/queue/queue.proto
+protoc -I ../internal/abstractions/queue/ --python_betterproto_out=../sdk/src/beam/clients/  ../internal/abstractions/queue/queue.proto
