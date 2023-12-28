@@ -7,7 +7,7 @@ from typing import Any, Callable, NamedTuple, Optional, Type, cast
 
 from grpclib.client import Channel, Stream, _MetadataLike
 from grpclib.const import Cardinality
-from grpclib.utils import Deadline
+from grpclib.metadata import Deadline
 from multidict import MultiDict
 
 from beam import terminal
@@ -101,6 +101,7 @@ def get_gateway_channel() -> Channel:
         host=config.gateway_url,
         port=int(config.gateway_port),
         ssl=True if config.gateway_port == "443" else False,
+        token="TESTTOKEN",
     )
 
     if config.token is None:
