@@ -10,8 +10,9 @@ from beam import terminal
 @click.command()
 @click.option("--name", default=None)
 @click.option("--token", default=None)
-def configure(name: str, token: str):
-    # First check if .beam/config exists
+@click.option("--gateway_url", default=None)
+@click.option("--gateway_port", default=None)
+def configure(name: str, token: str, gateway_url: str, gateway_port: str):
     homedir = os.getenv("HOME")
     config_path = os.path.join(homedir, ".beam", "creds")
 
@@ -24,6 +25,14 @@ def configure(name: str, token: str):
 
     name = name or prompt.Prompt.ask("Name")
     token = token or prompt.Prompt.ask("Token")
+    gateway_url = gateway_url or prompt.Prompt.ask("Gateway URL")
+    gateway_port = gateway_port or prompt.Prompt.ask("Gateway Port")
+
+    try:
+        gateway_port = int(gateway_port)
+    except ValueError:
+        terminal.error("Gateway port must be an integer.")
+        return
 
     if config.has_section(name):
         if not prompt.Confirm.ask(f"Configuration for {name} already exists. Overwrite?"):
@@ -32,6 +41,8 @@ def configure(name: str, token: str):
         config.add_section(name)
 
     config.set(name, "token", token)
+    config.set(name, "gateway_url", gateway_url)
+    config.set(name, "gateway_port", str(gateway_port))
 
     if not config.has_section("default"):
         config.add_section("default")
