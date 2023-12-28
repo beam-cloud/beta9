@@ -17,7 +17,7 @@ class ConfigureRequest(betterproto.Message):
 @dataclass
 class ConfigureResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
-    token: str = betterproto.string_field(2)
+    new_token: str = betterproto.string_field(2)
 
 
 @dataclass

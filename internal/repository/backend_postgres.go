@@ -67,3 +67,8 @@ func (r *PostgresBackendRepository) CreateObject(ctx context.Context) (types.Obj
 	var object types.Object
 	return object, nil
 }
+
+func (r *PostgresBackendRepository) CreateContext(ctx context.Context) (types.Context, error) {
+	var context types.Context
+	return context, nil
+}

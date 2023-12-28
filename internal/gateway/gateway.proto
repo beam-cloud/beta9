@@ -17,7 +17,7 @@ message ConfigureRequest {
 
 message ConfigureResponse {
   bool ok = 1;
-  string token = 2;
+  string new_token = 2;
 }
 
 message ObjectMetadata {

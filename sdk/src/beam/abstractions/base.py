@@ -17,4 +17,7 @@ class BaseAbstraction(ABC):
         return self.loop.run_until_complete(coroutine)
 
     def __del__(self) -> None:
-        self.channel.close()
+        try:
+            self.channel.close()
+        except AttributeError:
+            return
