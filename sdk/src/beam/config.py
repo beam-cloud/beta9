@@ -113,7 +113,7 @@ def get_gateway_channel() -> Channel:
         auth_response: AuthorizeResponse = run_sync(gateway_stub.authorize())
         if not auth_response.ok:
             channel.close()
-            terminal.error("Unable to authorize with gateway ☠️")
+            terminal.error(f"Unable to authorize with gateway: {auth_response.error_msg} ☠️")
 
         # save_config_to_file(config)
 

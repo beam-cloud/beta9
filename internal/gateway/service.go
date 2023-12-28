@@ -32,12 +32,38 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 		}, nil
 	}
 
-	// If auth is not found, look to see if there are no contexts in the database
-	// If there are no contexts, create an initial context value and an initial context
-	// If there are contexts, return unathorized
+	// See if the this gateway has been configured previously
+	existingContexts, err := gws.gw.BackendRepo.ListContexts(ctx)
+	if err != nil || len(existingContexts) >= 1 {
+		return &pb.AuthorizeResponse{
+			Ok:       false,
+			ErrorMsg: "Found existing contexts",
+		}, nil
+	}
+
+	// If no contexts are found, we can create a new one for the user
+	// and generate a new token
+	context, err := gws.gw.BackendRepo.CreateContext(ctx)
+	if err != nil {
+		return &pb.AuthorizeResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to create new context",
+		}, nil
+	}
+
+	// Now that we have a context, create a new token
+	token, err := gws.gw.BackendRepo.CreateToken(ctx, context.ID)
+	if err != nil {
+		return &pb.AuthorizeResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to create new token",
+		}, nil
+	}
 
 	return &pb.AuthorizeResponse{
-		Ok: false,
+		Ok:        true,
+		NewToken:  token.Key,
+		ContextId: context.ExternalID,
 	}, nil
 }
 

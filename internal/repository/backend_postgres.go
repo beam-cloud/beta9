@@ -2,12 +2,15 @@ package repository
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"log"
 
 	"github.com/beam-cloud/beam/internal/common"
 	_ "github.com/beam-cloud/beam/internal/repository/backend_postgres_migrations"
 	"github.com/beam-cloud/beam/internal/types"
+	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
@@ -65,25 +68,55 @@ func (r *PostgresBackendRepository) ListContexts(ctx context.Context) ([]types.C
 	return contexts, nil
 }
 
-func (r *PostgresBackendRepository) CreateContext(ctx context.Context, newContext types.Context) (types.Context, error) {
-	query := `
-	INSERT INTO context (name, external_id)
-	VALUES (:name, :external_id)
-	RETURNING id, name, external_id, created_at, updated_at;
-	`
+func (r *PostgresBackendRepository) CreateContext(ctx context.Context) (types.Context, error) {
+	name := uuid.New().String()[:6] // Generate a short UUID for the context name
 
-	stmt, err := r.client.PrepareNamedContext(ctx, query)
+	externalID, err := r.generateExternalID()
 	if err != nil {
 		return types.Context{}, err
 	}
-	defer stmt.Close()
+
+	query := `
+	INSERT INTO context (name, external_id)
+	VALUES ($1, $2)
+	RETURNING id, name, external_id, created_at, updated_at;
+	`
 
 	var context types.Context
-	if err := stmt.GetContext(ctx, &context, newContext); err != nil {
+	if err := r.client.GetContext(ctx, &context, query, name, externalID); err != nil {
 		return types.Context{}, err
 	}
 
 	return context, nil
+}
+
+const tokenLength = 64
+
+func (r *PostgresBackendRepository) CreateToken(ctx context.Context, contextID uint) (types.Token, error) {
+	externalID, err := r.generateExternalID()
+	if err != nil {
+		return types.Token{}, err
+	}
+
+	// Generate a new key for the token
+	randomBytes := make([]byte, tokenLength)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return types.Token{}, err
+	}
+	key := base64.URLEncoding.EncodeToString(randomBytes)
+
+	query := `
+	INSERT INTO token (external_id, key, active, context_id)
+	VALUES ($1, $2, $3, $4)
+	RETURNING id, external_id, key, created_at, updated_at, active, context_id;
+	`
+
+	var token types.Token
+	if err := r.client.GetContext(ctx, &token, query, externalID, key, true, contextID); err != nil {
+		return types.Token{}, err
+	}
+
+	return token, nil
 }
 
 func (r *PostgresBackendRepository) CreateObject(ctx context.Context, newObj types.Object) (types.Object, error) {
@@ -105,4 +138,12 @@ func (r *PostgresBackendRepository) CreateObject(ctx context.Context, newObj typ
 	}
 
 	return object, nil
+}
+
+func (r *PostgresBackendRepository) generateExternalID() (string, error) {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", b), nil
 }
