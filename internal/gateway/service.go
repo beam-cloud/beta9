@@ -9,6 +9,7 @@ import (
 	"path"
 
 	pb "github.com/beam-cloud/beam/proto"
+	"google.golang.org/grpc/metadata"
 )
 
 type GatewayService struct {
@@ -23,6 +24,19 @@ func NewGatewayService(gw *Gateway) (*GatewayService, error) {
 }
 
 func (gws *GatewayService) Configure(ctx context.Context, in *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
+	// Extract metadata from context
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		// Handle the case where metadata is missing if necessary
+	}
+
+	// Access specific metadata (e.g., authorization token)
+	var token string
+	if val, exists := md["authorization"]; exists && len(val) > 0 {
+		token = val[0] // Assuming the token is in the 'authorization' header
+		log.Println("token: ", token)
+	}
+
 	// TODO: check if token exists
 	// if token exists, update name of context
 	log.Println("in: ", in)
