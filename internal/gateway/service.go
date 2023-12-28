@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log"
 	"os"
 	"path"
 
+	"github.com/beam-cloud/beam/internal/auth"
 	pb "github.com/beam-cloud/beam/proto"
 )
 
@@ -18,6 +20,20 @@ type GatewayService struct {
 func NewGatewayService(gw *Gateway) (*GatewayService, error) {
 	return &GatewayService{
 		gw: gw,
+	}, nil
+}
+
+func (gws *GatewayService) Configure(ctx context.Context, in *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
+	authInfo, exists := auth.AuthInfoFromContext(ctx)
+	if exists {
+		log.Println("auth info found: ", authInfo)
+	}
+
+	log.Println("in: ", in)
+
+	return &pb.ConfigureResponse{
+		Ok:       true,
+		NewToken: "",
 	}, nil
 }
 

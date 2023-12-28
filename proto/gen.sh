@@ -2,8 +2,8 @@
 
 # Generate Go code
 protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ./scheduler.proto
-protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ./gateway.proto
-protoc -I . --python_betterproto_out=../sdk/src/beam/clients/  ./gateway.proto
+protoc -I ../internal/gateway/ --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ../internal/gateway/gateway.proto
+protoc -I ../internal/gateway/ --python_betterproto_out=../sdk/src/beam/clients/  ../internal/gateway/gateway.proto
 
 protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ./cache.proto
 protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ./cache.proto

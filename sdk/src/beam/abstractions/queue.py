@@ -21,9 +21,6 @@ class SimpleQueue(BaseAbstraction):
         r = self.run_sync(self.stub.size(name=self.name))
         return r.size if r.ok else 0
 
-    def __del__(self):
-        self.channel.close()
-
     def enqueue(self, value: Any) -> bool:
         r = self.run_sync(self.stub.enqueue(name=self.name, value=cloudpickle.dumps(value)))
 

@@ -9,6 +9,17 @@ import grpclib
 
 
 @dataclass
+class ConfigureRequest(betterproto.Message):
+    name: str = betterproto.string_field(1)
+
+
+@dataclass
+class ConfigureResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    new_token: str = betterproto.string_field(2)
+
+
+@dataclass
 class ObjectMetadata(betterproto.Message):
     name: str = betterproto.string_field(1)
     size: int = betterproto.int64_field(2)
@@ -42,6 +53,16 @@ class PutObjectResponse(betterproto.Message):
 
 
 class GatewayServiceStub(betterproto.ServiceStub):
+    async def configure(self, *, name: str = "") -> ConfigureResponse:
+        request = ConfigureRequest()
+        request.name = name
+
+        return await self._unary_unary(
+            "/gateway.GatewayService/Configure",
+            request,
+            ConfigureResponse,
+        )
+
     async def head_object(self, *, object_id: str = "") -> HeadObjectResponse:
         request = HeadObjectRequest()
         request.object_id = object_id

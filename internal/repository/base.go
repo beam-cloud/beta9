@@ -39,6 +39,7 @@ type ContainerRepository interface {
 
 type BackendRepository interface {
 	GetAllIdentities(ctx context.Context) ([]types.Identity, error)
+	CreateObject(ctx context.Context) (types.Object, error)
 }
 
 type BeamRepository interface {
