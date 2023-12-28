@@ -121,9 +121,15 @@ func (g *Gateway) Start() error {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
+	authInterceptor := NewAuthInterceptor()
+
+	serverOptions := []grpc.ServerOption{
+		grpc.UnaryInterceptor(authInterceptor.Unary()),
+		grpc.StreamInterceptor(authInterceptor.Stream()),
+	}
+
 	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(authInterceptor),
-		grpc.StreamInterceptor(streamAuthInterceptor),
+		serverOptions...,
 	)
 
 	// Create and register abstractions
