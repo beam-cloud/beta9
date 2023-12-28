@@ -50,12 +50,7 @@ func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, schedu
 func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
 	log.Printf("incoming function run request: %+v", in)
 
-	authInfo, authFound := auth.AuthInfoFromContext(stream.Context())
-	if !authFound {
-		stream.Send(&pb.FunctionInvokeResponse{Output: "Invalid token", Done: true, ExitCode: 1})
-		return errors.New("invalid token")
-	}
-
+	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 	invocationId := fs.genInvocationId()
 	containerId := fs.genContainerId(invocationId)
 
