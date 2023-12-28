@@ -4,27 +4,28 @@
 from dataclasses import dataclass
 
 import betterproto
+import grpclib
 
 
 @dataclass
-class SimpleQueuePutRequest(betterproto.Message):
+class SimpleQueueEnqueueRequest(betterproto.Message):
     name: str = betterproto.string_field(1)
     value: bytes = betterproto.bytes_field(2)
 
 
 @dataclass
-class SimpleQueuePutResponse(betterproto.Message):
+class SimpleQueueEnqueueResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
 @dataclass
-class SimpleQueuePopRequest(betterproto.Message):
+class SimpleQueueDequeueRequest(betterproto.Message):
     name: str = betterproto.string_field(1)
     value: bytes = betterproto.bytes_field(2)
 
 
 @dataclass
-class SimpleQueuePopResponse(betterproto.Message):
+class SimpleQueueDequeueResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     value: bytes = betterproto.bytes_field(2)
 
@@ -53,26 +54,30 @@ class SimpleQueueRequest(betterproto.Message):
 
 
 class SimpleQueueServiceStub(betterproto.ServiceStub):
-    async def put(self, *, name: str = "", value: bytes = b"") -> SimpleQueuePutResponse:
-        request = SimpleQueuePutRequest()
+    async def enqueue(
+        self, *, name: str = "", value: bytes = b""
+    ) -> SimpleQueueEnqueueResponse:
+        request = SimpleQueueEnqueueRequest()
         request.name = name
         request.value = value
 
         return await self._unary_unary(
-            "/queue.SimpleQueueService/Put",
+            "/dqueue.SimpleQueueService/Enqueue",
             request,
-            SimpleQueuePutResponse,
+            SimpleQueueEnqueueResponse,
         )
 
-    async def pop(self, *, name: str = "", value: bytes = b"") -> SimpleQueuePopResponse:
-        request = SimpleQueuePopRequest()
+    async def dequeue(
+        self, *, name: str = "", value: bytes = b""
+    ) -> SimpleQueueDequeueResponse:
+        request = SimpleQueueDequeueRequest()
         request.name = name
         request.value = value
 
         return await self._unary_unary(
-            "/queue.SimpleQueueService/Pop",
+            "/dqueue.SimpleQueueService/Dequeue",
             request,
-            SimpleQueuePopResponse,
+            SimpleQueueDequeueResponse,
         )
 
     async def peek(self, *, name: str = "") -> SimpleQueuePeekResponse:
