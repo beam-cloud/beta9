@@ -9,6 +9,7 @@ import (
 	"path"
 	"time"
 
+	"github.com/beam-cloud/beam/internal/auth"
 	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
@@ -49,6 +50,12 @@ func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, schedu
 func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
 	log.Printf("incoming function run request: %+v", in)
 
+	authInfo, authFound := auth.AuthInfoFromContext(stream.Context())
+	if !authFound {
+		stream.Send(&pb.FunctionInvokeResponse{Output: "Invalid token", Done: true, ExitCode: 1})
+		return errors.New("invalid token")
+	}
+
 	invocationId := fs.genInvocationId()
 	containerId := fs.genContainerId(invocationId)
 
@@ -83,6 +90,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		Env: []string{
 			fmt.Sprintf("INVOCATION_ID=%s", invocationId),
 			fmt.Sprintf("HANDLER=%s", in.Handler),
+			fmt.Sprintf("BEAM_TOKEN=%s", authInfo.Token.Key),
 		},
 		Cpu:        in.Cpu,
 		Memory:     in.Memory,

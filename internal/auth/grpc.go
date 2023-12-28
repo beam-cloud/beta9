@@ -61,6 +61,15 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 	}, true
 }
 
+type wrappedStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *wrappedStream) Context() context.Context {
+	return w.ctx
+}
+
 func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		md, ok := metadata.FromIncomingContext(stream.Context())
@@ -68,16 +77,24 @@ func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 			return status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		_, valid := ai.validateToken(md)
+		authInfo, valid := ai.validateToken(md)
 		if !valid {
 			if !ai.isAuthRequired(info.FullMethod) {
 				return handler(srv, stream)
 			}
-
 			return status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		return handler(srv, stream)
+		// Create a new context with the AuthInfo
+		ctxWithAuth := ai.newContextWithAuth(stream.Context(), authInfo)
+
+		// Create a new wrapped stream with the new context
+		wrappedStr := &wrappedStream{
+			ServerStream: stream,
+			ctx:          ctxWithAuth,
+		}
+
+		return handler(srv, wrappedStr)
 	}
 }
 

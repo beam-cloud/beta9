@@ -85,6 +85,13 @@ def save_config_to_file(config: GatewayConfig) -> None:
 
 
 def get_gateway_config() -> GatewayConfig:
+    gateway_url = os.getenv("BEAM_GATEWAY_HOST", None)
+    gateway_port = os.getenv("BEAM_GATEWAY_PORT", None)
+    token = os.getenv("BEAM_TOKEN", None)
+
+    if gateway_url and gateway_port and token:
+        return GatewayConfig(gateway_url, gateway_port, token)
+
     return load_config_from_file()
 
 
@@ -119,24 +126,15 @@ def get_gateway_channel() -> Channel:
 
         save_config_to_file(config)
 
-        # Close unauthenticated channel
-        channel.close()
+        channel.close()  # Close unauthenticated channel
 
-        # Open new channel with valid token
-        channel = AuthenticatedChannel(
-            host=config.gateway_url,
-            port=int(config.gateway_port),
-            ssl=True if config.gateway_port == "443" else False,
-            token=config.token,
-        )
-
-    else:
-        channel = AuthenticatedChannel(
-            host=config.gateway_url,
-            port=int(config.gateway_port),
-            ssl=True if config.gateway_port == "443" else False,
-            token=config.token,
-        )
+    # Open new channel with valid token
+    channel = AuthenticatedChannel(
+        host=config.gateway_url,
+        port=int(config.gateway_port),
+        ssl=True if config.gateway_port == "443" else False,
+        token=config.token,
+    )
 
     return channel
 
