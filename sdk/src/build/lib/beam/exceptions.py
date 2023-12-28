@@ -1,2 +1,0 @@
-class RunnerException(SystemExit):
-    pass

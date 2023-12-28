@@ -9,6 +9,19 @@ import grpclib
 
 
 @dataclass
+class AuthorizeRequest(betterproto.Message):
+    pass
+
+
+@dataclass
+class AuthorizeResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    context_id: str = betterproto.string_field(2)
+    new_token: str = betterproto.string_field(3)
+    error_msg: str = betterproto.string_field(4)
+
+
+@dataclass
 class ObjectMetadata(betterproto.Message):
     name: str = betterproto.string_field(1)
     size: int = betterproto.int64_field(2)
@@ -42,6 +55,15 @@ class PutObjectResponse(betterproto.Message):
 
 
 class GatewayServiceStub(betterproto.ServiceStub):
+    async def authorize(self) -> AuthorizeResponse:
+        request = AuthorizeRequest()
+
+        return await self._unary_unary(
+            "/gateway.GatewayService/Authorize",
+            request,
+            AuthorizeResponse,
+        )
+
     async def head_object(self, *, object_id: str = "") -> HeadObjectResponse:
         request = HeadObjectRequest()
         request.object_id = object_id
