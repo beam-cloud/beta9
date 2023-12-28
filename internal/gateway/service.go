@@ -29,15 +29,8 @@ func (gws *GatewayService) Configure(ctx context.Context, in *pb.ConfigureReques
 		log.Println("auth info found: ", authInfo)
 	}
 
-	// TODO: check if token exists
-	// if token exists, update name of context
 	log.Println("in: ", in)
-	// if in.Token != "" {
-	// 	gws.gw.BackendRepo.CreateObject(ctx)
-	// }
 
-	// if not, create context, and then create a token
-	// if context exists
 	return &pb.ConfigureResponse{
 		Ok:       true,
 		NewToken: "",

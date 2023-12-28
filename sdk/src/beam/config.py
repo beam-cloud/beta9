@@ -3,7 +3,7 @@ import functools
 import os
 import sys
 from contextlib import contextmanager
-from typing import Any, Callable, NamedTuple, Optional, Type, cast
+from typing import Any, Callable, NamedTuple, Optional, Type, Union, cast
 
 from grpclib.client import Channel, Stream, _MetadataLike
 from grpclib.const import Cardinality
@@ -12,15 +12,17 @@ from multidict import MultiDict
 
 from beam import terminal
 from beam.aio import run_sync
-from beam.clients.gateway import GatewayServiceStub
+from beam.clients.gateway import ConfigureResponse, GatewayServiceStub
 
 DEFAULT_CONFIG_FILE_PATH = "~/.beam/.config"
 DEFAULT_PROFILE_NAME = "default"
+DEFAULT_GATEWAY_HOST = "0.0.0.0"
+DEFAULT_GATEWAY_PORT = "1993"
 
 
 class GatewayConfig(NamedTuple):
-    gateway_url: str = "0.0.0.0"
-    gateway_port: str = "1993"
+    gateway_url: str = DEFAULT_GATEWAY_HOST
+    gateway_port: str = DEFAULT_GATEWAY_PORT
     token: Optional[str] = None
 
 
@@ -63,8 +65,9 @@ def load_config_from_file() -> GatewayConfig:
         return GatewayConfig()
 
     config.read(config_path)
-    gateway_url = config.get(DEFAULT_PROFILE_NAME, "gateway_url", fallback="0.0.0.0")
-    gateway_port = config.get(DEFAULT_PROFILE_NAME, "gateway_port", fallback="1993")
+
+    gateway_url = config.get(DEFAULT_PROFILE_NAME, "gateway_url", fallback=DEFAULT_GATEWAY_HOST)
+    gateway_port = config.get(DEFAULT_PROFILE_NAME, "gateway_port", fallback=DEFAULT_GATEWAY_PORT)
     token = config.get(DEFAULT_PROFILE_NAME, "token", fallback=None)
 
     return GatewayConfig(gateway_url, gateway_port, token)
@@ -87,25 +90,40 @@ def get_gateway_config() -> GatewayConfig:
 
 def get_gateway_channel() -> Channel:
     config: GatewayConfig = get_gateway_config()
-
-    channel = AuthenticatedChannel(
-        host=config.gateway_url,
-        port=int(config.gateway_port),
-        ssl=True if config.gateway_port == "443" else False,
-        token="TESTTOKEN",
-    )
+    channel: Union[AuthenticatedChannel, None] = None
 
     if config.token is None:
+        channel = AuthenticatedChannel(
+            host=config.gateway_url,
+            port=int(config.gateway_port),
+            ssl=True if config.gateway_port == "443" else False,
+            token=None,
+        )
+
         terminal.header("Welcome to Beam! Let's get started 📡")
+
         gateway_url = terminal.prompt(text="Gateway host", default="0.0.0.0")
         gateway_port = terminal.prompt(text="Gateway port", default="1993")
         token = terminal.prompt(text="Token", default=None)
 
         config = config._replace(gateway_url=gateway_url, gateway_port=gateway_port, token=token)
-        # save_config_to_file(config)
+
         terminal.header("Configuring gateway")
-        stub = GatewayServiceStub(channel=channel)
-        run_sync(stub.configure(name="test-thing"))
+        gateway_stub = GatewayServiceStub(channel=channel)
+        config_response: ConfigureResponse = run_sync(gateway_stub.configure(name="test-thing"))
+        if not config_response.ok:
+            channel.close()
+            terminal.error("Unable to configure gateway")
+
+        # save_config_to_file(config)
+
+    else:
+        channel = AuthenticatedChannel(
+            host=config.gateway_url,
+            port=int(config.gateway_port),
+            ssl=True if config.gateway_port == "443" else False,
+            token=config.token,
+        )
 
     return channel
 
