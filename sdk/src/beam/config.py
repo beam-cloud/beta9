@@ -109,7 +109,6 @@ def get_gateway_channel() -> Channel:
         stub = GatewayServiceStub(channel=channel)
         run_sync(stub.configure(name="test-thing"))
 
-    setattr(channel, "token", config.token)
     return channel
 
 

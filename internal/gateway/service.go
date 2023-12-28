@@ -24,7 +24,6 @@ func NewGatewayService(gw *Gateway) (*GatewayService, error) {
 }
 
 func (gws *GatewayService) Configure(ctx context.Context, in *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
-	// Extract metadata from context
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		// Handle the case where metadata is missing if necessary
