@@ -14,51 +14,71 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-func authInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	unauthenticatedMethods := map[string]bool{
-		"/gateway.GatewayService/Configure": true,
-	}
-
-	// Bypass auth for any methods in the map above
-	if _, ok := unauthenticatedMethods[info.FullMethod]; ok {
-		log.Println("bypassing auth")
-		return handler(ctx, req)
-	}
-
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok || len(md["authorization"]) == 0 {
-		return handler(ctx, req)
-	}
-
-	token := strings.TrimPrefix(md["authorization"][0], "Bearer ")
-
-	log.Println("incoming token: ", token)
-	// TODO: Validate the token
-
-	return handler(ctx, req)
+type AuthInterceptor struct {
+	unauthenticatedMethods map[string]bool
 }
 
-func streamAuthInterceptor(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	unauthenticatedMethods := map[string]bool{
-		"/gateway.GatewayService/Configure": true,
+func NewAuthInterceptor() *AuthInterceptor {
+	return &AuthInterceptor{
+		unauthenticatedMethods: map[string]bool{
+			"/gateway.GatewayService/Configure": true,
+		},
 	}
+}
 
-	// Bypass auth for certain methods
-	if _, ok := unauthenticatedMethods[info.FullMethod]; ok {
+func (ai *AuthInterceptor) isAuthRequired(method string) bool {
+	_, ok := ai.unauthenticatedMethods[method]
+	return !ok
+}
+
+func (ai *AuthInterceptor) validateToken(md metadata.MD) (string, bool) {
+	if len(md["authorization"]) == 0 {
+		return "", false
+	}
+	return strings.TrimPrefix(md["authorization"][0], "Bearer "), true
+}
+
+func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
+	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if !ai.isAuthRequired(info.FullMethod) {
+			return handler(srv, stream)
+		}
+
+		md, ok := metadata.FromIncomingContext(stream.Context())
+		if !ok {
+			return handler(srv, stream)
+		}
+
+		// TODO: Validate the token
+		_, valid := ai.validateToken(md)
+		if !valid {
+			// Handle invalid token case
+		}
+
 		return handler(srv, stream)
 	}
+}
 
-	// Extract and validate token
-	md, ok := metadata.FromIncomingContext(stream.Context())
-	if !ok || len(md["authorization"]) == 0 {
-		return handler(srv, stream)
+func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		if !ai.isAuthRequired(info.FullMethod) {
+			log.Println("bypassing auth...")
+			return handler(ctx, req)
+		}
+
+		md, ok := metadata.FromIncomingContext(ctx)
+		if !ok {
+			return handler(ctx, req)
+		}
+
+		// TODO: Validate the token
+		_, valid := ai.validateToken(md)
+		if !valid {
+			// Handle invalid token case
+		}
+
+		return handler(ctx, req)
 	}
-	token := strings.TrimPrefix(md["authorization"][0], "Bearer ")
-
-	log.Println("token: ", token)
-	// TODO: Validate the token
-
-	return handler(srv, stream)
 }
 
 func basicAuthMiddleware(beamRepo repository.BeamRepository) gin.HandlerFunc {
