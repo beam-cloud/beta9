@@ -19,11 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	SimpleQueueService_Put_FullMethodName   = "/queue.SimpleQueueService/Put"
-	SimpleQueueService_Pop_FullMethodName   = "/queue.SimpleQueueService/Pop"
-	SimpleQueueService_Peek_FullMethodName  = "/queue.SimpleQueueService/Peek"
-	SimpleQueueService_Empty_FullMethodName = "/queue.SimpleQueueService/Empty"
-	SimpleQueueService_Size_FullMethodName  = "/queue.SimpleQueueService/Size"
+	SimpleQueueService_Put_FullMethodName   = "/simplequeue.SimpleQueueService/Put"
+	SimpleQueueService_Pop_FullMethodName   = "/simplequeue.SimpleQueueService/Pop"
+	SimpleQueueService_Peek_FullMethodName  = "/simplequeue.SimpleQueueService/Peek"
+	SimpleQueueService_Empty_FullMethodName = "/simplequeue.SimpleQueueService/Empty"
+	SimpleQueueService_Size_FullMethodName  = "/simplequeue.SimpleQueueService/Size"
 )
 
 // SimpleQueueServiceClient is the client API for SimpleQueueService service.
