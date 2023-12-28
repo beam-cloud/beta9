@@ -14,7 +14,7 @@ from beam import terminal
 from beam.aio import run_sync
 from beam.clients.gateway import ConfigureResponse, GatewayServiceStub
 
-DEFAULT_CONFIG_FILE_PATH = "~/.beam/.config"
+DEFAULT_CONFIG_FILE_PATH = "~/.beam/creds"
 DEFAULT_PROFILE_NAME = "default"
 DEFAULT_GATEWAY_HOST = "0.0.0.0"
 DEFAULT_GATEWAY_PORT = "1993"
