@@ -53,22 +53,56 @@ func (r *PostgresBackendRepository) migrate() error {
 	return nil
 }
 
-func (r *PostgresBackendRepository) GetAllIdentities(ctx context.Context) ([]types.Identity, error) {
-	var identities []types.Identity
-	err := r.client.SelectContext(ctx, &identities, "SELECT * FROM identity")
+func (r *PostgresBackendRepository) ListContexts(ctx context.Context) ([]types.Context, error) {
+	var contexts []types.Context
+
+	query := `SELECT id, name, external_id, created_at, updated_at FROM context;`
+	err := r.client.SelectContext(ctx, &contexts, query)
 	if err != nil {
 		return nil, err
 	}
 
-	return identities, nil
+	return contexts, nil
 }
 
-func (r *PostgresBackendRepository) CreateObject(ctx context.Context) (types.Object, error) {
-	var object types.Object
-	return object, nil
-}
+func (r *PostgresBackendRepository) CreateContext(ctx context.Context, newContext types.Context) (types.Context, error) {
+	query := `
+	INSERT INTO context (name, external_id)
+	VALUES (:name, :external_id)
+	RETURNING id, name, external_id, created_at, updated_at;
+	`
 
-func (r *PostgresBackendRepository) CreateContext(ctx context.Context) (types.Context, error) {
+	stmt, err := r.client.PrepareNamedContext(ctx, query)
+	if err != nil {
+		return types.Context{}, err
+	}
+	defer stmt.Close()
+
 	var context types.Context
+	if err := stmt.GetContext(ctx, &context, newContext); err != nil {
+		return types.Context{}, err
+	}
+
 	return context, nil
+}
+
+func (r *PostgresBackendRepository) CreateObject(ctx context.Context, newObj types.Object) (types.Object, error) {
+	query := `
+	INSERT INTO object (external_id, hash, size, context_id)
+	VALUES (:external_id, :hash, :size, :context_id)
+	RETURNING id, external_id, hash, size, created_at, context_id;
+	`
+
+	stmt, err := r.client.PrepareNamedContext(ctx, query)
+	if err != nil {
+		return types.Object{}, err
+	}
+	defer stmt.Close()
+
+	var object types.Object
+	if err := stmt.GetContext(ctx, &object, newObj); err != nil {
+		return types.Object{}, err
+	}
+
+	return object, nil
 }

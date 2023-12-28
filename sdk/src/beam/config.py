@@ -12,7 +12,7 @@ from multidict import MultiDict
 
 from beam import terminal
 from beam.aio import run_sync
-from beam.clients.gateway import ConfigureResponse, GatewayServiceStub
+from beam.clients.gateway import AuthorizeResponse, GatewayServiceStub
 
 DEFAULT_CONFIG_FILE_PATH = "~/.beam/creds"
 DEFAULT_PROFILE_NAME = "default"
@@ -108,12 +108,12 @@ def get_gateway_channel() -> Channel:
 
         config = config._replace(gateway_url=gateway_url, gateway_port=gateway_port, token=token)
 
-        terminal.header("Configuring gateway")
+        terminal.header("Authorizing with gateway")
         gateway_stub = GatewayServiceStub(channel=channel)
-        config_response: ConfigureResponse = run_sync(gateway_stub.configure(name="test-thing"))
-        if not config_response.ok:
+        auth_response: AuthorizeResponse = run_sync(gateway_stub.authorize())
+        if not auth_response.ok:
             channel.close()
-            terminal.error("Unable to configure gateway")
+            terminal.error("Unable to authorize with gateway ☠️")
 
         # save_config_to_file(config)
 

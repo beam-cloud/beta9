@@ -102,7 +102,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return err
 	}
 
-	// TODO: replace placeholder service token
+	// TODO: replace placeholder token
 	client, err := common.NewRunCClient(hostname, "")
 	if err != nil {
 		return err

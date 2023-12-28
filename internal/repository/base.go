@@ -38,8 +38,9 @@ type ContainerRepository interface {
 }
 
 type BackendRepository interface {
-	GetAllIdentities(ctx context.Context) ([]types.Identity, error)
-	CreateObject(ctx context.Context) (types.Object, error)
+	ListContexts(ctx context.Context) ([]types.Context, error)
+	CreateContext(ctx context.Context, newContext types.Context) (types.Context, error)
+	CreateObject(ctx context.Context, newObj types.Object) (types.Object, error)
 }
 
 type BeamRepository interface {

@@ -9,14 +9,15 @@ import grpclib
 
 
 @dataclass
-class ConfigureRequest(betterproto.Message):
-    name: str = betterproto.string_field(1)
+class AuthorizeRequest(betterproto.Message):
+    pass
 
 
 @dataclass
-class ConfigureResponse(betterproto.Message):
+class AuthorizeResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
-    new_token: str = betterproto.string_field(2)
+    context_id: str = betterproto.string_field(2)
+    new_token: str = betterproto.string_field(3)
 
 
 @dataclass
@@ -53,14 +54,13 @@ class PutObjectResponse(betterproto.Message):
 
 
 class GatewayServiceStub(betterproto.ServiceStub):
-    async def configure(self, *, name: str = "") -> ConfigureResponse:
-        request = ConfigureRequest()
-        request.name = name
+    async def authorize(self) -> AuthorizeResponse:
+        request = AuthorizeRequest()
 
         return await self._unary_unary(
-            "/gateway.GatewayService/Configure",
+            "/gateway.GatewayService/Authorize",
             request,
-            ConfigureResponse,
+            AuthorizeResponse,
         )
 
     async def head_object(self, *, object_id: str = "") -> HeadObjectResponse:

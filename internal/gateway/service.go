@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"log"
 	"os"
 	"path"
 
@@ -23,17 +22,22 @@ func NewGatewayService(gw *Gateway) (*GatewayService, error) {
 	}, nil
 }
 
-func (gws *GatewayService) Configure(ctx context.Context, in *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
-	authInfo, exists := auth.AuthInfoFromContext(ctx)
-	if exists {
-		log.Println("auth info found: ", authInfo)
+func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeRequest) (*pb.AuthorizeResponse, error) {
+	authInfo, authFound := auth.AuthInfoFromContext(ctx)
+
+	if authFound {
+		return &pb.AuthorizeResponse{
+			ContextId: authInfo.Context.ExternalID,
+			Ok:        true,
+		}, nil
 	}
 
-	log.Println("in: ", in)
+	// If auth is not found, look to see if there are no contexts in the database
+	// If there are no contexts, create an initial context value and an initial context
+	// If there are contexts, return unathorized
 
-	return &pb.ConfigureResponse{
-		Ok:       true,
-		NewToken: "",
+	return &pb.AuthorizeResponse{
+		Ok: false,
 	}, nil
 }
 

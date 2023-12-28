@@ -5,6 +5,8 @@ import (
 	"log"
 	"strings"
 
+	"github.com/beam-cloud/beam/internal/types"
+
 	"github.com/beam-cloud/beam/internal/repository"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -15,7 +17,8 @@ import (
 var authContextKey = "auth"
 
 type AuthInfo struct {
-	Token string
+	Context types.Context
+	Token   types.Token
 }
 
 func AuthInfoFromContext(ctx context.Context) (AuthInfo, bool) {
@@ -32,7 +35,7 @@ func NewAuthInterceptor(backendRepo repository.BackendRepository) *AuthIntercept
 	return &AuthInterceptor{
 		backendRepo: backendRepo,
 		unauthenticatedMethods: map[string]bool{
-			"/gateway.GatewayService/Configure": true,
+			"/gateway.GatewayService/Authorize": true,
 		},
 	}
 }
@@ -80,7 +83,7 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 			return nil, status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		token, valid := ai.validateToken(md)
+		_, valid := ai.validateToken(md)
 		if !valid {
 			if !ai.isAuthRequired(info.FullMethod) {
 				return handler(ctx, req)
@@ -90,7 +93,8 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 		}
 
 		authInfo := AuthInfo{
-			Token: token,
+			Token:   types.Token{},
+			Context: types.Context{},
 		}
 
 		// Attach the auth info to context
