@@ -59,26 +59,49 @@ func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 	}
 }
 
+var authKey = "auth"
+
+type AuthInfo struct {
+	Token    string
+	UserName string
+}
+
 func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		if !ai.isAuthRequired(info.FullMethod) {
-			log.Println("bypassing auth...")
-			return handler(ctx, req)
-		}
-
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
 			return handler(ctx, req)
 		}
 
 		// TODO: Validate the token
-		_, valid := ai.validateToken(md)
+		token, valid := ai.validateToken(md)
 		if !valid {
 			// Handle invalid token case
 		}
 
+		if !ai.isAuthRequired(info.FullMethod) {
+			log.Println("bypassing auth...")
+			return handler(ctx, req)
+		}
+
+		authInfo := AuthInfo{
+			Token:    token,
+			UserName: "exampleUserName",
+		}
+
+		// Attach the auth info to context
+		ctx = ai.newContextWithAuth(ctx, authInfo)
 		return handler(ctx, req)
 	}
+}
+
+func (ai *AuthInterceptor) newContextWithAuth(ctx context.Context, authInfo AuthInfo) context.Context {
+	return context.WithValue(ctx, authKey, authInfo)
+}
+
+func AuthInfoFromContext(ctx context.Context) (AuthInfo, bool) {
+	authInfo, ok := ctx.Value(authKey).(AuthInfo)
+	return authInfo, ok
 }
 
 func basicAuthMiddleware(beamRepo repository.BeamRepository) gin.HandlerFunc {
