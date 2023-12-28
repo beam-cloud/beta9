@@ -12,6 +12,7 @@ import (
 	"github.com/beam-cloud/beam/internal/abstractions/image"
 	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
 	simplequeue "github.com/beam-cloud/beam/internal/abstractions/queue"
+	"github.com/beam-cloud/beam/internal/auth"
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
@@ -121,7 +122,7 @@ func (g *Gateway) Start() error {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	authInterceptor := NewAuthInterceptor()
+	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo)
 
 	serverOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(authInterceptor.Unary()),
