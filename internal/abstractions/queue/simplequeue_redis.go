@@ -23,7 +23,7 @@ func NewRedisSimpleQueueService(rdb *common.RedisClient) (*RedisSimpleQueueServi
 
 // Simple queue service implementations
 func (s *RedisSimpleQueueService) Put(ctx context.Context, in *pb.SimpleQueuePutRequest) (*pb.SimpleQueuePutResponse, error) {
-	queueName := Keys.QueueName(in.Name)
+	queueName := Keys.SimpleQueueName(in.Name)
 
 	err := s.rdb.RPush(context.TODO(), queueName, in.Value).Err()
 	if err != nil {
@@ -38,7 +38,7 @@ func (s *RedisSimpleQueueService) Put(ctx context.Context, in *pb.SimpleQueuePut
 }
 
 func (s *RedisSimpleQueueService) Pop(ctx context.Context, in *pb.SimpleQueuePopRequest) (*pb.SimpleQueuePopResponse, error) {
-	queueName := Keys.QueueName(in.Name)
+	queueName := Keys.SimpleQueueName(in.Name)
 
 	value, err := s.rdb.LPop(context.TODO(), queueName).Bytes()
 	if err == redis.Nil {
