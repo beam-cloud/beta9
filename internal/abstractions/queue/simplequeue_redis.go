@@ -22,39 +22,39 @@ func NewRedisSimpleQueueService(rdb *common.RedisClient) (*RedisSimpleQueueServi
 }
 
 // Simple queue service implementations
-func (s *RedisSimpleQueueService) Enqueue(ctx context.Context, in *pb.SimpleQueueEnqueueRequest) (*pb.SimpleQueueEnqueueResponse, error) {
+func (s *RedisSimpleQueueService) Put(ctx context.Context, in *pb.SimpleQueuePutRequest) (*pb.SimpleQueuePutResponse, error) {
 	queueName := Keys.SimpleQueueName(in.Name)
 
 	err := s.rdb.RPush(context.TODO(), queueName, in.Value).Err()
 	if err != nil {
-		return &pb.SimpleQueueEnqueueResponse{
+		return &pb.SimpleQueuePutResponse{
 			Ok: false,
 		}, err
 	}
 
-	return &pb.SimpleQueueEnqueueResponse{
+	return &pb.SimpleQueuePutResponse{
 		Ok: true,
 	}, nil
 }
 
-func (s *RedisSimpleQueueService) Dequeue(ctx context.Context, in *pb.SimpleQueueDequeueRequest) (*pb.SimpleQueueDequeueResponse, error) {
+func (s *RedisSimpleQueueService) Pop(ctx context.Context, in *pb.SimpleQueuePopRequest) (*pb.SimpleQueuePopResponse, error) {
 	queueName := Keys.SimpleQueueName(in.Name)
 
 	value, err := s.rdb.LPop(context.TODO(), queueName).Bytes()
 	if err == redis.Nil {
-		return &pb.SimpleQueueDequeueResponse{
-			Ok:    true,
+		return &pb.SimpleQueuePopResponse{
+			Ok: true,
 			Value: []byte{},
 		}, nil
-	} else if err != nil {
-		return &pb.SimpleQueueDequeueResponse{
-			Ok:    false,
+	} else if err != nil { 
+		return &pb.SimpleQueuePopResponse{
+			Ok: false,
 			Value: []byte{},
 		}, err
 	}
 
-	return &pb.SimpleQueueDequeueResponse{
-		Ok:    true,
+	return &pb.SimpleQueuePopResponse{
+		Ok: true,
 		Value: value,
 	}, nil
 }
