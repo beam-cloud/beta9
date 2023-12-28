@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"log"
 	"strings"
 
 	"github.com/beam-cloud/beam/internal/types"
@@ -17,12 +16,12 @@ import (
 var authContextKey = "auth"
 
 type AuthInfo struct {
-	Context types.Context
-	Token   types.Token
+	Context *types.Context
+	Token   *types.Token
 }
 
-func AuthInfoFromContext(ctx context.Context) (AuthInfo, bool) {
-	authInfo, ok := ctx.Value(authContextKey).(AuthInfo)
+func AuthInfoFromContext(ctx context.Context) (*AuthInfo, bool) {
+	authInfo, ok := ctx.Value(authContextKey).(*AuthInfo)
 	return authInfo, ok
 }
 
@@ -45,15 +44,21 @@ func (ai *AuthInterceptor) isAuthRequired(method string) bool {
 	return !ok
 }
 
-func (ai *AuthInterceptor) validateToken(md metadata.MD) (string, bool) {
+func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 	if len(md["authorization"]) == 0 {
-		return "", false
+		return nil, false
 	}
 
-	tokenStr := strings.TrimPrefix(md["authorization"][0], "Bearer ")
-	log.Println("tokenstr: ", tokenStr)
+	tokenKey := strings.TrimPrefix(md["authorization"][0], "Bearer ")
+	token, context, err := ai.backendRepo.AuthorizeToken(context.TODO(), tokenKey)
+	if err != nil {
+		return nil, false
+	}
 
-	return "", true
+	return &AuthInfo{
+		Token:   token,
+		Context: context,
+	}, true
 }
 
 func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
@@ -83,7 +88,7 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 			return nil, status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		_, valid := ai.validateToken(md)
+		authInfo, valid := ai.validateToken(md)
 		if !valid {
 			if !ai.isAuthRequired(info.FullMethod) {
 				return handler(ctx, req)
@@ -92,17 +97,12 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 			return nil, status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		authInfo := AuthInfo{
-			Token:   types.Token{},
-			Context: types.Context{},
-		}
-
 		// Attach the auth info to context
 		ctx = ai.newContextWithAuth(ctx, authInfo)
 		return handler(ctx, req)
 	}
 }
 
-func (ai *AuthInterceptor) newContextWithAuth(ctx context.Context, authInfo AuthInfo) context.Context {
+func (ai *AuthInterceptor) newContextWithAuth(ctx context.Context, authInfo *AuthInfo) context.Context {
 	return context.WithValue(ctx, authContextKey, authInfo)
 }

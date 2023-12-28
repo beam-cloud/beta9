@@ -42,6 +42,7 @@ type BackendRepository interface {
 	CreateContext(ctx context.Context) (types.Context, error)
 	CreateObject(ctx context.Context, newObj types.Object) (types.Object, error)
 	CreateToken(ctx context.Context, contextID uint) (types.Token, error)
+	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Context, error)
 }
 
 type BeamRepository interface {

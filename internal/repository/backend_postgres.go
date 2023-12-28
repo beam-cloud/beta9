@@ -119,6 +119,26 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, contextID u
 	return token, nil
 }
 
+func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Context, error) {
+	query := `
+	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.context_id,
+	       c.id "context.id", c.name "context.name", c.external_id "context.external_id", c.created_at "context.created_at", c.updated_at "context.updated_at"
+	FROM token t
+	INNER JOIN context c ON t.context_id = c.id
+	WHERE t.key = $1 AND t.active = TRUE;
+	`
+
+	var token types.Token
+	var context types.Context
+	token.Context = &context
+
+	if err := r.client.GetContext(ctx, &token, query, tokenKey); err != nil {
+		return nil, nil, err
+	}
+
+	return &token, &context, nil
+}
+
 func (r *PostgresBackendRepository) CreateObject(ctx context.Context, newObj types.Object) (types.Object, error) {
 	query := `
 	INSERT INTO object (external_id, hash, size, context_id)

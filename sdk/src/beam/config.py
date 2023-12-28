@@ -104,9 +104,7 @@ def get_gateway_channel() -> Channel:
 
         gateway_url = terminal.prompt(text="Gateway host", default="0.0.0.0")
         gateway_port = terminal.prompt(text="Gateway port", default="1993")
-        token = terminal.prompt(text="Token", default=None)
-
-        config = config._replace(gateway_url=gateway_url, gateway_port=gateway_port, token=token)
+        terminal.prompt(text="Token", default=None)
 
         terminal.header("Authorizing with gateway")
         gateway_stub = GatewayServiceStub(channel=channel)
@@ -115,7 +113,22 @@ def get_gateway_channel() -> Channel:
             channel.close()
             terminal.error(f"Unable to authorize with gateway: {auth_response.error_msg} ☠️")
 
-        # save_config_to_file(config)
+        config = config._replace(
+            gateway_url=gateway_url, gateway_port=gateway_port, token=auth_response.new_token
+        )
+
+        save_config_to_file(config)
+
+        # Close unauthenticated channel
+        channel.close()
+
+        # Open new channel with valid token
+        channel = AuthenticatedChannel(
+            host=config.gateway_url,
+            port=int(config.gateway_port),
+            ssl=True if config.gateway_port == "443" else False,
+            token=config.token,
+        )
 
     else:
         channel = AuthenticatedChannel(
