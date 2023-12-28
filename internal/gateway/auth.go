@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/base64"
 	"log"
 	"net/http"
@@ -9,7 +10,56 @@ import (
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/types"
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
+
+func authInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	unauthenticatedMethods := map[string]bool{
+		"/gateway.GatewayService/Configure": true,
+	}
+
+	// Bypass auth for any methods in the map above
+	if _, ok := unauthenticatedMethods[info.FullMethod]; ok {
+		log.Println("bypassing auth")
+		return handler(ctx, req)
+	}
+
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok || len(md["authorization"]) == 0 {
+		return handler(ctx, req)
+	}
+
+	token := strings.TrimPrefix(md["authorization"][0], "Bearer ")
+
+	log.Println("incoming token: ", token)
+	// TODO: Validate the token
+
+	return handler(ctx, req)
+}
+
+func streamAuthInterceptor(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	unauthenticatedMethods := map[string]bool{
+		"/gateway.GatewayService/Configure": true,
+	}
+
+	// Bypass auth for certain methods
+	if _, ok := unauthenticatedMethods[info.FullMethod]; ok {
+		return handler(srv, stream)
+	}
+
+	// Extract and validate token
+	md, ok := metadata.FromIncomingContext(stream.Context())
+	if !ok || len(md["authorization"]) == 0 {
+		return handler(srv, stream)
+	}
+	token := strings.TrimPrefix(md["authorization"][0], "Bearer ")
+
+	log.Println("token: ", token)
+	// TODO: Validate the token
+
+	return handler(srv, stream)
+}
 
 func basicAuthMiddleware(beamRepo repository.BeamRepository) gin.HandlerFunc {
 	versionRegex, err := types.GetAppVersionRegex()

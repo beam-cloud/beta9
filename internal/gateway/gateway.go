@@ -121,7 +121,10 @@ func (g *Gateway) Start() error {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(authInterceptor),
+		grpc.StreamInterceptor(streamAuthInterceptor),
+	)
 
 	// Create and register abstractions
 	rm, err := dmap.NewRedisMapService(g.redisClient)
