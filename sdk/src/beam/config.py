@@ -100,30 +100,33 @@ def get_gateway_channel() -> Channel:
     channel: Union[AuthenticatedChannel, None] = None
 
     if config.token is None:
-        channel = AuthenticatedChannel(
-            host=config.gateway_host,
-            port=int(config.gateway_port),
-            ssl=True if config.gateway_port == "443" else False,
-            token=None,
-        )
-
         terminal.header("Welcome to Beam! Let's get started 📡")
 
         gateway_host = terminal.prompt(text="Gateway host", default="0.0.0.0")
         gateway_port = terminal.prompt(text="Gateway port", default="1993")
-        terminal.prompt(text="Token", default=None)
+        token = terminal.prompt(text="Token", default=None)
+
+        channel = AuthenticatedChannel(
+            host=config.gateway_host,
+            port=int(config.gateway_port),
+            ssl=True if config.gateway_port == "443" else False,
+            token=token,
+        )
 
         terminal.header("Authorizing with gateway")
+
         gateway_stub = GatewayServiceStub(channel=channel)
         auth_response: AuthorizeResponse = run_sync(gateway_stub.authorize())
         if not auth_response.ok:
             channel.close()
             terminal.error(f"Unable to authorize with gateway: {auth_response.error_msg} ☠️")
 
-        config = config._replace(
-            gateway_host=gateway_host, gateway_port=gateway_port, token=auth_response.new_token
-        )
+        terminal.header("Authorized 🎉")
 
+        if token is None:
+            token = auth_response.new_token
+
+        config = config._replace(gateway_host=gateway_host, gateway_port=gateway_port, token=token)
         save_config_to_file(config)
 
         channel.close()  # Close unauthenticated channel
