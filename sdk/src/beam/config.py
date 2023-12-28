@@ -21,7 +21,7 @@ DEFAULT_GATEWAY_PORT = "1993"
 
 
 class GatewayConfig(NamedTuple):
-    gateway_url: str = DEFAULT_GATEWAY_HOST
+    gateway_host: str = DEFAULT_GATEWAY_HOST
     gateway_port: str = DEFAULT_GATEWAY_PORT
     token: Optional[str] = None
 
@@ -66,11 +66,11 @@ def load_config_from_file() -> GatewayConfig:
 
     config.read(config_path)
 
-    gateway_url = config.get(DEFAULT_PROFILE_NAME, "gateway_url", fallback=DEFAULT_GATEWAY_HOST)
+    gateway_host = config.get(DEFAULT_PROFILE_NAME, "gateway_host", fallback=DEFAULT_GATEWAY_HOST)
     gateway_port = config.get(DEFAULT_PROFILE_NAME, "gateway_port", fallback=DEFAULT_GATEWAY_PORT)
     token = config.get(DEFAULT_PROFILE_NAME, "token", fallback=None)
 
-    return GatewayConfig(gateway_url, gateway_port, token)
+    return GatewayConfig(gateway_host, gateway_port, token)
 
 
 def save_config_to_file(config: GatewayConfig) -> None:
@@ -85,12 +85,12 @@ def save_config_to_file(config: GatewayConfig) -> None:
 
 
 def get_gateway_config() -> GatewayConfig:
-    gateway_url = os.getenv("BEAM_GATEWAY_HOST", None)
+    gateway_host = os.getenv("BEAM_GATEWAY_HOST", None)
     gateway_port = os.getenv("BEAM_GATEWAY_PORT", None)
     token = os.getenv("BEAM_TOKEN", None)
 
-    if gateway_url and gateway_port and token:
-        return GatewayConfig(gateway_url, gateway_port, token)
+    if gateway_host and gateway_port and token:
+        return GatewayConfig(gateway_host, gateway_port, token)
 
     return load_config_from_file()
 
@@ -101,7 +101,7 @@ def get_gateway_channel() -> Channel:
 
     if config.token is None:
         channel = AuthenticatedChannel(
-            host=config.gateway_url,
+            host=config.gateway_host,
             port=int(config.gateway_port),
             ssl=True if config.gateway_port == "443" else False,
             token=None,
@@ -109,7 +109,7 @@ def get_gateway_channel() -> Channel:
 
         terminal.header("Welcome to Beam! Let's get started 📡")
 
-        gateway_url = terminal.prompt(text="Gateway host", default="0.0.0.0")
+        gateway_host = terminal.prompt(text="Gateway host", default="0.0.0.0")
         gateway_port = terminal.prompt(text="Gateway port", default="1993")
         terminal.prompt(text="Token", default=None)
 
@@ -121,7 +121,7 @@ def get_gateway_channel() -> Channel:
             terminal.error(f"Unable to authorize with gateway: {auth_response.error_msg} ☠️")
 
         config = config._replace(
-            gateway_url=gateway_url, gateway_port=gateway_port, token=auth_response.new_token
+            gateway_host=gateway_host, gateway_port=gateway_port, token=auth_response.new_token
         )
 
         save_config_to_file(config)
@@ -130,7 +130,7 @@ def get_gateway_channel() -> Channel:
 
     # Open new channel with valid token
     channel = AuthenticatedChannel(
-        host=config.gateway_url,
+        host=config.gateway_host,
         port=int(config.gateway_port),
         ssl=True if config.gateway_port == "443" else False,
         token=config.token,
