@@ -7,8 +7,21 @@ import (
 
 	"github.com/beam-cloud/beam/internal/repository"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
+
+var authContextKey = "auth"
+
+type AuthInfo struct {
+	Token string
+}
+
+func AuthInfoFromContext(ctx context.Context) (AuthInfo, bool) {
+	authInfo, ok := ctx.Value(authContextKey).(AuthInfo)
+	return authInfo, ok
+}
 
 type AuthInterceptor struct {
 	unauthenticatedMethods map[string]bool
@@ -42,46 +55,38 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (string, bool) {
 
 func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		if !ai.isAuthRequired(info.FullMethod) {
-			return handler(srv, stream)
-		}
-
 		md, ok := metadata.FromIncomingContext(stream.Context())
 		if !ok {
-			return handler(srv, stream)
+			return status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		// TODO: Validate the token
 		_, valid := ai.validateToken(md)
 		if !valid {
-			// Handle invalid token case
+			if !ai.isAuthRequired(info.FullMethod) {
+				return handler(srv, stream)
+			}
+
+			return status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
 		return handler(srv, stream)
 	}
 }
 
-var authKey = "auth"
-
-type AuthInfo struct {
-	Token string
-}
-
 func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
-			return handler(ctx, req)
+			return nil, status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		// TODO: Validate the token
 		token, valid := ai.validateToken(md)
 		if !valid {
-			// Handle invalid token case
-		}
+			if !ai.isAuthRequired(info.FullMethod) {
+				return handler(ctx, req)
+			}
 
-		if !ai.isAuthRequired(info.FullMethod) {
-			return handler(ctx, req)
+			return nil, status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
 		authInfo := AuthInfo{
@@ -95,10 +100,5 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 }
 
 func (ai *AuthInterceptor) newContextWithAuth(ctx context.Context, authInfo AuthInfo) context.Context {
-	return context.WithValue(ctx, authKey, authInfo)
-}
-
-func AuthInfoFromContext(ctx context.Context) (AuthInfo, bool) {
-	authInfo, ok := ctx.Value(authKey).(AuthInfo)
-	return authInfo, ok
+	return context.WithValue(ctx, authContextKey, authInfo)
 }
