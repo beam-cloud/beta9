@@ -18,6 +18,12 @@ DEFAULT_CONFIG_FILE_PATH = "~/.beam/.config"
 DEFAULT_PROFILE_NAME = "default"
 
 
+class GatewayConfig(NamedTuple):
+    gateway_url: str = "0.0.0.0"
+    gateway_port: str = "1993"
+    token: Optional[str] = None
+
+
 class AuthenticatedChannel(Channel):
     def __init__(self, *args, token: Optional[str] = None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -49,12 +55,6 @@ class AuthenticatedChannel(Channel):
         )
 
 
-class GatewayConfig(NamedTuple):
-    gateway_url: str = "0.0.0.0"
-    gateway_port: str = "1993"
-    token: Optional[str] = None
-
-
 def load_config_from_file() -> GatewayConfig:
     config_path = os.path.expanduser(DEFAULT_CONFIG_FILE_PATH)
     config = configparser.ConfigParser()
@@ -82,16 +82,7 @@ def save_config_to_file(config: GatewayConfig) -> None:
 
 
 def get_gateway_config() -> GatewayConfig:
-    config = load_config_from_file()
-
-    if config.token is None:
-        terminal.header("Welcome to Beam 📡 ")
-        gateway_url = terminal.prompt(text="Gateway host", default="0.0.0.0")
-        gateway_port = terminal.prompt(text="Gateway port", default="1993")
-        config = config._replace(gateway_url=gateway_url, gateway_port=gateway_port)
-        # save_config_to_file(config)
-
-    return config
+    return load_config_from_file()
 
 
 def get_gateway_channel() -> Channel:
@@ -105,6 +96,13 @@ def get_gateway_channel() -> Channel:
     )
 
     if config.token is None:
+        terminal.header("Welcome to Beam! Let's get started 📡")
+        gateway_url = terminal.prompt(text="Gateway host", default="0.0.0.0")
+        gateway_port = terminal.prompt(text="Gateway port", default="1993")
+        token = terminal.prompt(text="Token", default=None)
+
+        config = config._replace(gateway_url=gateway_url, gateway_port=gateway_port, token=token)
+        # save_config_to_file(config)
         terminal.header("Configuring gateway")
         stub = GatewayServiceStub(channel=channel)
         run_sync(stub.configure(name="test-thing"))

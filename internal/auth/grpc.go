@@ -33,7 +33,11 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (string, bool) {
 	if len(md["authorization"]) == 0 {
 		return "", false
 	}
-	return strings.TrimPrefix(md["authorization"][0], "Bearer "), true
+
+	tokenStr := strings.TrimPrefix(md["authorization"][0], "Bearer ")
+	log.Println("tokenstr: ", tokenStr)
+
+	return "", true
 }
 
 func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
@@ -60,8 +64,7 @@ func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 var authKey = "auth"
 
 type AuthInfo struct {
-	Token    string
-	UserName string
+	Token string
 }
 
 func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
@@ -78,13 +81,11 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 		}
 
 		if !ai.isAuthRequired(info.FullMethod) {
-			log.Println("bypassing auth...")
 			return handler(ctx, req)
 		}
 
 		authInfo := AuthInfo{
-			Token:    token,
-			UserName: "exampleUserName",
+			Token: token,
 		}
 
 		// Attach the auth info to context
