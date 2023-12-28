@@ -37,7 +37,7 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	if err != nil || len(existingContexts) >= 1 {
 		return &pb.AuthorizeResponse{
 			Ok:       false,
-			ErrorMsg: "Found existing contexts",
+			ErrorMsg: "Invalid token",
 		}, nil
 	}
 
