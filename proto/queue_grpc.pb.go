@@ -228,7 +228,7 @@ func _SimpleQueueService_Size_Handler(srv interface{}, ctx context.Context, dec 
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var SimpleQueueService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "queue.SimpleQueueService",
+	ServiceName: "simplequeue.SimpleQueueService",
 	HandlerType: (*SimpleQueueServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{

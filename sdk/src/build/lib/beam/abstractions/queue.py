@@ -11,12 +11,11 @@ class SimpleQueueInternalServerError(Exception):
 
 
 class SimpleQueue(BaseAbstraction):
-    def __init__(self, *, name: str, max_size=100) -> None:
+    def __init__(self, *, name: str) -> None:
         super().__init__()
 
         self.name: str = name
         self.stub: SimpleQueueServiceStub = SimpleQueueServiceStub(self.channel)
-        self.max_size: int = max_size
 
     def __len__(self):
         r = self.run_sync(self.stub.size(name=self.name))
@@ -25,16 +24,16 @@ class SimpleQueue(BaseAbstraction):
     def __del__(self):
         self.channel.close()
 
-    def put(self, value: Any) -> bool:
-        r = self.run_sync(self.stub.put(name=self.name, value=cloudpickle.dumps(value)))
+    def enqueue(self, value: Any) -> bool:
+        r = self.run_sync(self.stub.enqueue(name=self.name, value=cloudpickle.dumps(value)))
 
         if not r.ok:
             raise SimpleQueueInternalServerError
 
         return True
 
-    def pop(self) -> Any:
-        r = self.run_sync(self.stub.pop(name=self.name))
+    def dequeue(self) -> Any:
+        r = self.run_sync(self.stub.dequeue(name=self.name))
         if not r.ok:
             return SimpleQueueInternalServerError
 

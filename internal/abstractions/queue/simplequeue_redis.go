@@ -1,4 +1,4 @@
-package dqueue
+package simplequeue
 
 import (
 	"context"
@@ -60,12 +60,12 @@ func (s *RedisSimpleQueueService) Pop(ctx context.Context, in *pb.SimpleQueuePop
 }
 
 func (s *RedisSimpleQueueService) Peek(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueuePeekResponse, error) {
-	queueName := Keys.QueueName(in.Name)
+	queueName := Keys.SimpleQueueName(in.Name)
 
 	res, err := s.rdb.LRange(context.TODO(), queueName, 0, 0)
 	if err != nil {
 		return &pb.SimpleQueuePeekResponse{
-			Ok: false,
+			Ok:    false,
 			Value: []byte{},
 		}, err
 	}
@@ -76,48 +76,48 @@ func (s *RedisSimpleQueueService) Peek(ctx context.Context, in *pb.SimpleQueueRe
 	}
 
 	return &pb.SimpleQueuePeekResponse{
-		Ok: true,
+		Ok:    true,
 		Value: value,
 	}, nil
 }
 
 func (s *RedisSimpleQueueService) Empty(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueueEmptyResponse, error) {
-	queueName := Keys.QueueName(in.Name)
+	queueName := Keys.SimpleQueueName(in.Name)
 
 	length, err := s.rdb.LLen(context.TODO(), queueName).Result()
 	if err != nil {
 		return &pb.SimpleQueueEmptyResponse{
-			Ok: false,
+			Ok:    false,
 			Empty: false,
 		}, err
 	}
 
 	if length > 0 {
 		return &pb.SimpleQueueEmptyResponse{
-			Ok: true,
+			Ok:    true,
 			Empty: false,
 		}, nil
 	}
 
 	return &pb.SimpleQueueEmptyResponse{
-		Ok: true,
+		Ok:    true,
 		Empty: true,
 	}, nil
 }
 
 func (s *RedisSimpleQueueService) Size(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueueSizeResponse, error) {
-	queueName := Keys.QueueName(in.Name)
+	queueName := Keys.SimpleQueueName(in.Name)
 
 	length, err := s.rdb.LLen(context.TODO(), queueName).Result()
 	if err != nil {
 		return &pb.SimpleQueueSizeResponse{
-			Ok: false,
+			Ok:   false,
 			Size: 0,
 		}, err
 	}
 
 	return &pb.SimpleQueueSizeResponse{
-		Ok: true,
+		Ok:   true,
 		Size: uint64(length),
 	}, nil
 }
@@ -125,9 +125,8 @@ func (s *RedisSimpleQueueService) Size(ctx context.Context, in *pb.SimpleQueueRe
 // Redis keys
 var (
 	queuePrefix string = "simplequeue"
-	queueName  string = "simplequeue:%s:%s"
+	queueName   string = "simplequeue:%s:%s"
 )
-
 
 var Keys = &keys{}
 
@@ -137,7 +136,6 @@ func (k *keys) SimpleQueuePrefix() string {
 	return queuePrefix
 }
 
-func (k *keys) QueueName(name string) string {
+func (k *keys) SimpleQueueName(name string) string {
 	return fmt.Sprintf(queueName, name)
 }
-

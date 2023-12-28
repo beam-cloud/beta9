@@ -4,7 +4,6 @@
 from dataclasses import dataclass
 
 import betterproto
-import grpclib
 
 
 @dataclass
@@ -54,9 +53,7 @@ class SimpleQueueRequest(betterproto.Message):
 
 
 class SimpleQueueServiceStub(betterproto.ServiceStub):
-    async def put(
-        self, *, name: str = "", value: bytes = b""
-    ) -> SimpleQueuePutResponse:
+    async def put(self, *, name: str = "", value: bytes = b"") -> SimpleQueuePutResponse:
         request = SimpleQueuePutRequest()
         request.name = name
         request.value = value
@@ -67,9 +64,7 @@ class SimpleQueueServiceStub(betterproto.ServiceStub):
             SimpleQueuePutResponse,
         )
 
-    async def pop(
-        self, *, name: str = "", value: bytes = b""
-    ) -> SimpleQueuePopResponse:
+    async def pop(self, *, name: str = "", value: bytes = b"") -> SimpleQueuePopResponse:
         request = SimpleQueuePopRequest()
         request.name = name
         request.value = value
@@ -85,7 +80,7 @@ class SimpleQueueServiceStub(betterproto.ServiceStub):
         request.name = name
 
         return await self._unary_unary(
-            "/queue.SimpleQueueService/Peek",
+            "/dqueue.SimpleQueueService/Peek",
             request,
             SimpleQueuePeekResponse,
         )
@@ -95,7 +90,7 @@ class SimpleQueueServiceStub(betterproto.ServiceStub):
         request.name = name
 
         return await self._unary_unary(
-            "/queue.SimpleQueueService/Empty",
+            "/dqueue.SimpleQueueService/Empty",
             request,
             SimpleQueueEmptyResponse,
         )
@@ -105,7 +100,7 @@ class SimpleQueueServiceStub(betterproto.ServiceStub):
         request.name = name
 
         return await self._unary_unary(
-            "/queue.SimpleQueueService/Size",
+            "/dqueue.SimpleQueueService/Size",
             request,
             SimpleQueueSizeResponse,
         )
