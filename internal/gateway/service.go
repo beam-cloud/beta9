@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 
+	"github.com/beam-cloud/beam/internal/auth"
 	pb "github.com/beam-cloud/beam/proto"
 )
 
@@ -23,7 +24,7 @@ func NewGatewayService(gw *Gateway) (*GatewayService, error) {
 }
 
 func (gws *GatewayService) Configure(ctx context.Context, in *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
-	authInfo, exists := AuthInfoFromContext(ctx)
+	authInfo, exists := auth.AuthInfoFromContext(ctx)
 	if exists {
 		log.Println("auth info found: ", authInfo)
 	}
