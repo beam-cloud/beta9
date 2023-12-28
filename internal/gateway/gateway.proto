@@ -10,10 +10,7 @@ service GatewayService {
   rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
 }
 
-message ConfigureRequest {
-  string name = 1;
-  string token = 2;
-}
+message ConfigureRequest { string name = 1; }
 
 message ConfigureResponse {
   bool ok = 1;
