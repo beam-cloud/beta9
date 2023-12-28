@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log"
 	"os"
 	"path"
 
@@ -24,9 +25,10 @@ func NewGatewayService(gw *Gateway) (*GatewayService, error) {
 func (gws *GatewayService) Configure(ctx context.Context, in *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
 	// TODO: check if token exists
 	// if token exists, update name of context
-	if in.Token != "" {
-		gws.gw.BackendRepo.CreateObject(ctx)
-	}
+	log.Println("in: ", in)
+	// if in.Token != "" {
+	// 	gws.gw.BackendRepo.CreateObject(ctx)
+	// }
 
 	// if not, create context, and then create a token
 	// if context exists
