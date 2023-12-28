@@ -3,9 +3,12 @@ import functools
 import os
 import sys
 from contextlib import contextmanager
-from typing import Any, Callable, NamedTuple, Optional
+from typing import Any, Callable, NamedTuple, Optional, Type, cast
 
-from grpclib.client import Channel
+from grpclib.client import Channel, Stream, _MetadataLike
+from grpclib.const import Cardinality
+from grpclib.utils import Deadline
+from multidict import MultiDict
 
 from beam import terminal
 from beam.aio import run_sync
@@ -13,6 +16,37 @@ from beam.clients.gateway import GatewayServiceStub
 
 DEFAULT_CONFIG_FILE_PATH = "~/.beam/.config"
 DEFAULT_PROFILE_NAME = "default"
+
+
+class AuthenticatedChannel(Channel):
+    def __init__(self, *args, token: Optional[str] = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._token = token
+
+    def request(
+        self,
+        name: str,
+        cardinality: Cardinality,
+        request_type: Type,
+        reply_type: Type,
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional[Deadline] = None,
+        metadata: Optional[_MetadataLike] = None,
+    ) -> Stream:
+        if self._token:
+            metadata = cast(MultiDict, MultiDict(metadata or ()))
+            metadata["authorization"] = f"Bearer {self._token}"
+
+        return super().request(
+            name,
+            cardinality,
+            request_type,
+            reply_type,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
 
 
 class GatewayConfig(NamedTuple):
@@ -62,7 +96,8 @@ def get_gateway_config() -> GatewayConfig:
 
 def get_gateway_channel() -> Channel:
     config: GatewayConfig = get_gateway_config()
-    channel = Channel(
+
+    channel = AuthenticatedChannel(
         host=config.gateway_url,
         port=int(config.gateway_port),
         ssl=True if config.gateway_port == "443" else False,
@@ -71,7 +106,7 @@ def get_gateway_channel() -> Channel:
     if config.token is None:
         terminal.header("Configuring gateway")
         stub = GatewayServiceStub(channel=channel)
-        run_sync(stub.configure(name="test-thing", token=""))
+        run_sync(stub.configure(name="test-thing"))
 
     setattr(channel, "token", config.token)
     return channel

@@ -11,7 +11,6 @@ import grpclib
 @dataclass
 class ConfigureRequest(betterproto.Message):
     name: str = betterproto.string_field(1)
-    token: str = betterproto.string_field(2)
 
 
 @dataclass
@@ -54,10 +53,9 @@ class PutObjectResponse(betterproto.Message):
 
 
 class GatewayServiceStub(betterproto.ServiceStub):
-    async def configure(self, *, name: str = "", token: str = "") -> ConfigureResponse:
+    async def configure(self, *, name: str = "") -> ConfigureResponse:
         request = ConfigureRequest()
         request.name = name
-        request.token = token
 
         return await self._unary_unary(
             "/gateway.GatewayService/Configure",
