@@ -166,13 +166,13 @@ def get_gateway_channel() -> Channel:
 
         terminal.header("Authorized 🎉")
 
-        if config.token is None:
+        if not config.token:
             token = auth_response.new_token
 
         config = config._replace(
             gateway_host=config.gateway_host, gateway_port=config.gateway_port, token=token
         )
-        save_config_to_file(config)
+        save_config_to_file(config=config, name=config.name)
 
         channel.close()  # Close unauthenticated channel
     else:
