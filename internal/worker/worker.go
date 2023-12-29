@@ -549,17 +549,13 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, containerConfig *ContainerConfigResponse, options *ContainerOptions) []string {
 	env := []string{
-		fmt.Sprintf("IDENTITY_ID=%s", containerConfig.IdentityId),
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
-		fmt.Sprintf("STATSD_HOST=%s", os.Getenv("STATSD_HOST")),
-		fmt.Sprintf("STATSD_PORT=%s", os.Getenv("STATSD_PORT")),
 		fmt.Sprintf("BEAM_GATEWAY_HOST=%s", os.Getenv("BEAM_GATEWAY_HOST")),
 		fmt.Sprintf("BEAM_GATEWAY_PORT=%s", os.Getenv("BEAM_GATEWAY_PORT")),
 		"PYTHONUNBUFFERED=1",
 	}
-	env = append(env, containerConfig.Env...)
 	env = append(env, request.Env...)
 	return env
 }
