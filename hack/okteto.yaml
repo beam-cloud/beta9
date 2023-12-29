@@ -16,3 +16,4 @@ dev:
     - 1993:1993
     - 5432:postgres-postgresql:5432
     - 5001:headscale-ui:80
+    - 8080:headscale:8080
