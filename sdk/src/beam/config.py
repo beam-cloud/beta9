@@ -105,17 +105,22 @@ def get_gateway_config() -> GatewayConfig:
     token = os.getenv("BEAM_TOKEN", None)
 
     if gateway_host and gateway_port and token:
-        return GatewayConfig(gateway_host, gateway_port, token)
+        return GatewayConfig(gateway_host=gateway_host, gateway_port=gateway_port, token=token)
 
     return load_config_from_file()
 
 
 def configure_gateway_credentials(
-    config: GatewayConfig, *, gateway_host: str = None, gateway_port: str = None, token: str = None
+    config: GatewayConfig,
+    *,
+    name: str = None,
+    gateway_host: str = None,
+    gateway_port: str = None,
+    token: str = None,
 ) -> None:
     terminal.header("Welcome to Beam! Let's get started 📡")
 
-    name = config.name or terminal.prompt(text="Profile name", default=DEFAULT_PROFILE_NAME)
+    name = name or terminal.prompt(text="Profile name", default=DEFAULT_PROFILE_NAME)
     gateway_host = gateway_host or terminal.prompt(
         text="Gateway host", default=DEFAULT_GATEWAY_HOST
     )
@@ -139,6 +144,7 @@ def get_gateway_channel() -> Channel:
     if not config.token:
         config = configure_gateway_credentials(
             config,
+            name=config.name,
             gateway_host=config.gateway_host,
             gateway_port=config.gateway_port,
         )
