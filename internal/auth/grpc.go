@@ -2,8 +2,9 @@ package auth
 
 import (
 	"context"
-	"log"
 	"strings"
+
+	"github.com/beam-cloud/beam/internal/types"
 
 	"github.com/beam-cloud/beam/internal/repository"
 	"google.golang.org/grpc"
@@ -15,11 +16,12 @@ import (
 var authContextKey = "auth"
 
 type AuthInfo struct {
-	Token string
+	Context *types.Context
+	Token   *types.Token
 }
 
-func AuthInfoFromContext(ctx context.Context) (AuthInfo, bool) {
-	authInfo, ok := ctx.Value(authContextKey).(AuthInfo)
+func AuthInfoFromContext(ctx context.Context) (*AuthInfo, bool) {
+	authInfo, ok := ctx.Value(authContextKey).(*AuthInfo)
 	return authInfo, ok
 }
 
@@ -32,7 +34,7 @@ func NewAuthInterceptor(backendRepo repository.BackendRepository) *AuthIntercept
 	return &AuthInterceptor{
 		backendRepo: backendRepo,
 		unauthenticatedMethods: map[string]bool{
-			"/gateway.GatewayService/Configure": true,
+			"/gateway.GatewayService/Authorize": true,
 		},
 	}
 }
@@ -42,15 +44,30 @@ func (ai *AuthInterceptor) isAuthRequired(method string) bool {
 	return !ok
 }
 
-func (ai *AuthInterceptor) validateToken(md metadata.MD) (string, bool) {
+func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 	if len(md["authorization"]) == 0 {
-		return "", false
+		return nil, false
 	}
 
-	tokenStr := strings.TrimPrefix(md["authorization"][0], "Bearer ")
-	log.Println("tokenstr: ", tokenStr)
+	tokenKey := strings.TrimPrefix(md["authorization"][0], "Bearer ")
+	token, context, err := ai.backendRepo.AuthorizeToken(context.TODO(), tokenKey)
+	if err != nil {
+		return nil, false
+	}
 
-	return "", true
+	return &AuthInfo{
+		Token:   token,
+		Context: context,
+	}, true
+}
+
+type wrappedStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *wrappedStream) Context() context.Context {
+	return w.ctx
 }
 
 func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
@@ -60,16 +77,24 @@ func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 			return status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		_, valid := ai.validateToken(md)
+		authInfo, valid := ai.validateToken(md)
 		if !valid {
 			if !ai.isAuthRequired(info.FullMethod) {
 				return handler(srv, stream)
 			}
-
 			return status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		return handler(srv, stream)
+		// Create a new context with the AuthInfo
+		ctxWithAuth := ai.newContextWithAuth(stream.Context(), authInfo)
+
+		// Create a new wrapped stream with the new context
+		wrappedStr := &wrappedStream{
+			ServerStream: stream,
+			ctx:          ctxWithAuth,
+		}
+
+		return handler(srv, wrappedStr)
 	}
 }
 
@@ -80,7 +105,7 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 			return nil, status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		token, valid := ai.validateToken(md)
+		authInfo, valid := ai.validateToken(md)
 		if !valid {
 			if !ai.isAuthRequired(info.FullMethod) {
 				return handler(ctx, req)
@@ -89,16 +114,12 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 			return nil, status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		authInfo := AuthInfo{
-			Token: token,
-		}
-
 		// Attach the auth info to context
 		ctx = ai.newContextWithAuth(ctx, authInfo)
 		return handler(ctx, req)
 	}
 }
 
-func (ai *AuthInterceptor) newContextWithAuth(ctx context.Context, authInfo AuthInfo) context.Context {
+func (ai *AuthInterceptor) newContextWithAuth(ctx context.Context, authInfo *AuthInfo) context.Context {
 	return context.WithValue(ctx, authContextKey, authInfo)
 }

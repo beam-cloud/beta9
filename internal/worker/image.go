@@ -34,7 +34,7 @@ const (
 	imageMountLockFilename    string = "IMAGE_MOUNT_LOCK"
 )
 
-var requiredContainerDirectories []string = []string{"/workspace", "/volumes", "/snapshot", "/outputs", "/packages"}
+var requiredContainerDirectories []string = []string{"/workspace", "/volumes", "/snapshot"}
 
 type ImageClient struct {
 	registry       *common.ImageRegistry

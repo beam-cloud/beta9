@@ -13,16 +13,16 @@ from rich import prompt
 
 from beam import terminal
 from beam.aio import run_sync
-from beam.clients.gateway import ConfigureResponse, GatewayServiceStub
+from beam.clients.gateway import AuthorizeResponse, GatewayServiceStub
 
-DEFAULT_CONFIG_FILE_PATH = "~/.beam/.config"
+DEFAULT_CONFIG_FILE_PATH = "~/.beam/creds"
 DEFAULT_PROFILE_NAME = "default"
 DEFAULT_GATEWAY_HOST = "0.0.0.0"
 DEFAULT_GATEWAY_PORT = "1993"
 
 
 class GatewayConfig(NamedTuple):
-    gateway_url: str = DEFAULT_GATEWAY_HOST
+    gateway_host: str = DEFAULT_GATEWAY_HOST
     gateway_port: str = DEFAULT_GATEWAY_PORT
     token: Optional[str] = None
 
@@ -67,11 +67,11 @@ def load_config_from_file() -> GatewayConfig:
 
     config.read(config_path)
 
-    gateway_url = config.get(DEFAULT_PROFILE_NAME, "gateway_url", fallback=DEFAULT_GATEWAY_HOST)
+    gateway_host = config.get(DEFAULT_PROFILE_NAME, "gateway_host", fallback=DEFAULT_GATEWAY_HOST)
     gateway_port = config.get(DEFAULT_PROFILE_NAME, "gateway_port", fallback=DEFAULT_GATEWAY_PORT)
     token = config.get(DEFAULT_PROFILE_NAME, "token", fallback=None)
 
-    return GatewayConfig(gateway_url, gateway_port, token)
+    return GatewayConfig(gateway_host, gateway_port, token)
 
 
 def save_config_to_file(*, config: GatewayConfig, name: str) -> None:
@@ -96,15 +96,22 @@ def save_config_to_file(*, config: GatewayConfig, name: str) -> None:
 
 
 def get_gateway_config() -> GatewayConfig:
+    gateway_host = os.getenv("BEAM_GATEWAY_HOST", None)
+    gateway_port = os.getenv("BEAM_GATEWAY_PORT", None)
+    token = os.getenv("BEAM_TOKEN", None)
+
+    if gateway_host and gateway_port and token:
+        return GatewayConfig(gateway_host, gateway_port, token)
+
     return load_config_from_file()
 
 
 def configure_gateway_credentials(
-    config: GatewayConfig, *, gateway_url: str = None, gateway_port: str = None, token: str = None
+    config: GatewayConfig, *, gateway_host: str = None, gateway_port: str = None, token: str = None
 ) -> None:
     terminal.header("Welcome to Beam! Let's get started 📡")
 
-    gateway_url = gateway_url or terminal.prompt(text="Gateway host", default="0.0.0.0")
+    gateway_host = gateway_host or terminal.prompt(text="Gateway host", default="0.0.0.0")
     gateway_port = gateway_port or terminal.prompt(text="Gateway port", default="1993")
     token = token or terminal.prompt(text="Token", default=None)
 
@@ -114,7 +121,7 @@ def configure_gateway_credentials(
         terminal.error("Gateway port must be an integer.")
         return
 
-    config = config._replace(gateway_url=gateway_url, gateway_port=gateway_port, token=token)
+    config = config._replace(gateway_host=gateway_host, gateway_port=gateway_port, token=token)
     terminal.header("Configuring gateway")
 
     return config
@@ -127,25 +134,39 @@ def get_gateway_channel() -> Channel:
     if config.token is None:
         config = configure_gateway_credentials(
             config,
-            gateway_url=config.gateway_url,
+            gateway_host=config.gateway_host,
             gateway_port=config.gateway_port,
         )
 
         channel = AuthenticatedChannel(
-            host=config.gateway_url,
+            host=config.gateway_host,
             port=int(config.gateway_port),
             ssl=True if config.gateway_port == "443" else False,
             token=config.token,
         )
 
+        terminal.header("Authorizing with gateway")
+
         gateway_stub = GatewayServiceStub(channel=channel)
-        config_response: ConfigureResponse = run_sync(gateway_stub.configure(name="test-thing"))
-        if not config_response.ok:
+        auth_response: AuthorizeResponse = run_sync(gateway_stub.authorize())
+        if not auth_response.ok:
             channel.close()
-            terminal.error("Unable to configure gateway")
+            terminal.error(f"Unable to authorize with gateway: {auth_response.error_msg} ☠️")
+
+        terminal.header("Authorized 🎉")
+
+        if config.token is None:
+            token = auth_response.new_token
+
+        config = config._replace(
+            gateway_host=config.gateway_host, gateway_port=config.gateway_port, token=token
+        )
+        save_config_to_file(config)
+
+        channel.close()  # Close unauthenticated channel
     else:
         channel = AuthenticatedChannel(
-            host=config.gateway_url,
+            host=config.gateway_host,
             port=int(config.gateway_port),
             ssl=True if config.gateway_port == "443" else False,
             token=config.token,

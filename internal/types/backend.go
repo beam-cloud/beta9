@@ -21,6 +21,7 @@ type Token struct {
 	UpdatedAt  time.Time `db:"updated_at"`
 	Active     bool      `db:"active"`
 	ContextID  uint      `db:"context_id"` // Foreign key to Context
+	Context    *Context  `db:"context"`    // Pointer to associated Context
 }
 
 type Volume struct {

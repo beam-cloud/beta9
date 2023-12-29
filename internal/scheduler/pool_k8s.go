@@ -456,20 +456,8 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1.Volu
 		},
 		{
 			Name:      wpc.workerPoolConfig.DataVolumeName,
-			MountPath: "/packages",
-			SubPath:   "packages/",
-			ReadOnly:  true,
-		},
-		{
-			Name:      wpc.workerPoolConfig.DataVolumeName,
 			MountPath: "/snapshots",
 			SubPath:   "snapshots/",
-			ReadOnly:  false,
-		},
-		{
-			Name:      wpc.workerPoolConfig.DataVolumeName,
-			MountPath: "/outputs",
-			SubPath:   "outputs/",
 			ReadOnly:  false,
 		},
 		{

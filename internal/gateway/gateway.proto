@@ -5,16 +5,18 @@ option go_package = "github.com/beam-cloud/beam/proto";
 package gateway;
 
 service GatewayService {
-  rpc Configure(ConfigureRequest) returns (ConfigureResponse) {}
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse) {}
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
   rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
 }
 
-message ConfigureRequest { string name = 1; }
+message AuthorizeRequest {}
 
-message ConfigureResponse {
+message AuthorizeResponse {
   bool ok = 1;
-  string new_token = 2;
+  string context_id = 2;
+  string new_token = 3;
+  string error_msg = 4;
 }
 
 message ObjectMetadata {
