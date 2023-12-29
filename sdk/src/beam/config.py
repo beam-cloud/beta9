@@ -22,6 +22,7 @@ DEFAULT_GATEWAY_PORT = "1993"
 
 
 class GatewayConfig(NamedTuple):
+    name: str = DEFAULT_PROFILE_NAME
     gateway_host: str = DEFAULT_GATEWAY_HOST
     gateway_port: str = DEFAULT_GATEWAY_PORT
     token: Optional[str] = None
@@ -71,7 +72,7 @@ def load_config_from_file() -> GatewayConfig:
     gateway_port = config.get(DEFAULT_PROFILE_NAME, "gateway_port", fallback=DEFAULT_GATEWAY_PORT)
     token = config.get(DEFAULT_PROFILE_NAME, "token", fallback=None)
 
-    return GatewayConfig(gateway_host, gateway_port, token)
+    return GatewayConfig(DEFAULT_PROFILE_NAME, gateway_host, gateway_port, token)
 
 
 def save_config_to_file(*, config: GatewayConfig, name: str) -> None:
@@ -82,6 +83,7 @@ def save_config_to_file(*, config: GatewayConfig, name: str) -> None:
         name = DEFAULT_PROFILE_NAME
 
     config_parser = configparser.ConfigParser()
+    config_parser.read(config_path)
 
     if config_parser.has_section(name):
         if not prompt.Confirm.ask(f"Configuration for {name} already exists. Overwrite?"):
@@ -89,7 +91,9 @@ def save_config_to_file(*, config: GatewayConfig, name: str) -> None:
     else:
         config_parser.add_section(name)
 
-    config_parser[name] = config._asdict()
+    config_parser.set(name, "gateway_host", config.gateway_host)
+    config_parser.set(name, "gateway_port", config.gateway_port)
+    config_parser.set(name, "token", config.token or "")
 
     with open(config_path, "w") as file:
         config_parser.write(file)
@@ -111,17 +115,18 @@ def configure_gateway_credentials(
 ) -> None:
     terminal.header("Welcome to Beam! Let's get started 📡")
 
-    gateway_host = gateway_host or terminal.prompt(text="Gateway host", default="0.0.0.0")
-    gateway_port = gateway_port or terminal.prompt(text="Gateway port", default="1993")
+    name = config.name or terminal.prompt(text="Profile name", default=DEFAULT_PROFILE_NAME)
+    gateway_host = gateway_host or terminal.prompt(
+        text="Gateway host", default=DEFAULT_GATEWAY_HOST
+    )
+    gateway_port = gateway_port or terminal.prompt(
+        text="Gateway port", default=DEFAULT_GATEWAY_PORT
+    )
     token = token or terminal.prompt(text="Token", default=None)
 
-    try:
-        int(gateway_port)
-    except ValueError:
-        terminal.error("Gateway port must be an integer.")
-        return
-
-    config = config._replace(gateway_host=gateway_host, gateway_port=gateway_port, token=token)
+    config = config._replace(
+        name=name, gateway_host=gateway_host, gateway_port=gateway_port, token=token
+    )
     terminal.header("Configuring gateway")
 
     return config
@@ -131,7 +136,7 @@ def get_gateway_channel() -> Channel:
     config: GatewayConfig = get_gateway_config()
     channel: Union[AuthenticatedChannel, None] = None
 
-    if config.token is None:
+    if not config.token:
         config = configure_gateway_credentials(
             config,
             gateway_host=config.gateway_host,
@@ -151,7 +156,7 @@ def get_gateway_channel() -> Channel:
         auth_response: AuthorizeResponse = run_sync(gateway_stub.authorize())
         if not auth_response.ok:
             channel.close()
-            terminal.error(f"Unable to authorize with gateway: {auth_response.error_msg} ☠️")
+            terminal.error(f"Unable to authorize with gateway: {auth_response.error_msg}")
 
         terminal.header("Authorized 🎉")
 
