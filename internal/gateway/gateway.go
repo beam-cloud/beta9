@@ -80,6 +80,8 @@ func NewGateway() (*Gateway, error) {
 		Scheduler:        Scheduler,
 	}
 
+	eventBus := common.NewEventBus(redisClient)
+
 	beamRepo, err := repository.NewBeamPostgresRepository()
 	if err != nil {
 		return nil, err
@@ -107,10 +109,11 @@ func NewGateway() (*Gateway, error) {
 	gateway.metricsRepo = metricsRepo
 	gateway.keyEventManager = keyEventManager
 	gateway.beatService = beatService
+	gateway.eventBus = eventBus
 
 	// go gateway.keyEventManager.ListenForPattern(gateway.ctx, common.RedisKeys.SchedulerContainerState(types.DeploymentContainerPrefix), gateway.keyEventChan)
 	go gateway.beatService.Run(gateway.ctx)
-	// go gateway.eventBus.ReceiveEvents(gateway.ctx)
+	go gateway.eventBus.ReceiveEvents(gateway.ctx)
 
 	return gateway, nil
 }
