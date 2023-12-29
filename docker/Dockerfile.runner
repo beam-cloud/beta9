@@ -45,7 +45,7 @@ rm -rf /root/.cache/*
 rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
 EOT
 
-VOLUME ["/volumes", "/snapshot", "/outputs", "/packages"]
+VOLUME ["/volumes", "/snapshot"]
 
 
 # Python 3.11
@@ -82,7 +82,7 @@ rm -rf /root/.cache/*
 rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
 EOT
 
-VOLUME ["/volumes", "/snapshot", "/outputs", "/packages"]
+VOLUME ["/volumes", "/snapshot"]
 
 
 # Python 3.10
@@ -119,7 +119,7 @@ rm -rf /root/.cache/*
 rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
 EOT
 
-VOLUME ["/volumes", "/snapshot", "/outputs", "/packages"]
+VOLUME ["/volumes", "/snapshot"]
 
 
 # Python 3.9
@@ -156,7 +156,7 @@ rm -rf /root/.cache/*
 rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
 EOT
 
-VOLUME ["/volumes", "/snapshot", "/outputs", "/packages"]
+VOLUME ["/volumes", "/snapshot"]
 
 
 # Python 3.8
@@ -193,4 +193,4 @@ rm -rf /root/.cache/*
 rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
 EOT
 
-VOLUME ["/volumes", "/snapshot", "/outputs", "/packages"]
+VOLUME ["/volumes", "/snapshot"]
