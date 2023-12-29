@@ -241,12 +241,3 @@ spec:
             port: 50443
           ui:
             port: 5001
-
-      ui:
-        enabled: true
-        hosts:
-          - host: headscale.beam
-            paths:
-              - path: /
-                service:
-                  port: 5001
