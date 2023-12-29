@@ -227,7 +227,7 @@ spec:
         image: ghcr.io/gurucomputing/headscale-ui:latest
         ports:
           - name: http
-            containerPort: 5001
+            containerPort: 80
 
     service:
       main:
@@ -242,4 +242,4 @@ spec:
       ui:
         ports:
           ui:
-            port: 5001
+            port: 80
