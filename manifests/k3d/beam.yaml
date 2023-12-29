@@ -239,5 +239,7 @@ spec:
           grpc:
             enabled: false
             port: 50443
+      ui:
+        ports:
           ui:
             port: 5001

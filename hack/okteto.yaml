@@ -15,4 +15,4 @@ dev:
     forward:
     - 1993:1993
     - 5432:postgres-postgresql:5432
-    - 5001:headscale:5001
+    - 5001:headscale-ui:5001
