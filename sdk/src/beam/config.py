@@ -100,15 +100,8 @@ def get_gateway_config() -> GatewayConfig:
 
 
 def configure_gateway_credentials(
-    config: GatewayConfig, *, gateway_url: str, gateway_port: str, token: str
+    config: GatewayConfig, *, gateway_url: str = None, gateway_port: str = None, token: str = None
 ) -> None:
-    channel = AuthenticatedChannel(
-        host=config.gateway_url,
-        port=int(config.gateway_port),
-        ssl=True if config.gateway_port == "443" else False,
-        token=None,
-    )
-
     terminal.header("Welcome to Beam! Let's get started 📡")
 
     gateway_url = gateway_url or terminal.prompt(text="Gateway host", default="0.0.0.0")
@@ -124,12 +117,6 @@ def configure_gateway_credentials(
     config = config._replace(gateway_url=gateway_url, gateway_port=gateway_port, token=token)
     terminal.header("Configuring gateway")
 
-    gateway_stub = GatewayServiceStub(channel=channel)
-    config_response: ConfigureResponse = run_sync(gateway_stub.configure(name="test-thing"))
-    if not config_response.ok:
-        channel.close()
-        terminal.error("Unable to configure gateway")
-
     return config
 
 
@@ -138,7 +125,24 @@ def get_gateway_channel() -> Channel:
     channel: Union[AuthenticatedChannel, None] = None
 
     if config.token is None:
-        configure_gateway_credentials(config)
+        config = configure_gateway_credentials(
+            config,
+            gateway_url=config.gateway_url,
+            gateway_port=config.gateway_port,
+        )
+
+        channel = AuthenticatedChannel(
+            host=config.gateway_url,
+            port=int(config.gateway_port),
+            ssl=True if config.gateway_port == "443" else False,
+            token=config.token,
+        )
+
+        gateway_stub = GatewayServiceStub(channel=channel)
+        config_response: ConfigureResponse = run_sync(gateway_stub.configure(name="test-thing"))
+        if not config_response.ok:
+            channel.close()
+            terminal.error("Unable to configure gateway")
     else:
         channel = AuthenticatedChannel(
             host=config.gateway_url,
