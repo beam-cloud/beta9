@@ -1,26 +1,5 @@
 package worker
 
-type AppVolumeMount struct {
-	MountPath string `json:"mountPath"`
-	ReadOnly  bool   `json:"readOnly"`
-}
-
-// BeamAPI types
-type ApiError struct {
-}
-
-func (e *ApiError) Error() string {
-	return "API error"
-}
-
-type ValidationError struct {
-	Details []string `json:"detail"`
-}
-
-type ContainerConfigRequest struct {
-	ContainerId string `json:"container_id"`
-}
-
 type Mount struct {
 	Name      string `json:"name"`
 	LocalPath string `json:"local_path"`

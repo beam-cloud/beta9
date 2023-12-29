@@ -550,7 +550,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, containerConfig *ContainerConfigResponse, options *ContainerOptions) []string {
 	env := []string{
 		fmt.Sprintf("IDENTITY_ID=%s", containerConfig.IdentityId),
-		fmt.Sprintf("S2S_TOKEN=%s", containerConfig.S2SToken),
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
