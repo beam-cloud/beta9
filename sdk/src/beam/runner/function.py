@@ -53,11 +53,14 @@ def main(channel: Channel):
     result = handler(*args.get("args", ()), **args.get("kwargs", {}))
     result = cloudpickle.dumps(result)
 
+    # TODO: start task
+    # TODO: listen for task cancellation
     set_result_resp: FunctionSetResultResponse = run_sync(
         function_stub.function_set_result(task_id=task_id, result=result),
     )
     if not set_result_resp.ok:
         raise RunnerException()
+    # TODO: end task
 
 
 if __name__ == "__main__":
