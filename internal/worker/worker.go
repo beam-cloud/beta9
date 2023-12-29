@@ -76,9 +76,9 @@ type ContainerOptions struct {
 var (
 	//go:embed base_runc_config.json
 	baseRuncConfigRaw          string
+	baseConfigPath             string  = "/tmp"
 	imagePath                  string  = "/images"
 	containerLogsPath          string  = "/var/log/worker"
-	baseConfigPath             string  = "/tmp"
 	defaultContainerDirectory  string  = "/workspace"
 	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
 )
@@ -206,9 +206,6 @@ func (s *Worker) Run() error {
 				if err != nil {
 					log.Printf("Unable to run container <%s>: %v\n", containerId, err)
 
-					// HOTFIX: set a non-zero exit code for deployments that failed to launch due to some
-					// unhandled issue. This is just here to prevent infinite crashlooping
-					// TODO: handle these sorts of failures in a more graceful way
 					err := s.containerRepo.SetContainerExitCode(containerId, 1)
 					if err != nil {
 						log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
@@ -614,7 +611,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		existingCudaFound := false
 		env, existingCudaFound = s.containerCudaManager.InjectCudaEnvVars(env, options)
 		if !existingCudaFound {
-			// If the container image does not have cuda libraries installed, mount cuda from the host
+			// If the container image does not have cuda libraries installed, mount cuda libs from the host
 			spec.Mounts = s.containerCudaManager.InjectCudaMounts(spec.Mounts)
 		}
 	} else {
@@ -680,7 +677,7 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 		return err
 	}
 
-	// NOTE: because we only handle one GPU request at a time
+	// NOTE: because we only handle one GPU request at a time per worker
 	// We need to reset this back to the original worker pool limits
 	// TODO: Manage number of GPUs explicitly instead of this
 	if s.gpuType != "" {
