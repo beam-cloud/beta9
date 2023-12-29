@@ -54,10 +54,10 @@ var (
 )
 
 var (
-	identityPrefix               string = "identity"
-	identityConcurrencyQuota     string = "identity:concurrency_quota:%s"
-	identityActiveContainer      string = "identity:container:active:%s:%s:%s" // identityId, containerId, gpuType
-	identityActiveContainersLock string = "identity:container:active:lock:%s"  // identityId
+	contextPrefix               string = "context"
+	contextConcurrencyQuota     string = "context:concurrency_quota:%s"
+	contextActiveContainer      string = "context:container:active:%s:%s:%s" // contextId, containerId, gpuType
+	contextActiveContainersLock string = "context:container:active:lock:%s"  // contextId
 )
 
 var RedisKeys = &redisKeys{}
@@ -114,52 +114,52 @@ func (rk *redisKeys) QueuePrefix() string {
 	return queuePrefix
 }
 
-func (rk *redisKeys) QueueList(identityId, queueName string) string {
-	return fmt.Sprintf(queueList, identityId, queueName)
+func (rk *redisKeys) QueueList(contextId, queueName string) string {
+	return fmt.Sprintf(queueList, contextId, queueName)
 }
 
-func (rk *redisKeys) QueueTaskClaim(identityId, queueName, taskId string) string {
-	return fmt.Sprintf(queueTaskClaim, identityId, queueName, taskId)
+func (rk *redisKeys) QueueTaskClaim(contextId, queueName, taskId string) string {
+	return fmt.Sprintf(queueTaskClaim, contextId, queueName, taskId)
 }
 
-func (rk *redisKeys) QueueTasksInFlight(identityId, queueName string) string {
-	return fmt.Sprintf(queueTasksInFlight, identityId, queueName)
+func (rk *redisKeys) QueueTasksInFlight(contextId, queueName string) string {
+	return fmt.Sprintf(queueTasksInFlight, contextId, queueName)
 }
 
-func (rk *redisKeys) QueueTaskHeartbeat(identityId, queueName, taskId string) string {
-	return fmt.Sprintf(queueTaskHeartbeat, identityId, queueName, taskId)
+func (rk *redisKeys) QueueTaskHeartbeat(contextId, queueName, taskId string) string {
+	return fmt.Sprintf(queueTaskHeartbeat, contextId, queueName, taskId)
 }
 
-func (rk *redisKeys) QueueTaskRetries(identityId, queueName, taskId string) string {
-	return fmt.Sprintf(queueTaskRetries, identityId, queueName, taskId)
+func (rk *redisKeys) QueueTaskRetries(contextId, queueName, taskId string) string {
+	return fmt.Sprintf(queueTaskRetries, contextId, queueName, taskId)
 }
 
-func (rk *redisKeys) QueueTaskDuration(identityId, queueName string) string {
-	return fmt.Sprintf(queueTaskDuration, identityId, queueName)
+func (rk *redisKeys) QueueTaskDuration(contextId, queueName string) string {
+	return fmt.Sprintf(queueTaskDuration, contextId, queueName)
 }
 
-func (rk *redisKeys) QueueAverageTaskDuration(identityId, queueName string) string {
-	return fmt.Sprintf(queueAverageTaskDuration, identityId, queueName)
+func (rk *redisKeys) QueueAverageTaskDuration(contextId, queueName string) string {
+	return fmt.Sprintf(queueAverageTaskDuration, contextId, queueName)
 }
 
-func (rk *redisKeys) QueueTaskCompleteEvent(identityId, bucketName, taskId string) string {
-	return fmt.Sprintf(queueTaskCompleteEvent, identityId, bucketName, taskId)
+func (rk *redisKeys) QueueTaskCompleteEvent(contextId, bucketName, taskId string) string {
+	return fmt.Sprintf(queueTaskCompleteEvent, contextId, bucketName, taskId)
 }
 
-func (rk *redisKeys) QueueTaskRunningLock(identityId, bucketName, containerId, taskId string) string {
-	return fmt.Sprintf(queueTaskRunningLock, identityId, bucketName, containerId, taskId)
+func (rk *redisKeys) QueueTaskRunningLock(contextId, bucketName, containerId, taskId string) string {
+	return fmt.Sprintf(queueTaskRunningLock, contextId, bucketName, containerId, taskId)
 }
 
-func (rk *redisKeys) QueueProcessingLock(identityId, bucketName, containerId string) string {
-	return fmt.Sprintf(queueProcessingLock, identityId, bucketName, containerId)
+func (rk *redisKeys) QueueProcessingLock(contextId, bucketName, containerId string) string {
+	return fmt.Sprintf(queueProcessingLock, contextId, bucketName, containerId)
 }
 
-func (rk *redisKeys) QueueKeepWarmLock(identityId, bucketName, containerId string) string {
-	return fmt.Sprintf(queueKeepWarmLock, identityId, bucketName, containerId)
+func (rk *redisKeys) QueueKeepWarmLock(contextId, bucketName, containerId string) string {
+	return fmt.Sprintf(queueKeepWarmLock, contextId, bucketName, containerId)
 }
 
-func (rk *redisKeys) QueueTaskCancel(identityId, bucketName, taskId string) string {
-	return fmt.Sprintf(queueTaskCancel, identityId, bucketName, taskId)
+func (rk *redisKeys) QueueTaskCancel(contextId, bucketName, taskId string) string {
+	return fmt.Sprintf(queueTaskCancel, contextId, bucketName, taskId)
 }
 
 // Gateway keys
@@ -205,18 +205,18 @@ func (rk *redisKeys) WorkerPoolState(poolId string) string {
 	return fmt.Sprintf(workerPoolState, poolId)
 }
 
-func (rk *redisKeys) IdentityPrefix() string {
-	return identityPrefix
+func (rk *redisKeys) ContextPrefix() string {
+	return contextPrefix
 }
 
-func (rk *redisKeys) IdentityConcurrencyQuota(identityId string) string {
-	return fmt.Sprintf(identityConcurrencyQuota, identityId)
+func (rk *redisKeys) ContextConcurrencyQuota(contextId string) string {
+	return fmt.Sprintf(contextConcurrencyQuota, contextId)
 }
 
-func (rk *redisKeys) IdentityActiveContainer(identityId string, containerId string, gpuType string) string {
-	return fmt.Sprintf(identityActiveContainer, identityId, containerId, gpuType)
+func (rk *redisKeys) ContextActiveContainer(contextId string, containerId string, gpuType string) string {
+	return fmt.Sprintf(contextActiveContainer, contextId, containerId, gpuType)
 }
 
-func (rk *redisKeys) IdentityActiveContainerLock(identityId string) string {
-	return fmt.Sprintf(identityActiveContainersLock, identityId)
+func (rk *redisKeys) ContextActiveContainerLock(contextId string) string {
+	return fmt.Sprintf(contextActiveContainersLock, contextId)
 }

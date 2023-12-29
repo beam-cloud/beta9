@@ -60,13 +60,7 @@ func NewScheduler() (*Scheduler, error) {
 		return nil, err
 	}
 
-	// beamRepo, err := repo.NewBeamPostgresRepository()
-	// if err != nil {
-	// 	return nil, err
-	// }
-
 	return &Scheduler{
-		// beamRepo:          beamRepo,
 		eventBus:          eventBus,
 		workerRepo:        workerRepo,
 		workerPoolManager: workerPoolManager,

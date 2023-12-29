@@ -128,12 +128,12 @@ class _CallableWrapper:
         return self(*args, **kwargs)
 
     def _gather_and_yield_results(self, inputs: Iterable):
-        async def gather_async():
+        async def _gather_async():
             tasks = [asyncio.create_task(self._call_remote(input)) for input in inputs]
             for task in asyncio.as_completed(tasks):
                 yield await task
 
-        async_gen = gather_async()
+        async_gen = _gather_async()
         while True:
             try:
                 yield self.parent.loop.run_until_complete(async_gen.__anext__())
