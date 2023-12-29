@@ -66,8 +66,8 @@ class _CallableWrapper:
         return True
 
     def __call__(self, *args, **kwargs) -> Any:
-        invocation_id = os.getenv("INVOCATION_ID")
-        if invocation_id:
+        task_id = os.getenv("TASK_ID")
+        if task_id:
             return self.local(*args, **kwargs)
 
         if not self.parent.runtime_ready and not self._prepare_runtime():

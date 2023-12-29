@@ -90,6 +90,8 @@ func (r *PostgresBackendRepository) CreateContext(ctx context.Context) (types.Co
 	return context, nil
 }
 
+// Token
+
 const tokenLength = 64
 
 func (r *PostgresBackendRepository) CreateToken(ctx context.Context, contextID uint) (types.Token, error) {
@@ -139,6 +141,8 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	return &token, &context, nil
 }
 
+// Object
+
 func (r *PostgresBackendRepository) CreateObject(ctx context.Context, newObj types.Object) (types.Object, error) {
 	query := `
 	INSERT INTO object (external_id, hash, size, context_id)
@@ -167,3 +171,5 @@ func (r *PostgresBackendRepository) generateExternalID() (string, error) {
 	}
 	return fmt.Sprintf("%x", b), nil
 }
+
+// Task

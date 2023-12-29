@@ -48,13 +48,13 @@ func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, schedu
 }
 
 func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
-	log.Printf("incoming function run request: %+v", in)
+	log.Printf("incoming function request: %+v", in)
 
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
-	invocationId := fs.genInvocationId()
-	containerId := fs.genContainerId(invocationId)
+	taskId := fs.genInvocationId()
+	containerId := fs.genContainerId(taskId)
 
-	err := fs.rdb.Set(context.TODO(), Keys.FunctionArgs(invocationId), in.Args, functionArgsExpirationTimeout).Err()
+	err := fs.rdb.Set(context.TODO(), Keys.FunctionArgs(taskId), in.Args, functionArgsExpirationTimeout).Err()
 	if err != nil {
 		stream.Send(&pb.FunctionInvokeResponse{Output: "Failed", Done: true, ExitCode: 1})
 		return errors.New("unable to store function args")
@@ -83,7 +83,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	err = fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env: []string{
-			fmt.Sprintf("INVOCATION_ID=%s", invocationId),
+			fmt.Sprintf("TASK_ID=%s", taskId),
 			fmt.Sprintf("HANDLER=%s", in.Handler),
 			fmt.Sprintf("BEAM_TOKEN=%s", authInfo.Token.Key),
 		},
@@ -105,20 +105,19 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return err
 	}
 
-	// TODO: replace placeholder token
-	client, err := common.NewRunCClient(hostname, "")
+	client, err := common.NewRunCClient(hostname, authInfo.Token.Key)
 	if err != nil {
 		return err
 	}
 
 	go client.StreamLogs(ctx, containerId, outputChan)
 
-	return fs.handleStreams(ctx, stream, invocationId, containerId, outputChan, keyEventChan)
+	return fs.handleStreams(ctx, stream, taskId, containerId, outputChan, keyEventChan)
 }
 
 func (fs *RunCFunctionService) handleStreams(ctx context.Context,
 	stream pb.FunctionService_FunctionInvokeServer,
-	invocationId string, containerId string,
+	taskId string, containerId string,
 	outputChan chan common.OutputMsg, keyEventChan chan common.KeyEvent) error {
 
 	var lastMessage common.OutputMsg
@@ -137,7 +136,7 @@ _stream:
 				break _stream
 			}
 		case <-keyEventChan:
-			result, _ := fs.rdb.Get(context.TODO(), Keys.FunctionResult(invocationId)).Bytes()
+			result, _ := fs.rdb.Get(context.TODO(), Keys.FunctionResult(taskId)).Bytes()
 			if err := stream.Send(&pb.FunctionInvokeResponse{Done: true, Result: result, ExitCode: 0}); err != nil {
 				break
 			}
@@ -147,7 +146,7 @@ _stream:
 	}
 
 	if !lastMessage.Success {
-		return errors.New("function invocation failed")
+		return errors.New("function failed")
 	}
 
 	return nil
@@ -177,7 +176,7 @@ func (fs *RunCFunctionService) extractObjectFile(objectId string, stream pb.Func
 }
 
 func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {
-	value, err := fs.rdb.Get(context.TODO(), Keys.FunctionArgs(in.InvocationId)).Bytes()
+	value, err := fs.rdb.Get(context.TODO(), Keys.FunctionArgs(in.TaskId)).Bytes()
 	if err != nil {
 		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, nil
 	}
@@ -189,7 +188,7 @@ func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.Funct
 }
 
 func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error) {
-	err := fs.rdb.Set(context.TODO(), Keys.FunctionResult(in.InvocationId), in.Result, functionResultExpirationTimeout).Err()
+	err := fs.rdb.Set(context.TODO(), Keys.FunctionResult(in.TaskId), in.Result, functionResultExpirationTimeout).Err()
 	if err != nil {
 		return &pb.FunctionSetResultResponse{Ok: false}, nil
 	}
@@ -203,8 +202,8 @@ func (fs *RunCFunctionService) genInvocationId() string {
 	return uuid.New().String()[:8]
 }
 
-func (fs *RunCFunctionService) genContainerId(invocationId string) string {
-	return fmt.Sprintf("%s%s", functionContainerPrefix, invocationId)
+func (fs *RunCFunctionService) genContainerId(taskId string) string {
+	return fmt.Sprintf("%s%s", functionContainerPrefix, taskId)
 }
 
 // Redis keys
@@ -222,10 +221,10 @@ func (k *keys) FunctionPrefix() string {
 	return functionPrefix
 }
 
-func (k *keys) FunctionArgs(invocationId string) string {
-	return fmt.Sprintf(functionArgs, invocationId)
+func (k *keys) FunctionArgs(taskId string) string {
+	return fmt.Sprintf(functionArgs, taskId)
 }
 
-func (k *keys) FunctionResult(invocationId string) string {
-	return fmt.Sprintf(functionResult, invocationId)
+func (k *keys) FunctionResult(taskId string) string {
+	return fmt.Sprintf(functionResult, taskId)
 }

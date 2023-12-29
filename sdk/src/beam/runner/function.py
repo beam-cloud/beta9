@@ -38,13 +38,13 @@ def _load_handler() -> Callable:
 def main(channel: Channel):
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
 
-    invocation_id = os.getenv("INVOCATION_ID")
-    if not invocation_id:
+    task_id = os.getenv("TASK_ID")
+    if not task_id:
         raise RunnerException()
 
     handler = _load_handler()
     get_args_resp: FunctionGetArgsResponse = run_sync(
-        function_stub.function_get_args(invocation_id=invocation_id),
+        function_stub.function_get_args(task_id=task_id),
     )
     if not get_args_resp.ok:
         raise RunnerException()
@@ -54,7 +54,7 @@ def main(channel: Channel):
     result = cloudpickle.dumps(result)
 
     set_result_resp: FunctionSetResultResponse = run_sync(
-        function_stub.function_set_result(invocation_id=invocation_id, result=result),
+        function_stub.function_set_result(task_id=task_id, result=result),
     )
     if not set_result_resp.ok:
         raise RunnerException()

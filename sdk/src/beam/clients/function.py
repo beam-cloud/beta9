@@ -30,7 +30,7 @@ class FunctionInvokeResponse(betterproto.Message):
 
 @dataclass
 class FunctionGetArgsRequest(betterproto.Message):
-    invocation_id: str = betterproto.string_field(1)
+    task_id: str = betterproto.string_field(1)
 
 
 @dataclass
@@ -41,7 +41,7 @@ class FunctionGetArgsResponse(betterproto.Message):
 
 @dataclass
 class FunctionSetResultRequest(betterproto.Message):
-    invocation_id: str = betterproto.string_field(1)
+    task_id: str = betterproto.string_field(1)
     result: bytes = betterproto.bytes_field(2)
 
 
@@ -80,11 +80,9 @@ class FunctionServiceStub(betterproto.ServiceStub):
         ):
             yield response
 
-    async def function_get_args(
-        self, *, invocation_id: str = ""
-    ) -> FunctionGetArgsResponse:
+    async def function_get_args(self, *, task_id: str = "") -> FunctionGetArgsResponse:
         request = FunctionGetArgsRequest()
-        request.invocation_id = invocation_id
+        request.task_id = task_id
 
         return await self._unary_unary(
             "/function.FunctionService/FunctionGetArgs",
@@ -93,10 +91,10 @@ class FunctionServiceStub(betterproto.ServiceStub):
         )
 
     async def function_set_result(
-        self, *, invocation_id: str = "", result: bytes = b""
+        self, *, task_id: str = "", result: bytes = b""
     ) -> FunctionSetResultResponse:
         request = FunctionSetResultRequest()
-        request.invocation_id = invocation_id
+        request.task_id = task_id
         request.result = result
 
         return await self._unary_unary(

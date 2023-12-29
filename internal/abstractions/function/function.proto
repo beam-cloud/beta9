@@ -31,14 +31,14 @@ message FunctionInvokeResponse {
   bytes result = 4;
 }
 
-message FunctionGetArgsRequest { string invocation_id = 1; }
+message FunctionGetArgsRequest { string task_id = 1; }
 message FunctionGetArgsResponse {
   bool ok = 1;
   bytes args = 2;
 }
 
 message FunctionSetResultRequest {
-  string invocation_id = 1;
+  string task_id = 1;
   bytes result = 2;
 }
 
