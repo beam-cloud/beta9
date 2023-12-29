@@ -208,7 +208,7 @@ spec:
       enabled: false
 
     env:
-      HEADSCALE_SERVER_URL: http://headscale.beam
+      HEADSCALE_SERVER_URL: http://localhost:8080
       HEADSCALE_DB_HOST: postgres-postgresql.beam
       HEADSCALE_DB_PORT: 5432
       HEADSCALE_DB_NAME: main
