@@ -24,7 +24,6 @@ func NewGatewayService(gw *Gateway) (*GatewayService, error) {
 
 func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeRequest) (*pb.AuthorizeResponse, error) {
 	authInfo, authFound := auth.AuthInfoFromContext(ctx)
-
 	if authFound {
 		return &pb.AuthorizeResponse{
 			ContextId: authInfo.Context.ExternalID,

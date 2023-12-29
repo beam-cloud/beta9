@@ -51,8 +51,8 @@ def main(channel: Channel):
 
     args: dict = cloudpickle.loads(get_args_resp.args)
     result = handler(*args.get("args", ()), **args.get("kwargs", {}))
-
     result = cloudpickle.dumps(result)
+
     set_result_resp: FunctionSetResultResponse = run_sync(
         function_stub.function_set_result(invocation_id=invocation_id, result=result),
     )
