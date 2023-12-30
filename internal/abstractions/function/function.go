@@ -11,6 +11,7 @@ import (
 
 	"github.com/beam-cloud/beam/internal/auth"
 	"github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
@@ -34,13 +35,15 @@ type FunctionService interface {
 
 type RunCFunctionService struct {
 	pb.UnimplementedFunctionServiceServer
+	backendRepo     repository.BackendRepository
 	scheduler       *scheduler.Scheduler
 	keyEventManager *common.KeyEventManager
 	rdb             *common.RedisClient
 }
 
-func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, scheduler *scheduler.Scheduler, keyEventManager *common.KeyEventManager) (*RunCFunctionService, error) {
+func NewRuncFunctionService(ctx context.Context, backendRepo repository.BackendRepository, rdb *common.RedisClient, scheduler *scheduler.Scheduler, keyEventManager *common.KeyEventManager) (*RunCFunctionService, error) {
 	return &RunCFunctionService{
+		backendRepo:     backendRepo,
 		scheduler:       scheduler,
 		rdb:             rdb,
 		keyEventManager: keyEventManager,
@@ -66,7 +69,15 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 
 	go fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
 
-	err = fs.extractObjectFile(in.ObjectId, stream)
+	// Retrieve object
+	_, err = fs.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Context.Id)
+	if err != nil {
+		log.Println("COULDNT GET THE OBJECT")
+		stream.Send(&pb.FunctionInvokeResponse{Done: true, ExitCode: 1})
+		return err
+	}
+
+	err = fs.extractObjectFile(stream.Context(), in.ObjectId, authInfo.Context.Name, stream)
 	if err != nil {
 		return err
 	}
@@ -83,7 +94,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	err = fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env: []string{
-			fmt.Sprintf("TASK_ID=%s", taskId),
+			fmt.Sprintf("TASK_Id=%s", taskId),
 			fmt.Sprintf("HANDLER=%s", in.Handler),
 			fmt.Sprintf("BEAM_TOKEN=%s", authInfo.Token.Key),
 		},
@@ -93,7 +104,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		ImageId:    in.ImageId,
 		EntryPoint: []string{in.PythonVersion, "-m", "beam.runner.function"},
 		Mounts: []types.Mount{
-			{LocalPath: path.Join(types.DefaultExtractedObjectPath, in.ObjectId), MountPath: types.WorkerUserCodeVolume, ReadOnly: true},
+			{LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Context.Name, in.ObjectId), MountPath: types.WorkerUserCodeVolume, ReadOnly: true},
 		},
 	})
 	if err != nil {
@@ -111,7 +122,6 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	}
 
 	go client.StreamLogs(ctx, containerId, outputChan)
-
 	return fs.handleStreams(ctx, stream, taskId, containerId, outputChan, keyEventChan)
 }
 
@@ -152,15 +162,18 @@ _stream:
 	return nil
 }
 
-func (fs *RunCFunctionService) extractObjectFile(objectId string, stream pb.FunctionService_FunctionInvokeServer) error {
-	destPath := path.Join(types.DefaultExtractedObjectPath, objectId)
+func (fs *RunCFunctionService) extractObjectFile(ctx context.Context, objectId string, contextName string, stream pb.FunctionService_FunctionInvokeServer) error {
+	extractedObjectPath := path.Join(types.DefaultExtractedObjectPath, contextName)
+	os.MkdirAll(extractedObjectPath, 0644)
+
+	destPath := path.Join(types.DefaultExtractedObjectPath, contextName, objectId)
 	if _, err := os.Stat(destPath); !os.IsNotExist(err) {
 		// Folder already exists, so skip extraction
 		return nil
 	}
 
 	// Check if the object file exists
-	objectFilePath := path.Join(types.DefaultObjectPath, objectId)
+	objectFilePath := path.Join(types.DefaultObjectPath, contextName, objectId)
 	if _, err := os.Stat(objectFilePath); os.IsNotExist(err) {
 		stream.Send(&pb.FunctionInvokeResponse{Done: true, ExitCode: 1})
 		return errors.New("object file does not exist")

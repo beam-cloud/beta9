@@ -24,19 +24,21 @@ message ObjectMetadata {
   int64 size = 2;
 }
 
-message HeadObjectRequest { string object_id = 1; }
+message HeadObjectRequest { string hash = 1; }
 
 message HeadObjectResponse {
   bool ok = 1;
   bool exists = 2;
-  ObjectMetadata object_metadata = 3;
-  string error_msg = 4;
+  string object_id = 3;
+  ObjectMetadata object_metadata = 4;
+  string error_msg = 5;
 }
 
 message PutObjectRequest {
   bytes object_content = 1;
   ObjectMetadata object_metadata = 2;
-  bool overwrite = 3;
+  string hash = 3;
+  bool overwrite = 4;
 }
 
 message PutObjectResponse {

@@ -6,29 +6,29 @@ import (
 )
 
 type Context struct {
-	ID         uint      `db:"id"`
-	ExternalID string    `db:"external_id"`
+	Id         uint      `db:"id"`
+	ExternalId string    `db:"external_id"`
 	Name       string    `db:"name"`
 	CreatedAt  time.Time `db:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at"`
 }
 
 type Token struct {
-	ID         uint      `db:"id"`
-	ExternalID string    `db:"external_id"`
+	Id         uint      `db:"id"`
+	ExternalId string    `db:"external_id"`
 	Key        string    `db:"key"`
 	Active     bool      `db:"active"`
-	ContextID  uint      `db:"context_id"` // Foreign key to Context
+	ContextId  uint      `db:"context_id"` // Foreign key to Context
 	Context    *Context  `db:"context"`    // Pointer to associated Context
 	CreatedAt  time.Time `db:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at"`
 }
 
 type Volume struct {
-	ID         uint      `db:"id"`
-	ExternalID string    `db:"external_id"`
+	Id         uint      `db:"id"`
+	ExternalId string    `db:"external_id"`
 	Name       string    `db:"name"`
-	ContextID  uint      `db:"context_id"` // Foreign key to Context
+	ContextId  uint      `db:"context_id"` // Foreign key to Context
 	CreatedAt  time.Time `db:"created_at"`
 }
 
@@ -40,22 +40,22 @@ const (
 )
 
 type Deployment struct {
-	ID         uint      `db:"id"`
-	ExternalID string    `db:"external_id"`
+	Id         uint      `db:"id"`
+	ExternalId string    `db:"external_id"`
 	Version    uint      `db:"version"`
 	Status     string    `db:"status"`
-	ContextID  uint      `db:"context_id"` // Foreign key to Context
-	StubID     uint      `db:"stub_id"`    // Foreign key to Stub
+	ContextId  uint      `db:"context_id"` // Foreign key to Context
+	StubId     uint      `db:"stub_id"`    // Foreign key to Stub
 	CreatedAt  time.Time `db:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at"`
 }
 
 type Object struct {
-	ID         uint      `db:"id"`
-	ExternalID string    `db:"external_id"`
+	Id         uint      `db:"id"`
+	ExternalId string    `db:"external_id"`
 	Hash       string    `db:"hash"`
 	Size       int64     `db:"size"`
-	ContextID  uint      `db:"context_id"` // Foreign key to Context
+	ContextId  uint      `db:"context_id"` // Foreign key to Context
 	CreatedAt  time.Time `db:"created_at"`
 }
 
@@ -70,26 +70,26 @@ const (
 )
 
 type Task struct {
-	ID          uint         `db:"id"`
-	ExternalID  string       `db:"external_id"`
+	Id          uint         `db:"id"`
+	ExternalId  string       `db:"external_id"`
 	Status      string       `db:"status"`
-	ContainerID string       `db:"container_id"`
+	ContainerId string       `db:"container_id"`
 	StartedAt   time.Time    `db:"started_at"`
-	EndedAt     sql.NullTime `db:"ended_at"`   // Can be NULL if the task hasn't ended
-	ContextID   uint         `db:"context_id"` // Foreign key to Context
-	StubID      uint         `db:"stub_id"`    // Foreign key to Stub
+	EndedAt     sql.NullTime `db:"ended_at"`
+	ContextId   uint         `db:"context_id"` // Foreign key to Context
+	StubId      uint         `db:"stub_id"`    // Foreign key to Stub
 	CreatedAt   time.Time    `db:"created_at"`
 	UpdatedAt   time.Time    `db:"updated_at"`
 }
 
 type Stub struct {
-	ID         uint      `db:"id"`
-	ExternalID string    `db:"external_id"`
+	Id         uint      `db:"id"`
+	ExternalId string    `db:"external_id"`
 	Name       string    `db:"name"`
 	Type       string    `db:"type"`
 	Config     string    `db:"config"`
-	ObjectID   uint      `db:"object_id"`  // Foreign key to Object
-	ContextID  uint      `db:"context_id"` // Foreign key to Context
+	ObjectId   uint      `db:"object_id"`  // Foreign key to Object
+	ContextId  uint      `db:"context_id"` // Foreign key to Context
 	CreatedAt  time.Time `db:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at"`
 }

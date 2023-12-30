@@ -78,37 +78,39 @@ class FileSyncer:
                 zipf.write(file, os.path.relpath(file, self.root_dir))
                 terminal.detail(f"Added {file}")
 
-        object_id = None
+        hash = None
         size = 0
         object_content = None
 
         with open(temp_zip_name, "rb") as f:
             object_content = f.read()
             size = len(object_content)
-            object_id = hashlib.sha256(f.read()).hexdigest()
+            hash = hashlib.sha256(object_content).hexdigest()
 
         head_response: HeadObjectResponse = self.loop.run_until_complete(
-            self.gateway_stub.head_object(object_id=object_id)
+            self.gateway_stub.head_object(hash=hash)
         )
         put_response: Union[PutObjectResponse, None] = None
         if not head_response.exists:
-            metadata = ObjectMetadata(name=object_id, size=size)
+            metadata = ObjectMetadata(name=hash, size=size)
 
             with terminal.progress("Uploading"):
                 put_response: PutObjectResponse = self.loop.run_until_complete(
                     self.gateway_stub.put_object(
                         object_content=object_content,
                         object_metadata=metadata,
+                        hash=hash,
+                        overwrite=False,
                     )
                 )
         elif head_response.exists and head_response.ok:
-            return FileSyncResult(success=True, object_id=object_id)
+            terminal.header("Files synced")
+            return FileSyncResult(success=True, object_id=head_response.object_id)
 
         os.remove(temp_zip_name)
 
         if not put_response.ok:
-            terminal.header("File sync failed ☠️")
-            return FileSyncResult(success=False, object_id=put_response.object_id)
+            terminal.error("File sync failed ☠️")
 
         terminal.header("Files synced")
         return FileSyncResult(success=True, object_id=put_response.object_id)

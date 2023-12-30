@@ -26,7 +26,7 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	authInfo, authFound := auth.AuthInfoFromContext(ctx)
 	if authFound {
 		return &pb.AuthorizeResponse{
-			ContextId: authInfo.Context.ExternalID,
+			ContextId: authInfo.Context.ExternalId,
 			Ok:        true,
 		}, nil
 	}
@@ -51,7 +51,7 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	}
 
 	// Now that we have a context, create a new token
-	token, err := gws.gw.BackendRepo.CreateToken(ctx, context.ID)
+	token, err := gws.gw.BackendRepo.CreateToken(ctx, context.Id)
 	if err != nil {
 		return &pb.AuthorizeResponse{
 			Ok:       false,
@@ -62,68 +62,68 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	return &pb.AuthorizeResponse{
 		Ok:        true,
 		NewToken:  token.Key,
-		ContextId: context.ExternalID,
+		ContextId: context.ExternalId,
 	}, nil
 }
 
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
-	filePath := path.Join(GatewayConfig.DefaultObjectPath, in.ObjectId)
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	fileInfo, err := os.Stat(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return &pb.HeadObjectResponse{
-				Ok:       true,
-				Exists:   false,
-				ErrorMsg: "Object not found.",
-			}, nil
-		}
-
+	existingObject, err := gws.gw.BackendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Context.Id)
+	if err == nil {
 		return &pb.HeadObjectResponse{
-			Ok:       true,
-			Exists:   false,
-			ErrorMsg: err.Error(),
+			Ok:     true,
+			Exists: true,
+			ObjectMetadata: &pb.ObjectMetadata{
+				Name: existingObject.Hash,
+				Size: existingObject.Size,
+			},
+			ObjectId: existingObject.ExternalId,
 		}, nil
 	}
 
-	metadata := &pb.ObjectMetadata{
-		Name: fileInfo.Name(),
-		Size: fileInfo.Size(),
-	}
-
 	return &pb.HeadObjectResponse{
-		Ok:             true,
-		Exists:         true,
-		ObjectMetadata: metadata,
+		Ok:     true,
+		Exists: false,
 	}, nil
 }
 
 func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectRequest) (*pb.PutObjectResponse, error) {
-	os.MkdirAll(GatewayConfig.DefaultObjectPath, 0644)
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	hash := sha256.Sum256(in.ObjectContent)
-	objectId := hex.EncodeToString(hash[:])
-	filePath := path.Join(GatewayConfig.DefaultObjectPath, objectId)
+	objectPath := path.Join(GatewayConfig.DefaultObjectPath, authInfo.Context.Name)
+	os.MkdirAll(objectPath, 0644)
 
-	// Check if object already exists
-	_, err := os.Stat(filePath)
+	existingObject, err := gws.gw.BackendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Context.Id)
 	if err == nil && !in.Overwrite {
 		return &pb.PutObjectResponse{
 			Ok:       true,
-			ObjectId: objectId,
+			ObjectId: existingObject.ExternalId,
 		}, nil
 	}
 
+	hash := sha256.Sum256(in.ObjectContent)
+	hashStr := hex.EncodeToString(hash[:])
+
+	newObject, err := gws.gw.BackendRepo.CreateObject(ctx, hashStr, int64(len(in.ObjectContent)), authInfo.Context.Id)
+	if err != nil {
+		return &pb.PutObjectResponse{
+			Ok:       false,
+			ErrorMsg: "Unable to create object",
+		}, nil
+	}
+
+	filePath := path.Join(objectPath, newObject.ExternalId)
 	err = os.WriteFile(filePath, in.ObjectContent, 0644)
 	if err != nil {
 		return &pb.PutObjectResponse{
 			Ok:       false,
-			ErrorMsg: err.Error(),
+			ErrorMsg: "Unable to write files",
 		}, nil
 	}
 
 	return &pb.PutObjectResponse{
 		Ok:       true,
-		ObjectId: objectId,
+		ObjectId: newObject.ExternalId,
 	}, nil
 }

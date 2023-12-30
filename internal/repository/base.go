@@ -40,12 +40,14 @@ type ContainerRepository interface {
 type BackendRepository interface {
 	ListContexts(ctx context.Context) ([]types.Context, error)
 	CreateContext(ctx context.Context) (types.Context, error)
-	CreateObject(ctx context.Context, newObj types.Object) (types.Object, error)
-	CreateToken(ctx context.Context, contextID uint) (types.Token, error)
+	CreateObject(ctx context.Context, hash string, size int64, contextId uint) (types.Object, error)
+	GetObjectByHash(ctx context.Context, hash string, contextId uint) (types.Object, error)
+	GetObjectByExternalId(ctx context.Context, externalId string, contextId uint) (types.Object, error)
+	CreateToken(ctx context.Context, contextId uint) (types.Token, error)
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Context, error)
-	CreateTask(ctx context.Context, containerID string, contextID, stubID uint) (types.Task, error)
-	UpdateTask(ctx context.Context, taskID uint, updatedTask types.Task) (types.Task, error)
-	DeleteTask(ctx context.Context, taskID uint) error
+	CreateTask(ctx context.Context, containerId string, contextId, stubId uint) (types.Task, error)
+	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (types.Task, error)
+	DeleteTask(ctx context.Context, externalId string) error
 	ListTasks(ctx context.Context) ([]types.Task, error)
 }
 

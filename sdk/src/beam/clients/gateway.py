@@ -25,26 +25,29 @@ class AuthorizeResponse(betterproto.Message):
 class ObjectMetadata(betterproto.Message):
     name: str = betterproto.string_field(1)
     size: int = betterproto.int64_field(2)
+    object_id: str = betterproto.string_field(3)
 
 
 @dataclass
 class HeadObjectRequest(betterproto.Message):
-    object_id: str = betterproto.string_field(1)
+    hash: str = betterproto.string_field(1)
 
 
 @dataclass
 class HeadObjectResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     exists: bool = betterproto.bool_field(2)
-    object_metadata: "ObjectMetadata" = betterproto.message_field(3)
-    error_msg: str = betterproto.string_field(4)
+    object_id: str = betterproto.string_field(3)
+    object_metadata: "ObjectMetadata" = betterproto.message_field(4)
+    error_msg: str = betterproto.string_field(5)
 
 
 @dataclass
 class PutObjectRequest(betterproto.Message):
     object_content: bytes = betterproto.bytes_field(1)
     object_metadata: "ObjectMetadata" = betterproto.message_field(2)
-    overwrite: bool = betterproto.bool_field(3)
+    hash: str = betterproto.string_field(3)
+    overwrite: bool = betterproto.bool_field(4)
 
 
 @dataclass
@@ -64,9 +67,9 @@ class GatewayServiceStub(betterproto.ServiceStub):
             AuthorizeResponse,
         )
 
-    async def head_object(self, *, object_id: str = "") -> HeadObjectResponse:
+    async def head_object(self, *, hash: str = "") -> HeadObjectResponse:
         request = HeadObjectRequest()
-        request.object_id = object_id
+        request.hash = hash
 
         return await self._unary_unary(
             "/gateway.GatewayService/HeadObject",
@@ -79,12 +82,14 @@ class GatewayServiceStub(betterproto.ServiceStub):
         *,
         object_content: bytes = b"",
         object_metadata: Optional["ObjectMetadata"] = None,
+        hash: str = "",
         overwrite: bool = False,
     ) -> PutObjectResponse:
         request = PutObjectRequest()
         request.object_content = object_content
         if object_metadata is not None:
             request.object_metadata = object_metadata
+        request.hash = hash
         request.overwrite = overwrite
 
         return await self._unary_unary(
