@@ -91,7 +91,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	err = fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env: []string{
-			fmt.Sprintf("TASK_Id=%s", taskId),
+			fmt.Sprintf("TASK_ID=%s", taskId),
 			fmt.Sprintf("HANDLER=%s", in.Handler),
 			fmt.Sprintf("BEAM_TOKEN=%s", authInfo.Token.Key),
 		},
