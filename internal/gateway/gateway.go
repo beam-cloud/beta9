@@ -52,21 +52,9 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	Storage, err := storage.NewJuiceFsStorage()
+	Storage, err := storage.NewStorage()
 	if err != nil {
 		return nil, err
-	}
-
-	// Format filesystem
-	err = Storage.Format(GatewayConfig.DefaultFilesystemName)
-	if err != nil {
-		log.Fatalf("Unable to format filesystem: %+v\n", err)
-	}
-
-	// Mount filesystem
-	err = Storage.Mount(GatewayConfig.DefaultFilesystemPath)
-	if err != nil {
-		log.Fatalf("Unable to mount filesystem: %+v\n", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

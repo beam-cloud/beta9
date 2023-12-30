@@ -8,6 +8,7 @@ import (
 	"path"
 
 	"github.com/beam-cloud/beam/internal/auth"
+	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
 )
 
@@ -91,7 +92,7 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectRequest) (*pb.PutObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	objectPath := path.Join(GatewayConfig.DefaultObjectPath, authInfo.Context.Name)
+	objectPath := path.Join(types.DefaultObjectPath, authInfo.Context.Name)
 	os.MkdirAll(objectPath, 0644)
 
 	existingObject, err := gws.gw.BackendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Context.Id)

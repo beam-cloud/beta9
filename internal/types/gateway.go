@@ -17,6 +17,7 @@ import (
 const (
 	DefaultExtractedObjectPath string        = "/data/unpacked"
 	DefaultObjectPath          string        = "/data/objects"
+	DefaultFilesystemName      string        = "beam-fs"
 	DefaultFilesystemPath      string        = "/data"
 	FailedContainerThreshold   int           = 3
 	RequestTimeoutDurationS    time.Duration = 175 * time.Second
