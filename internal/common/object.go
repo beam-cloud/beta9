@@ -13,6 +13,8 @@ func ExtractObjectFile(ctx context.Context, objectId string, contextName string)
 	extractedObjectPath := path.Join(types.DefaultExtractedObjectPath, contextName)
 	os.MkdirAll(extractedObjectPath, 0644)
 
+	// TODO: add some sort of lock
+
 	destPath := path.Join(types.DefaultExtractedObjectPath, contextName, objectId)
 	if _, err := os.Stat(destPath); !os.IsNotExist(err) {
 		// Folder already exists, so skip extraction

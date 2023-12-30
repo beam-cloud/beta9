@@ -49,6 +49,7 @@ type BackendRepository interface {
 	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (types.Task, error)
 	DeleteTask(ctx context.Context, externalId string) error
 	ListTasks(ctx context.Context) ([]types.Task, error)
+	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, contextId uint, objectId uint) (types.Stub, error)
 }
 
 type BeamRepository interface {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 
@@ -254,4 +255,35 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 	}
 
 	return tasks, nil
+}
+
+// Stub
+
+func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, contextId uint, objectId uint) (types.Stub, error) {
+	var stub types.Stub
+
+	// First, try to get the stub
+	queryGet := `SELECT id, external_id, name, type, config, config_version, object_id, context_id, created_at, updated_at FROM stub WHERE name = $1 AND type = $2;`
+	err := r.client.GetContext(ctx, &stub, queryGet, name, stubType)
+	if err == nil {
+		return stub, nil
+	}
+
+	// Serialize config to JSON
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return types.Stub{}, err
+	}
+
+	// Stub not found, create a new one
+	queryCreate := `
+    INSERT INTO stub (name, type, config, context_id, object_id)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING id, external_id, name, type, config, config_version, object_id, context_id, created_at, updated_at;
+    `
+	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), contextId, objectId); err != nil {
+		return types.Stub{}, err
+	}
+
+	return stub, nil
 }

@@ -83,6 +83,10 @@ type Task struct {
 }
 
 type StubConfigV1 struct {
+	Cpu     int64  `json:"cpu"`
+	Memory  int64  `json:"memory"`
+	Gpu     string `json:"gpu"`
+	ImageId string `json:"image_id"`
 }
 
 type Stub struct {
