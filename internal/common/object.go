@@ -2,8 +2,6 @@ package common
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"path"
 
@@ -24,12 +22,12 @@ func ExtractObjectFile(ctx context.Context, objectId string, contextName string)
 	// Check if the object file exists
 	objectFilePath := path.Join(types.DefaultObjectPath, contextName, objectId)
 	if _, err := os.Stat(objectFilePath); os.IsNotExist(err) {
-		return errors.New("object file does not exist")
+		return err
 	}
 
 	zip := archiver.NewZip()
 	if err := zip.Unarchive(objectFilePath, destPath); err != nil {
-		return fmt.Errorf("failed to unzip object file: %v", err)
+		return err
 	}
 
 	return nil
