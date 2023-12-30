@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
 	"github.com/google/uuid"
-	"github.com/mholt/archiver/v3"
 )
 
 const (
@@ -68,13 +66,13 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 
 	go fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
 
-	// Retrieve object
+	// Retrieve and extract object
 	_, err = fs.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Context.Id)
 	if err != nil {
 		return err
 	}
 
-	err = fs.extractObjectFile(stream.Context(), in.ObjectId, authInfo.Context.Name, stream)
+	err = common.ExtractObjectFile(stream.Context(), in.ObjectId, authInfo.Context.Name)
 	if err != nil {
 		return err
 	}
@@ -154,32 +152,6 @@ _stream:
 
 	if !lastMessage.Success {
 		return errors.New("function failed")
-	}
-
-	return nil
-}
-
-func (fs *RunCFunctionService) extractObjectFile(ctx context.Context, objectId string, contextName string, stream pb.FunctionService_FunctionInvokeServer) error {
-	extractedObjectPath := path.Join(types.DefaultExtractedObjectPath, contextName)
-	os.MkdirAll(extractedObjectPath, 0644)
-
-	destPath := path.Join(types.DefaultExtractedObjectPath, contextName, objectId)
-	if _, err := os.Stat(destPath); !os.IsNotExist(err) {
-		// Folder already exists, so skip extraction
-		return nil
-	}
-
-	// Check if the object file exists
-	objectFilePath := path.Join(types.DefaultObjectPath, contextName, objectId)
-	if _, err := os.Stat(objectFilePath); os.IsNotExist(err) {
-		stream.Send(&pb.FunctionInvokeResponse{Done: true, ExitCode: 1})
-		return errors.New("object file does not exist")
-	}
-
-	zip := archiver.NewZip()
-	if err := zip.Unarchive(objectFilePath, destPath); err != nil {
-		stream.Send(&pb.FunctionInvokeResponse{Done: true, ExitCode: 1})
-		return fmt.Errorf("failed to unzip object file: %v", err)
 	}
 
 	return nil
