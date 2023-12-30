@@ -60,13 +60,14 @@ type Object struct {
 }
 
 type Task struct {
-	ID         uint         `db:"id"`
-	ExternalID string       `db:"external_id"`
-	CreatedAt  time.Time    `db:"created_at"`
-	StartedAt  time.Time    `db:"started_at"`
-	EndedAt    sql.NullTime `db:"ended_at"`   // Can be NULL if the task hasn't ended
-	ContextID  uint         `db:"context_id"` // Foreign key to Context
-	StubID     uint         `db:"stub_id"`    // Foreign key to Stub
+	ID          uint         `db:"id"`
+	ExternalID  string       `db:"external_id"`
+	ContainerID string       `db:"container_id"`
+	CreatedAt   time.Time    `db:"created_at"`
+	StartedAt   time.Time    `db:"started_at"`
+	EndedAt     sql.NullTime `db:"ended_at"`   // Can be NULL if the task hasn't ended
+	ContextID   uint         `db:"context_id"` // Foreign key to Context
+	StubID      uint         `db:"stub_id"`    // Foreign key to Stub
 }
 
 type Stub struct {

@@ -75,6 +75,7 @@ func upCreateTables(tx *sql.Tx) error {
 		`CREATE TABLE IF NOT EXISTS task (
             id SERIAL PRIMARY KEY,
             external_id VARCHAR(255) UNIQUE NOT NULL,
+            container_id VARCHAR(255) NOT NULL,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             started_at TIMESTAMP WITH TIME ZONE,
             ended_at TIMESTAMP WITH TIME ZONE,

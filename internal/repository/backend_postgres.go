@@ -56,6 +56,15 @@ func (r *PostgresBackendRepository) migrate() error {
 	return nil
 }
 
+func (r *PostgresBackendRepository) generateExternalID() (string, error) {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", b), nil
+}
+
+// Context
 func (r *PostgresBackendRepository) ListContexts(ctx context.Context) ([]types.Context, error) {
 	var contexts []types.Context
 
@@ -162,14 +171,6 @@ func (r *PostgresBackendRepository) CreateObject(ctx context.Context, newObj typ
 	}
 
 	return object, nil
-}
-
-func (r *PostgresBackendRepository) generateExternalID() (string, error) {
-	var b [12]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", b), nil
 }
 
 // Task
