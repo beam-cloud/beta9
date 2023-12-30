@@ -8,18 +8,19 @@ import (
 	"path"
 
 	"github.com/beam-cloud/beam/internal/auth"
+	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
 )
 
 type GatewayService struct {
-	gw *Gateway
+	backendRepo repository.BackendRepository
 	pb.UnimplementedGatewayServiceServer
 }
 
-func NewGatewayService(gw *Gateway) (*GatewayService, error) {
+func NewGatewayService(backendRepo repository.BackendRepository) (*GatewayService, error) {
 	return &GatewayService{
-		gw: gw,
+		backendRepo: backendRepo,
 	}, nil
 }
 
@@ -33,7 +34,7 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	}
 
 	// See if the this gateway has been configured previously
-	existingContexts, err := gws.gw.BackendRepo.ListContexts(ctx)
+	existingContexts, err := gws.backendRepo.ListContexts(ctx)
 	if err != nil || len(existingContexts) >= 1 {
 		return &pb.AuthorizeResponse{
 			Ok:       false,
@@ -43,7 +44,7 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 
 	// If no contexts are found, we can create a new one for the user
 	// and generate a new token
-	context, err := gws.gw.BackendRepo.CreateContext(ctx)
+	context, err := gws.backendRepo.CreateContext(ctx)
 	if err != nil {
 		return &pb.AuthorizeResponse{
 			Ok:       false,
@@ -52,7 +53,7 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	}
 
 	// Now that we have a context, create a new token
-	token, err := gws.gw.BackendRepo.CreateToken(ctx, context.Id)
+	token, err := gws.backendRepo.CreateToken(ctx, context.Id)
 	if err != nil {
 		return &pb.AuthorizeResponse{
 			Ok:       false,
@@ -70,7 +71,7 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	existingObject, err := gws.gw.BackendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Context.Id)
+	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Context.Id)
 	if err == nil {
 		return &pb.HeadObjectResponse{
 			Ok:     true,
@@ -95,7 +96,7 @@ func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectReques
 	objectPath := path.Join(types.DefaultObjectPath, authInfo.Context.Name)
 	os.MkdirAll(objectPath, 0644)
 
-	existingObject, err := gws.gw.BackendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Context.Id)
+	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Context.Id)
 	if err == nil && !in.Overwrite {
 		return &pb.PutObjectResponse{
 			Ok:       true,
@@ -106,7 +107,7 @@ func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectReques
 	hash := sha256.Sum256(in.ObjectContent)
 	hashStr := hex.EncodeToString(hash[:])
 
-	newObject, err := gws.gw.BackendRepo.CreateObject(ctx, hashStr, int64(len(in.ObjectContent)), authInfo.Context.Id)
+	newObject, err := gws.backendRepo.CreateObject(ctx, hashStr, int64(len(in.ObjectContent)), authInfo.Context.Id)
 	if err != nil {
 		return &pb.PutObjectResponse{
 			Ok:       false,
