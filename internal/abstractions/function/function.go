@@ -59,7 +59,6 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 
 	err := fs.rdb.Set(context.TODO(), Keys.FunctionArgs(taskId), in.Args, functionArgsExpirationTimeout).Err()
 	if err != nil {
-		stream.Send(&pb.FunctionInvokeResponse{Output: "Failed", Done: true, ExitCode: 1})
 		return errors.New("unable to store function args")
 	}
 
@@ -72,8 +71,6 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	// Retrieve object
 	_, err = fs.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Context.Id)
 	if err != nil {
-		log.Println("COULDNT GET THE OBJECT")
-		stream.Send(&pb.FunctionInvokeResponse{Done: true, ExitCode: 1})
 		return err
 	}
 

@@ -25,7 +25,6 @@ class AuthorizeResponse(betterproto.Message):
 class ObjectMetadata(betterproto.Message):
     name: str = betterproto.string_field(1)
     size: int = betterproto.int64_field(2)
-    object_id: str = betterproto.string_field(3)
 
 
 @dataclass
