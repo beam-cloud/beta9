@@ -43,6 +43,10 @@ type BackendRepository interface {
 	CreateObject(ctx context.Context, newObj types.Object) (types.Object, error)
 	CreateToken(ctx context.Context, contextID uint) (types.Token, error)
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Context, error)
+	CreateTask(ctx context.Context, containerID string, contextID, stubID uint) (types.Task, error)
+	UpdateTask(ctx context.Context, taskID uint, updatedTask types.Task) (types.Task, error)
+	DeleteTask(ctx context.Context, taskID uint) error
+	ListTasks(ctx context.Context) ([]types.Task, error)
 }
 
 type BeamRepository interface {

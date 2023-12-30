@@ -57,14 +57,15 @@ func (r *PostgresBackendRepository) migrate() error {
 }
 
 func (r *PostgresBackendRepository) generateExternalID() (string, error) {
-	var b [12]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	id, err := uuid.NewRandom()
+	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%x", b), nil
+	return id.String(), nil
 }
 
 // Context
+
 func (r *PostgresBackendRepository) ListContexts(ctx context.Context) ([]types.Context, error) {
 	var contexts []types.Context
 
@@ -174,3 +175,51 @@ func (r *PostgresBackendRepository) CreateObject(ctx context.Context, newObj typ
 }
 
 // Task
+
+func (r *PostgresBackendRepository) CreateTask(ctx context.Context, containerID string, contextID, stubID uint) (types.Task, error) {
+	query := `
+    INSERT INTO task (container_id, context_id, stub_id)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING id, external_id, status, container_id, context_id, stub_id, started_at, ended_at, created_at, updated_at;
+    `
+
+	var newTask types.Task
+	if err := r.client.GetContext(ctx, &newTask, query, containerID, contextID, stubID); err != nil {
+		return types.Task{}, err
+	}
+
+	return newTask, nil
+}
+
+func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, taskID uint, updatedTask types.Task) (types.Task, error) {
+	query := `
+	UPDATE task
+	SET status = $2, container_id = $3, started_at = $4, ended_at = $5, context_id = $6, stub_id = $7, updated_at = CURRENT_TIMESTAMP
+	WHERE id = $1
+	RETURNING id, external_id, status, container_id, context_id, stub_id, started_at, ended_at, created_at, updated_at;
+	`
+
+	var task types.Task
+	if err := r.client.GetContext(ctx, &task, query, taskID, updatedTask.Status, updatedTask.ContainerID, updatedTask.StartedAt, updatedTask.EndedAt, updatedTask.ContextID, updatedTask.StubID); err != nil {
+		return types.Task{}, err
+	}
+
+	return task, nil
+}
+
+func (r *PostgresBackendRepository) DeleteTask(ctx context.Context, taskID uint) error {
+	query := `DELETE FROM task WHERE id = $1;`
+	_, err := r.client.ExecContext(ctx, query, taskID)
+	return err
+}
+
+func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task, error) {
+	var tasks []types.Task
+	query := `SELECT id, external_id, status, container_id, started_at, ended_at, context_id, stub_id, created_at, updated_at FROM task;`
+	err := r.client.SelectContext(ctx, &tasks, query)
+	if err != nil {
+		return nil, err
+	}
+
+	return tasks, nil
+}
