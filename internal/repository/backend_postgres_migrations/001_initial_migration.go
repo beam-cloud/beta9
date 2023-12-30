@@ -63,6 +63,7 @@ func upCreateTables(tx *sql.Tx) error {
             name VARCHAR(255) NOT NULL,
             type stub_type NOT NULL,
             config JSON NOT NULL,
+            config_version INT UNSIGNED DEFAULT 1,
             object_id INT REFERENCES object(id),
             context_id INT REFERENCES context(id),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
