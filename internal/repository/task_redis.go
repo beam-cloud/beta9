@@ -2,12 +2,10 @@ package repository
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/types"
-	pb "github.com/beam-cloud/beam/proto"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -78,57 +76,6 @@ func (t *TaskRedisRepository) GetNextTask(queueName, containerId, identityExtern
 	}
 
 	return task, nil
-}
-
-func (t *TaskRedisRepository) GetTaskStream(queueName, containerId, identityExternalId string, stream pb.Scheduler_GetTaskStreamServer) error {
-	script := `
-	if redis.call('LLEN', KEYS[1]) > 0 then
-	  return redis.call('LPOP', KEYS[1])
-	else
-	  return nil
-	end`
-
-	for {
-		select {
-		case <-stream.Context().Done():
-			return nil
-		default:
-			res, err := t.rdb.Eval(context.TODO(), script, []string{common.RedisKeys.QueueList(identityExternalId, queueName)}).Result()
-			if err != nil {
-				if err == redis.Nil {
-					time.Sleep(time.Millisecond * 100)
-					continue
-				}
-				return err
-			}
-
-			task := []byte(res.(string))
-
-			var tm types.TaskMessage
-			err = tm.Decode(task)
-			if err != nil {
-				return err
-			}
-
-			err = t.rdb.Set(context.TODO(), common.RedisKeys.QueueTaskClaim(identityExternalId, queueName, tm.ID), task, 0).Err()
-			if err != nil {
-				return err
-			}
-
-			err = t.rdb.SetEx(context.TODO(), common.RedisKeys.QueueTaskHeartbeat(identityExternalId, queueName, tm.ID), 1, 60*time.Second).Err()
-			if err != nil {
-				return err
-			}
-
-			err = stream.Send(&pb.TaskStreamResponse{Task: task})
-			if err != nil {
-				return err
-			}
-
-			time.Sleep(time.Millisecond * 100)
-		}
-	}
-
 }
 
 func (t *TaskRedisRepository) GetTasksInFlight(queueName, identityExternalId string) (int, error) {
@@ -204,120 +151,4 @@ func (t *TaskRedisRepository) EndTask(taskId, queueName, containerId, containerH
 	}
 
 	return nil
-}
-
-func (t *TaskRedisRepository) MonitorTask(task *types.BeamAppTask, queueName, containerId, identityExternalId string, timeout int64, stream pb.Scheduler_MonitorTaskServer, timeoutCallback func() error) error {
-	ctx, cancel := context.WithCancel(stream.Context())
-	defer cancel()
-
-	// Listen for task cancellation events
-	channelKey := common.RedisKeys.QueueTaskCancel(identityExternalId, queueName, task.TaskId)
-	cancelFlag := make(chan bool, 1)
-	timeoutFlag := make(chan bool, 1)
-
-	var timeoutChan <-chan time.Time
-	taskStartTimeSeconds := task.StartedAt.Unix()
-	currentTimeSeconds := time.Now().Unix()
-	timeoutTimeSeconds := taskStartTimeSeconds + timeout
-	leftoverTimeoutSeconds := timeoutTimeSeconds - currentTimeSeconds
-
-	if timeout <= 0 {
-		timeoutChan = make(<-chan time.Time) // Indicates that the task does not have a timeout
-	} else if leftoverTimeoutSeconds <= 0 {
-		err := timeoutCallback()
-		if err != nil {
-			log.Printf("error timing out task: %v", err)
-			return err
-		}
-		timeoutFlag <- true
-		timeoutChan = make(<-chan time.Time)
-	} else {
-		timeoutChan = time.After(time.Duration(leftoverTimeoutSeconds) * time.Second)
-	}
-
-	go func() {
-	retry:
-		for {
-			messages, errs := t.rdb.Subscribe(ctx, channelKey)
-
-			for {
-				select {
-				case <-timeoutChan:
-					err := timeoutCallback()
-					if err != nil {
-						log.Printf("error timing out task: %v", err)
-					}
-					timeoutFlag <- true
-					return
-
-				case msg := <-messages:
-					if msg.Payload == task.TaskId {
-						cancelFlag <- true
-						return
-					}
-
-				case <-ctx.Done():
-					return
-
-				case err := <-errs:
-					log.Printf("error with monitor task subscription: %v", err)
-					break retry
-				}
-			}
-		}
-	}()
-
-	for {
-		select {
-		case <-stream.Context().Done():
-			return nil
-
-		case <-cancelFlag:
-			err := t.rdb.Del(context.TODO(), common.RedisKeys.QueueTaskClaim(identityExternalId, queueName, task.TaskId)).Err()
-			if err != nil {
-				return err
-			}
-			stream.Send(&pb.MonitorTaskResponse{Ok: true, Canceled: true, Complete: false, TimedOut: false})
-			return nil
-		case <-timeoutFlag:
-			err := t.rdb.Del(context.TODO(), common.RedisKeys.QueueTaskClaim(identityExternalId, queueName, task.TaskId)).Err()
-			if err != nil {
-				log.Printf("error deleting task claim: %v", err)
-				continue
-			}
-			stream.Send(&pb.MonitorTaskResponse{Ok: true, Canceled: false, Complete: false, TimedOut: true})
-			return nil
-
-		default:
-			if task.Status == types.BeamAppTaskStatusCancelled {
-				stream.Send(&pb.MonitorTaskResponse{Ok: true, Canceled: true, Complete: false, TimedOut: false})
-				return nil
-			}
-
-			err := t.rdb.SetEx(context.TODO(), common.RedisKeys.QueueTaskHeartbeat(identityExternalId, queueName, task.TaskId), 1, time.Duration(60)*time.Second).Err()
-			if err != nil {
-				return err
-			}
-
-			err = t.rdb.SetEx(context.TODO(), common.RedisKeys.QueueTaskRunningLock(identityExternalId, queueName, containerId, task.TaskId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
-			if err != nil {
-				return err
-			}
-
-			// Check if the task is currently claimed
-			exists, err := t.rdb.Exists(context.TODO(), common.RedisKeys.QueueTaskClaim(identityExternalId, queueName, task.TaskId)).Result()
-			if err != nil {
-				return err
-			}
-
-			// If the task claim key doesn't exist, send a message and return
-			if exists == 0 {
-				stream.Send(&pb.MonitorTaskResponse{Ok: true, Canceled: false, Complete: true, TimedOut: false})
-				return nil
-			}
-
-			stream.Send(&pb.MonitorTaskResponse{Ok: true, Canceled: false, Complete: false, TimedOut: false})
-			time.Sleep(time.Second * 1)
-		}
-	}
 }

@@ -207,7 +207,7 @@ func (qc *RedisQueueClient) MonitorTasks(ctx context.Context, beamRepo repositor
 					&taskPolicy,
 				)
 				if err != nil {
-					taskPolicy = common.DefaultTaskPolicy
+					taskPolicy = types.DefaultTaskPolicy
 				}
 
 				if retries >= int(taskPolicy.MaxRetries) {

@@ -8,6 +8,9 @@ service GatewayService {
   rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse) {}
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
   rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
+  rpc StartTask(StartTaskRequest) returns (StartTaskResponse);
+  rpc EndTask(EndTaskRequest) returns (EndTaskResponse);
+  rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse);
 }
 
 message AuthorizeRequest {}
@@ -24,23 +27,60 @@ message ObjectMetadata {
   int64 size = 2;
 }
 
-message HeadObjectRequest { string object_id = 1; }
+message HeadObjectRequest { string hash = 1; }
 
 message HeadObjectResponse {
   bool ok = 1;
   bool exists = 2;
-  ObjectMetadata object_metadata = 3;
-  string error_msg = 4;
+  string object_id = 3;
+  ObjectMetadata object_metadata = 4;
+  string error_msg = 5;
 }
 
 message PutObjectRequest {
   bytes object_content = 1;
   ObjectMetadata object_metadata = 2;
-  bool overwrite = 3;
+  string hash = 3;
+  bool overwrite = 4;
 }
 
 message PutObjectResponse {
   bool ok = 1;
   string object_id = 2;
   string error_msg = 3;
+}
+
+// Task queue messages
+message StartTaskRequest {
+  string task_id = 1;
+  string container_id = 2;
+}
+
+message StartTaskResponse { bool ok = 1; }
+
+message EndTaskRequest {
+  string task_id = 1;
+  float task_duration = 2;
+  string task_status = 3;
+  string container_id = 4;
+  string container_hostname = 5;
+  float scale_down_delay = 6;
+}
+
+message EndTaskResponse { bool ok = 1; }
+
+message GetOrCreateStubRequest {
+  string object_id = 1;
+  string image_id = 2;
+  string stub_type = 3;
+  string name = 4;
+  string python_version = 5;
+  int64 cpu = 6;
+  int64 memory = 7;
+  string gpu = 8;
+}
+
+message GetOrCreateStubResponse {
+  bool ok = 1;
+  string stub_id = 2;
 }

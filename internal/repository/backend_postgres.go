@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 
@@ -56,6 +57,16 @@ func (r *PostgresBackendRepository) migrate() error {
 	return nil
 }
 
+func (r *PostgresBackendRepository) generateExternalId() (string, error) {
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return "", err
+	}
+	return id.String(), nil
+}
+
+// Context
+
 func (r *PostgresBackendRepository) ListContexts(ctx context.Context) ([]types.Context, error) {
 	var contexts []types.Context
 
@@ -69,9 +80,9 @@ func (r *PostgresBackendRepository) ListContexts(ctx context.Context) ([]types.C
 }
 
 func (r *PostgresBackendRepository) CreateContext(ctx context.Context) (types.Context, error) {
-	name := uuid.New().String()[:6] // Generate a short UUID for the context name
+	name := uuid.New().String()[:6] // Generate a short UUId for the context name
 
-	externalID, err := r.generateExternalID()
+	externalId, err := r.generateExternalId()
 	if err != nil {
 		return types.Context{}, err
 	}
@@ -83,17 +94,19 @@ func (r *PostgresBackendRepository) CreateContext(ctx context.Context) (types.Co
 	`
 
 	var context types.Context
-	if err := r.client.GetContext(ctx, &context, query, name, externalID); err != nil {
+	if err := r.client.GetContext(ctx, &context, query, name, externalId); err != nil {
 		return types.Context{}, err
 	}
 
 	return context, nil
 }
 
+// Token
+
 const tokenLength = 64
 
-func (r *PostgresBackendRepository) CreateToken(ctx context.Context, contextID uint) (types.Token, error) {
-	externalID, err := r.generateExternalID()
+func (r *PostgresBackendRepository) CreateToken(ctx context.Context, contextId uint) (types.Token, error) {
+	externalId, err := r.generateExternalId()
 	if err != nil {
 		return types.Token{}, err
 	}
@@ -112,7 +125,7 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, contextID u
 	`
 
 	var token types.Token
-	if err := r.client.GetContext(ctx, &token, query, externalID, key, true, contextID); err != nil {
+	if err := r.client.GetContext(ctx, &token, query, externalId, key, true, contextId); err != nil {
 		return types.Token{}, err
 	}
 
@@ -139,31 +152,157 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	return &token, &context, nil
 }
 
-func (r *PostgresBackendRepository) CreateObject(ctx context.Context, newObj types.Object) (types.Object, error) {
-	query := `
-	INSERT INTO object (external_id, hash, size, context_id)
-	VALUES (:external_id, :hash, :size, :context_id)
-	RETURNING id, external_id, hash, size, created_at, context_id;
-	`
+// Object
 
-	stmt, err := r.client.PrepareNamedContext(ctx, query)
-	if err != nil {
+func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash string, size int64, contextId uint) (types.Object, error) {
+	query := `
+    INSERT INTO object (hash, size, context_id)
+    VALUES ($1, $2, $3)
+    RETURNING id, external_id, hash, size, created_at, context_id;
+    `
+
+	var newObject types.Object
+	if err := r.client.GetContext(ctx, &newObject, query, hash, size, contextId); err != nil {
 		return types.Object{}, err
 	}
-	defer stmt.Close()
 
+	return newObject, nil
+}
+
+func (r *PostgresBackendRepository) GetObjectByHash(ctx context.Context, hash string, contextId uint) (types.Object, error) {
 	var object types.Object
-	if err := stmt.GetContext(ctx, &object, newObj); err != nil {
+
+	query := `SELECT id, external_id, hash, size, created_at FROM object WHERE hash = $1 AND context_id = $2;`
+	err := r.client.GetContext(ctx, &object, query, hash, contextId)
+	if err != nil {
 		return types.Object{}, err
 	}
 
 	return object, nil
 }
 
-func (r *PostgresBackendRepository) generateExternalID() (string, error) {
-	var b [12]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
+func (r *PostgresBackendRepository) GetObjectByExternalId(ctx context.Context, externalId string, contextId uint) (types.Object, error) {
+	var object types.Object
+
+	query := `SELECT id, external_id, hash, size, created_at FROM object WHERE external_id = $1 AND context_id = $2;`
+	err := r.client.GetContext(ctx, &object, query, externalId, contextId)
+	if err != nil {
+		return types.Object{}, err
 	}
-	return fmt.Sprintf("%x", b), nil
+
+	return object, nil
+}
+
+// Task
+
+func (r *PostgresBackendRepository) CreateTask(ctx context.Context, containerId string, contextId, stubId uint) (*types.Task, error) {
+	query := `
+    INSERT INTO task (container_id, context_id, stub_id)
+    VALUES ($1, $2, $3)
+    RETURNING id, external_id, status, container_id, context_id, stub_id, started_at, ended_at, created_at, updated_at;
+    `
+
+	var newTask types.Task
+	if err := r.client.GetContext(ctx, &newTask, query, containerId, contextId, stubId); err != nil {
+		return &types.Task{}, err
+	}
+
+	return &newTask, nil
+}
+
+func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error) {
+	query := `
+	UPDATE task
+	SET status = $2, container_id = $3, started_at = $4, ended_at = $5, context_id = $6, stub_id = $7, updated_at = CURRENT_TIMESTAMP
+	WHERE external_id = $1
+	RETURNING id, external_id, status, container_id, context_id, stub_id, started_at, ended_at, created_at, updated_at;
+	`
+
+	var task types.Task
+	if err := r.client.GetContext(ctx, &task, query,
+		externalId, updatedTask.Status, updatedTask.ContainerId,
+		updatedTask.StartedAt, updatedTask.EndedAt,
+		updatedTask.ContextId, updatedTask.StubId); err != nil {
+		return &types.Task{}, err
+	}
+
+	return &task, nil
+}
+
+func (r *PostgresBackendRepository) DeleteTask(ctx context.Context, externalId string) error {
+	query := `DELETE FROM task WHERE external_id = $1;`
+	_, err := r.client.ExecContext(ctx, query, externalId)
+	return err
+}
+
+func (r *PostgresBackendRepository) GetTask(ctx context.Context, externalId string) (*types.Task, error) {
+	var task types.Task
+	query := `SELECT id, external_id, status, container_id, started_at, ended_at, context_id, stub_id, created_at, updated_at FROM task WHERE external_id = $1;`
+	err := r.client.GetContext(ctx, &task, query, externalId)
+	if err != nil {
+		return &types.Task{}, err
+	}
+
+	return &task, nil
+}
+
+func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task, error) {
+	var tasks []types.Task
+	query := `SELECT id, external_id, status, container_id, started_at, ended_at, context_id, stub_id, created_at, updated_at FROM task;`
+	err := r.client.SelectContext(ctx, &tasks, query)
+	if err != nil {
+		return nil, err
+	}
+
+	return tasks, nil
+}
+
+// Stub
+
+func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, contextId uint) (types.Stub, error) {
+	var stub types.Stub
+
+	// Serialize config to JSON
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return types.Stub{}, err
+	}
+
+	// Query to check if a stub with the same name, type, object_id, and config exists
+	queryGet := `
+    SELECT id, external_id, name, type, config, config_version, object_id, context_id, created_at, updated_at 
+    FROM stub 
+    WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb;
+    `
+	err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON))
+	if err == nil {
+		// Stub found, return it
+		return stub, nil
+	}
+
+	log.Println("err: ", err)
+
+	// Stub not found, create a new one
+	queryCreate := `
+    INSERT INTO stub (name, type, config, object_id, context_id)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING id, external_id, name, type, config, config_version, object_id, context_id, created_at, updated_at;
+    `
+	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), objectId, contextId); err != nil {
+		return types.Stub{}, err
+	}
+
+	return stub, nil
+}
+
+func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, contextId uint) (*types.Stub, error) {
+	var stub types.Stub
+
+	query := `SELECT id, external_id, name, type, config, config_version, object_id, context_id, created_at, updated_at FROM stub WHERE external_id = $1 AND context_id = $2;`
+	err := r.client.GetContext(ctx, &stub, query, externalId, contextId)
+	if err != nil {
+		return &types.Stub{}, err
+	}
+
+	return &stub, nil
 }

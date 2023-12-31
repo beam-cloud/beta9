@@ -13,6 +13,7 @@ from multidict import MultiDict
 from beam import terminal
 from beam.aio import run_sync
 from beam.clients.gateway import AuthorizeResponse, GatewayServiceStub
+from beam.exceptions import RunnerException
 
 DEFAULT_CONFIG_FILE_PATH = "~/.beam/creds"
 DEFAULT_PROFILE_NAME = "default"
@@ -149,6 +150,10 @@ def runner_context():
     try:
         channel: Channel = get_gateway_channel()
         yield channel
+    except RunnerException as exc:
+        exit_code = exc.code
+        print(f"An error occurred: {exc.message}")
+        raise
     except SystemExit as exc:
         exit_code = exc.code
         raise

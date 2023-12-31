@@ -12,8 +12,11 @@ from beam.clients.function import (
     FunctionInvokeResponse,
     FunctionServiceStub,
 )
-from beam.clients.gateway import GatewayServiceStub
+from beam.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
 from beam.sync import FileSyncer
+
+FUNCTION_STUB_TYPE = "FUNCTION"
+FUNCTION_STUB_PREFIX = "function"
 
 
 class Function(BaseAbstraction):
@@ -23,9 +26,12 @@ class Function(BaseAbstraction):
         self.image: Image = image
         self.image_available: bool = False
         self.files_synced: bool = False
+        self.stub_created: bool = False
         self.runtime_ready: bool = False
         self.object_id: str = ""
         self.image_id: str = ""
+        self.stub_id: str = ""
+        self.handler: str = ""
         self.cpu = cpu
         self.memory = memory
         self.gpu = gpu
@@ -44,6 +50,16 @@ class _CallableWrapper:
         self.parent: Function = parent
 
     def _prepare_runtime(self) -> bool:
+        module = inspect.getmodule(self.func)  # Determine module / function name
+        if module:
+            module_file = os.path.basename(module.__file__)
+            module_name = os.path.splitext(module_file)[0]
+        else:
+            module_name = "__main__"
+
+        function_name = self.func.__name__
+        self.parent.handler = f"{module_name}:{function_name}"
+
         if not self.parent.image_available:
             image_build_result: ImageBuildResult = self.parent.image.build()
 
@@ -62,12 +78,32 @@ class _CallableWrapper:
             else:
                 return False
 
+        if not self.parent.stub_created:
+            stub_response: GetOrCreateStubResponse = self.parent.run_sync(
+                self.parent.gateway_stub.get_or_create_stub(
+                    object_id=self.parent.object_id,
+                    image_id=self.parent.image_id,
+                    stub_type=FUNCTION_STUB_TYPE,
+                    name=f"{FUNCTION_STUB_PREFIX}/{self.parent.handler}",
+                    python_version=self.parent.image.python_version,
+                    cpu=self.parent.cpu,
+                    memory=self.parent.memory,
+                    gpu=self.parent.gpu,
+                )
+            )
+
+            if stub_response.ok:
+                self.parent.stub_created = True
+                self.parent.stub_id = stub_response.stub_id
+            else:
+                return False
+
         self.parent.runtime_ready = True
         return True
 
     def __call__(self, *args, **kwargs) -> Any:
-        invocation_id = os.getenv("INVOCATION_ID")
-        if invocation_id:
+        task_id = os.getenv("TASK_ID")
+        if task_id:
             return self.local(*args, **kwargs)
 
         if not self.parent.runtime_ready and not self._prepare_runtime():
@@ -77,16 +113,6 @@ class _CallableWrapper:
             return self.parent.run_sync(self._call_remote(*args, **kwargs))
 
     async def _call_remote(self, *args, **kwargs) -> Any:
-        module = inspect.getmodule(self.func)  # Determine module / function name
-        if module:
-            module_file = os.path.basename(module.__file__)
-            module_name = os.path.splitext(module_file)[0]
-        else:
-            module_name = "__main__"
-
-        function_name = self.func.__name__
-        handler = f"{module_name}:{function_name}"
-
         args = cloudpickle.dumps(
             {
                 "args": args,
@@ -100,8 +126,9 @@ class _CallableWrapper:
         async for r in self.parent.function_stub.function_invoke(
             object_id=self.parent.object_id,
             image_id=self.parent.image_id,
+            stub_id=self.parent.stub_id,
             args=args,
-            handler=handler,
+            handler=self.parent.handler,
             python_version=self.parent.image.python_version,
             cpu=self.parent.cpu,
             memory=self.parent.memory,
