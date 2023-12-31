@@ -145,7 +145,7 @@ _stream:
 	for {
 		select {
 		case o := <-outputChan:
-			if err := stream.Send(&pb.FunctionInvokeResponse{Output: o.Msg, Done: o.Done}); err != nil {
+			if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg, Done: o.Done}); err != nil {
 				lastMessage = o
 				break
 			}
@@ -156,7 +156,7 @@ _stream:
 			}
 		case <-keyEventChan:
 			result, _ := fs.rdb.Get(context.TODO(), Keys.FunctionResult(taskId)).Bytes()
-			if err := stream.Send(&pb.FunctionInvokeResponse{Done: true, Result: result, ExitCode: 0}); err != nil {
+			if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: 0}); err != nil {
 				break
 			}
 		case <-ctx.Done():

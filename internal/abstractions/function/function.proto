@@ -26,10 +26,11 @@ message FunctionInvokeRequest {
 }
 
 message FunctionInvokeResponse {
-  string output = 1;
-  bool done = 2;
-  uint32 exit_code = 3;
-  bytes result = 4;
+  string task_id = 1;
+  string output = 2;
+  bool done = 3;
+  uint32 exit_code = 4;
+  bytes result = 5;
 }
 
 message FunctionGetArgsRequest { string task_id = 1; }
