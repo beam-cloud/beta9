@@ -35,7 +35,7 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	}
 
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
-	task.Status = types.TaskStatusComplete
+	task.Status = in.TaskStatus
 
 	_, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
 	return &pb.EndTaskResponse{
