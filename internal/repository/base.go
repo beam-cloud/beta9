@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beam/internal/types"
-	pb "github.com/beam-cloud/beam/proto"
 )
 
 type SchedulerRepository interface{}
@@ -82,8 +81,6 @@ type BeamRepository interface {
 type TaskRepository interface {
 	StartTask(taskId, queueName, containerId, identityExternalId string) error
 	EndTask(taskId, queueName, containerId, containerHostname, identityExternalId string, taskDuration, scaleDownDelay float64) error
-	MonitorTask(task *types.BeamAppTask, queueName, containerId, identityExternalId string, timeout int64, stream pb.GatewayService_MonitorTaskServer, timeoutCallback func() error) error
-	GetTaskStream(queueName, containerId, identityExternalId string, stream pb.GatewayService_GetTaskStreamServer) error
 	GetNextTask(queueName, containerId, identityExternalId string) ([]byte, error)
 	GetTasksInFlight(queueName, identityExternalId string) (int, error)
 	IncrementTasksInFlight(queueName, identityExternalId string) error

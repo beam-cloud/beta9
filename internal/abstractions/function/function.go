@@ -24,7 +24,6 @@ type FunctionService interface {
 
 const (
 	functionContainerPrefix         string        = "function-"
-	functionStubNamePrefix          string        = "function"
 	defaultFunctionContainerCpu     int64         = 100
 	defaultFunctionContainerMemory  int64         = 128
 	functionArgsExpirationTimeout   time.Duration = 600 * time.Second
