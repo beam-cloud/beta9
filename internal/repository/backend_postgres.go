@@ -259,15 +259,8 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 
 // Stub
 
-func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, contextId uint, objectId uint) (types.Stub, error) {
+func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, contextId uint) (types.Stub, error) {
 	var stub types.Stub
-
-	// First, try to get the stub
-	queryGet := `SELECT id, external_id, name, type, config, config_version, object_id, context_id, created_at, updated_at FROM stub WHERE name = $1 AND type = $2;`
-	err := r.client.GetContext(ctx, &stub, queryGet, name, stubType)
-	if err == nil {
-		return stub, nil
-	}
 
 	// Serialize config to JSON
 	configJSON, err := json.Marshal(config)
@@ -275,13 +268,27 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 		return types.Stub{}, err
 	}
 
+	// Query to check if a stub with the same name, type, object_id, and config exists
+	queryGet := `
+    SELECT id, external_id, name, type, config, config_version, object_id, context_id, created_at, updated_at 
+    FROM stub 
+    WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb;
+    `
+	err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON))
+	if err == nil {
+		// Stub found, return it
+		return stub, nil
+	}
+
+	log.Println("err: ", err)
+
 	// Stub not found, create a new one
 	queryCreate := `
-    INSERT INTO stub (name, type, config, context_id, object_id)
+    INSERT INTO stub (name, type, config, object_id, context_id)
     VALUES ($1, $2, $3, $4, $5)
     RETURNING id, external_id, name, type, config, config_version, object_id, context_id, created_at, updated_at;
     `
-	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), contextId, objectId); err != nil {
+	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), objectId, contextId); err != nil {
 		return types.Stub{}, err
 	}
 

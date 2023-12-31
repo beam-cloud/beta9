@@ -92,6 +92,11 @@ type StubConfigV1 struct {
 	Runtime Runtime `json:"runtime"`
 }
 
+const (
+	StubTypeFunction  string = "FUNCTION"
+	StubTypeTaskQueue string = "TASK_QUEUE"
+)
+
 type Stub struct {
 	Id            uint      `db:"id"`
 	ExternalId    string    `db:"external_id"`
@@ -114,9 +119,9 @@ type Image struct {
 }
 
 type Runtime struct {
-	Cpu    string  `json:"cpu"`
+	Cpu    int64   `json:"cpu"`
 	Gpu    GpuType `json:"gpu"`
-	Memory string  `json:"memory"`
+	Memory int64   `json:"memory"`
 	Image  Image   `json:"image"`
 }
 

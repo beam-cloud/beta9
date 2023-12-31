@@ -17,6 +17,12 @@ import (
 	"github.com/google/uuid"
 )
 
+type FunctionService interface {
+	FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error
+	FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error)
+	FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error)
+}
+
 const (
 	functionContainerPrefix         string        = "function-"
 	defaultFunctionContainerCpu     int64         = 100
@@ -24,12 +30,6 @@ const (
 	functionArgsExpirationTimeout   time.Duration = 600 * time.Second
 	functionResultExpirationTimeout time.Duration = 600 * time.Second
 )
-
-type FunctionService interface {
-	FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error
-	FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error)
-	FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error)
-}
 
 type RunCFunctionService struct {
 	pb.UnimplementedFunctionServiceServer
@@ -67,7 +67,30 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	go fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
 
 	// Retrieve and extract object
-	_, err = fs.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Context.Id)
+	object, err := fs.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Context.Id)
+	if err != nil {
+		return err
+	}
+
+	stubConfig := types.StubConfigV1{
+		Runtime: types.Runtime{
+			Cpu:    in.Cpu,
+			Gpu:    types.GpuType(in.Gpu),
+			Memory: in.Memory,
+			Image: types.Image{
+				Commands:             []string{"echo", "Hello World"},
+				PythonVersion:        "3.8",
+				PythonPackages:       []string{"numpy", "pandas"},
+				BaseImage:            nil,
+				BaseImageCredentials: nil,
+			},
+		},
+	}
+
+	stubName := fmt.Sprintf("function/%s", in.Handler)
+	stubType := types.StubTypeFunction
+
+	_, err = fs.backendRepo.GetOrCreateStub(ctx, stubName, stubType, stubConfig, object.Id, authInfo.Context.Id)
 	if err != nil {
 		return err
 	}
