@@ -8,6 +8,11 @@ service GatewayService {
   rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse) {}
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
   rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
+  rpc GetTaskStream(GetTaskStreamRequest) returns (stream TaskStreamResponse);
+  rpc GetNextTask(GetNextTaskRequest) returns (GetNextTaskResponse);
+  rpc StartTask(StartTaskRequest) returns (StartTaskResponse);
+  rpc EndTask(EndTaskRequest) returns (EndTaskResponse);
+  rpc MonitorTask(MonitorTaskRequest) returns (stream MonitorTaskResponse);
 }
 
 message AuthorizeRequest {}
@@ -45,4 +50,60 @@ message PutObjectResponse {
   bool ok = 1;
   string object_id = 2;
   string error_msg = 3;
+}
+
+// Task queue messages
+message GetNextTaskRequest {
+  string queue_name = 1;
+  string container_id = 2;
+  string s2s_token = 3;
+}
+
+message GetNextTaskResponse {
+  bytes task = 1;
+  bool task_available = 2;
+}
+
+message GetTaskStreamRequest {
+  string queue_name = 1;
+  string container_id = 2;
+  string s2s_token = 3;
+}
+
+message TaskStreamResponse { bytes task = 1; }
+
+message StartTaskRequest {
+  string task_id = 1;
+  string queue_name = 2;
+  string container_id = 3;
+  string s2s_token = 4;
+}
+
+message StartTaskResponse { bool ok = 1; }
+
+message EndTaskRequest {
+  string task_id = 1;
+  string queue_name = 2;
+  float task_duration = 3;
+  string task_status = 4;
+  string container_id = 5;
+  string container_hostname = 6;
+  float scale_down_delay = 7;
+  string s2s_token = 8;
+}
+
+message EndTaskResponse { bool ok = 1; }
+
+message MonitorTaskRequest {
+  string task_id = 1;
+  string queue_name = 2;
+  string container_id = 3;
+  string s2s_token = 4;
+}
+
+message MonitorTaskResponse {
+  bool ok = 1;
+  bool canceled = 2;
+  bool complete = 3;
+  bool timed_out = 4;
 }

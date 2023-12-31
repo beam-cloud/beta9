@@ -35,6 +35,7 @@ func NewStorage() (Storage, error) {
 		}
 
 		// Format filesystem
+		// NOTE: this is a no-op if already formatted
 		err = s.Format(DefaultFilesystemName)
 		if err != nil {
 			log.Fatalf("Unable to format filesystem: %+v\n", err)

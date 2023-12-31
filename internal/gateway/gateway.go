@@ -14,6 +14,7 @@ import (
 	simplequeue "github.com/beam-cloud/beam/internal/abstractions/queue"
 	"github.com/beam-cloud/beam/internal/auth"
 	common "github.com/beam-cloud/beam/internal/common"
+	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/storage"
@@ -159,8 +160,8 @@ func (g *Gateway) Start() error {
 	pb.RegisterSchedulerServer(grpcServer, s)
 
 	// Register gateway services
-	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction yet)
-	gws, err := NewGatewayService(g.BackendRepo)
+	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction)
+	gws, err := gatewayservices.NewGatewayService(g.BackendRepo)
 	if err != nil {
 		return err
 	}

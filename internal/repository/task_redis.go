@@ -80,7 +80,7 @@ func (t *TaskRedisRepository) GetNextTask(queueName, containerId, identityExtern
 	return task, nil
 }
 
-func (t *TaskRedisRepository) GetTaskStream(queueName, containerId, identityExternalId string, stream pb.Scheduler_GetTaskStreamServer) error {
+func (t *TaskRedisRepository) GetTaskStream(queueName, containerId, identityExternalId string, stream pb.GatewayService_GetTaskStreamServer) error {
 	script := `
 	if redis.call('LLEN', KEYS[1]) > 0 then
 	  return redis.call('LPOP', KEYS[1])
@@ -206,7 +206,7 @@ func (t *TaskRedisRepository) EndTask(taskId, queueName, containerId, containerH
 	return nil
 }
 
-func (t *TaskRedisRepository) MonitorTask(task *types.BeamAppTask, queueName, containerId, identityExternalId string, timeout int64, stream pb.Scheduler_MonitorTaskServer, timeoutCallback func() error) error {
+func (t *TaskRedisRepository) MonitorTask(task *types.BeamAppTask, queueName, containerId, identityExternalId string, timeout int64, stream pb.GatewayService_MonitorTaskServer, timeoutCallback func() error) error {
 	ctx, cancel := context.WithCancel(stream.Context())
 	defer cancel()
 
