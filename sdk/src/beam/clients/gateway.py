@@ -86,9 +86,7 @@ class TaskStreamResponse(betterproto.Message):
 @dataclass
 class StartTaskRequest(betterproto.Message):
     task_id: str = betterproto.string_field(1)
-    queue_name: str = betterproto.string_field(2)
-    container_id: str = betterproto.string_field(3)
-    s2s_token: str = betterproto.string_field(4)
+    container_id: str = betterproto.string_field(2)
 
 
 @dataclass
@@ -99,13 +97,11 @@ class StartTaskResponse(betterproto.Message):
 @dataclass
 class EndTaskRequest(betterproto.Message):
     task_id: str = betterproto.string_field(1)
-    queue_name: str = betterproto.string_field(2)
-    task_duration: float = betterproto.float_field(3)
-    task_status: str = betterproto.string_field(4)
-    container_id: str = betterproto.string_field(5)
-    container_hostname: str = betterproto.string_field(6)
-    scale_down_delay: float = betterproto.float_field(7)
-    s2s_token: str = betterproto.string_field(8)
+    task_duration: float = betterproto.float_field(2)
+    task_status: str = betterproto.string_field(3)
+    container_id: str = betterproto.string_field(4)
+    container_hostname: str = betterproto.string_field(5)
+    scale_down_delay: float = betterproto.float_field(6)
 
 
 @dataclass
@@ -200,18 +196,11 @@ class GatewayServiceStub(betterproto.ServiceStub):
         )
 
     async def start_task(
-        self,
-        *,
-        task_id: str = "",
-        queue_name: str = "",
-        container_id: str = "",
-        s2s_token: str = "",
+        self, *, task_id: str = "", container_id: str = ""
     ) -> StartTaskResponse:
         request = StartTaskRequest()
         request.task_id = task_id
-        request.queue_name = queue_name
         request.container_id = container_id
-        request.s2s_token = s2s_token
 
         return await self._unary_unary(
             "/gateway.GatewayService/StartTask",
@@ -223,23 +212,19 @@ class GatewayServiceStub(betterproto.ServiceStub):
         self,
         *,
         task_id: str = "",
-        queue_name: str = "",
         task_duration: float = 0,
         task_status: str = "",
         container_id: str = "",
         container_hostname: str = "",
         scale_down_delay: float = 0,
-        s2s_token: str = "",
     ) -> EndTaskResponse:
         request = EndTaskRequest()
         request.task_id = task_id
-        request.queue_name = queue_name
         request.task_duration = task_duration
         request.task_status = task_status
         request.container_id = container_id
         request.container_hostname = container_hostname
         request.scale_down_delay = scale_down_delay
-        request.s2s_token = s2s_token
 
         return await self._unary_unary(
             "/gateway.GatewayService/EndTask",

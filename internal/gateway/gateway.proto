@@ -74,22 +74,18 @@ message TaskStreamResponse { bytes task = 1; }
 
 message StartTaskRequest {
   string task_id = 1;
-  string queue_name = 2;
-  string container_id = 3;
-  string s2s_token = 4;
+  string container_id = 2;
 }
 
 message StartTaskResponse { bool ok = 1; }
 
 message EndTaskRequest {
   string task_id = 1;
-  string queue_name = 2;
-  float task_duration = 3;
-  string task_status = 4;
-  string container_id = 5;
-  string container_hostname = 6;
-  float scale_down_delay = 7;
-  string s2s_token = 8;
+  float task_duration = 2;
+  string task_status = 3;
+  string container_id = 4;
+  string container_hostname = 5;
+  float scale_down_delay = 6;
 }
 
 message EndTaskResponse { bool ok = 1; }

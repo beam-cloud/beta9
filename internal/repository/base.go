@@ -45,6 +45,7 @@ type BackendRepository interface {
 	GetObjectByExternalId(ctx context.Context, externalId string, contextId uint) (types.Object, error)
 	CreateToken(ctx context.Context, contextId uint) (types.Token, error)
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Context, error)
+	GetTask(ctx context.Context, externalId string) (*types.Task, error)
 	CreateTask(ctx context.Context, containerId string, contextId, stubId uint) (*types.Task, error)
 	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error)
 	DeleteTask(ctx context.Context, externalId string) error

@@ -12,6 +12,7 @@ from beam.clients.function import (
     FunctionServiceStub,
     FunctionSetResultResponse,
 )
+from beam.clients.gateway import EndTaskResponse, GatewayServiceStub, StartTaskResponse
 from beam.config import with_runner_context
 from beam.exceptions import RunnerException
 
@@ -37,9 +38,11 @@ def _load_handler() -> Callable:
 @with_runner_context
 def main(channel: Channel):
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
+    gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
 
     task_id = os.getenv("TASK_ID")
-    if not task_id:
+    container_id = os.getenv("CONTAINER_ID")
+    if not task_id or not container_id:
         raise RunnerException()
 
     handler = _load_handler()
@@ -50,17 +53,37 @@ def main(channel: Channel):
         raise RunnerException()
 
     args: dict = cloudpickle.loads(get_args_resp.args)
+
+    # Start the task
+    start_task_response: StartTaskResponse = run_sync(
+        gateway_stub.start_task(task_id=task_id, container_id=container_id)
+    )
+    if not start_task_response.ok:
+        raise RunnerException()
+
+    # Invoke function
     result = handler(*args.get("args", ()), **args.get("kwargs", {}))
     result = cloudpickle.dumps(result)
 
-    # TODO: start task
-    # TODO: listen for task cancellation
     set_result_resp: FunctionSetResultResponse = run_sync(
         function_stub.function_set_result(task_id=task_id, result=result),
     )
     if not set_result_resp.ok:
         raise RunnerException()
-    # TODO: end task
+
+    # End the task
+    end_task_response: EndTaskResponse = run_sync(
+        gateway_stub.end_task(
+            task_id=task_id,
+            task_duration=0,
+            task_status="COMPLETE",
+            container_id=container_id,
+            container_hostname=container_id,
+            scale_down_delay=0,
+        )
+    )
+    if not end_task_response.ok:
+        raise RunnerException()
 
 
 if __name__ == "__main__":

@@ -2,7 +2,10 @@ package gatewayservices
 
 import (
 	"context"
+	"database/sql"
+	"time"
 
+	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
 )
 
@@ -30,49 +33,38 @@ import (
 // }
 
 func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskRequest) (*pb.StartTaskResponse, error) {
-	var err error = nil
-	// identity, authorized, err := wbs.Scheduler.beamRepo.AuthorizeServiceToServiceToken(in.S2SToken)
-	// if err != nil || !authorized {
-	// 	return nil, errors.New("invalid s2s token")
-	// }
+	task, err := gws.backendRepo.GetTask(ctx, in.TaskId)
+	if err != nil {
+		return &pb.StartTaskResponse{
+			Ok: false,
+		}, nil
+	}
 
-	// _, err = wbs.Scheduler.beamRepo.UpdateActiveTask(in.TaskId, types.BeamAppTaskStatusRunning, identity.ExternalId)
-	// if err != nil {
-	// 	return &pb.StartTaskResponse{
-	// 		Ok: false,
-	// 	}, nil
-	// }
+	task.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	task.Status = types.TaskStatusRunning
 
-	// err = wbs.Scheduler.taskRepo.StartTask(in.TaskId, in.QueueName, in.ContainerId, identity.ExternalId)
+	_, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
 	return &pb.StartTaskResponse{
 		Ok: err == nil,
 	}, nil
 }
 
-// func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (*pb.EndTaskResponse, error) {
-// 	identity, authorized, err := wbs.Scheduler.beamRepo.AuthorizeServiceToServiceToken(in.S2SToken)
-// 	if err != nil || !authorized {
-// 		return nil, errors.New("invalid s2s token")
-// 	}
+func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (*pb.EndTaskResponse, error) {
+	task, err := gws.backendRepo.GetTask(ctx, in.TaskId)
+	if err != nil {
+		return &pb.EndTaskResponse{
+			Ok: false,
+		}, nil
+	}
 
-// 	err = wbs.Scheduler.taskRepo.EndTask(in.TaskId, in.QueueName, in.ContainerId, in.ContainerHostname, identity.ExternalId, float64(in.TaskDuration), float64(in.ScaleDownDelay))
-// 	if err != nil {
-// 		return &pb.EndTaskResponse{
-// 			Ok: false,
-// 		}, nil
-// 	}
+	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	task.Status = types.TaskStatusComplete
 
-// 	_, err = wbs.Scheduler.beamRepo.UpdateActiveTask(in.TaskId, in.TaskStatus, identity.ExternalId)
-// 	if err != nil {
-// 		return &pb.EndTaskResponse{
-// 			Ok: false,
-// 		}, nil
-// 	}
-
-// 	return &pb.EndTaskResponse{
-// 		Ok: true,
-// 	}, nil
-// }
+	_, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
+	return &pb.EndTaskResponse{
+		Ok: err == nil,
+	}, nil
+}
 
 // func (gws *GatewayService) MonitorTask(req *pb.MonitorTaskRequest, stream pb.Scheduler_MonitorTaskServer) error {
 // 	identity, authorized, err := wbs.Scheduler.beamRepo.AuthorizeServiceToServiceToken(req.S2SToken)
