@@ -24,6 +24,7 @@ type FunctionService interface {
 
 const (
 	functionContainerPrefix         string        = "function-"
+	functionStubNamePrefix          string        = "function"
 	defaultFunctionContainerCpu     int64         = 100
 	defaultFunctionContainerMemory  int64         = 128
 	functionArgsExpirationTimeout   time.Duration = 600 * time.Second
@@ -145,7 +146,7 @@ func (fs *RunCFunctionService) createTask(ctx context.Context, in *pb.FunctionIn
 		},
 	}
 
-	stubName := fmt.Sprintf("function/%s", in.Handler)
+	stubName := fmt.Sprintf("%s/%s", functionStubNamePrefix, in.Handler)
 	stubType := types.StubTypeFunction
 
 	stub, err := fs.backendRepo.GetOrCreateStub(ctx, stubName, stubType, stubConfig, object.Id, authInfo.Context.Id)
