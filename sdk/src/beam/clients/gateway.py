@@ -2,7 +2,7 @@
 # sources: gateway.proto
 # plugin: python-betterproto
 from dataclasses import dataclass
-from typing import AsyncGenerator, Optional
+from typing import Optional
 
 import betterproto
 import grpclib
@@ -57,34 +57,9 @@ class PutObjectResponse(betterproto.Message):
 
 
 @dataclass
-class GetNextTaskRequest(betterproto.Message):
+class StartTaskRequest(betterproto.Message):
     """Task queue messages"""
 
-    queue_name: str = betterproto.string_field(1)
-    container_id: str = betterproto.string_field(2)
-    s2s_token: str = betterproto.string_field(3)
-
-
-@dataclass
-class GetNextTaskResponse(betterproto.Message):
-    task: bytes = betterproto.bytes_field(1)
-    task_available: bool = betterproto.bool_field(2)
-
-
-@dataclass
-class GetTaskStreamRequest(betterproto.Message):
-    queue_name: str = betterproto.string_field(1)
-    container_id: str = betterproto.string_field(2)
-    s2s_token: str = betterproto.string_field(3)
-
-
-@dataclass
-class TaskStreamResponse(betterproto.Message):
-    task: bytes = betterproto.bytes_field(1)
-
-
-@dataclass
-class StartTaskRequest(betterproto.Message):
     task_id: str = betterproto.string_field(1)
     container_id: str = betterproto.string_field(2)
 
@@ -107,22 +82,6 @@ class EndTaskRequest(betterproto.Message):
 @dataclass
 class EndTaskResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
-
-
-@dataclass
-class MonitorTaskRequest(betterproto.Message):
-    task_id: str = betterproto.string_field(1)
-    queue_name: str = betterproto.string_field(2)
-    container_id: str = betterproto.string_field(3)
-    s2s_token: str = betterproto.string_field(4)
-
-
-@dataclass
-class MonitorTaskResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    canceled: bool = betterproto.bool_field(2)
-    complete: bool = betterproto.bool_field(3)
-    timed_out: bool = betterproto.bool_field(4)
 
 
 @dataclass
@@ -184,35 +143,6 @@ class GatewayServiceStub(betterproto.ServiceStub):
             PutObjectResponse,
         )
 
-    async def get_task_stream(
-        self, *, queue_name: str = "", container_id: str = "", s2s_token: str = ""
-    ) -> AsyncGenerator[TaskStreamResponse, None]:
-        request = GetTaskStreamRequest()
-        request.queue_name = queue_name
-        request.container_id = container_id
-        request.s2s_token = s2s_token
-
-        async for response in self._unary_stream(
-            "/gateway.GatewayService/GetTaskStream",
-            request,
-            TaskStreamResponse,
-        ):
-            yield response
-
-    async def get_next_task(
-        self, *, queue_name: str = "", container_id: str = "", s2s_token: str = ""
-    ) -> GetNextTaskResponse:
-        request = GetNextTaskRequest()
-        request.queue_name = queue_name
-        request.container_id = container_id
-        request.s2s_token = s2s_token
-
-        return await self._unary_unary(
-            "/gateway.GatewayService/GetNextTask",
-            request,
-            GetNextTaskResponse,
-        )
-
     async def start_task(
         self, *, task_id: str = "", container_id: str = ""
     ) -> StartTaskResponse:
@@ -249,27 +179,6 @@ class GatewayServiceStub(betterproto.ServiceStub):
             request,
             EndTaskResponse,
         )
-
-    async def monitor_task(
-        self,
-        *,
-        task_id: str = "",
-        queue_name: str = "",
-        container_id: str = "",
-        s2s_token: str = "",
-    ) -> AsyncGenerator[MonitorTaskResponse, None]:
-        request = MonitorTaskRequest()
-        request.task_id = task_id
-        request.queue_name = queue_name
-        request.container_id = container_id
-        request.s2s_token = s2s_token
-
-        async for response in self._unary_stream(
-            "/gateway.GatewayService/MonitorTask",
-            request,
-            MonitorTaskResponse,
-        ):
-            yield response
 
     async def get_or_create_stub(
         self,
