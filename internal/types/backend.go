@@ -2,6 +2,7 @@ package types
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
@@ -69,6 +70,11 @@ const (
 	TaskStatusRetry     string = "RETRY"
 )
 
+var DefaultTaskPolicy = TaskPolicy{
+	MaxRetries: 3,
+	Timeout:    3600,
+}
+
 type Task struct {
 	Id          uint         `db:"id"`
 	ExternalId  string       `db:"external_id"`
@@ -83,10 +89,7 @@ type Task struct {
 }
 
 type StubConfigV1 struct {
-	Cpu     int64  `json:"cpu"`
-	Memory  int64  `json:"memory"`
-	Gpu     string `json:"gpu"`
-	ImageId string `json:"image_id"`
+	Runtime Runtime `json:"runtime"`
 }
 
 type Stub struct {
@@ -100,4 +103,44 @@ type Stub struct {
 	ContextId     uint      `db:"context_id"` // Foreign key to Context
 	CreatedAt     time.Time `db:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at"`
+}
+
+type Image struct {
+	Commands             []string `json:"commands"`
+	PythonVersion        string   `json:"python_version"`
+	PythonPackages       []string `json:"python_packages"`
+	BaseImage            *string  `json:"base_image"`
+	BaseImageCredentials *string  `json:"base_image_creds"`
+}
+
+type Runtime struct {
+	Cpu    string  `json:"cpu"`
+	Gpu    GpuType `json:"gpu"`
+	Memory string  `json:"memory"`
+	Image  Image   `json:"image"`
+}
+
+type GpuType string
+
+func (g *GpuType) UnmarshalJSON(data []byte) error {
+	var gpuStr string
+	err := json.Unmarshal(data, &gpuStr)
+	if err == nil {
+		*g = GpuType(gpuStr)
+		return nil
+	}
+
+	var gpuInt int
+	err = json.Unmarshal(data, &gpuInt)
+	if err != nil {
+		return err
+	}
+
+	if gpuInt == 0 {
+		*g = GpuType("")
+	} else if gpuInt > 0 {
+		*g = GpuType("T4")
+	}
+
+	return nil
 }
