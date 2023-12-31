@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beam/internal/types"
-	pb "github.com/beam-cloud/beam/proto"
 )
 
 type SchedulerRepository interface{}
@@ -40,9 +39,18 @@ type ContainerRepository interface {
 type BackendRepository interface {
 	ListContexts(ctx context.Context) ([]types.Context, error)
 	CreateContext(ctx context.Context) (types.Context, error)
-	CreateObject(ctx context.Context, newObj types.Object) (types.Object, error)
-	CreateToken(ctx context.Context, contextID uint) (types.Token, error)
+	CreateObject(ctx context.Context, hash string, size int64, contextId uint) (types.Object, error)
+	GetObjectByHash(ctx context.Context, hash string, contextId uint) (types.Object, error)
+	GetObjectByExternalId(ctx context.Context, externalId string, contextId uint) (types.Object, error)
+	CreateToken(ctx context.Context, contextId uint) (types.Token, error)
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Context, error)
+	GetTask(ctx context.Context, externalId string) (*types.Task, error)
+	CreateTask(ctx context.Context, containerId string, contextId, stubId uint) (*types.Task, error)
+	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error)
+	DeleteTask(ctx context.Context, externalId string) error
+	ListTasks(ctx context.Context) ([]types.Task, error)
+	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, contextId uint) (types.Stub, error)
+	GetStubByExternalId(ctx context.Context, externalId string, contextId uint) (*types.Stub, error)
 }
 
 type BeamRepository interface {
@@ -73,8 +81,6 @@ type BeamRepository interface {
 type TaskRepository interface {
 	StartTask(taskId, queueName, containerId, identityExternalId string) error
 	EndTask(taskId, queueName, containerId, containerHostname, identityExternalId string, taskDuration, scaleDownDelay float64) error
-	MonitorTask(task *types.BeamAppTask, queueName, containerId, identityExternalId string, timeout int64, stream pb.Scheduler_MonitorTaskServer, timeoutCallback func() error) error
-	GetTaskStream(queueName, containerId, identityExternalId string, stream pb.Scheduler_GetTaskStreamServer) error
 	GetNextTask(queueName, containerId, identityExternalId string) ([]byte, error)
 	GetTasksInFlight(queueName, identityExternalId string) (int, error)
 	IncrementTasksInFlight(queueName, identityExternalId string) error

@@ -2,34 +2,35 @@ package types
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
 type Context struct {
-	ID         uint      `db:"id"`
+	Id         uint      `db:"id"`
+	ExternalId string    `db:"external_id"`
 	Name       string    `db:"name"`
-	ExternalID string    `db:"external_id"`
 	CreatedAt  time.Time `db:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at"`
 }
 
 type Token struct {
-	ID         uint      `db:"id"`
-	ExternalID string    `db:"external_id"`
+	Id         uint      `db:"id"`
+	ExternalId string    `db:"external_id"`
 	Key        string    `db:"key"`
+	Active     bool      `db:"active"`
+	ContextId  uint      `db:"context_id"` // Foreign key to Context
+	Context    *Context  `db:"context"`    // Pointer to associated Context
 	CreatedAt  time.Time `db:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at"`
-	Active     bool      `db:"active"`
-	ContextID  uint      `db:"context_id"` // Foreign key to Context
-	Context    *Context  `db:"context"`    // Pointer to associated Context
 }
 
 type Volume struct {
-	ID         uint      `db:"id"`
-	ExternalID string    `db:"external_id"`
+	Id         uint      `db:"id"`
+	ExternalId string    `db:"external_id"`
 	Name       string    `db:"name"`
+	ContextId  uint      `db:"context_id"` // Foreign key to Context
 	CreatedAt  time.Time `db:"created_at"`
-	ContextID  uint      `db:"context_id"` // Foreign key to Context
 }
 
 const (
@@ -40,42 +41,111 @@ const (
 )
 
 type Deployment struct {
-	ID         uint      `db:"id"`
-	ExternalID string    `db:"external_id"`
+	Id         uint      `db:"id"`
+	ExternalId string    `db:"external_id"`
 	Version    uint      `db:"version"`
 	Status     string    `db:"status"`
+	ContextId  uint      `db:"context_id"` // Foreign key to Context
+	StubId     uint      `db:"stub_id"`    // Foreign key to Stub
 	CreatedAt  time.Time `db:"created_at"`
 	UpdatedAt  time.Time `db:"updated_at"`
-	ContextID  uint      `db:"context_id"` // Foreign key to Context
-	StubID     uint      `db:"stub_id"`    // Foreign key to Stub
 }
 
 type Object struct {
-	ID         uint      `db:"id"`
-	ExternalID string    `db:"external_id"`
+	Id         uint      `db:"id"`
+	ExternalId string    `db:"external_id"`
 	Hash       string    `db:"hash"`
 	Size       int64     `db:"size"`
+	ContextId  uint      `db:"context_id"` // Foreign key to Context
 	CreatedAt  time.Time `db:"created_at"`
-	ContextID  uint      `db:"context_id"` // Foreign key to Context
+}
+
+const (
+	TaskStatusPending   string = "PENDING"
+	TaskStatusRunning   string = "RUNNING"
+	TaskStatusComplete  string = "COMPLETE"
+	TaskStatusError     string = "ERROR"
+	TaskStatusCancelled string = "CANCELLED"
+	TaskStatusTimeout   string = "TIMEOUT"
+	TaskStatusRetry     string = "RETRY"
+)
+
+var DefaultTaskPolicy = TaskPolicy{
+	MaxRetries: 3,
+	Timeout:    3600,
 }
 
 type Task struct {
-	ID         uint         `db:"id"`
-	ExternalID string       `db:"external_id"`
-	CreatedAt  time.Time    `db:"created_at"`
-	StartedAt  time.Time    `db:"started_at"`
-	EndedAt    sql.NullTime `db:"ended_at"`   // Can be NULL if the task hasn't ended
-	ContextID  uint         `db:"context_id"` // Foreign key to Context
-	StubID     uint         `db:"stub_id"`    // Foreign key to Stub
+	Id          uint         `db:"id"`
+	ExternalId  string       `db:"external_id"`
+	Status      string       `db:"status"`
+	ContainerId string       `db:"container_id"`
+	StartedAt   sql.NullTime `db:"started_at"`
+	EndedAt     sql.NullTime `db:"ended_at"`
+	ContextId   uint         `db:"context_id"` // Foreign key to Context
+	StubId      uint         `db:"stub_id"`    // Foreign key to Stub
+	CreatedAt   time.Time    `db:"created_at"`
+	UpdatedAt   time.Time    `db:"updated_at"`
 }
 
+type StubConfigV1 struct {
+	Runtime Runtime `json:"runtime"`
+}
+
+const (
+	StubTypeFunction  string = "FUNCTION"
+	StubTypeTaskQueue string = "TASK_QUEUE"
+)
+
 type Stub struct {
-	ID        uint      `db:"id"`
-	Name      string    `db:"name"`
-	Type      string    `db:"type"`
-	Config    string    `db:"config"`
-	ObjectID  uint      `db:"object_id"`  // Foreign key to Object
-	ContextID uint      `db:"context_id"` // Foreign key to Context
-	CreatedAt time.Time `db:"created_at"`
-	UpdatedAt time.Time `db:"updated_at"`
+	Id            uint      `db:"id"`
+	ExternalId    string    `db:"external_id"`
+	Name          string    `db:"name"`
+	Type          string    `db:"type"`
+	Config        string    `db:"config"`
+	ConfigVersion uint      `db:"config_version"`
+	ObjectId      uint      `db:"object_id"`  // Foreign key to Object
+	ContextId     uint      `db:"context_id"` // Foreign key to Context
+	CreatedAt     time.Time `db:"created_at"`
+	UpdatedAt     time.Time `db:"updated_at"`
+}
+
+type Image struct {
+	Commands             []string `json:"commands"`
+	PythonVersion        string   `json:"python_version"`
+	PythonPackages       []string `json:"python_packages"`
+	BaseImage            *string  `json:"base_image"`
+	BaseImageCredentials *string  `json:"base_image_creds"`
+}
+
+type Runtime struct {
+	Cpu     int64   `json:"cpu"`
+	Gpu     GpuType `json:"gpu"`
+	Memory  int64   `json:"memory"`
+	ImageId string  `json:"image_id"`
+}
+
+type GpuType string
+
+func (g *GpuType) UnmarshalJSON(data []byte) error {
+	var gpuStr string
+	err := json.Unmarshal(data, &gpuStr)
+	if err == nil {
+		*g = GpuType(gpuStr)
+		return nil
+	}
+
+	var gpuInt int
+	err = json.Unmarshal(data, &gpuInt)
+	if err != nil {
+		return err
+	}
+
+	if gpuInt == 0 {
+		*g = GpuType("")
+	} else if gpuInt > 0 {
+		*g = GpuType("T4")
+	}
+
+	return nil
 }

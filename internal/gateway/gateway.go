@@ -14,6 +14,7 @@ import (
 	simplequeue "github.com/beam-cloud/beam/internal/abstractions/queue"
 	"github.com/beam-cloud/beam/internal/auth"
 	common "github.com/beam-cloud/beam/internal/common"
+	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/storage"
@@ -52,21 +53,9 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	Storage, err := storage.NewJuiceFsStorage()
+	Storage, err := storage.NewStorage()
 	if err != nil {
 		return nil, err
-	}
-
-	// Format filesystem
-	err = Storage.Format(GatewayConfig.DefaultFilesystemName)
-	if err != nil {
-		log.Fatalf("Unable to format filesystem: %+v\n", err)
-	}
-
-	// Mount filesystem
-	err = Storage.Mount(GatewayConfig.DefaultFilesystemPath)
-	if err != nil {
-		log.Fatalf("Unable to mount filesystem: %+v\n", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -157,7 +146,7 @@ func (g *Gateway) Start() error {
 	pb.RegisterImageServiceServer(grpcServer, is)
 
 	// Register function service
-	fs, err := function.NewRuncFunctionService(context.TODO(), g.redisClient, g.Scheduler, g.keyEventManager)
+	fs, err := function.NewRuncFunctionService(context.TODO(), g.BackendRepo, g.redisClient, g.Scheduler, g.keyEventManager)
 	if err != nil {
 		return err
 	}
@@ -171,8 +160,8 @@ func (g *Gateway) Start() error {
 	pb.RegisterSchedulerServer(grpcServer, s)
 
 	// Register gateway services
-	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction yet)
-	gws, err := NewGatewayService(g)
+	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction)
+	gws, err := gatewayservices.NewGatewayService(g.BackendRepo)
 	if err != nil {
 		return err
 	}

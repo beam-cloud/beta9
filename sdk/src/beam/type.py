@@ -1,6 +1,13 @@
 from enum import Enum
 
 
+class TaskStatus(str, Enum):
+    Complete = "COMPLETE"
+    Error = "ERROR"
+    Pending = "PENDING"
+    Running = "RUNNING"
+
+
 class PythonVersion(str, Enum):
     """
     An enum that defines versions of Python.

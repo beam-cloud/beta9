@@ -3,7 +3,6 @@ package types
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -17,22 +16,11 @@ import (
 const (
 	DefaultExtractedObjectPath string        = "/data/unpacked"
 	DefaultObjectPath          string        = "/data/objects"
+	DefaultFilesystemName      string        = "beam-fs"
 	DefaultFilesystemPath      string        = "/data"
 	FailedContainerThreshold   int           = 3
 	RequestTimeoutDurationS    time.Duration = 175 * time.Second
 )
-
-type RequestBucketType uint
-
-const (
-	RequestBucketTypeDeployment RequestBucketType = iota
-	RequestBucketTypeServe
-)
-
-type InvalidAppResponse struct {
-	AppId string `json:"app_id,omitempty"`
-	Error string `json:"error_msg,omitempty"`
-}
 
 type QueueResponse struct {
 	TaskId string `json:"task_id,omitempty"`
@@ -67,15 +55,6 @@ type ContainerEvent struct {
 	ContainerId string
 	Change      int
 }
-
-type RequestBucketState struct {
-	RunningContainers  int
-	PendingContainers  int
-	StoppingContainers int
-	FailedContainers   int
-}
-
-var ErrBucketNotInUse error = errors.New("bucket not in use")
 
 // TaskMessage represents a JSON serializable message
 // to be added to the task queue
