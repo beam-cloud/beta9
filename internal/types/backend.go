@@ -119,10 +119,10 @@ type Image struct {
 }
 
 type Runtime struct {
-	Cpu    int64   `json:"cpu"`
-	Gpu    GpuType `json:"gpu"`
-	Memory int64   `json:"memory"`
-	Image  Image   `json:"image"`
+	Cpu     int64   `json:"cpu"`
+	Gpu     GpuType `json:"gpu"`
+	Memory  int64   `json:"memory"`
+	ImageId string  `json:"image_id"`
 }
 
 type GpuType string

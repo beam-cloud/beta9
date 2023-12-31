@@ -133,16 +133,10 @@ func (fs *RunCFunctionService) createTask(ctx context.Context, in *pb.FunctionIn
 
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
-			Cpu:    in.Cpu,
-			Gpu:    types.GpuType(in.Gpu),
-			Memory: in.Memory,
-			Image: types.Image{
-				Commands:             []string{"echo", "Hello World"},
-				PythonVersion:        "3.8",
-				PythonPackages:       []string{"numpy", "pandas"},
-				BaseImage:            nil,
-				BaseImageCredentials: nil,
-			},
+			Cpu:     in.Cpu,
+			Gpu:     types.GpuType(in.Gpu),
+			Memory:  in.Memory,
+			ImageId: in.ImageId,
 		},
 	}
 
