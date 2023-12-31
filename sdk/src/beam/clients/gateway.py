@@ -125,6 +125,24 @@ class MonitorTaskResponse(betterproto.Message):
     timed_out: bool = betterproto.bool_field(4)
 
 
+@dataclass
+class GetOrCreateStubRequest(betterproto.Message):
+    object_id: str = betterproto.string_field(1)
+    image_id: str = betterproto.string_field(2)
+    stub_type: str = betterproto.string_field(3)
+    name: str = betterproto.string_field(4)
+    python_version: str = betterproto.string_field(5)
+    cpu: int = betterproto.int64_field(6)
+    memory: int = betterproto.int64_field(7)
+    gpu: str = betterproto.string_field(8)
+
+
+@dataclass
+class GetOrCreateStubResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    stub_id: str = betterproto.string_field(2)
+
+
 class GatewayServiceStub(betterproto.ServiceStub):
     async def authorize(self) -> AuthorizeResponse:
         request = AuthorizeRequest()
@@ -252,3 +270,31 @@ class GatewayServiceStub(betterproto.ServiceStub):
             MonitorTaskResponse,
         ):
             yield response
+
+    async def get_or_create_stub(
+        self,
+        *,
+        object_id: str = "",
+        image_id: str = "",
+        stub_type: str = "",
+        name: str = "",
+        python_version: str = "",
+        cpu: int = 0,
+        memory: int = 0,
+        gpu: str = "",
+    ) -> GetOrCreateStubResponse:
+        request = GetOrCreateStubRequest()
+        request.object_id = object_id
+        request.image_id = image_id
+        request.stub_type = stub_type
+        request.name = name
+        request.python_version = python_version
+        request.cpu = cpu
+        request.memory = memory
+        request.gpu = gpu
+
+        return await self._unary_unary(
+            "/gateway.GatewayService/GetOrCreateStub",
+            request,
+            GetOrCreateStubResponse,
+        )

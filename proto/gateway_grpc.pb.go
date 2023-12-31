@@ -19,14 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	GatewayService_Authorize_FullMethodName     = "/gateway.GatewayService/Authorize"
-	GatewayService_HeadObject_FullMethodName    = "/gateway.GatewayService/HeadObject"
-	GatewayService_PutObject_FullMethodName     = "/gateway.GatewayService/PutObject"
-	GatewayService_GetTaskStream_FullMethodName = "/gateway.GatewayService/GetTaskStream"
-	GatewayService_GetNextTask_FullMethodName   = "/gateway.GatewayService/GetNextTask"
-	GatewayService_StartTask_FullMethodName     = "/gateway.GatewayService/StartTask"
-	GatewayService_EndTask_FullMethodName       = "/gateway.GatewayService/EndTask"
-	GatewayService_MonitorTask_FullMethodName   = "/gateway.GatewayService/MonitorTask"
+	GatewayService_Authorize_FullMethodName       = "/gateway.GatewayService/Authorize"
+	GatewayService_HeadObject_FullMethodName      = "/gateway.GatewayService/HeadObject"
+	GatewayService_PutObject_FullMethodName       = "/gateway.GatewayService/PutObject"
+	GatewayService_GetTaskStream_FullMethodName   = "/gateway.GatewayService/GetTaskStream"
+	GatewayService_GetNextTask_FullMethodName     = "/gateway.GatewayService/GetNextTask"
+	GatewayService_StartTask_FullMethodName       = "/gateway.GatewayService/StartTask"
+	GatewayService_EndTask_FullMethodName         = "/gateway.GatewayService/EndTask"
+	GatewayService_MonitorTask_FullMethodName     = "/gateway.GatewayService/MonitorTask"
+	GatewayService_GetOrCreateStub_FullMethodName = "/gateway.GatewayService/GetOrCreateStub"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -41,6 +42,7 @@ type GatewayServiceClient interface {
 	StartTask(ctx context.Context, in *StartTaskRequest, opts ...grpc.CallOption) (*StartTaskResponse, error)
 	EndTask(ctx context.Context, in *EndTaskRequest, opts ...grpc.CallOption) (*EndTaskResponse, error)
 	MonitorTask(ctx context.Context, in *MonitorTaskRequest, opts ...grpc.CallOption) (GatewayService_MonitorTaskClient, error)
+	GetOrCreateStub(ctx context.Context, in *GetOrCreateStubRequest, opts ...grpc.CallOption) (*GetOrCreateStubResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -169,6 +171,15 @@ func (x *gatewayServiceMonitorTaskClient) Recv() (*MonitorTaskResponse, error) {
 	return m, nil
 }
 
+func (c *gatewayServiceClient) GetOrCreateStub(ctx context.Context, in *GetOrCreateStubRequest, opts ...grpc.CallOption) (*GetOrCreateStubResponse, error) {
+	out := new(GetOrCreateStubResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetOrCreateStub_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
@@ -181,6 +192,7 @@ type GatewayServiceServer interface {
 	StartTask(context.Context, *StartTaskRequest) (*StartTaskResponse, error)
 	EndTask(context.Context, *EndTaskRequest) (*EndTaskResponse, error)
 	MonitorTask(*MonitorTaskRequest, GatewayService_MonitorTaskServer) error
+	GetOrCreateStub(context.Context, *GetOrCreateStubRequest) (*GetOrCreateStubResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -211,6 +223,9 @@ func (UnimplementedGatewayServiceServer) EndTask(context.Context, *EndTaskReques
 }
 func (UnimplementedGatewayServiceServer) MonitorTask(*MonitorTaskRequest, GatewayService_MonitorTaskServer) error {
 	return status.Errorf(codes.Unimplemented, "method MonitorTask not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetOrCreateStub(context.Context, *GetOrCreateStubRequest) (*GetOrCreateStubResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetOrCreateStub not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -375,6 +390,24 @@ func (x *gatewayServiceMonitorTaskServer) Send(m *MonitorTaskResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _GatewayService_GetOrCreateStub_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetOrCreateStubRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetOrCreateStub(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetOrCreateStub_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetOrCreateStub(ctx, req.(*GetOrCreateStubRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -405,6 +438,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "EndTask",
 			Handler:    _GatewayService_EndTask_Handler,
+		},
+		{
+			MethodName: "GetOrCreateStub",
+			Handler:    _GatewayService_GetOrCreateStub_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

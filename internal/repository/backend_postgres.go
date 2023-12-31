@@ -294,3 +294,15 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 
 	return stub, nil
 }
+
+func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, contextId uint) (*types.Stub, error) {
+	var stub types.Stub
+
+	query := `SELECT id, external_id, name, type, config, config_version, object_id, context_id, created_at, updated_at FROM stub WHERE external_id = $1 AND context_id = $2;`
+	err := r.client.GetContext(ctx, &stub, query, externalId, contextId)
+	if err != nil {
+		return &types.Stub{}, err
+	}
+
+	return &stub, nil
+}

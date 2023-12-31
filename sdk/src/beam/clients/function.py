@@ -12,12 +12,13 @@ import grpclib
 class FunctionInvokeRequest(betterproto.Message):
     object_id: str = betterproto.string_field(1)
     image_id: str = betterproto.string_field(2)
-    args: bytes = betterproto.bytes_field(3)
-    handler: str = betterproto.string_field(4)
-    python_version: str = betterproto.string_field(5)
-    cpu: int = betterproto.int64_field(6)
-    memory: int = betterproto.int64_field(7)
-    gpu: str = betterproto.string_field(8)
+    stub_id: str = betterproto.string_field(3)
+    args: bytes = betterproto.bytes_field(4)
+    handler: str = betterproto.string_field(5)
+    python_version: str = betterproto.string_field(6)
+    cpu: int = betterproto.int64_field(7)
+    memory: int = betterproto.int64_field(8)
+    gpu: str = betterproto.string_field(9)
 
 
 @dataclass
@@ -56,6 +57,7 @@ class FunctionServiceStub(betterproto.ServiceStub):
         *,
         object_id: str = "",
         image_id: str = "",
+        stub_id: str = "",
         args: bytes = b"",
         handler: str = "",
         python_version: str = "",
@@ -66,6 +68,7 @@ class FunctionServiceStub(betterproto.ServiceStub):
         request = FunctionInvokeRequest()
         request.object_id = object_id
         request.image_id = image_id
+        request.stub_id = stub_id
         request.args = args
         request.handler = handler
         request.python_version = python_version

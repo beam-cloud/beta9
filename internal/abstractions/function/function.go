@@ -77,11 +77,6 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 
 	go fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
 
-	err = common.ExtractObjectFile(stream.Context(), in.ObjectId, authInfo.Context.Name)
-	if err != nil {
-		return err
-	}
-
 	// Don't allow negative compute requests
 	if in.Cpu <= 0 {
 		in.Cpu = defaultFunctionContainerCpu
@@ -126,24 +121,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 }
 
 func (fs *RunCFunctionService) createTask(ctx context.Context, in *pb.FunctionInvokeRequest, authInfo *auth.AuthInfo) (*types.Task, error) {
-	object, err := fs.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Context.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	stubConfig := types.StubConfigV1{
-		Runtime: types.Runtime{
-			Cpu:     in.Cpu,
-			Gpu:     types.GpuType(in.Gpu),
-			Memory:  in.Memory,
-			ImageId: in.ImageId,
-		},
-	}
-
-	stubName := fmt.Sprintf("%s/%s", functionStubNamePrefix, in.Handler)
-	stubType := types.StubTypeFunction
-
-	stub, err := fs.backendRepo.GetOrCreateStub(ctx, stubName, stubType, stubConfig, object.Id, authInfo.Context.Id)
+	stub, err := fs.backendRepo.GetStubByExternalId(ctx, in.StubId, authInfo.Context.Id)
 	if err != nil {
 		return nil, err
 	}
