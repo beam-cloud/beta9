@@ -80,7 +80,7 @@ type Task struct {
 	ExternalId  string       `db:"external_id"`
 	Status      string       `db:"status"`
 	ContainerId string       `db:"container_id"`
-	StartedAt   time.Time    `db:"started_at"`
+	StartedAt   sql.NullTime `db:"started_at"`
 	EndedAt     sql.NullTime `db:"ended_at"`
 	ContextId   uint         `db:"context_id"` // Foreign key to Context
 	StubId      uint         `db:"stub_id"`    // Foreign key to Stub

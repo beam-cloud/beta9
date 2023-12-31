@@ -14,7 +14,6 @@ import (
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
-	"github.com/google/uuid"
 )
 
 type FunctionService interface {
@@ -52,10 +51,21 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	log.Printf("incoming function request: %+v", in)
 
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
-	taskId := fs.genInvocationId()
-	containerId := fs.genContainerId(taskId)
+	task, err := fs.createTask(stream.Context(), in, authInfo)
+	if err != nil {
+		return err
+	}
 
-	err := fs.rdb.Set(context.TODO(), Keys.FunctionArgs(taskId), in.Args, functionArgsExpirationTimeout).Err()
+	taskId := task.ExternalId
+	containerId := fs.genContainerId(taskId)
+	task.ContainerId = containerId
+
+	_, err = fs.backendRepo.UpdateTask(stream.Context(), task.ExternalId, *task)
+	if err != nil {
+		return err
+	}
+
+	err = fs.rdb.Set(context.TODO(), Keys.FunctionArgs(taskId), in.Args, functionArgsExpirationTimeout).Err()
 	if err != nil {
 		return errors.New("unable to store function args")
 	}
@@ -65,35 +75,6 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	keyEventChan := make(chan common.KeyEvent)
 
 	go fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
-
-	// Retrieve and extract object
-	object, err := fs.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Context.Id)
-	if err != nil {
-		return err
-	}
-
-	stubConfig := types.StubConfigV1{
-		Runtime: types.Runtime{
-			Cpu:    in.Cpu,
-			Gpu:    types.GpuType(in.Gpu),
-			Memory: in.Memory,
-			Image: types.Image{
-				Commands:             []string{"echo", "Hello World"},
-				PythonVersion:        "3.8",
-				PythonPackages:       []string{"numpy", "pandas"},
-				BaseImage:            nil,
-				BaseImageCredentials: nil,
-			},
-		},
-	}
-
-	stubName := fmt.Sprintf("function/%s", in.Handler)
-	stubType := types.StubTypeFunction
-
-	_, err = fs.backendRepo.GetOrCreateStub(ctx, stubName, stubType, stubConfig, object.Id, authInfo.Context.Id)
-	if err != nil {
-		return err
-	}
 
 	err = common.ExtractObjectFile(stream.Context(), in.ObjectId, authInfo.Context.Name)
 	if err != nil {
@@ -141,6 +122,43 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 
 	go client.StreamLogs(ctx, containerId, outputChan)
 	return fs.handleStreams(ctx, stream, taskId, containerId, outputChan, keyEventChan)
+}
+
+func (fs *RunCFunctionService) createTask(ctx context.Context, in *pb.FunctionInvokeRequest, authInfo *auth.AuthInfo) (*types.Task, error) {
+	object, err := fs.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Context.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	stubConfig := types.StubConfigV1{
+		Runtime: types.Runtime{
+			Cpu:    in.Cpu,
+			Gpu:    types.GpuType(in.Gpu),
+			Memory: in.Memory,
+			Image: types.Image{
+				Commands:             []string{"echo", "Hello World"},
+				PythonVersion:        "3.8",
+				PythonPackages:       []string{"numpy", "pandas"},
+				BaseImage:            nil,
+				BaseImageCredentials: nil,
+			},
+		},
+	}
+
+	stubName := fmt.Sprintf("function/%s", in.Handler)
+	stubType := types.StubTypeFunction
+
+	stub, err := fs.backendRepo.GetOrCreateStub(ctx, stubName, stubType, stubConfig, object.Id, authInfo.Context.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	task, err := fs.backendRepo.CreateTask(ctx, "", authInfo.Context.Id, stub.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	return task, nil
 }
 
 func (fs *RunCFunctionService) handleStreams(ctx context.Context,
@@ -201,10 +219,6 @@ func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.Fun
 	return &pb.FunctionSetResultResponse{
 		Ok: true,
 	}, nil
-}
-
-func (fs *RunCFunctionService) genInvocationId() string {
-	return uuid.New().String()[:8]
 }
 
 func (fs *RunCFunctionService) genContainerId(taskId string) string {

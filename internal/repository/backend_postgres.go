@@ -195,22 +195,22 @@ func (r *PostgresBackendRepository) GetObjectByExternalId(ctx context.Context, e
 
 // Task
 
-func (r *PostgresBackendRepository) CreateTask(ctx context.Context, containerId string, contextId, stubId uint) (types.Task, error) {
+func (r *PostgresBackendRepository) CreateTask(ctx context.Context, containerId string, contextId, stubId uint) (*types.Task, error) {
 	query := `
     INSERT INTO task (container_id, context_id, stub_id)
-    VALUES ($1, $2, $3, $4, $5)
+    VALUES ($1, $2, $3)
     RETURNING id, external_id, status, container_id, context_id, stub_id, started_at, ended_at, created_at, updated_at;
     `
 
 	var newTask types.Task
 	if err := r.client.GetContext(ctx, &newTask, query, containerId, contextId, stubId); err != nil {
-		return types.Task{}, err
+		return &types.Task{}, err
 	}
 
-	return newTask, nil
+	return &newTask, nil
 }
 
-func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (types.Task, error) {
+func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error) {
 	query := `
 	UPDATE task
 	SET status = $2, container_id = $3, started_at = $4, ended_at = $5, context_id = $6, stub_id = $7, updated_at = CURRENT_TIMESTAMP
@@ -223,10 +223,10 @@ func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, externalId s
 		externalId, updatedTask.Status, updatedTask.ContainerId,
 		updatedTask.StartedAt, updatedTask.EndedAt,
 		updatedTask.ContextId, updatedTask.StubId); err != nil {
-		return types.Task{}, err
+		return &types.Task{}, err
 	}
 
-	return task, nil
+	return &task, nil
 }
 
 func (r *PostgresBackendRepository) DeleteTask(ctx context.Context, externalId string) error {
