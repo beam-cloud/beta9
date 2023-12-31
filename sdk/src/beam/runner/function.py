@@ -70,13 +70,15 @@ def main(channel: Channel):
     try:
         result = handler(*args.get("args", ()), **args.get("kwargs", {}))
         result = cloudpickle.dumps(result)
+    except BaseException as exc:
+        result = cloudpickle.dumps(exc)
+        task_status = TaskStatus.Error
+    finally:
         set_result_resp: FunctionSetResultResponse = run_sync(
             function_stub.function_set_result(task_id=task_id, result=result),
         )
         if not set_result_resp.ok:
             raise RunnerException("Unable to set function result")
-    except BaseException:
-        task_status = TaskStatus.Error
 
     task_duration = time.time() - start_time
 
