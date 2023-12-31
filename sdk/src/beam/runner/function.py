@@ -45,6 +45,7 @@ def main(channel: Channel):
     if not task_id or not container_id:
         raise RunnerException()
 
+    # Load user function and arguments
     handler = _load_handler()
     get_args_resp: FunctionGetArgsResponse = run_sync(
         function_stub.function_get_args(task_id=task_id),
