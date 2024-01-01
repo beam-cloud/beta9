@@ -44,6 +44,7 @@ def main(channel: Channel):
 
     task_id = os.getenv("TASK_ID")
     container_id = os.getenv("CONTAINER_ID")
+    container_hostname = os.getenv("CONTAINER_HOSTNAME")
     if not task_id or not container_id:
         raise RunnerException("Invalid runner environment")
 
@@ -89,7 +90,7 @@ def main(channel: Channel):
             task_duration=task_duration,
             task_status=task_status,
             container_id=container_id,
-            container_hostname=container_id,
+            container_hostname=container_hostname,
             scale_down_delay=0,
         )
     )
