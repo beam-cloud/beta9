@@ -10,3 +10,4 @@ dist/
 test.py
 *.egg-info/
 build/
+something
