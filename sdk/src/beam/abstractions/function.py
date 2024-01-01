@@ -20,8 +20,11 @@ FUNCTION_STUB_PREFIX = "function"
 
 
 class Function(BaseAbstraction):
-    def __init__(self, image: Image = Image(), cpu: int = 100, memory: int = 128, gpu="") -> None:
+    def __init__(self, image: Image, cpu: int = 100, memory: int = 128, gpu="") -> None:
         super().__init__()
+
+        if image is None:
+            image = Image()
 
         self.image: Image = image
         self.image_available: bool = False

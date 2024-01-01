@@ -8,4 +8,5 @@ dist/
 .DS_Store
 ./tests/fixtures/customer_apps
 test.py
-something/
+*.egg-info/
+build/
