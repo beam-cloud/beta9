@@ -65,7 +65,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return err
 	}
 
-	err = fs.rdb.Set(context.TODO(), Keys.FunctionArgs(taskId), in.Args, functionArgsExpirationTimeout).Err()
+	err = fs.rdb.Set(stream.Context(), Keys.FunctionArgs(taskId), in.Args, functionArgsExpirationTimeout).Err()
 	if err != nil {
 		return errors.New("unable to store function args")
 	}
@@ -154,7 +154,7 @@ _stream:
 				break _stream
 			}
 		case <-keyEventChan:
-			result, _ := fs.rdb.Get(context.TODO(), Keys.FunctionResult(taskId)).Bytes()
+			result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(taskId)).Bytes()
 			if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: 0}); err != nil {
 				break
 			}
@@ -171,7 +171,7 @@ _stream:
 }
 
 func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {
-	value, err := fs.rdb.Get(context.TODO(), Keys.FunctionArgs(in.TaskId)).Bytes()
+	value, err := fs.rdb.Get(ctx, Keys.FunctionArgs(in.TaskId)).Bytes()
 	if err != nil {
 		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, nil
 	}
@@ -183,7 +183,7 @@ func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.Funct
 }
 
 func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error) {
-	err := fs.rdb.Set(context.TODO(), Keys.FunctionResult(in.TaskId), in.Result, functionResultExpirationTimeout).Err()
+	err := fs.rdb.Set(ctx, Keys.FunctionResult(in.TaskId), in.Result, functionResultExpirationTimeout).Err()
 	if err != nil {
 		return &pb.FunctionSetResultResponse{Ok: false}, nil
 	}
