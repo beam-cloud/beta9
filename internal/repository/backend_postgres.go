@@ -67,8 +67,8 @@ func (r *PostgresBackendRepository) generateExternalId() (string, error) {
 
 // Context
 
-func (r *PostgresBackendRepository) ListContexts(ctx context.Context) ([]types.Context, error) {
-	var contexts []types.Context
+func (r *PostgresBackendRepository) ListContexts(ctx context.Context) ([]types.Workspace, error) {
+	var contexts []types.Workspace
 
 	query := `SELECT id, name, external_id, created_at, updated_at FROM context;`
 	err := r.client.SelectContext(ctx, &contexts, query)
@@ -79,12 +79,12 @@ func (r *PostgresBackendRepository) ListContexts(ctx context.Context) ([]types.C
 	return contexts, nil
 }
 
-func (r *PostgresBackendRepository) CreateContext(ctx context.Context) (types.Context, error) {
+func (r *PostgresBackendRepository) CreateContext(ctx context.Context) (types.Workspace, error) {
 	name := uuid.New().String()[:6] // Generate a short UUId for the context name
 
 	externalId, err := r.generateExternalId()
 	if err != nil {
-		return types.Context{}, err
+		return types.Workspace{}, err
 	}
 
 	query := `
@@ -93,9 +93,9 @@ func (r *PostgresBackendRepository) CreateContext(ctx context.Context) (types.Co
 	RETURNING id, name, external_id, created_at, updated_at;
 	`
 
-	var context types.Context
+	var context types.Workspace
 	if err := r.client.GetContext(ctx, &context, query, name, externalId); err != nil {
-		return types.Context{}, err
+		return types.Workspace{}, err
 	}
 
 	return context, nil
@@ -132,7 +132,7 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, contextId u
 	return token, nil
 }
 
-func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Context, error) {
+func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error) {
 	query := `
 	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.context_id,
 	       c.id "context.id", c.name "context.name", c.external_id "context.external_id", c.created_at "context.created_at", c.updated_at "context.updated_at"
@@ -142,8 +142,8 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	`
 
 	var token types.Token
-	var context types.Context
-	token.Context = &context
+	var context types.Workspace
+	token.Workspace = &context
 
 	if err := r.client.GetContext(ctx, &token, query, tokenKey); err != nil {
 		return nil, nil, err
@@ -222,7 +222,7 @@ func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, externalId s
 	if err := r.client.GetContext(ctx, &task, query,
 		externalId, updatedTask.Status, updatedTask.ContainerId,
 		updatedTask.StartedAt, updatedTask.EndedAt,
-		updatedTask.ContextId, updatedTask.StubId); err != nil {
+		updatedTask.WorkspaceId, updatedTask.StubId); err != nil {
 		return &types.Task{}, err
 	}
 
@@ -279,8 +279,6 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 		// Stub found, return it
 		return stub, nil
 	}
-
-	log.Println("err: ", err)
 
 	// Stub not found, create a new one
 	queryCreate := `

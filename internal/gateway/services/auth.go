@@ -11,7 +11,7 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	authInfo, authFound := auth.AuthInfoFromContext(ctx)
 	if authFound {
 		return &pb.AuthorizeResponse{
-			ContextId: authInfo.Context.ExternalId,
+			ContextId: authInfo.Workspace.ExternalId,
 			Ok:        true,
 		}, nil
 	}

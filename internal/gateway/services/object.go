@@ -15,7 +15,7 @@ import (
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Context.Id)
+	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
 	if err == nil {
 		return &pb.HeadObjectResponse{
 			Ok:     true,
@@ -37,10 +37,10 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectRequest) (*pb.PutObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	objectPath := path.Join(types.DefaultObjectPath, authInfo.Context.Name)
+	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
 	os.MkdirAll(objectPath, 0644)
 
-	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Context.Id)
+	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
 	if err == nil && !in.Overwrite {
 		return &pb.PutObjectResponse{
 			Ok:       true,
@@ -51,7 +51,7 @@ func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectReques
 	hash := sha256.Sum256(in.ObjectContent)
 	hashStr := hex.EncodeToString(hash[:])
 
-	newObject, err := gws.backendRepo.CreateObject(ctx, hashStr, int64(len(in.ObjectContent)), authInfo.Context.Id)
+	newObject, err := gws.backendRepo.CreateObject(ctx, hashStr, int64(len(in.ObjectContent)), authInfo.Workspace.Id)
 	if err != nil {
 		return &pb.PutObjectResponse{
 			Ok:       false,

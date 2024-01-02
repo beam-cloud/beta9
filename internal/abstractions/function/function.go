@@ -98,7 +98,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		ImageId:    in.ImageId,
 		EntryPoint: []string{in.PythonVersion, "-m", "beam.runner.function"},
 		Mounts: []types.Mount{
-			{LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Context.Name, in.ObjectId), MountPath: types.WorkerUserCodeVolume, ReadOnly: true},
+			{LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId), MountPath: types.WorkerUserCodeVolume, ReadOnly: true},
 		},
 	})
 	if err != nil {
@@ -120,12 +120,12 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 }
 
 func (fs *RunCFunctionService) createTask(ctx context.Context, in *pb.FunctionInvokeRequest, authInfo *auth.AuthInfo) (*types.Task, error) {
-	stub, err := fs.backendRepo.GetStubByExternalId(ctx, in.StubId, authInfo.Context.Id)
+	stub, err := fs.backendRepo.GetStubByExternalId(ctx, in.StubId, authInfo.Workspace.Id)
 	if err != nil {
 		return nil, err
 	}
 
-	task, err := fs.backendRepo.CreateTask(ctx, "", authInfo.Context.Id, stub.Id)
+	task, err := fs.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, stub.Id)
 	if err != nil {
 		return nil, err
 	}

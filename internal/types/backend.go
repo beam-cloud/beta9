@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-type Context struct {
+type Workspace struct {
 	Id         uint      `db:"id"`
 	ExternalId string    `db:"external_id"`
 	Name       string    `db:"name"`
@@ -15,22 +15,22 @@ type Context struct {
 }
 
 type Token struct {
-	Id         uint      `db:"id"`
-	ExternalId string    `db:"external_id"`
-	Key        string    `db:"key"`
-	Active     bool      `db:"active"`
-	ContextId  uint      `db:"context_id"` // Foreign key to Context
-	Context    *Context  `db:"context"`    // Pointer to associated Context
-	CreatedAt  time.Time `db:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at"`
+	Id          uint       `db:"id"`
+	ExternalId  string     `db:"external_id"`
+	Key         string     `db:"key"`
+	Active      bool       `db:"active"`
+	WorkspaceId uint       `db:"Workspace_id"` // Foreign key to Workspace
+	Workspace   *Workspace `db:"Workspace"`    // Pointer to associated Workspace
+	CreatedAt   time.Time  `db:"created_at"`
+	UpdatedAt   time.Time  `db:"updated_at"`
 }
 
 type Volume struct {
-	Id         uint      `db:"id"`
-	ExternalId string    `db:"external_id"`
-	Name       string    `db:"name"`
-	ContextId  uint      `db:"context_id"` // Foreign key to Context
-	CreatedAt  time.Time `db:"created_at"`
+	Id          uint      `db:"id"`
+	ExternalId  string    `db:"external_id"`
+	Name        string    `db:"name"`
+	WorkspaceId uint      `db:"Workspace_id"` // Foreign key to Workspace
+	CreatedAt   time.Time `db:"created_at"`
 }
 
 const (
@@ -41,23 +41,23 @@ const (
 )
 
 type Deployment struct {
-	Id         uint      `db:"id"`
-	ExternalId string    `db:"external_id"`
-	Version    uint      `db:"version"`
-	Status     string    `db:"status"`
-	ContextId  uint      `db:"context_id"` // Foreign key to Context
-	StubId     uint      `db:"stub_id"`    // Foreign key to Stub
-	CreatedAt  time.Time `db:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at"`
+	Id          uint      `db:"id"`
+	ExternalId  string    `db:"external_id"`
+	Version     uint      `db:"version"`
+	Status      string    `db:"status"`
+	WorkspaceId uint      `db:"Workspace_id"` // Foreign key to Workspace
+	StubId      uint      `db:"stub_id"`      // Foreign key to Stub
+	CreatedAt   time.Time `db:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at"`
 }
 
 type Object struct {
-	Id         uint      `db:"id"`
-	ExternalId string    `db:"external_id"`
-	Hash       string    `db:"hash"`
-	Size       int64     `db:"size"`
-	ContextId  uint      `db:"context_id"` // Foreign key to Context
-	CreatedAt  time.Time `db:"created_at"`
+	Id          uint      `db:"id"`
+	ExternalId  string    `db:"external_id"`
+	Hash        string    `db:"hash"`
+	Size        int64     `db:"size"`
+	WorkspaceId uint      `db:"Workspace_id"` // Foreign key to Workspace
+	CreatedAt   time.Time `db:"created_at"`
 }
 
 const (
@@ -82,8 +82,8 @@ type Task struct {
 	ContainerId string       `db:"container_id"`
 	StartedAt   sql.NullTime `db:"started_at"`
 	EndedAt     sql.NullTime `db:"ended_at"`
-	ContextId   uint         `db:"context_id"` // Foreign key to Context
-	StubId      uint         `db:"stub_id"`    // Foreign key to Stub
+	WorkspaceId uint         `db:"Workspace_id"` // Foreign key to Workspace
+	StubId      uint         `db:"stub_id"`      // Foreign key to Stub
 	CreatedAt   time.Time    `db:"created_at"`
 	UpdatedAt   time.Time    `db:"updated_at"`
 }
@@ -104,8 +104,8 @@ type Stub struct {
 	Type          string    `db:"type"`
 	Config        string    `db:"config"`
 	ConfigVersion uint      `db:"config_version"`
-	ObjectId      uint      `db:"object_id"`  // Foreign key to Object
-	ContextId     uint      `db:"context_id"` // Foreign key to Context
+	ObjectId      uint      `db:"object_id"`    // Foreign key to Object
+	WorkspaceId   uint      `db:"Workspace_id"` // Foreign key to Workspace
 	CreatedAt     time.Time `db:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at"`
 }
