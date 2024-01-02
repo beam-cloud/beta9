@@ -142,6 +142,17 @@ class GetOrCreateStubResponse(betterproto.Message):
     stub_id: str = betterproto.string_field(2)
 
 
+@dataclass
+class DeployStubRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+
+
+@dataclass
+class DeployStubResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    deployment_id: str = betterproto.string_field(2)
+
+
 class GatewayServiceStub(betterproto.ServiceStub):
     async def authorize(self) -> AuthorizeResponse:
         request = AuthorizeRequest()
@@ -266,4 +277,14 @@ class GatewayServiceStub(betterproto.ServiceStub):
             "/gateway.GatewayService/GetOrCreateStub",
             request,
             GetOrCreateStubResponse,
+        )
+
+    async def deploy_stub(self, *, stub_id: str = "") -> DeployStubResponse:
+        request = DeployStubRequest()
+        request.stub_id = stub_id
+
+        return await self._unary_unary(
+            "/gateway.GatewayService/DeployStub",
+            request,
+            DeployStubResponse,
         )

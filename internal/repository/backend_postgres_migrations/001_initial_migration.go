@@ -17,7 +17,6 @@ func upCreateTables(tx *sql.Tx) error {
 	}
 
 	createStatements := []string{
-		`CREATE TYPE deployment_status AS ENUM ('STOPPED', 'READY', 'ERROR', 'PENDING');`,
 		`CREATE TYPE stub_type AS ENUM ('TASK_QUEUE', 'REST_API', 'FUNCTION');`,
 		`CREATE TYPE task_status AS ENUM ('PENDING', 'RUNNING', 'CANCELLED', 'COMPLETE', 'ERROR', 'TIMEOUT', 'RETRY');`,
 
@@ -73,8 +72,7 @@ func upCreateTables(tx *sql.Tx) error {
 		`CREATE TABLE IF NOT EXISTS deployment (
             id SERIAL PRIMARY KEY,
             external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
-            version INT NOT NULL,
-            status deployment_status NOT NULL DEFAULT 'PENDING',
+            active BOOLEAN NOT NULL DEFAULT true,
             workspace_id INT REFERENCES workspace(id),
             stub_id INT REFERENCES stub(id),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -114,7 +112,6 @@ func downDropTables(tx *sql.Tx) error {
 		"DROP TABLE IF EXISTS volume;",
 		"DROP TABLE IF EXISTS token;",
 		"DROP TYPE IF EXISTS stub_type;",
-		"DROP TYPE IF EXISTS deployment_status;",
 		"DROP TYPE IF EXISTS task_status;",
 	}
 

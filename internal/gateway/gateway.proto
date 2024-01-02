@@ -14,6 +14,7 @@ service GatewayService {
   rpc StopTask(StopTaskRequest) returns (StopTaskResponse);
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
   rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse);
+  rpc DeployStub(DeployStubRequest) returns (DeployStubResponse);
 }
 
 message AuthorizeRequest {}
@@ -72,9 +73,7 @@ message EndTaskRequest {
 
 message EndTaskResponse { bool ok = 1; }
 
-message ListTasksRequest {
-  uint32 limit = 1;
-}
+message ListTasksRequest { uint32 limit = 1; }
 
 message Task {
   string id = 2;
@@ -97,9 +96,7 @@ message ListTasksResponse {
   int32 total = 4;
 }
 
-message StopTaskRequest {
-  string task_id = 1;
-}
+message StopTaskRequest { string task_id = 1; }
 
 message StopTaskResponse {
   bool ok = 1;
@@ -120,4 +117,11 @@ message GetOrCreateStubRequest {
 message GetOrCreateStubResponse {
   bool ok = 1;
   string stub_id = 2;
+}
+
+message DeployStubRequest { string stub_id = 1; }
+
+message DeployStubResponse {
+  bool ok = 1;
+  string deployment_id = 2;
 }

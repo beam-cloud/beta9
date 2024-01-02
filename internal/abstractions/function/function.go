@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"path"
 	"time"
 
@@ -48,8 +47,6 @@ func NewRuncFunctionService(ctx context.Context, backendRepo repository.BackendR
 }
 
 func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
-	log.Printf("incoming function request: %+v", in)
-
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 	task, err := fs.createTask(stream.Context(), in, authInfo)
 	if err != nil {

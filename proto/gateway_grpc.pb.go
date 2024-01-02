@@ -27,6 +27,7 @@ const (
 	GatewayService_StopTask_FullMethodName        = "/gateway.GatewayService/StopTask"
 	GatewayService_ListTasks_FullMethodName       = "/gateway.GatewayService/ListTasks"
 	GatewayService_GetOrCreateStub_FullMethodName = "/gateway.GatewayService/GetOrCreateStub"
+	GatewayService_DeployStub_FullMethodName      = "/gateway.GatewayService/DeployStub"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -41,6 +42,7 @@ type GatewayServiceClient interface {
 	StopTask(ctx context.Context, in *StopTaskRequest, opts ...grpc.CallOption) (*StopTaskResponse, error)
 	ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error)
 	GetOrCreateStub(ctx context.Context, in *GetOrCreateStubRequest, opts ...grpc.CallOption) (*GetOrCreateStubResponse, error)
+	DeployStub(ctx context.Context, in *DeployStubRequest, opts ...grpc.CallOption) (*DeployStubResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -123,6 +125,15 @@ func (c *gatewayServiceClient) GetOrCreateStub(ctx context.Context, in *GetOrCre
 	return out, nil
 }
 
+func (c *gatewayServiceClient) DeployStub(ctx context.Context, in *DeployStubRequest, opts ...grpc.CallOption) (*DeployStubResponse, error) {
+	out := new(DeployStubResponse)
+	err := c.cc.Invoke(ctx, GatewayService_DeployStub_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
@@ -135,6 +146,7 @@ type GatewayServiceServer interface {
 	StopTask(context.Context, *StopTaskRequest) (*StopTaskResponse, error)
 	ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error)
 	GetOrCreateStub(context.Context, *GetOrCreateStubRequest) (*GetOrCreateStubResponse, error)
+	DeployStub(context.Context, *DeployStubRequest) (*DeployStubResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -165,6 +177,9 @@ func (UnimplementedGatewayServiceServer) ListTasks(context.Context, *ListTasksRe
 }
 func (UnimplementedGatewayServiceServer) GetOrCreateStub(context.Context, *GetOrCreateStubRequest) (*GetOrCreateStubResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetOrCreateStub not implemented")
+}
+func (UnimplementedGatewayServiceServer) DeployStub(context.Context, *DeployStubRequest) (*DeployStubResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeployStub not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -323,6 +338,24 @@ func _GatewayService_GetOrCreateStub_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_DeployStub_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeployStubRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).DeployStub(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_DeployStub_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).DeployStub(ctx, req.(*DeployStubRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -361,6 +394,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetOrCreateStub",
 			Handler:    _GatewayService_GetOrCreateStub_Handler,
+		},
+		{
+			MethodName: "DeployStub",
+			Handler:    _GatewayService_DeployStub_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
