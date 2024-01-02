@@ -21,21 +21,21 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		},
 	}
 
-	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Context.Id)
+	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok: false,
 		}, nil
 	}
 
-	err = common.ExtractObjectFile(ctx, object.ExternalId, authInfo.Context.Name)
+	err = common.ExtractObjectFile(ctx, object.ExternalId, authInfo.Workspace.Name)
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok: false,
 		}, nil
 	}
 
-	stub, err := gws.backendRepo.GetOrCreateStub(ctx, in.Name, in.StubType, stubConfig, object.Id, authInfo.Context.Id)
+	stub, err := gws.backendRepo.GetOrCreateStub(ctx, in.Name, in.StubType, stubConfig, object.Id, authInfo.Workspace.Id)
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok: false,

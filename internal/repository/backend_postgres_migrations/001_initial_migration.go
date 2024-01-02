@@ -21,7 +21,7 @@ func upCreateTables(tx *sql.Tx) error {
 		`CREATE TYPE stub_type AS ENUM ('TASK_QUEUE', 'REST_API', 'FUNCTION');`,
 		`CREATE TYPE task_status AS ENUM ('PENDING', 'RUNNING', 'CANCELLED', 'COMPLETE', 'ERROR', 'TIMEOUT', 'RETRY');`,
 
-		`CREATE TABLE IF NOT EXISTS context (
+		`CREATE TABLE IF NOT EXISTS workspace (
             id SERIAL PRIMARY KEY,
             external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
             name VARCHAR(255) NOT NULL UNIQUE,
@@ -34,7 +34,7 @@ func upCreateTables(tx *sql.Tx) error {
             external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
             key VARCHAR(255) NOT NULL,
             active BOOLEAN NOT NULL,
-            context_id INT REFERENCES context(id),
+            workspace_id INT REFERENCES workspace(id),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );`,
@@ -43,7 +43,7 @@ func upCreateTables(tx *sql.Tx) error {
             id SERIAL PRIMARY KEY,
             external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
             name VARCHAR(255) NOT NULL,
-            context_id INT REFERENCES context(id),
+            workspace_id INT REFERENCES workspace(id),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );`,
@@ -53,7 +53,7 @@ func upCreateTables(tx *sql.Tx) error {
             external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
             hash VARCHAR(255) NOT NULL UNIQUE,
             size BIGINT NOT NULL,
-            context_id INT REFERENCES context(id),
+            workspace_id INT REFERENCES workspace(id),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );`,
 
@@ -65,7 +65,7 @@ func upCreateTables(tx *sql.Tx) error {
             config JSON NOT NULL,
             config_version INT DEFAULT 1,
             object_id INT REFERENCES object(id),
-            context_id INT REFERENCES context(id),
+            workspace_id INT REFERENCES workspace(id),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );`,
@@ -75,7 +75,8 @@ func upCreateTables(tx *sql.Tx) error {
             external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
             version INT NOT NULL,
             status deployment_status NOT NULL DEFAULT 'PENDING',
-            context_id INT REFERENCES context(id),
+            workspace_id INT REFERENCES workspace(id),
+            stub_id INT REFERENCES stub(id),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );`,
@@ -87,7 +88,7 @@ func upCreateTables(tx *sql.Tx) error {
             status task_status NOT NULL DEFAULT 'PENDING',
             started_at TIMESTAMP WITH TIME ZONE,
             ended_at TIMESTAMP WITH TIME ZONE,
-            context_id INT REFERENCES context(id),
+            workspace_id INT REFERENCES workspace(id),
             stub_id INT REFERENCES stub(id),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -109,7 +110,7 @@ func downDropTables(tx *sql.Tx) error {
 		"DROP TABLE IF EXISTS task;",
 		"DROP TABLE IF EXISTS deployment;",
 		"DROP TABLE IF EXISTS object;",
-		"DROP TABLE IF EXISTS context;",
+		"DROP TABLE IF EXISTS workspace;",
 		"DROP TABLE IF EXISTS volume;",
 		"DROP TABLE IF EXISTS token;",
 		"DROP TYPE IF EXISTS stub_type;",

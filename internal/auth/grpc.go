@@ -16,8 +16,8 @@ import (
 var authContextKey = "auth"
 
 type AuthInfo struct {
-	Context *types.Context
-	Token   *types.Token
+	Workspace *types.Workspace
+	Token     *types.Token
 }
 
 func AuthInfoFromContext(ctx context.Context) (*AuthInfo, bool) {
@@ -50,14 +50,14 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 	}
 
 	tokenKey := strings.TrimPrefix(md["authorization"][0], "Bearer ")
-	token, context, err := ai.backendRepo.AuthorizeToken(context.TODO(), tokenKey)
+	token, workspace, err := ai.backendRepo.AuthorizeToken(context.TODO(), tokenKey)
 	if err != nil {
 		return nil, false
 	}
 
 	return &AuthInfo{
-		Token:   token,
-		Context: context,
+		Token:     token,
+		Workspace: workspace,
 	}, true
 }
 

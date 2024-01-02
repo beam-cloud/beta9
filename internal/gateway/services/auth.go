@@ -11,13 +11,13 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	authInfo, authFound := auth.AuthInfoFromContext(ctx)
 	if authFound {
 		return &pb.AuthorizeResponse{
-			ContextId: authInfo.Context.ExternalId,
-			Ok:        true,
+			WorkspaceId: authInfo.Workspace.ExternalId,
+			Ok:          true,
 		}, nil
 	}
 
 	// See if the this gateway has been configured previously
-	existingContexts, err := gws.backendRepo.ListContexts(ctx)
+	existingContexts, err := gws.backendRepo.ListWorkspaces(ctx)
 	if err != nil || len(existingContexts) >= 1 {
 		return &pb.AuthorizeResponse{
 			Ok:       false,
@@ -25,9 +25,9 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 		}, nil
 	}
 
-	// If no contexts are found, we can create a new one for the user
+	// If no workspaces are found, we can create a new one for the user
 	// and generate a new token
-	context, err := gws.backendRepo.CreateContext(ctx)
+	workspace, err := gws.backendRepo.CreateWorkspace(ctx)
 	if err != nil {
 		return &pb.AuthorizeResponse{
 			Ok:       false,
@@ -36,7 +36,7 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	}
 
 	// Now that we have a context, create a new token
-	token, err := gws.backendRepo.CreateToken(ctx, context.Id)
+	token, err := gws.backendRepo.CreateToken(ctx, workspace.Id)
 	if err != nil {
 		return &pb.AuthorizeResponse{
 			Ok:       false,
@@ -45,8 +45,8 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	}
 
 	return &pb.AuthorizeResponse{
-		Ok:        true,
-		NewToken:  token.Key,
-		ContextId: context.ExternalId,
+		Ok:          true,
+		NewToken:    token.Key,
+		WorkspaceId: workspace.ExternalId,
 	}, nil
 }
