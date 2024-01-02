@@ -67,20 +67,20 @@ func (r *PostgresBackendRepository) generateExternalId() (string, error) {
 
 // Context
 
-func (r *PostgresBackendRepository) ListContexts(ctx context.Context) ([]types.Workspace, error) {
-	var contexts []types.Workspace
+func (r *PostgresBackendRepository) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
+	var workspaces []types.Workspace
 
-	query := `SELECT id, name, external_id, created_at, updated_at FROM context;`
-	err := r.client.SelectContext(ctx, &contexts, query)
+	query := `SELECT id, name, external_id, created_at, updated_at FROM workspace;`
+	err := r.client.SelectContext(ctx, &workspaces, query)
 	if err != nil {
 		return nil, err
 	}
 
-	return contexts, nil
+	return workspaces, nil
 }
 
-func (r *PostgresBackendRepository) CreateContext(ctx context.Context) (types.Workspace, error) {
-	name := uuid.New().String()[:6] // Generate a short UUId for the context name
+func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.Workspace, error) {
+	name := uuid.New().String()[:6] // Generate a short UUID for the workspace name
 
 	externalId, err := r.generateExternalId()
 	if err != nil {
@@ -88,7 +88,7 @@ func (r *PostgresBackendRepository) CreateContext(ctx context.Context) (types.Wo
 	}
 
 	query := `
-	INSERT INTO context (name, external_id)
+	INSERT INTO workspace (name, external_id)
 	VALUES ($1, $2)
 	RETURNING id, name, external_id, created_at, updated_at;
 	`
@@ -105,7 +105,7 @@ func (r *PostgresBackendRepository) CreateContext(ctx context.Context) (types.Wo
 
 const tokenLength = 64
 
-func (r *PostgresBackendRepository) CreateToken(ctx context.Context, contextId uint) (types.Token, error) {
+func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId uint) (types.Token, error) {
 	externalId, err := r.generateExternalId()
 	if err != nil {
 		return types.Token{}, err
@@ -119,13 +119,13 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, contextId u
 	key := base64.URLEncoding.EncodeToString(randomBytes)
 
 	query := `
-	INSERT INTO token (external_id, key, active, context_id)
+	INSERT INTO token (external_id, key, active, workspace_id)
 	VALUES ($1, $2, $3, $4)
-	RETURNING id, external_id, key, created_at, updated_at, active, context_id;
+	RETURNING id, external_id, key, created_at, updated_at, active, workspace_id;
 	`
 
 	var token types.Token
-	if err := r.client.GetContext(ctx, &token, query, externalId, key, true, contextId); err != nil {
+	if err := r.client.GetContext(ctx, &token, query, externalId, key, true, workspaceId); err != nil {
 		return types.Token{}, err
 	}
 
@@ -134,46 +134,46 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, contextId u
 
 func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error) {
 	query := `
-	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.context_id,
-	       c.id "context.id", c.name "context.name", c.external_id "context.external_id", c.created_at "context.created_at", c.updated_at "context.updated_at"
+	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.workspace_id,
+	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.created_at "workspace.created_at", w.updated_at "workspace.updated_at"
 	FROM token t
-	INNER JOIN context c ON t.context_id = c.id
+	INNER JOIN workspace w ON t.workspace_id = w.id
 	WHERE t.key = $1 AND t.active = TRUE;
 	`
 
 	var token types.Token
-	var context types.Workspace
-	token.Workspace = &context
+	var workspace types.Workspace
+	token.Workspace = &workspace
 
 	if err := r.client.GetContext(ctx, &token, query, tokenKey); err != nil {
 		return nil, nil, err
 	}
 
-	return &token, &context, nil
+	return &token, &workspace, nil
 }
 
 // Object
 
-func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash string, size int64, contextId uint) (types.Object, error) {
+func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error) {
 	query := `
-    INSERT INTO object (hash, size, context_id)
+    INSERT INTO object (hash, size, workspace_id)
     VALUES ($1, $2, $3)
-    RETURNING id, external_id, hash, size, created_at, context_id;
+    RETURNING id, external_id, hash, size, created_at, workspace_id;
     `
 
 	var newObject types.Object
-	if err := r.client.GetContext(ctx, &newObject, query, hash, size, contextId); err != nil {
+	if err := r.client.GetContext(ctx, &newObject, query, hash, size, workspaceId); err != nil {
 		return types.Object{}, err
 	}
 
 	return newObject, nil
 }
 
-func (r *PostgresBackendRepository) GetObjectByHash(ctx context.Context, hash string, contextId uint) (types.Object, error) {
+func (r *PostgresBackendRepository) GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error) {
 	var object types.Object
 
-	query := `SELECT id, external_id, hash, size, created_at FROM object WHERE hash = $1 AND context_id = $2;`
-	err := r.client.GetContext(ctx, &object, query, hash, contextId)
+	query := `SELECT id, external_id, hash, size, created_at FROM object WHERE hash = $1 AND workspace_id = $2;`
+	err := r.client.GetContext(ctx, &object, query, hash, workspaceId)
 	if err != nil {
 		return types.Object{}, err
 	}
@@ -181,11 +181,11 @@ func (r *PostgresBackendRepository) GetObjectByHash(ctx context.Context, hash st
 	return object, nil
 }
 
-func (r *PostgresBackendRepository) GetObjectByExternalId(ctx context.Context, externalId string, contextId uint) (types.Object, error) {
+func (r *PostgresBackendRepository) GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error) {
 	var object types.Object
 
-	query := `SELECT id, external_id, hash, size, created_at FROM object WHERE external_id = $1 AND context_id = $2;`
-	err := r.client.GetContext(ctx, &object, query, externalId, contextId)
+	query := `SELECT id, external_id, hash, size, created_at FROM object WHERE external_id = $1 AND workspace_id = $2;`
+	err := r.client.GetContext(ctx, &object, query, externalId, workspaceId)
 	if err != nil {
 		return types.Object{}, err
 	}
@@ -197,9 +197,9 @@ func (r *PostgresBackendRepository) GetObjectByExternalId(ctx context.Context, e
 
 func (r *PostgresBackendRepository) CreateTask(ctx context.Context, containerId string, contextId, stubId uint) (*types.Task, error) {
 	query := `
-    INSERT INTO task (container_id, context_id, stub_id)
+    INSERT INTO task (container_id, workspace_id, stub_id)
     VALUES ($1, $2, $3)
-    RETURNING id, external_id, status, container_id, context_id, stub_id, started_at, ended_at, created_at, updated_at;
+    RETURNING id, external_id, status, container_id, workspace_id, stub_id, started_at, ended_at, created_at, updated_at;
     `
 
 	var newTask types.Task
@@ -213,9 +213,9 @@ func (r *PostgresBackendRepository) CreateTask(ctx context.Context, containerId 
 func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error) {
 	query := `
 	UPDATE task
-	SET status = $2, container_id = $3, started_at = $4, ended_at = $5, context_id = $6, stub_id = $7, updated_at = CURRENT_TIMESTAMP
+	SET status = $2, container_id = $3, started_at = $4, ended_at = $5, workspace_id = $6, stub_id = $7, updated_at = CURRENT_TIMESTAMP
 	WHERE external_id = $1
-	RETURNING id, external_id, status, container_id, context_id, stub_id, started_at, ended_at, created_at, updated_at;
+	RETURNING id, external_id, status, container_id, workspace_id, stub_id, started_at, ended_at, created_at, updated_at;
 	`
 
 	var task types.Task
@@ -237,7 +237,7 @@ func (r *PostgresBackendRepository) DeleteTask(ctx context.Context, externalId s
 
 func (r *PostgresBackendRepository) GetTask(ctx context.Context, externalId string) (*types.Task, error) {
 	var task types.Task
-	query := `SELECT id, external_id, status, container_id, started_at, ended_at, context_id, stub_id, created_at, updated_at FROM task WHERE external_id = $1;`
+	query := `SELECT id, external_id, status, container_id, started_at, ended_at, workspace_id, stub_id, created_at, updated_at FROM task WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &task, query, externalId)
 	if err != nil {
 		return &types.Task{}, err
@@ -248,7 +248,7 @@ func (r *PostgresBackendRepository) GetTask(ctx context.Context, externalId stri
 
 func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task, error) {
 	var tasks []types.Task
-	query := `SELECT id, external_id, status, container_id, started_at, ended_at, context_id, stub_id, created_at, updated_at FROM task;`
+	query := `SELECT id, external_id, status, container_id, started_at, ended_at, workspace_id, stub_id, created_at, updated_at FROM task;`
 	err := r.client.SelectContext(ctx, &tasks, query)
 	if err != nil {
 		return nil, err
@@ -259,7 +259,7 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 
 // Stub
 
-func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, contextId uint) (types.Stub, error) {
+func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint) (types.Stub, error) {
 	var stub types.Stub
 
 	// Serialize config to JSON
@@ -270,7 +270,7 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 
 	// Query to check if a stub with the same name, type, object_id, and config exists
 	queryGet := `
-    SELECT id, external_id, name, type, config, config_version, object_id, context_id, created_at, updated_at 
+    SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at 
     FROM stub 
     WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb;
     `
@@ -282,22 +282,22 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 
 	// Stub not found, create a new one
 	queryCreate := `
-    INSERT INTO stub (name, type, config, object_id, context_id)
+    INSERT INTO stub (name, type, config, object_id, workspace_id)
     VALUES ($1, $2, $3, $4, $5)
-    RETURNING id, external_id, name, type, config, config_version, object_id, context_id, created_at, updated_at;
+    RETURNING id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at;
     `
-	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), objectId, contextId); err != nil {
+	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), objectId, workspaceId); err != nil {
 		return types.Stub{}, err
 	}
 
 	return stub, nil
 }
 
-func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, contextId uint) (*types.Stub, error) {
+func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, workspaceId uint) (*types.Stub, error) {
 	var stub types.Stub
 
-	query := `SELECT id, external_id, name, type, config, config_version, object_id, context_id, created_at, updated_at FROM stub WHERE external_id = $1 AND context_id = $2;`
-	err := r.client.GetContext(ctx, &stub, query, externalId, contextId)
+	query := `SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at FROM stub WHERE external_id = $1 AND workspace_id = $2;`
+	err := r.client.GetContext(ctx, &stub, query, externalId, workspaceId)
 	if err != nil {
 		return &types.Stub{}, err
 	}
