@@ -21,7 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 func KubernetesWorkerPoolControllerFactory() WorkerPoolControllerFactory {
@@ -254,6 +254,12 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 		common.Secrets().Get("BEAM_WORKER_IMAGE_TAG"),
 	)
 
+	resources := corev1.ResourceRequirements{}
+	if common.Secrets().GetWithDefault("BEAM_WORKER_RESOURCES_ENFORCED", "true") != "false" {
+		resources.Requests = resourceRequests
+		resources.Limits = resourceRequests
+	}
+
 	containers := []corev1.Container{
 		{
 			Name:  defaultContainerName,
@@ -261,12 +267,9 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 			Command: []string{
 				defaultWorkerEntrypoint,
 			},
-			Resources: corev1.ResourceRequirements{
-				Requests: resourceRequests,
-				Limits:   resourceRequests,
-			},
+			Resources: resources,
 			SecurityContext: &corev1.SecurityContext{
-				Privileged: pointer.BoolPtr(true),
+				Privileged: ptr.To(true),
 			},
 			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpu),
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
@@ -286,14 +289,14 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 		Spec: corev1.PodSpec{
 			// TODO: change ServiceAccountName to be pulled from the CR instead of from a secret
 			ServiceAccountName:           common.Secrets().GetWithDefault("BEAM_WORKER_SERVICE_ACCOUNT_NAME", "default"),
-			AutomountServiceAccountToken: pointer.BoolPtr(true),
+			AutomountServiceAccountToken: ptr.To(true),
 			HostNetwork:                  wpc.controllerConfig.HostNetwork,
 			ImagePullSecrets:             imagePullSecrets,
 			RestartPolicy:                corev1.RestartPolicyOnFailure,
 			NodeSelector:                 wpc.getWorkerNodeSelector(),
 			Containers:                   containers,
 			Volumes:                      wpc.getWorkerVolumes(workerMemory),
-			EnableServiceLinks:           pointer.BoolPtr(false),
+			EnableServiceLinks:           ptr.To(false),
 		},
 	}
 
