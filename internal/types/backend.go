@@ -33,18 +33,10 @@ type Volume struct {
 	CreatedAt   time.Time `db:"created_at"`
 }
 
-const (
-	DeploymentStatusPending string = "PENDING"
-	DeploymentStatusReady   string = "READY"
-	DeploymentStatusError   string = "ERROR"
-	DeploymentStatusStopped string = "STOPPED"
-)
-
 type Deployment struct {
 	Id          uint      `db:"id"`
 	ExternalId  string    `db:"external_id"`
-	Version     uint      `db:"version"`
-	Status      string    `db:"status"`
+	Active      bool      `db:"active"`
 	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
 	StubId      uint      `db:"stub_id"`      // Foreign key to Stub
 	CreatedAt   time.Time `db:"created_at"`
