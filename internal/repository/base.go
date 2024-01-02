@@ -37,20 +37,20 @@ type ContainerRepository interface {
 }
 
 type BackendRepository interface {
-	ListContexts(ctx context.Context) ([]types.Context, error)
-	CreateContext(ctx context.Context) (types.Context, error)
-	CreateObject(ctx context.Context, hash string, size int64, contextId uint) (types.Object, error)
-	GetObjectByHash(ctx context.Context, hash string, contextId uint) (types.Object, error)
-	GetObjectByExternalId(ctx context.Context, externalId string, contextId uint) (types.Object, error)
-	CreateToken(ctx context.Context, contextId uint) (types.Token, error)
-	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Context, error)
+	ListWorkspaces(ctx context.Context) ([]types.Workspace, error)
+	CreateWorkspace(ctx context.Context) (types.Workspace, error)
+	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error)
+	GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error)
+	GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error)
+	CreateToken(ctx context.Context, workspaceId uint) (types.Token, error)
+	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error)
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
-	CreateTask(ctx context.Context, containerId string, contextId, stubId uint) (*types.Task, error)
+	CreateTask(ctx context.Context, containerId string, workspaceId, stubId uint) (*types.Task, error)
 	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error)
 	DeleteTask(ctx context.Context, externalId string) error
 	ListTasks(ctx context.Context) ([]types.Task, error)
-	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, contextId uint) (types.Stub, error)
-	GetStubByExternalId(ctx context.Context, externalId string, contextId uint) (*types.Stub, error)
+	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint) (types.Stub, error)
+	GetStubByExternalId(ctx context.Context, externalId string, workspaceId uint) (*types.Stub, error)
 }
 
 type BeamRepository interface {
