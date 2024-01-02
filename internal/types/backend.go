@@ -19,8 +19,8 @@ type Token struct {
 	ExternalId  string     `db:"external_id"`
 	Key         string     `db:"key"`
 	Active      bool       `db:"active"`
-	WorkspaceId uint       `db:"Workspace_id"` // Foreign key to Workspace
-	Workspace   *Workspace `db:"Workspace"`    // Pointer to associated Workspace
+	WorkspaceId uint       `db:"workspace_id"` // Foreign key to Workspace
+	Workspace   *Workspace `db:"workspace"`    // Pointer to associated Workspace
 	CreatedAt   time.Time  `db:"created_at"`
 	UpdatedAt   time.Time  `db:"updated_at"`
 }
@@ -29,7 +29,7 @@ type Volume struct {
 	Id          uint      `db:"id"`
 	ExternalId  string    `db:"external_id"`
 	Name        string    `db:"name"`
-	WorkspaceId uint      `db:"Workspace_id"` // Foreign key to Workspace
+	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
 	CreatedAt   time.Time `db:"created_at"`
 }
 
@@ -45,7 +45,7 @@ type Deployment struct {
 	ExternalId  string    `db:"external_id"`
 	Version     uint      `db:"version"`
 	Status      string    `db:"status"`
-	WorkspaceId uint      `db:"Workspace_id"` // Foreign key to Workspace
+	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
 	StubId      uint      `db:"stub_id"`      // Foreign key to Stub
 	CreatedAt   time.Time `db:"created_at"`
 	UpdatedAt   time.Time `db:"updated_at"`
@@ -56,7 +56,7 @@ type Object struct {
 	ExternalId  string    `db:"external_id"`
 	Hash        string    `db:"hash"`
 	Size        int64     `db:"size"`
-	WorkspaceId uint      `db:"Workspace_id"` // Foreign key to Workspace
+	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
 	CreatedAt   time.Time `db:"created_at"`
 }
 
@@ -82,7 +82,7 @@ type Task struct {
 	ContainerId string       `db:"container_id"`
 	StartedAt   sql.NullTime `db:"started_at"`
 	EndedAt     sql.NullTime `db:"ended_at"`
-	WorkspaceId uint         `db:"Workspace_id"` // Foreign key to Workspace
+	WorkspaceId uint         `db:"workspace_id"` // Foreign key to Workspace
 	StubId      uint         `db:"stub_id"`      // Foreign key to Stub
 	CreatedAt   time.Time    `db:"created_at"`
 	UpdatedAt   time.Time    `db:"updated_at"`
@@ -105,7 +105,7 @@ type Stub struct {
 	Config        string    `db:"config"`
 	ConfigVersion uint      `db:"config_version"`
 	ObjectId      uint      `db:"object_id"`    // Foreign key to Object
-	WorkspaceId   uint      `db:"Workspace_id"` // Foreign key to Workspace
+	WorkspaceId   uint      `db:"workspace_id"` // Foreign key to Workspace
 	CreatedAt     time.Time `db:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at"`
 }

@@ -16,7 +16,7 @@ class AuthorizeRequest(betterproto.Message):
 @dataclass
 class AuthorizeResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
-    context_id: str = betterproto.string_field(2)
+    workspace_id: str = betterproto.string_field(2)
     new_token: str = betterproto.string_field(3)
     error_msg: str = betterproto.string_field(4)
 
