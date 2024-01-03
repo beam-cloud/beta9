@@ -38,7 +38,7 @@ def list_tasks(format: str, channel: Channel):
         return
 
     table = Table(
-        Column("ID"),
+        Column("Task ID"),
         Column("Status"),
         Column("Started At"),
         Column("Ended At"),
