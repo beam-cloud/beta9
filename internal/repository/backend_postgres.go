@@ -257,6 +257,22 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 	return tasks, nil
 }
 
+func (r *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context) ([]types.TaskWithRelated, error) {
+	var tasks []types.TaskWithRelated
+	query := `
+	SELECT w.external_id AS "workspace.external_id", w.name AS "workspace.name", s.external_id AS "stub.external_id", s.name AS "stub.name", t.*
+	FROM task t
+	JOIN workspace w ON t.workspace_id = w.id
+	JOIN stub s ON t.stub_id = s.id;
+	`
+	err := r.client.SelectContext(ctx, &tasks, query)
+	if err != nil {
+		return nil, err
+	}
+
+	return tasks, nil
+}
+
 // Stub
 
 func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint) (types.Stub, error) {
@@ -270,8 +286,8 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 
 	// Query to check if a stub with the same name, type, object_id, and config exists
 	queryGet := `
-    SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at 
-    FROM stub 
+    SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at
+    FROM stub
     WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb;
     `
 	err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON))

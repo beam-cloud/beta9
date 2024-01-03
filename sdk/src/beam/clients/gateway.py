@@ -2,7 +2,8 @@
 # sources: gateway.proto
 # plugin: python-betterproto
 from dataclasses import dataclass
-from typing import Optional
+from datetime import datetime
+from typing import List, Optional
 
 import betterproto
 import grpclib
@@ -81,6 +82,45 @@ class EndTaskRequest(betterproto.Message):
 
 @dataclass
 class EndTaskResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+
+
+@dataclass
+class ListTasksRequest(betterproto.Message):
+    page_number: int = betterproto.int32_field(1)
+    page_size: int = betterproto.int32_field(2)
+    filter: str = betterproto.string_field(3)
+    sort_by: str = betterproto.string_field(4)
+
+
+@dataclass
+class Task(betterproto.Message):
+    id: str = betterproto.string_field(2)
+    status: str = betterproto.string_field(3)
+    container_id: str = betterproto.string_field(4)
+    started_at: datetime = betterproto.message_field(5)
+    ended_at: datetime = betterproto.message_field(6)
+    workspace_id: str = betterproto.string_field(7)
+    workspace_name: str = betterproto.string_field(8)
+    stub_id: str = betterproto.string_field(9)
+    stub_name: str = betterproto.string_field(10)
+    created_at: datetime = betterproto.message_field(11)
+    updated_at: datetime = betterproto.message_field(12)
+
+
+@dataclass
+class ListTasksResponse(betterproto.Message):
+    tasks: List["Task"] = betterproto.message_field(1)
+    total: int = betterproto.int32_field(2)
+
+
+@dataclass
+class StopTaskRequest(betterproto.Message):
+    task_id: str = betterproto.string_field(1)
+
+
+@dataclass
+class StopTaskResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
@@ -178,6 +218,36 @@ class GatewayServiceStub(betterproto.ServiceStub):
             "/gateway.GatewayService/EndTask",
             request,
             EndTaskResponse,
+        )
+
+    async def stop_task(self, *, task_id: str = "") -> StopTaskResponse:
+        request = StopTaskRequest()
+        request.task_id = task_id
+
+        return await self._unary_unary(
+            "/gateway.GatewayService/StopTask",
+            request,
+            StopTaskResponse,
+        )
+
+    async def list_tasks(
+        self,
+        *,
+        page_number: int = 0,
+        page_size: int = 0,
+        filter: str = "",
+        sort_by: str = "",
+    ) -> ListTasksResponse:
+        request = ListTasksRequest()
+        request.page_number = page_number
+        request.page_size = page_size
+        request.filter = filter
+        request.sort_by = sort_by
+
+        return await self._unary_unary(
+            "/gateway.GatewayService/ListTasks",
+            request,
+            ListTasksResponse,
         )
 
     async def get_or_create_stub(
