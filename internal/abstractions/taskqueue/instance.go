@@ -2,6 +2,7 @@ package taskqueue
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math/rand"
 	"time"
@@ -10,6 +11,13 @@ import (
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
 )
+
+type taskQueueState struct {
+	RunningContainers  int
+	PendingContainers  int
+	StoppingContainers int
+	FailedContainers   int
+}
 
 type taskQueueInstance struct {
 	name               string
@@ -21,6 +29,7 @@ type taskQueueInstance struct {
 	containerEventChan chan types.ContainerEvent
 	containers         map[string]bool
 	scaleEventChan     chan int
+	rdb                *common.RedisClient
 }
 
 func (i *taskQueueInstance) monitor() error {
@@ -56,6 +65,74 @@ func (i *taskQueueInstance) monitor() error {
 	}
 }
 
+func (i *taskQueueInstance) state() (*taskQueueState, error) {
+	containers, err := i.activeContainers()
+	if err != nil {
+		return nil, err
+	}
+
+	failedContainers, err := i.failedContainers()
+	if err != nil {
+		return nil, err
+	}
+
+	state := taskQueueState{}
+
+	for _, container := range containers {
+		switch container.Status {
+		case types.ContainerStatusRunning:
+			state.RunningContainers++
+		case types.ContainerStatusPending:
+			state.PendingContainers++
+		case types.ContainerStatusStopping:
+			state.StoppingContainers++
+		}
+	}
+
+	state.FailedContainers = failedContainers
+
+	return &state, nil
+}
+
+func (i *taskQueueInstance) activeContainers() ([]types.ContainerState, error) {
+	patternSuffix := fmt.Sprintf("%s%s-*", taskQueueContainerPrefix, i.stub.ExternalId)
+	pattern := common.RedisKeys.SchedulerContainerState(patternSuffix)
+
+	keys, err := i.rdb.Scan(i.ctx, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get keys for pattern <%v>: %v", pattern, err)
+	}
+
+	containerStates := make([]types.ContainerState, 0, len(keys))
+	for _, key := range keys {
+		res, err := i.rdb.HGetAll(i.ctx, key).Result()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get container state for key %s: %w", key, err)
+		}
+
+		state := &types.ContainerState{}
+		if err = common.ToStruct(res, state); err != nil {
+			return nil, fmt.Errorf("failed to deserialize container state <%v>: %v", key, err)
+		}
+
+		containerStates = append(containerStates, *state)
+	}
+
+	return containerStates, nil
+}
+
+func (i *taskQueueInstance) failedContainers() (int, error) {
+	patternSuffix := fmt.Sprintf("%s%s-*", taskQueueContainerPrefix, i.stub.ExternalId)
+	pattern := common.RedisKeys.SchedulerContainerExitCode(patternSuffix)
+
+	keys, err := i.rdb.Scan(i.ctx, pattern)
+	if err != nil {
+		return -1, fmt.Errorf("failed to get keys with pattern <%v>: %w", pattern, err)
+	}
+
+	return len(keys), nil
+}
+
 func (i *taskQueueInstance) handleScalingEvent(queue *taskQueueInstance, desiredContainers int) error {
 	err := queue.lock.Acquire(queue.ctx, Keys.taskQueueInstanceLock(queue.name), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
@@ -63,7 +140,7 @@ func (i *taskQueueInstance) handleScalingEvent(queue *taskQueueInstance, desired
 	}
 	defer i.lock.Release(Keys.taskQueueInstanceLock(queue.name))
 
-	state, err := i.bucketRepo.GetRequestBucketState()
+	state, err := i.state()
 	if err != nil {
 		return err
 	}

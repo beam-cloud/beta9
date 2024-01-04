@@ -45,7 +45,7 @@ func NewTaskQueueRedis(ctx context.Context, rdb *common.RedisClient, scheduler *
 		return nil, err
 	}
 
-	go keyEventManager.ListenForPattern(context.Background(), common.RedisKeys.SchedulerContainerState(taskQueueContainerPrefix), keyEventChan)
+	go keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(taskQueueContainerPrefix), keyEventChan)
 
 	tq := &TaskQueueRedis{
 		ctx:             ctx,
@@ -94,6 +94,7 @@ func (tq *TaskQueueRedis) create(stubId string) error {
 		containerEventChan: make(chan types.ContainerEvent, 1),
 		containers:         make(map[string]bool),
 		scaleEventChan:     make(chan int, 1),
+		rdb:                tq.rdb,
 	}
 
 	tq.queueInstances.Set(stubId, queue)
@@ -110,7 +111,6 @@ func (tq *TaskQueueRedis) handleContainerEvents() {
 			log.Println("(rx event) container ID: ", containerId)
 
 			operation := event.Operation
-
 			containerIdParts := strings.Split(containerId, "-")
 			stubId := strings.Join(containerIdParts[1:3], "-")
 
