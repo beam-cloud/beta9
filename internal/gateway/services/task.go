@@ -52,12 +52,19 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 
 	tasks, err := gws.backendRepo.ListTasksWithRelated(ctx, limit)
 	if err != nil {
-		return &pb.ListTasksResponse{}, err
+		return &pb.ListTasksResponse{
+			Ok:     false,
+			ErrMsg: "Failed to get tasks from db",
+		}, nil
 	}
 
-	response := &pb.ListTasksResponse{}
-	for _, task := range tasks {
-		response.Tasks = append(response.Tasks, &pb.Task{
+	response := &pb.ListTasksResponse{
+		Ok:    true,
+		Total: int32(len(tasks)),
+		Tasks: make([]*pb.Task, len(tasks)),
+	}
+	for i, task := range tasks {
+		response.Tasks[i] = &pb.Task{
 			Id:            task.ExternalId,
 			Status:        string(task.Status),
 			ContainerId:   task.ContainerId,
@@ -69,9 +76,8 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 			StubName:      task.Stub.Name,
 			CreatedAt:     timestamppb.New(task.CreatedAt),
 			UpdatedAt:     timestamppb.New(task.UpdatedAt),
-		})
+		}
 	}
-	response.Total = int32(len(response.Tasks))
 
 	return response, nil
 }
@@ -79,21 +85,30 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 func (gws *GatewayService) StopTask(ctx context.Context, in *pb.StopTaskRequest) (*pb.StopTaskResponse, error) {
 	task, err := gws.backendRepo.GetTask(ctx, in.TaskId)
 	if err != nil {
-		return &pb.StopTaskResponse{Ok: false}, nil
+		return &pb.StopTaskResponse{
+			Ok:     false,
+			ErrMsg: "Failed to get task from db",
+		}, nil
 	}
 
 	if task.Status.IsCompleted() {
-		return &pb.StopTaskResponse{Ok: true}, err
+		return &pb.StopTaskResponse{Ok: true}, nil
 	}
 
 	if err := gws.scheduler.Stop(task.ContainerId); err != nil {
-		return &pb.StopTaskResponse{Ok: false}, err
+		return &pb.StopTaskResponse{
+			Ok:     false,
+			ErrMsg: "Failed to stop container",
+		}, nil
 	}
 
 	task.Status = types.TaskStatusCancelled
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	if _, err := gws.backendRepo.UpdateTask(ctx, in.TaskId, *task); err != nil {
-		return &pb.StopTaskResponse{Ok: false}, err
+		return &pb.StopTaskResponse{
+			Ok:     false,
+			ErrMsg: "Failed to update task in db",
+		}, nil
 	}
 
 	return &pb.StopTaskResponse{Ok: true}, nil

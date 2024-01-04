@@ -1,21 +1,19 @@
-from email.policy import default
-
 import click
 from betterproto import Casing
-from grpclib.client import Channel
 from rich.table import Column, Table, box
 
 from beam import aio, terminal
+from beam.cli.contexts import get_gateway_service
 from beam.clients.gateway import GatewayServiceStub, ListTasksResponse, StopTaskResponse
-from beam.config import with_runner_context
 
 
 @click.group(
     name="tasks",
     help="List and stop tasks",
 )
-def cli():
-    pass
+@click.pass_context
+def cli(ctx: click.Context):
+    ctx.obj = ctx.with_resource(get_gateway_service())
 
 
 @cli.command(
@@ -35,10 +33,12 @@ def cli():
     show_default=True,
     help="Change the format of the output.",
 )
-@with_runner_context
-def list_tasks(limit: int, format: str, channel: Channel):
-    service = GatewayServiceStub(channel)
+@click.pass_obj
+def list_tasks(service: GatewayServiceStub, limit: int, format: str):
     response: ListTasksResponse = aio.run_sync(service.list_tasks(limit=limit))
+
+    if not response.ok:
+        terminal.error(response.err_msg)
 
     if format == "json":
         tasks = [task.to_dict(casing=Casing.SNAKE) for task in response.tasks]
@@ -84,12 +84,11 @@ def list_tasks(limit: int, format: str, channel: Channel):
     "--task-id",
     help="The task to stop.",
 )
-@with_runner_context
-def stop_task(task_id: str, channel: Channel):
-    service = GatewayServiceStub(channel)
+@click.pass_obj
+def stop_task(service: GatewayServiceStub, task_id: str):
     response: StopTaskResponse = aio.run_sync(service.stop_task(task_id=task_id))
 
     if response.ok:
         terminal.detail(f"Stopped task {task_id}", dim=False)
     else:
-        terminal.error(f"Failed to stop task {task_id}")
+        terminal.error(f"{response.err_msg}\nFailed to stop task {task_id}")

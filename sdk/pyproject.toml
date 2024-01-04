@@ -46,8 +46,9 @@ build-backend = "poetry.core.masonry.api"
 pythonpath = ["src"]
 
 [tool.ruff]
-ignore = ["F401"]
 line-length = 100
+ignore-init-module-imports = true
+exclude = ["src/beam/clients"]
 src = ["src", "test", "bin"]
 
 [tool.ruff.per-file-ignores]

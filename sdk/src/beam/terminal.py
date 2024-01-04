@@ -22,7 +22,7 @@ def print_json(data: Any, **kwargs: Any) -> None:
     _console.print_json(data=data, indent=2, default=lambda o: str(o), **kwargs)
 
 
-def prompt(*, text: str, default: str) -> str:
+def prompt(*, text: str, default: Any) -> Any:
     prompt_text = f"=> {text} [{default}]: "
     _console.print(Text(prompt_text, style="bold blue"), end="")
     user_input = input().strip()
@@ -36,6 +36,10 @@ def detail(text: str, dim: bool = True) -> None:
 
 def success(text: str) -> None:
     _console.print(Text(text, style="bold green"))
+
+
+def warn(text: str) -> None:
+    _console.print(Text(text, style="bold yellow"))
 
 
 def error(text: str) -> None:

@@ -91,8 +91,10 @@ message Task {
 }
 
 message ListTasksResponse {
-  repeated Task tasks = 1;
-  int32 total = 2;
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Task tasks = 3;
+  int32 total = 4;
 }
 
 message StopTaskRequest {
@@ -101,6 +103,7 @@ message StopTaskRequest {
 
 message StopTaskResponse {
   bool ok = 1;
+  string err_msg = 2;
 }
 
 message GetOrCreateStubRequest {

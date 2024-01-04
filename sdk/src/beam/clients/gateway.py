@@ -107,8 +107,10 @@ class Task(betterproto.Message):
 
 @dataclass
 class ListTasksResponse(betterproto.Message):
-    tasks: List["Task"] = betterproto.message_field(1)
-    total: int = betterproto.int32_field(2)
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    tasks: List["Task"] = betterproto.message_field(3)
+    total: int = betterproto.int32_field(4)
 
 
 @dataclass
@@ -119,6 +121,7 @@ class StopTaskRequest(betterproto.Message):
 @dataclass
 class StopTaskResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
 
 
 @dataclass
