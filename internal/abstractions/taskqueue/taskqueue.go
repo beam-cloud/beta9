@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	common "github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
@@ -29,16 +30,21 @@ const (
 )
 
 type TaskQueueRedis struct {
-	ctx       context.Context
-	rdb       *common.RedisClient
-	scheduler *scheduler.Scheduler
+	ctx           context.Context
+	rdb           *common.RedisClient
+	containerRepo repository.ContainerRepository
+	scheduler     *scheduler.Scheduler
 	pb.UnimplementedTaskQueueServiceServer
 	queueInstances  *common.SafeMap[*taskQueueInstance]
 	keyEventManager *common.KeyEventManager
 	keyEventChan    chan common.KeyEvent
 }
 
-func NewTaskQueueRedis(ctx context.Context, rdb *common.RedisClient, scheduler *scheduler.Scheduler) (*TaskQueueRedis, error) {
+func NewTaskQueueRedis(ctx context.Context,
+	rdb *common.RedisClient,
+	scheduler *scheduler.Scheduler,
+	containerRepo repository.ContainerRepository,
+) (*TaskQueueRedis, error) {
 	keyEventChan := make(chan common.KeyEvent)
 	keyEventManager, err := common.NewKeyEventManager(rdb)
 	if err != nil {
@@ -53,6 +59,7 @@ func NewTaskQueueRedis(ctx context.Context, rdb *common.RedisClient, scheduler *
 		scheduler:       scheduler,
 		keyEventChan:    keyEventChan,
 		keyEventManager: keyEventManager,
+		containerRepo:   containerRepo,
 	}
 
 	err = tq.start()
@@ -91,6 +98,7 @@ func (tq *TaskQueueRedis) create(stubId string) error {
 		lock:               lock,
 		name:               "test",
 		scheduler:          tq.scheduler,
+		containerRepo:      tq.containerRepo,
 		containerEventChan: make(chan types.ContainerEvent, 1),
 		containers:         make(map[string]bool),
 		scaleEventChan:     make(chan int, 1),
@@ -144,7 +152,7 @@ func (tq *TaskQueueRedis) handleContainerEvents() {
 // Redis keys
 var (
 	taskQueuePrefix       string = "taskqueue"
-	taskQueueInstanceLock string = "taskqueue:%s"
+	taskQueueInstanceLock string = "taskqueue:%s:%s"
 )
 
 var Keys = &keys{}
@@ -155,6 +163,6 @@ func (k *keys) TaskQueuePrefix() string {
 	return taskQueuePrefix
 }
 
-func (k *keys) taskQueueInstanceLock(stubId string) string {
-	return fmt.Sprintf(taskQueueInstanceLock, stubId)
+func (k *keys) taskQueueInstanceLock(workspaceName, stubId string) string {
+	return fmt.Sprintf(taskQueueInstanceLock, workspaceName, stubId)
 }

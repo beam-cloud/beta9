@@ -34,6 +34,8 @@ type ContainerRepository interface {
 	DeleteContainerState(*types.ContainerRequest) error
 	SetContainerWorkerHostname(containerId string, addr string) error
 	GetContainerWorkerHostname(containerId string) (string, error)
+	GetActiveContainersByPrefix(patternPrefix string) ([]types.ContainerState, error)
+	GetFailedContainerCountByPrefix(patternPrefix string) (int, error)
 }
 
 type BackendRepository interface {

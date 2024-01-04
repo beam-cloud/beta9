@@ -26,15 +26,16 @@ import (
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
 
-	eventBus    *common.EventBus
-	redisClient *common.RedisClient
-	BackendRepo repository.BackendRepository
-	BeamRepo    repository.BeamRepository
-	metricsRepo repository.MetricsStatsdRepository
-	Storage     storage.Storage
-	Scheduler   *scheduler.Scheduler
-	ctx         context.Context
-	cancelFunc  context.CancelFunc
+	eventBus      *common.EventBus
+	redisClient   *common.RedisClient
+	ContainerRepo repository.ContainerRepository
+	BackendRepo   repository.BackendRepository
+	BeamRepo      repository.BeamRepository
+	metricsRepo   repository.MetricsStatsdRepository
+	Storage       storage.Storage
+	Scheduler     *scheduler.Scheduler
+	ctx           context.Context
+	cancelFunc    context.CancelFunc
 }
 
 func NewGateway() (*Gateway, error) {
@@ -74,8 +75,10 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
+	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	metricsRepo := repository.NewMetricsStatsdRepository()
 
+	gateway.ContainerRepo = containerRepo
 	gateway.BackendRepo = backendRepo
 	gateway.BeamRepo = beamRepo
 	gateway.metricsRepo = metricsRepo
@@ -133,7 +136,7 @@ func (g *Gateway) Start() error {
 	pb.RegisterFunctionServiceServer(grpcServer, fs)
 
 	// Register task queue service
-	tq, err := taskqueue.NewTaskQueueRedis(g.ctx, g.redisClient, g.Scheduler)
+	tq, err := taskqueue.NewTaskQueueRedis(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo)
 	if err != nil {
 		return err
 	}
