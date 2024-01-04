@@ -87,10 +87,7 @@ class EndTaskResponse(betterproto.Message):
 
 @dataclass
 class ListTasksRequest(betterproto.Message):
-    page_number: int = betterproto.int32_field(1)
-    page_size: int = betterproto.int32_field(2)
-    filter: str = betterproto.string_field(3)
-    sort_by: str = betterproto.string_field(4)
+    limit: int = betterproto.uint32_field(1)
 
 
 @dataclass
@@ -230,19 +227,9 @@ class GatewayServiceStub(betterproto.ServiceStub):
             StopTaskResponse,
         )
 
-    async def list_tasks(
-        self,
-        *,
-        page_number: int = 0,
-        page_size: int = 0,
-        filter: str = "",
-        sort_by: str = "",
-    ) -> ListTasksResponse:
+    async def list_tasks(self, *, limit: int = 0) -> ListTasksResponse:
         request = ListTasksRequest()
-        request.page_number = page_number
-        request.page_size = page_size
-        request.filter = filter
-        request.sort_by = sort_by
+        request.limit = limit
 
         return await self._unary_unary(
             "/gateway.GatewayService/ListTasks",

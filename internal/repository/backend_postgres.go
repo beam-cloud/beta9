@@ -257,15 +257,17 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 	return tasks, nil
 }
 
-func (r *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context) ([]types.TaskWithRelated, error) {
+func (r *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, limit uint32) ([]types.TaskWithRelated, error) {
 	var tasks []types.TaskWithRelated
 	query := `
 	SELECT w.external_id AS "workspace.external_id", w.name AS "workspace.name", s.external_id AS "stub.external_id", s.name AS "stub.name", t.*
 	FROM task t
 	JOIN workspace w ON t.workspace_id = w.id
-	JOIN stub s ON t.stub_id = s.id;
+	JOIN stub s ON t.stub_id = s.id
+	ORDER BY t.id DESC
+	LIMIT $1;
 	`
-	err := r.client.SelectContext(ctx, &tasks, query)
+	err := r.client.SelectContext(ctx, &tasks, query, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -45,7 +45,12 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 }
 
 func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksRequest) (*pb.ListTasksResponse, error) {
-	tasks, err := gws.backendRepo.ListTasksWithRelated(ctx)
+	limit := uint32(1000)
+	if in.Limit > 0 && in.Limit < limit {
+		limit = in.Limit
+	}
+
+	tasks, err := gws.backendRepo.ListTasksWithRelated(ctx, limit)
 	if err != nil {
 		return &pb.ListTasksResponse{}, err
 	}

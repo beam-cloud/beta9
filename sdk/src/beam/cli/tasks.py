@@ -1,3 +1,5 @@
+from email.policy import default
+
 import click
 from betterproto import Casing
 from grpclib.client import Channel
@@ -21,6 +23,12 @@ def cli():
     help="List all tasks",
 )
 @click.option(
+    "--limit",
+    type=click.IntRange(1, 1000),
+    default=100,
+    help="The number of tasks to fetch.",
+)
+@click.option(
     "--format",
     type=click.Choice(("table", "json")),
     default="table",
@@ -28,9 +36,9 @@ def cli():
     help="Change the format of the output.",
 )
 @with_runner_context
-def list_tasks(format: str, channel: Channel):
+def list_tasks(limit: int, format: str, channel: Channel):
     service = GatewayServiceStub(channel)
-    response: ListTasksResponse = aio.run_sync(service.list_tasks())
+    response: ListTasksResponse = aio.run_sync(service.list_tasks(limit=limit))
 
     if format == "json":
         tasks = [task.to_dict(casing=Casing.SNAKE) for task in response.tasks]
@@ -48,8 +56,7 @@ def list_tasks(format: str, channel: Channel):
         box=box.SIMPLE,
     )
 
-    tasks = sorted(response.tasks, key=lambda t: t.created_at, reverse=True)
-    for task in tasks:
+    for task in response.tasks:
         table.add_row(
             task.id,
             (

@@ -73,10 +73,7 @@ message EndTaskRequest {
 message EndTaskResponse { bool ok = 1; }
 
 message ListTasksRequest {
-  int32 page_number = 1;
-  int32 page_size = 2;
-  string filter = 3;
-  string sort_by = 4;
+  uint32 limit = 1;
 }
 
 message Task {
