@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package taskqueue;
+
+service TaskQueueService {
+  rpc TaskQueuePut(TaskQueuePutRequest) returns (TaskQueuePutResponse) {}
+}
+
+message TaskQueuePutRequest {}
+
+message TaskQueuePutResponse {}

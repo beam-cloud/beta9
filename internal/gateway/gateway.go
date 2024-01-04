@@ -12,6 +12,7 @@ import (
 	"github.com/beam-cloud/beam/internal/abstractions/image"
 	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
 	simplequeue "github.com/beam-cloud/beam/internal/abstractions/queue"
+	"github.com/beam-cloud/beam/internal/abstractions/taskqueue"
 	"github.com/beam-cloud/beam/internal/auth"
 	common "github.com/beam-cloud/beam/internal/common"
 	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
@@ -19,27 +20,21 @@ import (
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/storage"
 	pb "github.com/beam-cloud/beam/proto"
-	beat "github.com/beam-cloud/beat/pkg"
 	"google.golang.org/grpc"
 )
 
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
 
-	BaseURL          string
-	beatService      *beat.BeatService
-	eventBus         *common.EventBus
-	redisClient      *common.RedisClient
-	BackendRepo      repository.BackendRepository
-	BeamRepo         repository.BeamRepository
-	metricsRepo      repository.MetricsStatsdRepository
-	Storage          storage.Storage
-	Scheduler        *scheduler.Scheduler
-	unloadBucketChan chan string
-	keyEventManager  *common.KeyEventManager
-	keyEventChan     chan common.KeyEvent
-	ctx              context.Context
-	cancelFunc       context.CancelFunc
+	eventBus    *common.EventBus
+	redisClient *common.RedisClient
+	BackendRepo repository.BackendRepository
+	BeamRepo    repository.BeamRepository
+	metricsRepo repository.MetricsStatsdRepository
+	Storage     storage.Storage
+	Scheduler   *scheduler.Scheduler
+	ctx         context.Context
+	cancelFunc  context.CancelFunc
 }
 
 func NewGateway() (*Gateway, error) {
@@ -60,13 +55,11 @@ func NewGateway() (*Gateway, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	gateway := &Gateway{
-		redisClient:      redisClient,
-		ctx:              ctx,
-		cancelFunc:       cancel,
-		keyEventChan:     make(chan common.KeyEvent),
-		unloadBucketChan: make(chan string),
-		Storage:          Storage,
-		Scheduler:        Scheduler,
+		redisClient: redisClient,
+		ctx:         ctx,
+		cancelFunc:  cancel,
+		Storage:     Storage,
+		Scheduler:   Scheduler,
 	}
 
 	eventBus := common.NewEventBus(redisClient)
@@ -83,25 +76,11 @@ func NewGateway() (*Gateway, error) {
 
 	metricsRepo := repository.NewMetricsStatsdRepository()
 
-	beatService, err := beat.NewBeatService()
-	if err != nil {
-		return nil, err
-	}
-
-	keyEventManager, err := common.NewKeyEventManager(redisClient)
-	if err != nil {
-		return nil, err
-	}
-
 	gateway.BackendRepo = backendRepo
 	gateway.BeamRepo = beamRepo
 	gateway.metricsRepo = metricsRepo
-	gateway.keyEventManager = keyEventManager
-	gateway.beatService = beatService
 	gateway.eventBus = eventBus
 
-	// go gateway.keyEventManager.ListenForPattern(gateway.ctx, common.RedisKeys.SchedulerContainerState(types.DeploymentContainerPrefix), gateway.keyEventChan)
-	go gateway.beatService.Run(gateway.ctx)
 	go gateway.eventBus.ReceiveEvents(gateway.ctx)
 
 	return gateway, nil
@@ -132,6 +111,7 @@ func (g *Gateway) Start() error {
 	}
 	pb.RegisterMapServiceServer(grpcServer, rm)
 
+	// Register simple queue service
 	rq, err := simplequeue.NewRedisSimpleQueueService(g.redisClient)
 	if err != nil {
 		return err
@@ -139,18 +119,25 @@ func (g *Gateway) Start() error {
 	pb.RegisterSimpleQueueServiceServer(grpcServer, rq)
 
 	// Register image service
-	is, err := image.NewRuncImageService(context.TODO(), g.Scheduler)
+	is, err := image.NewRuncImageService(g.ctx, g.Scheduler)
 	if err != nil {
 		return err
 	}
 	pb.RegisterImageServiceServer(grpcServer, is)
 
 	// Register function service
-	fs, err := function.NewRuncFunctionService(context.TODO(), g.BackendRepo, g.redisClient, g.Scheduler, g.keyEventManager)
+	fs, err := function.NewRuncFunctionService(g.ctx, g.BackendRepo, g.redisClient, g.Scheduler)
 	if err != nil {
 		return err
 	}
 	pb.RegisterFunctionServiceServer(grpcServer, fs)
+
+	// Register task queue service
+	tq, err := taskqueue.NewTaskQueueRedis(g.ctx, g.redisClient, g.Scheduler)
+	if err != nil {
+		return err
+	}
+	pb.RegisterTaskQueueServiceServer(grpcServer, tq)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService()

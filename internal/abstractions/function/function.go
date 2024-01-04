@@ -37,7 +37,12 @@ type RunCFunctionService struct {
 	rdb             *common.RedisClient
 }
 
-func NewRuncFunctionService(ctx context.Context, backendRepo repository.BackendRepository, rdb *common.RedisClient, scheduler *scheduler.Scheduler, keyEventManager *common.KeyEventManager) (*RunCFunctionService, error) {
+func NewRuncFunctionService(ctx context.Context, backendRepo repository.BackendRepository, rdb *common.RedisClient, scheduler *scheduler.Scheduler) (*RunCFunctionService, error) {
+	keyEventManager, err := common.NewKeyEventManager(rdb)
+	if err != nil {
+		return nil, err
+	}
+
 	return &RunCFunctionService{
 		backendRepo:     backendRepo,
 		scheduler:       scheduler,

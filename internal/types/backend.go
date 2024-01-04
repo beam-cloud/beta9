@@ -98,9 +98,13 @@ type TaskWithRelated struct {
 }
 
 type StubConfigV1 struct {
-	Runtime         Runtime `json:"runtime"`
-	KeepWarmSeconds uint    `json:"keep_warm_seconds"`
-	Workers         uint    `json:"workers"` // yeah?
+	Runtime         Runtime    `json:"runtime"`
+	KeepWarmSeconds uint       `json:"keep_warm_seconds"`
+	MaxPendingTasks uint       `json:"max_pending_tasks"`
+	CallbackUrl     string     `json:"callback_url"`
+	TaskPolicy      TaskPolicy `json:"task_policy"`
+	Workers         uint       `json:"workers"`
+	Authorized      bool       `json:"authorized"`
 }
 
 const (

@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/gofrs/uuid"
 )
 
@@ -42,13 +41,6 @@ type RequestedVersionType uint
 type RequestedVersion struct {
 	Type  RequestedVersionType
 	Value uint
-}
-
-type RequestBucket interface {
-	ForwardRequest(*gin.Context) error
-	GetName() string
-	GetContainerEventChan() chan ContainerEvent
-	Close()
 }
 
 type ContainerEvent struct {
