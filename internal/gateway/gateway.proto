@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 option go_package = "github.com/beam-cloud/beam/proto";
+import "google/protobuf/timestamp.proto";
 
 package gateway;
 
@@ -10,6 +11,8 @@ service GatewayService {
   rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
   rpc StartTask(StartTaskRequest) returns (StartTaskResponse);
   rpc EndTask(EndTaskRequest) returns (EndTaskResponse);
+  rpc StopTask(StopTaskRequest) returns (StopTaskResponse);
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
   rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse);
 }
 
@@ -68,6 +71,40 @@ message EndTaskRequest {
 }
 
 message EndTaskResponse { bool ok = 1; }
+
+message ListTasksRequest {
+  uint32 limit = 1;
+}
+
+message Task {
+  string id = 2;
+  string status = 3;
+  string container_id = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp ended_at = 6;
+  string workspace_id = 7;
+  string workspace_name = 8;
+  string stub_id = 9;
+  string stub_name = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+message ListTasksResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Task tasks = 3;
+  int32 total = 4;
+}
+
+message StopTaskRequest {
+  string task_id = 1;
+}
+
+message StopTaskResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
 
 message GetOrCreateStubRequest {
   string object_id = 1;

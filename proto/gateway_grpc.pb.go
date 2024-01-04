@@ -24,6 +24,8 @@ const (
 	GatewayService_PutObject_FullMethodName       = "/gateway.GatewayService/PutObject"
 	GatewayService_StartTask_FullMethodName       = "/gateway.GatewayService/StartTask"
 	GatewayService_EndTask_FullMethodName         = "/gateway.GatewayService/EndTask"
+	GatewayService_StopTask_FullMethodName        = "/gateway.GatewayService/StopTask"
+	GatewayService_ListTasks_FullMethodName       = "/gateway.GatewayService/ListTasks"
 	GatewayService_GetOrCreateStub_FullMethodName = "/gateway.GatewayService/GetOrCreateStub"
 )
 
@@ -36,6 +38,8 @@ type GatewayServiceClient interface {
 	PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error)
 	StartTask(ctx context.Context, in *StartTaskRequest, opts ...grpc.CallOption) (*StartTaskResponse, error)
 	EndTask(ctx context.Context, in *EndTaskRequest, opts ...grpc.CallOption) (*EndTaskResponse, error)
+	StopTask(ctx context.Context, in *StopTaskRequest, opts ...grpc.CallOption) (*StopTaskResponse, error)
+	ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error)
 	GetOrCreateStub(ctx context.Context, in *GetOrCreateStubRequest, opts ...grpc.CallOption) (*GetOrCreateStubResponse, error)
 }
 
@@ -92,6 +96,24 @@ func (c *gatewayServiceClient) EndTask(ctx context.Context, in *EndTaskRequest, 
 	return out, nil
 }
 
+func (c *gatewayServiceClient) StopTask(ctx context.Context, in *StopTaskRequest, opts ...grpc.CallOption) (*StopTaskResponse, error) {
+	out := new(StopTaskResponse)
+	err := c.cc.Invoke(ctx, GatewayService_StopTask_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error) {
+	out := new(ListTasksResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListTasks_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) GetOrCreateStub(ctx context.Context, in *GetOrCreateStubRequest, opts ...grpc.CallOption) (*GetOrCreateStubResponse, error) {
 	out := new(GetOrCreateStubResponse)
 	err := c.cc.Invoke(ctx, GatewayService_GetOrCreateStub_FullMethodName, in, out, opts...)
@@ -110,6 +132,8 @@ type GatewayServiceServer interface {
 	PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error)
 	StartTask(context.Context, *StartTaskRequest) (*StartTaskResponse, error)
 	EndTask(context.Context, *EndTaskRequest) (*EndTaskResponse, error)
+	StopTask(context.Context, *StopTaskRequest) (*StopTaskResponse, error)
+	ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error)
 	GetOrCreateStub(context.Context, *GetOrCreateStubRequest) (*GetOrCreateStubResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
@@ -132,6 +156,12 @@ func (UnimplementedGatewayServiceServer) StartTask(context.Context, *StartTaskRe
 }
 func (UnimplementedGatewayServiceServer) EndTask(context.Context, *EndTaskRequest) (*EndTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method EndTask not implemented")
+}
+func (UnimplementedGatewayServiceServer) StopTask(context.Context, *StopTaskRequest) (*StopTaskResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StopTask not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTasks not implemented")
 }
 func (UnimplementedGatewayServiceServer) GetOrCreateStub(context.Context, *GetOrCreateStubRequest) (*GetOrCreateStubResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetOrCreateStub not implemented")
@@ -239,6 +269,42 @@ func _GatewayService_EndTask_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_StopTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).StopTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_StopTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).StopTask(ctx, req.(*StopTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ListTasks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTasksRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListTasks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListTasks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListTasks(ctx, req.(*ListTasksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GatewayService_GetOrCreateStub_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetOrCreateStubRequest)
 	if err := dec(in); err != nil {
@@ -283,6 +349,14 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "EndTask",
 			Handler:    _GatewayService_EndTask_Handler,
+		},
+		{
+			MethodName: "StopTask",
+			Handler:    _GatewayService_StopTask_Handler,
+		},
+		{
+			MethodName: "ListTasks",
+			Handler:    _GatewayService_ListTasks_Handler,
 		},
 		{
 			MethodName: "GetOrCreateStub",
