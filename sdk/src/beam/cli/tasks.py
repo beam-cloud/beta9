@@ -67,8 +67,8 @@ def list_tasks(service: GatewayServiceStub, limit: int, format: str):
             terminal.humanize_date(task.started_at),
             terminal.humanize_date(task.ended_at),
             task.container_id,
-            str(task.stub_name),
-            str(task.workspace_name),
+            task.stub_name,
+            task.workspace_name,
         )
 
     table.add_section()
