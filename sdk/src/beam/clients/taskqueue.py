@@ -9,12 +9,14 @@ import grpclib
 
 @dataclass
 class TaskQueuePutRequest(betterproto.Message):
-    pass
+    stub_id: str = betterproto.string_field(1)
+    payload: bytes = betterproto.bytes_field(2)
 
 
 @dataclass
 class TaskQueuePutResponse(betterproto.Message):
-    pass
+    ok: bool = betterproto.bool_field(1)
+    task_id: str = betterproto.string_field(2)
 
 
 @dataclass
@@ -28,8 +30,12 @@ class TaskQueuePopResponse(betterproto.Message):
 
 
 class TaskQueueServiceStub(betterproto.ServiceStub):
-    async def task_queue_put(self) -> TaskQueuePutResponse:
+    async def task_queue_put(
+        self, *, stub_id: str = "", payload: bytes = b""
+    ) -> TaskQueuePutResponse:
         request = TaskQueuePutRequest()
+        request.stub_id = stub_id
+        request.payload = payload
 
         return await self._unary_unary(
             "/taskqueue.TaskQueueService/TaskQueuePut",

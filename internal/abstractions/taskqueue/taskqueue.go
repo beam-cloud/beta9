@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/beam-cloud/beam/internal/auth"
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
@@ -34,6 +35,7 @@ type TaskQueueRedis struct {
 	ctx           context.Context
 	rdb           *common.RedisClient
 	containerRepo repository.ContainerRepository
+	backendRepo   repository.BackendRepository
 	scheduler     *scheduler.Scheduler
 	pb.UnimplementedTaskQueueServiceServer
 	queueInstances  *common.SafeMap[*taskQueueInstance]
@@ -46,6 +48,7 @@ func NewTaskQueueRedis(ctx context.Context,
 	rdb *common.RedisClient,
 	scheduler *scheduler.Scheduler,
 	containerRepo repository.ContainerRepository,
+	backendRepo repository.BackendRepository,
 ) (*TaskQueueRedis, error) {
 	keyEventChan := make(chan common.KeyEvent)
 	keyEventManager, err := common.NewKeyEventManager(rdb)
@@ -62,6 +65,7 @@ func NewTaskQueueRedis(ctx context.Context,
 		keyEventChan:    keyEventChan,
 		keyEventManager: keyEventManager,
 		containerRepo:   containerRepo,
+		backendRepo:     backendRepo,
 		queueClient:     newRedisTaskQueueClient(rdb),
 	}
 
@@ -69,28 +73,41 @@ func NewTaskQueueRedis(ctx context.Context,
 	return tq, nil
 }
 
-func (tq *TaskQueueRedis) TaskQueuePut(context.Context, *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
-	// _, exists := tq.queueInstances.Get("")
-	// if !exists {
-	// 	err := tq.createQueueInstance("test")
-	// 	if err != nil {
+func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	// 	}
-	// }
+	queue, exists := tq.queueInstances.Get(in.StubId)
+	if !exists {
+		err := tq.createQueueInstance(in.StubId, authInfo.Workspace.Id)
+		if err != nil {
+			return &pb.TaskQueuePutResponse{
+				Ok: false,
+			}, nil
+		}
+	}
 
-	return &pb.TaskQueuePutResponse{}, nil
+	log.Println("queue: ", queue)
+
+	return &pb.TaskQueuePutResponse{
+		Ok: true,
+	}, nil
 }
 
-func (tq *TaskQueueRedis) createQueueInstance(stubId string) error {
+func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspaceId uint) error {
 	_, exists := tq.queueInstances.Get(stubId)
 	if exists {
 		return errors.New("queue already in memory")
 	}
 
+	stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId, workspaceId)
+	if err != nil {
+		return err
+	}
+
 	lock := common.NewRedisLock(tq.rdb)
 	queue := &taskQueueInstance{
 		lock:               lock,
-		name:               "test",
+		name:               stub.Name,
 		scheduler:          tq.scheduler,
 		containerRepo:      tq.containerRepo,
 		containerEventChan: make(chan types.ContainerEvent, 1),
@@ -122,7 +139,7 @@ func (tq *TaskQueueRedis) handleContainerEvents() {
 
 			queue, exists := tq.queueInstances.Get(stubId)
 			if !exists {
-				err := tq.createQueueInstance(stubId)
+				err := tq.createQueueInstance("", 1)
 				if err != nil {
 					log.Printf("err creating instance: %+v\n", err)
 					continue

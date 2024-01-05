@@ -4,7 +4,6 @@ import signal
 import sys
 import threading
 import time
-from http import HTTPStatus
 from multiprocessing import Event, Manager, Process, set_start_method
 from multiprocessing.managers import DictProxy, SyncManager
 from typing import Any, Callable, List
@@ -148,18 +147,7 @@ class TaskQueueWorker:
         self.worker_startup_event: Event = worker_startup_event
 
     def set_task_result(self, *, task_id: str, task_result: Any, task_status: str) -> None:
-        status_code = HTTPStatus.OK
-
-        if task_status == TaskStatus.Error:
-            status_code = HTTPStatus.INTERNAL_SERVER_ERROR
-
-        try:
-            self.task_results[task_id] = self._create_response(
-                body=task_result, status_code=status_code
-            )
-        except BrokenPipeError:
-            print("Failed to communicate with task bus, killing worker.")
-            os._exit(TaskExitCode.SigKill)
+        pass
 
     @with_runner_context
     def process_tasks(self, channel: Channel) -> None:
@@ -192,7 +180,7 @@ class TaskQueueWorker:
         # Invoke function
         task_status = TaskStatus.Complete
         try:
-            result = handler()
+            result = handler("hi")
             result = cloudpickle.dumps(result)
         except BaseException as exc:
             result = cloudpickle.dumps(exc)
