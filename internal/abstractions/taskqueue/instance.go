@@ -42,7 +42,7 @@ type taskQueueInstance struct {
 }
 
 func (i *taskQueueInstance) monitor() error {
-	// go i.autoscaler.start(i.ctx) // Start the autoscaler
+	go i.autoscaler.start(i.ctx) // Start the autoscaler
 
 	for {
 		select {

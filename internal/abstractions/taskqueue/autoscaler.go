@@ -64,23 +64,20 @@ func newAutoscaler(i *taskQueueInstance) *autoscaler {
 func (as *autoscaler) sample() (*autoscalerSample, error) {
 	instance := as.instance
 
-	queueLength := int64(0)
-	// queueLength, err := instance.queueClient.QueueLength(instance.stub.ExternalId, requestBucket.Name)
-	// if err != nil {
-	// 	queueLength = -1
-	// }
+	queueLength, err := instance.client.QueueLength(instance.workspace.Name, instance.stub.ExternalId)
+	if err != nil {
+		queueLength = -1
+	}
 
-	runningTasks := int64(0)
-	// runningTasks, err := instance.queueClient.TasksRunning(requestBucket.IdentityId, requestBucket.Name)
-	// if err != nil {
-	// 	runningTasks = -1
-	// }
+	runningTasks, err := instance.client.TasksRunning(instance.workspace.Name, instance.stub.ExternalId)
+	if err != nil {
+		runningTasks = -1
+	}
 
-	taskDuration := float64(0)
-	// taskDuration, err := instance.queueClient.GetTaskDuration(requestBucket.IdentityId, requestBucket.Name)
-	// if err != nil {
-	// 	taskDuration = -1
-	// }
+	taskDuration, err := instance.client.GetTaskDuration(instance.workspace.Name, instance.stub.ExternalId)
+	if err != nil {
+		taskDuration = -1
+	}
 
 	currentContainers := 0
 	state, err := instance.state()

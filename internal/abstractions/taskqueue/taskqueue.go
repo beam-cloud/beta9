@@ -85,6 +85,8 @@ func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 				Ok: false,
 			}, nil
 		}
+
+		queue, _ = tq.queueInstances.Get(in.StubId)
 	}
 
 	task, err := tq.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, queue.stub.Id)
@@ -92,7 +94,6 @@ func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 		return nil, err
 	}
 
-	queue, _ = tq.queueInstances.Get(in.StubId)
 	err = queue.client.Push(queue.workspace.Name, queue.stub.ExternalId, task.ExternalId, []interface{}{}, map[string]interface{}{})
 	if err != nil {
 		tq.backendRepo.DeleteTask(ctx, task.ExternalId)
