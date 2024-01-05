@@ -148,15 +148,24 @@ func (tq *TaskQueueRedis) handleContainerEvents() {
 
 // Redis keys
 var (
-	taskQueuePrefix       string = "taskqueue"
-	taskQueueInstanceLock string = "taskqueue:%s:%s"
+	taskQueuePrefix              string = "taskqueue"
+	taskQueueInstanceLock        string = "taskqueue:%s:%s"
+	taskQueueList                string = "taskqueue:%s:%s"
+	taskQueueTaskDuration        string = "taskqueue:%s:%s:task_duration"
+	taskQueueAverageTaskDuration string = "taskqueue:%s:%s:avg_task_duration"
+	taskQueueTaskClaim           string = "taskqueue:%s:%s:task:claim:%s"
+	taskQueueTaskRetries         string = "taskqueue:%s:%s:task:retries:%s"
+	taskQueueTaskHeartbeat       string = "taskqueue:%s:%s:task:heartbeat:%s"
+	taskQueueProcessingLock      string = "taskqueue:%s:%s:processing_lock:%s"
+	taskQueueKeepWarmLock        string = "taskqueue:%s:%s:keep_warm_lock:%s"
+	taskQueueTaskRunningLock     string = "taskqueue:%s:%s:task_running:%s:%s"
 )
 
 var Keys = &keys{}
 
 type keys struct{}
 
-func (k *keys) TaskQueuePrefix() string {
+func (k *keys) taskQueuePrefix() string {
 	return taskQueuePrefix
 }
 

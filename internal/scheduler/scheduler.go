@@ -23,7 +23,6 @@ type Scheduler struct {
 	workerPoolManager *WorkerPoolManager
 	requestBacklog    *RequestBacklog
 	ContainerRepo     repo.ContainerRepository
-	taskRepo          repo.TaskRepository
 	beamRepo          repo.BeamRepository
 	metricsRepo       repo.MetricsStatsdRepository
 	eventBus          *common.EventBus
@@ -39,7 +38,6 @@ func NewScheduler() (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
-	taskRepo := repo.NewTaskRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 
@@ -66,7 +64,6 @@ func NewScheduler() (*Scheduler, error) {
 		workerPoolManager: workerPoolManager,
 		requestBacklog:    requestBacklog,
 		ContainerRepo:     containerRepo,
-		taskRepo:          taskRepo,
 		metricsRepo:       repo.NewMetricsStatsdRepository(),
 		redisClient:       redisClient,
 	}, nil

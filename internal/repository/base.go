@@ -81,15 +81,6 @@ type BeamRepository interface {
 	GetIdentityQuota(identityId string) (*types.IdentityQuota, error)
 }
 
-type TaskRepository interface {
-	StartTask(taskId, queueName, containerId, identityExternalId string) error
-	EndTask(taskId, queueName, containerId, containerHostname, identityExternalId string, taskDuration, scaleDownDelay float64) error
-	GetNextTask(queueName, containerId, identityExternalId string) ([]byte, error)
-	GetTasksInFlight(queueName, identityExternalId string) (int, error)
-	IncrementTasksInFlight(queueName, identityExternalId string) error
-	DecrementTasksInFlight(queueName, identityExternalId string) error
-}
-
 type WorkerPoolRepository interface {
 	GetPool(name string) (*types.WorkerPoolResource, error)
 	GetPools() ([]types.WorkerPoolResource, error)
