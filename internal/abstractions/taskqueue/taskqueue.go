@@ -91,7 +91,7 @@ func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 
 	log.Println("queue: ", queue)
 
-	err := queue.client.Push("yfakeid", "somename", queue.stub.ExternalId, []byte{})
+	err := queue.client.Push("yfakeid", "somename", queue.stub.ExternalId, []interface{}{}, map[string]interface{}{})
 
 	return &pb.TaskQueuePutResponse{
 		Ok: err == nil,

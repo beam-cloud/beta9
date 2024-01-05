@@ -32,8 +32,19 @@ func newRedisTaskQueueClient(rdb *common.RedisClient) *taskQueueClient {
 }
 
 // Add a new task to the queue
-func (qc *taskQueueClient) Push(taskId, workspaceName, stubId string, payload interface{}) error {
-	_, err := qc.delay(taskId, workspaceName, stubId, payload)
+func (qc *taskQueueClient) Push(taskId, workspaceName, stubId string, args []interface{}, kwargs map[string]interface{}) error {
+	taskMessage := qc.getTaskMessage(stubId)
+	taskMessage.ID = taskId
+	taskMessage.Args = args
+	taskMessage.Kwargs = kwargs
+
+	defer qc.releaseTaskMessage(taskMessage)
+	encodedMessage, err := taskMessage.Encode()
+	if err != nil {
+		return err
+	}
+
+	err = qc.rdb.RPush(context.TODO(), Keys.taskQueueList(workspaceName, stubId), encodedMessage).Err()
 	if err != nil {
 		return err
 	}
@@ -43,37 +54,14 @@ func (qc *taskQueueClient) Push(taskId, workspaceName, stubId string, payload in
 
 func (qc *taskQueueClient) getTaskMessage(task string) *types.TaskMessage {
 	msg := taskMessagePool.Get().(*types.TaskMessage)
-	msg.Task = task
 	msg.Args = make([]interface{}, 0)
 	msg.Kwargs = make(map[string]interface{})
-	msg.ETA = nil
 	return msg
 }
 
 func (qc *taskQueueClient) releaseTaskMessage(v *types.TaskMessage) {
 	v.Reset()
 	taskMessagePool.Put(v)
-}
-
-func (qc *taskQueueClient) delay(taskId string, workspaceName string, stubId string, args ...interface{}) (*AsyncResult, error) {
-	taskMessage := qc.getTaskMessage(stubId)
-	taskMessage.ID = taskId
-	taskMessage.Args = args
-
-	defer qc.releaseTaskMessage(taskMessage)
-	encodedMessage, err := taskMessage.Encode()
-	if err != nil {
-		return nil, err
-	}
-
-	err = qc.rdb.RPush(context.TODO(), Keys.taskQueueList(workspaceName, stubId), encodedMessage).Err()
-	if err != nil {
-		return nil, err
-	}
-
-	return &AsyncResult{
-		TaskID: taskMessage.ID,
-	}, nil
 }
 
 // Get queue length
