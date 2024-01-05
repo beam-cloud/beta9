@@ -26,6 +26,7 @@ var errTaskQueueNotInUse error = errors.New("queue not in use")
 
 type taskQueueInstance struct {
 	name               string
+	workspace          *types.Workspace
 	stub               *types.Stub
 	stubConfig         *types.StubConfigV1
 	ctx                context.Context

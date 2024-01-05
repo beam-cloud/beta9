@@ -29,7 +29,7 @@ func newRedisTaskQueueClient(rdb *common.RedisClient) *taskQueueClient {
 }
 
 // Add a new task to the queue
-func (qc *taskQueueClient) Push(taskId, workspaceName, stubId string, args []interface{}, kwargs map[string]interface{}) error {
+func (qc *taskQueueClient) Push(workspaceName, stubId, taskId string, args []interface{}, kwargs map[string]interface{}) error {
 	taskMessage := qc.getTaskMessage(stubId)
 	taskMessage.ID = taskId
 	taskMessage.Args = args

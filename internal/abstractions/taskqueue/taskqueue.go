@@ -79,7 +79,7 @@ func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 
 	queue, exists := tq.queueInstances.Get(in.StubId)
 	if !exists {
-		err := tq.createQueueInstance(in.StubId, authInfo.Workspace.Id)
+		err := tq.createQueueInstance(in.StubId, authInfo.Workspace)
 		if err != nil {
 			return &pb.TaskQueuePutResponse{
 				Ok: false,
@@ -87,33 +87,40 @@ func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 		}
 	}
 
+	task, err := tq.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, queue.stub.Id)
+	if err != nil {
+		return nil, err
+	}
+
 	queue, _ = tq.queueInstances.Get(in.StubId)
-
-	log.Println("queue: ", queue)
-
-	err := queue.client.Push("yfakeid", "somename", queue.stub.ExternalId, []interface{}{}, map[string]interface{}{})
+	err = queue.client.Push(queue.workspace.Name, queue.stub.ExternalId, task.ExternalId, []interface{}{}, map[string]interface{}{})
+	if err != nil {
+		tq.backendRepo.DeleteTask(ctx, task.ExternalId)
+	}
 
 	return &pb.TaskQueuePutResponse{
-		Ok: err == nil,
+		Ok:     err == nil,
+		TaskId: task.ExternalId,
 	}, nil
 }
 
-func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspaceId uint) error {
+func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Workspace) error {
 	_, exists := tq.queueInstances.Get(stubId)
 	if exists {
 		return errors.New("queue already in memory")
 	}
 
-	stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId, workspaceId)
+	stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId, workspace.Id)
 	if err != nil {
 		return err
 	}
 
 	lock := common.NewRedisLock(tq.rdb)
 	queue := &taskQueueInstance{
-		lock: lock,
-		name: stub.Name,
-		stub: stub,
+		lock:      lock,
+		name:      stub.Name,
+		workspace: workspace,
+		stub:      stub,
 		// stubConfig: stub.,
 		scheduler:          tq.scheduler,
 		containerRepo:      tq.containerRepo,
@@ -148,7 +155,7 @@ func (tq *TaskQueueRedis) handleContainerEvents() {
 
 			queue, exists := tq.queueInstances.Get(stubId)
 			if !exists {
-				err := tq.createQueueInstance("", 1)
+				err := tq.createQueueInstance("", nil)
 				if err != nil {
 					log.Printf("err creating instance: %+v\n", err)
 					continue
