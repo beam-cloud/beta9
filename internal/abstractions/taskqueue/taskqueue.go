@@ -69,15 +69,15 @@ func NewTaskQueueRedis(ctx context.Context,
 }
 
 func (tq *TaskQueueRedis) TaskQueuePut(context.Context, *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
-	_, exists := tq.queueInstances.Get("")
-	if !exists {
-		err := tq.createQueueInstance("test")
-		if err != nil {
+	// _, exists := tq.queueInstances.Get("")
+	// if !exists {
+	// 	err := tq.createQueueInstance("test")
+	// 	if err != nil {
 
-		}
-	}
+	// 	}
+	// }
 
-	return nil, nil
+	return &pb.TaskQueuePutResponse{}, nil
 }
 
 func (tq *TaskQueueRedis) createQueueInstance(stubId string) error {
