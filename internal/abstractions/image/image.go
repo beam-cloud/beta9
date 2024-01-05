@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	pb "github.com/beam-cloud/beam/proto"
 	"github.com/pkg/errors"
@@ -22,8 +23,8 @@ type RuncImageService struct {
 	scheduler *scheduler.Scheduler
 }
 
-func NewRuncImageService(ctx context.Context, scheduler *scheduler.Scheduler) (*RuncImageService, error) {
-	builder, err := NewBuilder(scheduler)
+func NewRuncImageService(ctx context.Context, scheduler *scheduler.Scheduler, containerRepo repository.ContainerRepository) (*RuncImageService, error) {
+	builder, err := NewBuilder(scheduler, containerRepo)
 	if err != nil {
 		return nil, err
 	}

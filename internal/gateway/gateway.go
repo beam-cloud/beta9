@@ -122,14 +122,14 @@ func (g *Gateway) Start() error {
 	pb.RegisterSimpleQueueServiceServer(grpcServer, rq)
 
 	// Register image service
-	is, err := image.NewRuncImageService(g.ctx, g.Scheduler)
+	is, err := image.NewRuncImageService(g.ctx, g.Scheduler, g.ContainerRepo)
 	if err != nil {
 		return err
 	}
 	pb.RegisterImageServiceServer(grpcServer, is)
 
 	// Register function service
-	fs, err := function.NewRuncFunctionService(g.ctx, g.BackendRepo, g.redisClient, g.Scheduler)
+	fs, err := function.NewRuncFunctionService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler)
 	if err != nil {
 		return err
 	}

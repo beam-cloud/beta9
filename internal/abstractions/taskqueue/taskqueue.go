@@ -172,3 +172,39 @@ func (k *keys) taskQueuePrefix() string {
 func (k *keys) taskQueueInstanceLock(workspaceName, stubId string) string {
 	return fmt.Sprintf(taskQueueInstanceLock, workspaceName, stubId)
 }
+
+func (k *keys) taskQueueList(workspaceName, stubId string) string {
+	return fmt.Sprintf(taskQueueList, workspaceName, stubId)
+}
+
+func (k *keys) taskQueueTaskClaim(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskQueueTaskClaim, workspaceName, stubId, taskId)
+}
+
+func (k *keys) taskQueueTaskHeartbeat(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskQueueTaskHeartbeat, workspaceName, stubId, taskId)
+}
+
+func (k *keys) taskQueueTaskRetries(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskQueueTaskRetries, workspaceName, stubId, taskId)
+}
+
+func (k *keys) taskQueueTaskDuration(workspaceName, stubId string) string {
+	return fmt.Sprintf(taskQueueTaskDuration, workspaceName, stubId)
+}
+
+func (k *keys) taskQueueAverageTaskDuration(workspaceName, stubId string) string {
+	return fmt.Sprintf(taskQueueAverageTaskDuration, workspaceName, stubId)
+}
+
+func (k *keys) taskQueueTaskRunningLock(workspaceName, stubId, containerId, taskId string) string {
+	return fmt.Sprintf(taskQueueTaskRunningLock, workspaceName, stubId, containerId, taskId)
+}
+
+func (k *keys) taskQueueProcessingLock(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(taskQueueProcessingLock, workspaceName, stubId, containerId)
+}
+
+func (k *keys) taskQueueKeepWarmLock(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(taskQueueKeepWarmLock, workspaceName, stubId, containerId)
+}

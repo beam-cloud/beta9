@@ -32,12 +32,13 @@ const (
 type RunCFunctionService struct {
 	pb.UnimplementedFunctionServiceServer
 	backendRepo     repository.BackendRepository
+	containerRepo   repository.ContainerRepository
 	scheduler       *scheduler.Scheduler
 	keyEventManager *common.KeyEventManager
 	rdb             *common.RedisClient
 }
 
-func NewRuncFunctionService(ctx context.Context, backendRepo repository.BackendRepository, rdb *common.RedisClient, scheduler *scheduler.Scheduler) (*RunCFunctionService, error) {
+func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, scheduler *scheduler.Scheduler) (*RunCFunctionService, error) {
 	keyEventManager, err := common.NewKeyEventManager(rdb)
 	if err != nil {
 		return nil, err
@@ -45,6 +46,7 @@ func NewRuncFunctionService(ctx context.Context, backendRepo repository.BackendR
 
 	return &RunCFunctionService{
 		backendRepo:     backendRepo,
+		containerRepo:   containerRepo,
 		scheduler:       scheduler,
 		rdb:             rdb,
 		keyEventManager: keyEventManager,
@@ -107,7 +109,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return err
 	}
 
-	hostname, err := fs.scheduler.ContainerRepo.GetContainerWorkerHostname(containerId)
+	hostname, err := fs.containerRepo.GetContainerWorkerHostname(containerId)
 	if err != nil {
 		return err
 	}

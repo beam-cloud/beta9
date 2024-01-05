@@ -2,20 +2,14 @@ package taskqueue
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"log"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	common "github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/types"
 	"github.com/gin-gonic/gin"
 	"github.com/gofrs/uuid"
-	"gorm.io/gorm"
 )
 
 const (
@@ -75,7 +69,7 @@ func (qc *taskQueueClient) releaseTaskMessage(v *types.TaskMessage) {
 	taskMessagePool.Put(v)
 }
 
-func (qc *taskQueueClient) delay(taskId string, task string, identityId string, queueName string, args ...interface{}) (*AsyncResult, error) {
+func (qc *taskQueueClient) delay(taskId string, task string, workspaceName string, stubId string, args ...interface{}) (*AsyncResult, error) {
 	taskMessage := qc.getTaskMessage(task)
 	taskMessage.ID = taskId
 	taskMessage.Args = args
@@ -86,7 +80,7 @@ func (qc *taskQueueClient) delay(taskId string, task string, identityId string, 
 		return nil, err
 	}
 
-	err = qc.rdb.RPush(context.TODO(), common.RedisKeys.QueueList(identityId, queueName), encodedMessage).Err()
+	err = qc.rdb.RPush(context.TODO(), Keys.taskQueueList(workspaceName, stubId), encodedMessage).Err()
 	if err != nil {
 		return nil, err
 	}
@@ -97,8 +91,8 @@ func (qc *taskQueueClient) delay(taskId string, task string, identityId string, 
 }
 
 // Get queue length
-func (qc *taskQueueClient) QueueLength(identityId, queueName string) (int64, error) {
-	res, err := qc.rdb.LLen(context.TODO(), common.RedisKeys.QueueList(identityId, queueName)).Result()
+func (qc *taskQueueClient) QueueLength(workspaceName, stubId string) (int64, error) {
+	res, err := qc.rdb.LLen(context.TODO(), Keys.taskQueueList(workspaceName, stubId)).Result()
 	if err != nil {
 		return -1, err
 	}
@@ -107,8 +101,8 @@ func (qc *taskQueueClient) QueueLength(identityId, queueName string) (int64, err
 }
 
 // Check if any tasks are running
-func (qc *taskQueueClient) TaskRunning(identityId, queueName string) (bool, error) {
-	keys, err := qc.rdb.Scan(context.TODO(), common.RedisKeys.QueueTaskClaim(identityId, queueName, "*"))
+func (qc *taskQueueClient) TaskRunning(workspaceName, stubId string) (bool, error) {
+	keys, err := qc.rdb.Scan(context.TODO(), Keys.taskQueueTaskClaim(workspaceName, stubId, "*"))
 	if err != nil {
 		return false, err
 	}
@@ -117,8 +111,8 @@ func (qc *taskQueueClient) TaskRunning(identityId, queueName string) (bool, erro
 }
 
 // Check how many tasks are running
-func (qc *taskQueueClient) TasksRunning(identityId, queueName string) (int, error) {
-	keys, err := qc.rdb.Scan(context.TODO(), common.RedisKeys.QueueTaskClaim(identityId, queueName, "*"))
+func (qc *taskQueueClient) TasksRunning(workspaceName, stubId string) (int, error) {
+	keys, err := qc.rdb.Scan(context.TODO(), Keys.taskQueueTaskClaim(workspaceName, stubId, "*"))
 	if err != nil {
 		return -1, err
 	}
@@ -127,8 +121,8 @@ func (qc *taskQueueClient) TasksRunning(identityId, queueName string) (int, erro
 }
 
 // Get most recent task duration
-func (qc *taskQueueClient) GetTaskDuration(identityId, queueName string) (float64, error) {
-	res, err := qc.rdb.LPop(context.TODO(), common.RedisKeys.QueueTaskDuration(identityId, queueName)).Result()
+func (qc *taskQueueClient) GetTaskDuration(workspaceName, stubId string) (float64, error) {
+	res, err := qc.rdb.LPop(context.TODO(), Keys.taskQueueTaskDuration(workspaceName, stubId)).Result()
 	if err != nil {
 		return -1, err
 	}
@@ -141,16 +135,16 @@ func (qc *taskQueueClient) GetTaskDuration(identityId, queueName string) (float6
 	return duration, nil
 }
 
-func (qc *taskQueueClient) SetAverageTaskDuration(identityId, queueName string, duration float64) error {
-	err := qc.rdb.Set(context.TODO(), common.RedisKeys.QueueAverageTaskDuration(identityId, queueName), duration, 0).Err()
+func (qc *taskQueueClient) SetAverageTaskDuration(workspaceName, stubId string, duration float64) error {
+	err := qc.rdb.Set(context.TODO(), Keys.taskQueueAverageTaskDuration(workspaceName, stubId), duration, 0).Err()
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (qc *taskQueueClient) GetAverageTaskDuration(identityId, queueName string) (float64, error) {
-	res, err := qc.rdb.Get(context.TODO(), common.RedisKeys.QueueAverageTaskDuration(identityId, queueName)).Result()
+func (qc *taskQueueClient) GetAverageTaskDuration(workspaceName, stubId string) (float64, error) {
+	res, err := qc.rdb.Get(context.TODO(), Keys.taskQueueAverageTaskDuration(workspaceName, stubId)).Result()
 	if err != nil {
 		return -1, err
 	}
@@ -164,99 +158,99 @@ func (qc *taskQueueClient) GetAverageTaskDuration(identityId, queueName string) 
 }
 
 // Monitor tasks -- if a container is killed unexpectedly, it will automatically be re-added to the queue
-func (qc *taskQueueClient) MonitorTasks(ctx context.Context, beamRepo repository.BeamRepository) {
-	monitorRate := time.Duration(5) * time.Second
-	ticker := time.NewTicker(monitorRate)
-	defer ticker.Stop()
+// func (qc *taskQueueClient) MonitorTasks(ctx context.Context, beamRepo repository.BeamRepository) {
+// 	monitorRate := time.Duration(5) * time.Second
+// 	ticker := time.NewTicker(monitorRate)
+// 	defer ticker.Stop()
 
-	for range ticker.C {
-		claimedTasks, err := qc.rdb.Scan(context.TODO(), common.RedisKeys.QueueTaskClaim("*", "*", "*"))
-		if err != nil {
-			return
-		}
+// 	for range ticker.C {
+// 		claimedTasks, err := qc.rdb.Scan(context.TODO(), common.RedisKeys.QueueTaskClaim("*", "*", "*"))
+// 		if err != nil {
+// 			return
+// 		}
 
-		for _, claimKey := range claimedTasks {
-			v := strings.Split(claimKey, ":")
-			identityId := v[1]
-			queueName := v[2]
-			taskId := v[5]
+// 		for _, claimKey := range claimedTasks {
+// 			v := strings.Split(claimKey, ":")
+// 			identityId := v[1]
+// 			queueName := v[2]
+// 			taskId := v[5]
 
-			res, err := qc.rdb.Exists(context.TODO(), common.RedisKeys.QueueTaskHeartbeat(identityId, queueName, taskId)).Result()
-			if err != nil {
-				continue
-			}
+// 			res, err := qc.rdb.Exists(context.TODO(), common.RedisKeys.QueueTaskHeartbeat(identityId, queueName, taskId)).Result()
+// 			if err != nil {
+// 				continue
+// 			}
 
-			recentHeartbeat := res > 0
-			if !recentHeartbeat {
-				log.Printf("Missing heartbeat, reinserting task<%s:%s> into queue: %s\n", identityId, taskId, queueName)
+// 			recentHeartbeat := res > 0
+// 			if !recentHeartbeat {
+// 				log.Printf("Missing heartbeat, reinserting task<%s:%s> into queue: %s\n", identityId, taskId, queueName)
 
-				retries, err := qc.rdb.Get(context.TODO(), common.RedisKeys.QueueTaskRetries(identityId, queueName, taskId)).Int()
-				if err != nil {
-					retries = 0
-				}
+// 				retries, err := qc.rdb.Get(context.TODO(), common.RedisKeys.QueueTaskRetries(identityId, queueName, taskId)).Int()
+// 				if err != nil {
+// 					retries = 0
+// 				}
 
-				task, err := beamRepo.GetAppTask(taskId)
-				if err != nil {
-					continue
-				}
+// 				task, err := beamRepo.GetAppTask(taskId)
+// 				if err != nil {
+// 					continue
+// 				}
 
-				taskPolicy := types.TaskPolicy{}
-				err = json.Unmarshal(
-					task.TaskPolicy,
-					&taskPolicy,
-				)
-				if err != nil {
-					taskPolicy = types.DefaultTaskPolicy
-				}
+// 				taskPolicy := types.TaskPolicy{}
+// 				err = json.Unmarshal(
+// 					task.TaskPolicy,
+// 					&taskPolicy,
+// 				)
+// 				if err != nil {
+// 					taskPolicy = types.DefaultTaskPolicy
+// 				}
 
-				if retries >= int(taskPolicy.MaxRetries) {
-					log.Printf("Hit retry limit, not reinserting task <%s> into queue: %s\n", taskId, queueName)
+// 				if retries >= int(taskPolicy.MaxRetries) {
+// 					log.Printf("Hit retry limit, not reinserting task <%s> into queue: %s\n", taskId, queueName)
 
-					_, err = beamRepo.UpdateActiveTask(taskId, types.BeamAppTaskStatusFailed, identityId)
-					if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-						continue
-					}
+// 					_, err = beamRepo.UpdateActiveTask(taskId, types.BeamAppTaskStatusFailed, identityId)
+// 					if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+// 						continue
+// 					}
 
-					err = qc.rdb.Del(context.TODO(), common.RedisKeys.QueueTaskClaim(identityId, queueName, taskId)).Err()
-					if err != nil {
-						log.Printf("Unable to delete task claim: %s\n", taskId)
-					}
+// 					err = qc.rdb.Del(context.TODO(), common.RedisKeys.QueueTaskClaim(identityId, queueName, taskId)).Err()
+// 					if err != nil {
+// 						log.Printf("Unable to delete task claim: %s\n", taskId)
+// 					}
 
-					continue
-				}
+// 					continue
+// 				}
 
-				retries += 1
-				err = qc.rdb.Set(context.TODO(), common.RedisKeys.QueueTaskRetries(identityId, queueName, taskId), retries, 0).Err()
-				if err != nil {
-					continue
-				}
+// 				retries += 1
+// 				err = qc.rdb.Set(context.TODO(), common.RedisKeys.QueueTaskRetries(identityId, queueName, taskId), retries, 0).Err()
+// 				if err != nil {
+// 					continue
+// 				}
 
-				_, err = beamRepo.UpdateActiveTask(taskId, types.BeamAppTaskStatusRetry, identityId)
-				if err != nil {
-					continue
-				}
+// 				_, err = beamRepo.UpdateActiveTask(taskId, types.BeamAppTaskStatusRetry, identityId)
+// 				if err != nil {
+// 					continue
+// 				}
 
-				encodedMessage, err := qc.rdb.Get(context.TODO(), common.RedisKeys.QueueTaskClaim(identityId, queueName, taskId)).Result()
-				if err != nil {
-					continue
-				}
+// 				encodedMessage, err := qc.rdb.Get(context.TODO(), common.RedisKeys.QueueTaskClaim(identityId, queueName, taskId)).Result()
+// 				if err != nil {
+// 					continue
+// 				}
 
-				err = qc.rdb.Del(context.TODO(), common.RedisKeys.QueueTaskClaim(identityId, queueName, taskId)).Err()
-				if err != nil {
-					log.Printf("Unable to delete task claim: %s\n", taskId)
-					continue
-				}
+// 				err = qc.rdb.Del(context.TODO(), common.RedisKeys.QueueTaskClaim(identityId, queueName, taskId)).Err()
+// 				if err != nil {
+// 					log.Printf("Unable to delete task claim: %s\n", taskId)
+// 					continue
+// 				}
 
-				err = qc.rdb.RPush(context.TODO(), common.RedisKeys.QueueList(identityId, queueName), encodedMessage).Err()
-				if err != nil {
-					log.Printf("Unable to insert task <%s> into queue <%s>: %v\n", taskId, queueName, err)
-					continue
-				}
+// 				err = qc.rdb.RPush(context.TODO(), common.RedisKeys.QueueList(identityId, queueName), encodedMessage).Err()
+// 				if err != nil {
+// 					log.Printf("Unable to insert task <%s> into queue <%s>: %v\n", taskId, queueName, err)
+// 					continue
+// 				}
 
-			}
-		}
-	}
-}
+// 			}
+// 		}
+// 	}
+// }
 
 // AsyncResult represents pending result
 type AsyncResult struct {
