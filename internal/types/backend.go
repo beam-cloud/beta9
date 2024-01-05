@@ -103,8 +103,9 @@ type StubConfigV1 struct {
 	MaxPendingTasks uint       `json:"max_pending_tasks"`
 	CallbackUrl     string     `json:"callback_url"`
 	TaskPolicy      TaskPolicy `json:"task_policy"`
-	Workers         uint       `json:"workers"`
+	Concurrency     uint       `json:"concurrency"`
 	Authorized      bool       `json:"authorized"`
+	MaxContainers   uint       `json:"max_containers"`
 }
 
 const (

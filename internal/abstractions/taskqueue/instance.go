@@ -2,6 +2,7 @@ package taskqueue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -11,6 +12,7 @@ import (
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
+	"github.com/google/uuid"
 )
 
 type taskQueueState struct {
@@ -19,6 +21,8 @@ type taskQueueState struct {
 	StoppingContainers int
 	FailedContainers   int
 }
+
+var errTaskQueueNotInUse error = errors.New("queue not in use")
 
 type taskQueueInstance struct {
 	name               string
@@ -32,10 +36,11 @@ type taskQueueInstance struct {
 	scaleEventChan     chan int
 	rdb                *common.RedisClient
 	containerRepo      repository.ContainerRepository
+	autoscaler         *autoscaler
 }
 
 func (i *taskQueueInstance) monitor() error {
-	// go i.autoScaler.Start() // Start the autoscaler
+	go i.autoscaler.start(i.ctx) // Start the autoscaler
 
 	for {
 		select {
@@ -59,8 +64,7 @@ func (i *taskQueueInstance) monitor() error {
 			}
 
 		case desiredContainers := <-i.scaleEventChan:
-			err := i.handleScalingEvent(i, desiredContainers)
-			if err == nil {
+			if err := i.handleScalingEvent(i, desiredContainers); err != nil {
 				continue
 			}
 		}
@@ -80,7 +84,6 @@ func (i *taskQueueInstance) state() (*taskQueueState, error) {
 	}
 
 	state := taskQueueState{}
-
 	for _, container := range containers {
 		switch container.Status {
 		case types.ContainerStatusRunning:
@@ -109,7 +112,7 @@ func (i *taskQueueInstance) handleScalingEvent(queue *taskQueueInstance, desired
 	}
 
 	if state.FailedContainers >= types.FailedContainerThreshold {
-		log.Printf("<%s> Reached failed container threshold, scaling to zero.", queue.name)
+		log.Printf("<%s> reached failed container threshold, scaling to zero.", queue.name)
 		desiredContainers = 0
 	}
 
@@ -119,7 +122,7 @@ func (i *taskQueueInstance) handleScalingEvent(queue *taskQueueInstance, desired
 
 	noContainersRunning := (state.PendingContainers == 0) && (state.RunningContainers == 0) && (state.StoppingContainers == 0)
 	if desiredContainers == 0 && noContainersRunning {
-		return nil //types.ErrBucketNotInUse
+		return errTaskQueueNotInUse
 	}
 
 	containerDelta := desiredContainers - (state.RunningContainers + state.PendingContainers)
@@ -170,4 +173,8 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 	}
 
 	return nil
+}
+
+func (i *taskQueueInstance) genContainerId() string {
+	return fmt.Sprintf("%s%s-%s", taskQueueContainerPrefix, i.stub.ExternalId, uuid.New().String()[:8])
 }

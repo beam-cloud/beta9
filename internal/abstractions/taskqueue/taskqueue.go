@@ -38,6 +38,7 @@ type TaskQueueRedis struct {
 	queueInstances  *common.SafeMap[*taskQueueInstance]
 	keyEventManager *common.KeyEventManager
 	keyEventChan    chan common.KeyEvent
+	queueClient     *taskQueueClient
 }
 
 func NewTaskQueueRedis(ctx context.Context,
@@ -60,25 +61,17 @@ func NewTaskQueueRedis(ctx context.Context,
 		keyEventChan:    keyEventChan,
 		keyEventManager: keyEventManager,
 		containerRepo:   containerRepo,
+		queueClient:     newRedisTaskQueueClient(rdb),
 	}
 
-	err = tq.start()
-	if err != nil {
-		return nil, err
-	}
-
-	return tq, nil
-}
-
-func (tq *TaskQueueRedis) start() error {
 	go tq.handleContainerEvents()
-	return nil
+	return tq, nil
 }
 
 func (tq *TaskQueueRedis) TaskQueuePut(context.Context, *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
 	_, exists := tq.queueInstances.Get("")
 	if !exists {
-		err := tq.create("test")
+		err := tq.createQueueInstance("test")
 		if err != nil {
 
 		}
@@ -87,7 +80,7 @@ func (tq *TaskQueueRedis) TaskQueuePut(context.Context, *pb.TaskQueuePutRequest)
 	return nil, nil
 }
 
-func (tq *TaskQueueRedis) create(stubId string) error {
+func (tq *TaskQueueRedis) createQueueInstance(stubId string) error {
 	_, exists := tq.queueInstances.Get(stubId)
 	if exists {
 		return errors.New("queue already in memory")
@@ -105,8 +98,12 @@ func (tq *TaskQueueRedis) create(stubId string) error {
 		rdb:                tq.rdb,
 	}
 
+	autoscaler := newAutoscaler(queue)
+	queue.autoscaler = autoscaler
+
 	tq.queueInstances.Set(stubId, queue)
 	go queue.monitor()
+
 	return nil
 }
 
@@ -124,7 +121,7 @@ func (tq *TaskQueueRedis) handleContainerEvents() {
 
 			queue, exists := tq.queueInstances.Get(stubId)
 			if !exists {
-				err := tq.create(stubId)
+				err := tq.createQueueInstance(stubId)
 				if err != nil {
 					log.Printf("err creating instance: %+v\n", err)
 					continue
