@@ -152,7 +152,10 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			ImageId:    i.stubConfig.Runtime.ImageId,
 			EntryPoint: []string{"python3.8", "-m", "beam.runner.function"},
 			Mounts: []types.Mount{
-				{LocalPath: path.Join(types.DefaultExtractedObjectPath, i.workspace.Name, "someobj_id"), MountPath: types.WorkerUserCodeVolume, ReadOnly: true},
+				{
+					LocalPath: path.Join(types.DefaultExtractedObjectPath, i.workspace.Name, "someobj_id"),
+					MountPath: types.WorkerUserCodeVolume, ReadOnly: true,
+				},
 			},
 		}
 

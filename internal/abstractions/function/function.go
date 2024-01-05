@@ -102,7 +102,10 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		ImageId:    in.ImageId,
 		EntryPoint: []string{in.PythonVersion, "-m", "beam.runner.function"},
 		Mounts: []types.Mount{
-			{LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId), MountPath: types.WorkerUserCodeVolume, ReadOnly: true},
+			{
+				LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId),
+				MountPath: types.WorkerUserCodeVolume, ReadOnly: true,
+			},
 		},
 	})
 	if err != nil {
