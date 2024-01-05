@@ -63,14 +63,25 @@ type Object struct {
 	CreatedAt   time.Time `db:"created_at"`
 }
 
+type TaskStatus string
+
+func (ts TaskStatus) IsCompleted() bool {
+	switch ts {
+	case TaskStatusComplete, TaskStatusCancelled, TaskStatusError, TaskStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
-	TaskStatusPending   string = "PENDING"
-	TaskStatusRunning   string = "RUNNING"
-	TaskStatusComplete  string = "COMPLETE"
-	TaskStatusError     string = "ERROR"
-	TaskStatusCancelled string = "CANCELLED"
-	TaskStatusTimeout   string = "TIMEOUT"
-	TaskStatusRetry     string = "RETRY"
+	TaskStatusPending   TaskStatus = "PENDING"
+	TaskStatusRunning   TaskStatus = "RUNNING"
+	TaskStatusComplete  TaskStatus = "COMPLETE"
+	TaskStatusError     TaskStatus = "ERROR"
+	TaskStatusCancelled TaskStatus = "CANCELLED"
+	TaskStatusTimeout   TaskStatus = "TIMEOUT"
+	TaskStatusRetry     TaskStatus = "RETRY"
 )
 
 var DefaultTaskPolicy = TaskPolicy{
@@ -81,7 +92,7 @@ var DefaultTaskPolicy = TaskPolicy{
 type Task struct {
 	Id          uint         `db:"id"`
 	ExternalId  string       `db:"external_id"`
-	Status      string       `db:"status"`
+	Status      TaskStatus   `db:"status"`
 	ContainerId string       `db:"container_id"`
 	StartedAt   sql.NullTime `db:"started_at"`
 	EndedAt     sql.NullTime `db:"ended_at"`
@@ -89,6 +100,12 @@ type Task struct {
 	StubId      uint         `db:"stub_id"`      // Foreign key to Stub
 	CreatedAt   time.Time    `db:"created_at"`
 	UpdatedAt   time.Time    `db:"updated_at"`
+}
+
+type TaskWithRelated struct {
+	Task
+	Workspace Workspace `db:"workspace"`
+	Stub      Stub      `db:"stub"`
 }
 
 type StubConfigV1 struct {

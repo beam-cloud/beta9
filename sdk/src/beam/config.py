@@ -2,6 +2,7 @@ import configparser
 import functools
 import os
 import sys
+import traceback
 from contextlib import contextmanager
 from typing import Any, Callable, NamedTuple, Optional, Type, Union, cast
 
@@ -114,11 +115,11 @@ def get_gateway_config() -> GatewayConfig:
 def configure_gateway_credentials(
     config: GatewayConfig,
     *,
-    name: str = None,
-    gateway_host: str = None,
-    gateway_port: str = None,
-    token: str = None,
-) -> None:
+    name: Optional[str] = None,
+    gateway_host: Optional[str] = None,
+    gateway_port: Optional[str] = None,
+    token: Optional[str] = None,
+) -> GatewayConfig:
     terminal.header("Welcome to Beam! Let's get started 📡")
 
     name = name or terminal.prompt(text="Profile name", default=DEFAULT_PROFILE_NAME)
@@ -196,8 +197,6 @@ def runner_context():
         yield channel
     except RunnerException as exc:
         exit_code = exc.code
-        print(f"An error occurred: {exit_code}")
-        print(f"An error occurred: {exc.message}")
         raise
     except SystemExit as exc:
         exit_code = exc.code
@@ -205,9 +204,11 @@ def runner_context():
     except BaseException:
         exit_code = 1
     finally:
-        channel.close()
+        if channel := locals().get("channel", None):
+            channel.close()
 
         if exit_code != 0:
+            traceback.print_exc()
             sys.exit(exit_code)
 
 
