@@ -122,5 +122,7 @@ class _CallableWrapper:
         if not self.parent.runtime_ready and not self._prepare_runtime():
             return
 
-        r: TaskQueuePutResponse = self.parent.run_sync(self.parent.taskqueue_stub.task_queue_put())
+        r: TaskQueuePutResponse = self.parent.run_sync(
+            self.parent.taskqueue_stub.task_queue_put(stub_id=self.parent.stub_id, payload=payload)
+        )
         print(r)

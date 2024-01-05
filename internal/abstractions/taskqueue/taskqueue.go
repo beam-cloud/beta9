@@ -67,6 +67,7 @@ func NewTaskQueueRedis(ctx context.Context,
 		containerRepo:   containerRepo,
 		backendRepo:     backendRepo,
 		queueClient:     newRedisTaskQueueClient(rdb),
+		queueInstances:  common.NewSafeMap[*taskQueueInstance](),
 	}
 
 	go tq.handleContainerEvents()
@@ -85,6 +86,8 @@ func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 			}, nil
 		}
 	}
+
+	queue, _ = tq.queueInstances.Get(in.StubId)
 
 	log.Println("queue: ", queue)
 
@@ -114,6 +117,7 @@ func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspaceId uint) e
 		containers:         make(map[string]bool),
 		scaleEventChan:     make(chan int, 1),
 		rdb:                tq.rdb,
+		ctx:                context.Background(),
 	}
 
 	autoscaler := newAutoscaler(queue)
