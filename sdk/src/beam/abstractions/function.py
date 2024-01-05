@@ -1,13 +1,15 @@
 import asyncio
 import inspect
 import os
-from typing import Any, Callable, Iterable, Union
+from typing import Any, Callable, Iterable, List, Union
 
 import cloudpickle
+import json
 
 from beam import terminal
 from beam.abstractions.base import BaseAbstraction
 from beam.abstractions.image import Image, ImageBuildResult
+from beam.abstractions.volume import Volume
 from beam.clients.function import (
     FunctionInvokeResponse,
     FunctionServiceStub,
@@ -20,7 +22,9 @@ FUNCTION_STUB_PREFIX = "function"
 
 
 class Function(BaseAbstraction):
-    def __init__(self, image: Image, cpu: int = 100, memory: int = 128, gpu="") -> None:
+    def __init__(
+        self, image: Image, cpu: int = 100, memory: int = 128, gpu="", volumes: List[Volume] = []
+    ) -> None:
         super().__init__()
 
         if image is None:
@@ -38,6 +42,7 @@ class Function(BaseAbstraction):
         self.cpu = cpu
         self.memory = memory
         self.gpu = gpu
+        self.volumes = volumes
 
         self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
@@ -81,7 +86,15 @@ class _CallableWrapper:
             else:
                 return False
 
+        for volume in self.parent.volumes:
+            if not volume.ready and not volume.get_or_create():
+                return False
+
         if not self.parent.stub_created:
+            volumes = json.dumps(
+                [volume.to_dict() for volume in self.parent.volumes]
+            ).encode("utf-8")
+
             stub_response: GetOrCreateStubResponse = self.parent.run_sync(
                 self.parent.gateway_stub.get_or_create_stub(
                     object_id=self.parent.object_id,
@@ -92,6 +105,7 @@ class _CallableWrapper:
                     cpu=self.parent.cpu,
                     memory=self.parent.memory,
                     gpu=self.parent.gpu,
+                    volumes=volumes,
                 )
             )
 
@@ -122,6 +136,7 @@ class _CallableWrapper:
                 "kwargs": kwargs,
             },
         )
+        volumes = json.dumps([volume.to_dict() for volume in self.parent.volumes]).encode("utf-8")
 
         terminal.header("Running function")
         last_response: Union[None, FunctionInvokeResponse] = None
@@ -136,6 +151,7 @@ class _CallableWrapper:
             cpu=self.parent.cpu,
             memory=self.parent.memory,
             gpu=self.parent.gpu,
+            volumes=volumes,
         ):
             if r.output != "":
                 terminal.detail(r.output)

@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package volume;
+
+service VolumeService {
+    rpc GetOrCreateVolume(GetOrCreateVolumeRequest) returns (GetOrCreateVolumeResponse) {}
+}
+
+message GetOrCreateVolumeRequest {
+    string name = 1;
+}
+
+message GetOrCreateVolumeResponse {
+    bool ok = 1;
+    string volume_id = 2;
+}

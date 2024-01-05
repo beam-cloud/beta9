@@ -12,6 +12,7 @@ import (
 	"github.com/beam-cloud/beam/internal/abstractions/image"
 	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
 	simplequeue "github.com/beam-cloud/beam/internal/abstractions/queue"
+	volumesvc "github.com/beam-cloud/beam/internal/abstractions/volume"
 	"github.com/beam-cloud/beam/internal/auth"
 	common "github.com/beam-cloud/beam/internal/common"
 	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
@@ -151,6 +152,13 @@ func (g *Gateway) Start() error {
 		return err
 	}
 	pb.RegisterFunctionServiceServer(grpcServer, fs)
+
+	// Register volume service
+	vs, err := volumesvc.NewStructWorkspaceVolumeService()
+	if err != nil {
+		return err
+	}
+	pb.RegisterVolumeServiceServer(grpcServer, vs)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService()

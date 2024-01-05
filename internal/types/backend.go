@@ -27,10 +27,13 @@ type Token struct {
 
 type Volume struct {
 	Id          uint      `db:"id"`
-	ExternalId  string    `db:"external_id"`
-	Name        string    `db:"name"`
+	ExternalId  string    `db:"external_id" json:"id"`
+	Name        string    `db:"name" json:"name"`
 	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
 	CreatedAt   time.Time `db:"created_at"`
+
+	// Non-db fields
+	MountPath string `json:"mount_path"`
 }
 
 const (
@@ -89,7 +92,8 @@ type Task struct {
 }
 
 type StubConfigV1 struct {
-	Runtime Runtime `json:"runtime"`
+	Runtime Runtime  `json:"runtime"`
+	Volumes []Volume `json:"volumes"`
 }
 
 const (

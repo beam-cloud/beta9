@@ -23,6 +23,7 @@ message FunctionInvokeRequest {
   int64 cpu = 7;
   int64 memory = 8;
   string gpu = 9;
+  bytes volumes = 10;
 }
 
 message FunctionInvokeResponse {

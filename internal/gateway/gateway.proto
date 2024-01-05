@@ -78,6 +78,7 @@ message GetOrCreateStubRequest {
   int64 cpu = 6;
   int64 memory = 7;
   string gpu = 8;
+  bytes volumes = 9;
 }
 
 message GetOrCreateStubResponse {

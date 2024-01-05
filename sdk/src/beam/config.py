@@ -196,6 +196,7 @@ def runner_context():
         yield channel
     except RunnerException as exc:
         exit_code = exc.code
+        print(f"An error occurred: {exit_code}")
         print(f"An error occurred: {exc.message}")
         raise
     except SystemExit as exc:

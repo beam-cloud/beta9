@@ -2,6 +2,8 @@ package gatewayservices
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 
 	"github.com/beam-cloud/beam/internal/auth"
 	"github.com/beam-cloud/beam/internal/common"
@@ -12,6 +14,15 @@ import (
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	volumes := []types.Volume{}
+	err := json.Unmarshal(in.Volumes, &volumes)
+	if err != nil {
+		log.Println(err)
+		return &pb.GetOrCreateStubResponse{
+			Ok: false,
+		}, nil
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:     in.Cpu,
@@ -19,6 +30,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Memory:  in.Memory,
 			ImageId: in.ImageId,
 		},
+		Volumes: volumes,
 	}
 
 	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)

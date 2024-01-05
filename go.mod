@@ -2,8 +2,6 @@ module github.com/beam-cloud/beam
 
 go 1.21
 
-toolchain go1.21.5
-
 require (
 	github.com/NVIDIA/go-nvml v0.12.0-1
 	github.com/alicebob/miniredis/v2 v2.30.5
