@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"path"
 	"time"
 
 	common "github.com/beam-cloud/beam/internal/common"
@@ -139,7 +140,21 @@ func (i *taskQueueInstance) handleScalingEvent(queue *taskQueueInstance, desired
 
 func (i *taskQueueInstance) startContainers(containersToRun int) error {
 	for c := 0; c < containersToRun; c++ {
-		runRequest := &types.ContainerRequest{}
+		runRequest := &types.ContainerRequest{
+			ContainerId: i.genContainerId(),
+			Env: []string{
+				fmt.Sprintf("HANDLER=%s", i.stubConfig.CallbackUrl),
+				fmt.Sprintf("BEAM_TOKEN=%s", "faketoken"),
+			},
+			Cpu:        i.stubConfig.Runtime.Cpu,
+			Memory:     i.stubConfig.Runtime.Memory,
+			Gpu:        string(i.stubConfig.Runtime.Gpu),
+			ImageId:    i.stubConfig.Runtime.ImageId,
+			EntryPoint: []string{"python3.8", "-m", "beam.runner.function"},
+			Mounts: []types.Mount{
+				{LocalPath: path.Join(types.DefaultExtractedObjectPath, i.workspace.Name, "someobj_id"), MountPath: types.WorkerUserCodeVolume, ReadOnly: true},
+			},
+		}
 
 		err := i.scheduler.Run(runRequest)
 		if err != nil {
