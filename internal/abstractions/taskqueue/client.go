@@ -4,7 +4,6 @@ import (
 	"context"
 	"strconv"
 	"sync"
-	"time"
 
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/types"
@@ -17,12 +16,10 @@ type taskQueueClient struct {
 
 var taskMessagePool = sync.Pool{
 	New: func() interface{} {
-		eta := time.Now().Format(time.RFC3339)
 		return &types.TaskMessage{
-			ID:      uuid.Must(uuid.NewV4()).String(),
-			Retries: 0,
-			Kwargs:  nil,
-			ETA:     &eta,
+			ID:     uuid.Must(uuid.NewV4()).String(),
+			Args:   nil,
+			Kwargs: nil,
 		}
 	},
 }
