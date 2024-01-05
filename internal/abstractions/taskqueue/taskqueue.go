@@ -16,6 +16,7 @@ import (
 
 type TaskQueueService interface {
 	TaskQueuePut(context.Context, *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error)
+	TaskQueuePop(context.Context, *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error)
 	// TaskQueueLength(stubId string) (int64, error)
 	// TaskRunning(identityId, queueName string) (bool, error)
 	// TasksRunning(identityId, queueName string) (int, error)

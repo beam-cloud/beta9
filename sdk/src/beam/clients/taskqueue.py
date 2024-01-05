@@ -17,6 +17,16 @@ class TaskQueuePutResponse(betterproto.Message):
     pass
 
 
+@dataclass
+class TaskQueuePopRequest(betterproto.Message):
+    pass
+
+
+@dataclass
+class TaskQueuePopResponse(betterproto.Message):
+    pass
+
+
 class TaskQueueServiceStub(betterproto.ServiceStub):
     async def task_queue_put(self) -> TaskQueuePutResponse:
         request = TaskQueuePutRequest()
@@ -25,4 +35,13 @@ class TaskQueueServiceStub(betterproto.ServiceStub):
             "/taskqueue.TaskQueueService/TaskQueuePut",
             request,
             TaskQueuePutResponse,
+        )
+
+    async def task_queue_pop(self) -> TaskQueuePopResponse:
+        request = TaskQueuePopRequest()
+
+        return await self._unary_unary(
+            "/taskqueue.TaskQueueService/TaskQueuePop",
+            request,
+            TaskQueuePopResponse,
         )

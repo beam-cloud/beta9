@@ -12,10 +12,6 @@ import (
 	"github.com/gofrs/uuid"
 )
 
-const (
-	MaxTaskRetries int = 3
-)
-
 type taskQueueClient struct {
 	rdb *common.RedisClient
 }

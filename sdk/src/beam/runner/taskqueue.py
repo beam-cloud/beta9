@@ -1,24 +1,48 @@
-import asyncio
+import importlib
 import os
 import signal
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from http import HTTPStatus
 from multiprocessing import Event, Manager, Process, set_start_method
 from multiprocessing.managers import DictProxy, SyncManager
-from typing import Any, List
+from typing import Any, Callable, List
 
+import cloudpickle
 from fastapi import FastAPI
-from runner.instance import AppInstance, AppInstanceMode
+from grpclib.client import Channel
 from uvicorn import Config, Server
 
-from beam.clients.gateway import TaskClient
-from beam.task import BeamAppTaskStatus, BeamTaskExitCode
+from beam.aio import run_sync
+from beam.clients.gateway import EndTaskResponse, GatewayServiceStub, StartTaskResponse
+from beam.clients.taskqueue import TaskQueueServiceStub
+from beam.config import with_runner_context
+from beam.exceptions import RunnerException
+from beam.type import TaskExitCode, TaskStatus
+
+USER_CODE_VOLUME = "/mnt/code"
+TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 
 
-class TaskQueue:
+# TODO: move to some sort of common module
+def _load_handler() -> Callable:
+    sys.path.insert(0, USER_CODE_VOLUME)
+
+    handler = os.getenv("HANDLER")
+    if not handler:
+        raise RunnerException()
+
+    try:
+        module, func = handler.split(":")
+        target_module = importlib.import_module(module)
+        method = getattr(target_module, func)
+        return method
+    except BaseException:
+        raise RunnerException()
+
+
+class TaskQueueServer:
     def __init__(self) -> None:
         set_start_method("spawn", force=True)
 
@@ -29,7 +53,7 @@ class TaskQueue:
         self.manager: SyncManager = Manager()
 
         # Task worker attributes
-        self.task_worker_count: int = WORKERS
+        self.task_worker_count: int = 1  # TODO: swap out for concurrency value
         self.task_results: DictProxy = self.manager.dict()
         self.task_processes: List[Process] = []
         self.task_workers: List[TaskQueueWorker] = []
@@ -61,7 +85,7 @@ class TaskQueue:
     def _start_worker(self, worker_index: int):
         # Initialize task worker
         self.task_workers.append(
-            BeamTaskWorker(
+            TaskQueueWorker(
                 parent_pid=self.pid,
                 worker_startup_event=self.task_worker_startup_events[worker_index],
                 task_results=self.task_results,
@@ -88,7 +112,7 @@ class TaskQueue:
                 # Restart worker if the exit code indicates worker exit
                 # was due a task timeout, task cancellation, or workbus disconnect
                 if exit_code in [
-                    TaskExitCode.Canceled,
+                    TaskExitCode.Cancelled,
                     TaskExitCode.Timeout,
                     TaskExitCode.Disconnect,
                 ]:
@@ -100,7 +124,7 @@ class TaskQueue:
                     continue
 
                 self.exit_code = exit_code
-                if self.exit_code == BeamTaskExitCode.SigKill:
+                if self.exit_code == TaskExitCode.SigKill:
                     print(
                         "Task worker ran out memory! Try deploying again with higher memory limits."
                     )
@@ -126,7 +150,7 @@ class TaskQueueWorker:
     def set_task_result(self, *, task_id: str, task_result: Any, task_status: str) -> None:
         status_code = HTTPStatus.OK
 
-        if task_status == BeamAppTaskStatus.FAILED:
+        if task_status == TaskStatus.Error:
             status_code = HTTPStatus.INTERNAL_SERVER_ERROR
 
         try:
@@ -137,60 +161,113 @@ class TaskQueueWorker:
             print("Failed to communicate with task bus, killing worker.")
             os._exit(TaskExitCode.SigKill)
 
-    # Process tasks in queue one by one
-    def process_tasks(self) -> None:
+    @with_runner_context
+    def process_tasks(self, channel: Channel) -> None:
         self.worker_startup_event.set()
-        loop = asyncio.get_event_loop()
 
+        gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
+        taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(channel)
+
+        container_id = os.getenv("CONTAINER_ID")
+        container_hostname = os.getenv("CONTAINER_HOSTNAME")
+        if not container_id:
+            raise RunnerException("Invalid runner environment")
+
+        # TODO: NOOP
+        run_sync(taskqueue_stub.task_queue_pop())
+
+        # Load user function and arguments
+        handler = _load_handler()
+
+        task_id = "test"
+
+        # Start the task
+        start_time = time.time()
+        start_task_response: StartTaskResponse = run_sync(
+            gateway_stub.start_task(task_id=task_id, container_id=container_id)
+        )
+        if not start_task_response.ok:
+            raise RunnerException("Unable to start task")
+
+        # Invoke function
+        task_status = TaskStatus.Complete
         try:
-            self.task_client: TaskClient = TaskClient()
-            self.instance: AppInstance = AppInstance.create(AppInstanceMode.Deployment)
-        except BaseException:
-            print("Error occurred during app initialization")
-            sys.exit(BeamTaskExitCode.ErrorLoadingApp)
+            result = handler()
+            result = cloudpickle.dumps(result)
+        except BaseException as exc:
+            result = cloudpickle.dumps(exc)
+            task_status = TaskStatus.Error
+        finally:
+            pass
 
-        async def _task_loop():
-            print("Ready for tasks.")
+        task_duration = time.time() - start_time
 
-            executor = ThreadPoolExecutor(max_workers=1)
+        # End the task
+        end_task_response: EndTaskResponse = run_sync(
+            gateway_stub.end_task(
+                task_id=task_id,
+                task_duration=task_duration,
+                task_status=task_status,
+                container_id=container_id,
+                container_hostname=container_hostname,
+                scale_down_delay=0,
+            )
+        )
+        if not end_task_response.ok:
+            raise RunnerException("Unable to end task")
 
-            async for task in self.task_client.task_generator(self.instance):
-                task_status = BeamAppTaskStatus.COMPLETE
+        # try:
+        #     self.task_client: TaskClient = TaskClient()
+        # except BaseException:
+        #     print("Error occurred during app initialization")
+        #     sys.exit(BeamTaskExitCode.ErrorLoadingApp)
 
-                if not await task.before():
-                    print(f"Unable to start task: {task.task_id}")
-                    continue
+        # async def _task_loop():
+        #     print("Ready for tasks.")
 
-                try:
-                    monitor_task = loop.create_task(self.task_client.monitor_task(task))
-                    task_result, err = await loop.run_in_executor(executor, task.run)
-                    if err:
-                        task_status = BeamAppTaskStatus.FAILED
+        #     executor = ThreadPoolExecutor(max_workers=1)
 
-                    self.set_task_result(
-                        task_id=task.task_id, task_result=task_result, task_status=task_status
-                    )
+        #     async for task in self.task_client.task_generator(self.instance):
+        #         task_status = TaskStatus.COMPLETE
 
-                except BaseException:
-                    print("Unhandled error occurred in task")
-                    task_status = BeamAppTaskStatus.FAILED
-                finally:
-                    if not await task.after(task_status=task_status):
-                        print(f"Unable to end task: {task.task_id}")
-                    else:
-                        task.close(msg=task_result, status=task_status)
+        #         if not await task.before():
+        #             print(f"Unable to start task: {task.task_id}")
+        #             continue
 
-                    monitor_task.cancel()
+        #         try:
+        #             monitor_task = loop.create_task(self.task_client.monitor_task(task))
+        #             task_result, err = await loop.run_in_executor(executor, task.run)
+        #             if err:
+        #                 task_status = TaskStatus.FAILED
 
-        loop.run_until_complete(_task_loop())
-        self.task_client.close()
-        print("Worker exited.")
+        #             self.set_task_result(
+        #                 task_id=task.task_id, task_result=task_result, task_status=task_status
+        #             )
+
+        #         except BaseException:
+        #             print("Unhandled error occurred in task")
+        #             task_status = TaskStatus.Error
+        #         finally:
+        #             if not await task.after(task_status=task_status):
+        #                 print(f"Unable to end task: {task.task_id}")
+        #             else:
+        #                 task.close(msg=task_result, status=task_status)
+
+        #             monitor_task.cancel()
+
+        # loop.run_until_complete(_task_loop())
+        # print("Worker exited.")
 
 
-if __name__ == "__main__":
-    config = Config(app=deployment.app, host="0.0.0.0", port=int(os.getenv("BIND_PORT")), workers=1)
+def main():
+    server = TaskQueueServer()
+    config = Config(app=server.app, host="0.0.0.0", port=int(os.getenv("BIND_PORT")), workers=1)
     server = Server(config)
     server.run()
 
-    if deployment.exit_code != 0 and deployment.exit_code != BeamTaskExitCode.SigTerm:
-        sys.exit(deployment.exit_code)
+    if server.exit_code != 0 and server.exit_code != TaskExitCode.SigTerm:
+        sys.exit(server.exit_code)
+
+
+if __name__ == "__main__":
+    main()

@@ -5,7 +5,7 @@ from typing import Any, Callable
 from beam.abstractions.base import BaseAbstraction
 from beam.abstractions.image import Image, ImageBuildResult
 from beam.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
-from beam.clients.taskqueue import TaskQueuePutResponse, TaskQueueServiceStub
+from beam.clients.taskqueue import TaskQueuePopResponse, TaskQueuePutResponse, TaskQueueServiceStub
 from beam.sync import FileSyncer
 
 TASKQUEUE_STUB_TYPE = "TASK_QUEUE"
@@ -119,9 +119,15 @@ class _CallableWrapper:
         return self.func(*args, **kwargs)
 
     def put(self, payload: Any):
+        if not self.parent.runtime_ready and not self._prepare_runtime():
+            return
+
         r: TaskQueuePutResponse = self.parent.run_sync(self.parent.taskqueue_stub.task_queue_put())
         print(r)
 
-    def clear(self):
-        r: TaskQueuePutResponse = self.parent.run_sync(self.parent.taskqueue_stub.task_queue_put())
+    def pop(self):
+        if not self.parent.runtime_ready and not self._prepare_runtime():
+            return
+
+        r: TaskQueuePopResponse = self.parent.run_sync(self.parent.taskqueue_stub.task_queue_pop())
         print(r)

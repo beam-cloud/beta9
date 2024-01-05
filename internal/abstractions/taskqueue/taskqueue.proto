@@ -6,8 +6,13 @@ package taskqueue;
 
 service TaskQueueService {
   rpc TaskQueuePut(TaskQueuePutRequest) returns (TaskQueuePutResponse) {}
+  rpc TaskQueuePop(TaskQueuePopRequest) returns (TaskQueuePopResponse) {}
 }
 
 message TaskQueuePutRequest {}
 
 message TaskQueuePutResponse {}
+
+message TaskQueuePopRequest {}
+
+message TaskQueuePopResponse {}
