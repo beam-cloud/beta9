@@ -3,7 +3,6 @@ package gatewayservices
 import (
 	"context"
 	"encoding/json"
-	"log"
 
 	"github.com/beam-cloud/beam/internal/auth"
 	"github.com/beam-cloud/beam/internal/common"
@@ -17,7 +16,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	volumes := []types.Volume{}
 	err := json.Unmarshal(in.Volumes, &volumes)
 	if err != nil {
-		log.Println(err)
 		return &pb.GetOrCreateStubResponse{
 			Ok: false,
 		}, nil

@@ -2,7 +2,6 @@ package volume
 
 import (
 	"context"
-	"log"
 
 	"github.com/beam-cloud/beam/internal/auth"
 	"github.com/beam-cloud/beam/internal/repository"
@@ -39,7 +38,6 @@ func (vs *StructWorkspaceVolumeService) GetOrCreateVolume(ctx context.Context, i
 			Ok: false,
 		}, err
 	}
-	log.Println(volume)
 
 	return &pb.GetOrCreateVolumeResponse{
 		VolumeId: volume.ExternalId,
