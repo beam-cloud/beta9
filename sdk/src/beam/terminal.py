@@ -57,7 +57,12 @@ def progress(task_name: str):
         yield
 
 
-def humanize_date(d: datetime.datetime):
+def humanize_date(d: datetime.datetime) -> str:
+    # Check if datetime is "zero" time
+    if d == datetime.datetime(1, 1, 1, tzinfo=datetime.timezone.utc):
+        return ""
+
+    # Generate relative datetime
     diff = datetime.datetime.now(datetime.timezone.utc) - d
     s = diff.seconds
     if diff.days > 7 or diff.days < 0:
