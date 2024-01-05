@@ -37,6 +37,7 @@ type taskQueueInstance struct {
 	rdb                *common.RedisClient
 	containerRepo      repository.ContainerRepository
 	autoscaler         *autoscaler
+	client             *taskQueueClient
 }
 
 func (i *taskQueueInstance) monitor() error {

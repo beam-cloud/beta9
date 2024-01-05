@@ -91,8 +91,10 @@ func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 
 	log.Println("queue: ", queue)
 
+	err := queue.client.Push("yfakeid", "somename", queue.stub.ExternalId, []byte{})
+
 	return &pb.TaskQueuePutResponse{
-		Ok: true,
+		Ok: err == nil,
 	}, nil
 }
 
@@ -109,8 +111,10 @@ func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspaceId uint) e
 
 	lock := common.NewRedisLock(tq.rdb)
 	queue := &taskQueueInstance{
-		lock:               lock,
-		name:               stub.Name,
+		lock: lock,
+		name: stub.Name,
+		stub: stub,
+		// stubConfig: stub.,
 		scheduler:          tq.scheduler,
 		containerRepo:      tq.containerRepo,
 		containerEventChan: make(chan types.ContainerEvent, 1),
@@ -118,6 +122,7 @@ func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspaceId uint) e
 		scaleEventChan:     make(chan int, 1),
 		rdb:                tq.rdb,
 		ctx:                context.Background(),
+		client:             tq.queueClient,
 	}
 
 	autoscaler := newAutoscaler(queue)

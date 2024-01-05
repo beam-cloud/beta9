@@ -8,7 +8,6 @@ import (
 
 	common "github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/types"
-	"github.com/gin-gonic/gin"
 	"github.com/gofrs/uuid"
 )
 
@@ -33,22 +32,13 @@ func newRedisTaskQueueClient(rdb *common.RedisClient) *taskQueueClient {
 }
 
 // Add a new task to the queue
-func (qc *taskQueueClient) Push(identityId string, queueName string, taskId string, ctx *gin.Context) (string, error) {
-	var payload any
-	if ctx != nil {
-		err := ctx.BindJSON(&payload)
-		if err != nil {
-			return "", err
-		}
-	}
-
-	taskName := queueName
-	_, err := qc.delay(taskId, taskName, identityId, queueName, payload)
+func (qc *taskQueueClient) Push(taskId, workspaceName, stubId string, payload interface{}) error {
+	_, err := qc.delay(taskId, workspaceName, stubId, payload)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	return taskId, nil
+	return nil
 }
 
 func (qc *taskQueueClient) getTaskMessage(task string) *types.TaskMessage {
@@ -65,8 +55,8 @@ func (qc *taskQueueClient) releaseTaskMessage(v *types.TaskMessage) {
 	taskMessagePool.Put(v)
 }
 
-func (qc *taskQueueClient) delay(taskId string, task string, workspaceName string, stubId string, args ...interface{}) (*AsyncResult, error) {
-	taskMessage := qc.getTaskMessage(task)
+func (qc *taskQueueClient) delay(taskId string, workspaceName string, stubId string, args ...interface{}) (*AsyncResult, error) {
+	taskMessage := qc.getTaskMessage(stubId)
 	taskMessage.ID = taskId
 	taskMessage.Args = args
 
