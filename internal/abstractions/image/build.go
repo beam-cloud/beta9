@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -47,13 +46,7 @@ type BuildOpts struct {
 	ForceRebuild       bool
 }
 
-func NewBuilder(scheduler *scheduler.Scheduler, containerRepo repository.ContainerRepository) (*Builder, error) {
-	storeName := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_REGISTRY_STORE", "s3")
-	registry, err := common.NewImageRegistry(storeName)
-	if err != nil {
-		return nil, err
-	}
-
+func NewBuilder(registry *common.ImageRegistry, scheduler *scheduler.Scheduler, containerRepo repository.ContainerRepository) (*Builder, error) {
 	return &Builder{
 		scheduler:     scheduler,
 		registry:      registry,
@@ -113,10 +106,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		if err != nil {
 			return err
 		}
-	}
-
-	if opts.BaseImageRegistry == "" {
-		opts.BaseImageRegistry = os.Getenv("BEAM_RUNNER_BASE_IMAGE_REGISTRY")
 	}
 
 	baseImageId, err := b.GetImageId(&BuildOpts{

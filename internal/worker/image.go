@@ -14,6 +14,7 @@ import (
 
 	"github.com/beam-cloud/beam/internal/abstractions/image"
 	common "github.com/beam-cloud/beam/internal/common"
+	types "github.com/beam-cloud/beam/internal/types"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/moby/sys/mountinfo"
@@ -27,11 +28,10 @@ import (
 )
 
 const (
-	imagePullCommand          string = "skopeo"
-	awsCredentialProviderName string = "aws"
-	imageCachePath            string = "/dev/shm/images"
-	imageAvailableFilename    string = "IMAGE_AVAILABLE"
-	imageMountLockFilename    string = "IMAGE_MOUNT_LOCK"
+	imagePullCommand       string = "skopeo"
+	imageCachePath         string = "/dev/shm/images"
+	imageAvailableFilename string = "IMAGE_AVAILABLE"
+	imageMountLockFilename string = "IMAGE_MOUNT_LOCK"
 )
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes", "/snapshot"}
@@ -45,31 +45,34 @@ type ImageClient struct {
 	CommandTimeout int
 	Debug          bool
 	Creds          string
-	VerifyTLS      bool
+	config         types.ImageServiceConfig
 }
 
-func NewImageClient() (*ImageClient, error) {
+func NewImageClient(config types.ImageServiceConfig) (*ImageClient, error) {
 	var provider CredentialProvider // Configure image registry credentials
 
-	providerName := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_CREDENTIAL_PROVIDER", "aws")
-	if providerName == awsCredentialProviderName {
-		provider = &AWSCredentialProvider{}
-	} else {
-		provider = &DockerCredentialProvider{}
+	switch config.RegistryCredentialProviderName {
+	case "aws":
+		provider = &AWSCredentialProvider{
+			Region: config.Registries.S3.Region,
+		}
+	case "docker":
+		provider = &DockerCredentialProvider{
+			Username: config.Registries.Docker.Username,
+			Password: config.Registries.Docker.Password,
+		}
+	default:
+		return nil, fmt.Errorf("invalid credential provider name: %s", config.RegistryCredentialProviderName)
 	}
 
-	storeName := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_REGISTRY_STORE", "s3")
-	registry, err := common.NewImageRegistry(storeName)
+	registry, err := common.NewImageRegistry(config)
 	if err != nil {
 		return nil, err
 	}
 
-	verifyTLS := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_TLS_VERIFY", "true") != "false"
-
-	cacheUrl, cacheUrlSet := os.LookupEnv("BEAM_CACHE_URL")
 	var cacheClient *CacheClient = nil
-	if cacheUrlSet && cacheUrl != "" {
-		cacheClient, err = NewCacheClient(cacheUrl, "")
+	if config.CacheURL != "" {
+		cacheClient, err = NewCacheClient(config.CacheURL, "")
 		if err != nil {
 			return nil, err
 		}
@@ -84,6 +87,7 @@ func NewImageClient() (*ImageClient, error) {
 	}
 
 	return &ImageClient{
+		config:         config,
 		registry:       registry,
 		cacheClient:    cacheClient,
 		ImagePath:      baseImagePath,
@@ -91,7 +95,6 @@ func NewImageClient() (*ImageClient, error) {
 		CommandTimeout: -1,
 		Debug:          false,
 		Creds:          creds,
-		VerifyTLS:      verifyTLS,
 	}, nil
 }
 
@@ -147,10 +150,6 @@ func (i *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
-
-	if !i.VerifyTLS {
-		args = append(args, []string{"--src-tls-verify=false", "--dest-tls-verify=false"}...)
-	}
 
 	args = append(args, i.args(creds)...)
 	cmd := exec.CommandContext(ctx, i.PullCommand, args...)
@@ -230,6 +229,10 @@ func (i *ImageClient) args(creds *string) (out []string) {
 		out = append(out, "--command-timeout", fmt.Sprintf("%d", i.CommandTimeout))
 	}
 
+	if !i.config.EnableTLS {
+		out = append(out, []string{"--src-tls-verify=false", "--dest-tls-verify=false"}...)
+	}
+
 	if i.Debug {
 		out = append(out, "--debug")
 	}
@@ -286,15 +289,14 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}()
 
 	var err error = nil
-	archiveStore := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_REGISTRY_STORE", "s3")
-	switch archiveStore {
+	switch i.config.RegistryStore {
 	case "s3":
 		err = clip.CreateAndUploadArchive(clip.CreateOptions{
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
 		}, &clipCommon.S3StorageInfo{
-			Bucket: common.Secrets().Get("BEAM_IMAGESERVICE_IMAGE_REGISTRY_S3_BUCKET"),
-			Region: common.Secrets().Get("BEAM_IMAGESERVICE_IMAGE_REGISTRY_S3_REGION"),
+			Bucket: i.config.Registries.S3.Bucket,
+			Region: i.config.Registries.S3.Region,
 			Key:    fmt.Sprintf("%s.clip", imageId),
 		})
 	case "local":

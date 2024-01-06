@@ -5,6 +5,5 @@
 !go.mod
 !go.sum
 !sdk
-!.secrets
 **/__pycache__
 *.pyc

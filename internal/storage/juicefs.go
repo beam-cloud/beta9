@@ -5,22 +5,25 @@ import (
 	"log"
 	"os/exec"
 
-	"github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/types"
 )
 
 type JuiceFsStorage struct {
 	mountCmd *exec.Cmd
+	config   types.JuiceFSConfig
 }
 
-func NewJuiceFsStorage() (Storage, error) {
-	return &JuiceFsStorage{}, nil
+func NewJuiceFsStorage(config types.JuiceFSConfig) (Storage, error) {
+	return &JuiceFsStorage{
+		config: config,
+	}, nil
 }
 
 func (s *JuiceFsStorage) Mount(localPath string) error {
 	s.mountCmd = exec.Command(
 		"juicefs",
 		"mount",
-		common.Secrets().Get("BEAM_JUICEFS_REDIS"),
+		s.config.RedisURI,
 		localPath,
 	)
 
@@ -42,10 +45,10 @@ func (s *JuiceFsStorage) Format(fsName string) error {
 		"juicefs",
 		"format",
 		"--storage", "s3",
-		"--bucket", common.Secrets().Get("BEAM_JUICEFS_S3_BUCKET"),
-		"--access-key", common.Secrets().Get("BEAM_JUICEFS_AWS_ACCESS_KEY"),
-		"--secret-key", common.Secrets().Get("BEAM_JUICEFS_AWS_SECRET_KEY"),
-		common.Secrets().Get("BEAM_JUICEFS_REDIS"),
+		"--bucket", s.config.AWSS3Bucket,
+		"--access-key", s.config.AWSAccessKeyID,
+		"--secret-key", s.config.AWSSecretAccessKey,
+		s.config.RedisURI,
 		fsName,
 	)
 

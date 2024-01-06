@@ -27,8 +27,8 @@ func TestInjectCudaEnvVarsNoCudaInImage(t *testing.T) {
 		"NVIDIA_VISIBLE_DEVICES=",
 		"CUDA_VERSION=",
 		"GPU_TYPE=",
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.2/bin:$PATH",
-		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.2/targets/x86_64-linux/lib:$LD_LIBRARY_PATH",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.3/bin:$PATH",
+		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.3/targets/x86_64-linux/lib:$LD_LIBRARY_PATH",
 	}
 
 	resultEnv, _ := manager.InjectCudaEnvVars(initialEnv, &ContainerOptions{
@@ -48,7 +48,7 @@ func TestInjectCudaEnvVarsExistingCudaInImage(t *testing.T) {
 	// Set some environment variables to simulate NVIDIA settings
 	os.Setenv("NVIDIA_DRIVER_CAPABILITIES", "all")
 	os.Setenv("NVIDIA_REQUIRE_CUDA", "cuda>=9.0")
-	os.Setenv("CUDA_VERSION", "12.2")
+	os.Setenv("CUDA_VERSION", "12.3")
 
 	expectedEnv := []string{
 		"INITIAL=1",

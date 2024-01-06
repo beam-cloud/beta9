@@ -2,14 +2,13 @@ package common
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"math"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/beam-cloud/beam/internal/types"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
@@ -20,7 +19,7 @@ func NewRedisClientForTest() (*RedisClient, error) {
 		return nil, err
 	}
 
-	return NewRedisClient(WithAddress(s.Addr()))
+	return NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
 }
 
 func TestRedisLock(t *testing.T) {
@@ -87,38 +86,9 @@ func TestRedisLockWithTTLAndRetry(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestWithClientName(t *testing.T) {
-	opts1 := &RedisOptions{}
-	WithClientName("beam")(opts1)
-	assert.Equal(t, "beam", opts1.ClientName)
-
-	opts2 := &RedisOptions{}
-	WithClientName("My ^ App $")(opts2)
-	assert.Equal(t, "MyApp", opts2.ClientName)
-
-	opts3 := &RedisOptions{}
-	WithClientName("  g /.\\ []o]  o  ! @   #d---n$% ^&a*()m-_=e+ ")(opts3)
-	assert.Equal(t, "goodname", opts3.ClientName)
-}
-
-func TestWithAddress(t *testing.T) {
-	addr := "redis.beam.cloud:3452"
-
-	opts1 := &RedisOptions{}
-	WithAddress(addr)(opts1)
-	assert.Equal(t, addr, opts1.Addr)
-	assert.Equal(t, []string{addr}, opts1.Addrs())
-
-	addr = "redis1.beam.cloud:3452,redis2.beam.cloud:3452"
-	opts2 := &RedisOptions{}
-	WithAddress(addr)(opts2)
-	assert.Equal(t, addr, opts2.Addr)
-	assert.Equal(t, strings.Split(addr, ","), opts2.Addrs())
-}
-
 func TestCopyStruct(t *testing.T) {
-	options1 := &RedisOptions{ClientName: "hello", PoolSize: 10, ConnMaxLifetime: time.Second, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
-	options2 := &RedisOptions{}
+	options1 := &types.RedisConfig{ClientName: "hello", PoolSize: 10, ConnMaxLifetime: time.Second}
+	options2 := &types.RedisConfig{}
 
 	CopyStruct(options1, options2)
 

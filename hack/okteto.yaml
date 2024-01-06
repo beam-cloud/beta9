@@ -6,12 +6,10 @@ dev:
     sync:
     - ../:/workspace
     environment:
-      DEFAULT_NAMESPACE: ${OKTETO_NAMESPACE}
       BUILD_COMMAND: |
         go build -o /workspace/bin/beam /workspace/cmd/beam/main.go
         go build -o /workspace/bin/worker /workspace/cmd/worker/main.go
       BUILD_BINARY_PATH: /workspace/bin/beam
-      CONFIG_PATH: /workspace/.secrets
     forward:
     - 1993:1993
     - 1994:1994
