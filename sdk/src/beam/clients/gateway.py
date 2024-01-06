@@ -134,6 +134,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     cpu: int = betterproto.int64_field(6)
     memory: int = betterproto.int64_field(7)
     gpu: str = betterproto.string_field(8)
+    handler: str = betterproto.string_field(9)
 
 
 @dataclass
@@ -262,6 +263,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
         cpu: int = 0,
         memory: int = 0,
         gpu: str = "",
+        handler: str = "",
     ) -> GetOrCreateStubResponse:
         request = GetOrCreateStubRequest()
         request.object_id = object_id
@@ -272,6 +274,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
         request.cpu = cpu
         request.memory = memory
         request.gpu = gpu
+        request.handler = handler
 
         return await self._unary_unary(
             "/gateway.GatewayService/GetOrCreateStub",

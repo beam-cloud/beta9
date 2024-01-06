@@ -2,6 +2,7 @@ package function
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -55,7 +56,18 @@ func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, backen
 
 func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
-	task, err := fs.createTask(stream.Context(), in, authInfo)
+	stub, err := fs.backendRepo.GetStubByExternalId(stream.Context(), in.StubId, authInfo.Workspace.Id)
+	if err != nil {
+		return err
+	}
+
+	task, err := fs.createTask(stream.Context(), in, authInfo, &stub.Stub)
+	if err != nil {
+		return err
+	}
+
+	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
+	err = json.Unmarshal([]byte(stub.Config), &stubConfig)
 	if err != nil {
 		return err
 	}
@@ -81,29 +93,29 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	go fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
 
 	// Don't allow negative compute requests
-	if in.Cpu <= 0 {
-		in.Cpu = defaultFunctionContainerCpu
+	if stubConfig.Runtime.Cpu <= 0 {
+		stubConfig.Runtime.Cpu = defaultFunctionContainerCpu
 	}
 
-	if in.Memory <= 0 {
-		in.Memory = defaultFunctionContainerMemory
+	if stubConfig.Runtime.Memory <= 0 {
+		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
 	err = fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env: []string{
 			fmt.Sprintf("TASK_ID=%s", taskId),
-			fmt.Sprintf("HANDLER=%s", in.Handler),
+			fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
 			fmt.Sprintf("BEAM_TOKEN=%s", authInfo.Token.Key),
 		},
-		Cpu:        in.Cpu,
-		Memory:     in.Memory,
-		Gpu:        in.Gpu,
-		ImageId:    in.ImageId,
-		EntryPoint: []string{in.PythonVersion, "-m", "beam.runner.function"},
+		Cpu:        stubConfig.Runtime.Cpu,
+		Memory:     stubConfig.Runtime.Memory,
+		Gpu:        string(stubConfig.Runtime.Gpu),
+		ImageId:    stubConfig.Runtime.ImageId,
+		EntryPoint: []string{stubConfig.PythonVersion, "-m", "beam.runner.function"},
 		Mounts: []types.Mount{
 			{
-				LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId),
+				LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, stub.Object.ExternalId),
 				MountPath: types.WorkerUserCodeVolume, ReadOnly: true,
 			},
 		},
@@ -126,12 +138,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	return fs.handleStreams(ctx, stream, taskId, containerId, outputChan, keyEventChan)
 }
 
-func (fs *RunCFunctionService) createTask(ctx context.Context, in *pb.FunctionInvokeRequest, authInfo *auth.AuthInfo) (*types.Task, error) {
-	stub, err := fs.backendRepo.GetStubByExternalId(ctx, in.StubId, authInfo.Workspace.Id)
-	if err != nil {
-		return nil, err
-	}
-
+func (fs *RunCFunctionService) createTask(ctx context.Context, in *pb.FunctionInvokeRequest, authInfo *auth.AuthInfo, stub *types.Stub) (*types.Task, error) {
 	task, err := fs.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, stub.Id)
 	if err != nil {
 		return nil, err

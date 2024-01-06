@@ -92,6 +92,7 @@ class _CallableWrapper:
                     cpu=self.parent.cpu,
                     memory=self.parent.memory,
                     gpu=self.parent.gpu,
+                    handler=self.parent.handler,
                 )
             )
 
@@ -127,15 +128,8 @@ class _CallableWrapper:
         last_response: Union[None, FunctionInvokeResponse] = None
 
         async for r in self.parent.function_stub.function_invoke(
-            object_id=self.parent.object_id,
-            image_id=self.parent.image_id,
             stub_id=self.parent.stub_id,
             args=args,
-            handler=self.parent.handler,
-            python_version=self.parent.image.python_version,
-            cpu=self.parent.cpu,
-            memory=self.parent.memory,
-            gpu=self.parent.gpu,
         ):
             if r.output != "":
                 terminal.detail(r.output)

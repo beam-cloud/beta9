@@ -2,6 +2,7 @@ package taskqueue
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -116,13 +117,20 @@ func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Wo
 		return err
 	}
 
+	var stubConfig *types.StubConfigV1 = &types.StubConfigV1{}
+	err = json.Unmarshal([]byte(stub.Config), stubConfig)
+	if err != nil {
+		return err
+	}
+
 	lock := common.NewRedisLock(tq.rdb)
 	queue := &taskQueueInstance{
-		lock:      lock,
-		name:      stub.Name,
-		workspace: workspace,
-		stub:      stub,
-		// stubConfig: stub.,
+		lock:               lock,
+		name:               stub.Name,
+		workspace:          workspace,
+		stub:               &stub.Stub,
+		object:             &stub.Object,
+		stubConfig:         stubConfig,
 		scheduler:          tq.scheduler,
 		containerRepo:      tq.containerRepo,
 		containerEventChan: make(chan types.ContainerEvent, 1),

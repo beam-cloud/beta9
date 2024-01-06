@@ -30,6 +30,7 @@ type taskQueueInstance struct {
 	workspace          *types.Workspace
 	stub               *types.Stub
 	stubConfig         *types.StubConfigV1
+	object             *types.Object
 	ctx                context.Context
 	lock               *common.RedisLock
 	scheduler          *scheduler.Scheduler
@@ -103,11 +104,11 @@ func (i *taskQueueInstance) state() (*taskQueueState, error) {
 }
 
 func (i *taskQueueInstance) handleScalingEvent(queue *taskQueueInstance, desiredContainers int) error {
-	err := queue.lock.Acquire(queue.ctx, Keys.taskQueueInstanceLock("workspaceName", queue.name), common.RedisLockOptions{TtlS: 10, Retries: 0})
+	err := queue.lock.Acquire(queue.ctx, Keys.taskQueueInstanceLock(queue.workspace.Name, queue.name), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
 	}
-	defer i.lock.Release(Keys.taskQueueInstanceLock("workspaceName", queue.name))
+	defer i.lock.Release(Keys.taskQueueInstanceLock(queue.workspace.Name, queue.name))
 
 	state, err := i.state()
 	if err != nil {
@@ -143,17 +144,17 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		runRequest := &types.ContainerRequest{
 			ContainerId: i.genContainerId(),
 			Env: []string{
-				fmt.Sprintf("HANDLER=%s", i.stubConfig.CallbackUrl),
+				fmt.Sprintf("HANDLER=%s", i.stubConfig.Handler),
 				fmt.Sprintf("BEAM_TOKEN=%s", "faketoken"),
 			},
 			Cpu:        i.stubConfig.Runtime.Cpu,
 			Memory:     i.stubConfig.Runtime.Memory,
 			Gpu:        string(i.stubConfig.Runtime.Gpu),
 			ImageId:    i.stubConfig.Runtime.ImageId,
-			EntryPoint: []string{"python3.8", "-m", "beam.runner.function"},
+			EntryPoint: []string{i.stubConfig.PythonVersion, "-m", "beam.runner.taskqueue"},
 			Mounts: []types.Mount{
 				{
-					LocalPath: path.Join(types.DefaultExtractedObjectPath, i.workspace.Name, "someobj_id"),
+					LocalPath: path.Join(types.DefaultExtractedObjectPath, i.workspace.Name, i.object.ExternalId),
 					MountPath: types.WorkerUserCodeVolume, ReadOnly: true,
 				},
 			},

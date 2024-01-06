@@ -20,6 +20,8 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Memory:  in.Memory,
 			ImageId: in.ImageId,
 		},
+		Handler:       in.Handler,
+		PythonVersion: in.PythonVersion,
 	}
 
 	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)

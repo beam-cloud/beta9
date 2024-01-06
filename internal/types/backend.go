@@ -99,6 +99,8 @@ type TaskWithRelated struct {
 
 type StubConfigV1 struct {
 	Runtime         Runtime    `json:"runtime"`
+	Handler         string     `json:"handler"`
+	PythonVersion   string     `json:"python_version"`
 	KeepWarmSeconds uint       `json:"keep_warm_seconds"`
 	MaxPendingTasks uint       `json:"max_pending_tasks"`
 	CallbackUrl     string     `json:"callback_url"`
@@ -124,6 +126,12 @@ type Stub struct {
 	WorkspaceId   uint      `db:"workspace_id"` // Foreign key to Workspace
 	CreatedAt     time.Time `db:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at"`
+}
+
+type StubWithRelated struct {
+	Stub
+	Workspace Workspace `db:"workspace"`
+	Object    Object    `db:"object"`
 }
 
 type Image struct {
