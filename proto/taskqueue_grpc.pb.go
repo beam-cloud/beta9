@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	TaskQueueService_TaskQueuePut_FullMethodName = "/taskqueue.TaskQueueService/TaskQueuePut"
-	TaskQueueService_TaskQueuePop_FullMethodName = "/taskqueue.TaskQueueService/TaskQueuePop"
+	TaskQueueService_TaskQueuePut_FullMethodName    = "/taskqueue.TaskQueueService/TaskQueuePut"
+	TaskQueueService_TaskQueuePop_FullMethodName    = "/taskqueue.TaskQueueService/TaskQueuePop"
+	TaskQueueService_TaskQueueLength_FullMethodName = "/taskqueue.TaskQueueService/TaskQueueLength"
 )
 
 // TaskQueueServiceClient is the client API for TaskQueueService service.
@@ -29,6 +30,7 @@ const (
 type TaskQueueServiceClient interface {
 	TaskQueuePut(ctx context.Context, in *TaskQueuePutRequest, opts ...grpc.CallOption) (*TaskQueuePutResponse, error)
 	TaskQueuePop(ctx context.Context, in *TaskQueuePopRequest, opts ...grpc.CallOption) (*TaskQueuePopResponse, error)
+	TaskQueueLength(ctx context.Context, in *TaskQueueLengthRequest, opts ...grpc.CallOption) (*TaskQueueLengthResponse, error)
 }
 
 type taskQueueServiceClient struct {
@@ -57,12 +59,22 @@ func (c *taskQueueServiceClient) TaskQueuePop(ctx context.Context, in *TaskQueue
 	return out, nil
 }
 
+func (c *taskQueueServiceClient) TaskQueueLength(ctx context.Context, in *TaskQueueLengthRequest, opts ...grpc.CallOption) (*TaskQueueLengthResponse, error) {
+	out := new(TaskQueueLengthResponse)
+	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueueLength_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TaskQueueServiceServer is the server API for TaskQueueService service.
 // All implementations must embed UnimplementedTaskQueueServiceServer
 // for forward compatibility
 type TaskQueueServiceServer interface {
 	TaskQueuePut(context.Context, *TaskQueuePutRequest) (*TaskQueuePutResponse, error)
 	TaskQueuePop(context.Context, *TaskQueuePopRequest) (*TaskQueuePopResponse, error)
+	TaskQueueLength(context.Context, *TaskQueueLengthRequest) (*TaskQueueLengthResponse, error)
 	mustEmbedUnimplementedTaskQueueServiceServer()
 }
 
@@ -75,6 +87,9 @@ func (UnimplementedTaskQueueServiceServer) TaskQueuePut(context.Context, *TaskQu
 }
 func (UnimplementedTaskQueueServiceServer) TaskQueuePop(context.Context, *TaskQueuePopRequest) (*TaskQueuePopResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TaskQueuePop not implemented")
+}
+func (UnimplementedTaskQueueServiceServer) TaskQueueLength(context.Context, *TaskQueueLengthRequest) (*TaskQueueLengthResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TaskQueueLength not implemented")
 }
 func (UnimplementedTaskQueueServiceServer) mustEmbedUnimplementedTaskQueueServiceServer() {}
 
@@ -125,6 +140,24 @@ func _TaskQueueService_TaskQueuePop_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskQueueService_TaskQueueLength_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TaskQueueLengthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskQueueServiceServer).TaskQueueLength(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskQueueService_TaskQueueLength_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskQueueServiceServer).TaskQueueLength(ctx, req.(*TaskQueueLengthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TaskQueueService_ServiceDesc is the grpc.ServiceDesc for TaskQueueService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -139,6 +172,10 @@ var TaskQueueService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TaskQueuePop",
 			Handler:    _TaskQueueService_TaskQueuePop_Handler,
+		},
+		{
+			MethodName: "TaskQueueLength",
+			Handler:    _TaskQueueService_TaskQueueLength_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

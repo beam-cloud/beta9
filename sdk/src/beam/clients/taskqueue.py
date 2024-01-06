@@ -31,6 +31,17 @@ class TaskQueuePopResponse(betterproto.Message):
     task_msg: bytes = betterproto.bytes_field(2)
 
 
+@dataclass
+class TaskQueueLengthRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+
+
+@dataclass
+class TaskQueueLengthResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    length: int = betterproto.int64_field(2)
+
+
 class TaskQueueServiceStub(betterproto.ServiceStub):
     async def task_queue_put(
         self, *, stub_id: str = "", payload: bytes = b""
@@ -56,4 +67,14 @@ class TaskQueueServiceStub(betterproto.ServiceStub):
             "/taskqueue.TaskQueueService/TaskQueuePop",
             request,
             TaskQueuePopResponse,
+        )
+
+    async def task_queue_length(self, *, stub_id: str = "") -> TaskQueueLengthResponse:
+        request = TaskQueueLengthRequest()
+        request.stub_id = stub_id
+
+        return await self._unary_unary(
+            "/taskqueue.TaskQueueService/TaskQueueLength",
+            request,
+            TaskQueueLengthResponse,
         )

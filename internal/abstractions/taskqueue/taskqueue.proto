@@ -7,6 +7,8 @@ package taskqueue;
 service TaskQueueService {
   rpc TaskQueuePut(TaskQueuePutRequest) returns (TaskQueuePutResponse) {}
   rpc TaskQueuePop(TaskQueuePopRequest) returns (TaskQueuePopResponse) {}
+  rpc TaskQueueLength(TaskQueueLengthRequest)
+      returns (TaskQueueLengthResponse) {}
 }
 
 message TaskQueuePutRequest {
@@ -27,4 +29,11 @@ message TaskQueuePopRequest {
 message TaskQueuePopResponse {
   bool ok = 1;
   bytes task_msg = 2;
+}
+
+message TaskQueueLengthRequest { string stub_id = 1; }
+
+message TaskQueueLengthResponse {
+  bool ok = 1;
+  int64 length = 2;
 }

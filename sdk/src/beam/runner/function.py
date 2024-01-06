@@ -1,8 +1,5 @@
-import importlib
 import os
-import sys
 import time
-from typing import Callable
 
 import cloudpickle
 from grpclib.client import Channel
@@ -16,25 +13,8 @@ from beam.clients.function import (
 from beam.clients.gateway import EndTaskResponse, GatewayServiceStub, StartTaskResponse
 from beam.config import with_runner_context
 from beam.exceptions import RunnerException
+from beam.runner.common import load_handler
 from beam.type import TaskStatus
-
-USER_CODE_VOLUME = "/mnt/code"
-
-
-def _load_handler() -> Callable:
-    sys.path.insert(0, USER_CODE_VOLUME)
-
-    handler = os.getenv("HANDLER")
-    if not handler:
-        raise RunnerException()
-
-    try:
-        module, func = handler.split(":")
-        target_module = importlib.import_module(module)
-        method = getattr(target_module, func)
-        return method
-    except BaseException:
-        raise RunnerException()
 
 
 @with_runner_context
@@ -49,7 +29,7 @@ def main(channel: Channel):
         raise RunnerException("Invalid runner environment")
 
     # Load user function and arguments
-    handler = _load_handler()
+    handler = load_handler()
     get_args_resp: FunctionGetArgsResponse = run_sync(
         function_stub.function_get_args(task_id=task_id),
     )

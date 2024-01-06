@@ -18,7 +18,8 @@ import (
 type TaskQueueService interface {
 	TaskQueuePut(context.Context, *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error)
 	TaskQueuePop(context.Context, *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error)
-	// TaskQueueLength(stubId string) (int64, error)
+	TaskQueueLength(context.Context, *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error)
+
 	// TaskRunning(identityId, queueName string) (bool, error)
 	// TasksRunning(identityId, queueName string) (int, error)
 	// GetTaskDuration(identityId, queueName string) (float64, error)
@@ -74,7 +75,7 @@ func NewTaskQueueRedis(ctx context.Context,
 	return tq, nil
 }
 
-type Payload struct {
+type TaskPayload struct {
 	Args   []interface{}          `json:"args"`
 	Kwargs map[string]interface{} `json:"kwargs"`
 }
@@ -99,7 +100,7 @@ func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 		return nil, err
 	}
 
-	var payload Payload
+	var payload TaskPayload
 	err = json.Unmarshal(in.Payload, &payload)
 	if err != nil {
 		return &pb.TaskQueuePutResponse{
@@ -145,6 +146,20 @@ func (tq *TaskQueueRedis) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 
 	return &pb.TaskQueuePopResponse{
 		Ok: true, TaskMsg: msg,
+	}, nil
+}
+
+func (tq *TaskQueueRedis) TaskQueueLength(ctx context.Context, in *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	length, err := tq.queueClient.QueueLength(authInfo.Workspace.Name, in.StubId)
+	if err != nil {
+		return &pb.TaskQueueLengthResponse{Ok: false}, nil
+	}
+
+	return &pb.TaskQueueLengthResponse{
+		Ok:     true,
+		Length: length,
 	}, nil
 }
 

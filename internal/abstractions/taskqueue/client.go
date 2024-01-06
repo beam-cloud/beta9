@@ -2,7 +2,6 @@ package taskqueue
 
 import (
 	"context"
-	"log"
 	"strconv"
 	"sync"
 	"time"
@@ -61,7 +60,6 @@ func (qc *taskQueueClient) Pop(workspaceName, stubId, containerId string) ([]byt
 		return nil, err
 	}
 
-	log.Println("queue length? ", queueLength)
 	if queueLength == 0 {
 		return nil, nil
 	}
