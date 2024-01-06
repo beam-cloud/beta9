@@ -76,16 +76,17 @@ func (i *taskQueueInstance) monitor() error {
 }
 
 func (i *taskQueueInstance) state() (*taskQueueState, error) {
-	patternPrefix := common.RedisKeys.SchedulerContainerState(fmt.Sprintf("%s%s-*", taskQueueContainerPrefix, i.stub.ExternalId))
+	patternPrefix := fmt.Sprintf("%s%s-*", taskQueueContainerPrefix, i.stub.ExternalId)
 	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
 	if err != nil {
 		return nil, err
 	}
 
-	failedContainers, err := i.containerRepo.GetFailedContainerCountByPrefix(patternPrefix)
+	_, err = i.containerRepo.GetFailedContainerCountByPrefix(patternPrefix)
 	if err != nil {
 		return nil, err
 	}
+	failedContainers := 0
 
 	state := taskQueueState{}
 	for _, container := range containers {
@@ -114,6 +115,8 @@ func (i *taskQueueInstance) handleScalingEvent(queue *taskQueueInstance, desired
 	if err != nil {
 		return err
 	}
+
+	log.Printf("state: %+v\n", state)
 
 	if state.FailedContainers >= types.FailedContainerThreshold {
 		log.Printf("<%s> reached failed container threshold, scaling to zero.", queue.name)
@@ -162,10 +165,10 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 
 		err := i.scheduler.Run(runRequest)
 		if err != nil {
+			log.Printf("<%s> unable to run container: %v", i.name, err)
 			return err
 		}
 
-		log.Printf("<%s> unable to run container: %v", i.name, err)
 		continue
 	}
 

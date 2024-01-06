@@ -4,9 +4,8 @@ import signal
 import sys
 import threading
 import time
-from multiprocessing import Event, Manager, Process, set_start_method
-from multiprocessing.managers import DictProxy, SyncManager
-from typing import Any, Callable, List
+from multiprocessing import Event, Process, set_start_method
+from typing import Callable, List
 
 import cloudpickle
 from fastapi import FastAPI
@@ -41,7 +40,7 @@ def _load_handler() -> Callable:
         raise RunnerException()
 
 
-class TaskQueueServer:
+class TaskQueueManager:
     def __init__(self) -> None:
         set_start_method("spawn", force=True)
 
@@ -49,11 +48,9 @@ class TaskQueueServer:
         self.app: FastAPI = FastAPI()
         self.pid: int = os.getpid()
         self.exit_code: int = 0
-        self.manager: SyncManager = Manager()
 
         # Task worker attributes
         self.task_worker_count: int = 1  # TODO: swap out for concurrency value
-        self.task_results: DictProxy = self.manager.dict()
         self.task_processes: List[Process] = []
         self.task_workers: List[TaskQueueWorker] = []
         self.task_worker_startup_events: List[Event] = [
@@ -87,7 +84,6 @@ class TaskQueueServer:
             TaskQueueWorker(
                 parent_pid=self.pid,
                 worker_startup_event=self.task_worker_startup_events[worker_index],
-                task_results=self.task_results,
             )
         )
 
@@ -140,14 +136,9 @@ class TaskQueueWorker:
         *,
         parent_pid: int,
         worker_startup_event: Event,
-        task_results: dict,
     ) -> None:
         self.parent_pid: int = parent_pid
-        self.task_results: dict = task_results
         self.worker_startup_event: Event = worker_startup_event
-
-    def set_task_result(self, *, task_id: str, task_result: Any, task_status: str) -> None:
-        pass
 
     @with_runner_context
     def process_tasks(self, channel: Channel) -> None:
@@ -248,13 +239,14 @@ class TaskQueueWorker:
 
 
 def main():
-    server = TaskQueueServer()
-    config = Config(app=server.app, host="0.0.0.0", port=int(os.getenv("BIND_PORT")), workers=1)
-    server = Server(config)
-    server.run()
+    tq = TaskQueueManager()
+    config = Config(app=tq.app, host="0.0.0.0", port=int(os.getenv("BIND_PORT")), workers=1)
 
-    if server.exit_code != 0 and server.exit_code != TaskExitCode.SigTerm:
-        sys.exit(server.exit_code)
+    s = Server(config)
+    s.run()
+
+    if tq.exit_code != 0 and tq.exit_code != TaskExitCode.SigTerm:
+        sys.exit(tq.exit_code)
 
 
 if __name__ == "__main__":

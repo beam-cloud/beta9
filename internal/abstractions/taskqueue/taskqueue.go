@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/beam-cloud/beam/internal/auth"
 	common "github.com/beam-cloud/beam/internal/common"
@@ -158,31 +157,31 @@ func (tq *TaskQueueRedis) handleContainerEvents() {
 
 			log.Println("(rx event) container ID: ", containerId)
 
-			operation := event.Operation
-			containerIdParts := strings.Split(containerId, "-")
-			stubId := strings.Join(containerIdParts[1:3], "-")
+			// operation := event.Operation
+			// containerIdParts := strings.Split(containerId, "-")
+			// stubId := strings.Join(containerIdParts[1:3], "-")
 
-			queue, exists := tq.queueInstances.Get(stubId)
-			if !exists {
-				err := tq.createQueueInstance("", nil)
-				if err != nil {
-					log.Printf("err creating instance: %+v\n", err)
-					continue
-				}
-			}
+			// queue, exists := tq.queueInstances.Get(stubId)
+			// if !exists {
+			// 	err := tq.createQueueInstance("", nil)
+			// 	if err != nil {
+			// 		log.Printf("err creating instance: %+v\n", err)
+			// 		continue
+			// 	}
+			// }
 
-			switch operation {
-			case common.KeyOperationSet, common.KeyOperationHSet:
-				queue.containerEventChan <- types.ContainerEvent{
-					ContainerId: containerId,
-					Change:      +1,
-				}
-			case common.KeyOperationDel, common.KeyOperationExpired:
-				queue.containerEventChan <- types.ContainerEvent{
-					ContainerId: containerId,
-					Change:      -1,
-				}
-			}
+			// switch operation {
+			// case common.KeyOperationSet, common.KeyOperationHSet:
+			// 	queue.containerEventChan <- types.ContainerEvent{
+			// 		ContainerId: containerId,
+			// 		Change:      +1,
+			// 	}
+			// case common.KeyOperationDel, common.KeyOperationExpired:
+			// 	queue.containerEventChan <- types.ContainerEvent{
+			// 		ContainerId: containerId,
+			// 		Change:      -1,
+			// 	}
+			// }
 		case <-tq.ctx.Done():
 			return
 		}

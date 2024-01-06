@@ -95,6 +95,7 @@ class _CallableWrapper:
                     cpu=self.parent.cpu,
                     memory=self.parent.memory,
                     gpu=self.parent.gpu,
+                    handler=self.parent.handler,
                 )
             )
 
