@@ -223,11 +223,6 @@ func (qc *taskQueueClient) GetAverageTaskDuration(workspaceName, stubId string) 
 // 	}
 // }
 
-// AsyncResult represents pending result
-type AsyncResult struct {
-	TaskID string
-}
-
 /*
 
 
@@ -288,42 +283,6 @@ func (t *TaskRedisRepository) GetNextTask(queueName, containerId, identityExtern
 	return task, nil
 }
 
-func (t *TaskRedisRepository) GetTasksInFlight(queueName, identityExternalId string) (int, error) {
-	val, err := t.rdb.Get(context.TODO(), common.RedisKeys.QueueTasksInFlight(identityExternalId, queueName)).Int()
-	if err != nil {
-		return 0, err
-	}
-
-	return val, nil
-}
-
-func (t *TaskRedisRepository) IncrementTasksInFlight(queueName, identityExternalId string) error {
-	err := t.rdb.Incr(context.TODO(), common.RedisKeys.QueueTasksInFlight(identityExternalId, queueName)).Err()
-	if err != nil {
-		return err
-	}
-
-	err = t.rdb.Expire(context.TODO(), common.RedisKeys.QueueTasksInFlight(identityExternalId, queueName), types.RequestTimeoutDurationS).Err()
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (t *TaskRedisRepository) DecrementTasksInFlight(queueName, identityExternalId string) error {
-	err := t.rdb.Decr(context.TODO(), common.RedisKeys.QueueTasksInFlight(identityExternalId, queueName)).Err()
-	if err != nil {
-		return err
-	}
-
-	err = t.rdb.Expire(context.TODO(), common.RedisKeys.QueueTasksInFlight(identityExternalId, queueName), types.RequestTimeoutDurationS).Err()
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
 
 func (t *TaskRedisRepository) StartTask(taskId, queueName, containerId, identityExternalId string) error {
 	err := t.rdb.SetEx(context.TODO(), common.RedisKeys.QueueTaskRunningLock(identityExternalId, queueName, containerId, taskId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()

@@ -105,6 +105,10 @@ func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 	}, nil
 }
 
+func (tq *TaskQueueRedis) TaskQueuePop(context.Context, *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error) {
+	return &pb.TaskQueuePopResponse{}, nil
+}
+
 func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Workspace) error {
 	_, exists := tq.queueInstances.Get(stubId)
 	if exists {
@@ -122,6 +126,11 @@ func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Wo
 		return err
 	}
 
+	token, err := tq.backendRepo.RetrieveActiveToken(tq.ctx, stub.Workspace.Id)
+	if err != nil {
+		return err
+	}
+
 	lock := common.NewRedisLock(tq.rdb)
 	queue := &taskQueueInstance{
 		lock:               lock,
@@ -129,6 +138,7 @@ func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Wo
 		workspace:          workspace,
 		stub:               &stub.Stub,
 		object:             &stub.Object,
+		token:              token,
 		stubConfig:         stubConfig,
 		scheduler:          tq.scheduler,
 		containerRepo:      tq.containerRepo,

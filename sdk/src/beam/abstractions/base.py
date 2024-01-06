@@ -21,7 +21,3 @@ class BaseAbstraction(ABC):
             self.channel.close()
         except AttributeError:
             return
-
-
-def prepare_runtime():
-    pass

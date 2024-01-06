@@ -1,45 +1,26 @@
 import asyncio
-import inspect
 import os
 from typing import Any, Callable, Iterable, Union
 
 import cloudpickle
 
 from beam import terminal
-from beam.abstractions.base import BaseAbstraction
-from beam.abstractions.image import Image, ImageBuildResult
+from beam.abstractions.image import Image
+from beam.abstractions.runner import RunnerAbstraction
 from beam.clients.function import (
     FunctionInvokeResponse,
     FunctionServiceStub,
 )
-from beam.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
 from beam.sync import FileSyncer
 
 FUNCTION_STUB_TYPE = "FUNCTION"
 FUNCTION_STUB_PREFIX = "function"
 
 
-class Function(BaseAbstraction):
+class Function(RunnerAbstraction):
     def __init__(self, image: Image, cpu: int = 100, memory: int = 128, gpu="") -> None:
-        super().__init__()
+        super().__init__(image=image, cpu=cpu, memory=memory, gpu=gpu)
 
-        if image is None:
-            image = Image()
-
-        self.image: Image = image
-        self.image_available: bool = False
-        self.files_synced: bool = False
-        self.stub_created: bool = False
-        self.runtime_ready: bool = False
-        self.object_id: str = ""
-        self.image_id: str = ""
-        self.stub_id: str = ""
-        self.handler: str = ""
-        self.cpu = cpu
-        self.memory = memory
-        self.gpu = gpu
-
-        self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
 
@@ -52,65 +33,16 @@ class _CallableWrapper:
         self.func: Callable = func
         self.parent: Function = parent
 
-    def _prepare_runtime(self) -> bool:
-        module = inspect.getmodule(self.func)  # Determine module / function name
-        if module:
-            module_file = os.path.basename(module.__file__)
-            module_name = os.path.splitext(module_file)[0]
-        else:
-            module_name = "__main__"
-
-        function_name = self.func.__name__
-        self.parent.handler = f"{module_name}:{function_name}"
-
-        if not self.parent.image_available:
-            image_build_result: ImageBuildResult = self.parent.image.build()
-
-            if image_build_result and image_build_result.success:
-                self.parent.image_available = True
-                self.parent.image_id = image_build_result.image_id
-            else:
-                return False
-
-        if not self.parent.files_synced:
-            sync_result = self.parent.syncer.sync()
-
-            if sync_result.success:
-                self.parent.files_synced = True
-                self.parent.object_id = sync_result.object_id
-            else:
-                return False
-
-        if not self.parent.stub_created:
-            stub_response: GetOrCreateStubResponse = self.parent.run_sync(
-                self.parent.gateway_stub.get_or_create_stub(
-                    object_id=self.parent.object_id,
-                    image_id=self.parent.image_id,
-                    stub_type=FUNCTION_STUB_TYPE,
-                    name=f"{FUNCTION_STUB_PREFIX}/{self.parent.handler}",
-                    python_version=self.parent.image.python_version,
-                    cpu=self.parent.cpu,
-                    memory=self.parent.memory,
-                    gpu=self.parent.gpu,
-                    handler=self.parent.handler,
-                )
-            )
-
-            if stub_response.ok:
-                self.parent.stub_created = True
-                self.parent.stub_id = stub_response.stub_id
-            else:
-                return False
-
-        self.parent.runtime_ready = True
-        return True
-
     def __call__(self, *args, **kwargs) -> Any:
-        task_id = os.getenv("TASK_ID")
-        if task_id:
+        container_id = os.getenv("CONTAINER_ID")
+        if container_id:
             return self.local(*args, **kwargs)
 
-        if not self.parent.runtime_ready and not self._prepare_runtime():
+        if not self.parent.runtime_ready and not self.parent.prepare_runtime(
+            func=self.func,
+            stub_type=FUNCTION_STUB_TYPE,
+            stub_name=f"{FUNCTION_STUB_PREFIX}/{self.parent.handler}",
+        ):
             return
 
         with terminal.progress("Working..."):
@@ -165,7 +97,11 @@ class _CallableWrapper:
                 break
 
     def map(self, inputs: Iterable):
-        if not self.parent.runtime_ready and not self._prepare_runtime():
+        if not self.parent.runtime_ready and not self.parent.prepare_runtime(
+            func=self.func,
+            stub_type=FUNCTION_STUB_TYPE,
+            stub_name=f"{FUNCTION_STUB_PREFIX}/{self.parent.handler}",
+        ):
             return
 
         return self._gather_and_yield_results(inputs)

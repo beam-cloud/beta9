@@ -31,6 +31,7 @@ type taskQueueInstance struct {
 	stub               *types.Stub
 	stubConfig         *types.StubConfigV1
 	object             *types.Object
+	token              *types.Token
 	ctx                context.Context
 	lock               *common.RedisLock
 	scheduler          *scheduler.Scheduler
@@ -148,7 +149,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			ContainerId: i.genContainerId(),
 			Env: []string{
 				fmt.Sprintf("HANDLER=%s", i.stubConfig.Handler),
-				fmt.Sprintf("BEAM_TOKEN=%s", "faketoken"),
+				fmt.Sprintf("BEAM_TOKEN=%s", i.token.Key),
 			},
 			Cpu:        i.stubConfig.Runtime.Cpu,
 			Memory:     i.stubConfig.Runtime.Memory,

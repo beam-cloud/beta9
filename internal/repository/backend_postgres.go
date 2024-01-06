@@ -152,6 +152,24 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	return &token, &workspace, nil
 }
 
+func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error) {
+	query := `
+	SELECT id, external_id, key, created_at, updated_at, active, workspace_id
+	FROM token
+	WHERE workspace_id = $1 AND active = TRUE
+	ORDER BY updated_at DESC
+	LIMIT 1;
+	`
+
+	var token types.Token
+	err := r.client.GetContext(ctx, &token, query, workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &token, nil
+}
+
 // Object
 
 func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error) {
