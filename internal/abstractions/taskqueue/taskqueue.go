@@ -134,7 +134,7 @@ func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Wo
 	lock := common.NewRedisLock(tq.rdb)
 	queue := &taskQueueInstance{
 		lock:               lock,
-		name:               stub.Name,
+		name:               fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
 		workspace:          workspace,
 		stub:               &stub.Stub,
 		object:             &stub.Object,
@@ -201,7 +201,7 @@ func (tq *TaskQueueRedis) handleContainerEvents() {
 // Redis keys
 var (
 	taskQueuePrefix              string = "taskqueue"
-	taskQueueInstanceLock        string = "taskqueue:%s:%s"
+	taskQueueInstanceLock        string = "taskqueue:%s:%s:instance_lock"
 	taskQueueList                string = "taskqueue:%s:%s"
 	taskQueueTaskDuration        string = "taskqueue:%s:%s:task_duration"
 	taskQueueAverageTaskDuration string = "taskqueue:%s:%s:avg_task_duration"

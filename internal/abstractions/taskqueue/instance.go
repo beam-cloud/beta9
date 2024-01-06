@@ -65,11 +65,11 @@ func (i *taskQueueInstance) monitor() error {
 			}
 
 			if initialContainerCount != len(i.containers) {
-				log.Printf("<%s> scaled from %d->%d", i.name, initialContainerCount, len(i.containers))
+				log.Printf("<taskqueue %s> scaled from %d->%d", i.name, initialContainerCount, len(i.containers))
 			}
 
 		case desiredContainers := <-i.scaleEventChan:
-			if err := i.handleScalingEvent(i, desiredContainers); err != nil {
+			if err := i.handleScalingEvent(desiredContainers); err != nil {
 				continue
 			}
 		}
@@ -105,12 +105,12 @@ func (i *taskQueueInstance) state() (*taskQueueState, error) {
 	return &state, nil
 }
 
-func (i *taskQueueInstance) handleScalingEvent(queue *taskQueueInstance, desiredContainers int) error {
-	err := queue.lock.Acquire(queue.ctx, Keys.taskQueueInstanceLock(queue.workspace.Name, queue.name), common.RedisLockOptions{TtlS: 10, Retries: 0})
+func (i *taskQueueInstance) handleScalingEvent(desiredContainers int) error {
+	err := i.lock.Acquire(i.ctx, Keys.taskQueueInstanceLock(i.workspace.Name, i.stub.ExternalId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
 	}
-	defer i.lock.Release(Keys.taskQueueInstanceLock(queue.workspace.Name, queue.name))
+	defer i.lock.Release(Keys.taskQueueInstanceLock(i.workspace.Name, i.stub.ExternalId))
 
 	state, err := i.state()
 	if err != nil {
@@ -120,10 +120,12 @@ func (i *taskQueueInstance) handleScalingEvent(queue *taskQueueInstance, desired
 	log.Printf("state: %+v\n", state)
 
 	if state.FailedContainers >= types.FailedContainerThreshold {
-		log.Printf("<%s> reached failed container threshold, scaling to zero.", queue.name)
+		log.Printf("<taskqueue %s> reached failed container threshold, scaling to zero.", i.name)
 		desiredContainers = 0
 	}
 
+	// TODO: put this back...?
+	// Stubs currently have no concept of status so this is meaningless
 	// if rb.Status == types.DeploymentStatusStopped {
 	// 	desiredContainers = 0
 	// }
@@ -144,6 +146,7 @@ func (i *taskQueueInstance) handleScalingEvent(queue *taskQueueInstance, desired
 }
 
 func (i *taskQueueInstance) startContainers(containersToRun int) error {
+	log.Println("containers to run: ", containersToRun)
 	for c := 0; c < containersToRun; c++ {
 		runRequest := &types.ContainerRequest{
 			ContainerId: i.genContainerId(),
@@ -166,7 +169,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 
 		err := i.scheduler.Run(runRequest)
 		if err != nil {
-			log.Printf("<%s> unable to run container: %v", i.name, err)
+			log.Printf("<taskqueue %s> unable to run  container: %v", i.name, err)
 			return err
 		}
 
@@ -180,7 +183,7 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 	src := rand.NewSource(time.Now().UnixNano())
 	rnd := rand.New(src)
 
-	containerIds := []string{}
+	containerIds := []string{} // TODO: get stoppable containers...
 
 	for c := 0; c < containersToStop && len(containerIds) > 0; c++ {
 		idx := rnd.Intn(len(containerIds))
@@ -188,7 +191,7 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 
 		err := i.scheduler.Stop(containerId)
 		if err != nil {
-			log.Printf("unable to stop container: %v", err)
+			log.Printf("<taskqueue %s> unable to stop container: %v", i.name, err)
 			return err
 		}
 

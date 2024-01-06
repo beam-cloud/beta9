@@ -2,6 +2,7 @@ package taskqueue
 
 import (
 	"context"
+	"log"
 	"math"
 	"time"
 
@@ -97,6 +98,8 @@ func (as *autoscaler) sample() (*autoscalerSample, error) {
 	if sample.RunningTasks >= 0 {
 		sample.QueueLength = sample.QueueLength + int64(runningTasks)
 	}
+
+	log.Printf("autoscaler sample: %+v\n", sample)
 
 	// Cache most recent autoscaler sample so RequestBucket can access without hitting redis
 	as.mostRecentSample = sample
