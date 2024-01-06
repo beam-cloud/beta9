@@ -124,37 +124,42 @@ func (as *autoscaler) start(ctx context.Context) {
 	ticker := time.NewTicker(SampleRate)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		sample, err := as.sample()
-		if err != nil {
-			continue
-		}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sample, err := as.sample()
+			if err != nil {
+				continue
+			}
 
-		// Append samples to moving windows
-		as.samples.QueueLength.Append(float64(sample.QueueLength))
-		as.samples.CurrentContainers.Append(float64(sample.CurrentContainers))
-		as.samples.RunningTasks.Append(float64(sample.RunningTasks))
-		as.samples.TaskDuration.Append(float64(sample.TaskDuration))
+			// Append samples to moving windows
+			as.samples.QueueLength.Append(float64(sample.QueueLength))
+			as.samples.CurrentContainers.Append(float64(sample.CurrentContainers))
+			as.samples.RunningTasks.Append(float64(sample.RunningTasks))
+			as.samples.TaskDuration.Append(float64(sample.TaskDuration))
 
-		var scaleResult *AutoscaleResult = nil
-		switch as.autoscalingMode {
-		case AutoScalingModeQueueDepth:
-			scaleResult = as.scaleByQueueDepth(sample)
-		case AutoScalingModeDefault:
-			scaleResult = as.scaleToOne(sample)
-		default:
-		}
+			var scaleResult *AutoscaleResult = nil
+			switch as.autoscalingMode {
+			case AutoScalingModeQueueDepth:
+				scaleResult = as.scaleByQueueDepth(sample)
+			case AutoScalingModeDefault:
+				scaleResult = as.scaleToOne(sample)
+			default:
+			}
 
-		// If there is a activator:deployment_containers:<app_id> key in the store, use this value instead
-		// This basically override any autoscaling result calculated above
+			// If there is a gateway:taskqueue_containers:<app_id> key in the store, use this value instead
+			// This basically override any autoscaling result calculated above
 
-		// containerCountOverride, err := as.stateStore.MinContainerCount(as.requestBucket.AppId)
-		// if err == nil && scaleResult.DesiredContainers != 0 {
-		// 	scaleResult.DesiredContainers = containerCountOverride
-		// }
+			// containerCountOverride, err := as.stateStore.MinContainerCount(as.requestBucket.AppId)
+			// if err == nil && scaleResult.DesiredContainers != 0 {
+			// 	scaleResult.DesiredContainers = containerCountOverride
+			// }
 
-		if scaleResult != nil && scaleResult.ResultValid {
-			as.instance.scaleEventChan <- scaleResult.DesiredContainers // Send autoscaling result to request bucket
+			if scaleResult != nil && scaleResult.ResultValid {
+				as.instance.scaleEventChan <- scaleResult.DesiredContainers // Send autoscaling result to request bucket
+			}
 		}
 	}
 }

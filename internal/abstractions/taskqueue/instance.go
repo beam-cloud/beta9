@@ -2,7 +2,6 @@ package taskqueue
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -23,16 +22,15 @@ type taskQueueState struct {
 	FailedContainers   int
 }
 
-var errTaskQueueNotInUse error = errors.New("queue not in use")
-
 type taskQueueInstance struct {
+	ctx                context.Context
+	cancelFunc         context.CancelFunc
 	name               string
 	workspace          *types.Workspace
 	stub               *types.Stub
 	stubConfig         *types.StubConfigV1
 	object             *types.Object
 	token              *types.Token
-	ctx                context.Context
 	lock               *common.RedisLock
 	scheduler          *scheduler.Scheduler
 	containerEventChan chan types.ContainerEvent
@@ -132,7 +130,8 @@ func (i *taskQueueInstance) handleScalingEvent(desiredContainers int) error {
 
 	noContainersRunning := (state.PendingContainers == 0) && (state.RunningContainers == 0) && (state.StoppingContainers == 0)
 	if desiredContainers == 0 && noContainersRunning {
-		return errTaskQueueNotInUse
+		i.cancelFunc()
+		return nil
 	}
 
 	containerDelta := desiredContainers - (state.RunningContainers + state.PendingContainers)

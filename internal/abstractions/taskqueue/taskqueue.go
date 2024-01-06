@@ -131,8 +131,11 @@ func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Wo
 		return err
 	}
 
+	ctx, cancelFunc := context.WithCancel(tq.ctx)
 	lock := common.NewRedisLock(tq.rdb)
 	queue := &taskQueueInstance{
+		ctx:                ctx,
+		cancelFunc:         cancelFunc,
 		lock:               lock,
 		name:               fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
 		workspace:          workspace,
@@ -146,7 +149,6 @@ func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Wo
 		containers:         make(map[string]bool),
 		scaleEventChan:     make(chan int, 1),
 		rdb:                tq.rdb,
-		ctx:                context.Background(),
 		client:             tq.queueClient,
 	}
 
