@@ -145,13 +145,13 @@ func (i *taskQueueInstance) handleScalingEvent(desiredContainers int) error {
 }
 
 func (i *taskQueueInstance) startContainers(containersToRun int) error {
-	log.Println("containers to run: ", containersToRun)
 	for c := 0; c < containersToRun; c++ {
 		runRequest := &types.ContainerRequest{
 			ContainerId: i.genContainerId(),
 			Env: []string{
 				fmt.Sprintf("HANDLER=%s", i.stubConfig.Handler),
 				fmt.Sprintf("BEAM_TOKEN=%s", i.token.Key),
+				fmt.Sprintf("STUB_ID=%s", i.stub.ExternalId),
 			},
 			Cpu:        i.stubConfig.Runtime.Cpu,
 			Memory:     i.stubConfig.Runtime.Memory,

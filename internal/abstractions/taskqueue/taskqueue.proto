@@ -19,6 +19,12 @@ message TaskQueuePutResponse {
   string task_id = 2;
 }
 
-message TaskQueuePopRequest {}
+message TaskQueuePopRequest {
+  string stub_id = 1;
+  string container_id = 2;
+}
 
-message TaskQueuePopResponse {}
+message TaskQueuePopResponse {
+  bool ok = 1;
+  bytes task_msg = 2;
+}

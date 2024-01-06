@@ -74,6 +74,11 @@ func NewTaskQueueRedis(ctx context.Context,
 	return tq, nil
 }
 
+type Payload struct {
+	Args   []interface{}          `json:"args"`
+	Kwargs map[string]interface{} `json:"kwargs"`
+}
+
 func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
@@ -94,7 +99,15 @@ func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 		return nil, err
 	}
 
-	err = queue.client.Push(queue.workspace.Name, queue.stub.ExternalId, task.ExternalId, []interface{}{}, map[string]interface{}{})
+	var payload Payload
+	err = json.Unmarshal(in.Payload, &payload)
+	if err != nil {
+		return &pb.TaskQueuePutResponse{
+			Ok: false,
+		}, nil
+	}
+
+	err = queue.client.Push(queue.workspace.Name, queue.stub.ExternalId, task.ExternalId, payload.Args, payload.Kwargs)
 	if err != nil {
 		tq.backendRepo.DeleteTask(ctx, task.ExternalId)
 	}
@@ -105,8 +118,29 @@ func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 	}, nil
 }
 
-func (tq *TaskQueueRedis) TaskQueuePop(context.Context, *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error) {
-	return &pb.TaskQueuePopResponse{}, nil
+func (tq *TaskQueueRedis) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	queue, exists := tq.queueInstances.Get(in.StubId)
+	if !exists {
+		err := tq.createQueueInstance(in.StubId, authInfo.Workspace)
+		if err != nil {
+			return &pb.TaskQueuePopResponse{
+				Ok: false,
+			}, nil
+		}
+
+		queue, _ = tq.queueInstances.Get(in.StubId)
+	}
+
+	msg, err := queue.client.Pop(authInfo.Workspace.Name, in.StubId, in.ContainerId)
+	if err != nil {
+		return &pb.TaskQueuePopResponse{Ok: false}, nil
+	}
+
+	return &pb.TaskQueuePopResponse{
+		Ok: true, TaskMsg: msg,
+	}, nil
 }
 
 func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Workspace) error {

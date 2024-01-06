@@ -21,12 +21,14 @@ class TaskQueuePutResponse(betterproto.Message):
 
 @dataclass
 class TaskQueuePopRequest(betterproto.Message):
-    pass
+    stub_id: str = betterproto.string_field(1)
+    container_id: str = betterproto.string_field(2)
 
 
 @dataclass
 class TaskQueuePopResponse(betterproto.Message):
-    pass
+    ok: bool = betterproto.bool_field(1)
+    task_msg: bytes = betterproto.bytes_field(2)
 
 
 class TaskQueueServiceStub(betterproto.ServiceStub):
@@ -43,8 +45,12 @@ class TaskQueueServiceStub(betterproto.ServiceStub):
             TaskQueuePutResponse,
         )
 
-    async def task_queue_pop(self) -> TaskQueuePopResponse:
+    async def task_queue_pop(
+        self, *, stub_id: str = "", container_id: str = ""
+    ) -> TaskQueuePopResponse:
         request = TaskQueuePopRequest()
+        request.stub_id = stub_id
+        request.container_id = container_id
 
         return await self._unary_unary(
             "/taskqueue.TaskQueueService/TaskQueuePop",

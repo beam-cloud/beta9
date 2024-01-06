@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import signal
 import sys
@@ -7,16 +8,17 @@ import time
 from multiprocessing import Event, Process, set_start_method
 from typing import Callable, List
 
+import cloudpickle
 from fastapi import FastAPI
 from grpclib.client import Channel
 from uvicorn import Config, Server
 
 from beam.aio import run_sync
-from beam.clients.gateway import GatewayServiceStub
-from beam.clients.taskqueue import TaskQueueServiceStub
+from beam.clients.gateway import EndTaskResponse, GatewayServiceStub, StartTaskResponse
+from beam.clients.taskqueue import TaskQueuePopResponse, TaskQueueServiceStub
 from beam.config import with_runner_context
 from beam.exceptions import RunnerException
-from beam.type import TaskExitCode
+from beam.type import TaskExitCode, TaskStatus
 
 USER_CODE_VOLUME = "/mnt/code"
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
@@ -141,63 +143,62 @@ class TaskQueueWorker:
 
     @with_runner_context
     def process_tasks(self, channel: Channel) -> None:
-        print("got here...")
         self.worker_startup_event.set()
+        handler = _load_handler()
 
         gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
         taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(channel)
 
         container_id = os.getenv("CONTAINER_ID")
         container_hostname = os.getenv("CONTAINER_HOSTNAME")
-        if not container_id:
+        stub_id = os.getenv("STUB_ID")
+        if not container_id or not stub_id:
             raise RunnerException("Invalid runner environment")
 
-        # TODO: NOOP
-        r = run_sync(taskqueue_stub.task_queue_pop())
-        print(r)
-        # Load user function and arguments
-        print("loading handler...?")
-        handler = _load_handler()
-        print(handler)
+        r: TaskQueuePopResponse = run_sync(
+            taskqueue_stub.task_queue_pop(stub_id=stub_id, container_id=container_id)
+        )
+        task_msg = None
+        if not r.ok:
+            return
 
-        return 0
+        task_msg = json.loads(r.task_msg)
+        task_id = task_msg["id"]
 
-        # task_id = "test"
+        # Start the task
+        start_time = time.time()
+        start_task_response: StartTaskResponse = run_sync(
+            gateway_stub.start_task(task_id=task_id, container_id=container_id)
+        )
+        if not start_task_response.ok:
+            raise RunnerException("Unable to start task")
 
-        # # Start the task
-        # start_time = time.time()
-        # start_task_response: StartTaskResponse = run_sync(
-        #     gateway_stub.start_task(task_id=task_id, container_id=container_id)
-        # )
-        # if not start_task_response.ok:
-        #     raise RunnerException("Unable to start task")
+        # Invoke function
+        task_status = TaskStatus.Complete
+        try:
+            result = handler(*task_msg["args"], **task_msg["kwargs"])
+            result = cloudpickle.dumps(result)
+        except BaseException as exc:
+            result = cloudpickle.dumps(exc)
+            task_status = TaskStatus.Error
+        finally:
+            pass
 
-        # # Invoke function
-        # task_status = TaskStatus.Complete
-        # try:
-        #     result = handler("hi")
-        #     result = cloudpickle.dumps(result)
-        # except BaseException as exc:
-        #     result = cloudpickle.dumps(exc)
-        #     task_status = TaskStatus.Error
-        # finally:
-        #     pass
+        task_duration = time.time() - start_time
 
-        # task_duration = time.time() - start_time
-
-        # # End the task
-        # end_task_response: EndTaskResponse = run_sync(
-        #     gateway_stub.end_task(
-        #         task_id=task_id,
-        #         task_duration=task_duration,
-        #         task_status=task_status,
-        #         container_id=container_id,
-        #         container_hostname=container_hostname,
-        #         scale_down_delay=0,
-        #     )
-        # )
-        # if not end_task_response.ok:
-        #     raise RunnerException("Unable to end task")
+        # End the task
+        end_task_response: EndTaskResponse = run_sync(
+            gateway_stub.end_task(
+                task_id=task_id,
+                task_duration=task_duration,
+                task_status=task_status,
+                container_id=container_id,
+                container_hostname=container_hostname,
+                scale_down_delay=0,
+            )
+        )
+        if not end_task_response.ok:
+            raise RunnerException("Unable to end task")
 
         # try:
         #     self.task_client: TaskClient = TaskClient()

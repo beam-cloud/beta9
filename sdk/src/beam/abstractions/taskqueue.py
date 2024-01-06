@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Any, Callable
 
@@ -50,7 +51,7 @@ class _CallableWrapper:
     def local(self, *args, **kwargs) -> Any:
         return self.func(*args, **kwargs)
 
-    def put(self, payload: Any):
+    def put(self, *args, **kwargs):
         if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,
@@ -58,7 +59,13 @@ class _CallableWrapper:
         ):
             return
 
+        payload = {"args": args, "kwargs": kwargs}
+        json_payload = json.dumps(payload)
+
         r: TaskQueuePutResponse = self.parent.run_sync(
-            self.parent.taskqueue_stub.task_queue_put(stub_id=self.parent.stub_id, payload=payload)
+            self.parent.taskqueue_stub.task_queue_put(
+                stub_id=self.parent.stub_id, payload=json_payload.encode("utf-8")
+            )
         )
+
         print(r)
