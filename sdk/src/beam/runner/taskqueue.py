@@ -193,7 +193,7 @@ class TaskQueueWorker:
                 raise RunnerException("Unable to end task")
 
 
-def main():
+if __name__ == "__main__":
     tq = TaskQueueManager()
     atexit.register(tq.shutdown)
 
@@ -201,7 +201,3 @@ def main():
 
     if tq.exit_code != 0 and tq.exit_code != TaskExitCode.SigTerm:
         sys.exit(tq.exit_code)
-
-
-if __name__ == "__main__":
-    main()
