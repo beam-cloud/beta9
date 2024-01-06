@@ -40,7 +40,7 @@ class _CallableWrapper:
         if container_id is not None:
             return self.local(*args, **kwargs)
 
-        if not self.parent.runtime_ready and not self.parent.prepare_runtime(
+        if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,
             stub_name=f"{TASKQUEUE_STUB_PREFIX}/{self.parent.handler}",
@@ -51,7 +51,7 @@ class _CallableWrapper:
         return self.func(*args, **kwargs)
 
     def put(self, payload: Any):
-        if not self.parent.runtime_ready and not self.parent.prepare_runtime(
+        if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,
             stub_name=f"{TASKQUEUE_STUB_PREFIX}/{self.parent.handler}",

@@ -38,7 +38,7 @@ class _CallableWrapper:
         if container_id:
             return self.local(*args, **kwargs)
 
-        if not self.parent.runtime_ready and not self.parent.prepare_runtime(
+        if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=FUNCTION_STUB_TYPE,
             stub_name=f"{FUNCTION_STUB_PREFIX}/{self.parent.handler}",
@@ -97,7 +97,7 @@ class _CallableWrapper:
                 break
 
     def map(self, inputs: Iterable):
-        if not self.parent.runtime_ready and not self.parent.prepare_runtime(
+        if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=FUNCTION_STUB_TYPE,
             stub_name=f"{FUNCTION_STUB_PREFIX}/{self.parent.handler}",

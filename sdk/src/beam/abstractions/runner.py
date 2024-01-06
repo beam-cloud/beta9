@@ -38,6 +38,9 @@ class RunnerAbstraction(BaseAbstraction):
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
 
     def prepare_runtime(self, *, func: Callable, stub_type: str, stub_name: str) -> bool:
+        if self.runtime_ready:
+            return True
+
         module = inspect.getmodule(func)  # Determine module / function name
         if module:
             module_file = os.path.basename(module.__file__)
