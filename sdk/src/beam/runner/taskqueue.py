@@ -158,6 +158,8 @@ class TaskQueueWorker:
         r: TaskQueuePopResponse = run_sync(
             taskqueue_stub.task_queue_pop(stub_id=stub_id, container_id=container_id)
         )
+        print(r)
+
         task_msg = None
         if not r.ok:
             return

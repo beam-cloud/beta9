@@ -138,6 +138,11 @@ func (tq *TaskQueueRedis) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 		return &pb.TaskQueuePopResponse{Ok: false}, nil
 	}
 
+	// TODO: handle this more gracefully
+	if msg == nil {
+		return &pb.TaskQueuePopResponse{Ok: false}, nil
+	}
+
 	return &pb.TaskQueuePopResponse{
 		Ok: true, TaskMsg: msg,
 	}, nil
