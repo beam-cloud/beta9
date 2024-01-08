@@ -326,6 +326,7 @@ func (tq *TaskQueueRedis) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				log.Printf("error deleting task claim: %v", err)
 				continue
 			}
+
 			stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: true})
 			return nil
 

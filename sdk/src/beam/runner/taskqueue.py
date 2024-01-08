@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Event, Process, set_start_method
 from typing import Any, List, NamedTuple, Union
 
@@ -39,7 +40,7 @@ class TaskQueueManager:
     def __init__(self) -> None:
         set_start_method("spawn", force=True)
 
-        # Management server attributes
+        # Manager attributes
         self.pid: int = os.getpid()
         self.exit_code: int = 0
 
@@ -152,7 +153,7 @@ class TaskQueueWorker:
         task = json.loads(r.task_msg)
         return Task(id=task["id"], args=task["args"], kwargs=task["kwargs"])
 
-    async def monitor_task(
+    async def _monitor_task(
         self, stub_id: str, container_id: str, taskqueue_stub: TaskQueueServiceStub, task: Task
     ) -> None:
         initial_backoff = 5
@@ -216,40 +217,47 @@ class TaskQueueWorker:
         taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(channel)
 
         handler = load_handler()
+        executor = ThreadPoolExecutor()
+
         while True:
             task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)
             if not task:
                 time.sleep(TASK_POLLING_INTERVAL)
                 continue
 
-            monitor_task = loop.create_task(
-                self.monitor_task(config.stub_id, config.container_id, taskqueue_stub, task)
-            )
-
-            start_time = time.time()
-            task_status = TaskStatus.Complete
-            try:
-                result = handler(*task.args, **task.kwargs)
-                result = cloudpickle.dumps(result)
-            except BaseException as exc:
-                result = cloudpickle.dumps(exc)
-                task_status = TaskStatus.Error
-            finally:
-                complete_task_response: TaskQueueCompleteResponse = run_sync(
-                    taskqueue_stub.task_queue_complete(
-                        task_id=task.id,
-                        stub_id=config.stub_id,
-                        task_duration=time.time() - start_time,
-                        task_status=task_status,
-                        container_id=config.container_id,
-                        container_hostname=config.container_hostname,
-                        scale_down_delay=config.scale_down_delay,
-                    )
+            async def _run_task():
+                monitor_task = loop.create_task(
+                    self._monitor_task(config.stub_id, config.container_id, taskqueue_stub, task),
                 )
-                if not complete_task_response.ok:
-                    raise RunnerException("Unable to end task")
 
-                monitor_task.cancel()
+                start_time = time.time()
+                task_status = TaskStatus.Complete
+                try:
+                    result = await loop.run_in_executor(
+                        executor, lambda: handler(*task.args, **task.kwargs)
+                    )
+                    result = cloudpickle.dumps(result)
+                except BaseException as exc:
+                    result = cloudpickle.dumps(exc)
+                    task_status = TaskStatus.Error
+                finally:
+                    complete_task_response: TaskQueueCompleteResponse = run_sync(
+                        taskqueue_stub.task_queue_complete(
+                            task_id=task.id,
+                            stub_id=config.stub_id,
+                            task_duration=time.time() - start_time,
+                            task_status=task_status,
+                            container_id=config.container_id,
+                            container_hostname=config.container_hostname,
+                            scale_down_delay=config.scale_down_delay,
+                        )
+                    )
+                    if not complete_task_response.ok:
+                        raise RunnerException("Unable to end task")
+
+                    monitor_task.cancel()
+
+            loop.run_until_complete(_run_task())
 
 
 if __name__ == "__main__":
