@@ -3,7 +3,7 @@
 # plugin: python-betterproto
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import betterproto
 import grpclib
@@ -86,8 +86,16 @@ class EndTaskResponse(betterproto.Message):
 
 
 @dataclass
+class StringList(betterproto.Message):
+    values: List[str] = betterproto.string_field(1)
+
+
+@dataclass
 class ListTasksRequest(betterproto.Message):
-    limit: int = betterproto.uint32_field(1)
+    filters: Dict[str, "StringList"] = betterproto.map_field(
+        1, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
+    )
+    limit: int = betterproto.uint32_field(2)
 
 
 @dataclass
@@ -97,10 +105,10 @@ class Task(betterproto.Message):
     container_id: str = betterproto.string_field(4)
     started_at: datetime = betterproto.message_field(5)
     ended_at: datetime = betterproto.message_field(6)
-    workspace_id: str = betterproto.string_field(7)
-    workspace_name: str = betterproto.string_field(8)
-    stub_id: str = betterproto.string_field(9)
-    stub_name: str = betterproto.string_field(10)
+    stub_id: str = betterproto.string_field(7)
+    stub_name: str = betterproto.string_field(8)
+    workspace_id: str = betterproto.string_field(9)
+    workspace_name: str = betterproto.string_field(10)
     created_at: datetime = betterproto.message_field(11)
     updated_at: datetime = betterproto.message_field(12)
 
@@ -237,8 +245,11 @@ class GatewayServiceStub(betterproto.ServiceStub):
             StopTaskResponse,
         )
 
-    async def list_tasks(self, *, limit: int = 0) -> ListTasksResponse:
+    async def list_tasks(
+        self, *, filters: Optional[Dict[str, "StringList"]] = None, limit: int = 0
+    ) -> ListTasksResponse:
         request = ListTasksRequest()
+        request.filters = filters
         request.limit = limit
 
         return await self._unary_unary(
