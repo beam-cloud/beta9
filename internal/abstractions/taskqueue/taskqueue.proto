@@ -7,6 +7,8 @@ package taskqueue;
 service TaskQueueService {
   rpc TaskQueuePut(TaskQueuePutRequest) returns (TaskQueuePutResponse) {}
   rpc TaskQueuePop(TaskQueuePopRequest) returns (TaskQueuePopResponse) {}
+  rpc TaskQueueMonitor(TaskQueueMonitorRequest)
+      returns (stream TaskQueueMonitorResponse);
   rpc TaskQueueComplete(TaskQueueCompleteRequest)
       returns (TaskQueueCompleteResponse) {}
   rpc TaskQueueLength(TaskQueueLengthRequest)
@@ -51,3 +53,16 @@ message TaskQueueCompleteRequest {
 }
 
 message TaskQueueCompleteResponse { bool ok = 1; }
+
+message TaskQueueMonitorRequest {
+  string task_id = 1;
+  string stub_id = 2;
+  string container_id = 3;
+}
+
+message TaskQueueMonitorResponse {
+  bool ok = 1;
+  bool cancelled = 2;
+  bool complete = 3;
+  bool timed_out = 4;
+}

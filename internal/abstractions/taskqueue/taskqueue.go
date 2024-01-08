@@ -213,6 +213,156 @@ func (tq *TaskQueueRedis) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}, nil
 }
 
+func (tq *TaskQueueRedis) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error {
+	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
+
+	ctx, cancel := context.WithCancel(stream.Context())
+	defer cancel()
+
+	task, err := tq.backendRepo.GetTask(ctx, req.TaskId)
+	if err != nil {
+		return err
+	}
+
+	stub, err := tq.backendRepo.GetStubByExternalId(stream.Context(), req.StubId, authInfo.Workspace.Id)
+	if err != nil {
+		return err
+	}
+
+	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
+	err = json.Unmarshal([]byte(stub.Config), &stubConfig)
+	if err != nil {
+		return err
+	}
+
+	timeout := int64(stubConfig.TaskPolicy.Timeout)
+	timeoutCallback := func() error {
+		task.Status = types.TaskStatusTimeout
+		_, err = tq.backendRepo.UpdateTask(
+			stream.Context(),
+			task.ExternalId,
+			*task,
+		)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	// Listen for task cancellation events
+	channelKey := Keys.taskQueueTaskCancel(authInfo.Workspace.Name, req.StubId, task.ExternalId)
+	cancelFlag := make(chan bool, 1)
+	timeoutFlag := make(chan bool, 1)
+
+	var timeoutChan <-chan time.Time
+	taskStartTimeSeconds := task.StartedAt.Time.Unix()
+	currentTimeSeconds := time.Now().Unix()
+	timeoutTimeSeconds := taskStartTimeSeconds + timeout
+	leftoverTimeoutSeconds := timeoutTimeSeconds - currentTimeSeconds
+
+	if timeout <= 0 {
+		timeoutChan = make(<-chan time.Time) // Indicates that the task does not have a timeout
+	} else if leftoverTimeoutSeconds <= 0 {
+		err := timeoutCallback()
+		if err != nil {
+			log.Printf("error timing out task: %v", err)
+			return err
+		}
+
+		timeoutFlag <- true
+		timeoutChan = make(<-chan time.Time)
+	} else {
+		timeoutChan = time.After(time.Duration(leftoverTimeoutSeconds) * time.Second)
+	}
+
+	go func() {
+	retry:
+		for {
+			messages, errs := tq.rdb.Subscribe(ctx, channelKey)
+
+			for {
+				select {
+				case <-timeoutChan:
+					err := timeoutCallback()
+					if err != nil {
+						log.Printf("error timing out task: %v", err)
+					}
+					timeoutFlag <- true
+					return
+
+				case msg := <-messages:
+					if msg.Payload == task.ExternalId {
+						cancelFlag <- true
+						return
+					}
+
+				case <-ctx.Done():
+					return
+
+				case err := <-errs:
+					log.Printf("error with monitor task subscription: %v", err)
+					break retry
+				}
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-stream.Context().Done():
+			return nil
+
+		case <-cancelFlag:
+			err := tq.rdb.Del(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Err()
+			if err != nil {
+				return err
+			}
+			stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: true, Complete: false, TimedOut: false})
+			return nil
+		case <-timeoutFlag:
+			err := tq.rdb.Del(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Err()
+			if err != nil {
+				log.Printf("error deleting task claim: %v", err)
+				continue
+			}
+			stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: true})
+			return nil
+
+		default:
+			if task.Status == types.TaskStatusCancelled {
+				stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: true, Complete: false, TimedOut: false})
+				return nil
+			}
+
+			err := tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskHeartbeat(authInfo.Workspace.Name, req.StubId, task.ExternalId), 1, time.Duration(60)*time.Second).Err()
+			if err != nil {
+				return err
+			}
+
+			err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
+			if err != nil {
+				return err
+			}
+
+			// Check if the task is currently claimed
+			exists, err := tq.rdb.Exists(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Result()
+			if err != nil {
+				return err
+			}
+
+			// If the task claim key doesn't exist, send a message and return
+			if exists == 0 {
+				stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: true, TimedOut: false})
+				return nil
+			}
+
+			stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: false})
+			time.Sleep(time.Second * 1)
+		}
+	}
+}
+
 func (tq *TaskQueueRedis) TaskQueueLength(ctx context.Context, in *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
@@ -430,6 +580,7 @@ var (
 	taskQueueTaskDuration        string = "taskqueue:%s:%s:task_duration"
 	taskQueueAverageTaskDuration string = "taskqueue:%s:%s:avg_task_duration"
 	taskQueueTaskClaim           string = "taskqueue:%s:%s:task:claim:%s"
+	taskQueueTaskCancel          string = "taskqueue:%s:%s:task:cancel:%s"
 	taskQueueTaskRetries         string = "taskqueue:%s:%s:task:retries:%s"
 	taskQueueTaskHeartbeat       string = "taskqueue:%s:%s:task:heartbeat:%s"
 	taskQueueProcessingLock      string = "taskqueue:%s:%s:processing_lock:%s"
@@ -455,6 +606,10 @@ func (k *keys) taskQueueList(workspaceName, stubId string) string {
 
 func (k *keys) taskQueueTaskClaim(workspaceName, stubId, taskId string) string {
 	return fmt.Sprintf(taskQueueTaskClaim, workspaceName, stubId, taskId)
+}
+
+func (k *keys) taskQueueTaskCancel(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskQueueTaskCancel, workspaceName, stubId, taskId)
 }
 
 func (k *keys) taskQueueTaskHeartbeat(workspaceName, stubId, taskId string) string {

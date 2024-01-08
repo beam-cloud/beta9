@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion7
 const (
 	TaskQueueService_TaskQueuePut_FullMethodName      = "/taskqueue.TaskQueueService/TaskQueuePut"
 	TaskQueueService_TaskQueuePop_FullMethodName      = "/taskqueue.TaskQueueService/TaskQueuePop"
+	TaskQueueService_TaskQueueMonitor_FullMethodName  = "/taskqueue.TaskQueueService/TaskQueueMonitor"
 	TaskQueueService_TaskQueueComplete_FullMethodName = "/taskqueue.TaskQueueService/TaskQueueComplete"
 	TaskQueueService_TaskQueueLength_FullMethodName   = "/taskqueue.TaskQueueService/TaskQueueLength"
 )
@@ -31,6 +32,7 @@ const (
 type TaskQueueServiceClient interface {
 	TaskQueuePut(ctx context.Context, in *TaskQueuePutRequest, opts ...grpc.CallOption) (*TaskQueuePutResponse, error)
 	TaskQueuePop(ctx context.Context, in *TaskQueuePopRequest, opts ...grpc.CallOption) (*TaskQueuePopResponse, error)
+	TaskQueueMonitor(ctx context.Context, in *TaskQueueMonitorRequest, opts ...grpc.CallOption) (TaskQueueService_TaskQueueMonitorClient, error)
 	TaskQueueComplete(ctx context.Context, in *TaskQueueCompleteRequest, opts ...grpc.CallOption) (*TaskQueueCompleteResponse, error)
 	TaskQueueLength(ctx context.Context, in *TaskQueueLengthRequest, opts ...grpc.CallOption) (*TaskQueueLengthResponse, error)
 }
@@ -61,6 +63,38 @@ func (c *taskQueueServiceClient) TaskQueuePop(ctx context.Context, in *TaskQueue
 	return out, nil
 }
 
+func (c *taskQueueServiceClient) TaskQueueMonitor(ctx context.Context, in *TaskQueueMonitorRequest, opts ...grpc.CallOption) (TaskQueueService_TaskQueueMonitorClient, error) {
+	stream, err := c.cc.NewStream(ctx, &TaskQueueService_ServiceDesc.Streams[0], TaskQueueService_TaskQueueMonitor_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &taskQueueServiceTaskQueueMonitorClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type TaskQueueService_TaskQueueMonitorClient interface {
+	Recv() (*TaskQueueMonitorResponse, error)
+	grpc.ClientStream
+}
+
+type taskQueueServiceTaskQueueMonitorClient struct {
+	grpc.ClientStream
+}
+
+func (x *taskQueueServiceTaskQueueMonitorClient) Recv() (*TaskQueueMonitorResponse, error) {
+	m := new(TaskQueueMonitorResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (c *taskQueueServiceClient) TaskQueueComplete(ctx context.Context, in *TaskQueueCompleteRequest, opts ...grpc.CallOption) (*TaskQueueCompleteResponse, error) {
 	out := new(TaskQueueCompleteResponse)
 	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueueComplete_FullMethodName, in, out, opts...)
@@ -85,6 +119,7 @@ func (c *taskQueueServiceClient) TaskQueueLength(ctx context.Context, in *TaskQu
 type TaskQueueServiceServer interface {
 	TaskQueuePut(context.Context, *TaskQueuePutRequest) (*TaskQueuePutResponse, error)
 	TaskQueuePop(context.Context, *TaskQueuePopRequest) (*TaskQueuePopResponse, error)
+	TaskQueueMonitor(*TaskQueueMonitorRequest, TaskQueueService_TaskQueueMonitorServer) error
 	TaskQueueComplete(context.Context, *TaskQueueCompleteRequest) (*TaskQueueCompleteResponse, error)
 	TaskQueueLength(context.Context, *TaskQueueLengthRequest) (*TaskQueueLengthResponse, error)
 	mustEmbedUnimplementedTaskQueueServiceServer()
@@ -99,6 +134,9 @@ func (UnimplementedTaskQueueServiceServer) TaskQueuePut(context.Context, *TaskQu
 }
 func (UnimplementedTaskQueueServiceServer) TaskQueuePop(context.Context, *TaskQueuePopRequest) (*TaskQueuePopResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TaskQueuePop not implemented")
+}
+func (UnimplementedTaskQueueServiceServer) TaskQueueMonitor(*TaskQueueMonitorRequest, TaskQueueService_TaskQueueMonitorServer) error {
+	return status.Errorf(codes.Unimplemented, "method TaskQueueMonitor not implemented")
 }
 func (UnimplementedTaskQueueServiceServer) TaskQueueComplete(context.Context, *TaskQueueCompleteRequest) (*TaskQueueCompleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TaskQueueComplete not implemented")
@@ -153,6 +191,27 @@ func _TaskQueueService_TaskQueuePop_Handler(srv interface{}, ctx context.Context
 		return srv.(TaskQueueServiceServer).TaskQueuePop(ctx, req.(*TaskQueuePopRequest))
 	}
 	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskQueueService_TaskQueueMonitor_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(TaskQueueMonitorRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(TaskQueueServiceServer).TaskQueueMonitor(m, &taskQueueServiceTaskQueueMonitorServer{stream})
+}
+
+type TaskQueueService_TaskQueueMonitorServer interface {
+	Send(*TaskQueueMonitorResponse) error
+	grpc.ServerStream
+}
+
+type taskQueueServiceTaskQueueMonitorServer struct {
+	grpc.ServerStream
+}
+
+func (x *taskQueueServiceTaskQueueMonitorServer) Send(m *TaskQueueMonitorResponse) error {
+	return x.ServerStream.SendMsg(m)
 }
 
 func _TaskQueueService_TaskQueueComplete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -215,6 +274,12 @@ var TaskQueueService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TaskQueueService_TaskQueueLength_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "TaskQueueMonitor",
+			Handler:       _TaskQueueService_TaskQueueMonitor_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "taskqueue.proto",
 }

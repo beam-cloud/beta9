@@ -1,3 +1,4 @@
+import asyncio
 import atexit
 import json
 import os
@@ -5,25 +6,33 @@ import signal
 import sys
 import threading
 import time
+import traceback
 from multiprocessing import Event, Process, set_start_method
 from typing import Any, List, NamedTuple, Union
 
 import cloudpickle
+import grpc
+import grpclib
 from grpclib.client import Channel
+from grpclib.exceptions import StreamTerminatedError
 
 from beam.aio import run_sync
 from beam.clients.taskqueue import (
     TaskQueueCompleteResponse,
+    TaskQueueMonitorResponse,
     TaskQueuePopResponse,
     TaskQueueServiceStub,
 )
 from beam.config import with_runner_context
 from beam.exceptions import RunnerException
-from beam.runner.common import load_handler
+from beam.runner.common import Config, load_handler
 from beam.type import TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.01
+
+
+config: Config = Config.load_from_env()
 
 
 class TaskQueueManager:
@@ -35,7 +44,7 @@ class TaskQueueManager:
         self.exit_code: int = 0
 
         # Task worker attributes
-        self.task_worker_count: int = 1  # TODO: swap out for concurrency value
+        self.task_worker_count: int = config.concurrency
         self.task_processes: List[Process] = []
         self.task_workers: List[TaskQueueWorker] = []
         self.task_worker_startup_events: List[Event] = [
@@ -143,28 +152,81 @@ class TaskQueueWorker:
         task = json.loads(r.task_msg)
         return Task(id=task["id"], args=task["args"], kwargs=task["kwargs"])
 
+    async def monitor_task(
+        self, stub_id: str, container_id: str, taskqueue_stub: TaskQueueServiceStub, task: Task
+    ) -> None:
+        initial_backoff = 5
+        max_retries = 5
+        backoff = initial_backoff
+        retry = 0
+
+        while retry <= max_retries:
+            try:
+                async for response in taskqueue_stub.task_queue_monitor(
+                    task_id=task.id,
+                    stub_id=stub_id,
+                    container_id=container_id,
+                ):
+                    response: TaskQueueMonitorResponse
+                    if response.cancelled:
+                        print(f"Task cancelled: {task.id}")
+                        os._exit(TaskExitCode.Cancelled)
+
+                    if response.complete:
+                        return
+
+                    if response.timed_out:
+                        print(f"Task timed out: {task.id}")
+                        os._exit(TaskExitCode.Timeout)
+
+                    retry = 0
+                    backoff = initial_backoff
+
+                # If successful, it means the stream is finished.
+                # Break out of the retry loop
+                break
+
+            except (
+                grpc.aio.AioRpcError,
+                grpclib.exceptions.GRPCError,
+                StreamTerminatedError,
+                ConnectionRefusedError,
+            ):
+                if retry == max_retries:
+                    print("Lost connection to task monitor, exiting")
+                    os._exit(0)
+
+                await asyncio.sleep(backoff)
+                backoff *= 2
+                retry += 1
+
+            except asyncio.exceptions.CancelledError:
+                return
+
+            except BaseException:
+                print(traceback.format_exc())
+                print("Unexpected error occurred in task monitor")
+                os._exit(0)
+
     @with_runner_context
     def process_tasks(self, channel: Channel) -> None:
         self.worker_startup_event.set()
-        handler = load_handler()
+        loop = asyncio.get_event_loop()
 
         taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(channel)
 
-        container_id = os.getenv("CONTAINER_ID")
-        container_hostname = os.getenv("CONTAINER_HOSTNAME")
-        stub_id = os.getenv("STUB_ID")
-
-        if not container_id or not stub_id:
-            raise RunnerException("Invalid runner environment")
-
+        handler = load_handler()
         while True:
-            task = self._get_next_task(taskqueue_stub, stub_id, container_id)
+            task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)
             if not task:
                 time.sleep(TASK_POLLING_INTERVAL)
                 continue
 
-            start_time = time.time()
+            monitor_task = loop.create_task(
+                self.monitor_task(config.stub_id, config.container_id, taskqueue_stub, task)
+            )
 
+            start_time = time.time()
             task_status = TaskStatus.Complete
             try:
                 result = handler(*task.args, **task.kwargs)
@@ -176,16 +238,18 @@ class TaskQueueWorker:
                 complete_task_response: TaskQueueCompleteResponse = run_sync(
                     taskqueue_stub.task_queue_complete(
                         task_id=task.id,
-                        stub_id=stub_id,
+                        stub_id=config.stub_id,
                         task_duration=time.time() - start_time,
                         task_status=task_status,
-                        container_id=container_id,
-                        container_hostname=container_hostname,
-                        scale_down_delay=10,
+                        container_id=config.container_id,
+                        container_hostname=config.container_hostname,
+                        scale_down_delay=config.scale_down_delay,
                     )
                 )
                 if not complete_task_response.ok:
                     raise RunnerException("Unable to end task")
+
+                monitor_task.cancel()
 
 
 if __name__ == "__main__":

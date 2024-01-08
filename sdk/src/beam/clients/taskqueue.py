@@ -2,6 +2,7 @@
 # sources: taskqueue.proto
 # plugin: python-betterproto
 from dataclasses import dataclass
+from typing import AsyncGenerator
 
 import betterproto
 import grpclib
@@ -58,6 +59,21 @@ class TaskQueueCompleteResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
+@dataclass
+class TaskQueueMonitorRequest(betterproto.Message):
+    task_id: str = betterproto.string_field(1)
+    stub_id: str = betterproto.string_field(2)
+    container_id: str = betterproto.string_field(3)
+
+
+@dataclass
+class TaskQueueMonitorResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    cancelled: bool = betterproto.bool_field(2)
+    complete: bool = betterproto.bool_field(3)
+    timed_out: bool = betterproto.bool_field(4)
+
+
 class TaskQueueServiceStub(betterproto.ServiceStub):
     async def task_queue_put(
         self, *, stub_id: str = "", payload: bytes = b""
@@ -84,6 +100,21 @@ class TaskQueueServiceStub(betterproto.ServiceStub):
             request,
             TaskQueuePopResponse,
         )
+
+    async def task_queue_monitor(
+        self, *, task_id: str = "", stub_id: str = "", container_id: str = ""
+    ) -> AsyncGenerator[TaskQueueMonitorResponse, None]:
+        request = TaskQueueMonitorRequest()
+        request.task_id = task_id
+        request.stub_id = stub_id
+        request.container_id = container_id
+
+        async for response in self._unary_stream(
+            "/taskqueue.TaskQueueService/TaskQueueMonitor",
+            request,
+            TaskQueueMonitorResponse,
+        ):
+            yield response
 
     async def task_queue_complete(
         self,
