@@ -1,4 +1,5 @@
 from beam.abstractions.base import BaseAbstraction
+from beam.clients.gateway import Volume as VolumeConfig
 from beam.clients.volume import VolumeServiceStub
 
 
@@ -23,7 +24,7 @@ class Volume(BaseAbstraction):
         return False
 
     def to_dict(self):
-        return {
-            "id": self.volume_id,
-            "mount_path": self.mount_path,
-        }
+        return VolumeConfig(
+            id=self.volume_id,
+            mount_path=self.mount_path,
+        )

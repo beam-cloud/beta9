@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
+
+	pb "github.com/beam-cloud/beam/proto"
 )
 
 type Workspace struct {
@@ -27,13 +29,10 @@ type Token struct {
 
 type Volume struct {
 	Id          uint      `db:"id"`
-	ExternalId  string    `db:"external_id" json:"id"`
-	Name        string    `db:"name" json:"name"`
+	ExternalId  string    `db:"external_id"`
+	Name        string    `db:"name"`
 	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
 	CreatedAt   time.Time `db:"created_at"`
-
-	// Non-db fields
-	MountPath string `json:"mount_path"`
 }
 
 const (
@@ -109,8 +108,8 @@ type TaskWithRelated struct {
 }
 
 type StubConfigV1 struct {
-	Runtime Runtime  `json:"runtime"`
-	Volumes []Volume `json:"volumes"`
+	Runtime Runtime      `json:"runtime"`
+	Volumes []*pb.Volume `json:"volumes"`
 }
 
 const (

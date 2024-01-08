@@ -2,7 +2,6 @@ package function
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -86,13 +85,6 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		in.Memory = defaultFunctionContainerMemory
 	}
 
-	volumes := []types.Volume{}
-
-	err = json.Unmarshal(in.Volumes, &volumes)
-	if err != nil {
-		return err
-	}
-
 	mounts := []types.Mount{
 		{
 			LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId),
@@ -101,9 +93,9 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		},
 	}
 
-	for _, v := range volumes {
+	for _, v := range in.Volumes {
 		mounts = append(mounts, types.Mount{
-			LocalPath: path.Join(types.DefaultVolumesPath, authInfo.Workspace.Name, v.ExternalId),
+			LocalPath: path.Join(types.DefaultVolumesPath, authInfo.Workspace.Name, v.Id),
 			LinkPath:  path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId, v.MountPath),
 			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
 			ReadOnly:  false,

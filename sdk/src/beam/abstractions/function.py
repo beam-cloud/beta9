@@ -4,7 +4,6 @@ import os
 from typing import Any, Callable, Iterable, List, Union
 
 import cloudpickle
-import json
 
 from beam import terminal
 from beam.abstractions.base import BaseAbstraction
@@ -91,10 +90,6 @@ class _CallableWrapper:
                 return False
 
         if not self.parent.stub_created:
-            volumes = json.dumps(
-                [volume.to_dict() for volume in self.parent.volumes]
-            ).encode("utf-8")
-
             stub_response: GetOrCreateStubResponse = self.parent.run_sync(
                 self.parent.gateway_stub.get_or_create_stub(
                     object_id=self.parent.object_id,
@@ -105,10 +100,11 @@ class _CallableWrapper:
                     cpu=self.parent.cpu,
                     memory=self.parent.memory,
                     gpu=self.parent.gpu,
-                    volumes=volumes,
+                    volumes=[volume.to_dict() for volume in self.parent.volumes],
                 )
             )
 
+            print(stub_response)
             if stub_response.ok:
                 self.parent.stub_created = True
                 self.parent.stub_id = stub_response.stub_id
@@ -136,7 +132,6 @@ class _CallableWrapper:
                 "kwargs": kwargs,
             },
         )
-        volumes = json.dumps([volume.to_dict() for volume in self.parent.volumes]).encode("utf-8")
 
         terminal.header("Running function")
         last_response: Union[None, FunctionInvokeResponse] = None
@@ -151,7 +146,7 @@ class _CallableWrapper:
             cpu=self.parent.cpu,
             memory=self.parent.memory,
             gpu=self.parent.gpu,
-            volumes=volumes,
+            volumes=[volume.to_dict() for volume in self.parent.volumes],
         ):
             if r.output != "":
                 terminal.detail(r.output)

@@ -2,10 +2,16 @@
 # sources: function.proto
 # plugin: python-betterproto
 from dataclasses import dataclass
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List
 
 import betterproto
 import grpclib
+
+
+@dataclass
+class FVolume(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    mount_path: str = betterproto.string_field(2)
 
 
 @dataclass
@@ -19,7 +25,7 @@ class FunctionInvokeRequest(betterproto.Message):
     cpu: int = betterproto.int64_field(7)
     memory: int = betterproto.int64_field(8)
     gpu: str = betterproto.string_field(9)
-    volumes: bytes = betterproto.bytes_field(10)
+    volumes: List["FVolume"] = betterproto.message_field(10)
 
 
 @dataclass
@@ -66,7 +72,7 @@ class FunctionServiceStub(betterproto.ServiceStub):
         cpu: int = 0,
         memory: int = 0,
         gpu: str = "",
-        volumes: bytes = b"",
+        volumes: List["FVolume"] = [],
     ) -> AsyncGenerator[FunctionInvokeResponse, None]:
         request = FunctionInvokeRequest()
         request.object_id = object_id
@@ -78,7 +84,8 @@ class FunctionServiceStub(betterproto.ServiceStub):
         request.cpu = cpu
         request.memory = memory
         request.gpu = gpu
-        request.volumes = volumes
+        if volumes is not None:
+            request.volumes = volumes
 
         async for response in self._unary_stream(
             "/function.FunctionService/FunctionInvoke",

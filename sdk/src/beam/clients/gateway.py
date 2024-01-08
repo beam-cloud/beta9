@@ -125,6 +125,12 @@ class StopTaskResponse(betterproto.Message):
 
 
 @dataclass
+class Volume(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    mount_path: str = betterproto.string_field(2)
+
+
+@dataclass
 class GetOrCreateStubRequest(betterproto.Message):
     object_id: str = betterproto.string_field(1)
     image_id: str = betterproto.string_field(2)
@@ -134,7 +140,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     cpu: int = betterproto.int64_field(6)
     memory: int = betterproto.int64_field(7)
     gpu: str = betterproto.string_field(8)
-    volumes: bytes = betterproto.bytes_field(9)
+    volumes: List["Volume"] = betterproto.message_field(9)
 
 
 @dataclass
@@ -252,7 +258,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
         cpu: int = 0,
         memory: int = 0,
         gpu: str = "",
-        volumes: bytes = b"",
+        volumes: List["Volume"] = [],
     ) -> GetOrCreateStubResponse:
         request = GetOrCreateStubRequest()
         request.object_id = object_id
@@ -263,7 +269,8 @@ class GatewayServiceStub(betterproto.ServiceStub):
         request.cpu = cpu
         request.memory = memory
         request.gpu = gpu
-        request.volumes = volumes
+        if volumes is not None:
+            request.volumes = volumes
 
         return await self._unary_unary(
             "/gateway.GatewayService/GetOrCreateStub",
