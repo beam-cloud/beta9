@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
+
+	pb "github.com/beam-cloud/beam/proto"
 )
 
 type Workspace struct {
@@ -106,7 +108,8 @@ type TaskWithRelated struct {
 }
 
 type StubConfigV1 struct {
-	Runtime Runtime `json:"runtime"`
+	Runtime Runtime      `json:"runtime"`
+	Volumes []*pb.Volume `json:"volumes"`
 }
 
 const (

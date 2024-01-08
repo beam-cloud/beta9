@@ -340,6 +340,26 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	return &stub, nil
 }
 
+func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
+	var volume types.Volume
+
+	queryGet := `SELECT id, external_id, name, workspace_id, created_at FROM volume WHERE name = $1 AND workspace_id = $2;`
+
+	err := c.client.GetContext(ctx, &volume, queryGet, name, workspaceId)
+	if err == nil {
+		return &volume, err
+	}
+
+	queryCreate := `INSERT INTO volume (name, workspace_id) VALUES ($1, $2) RETURNING id, external_id, name, workspace_id, created_at;`
+
+	err = c.client.GetContext(ctx, &volume, queryCreate, name, workspaceId)
+	if err != nil {
+		return &types.Volume{}, err
+	}
+
+	return &volume, nil
+}
+
 // Helpers
 
 // buildLimitClause generates a LIMIT clause for a SQL query.

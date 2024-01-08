@@ -29,7 +29,7 @@ func (s *RedisSimpleQueueService) Put(ctx context.Context, in *pb.SimpleQueuePut
 	if err != nil {
 		return &pb.SimpleQueuePutResponse{
 			Ok: false,
-		}, err
+		}, nil
 	}
 
 	return &pb.SimpleQueuePutResponse{
@@ -43,18 +43,18 @@ func (s *RedisSimpleQueueService) Pop(ctx context.Context, in *pb.SimpleQueuePop
 	value, err := s.rdb.LPop(context.TODO(), queueName).Bytes()
 	if err == redis.Nil {
 		return &pb.SimpleQueuePopResponse{
-			Ok: true,
+			Ok:    true,
 			Value: []byte{},
 		}, nil
-	} else if err != nil { 
+	} else if err != nil {
 		return &pb.SimpleQueuePopResponse{
-			Ok: false,
+			Ok:    false,
 			Value: []byte{},
-		}, err
+		}, nil
 	}
 
 	return &pb.SimpleQueuePopResponse{
-		Ok: true,
+		Ok:    true,
 		Value: value,
 	}, nil
 }
@@ -67,7 +67,7 @@ func (s *RedisSimpleQueueService) Peek(ctx context.Context, in *pb.SimpleQueueRe
 		return &pb.SimpleQueuePeekResponse{
 			Ok:    false,
 			Value: []byte{},
-		}, err
+		}, nil
 	}
 
 	var value []byte
@@ -89,7 +89,7 @@ func (s *RedisSimpleQueueService) Empty(ctx context.Context, in *pb.SimpleQueueR
 		return &pb.SimpleQueueEmptyResponse{
 			Ok:    false,
 			Empty: false,
-		}, err
+		}, nil
 	}
 
 	if length > 0 {
@@ -113,7 +113,7 @@ func (s *RedisSimpleQueueService) Size(ctx context.Context, in *pb.SimpleQueueRe
 		return &pb.SimpleQueueSizeResponse{
 			Ok:   false,
 			Size: 0,
-		}, err
+		}, nil
 	}
 
 	return &pb.SimpleQueueSizeResponse{
