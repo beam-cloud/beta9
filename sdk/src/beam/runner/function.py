@@ -1,10 +1,5 @@
 import os
 import time
-<<<<<<< HEAD
-=======
-import traceback
-from typing import Callable
->>>>>>> master
 
 import cloudpickle
 from grpclib.client import Channel
@@ -18,30 +13,9 @@ from beam.clients.function import (
 from beam.clients.gateway import EndTaskResponse, GatewayServiceStub, StartTaskResponse
 from beam.config import with_runner_context
 from beam.exceptions import RunnerException
-from beam.runner.common import load_handler
+from beam.runner.common import USER_CODE_VOLUME, load_handler
 from beam.type import TaskStatus
 
-<<<<<<< HEAD
-=======
-USER_CODE_VOLUME = "/mnt/code"
-
-
-def _load_handler() -> Callable:
-    sys.path.insert(0, USER_CODE_VOLUME)
-
-    handler = os.getenv("HANDLER")
-    if not handler:
-        raise RunnerException("Handler not specified")
-
-    try:
-        module, func = handler.split(":")
-        target_module = importlib.import_module(module)
-        method = getattr(target_module, func)
-        return method
-    except BaseException:
-        raise RunnerException("Unable to load handler", traceback.format_exc())
-
->>>>>>> master
 
 @with_runner_context
 def main(channel: Channel):
