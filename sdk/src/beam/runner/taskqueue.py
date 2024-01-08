@@ -141,14 +141,17 @@ class TaskQueueWorker:
     def _get_next_task(
         self, taskqueue_stub: TaskQueueServiceStub, stub_id: str, container_id: str
     ) -> Union[Task, None]:
-        r: TaskQueuePopResponse = run_sync(
-            taskqueue_stub.task_queue_pop(stub_id=stub_id, container_id=container_id)
-        )
-        if not r.ok or not r.task_msg:
-            return None
+        try:
+            r: TaskQueuePopResponse = run_sync(
+                taskqueue_stub.task_queue_pop(stub_id=stub_id, container_id=container_id)
+            )
+            if not r.ok or not r.task_msg:
+                return None
 
-        task = json.loads(r.task_msg)
-        return Task(id=task["id"], args=task["args"], kwargs=task["kwargs"])
+            task = json.loads(r.task_msg)
+            return Task(id=task["id"], args=task["args"], kwargs=task["kwargs"])
+        except grpclib.exceptions.StreamTerminatedError:
+            return None
 
     async def _monitor_task(
         self, stub_id: str, container_id: str, taskqueue_stub: TaskQueueServiceStub, task: Task

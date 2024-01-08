@@ -116,8 +116,6 @@ func (i *taskQueueInstance) handleScalingEvent(desiredContainers int) error {
 		return err
 	}
 
-	log.Printf("state: %+v\n", state)
-
 	if state.FailedContainers >= types.FailedContainerThreshold {
 		log.Printf("<taskqueue %s> reached failed container threshold, scaling to zero.", i.name)
 		desiredContainers = 0
