@@ -151,14 +151,6 @@ func (as *autoscaler) start(ctx context.Context) {
 			default:
 			}
 
-			// If there is a gateway:taskqueue_containers:<app_id> key in the store, use this value instead
-			// This basically override any autoscaling result calculated above
-
-			// containerCountOverride, err := as.stateStore.MinContainerCount(as.requestBucket.AppId)
-			// if err == nil && scaleResult.DesiredContainers != 0 {
-			// 	scaleResult.DesiredContainers = containerCountOverride
-			// }
-
 			if scaleResult != nil && scaleResult.ResultValid {
 				as.instance.scaleEventChan <- scaleResult.DesiredContainers // Send autoscaling result to request bucket
 			}

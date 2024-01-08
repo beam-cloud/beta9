@@ -138,7 +138,6 @@ class TaskQueueWorker:
             taskqueue_stub.task_queue_pop(stub_id=stub_id, container_id=container_id)
         )
         if not r.ok or not r.task_msg:
-            time.sleep(TASK_POLLING_INTERVAL)
             return None
 
         task = json.loads(r.task_msg)
@@ -158,7 +157,12 @@ class TaskQueueWorker:
         if not container_id or not stub_id:
             raise RunnerException("Invalid runner environment")
 
-        while task := self._get_next_task(taskqueue_stub, stub_id, container_id):
+        while True:
+            task = self._get_next_task(taskqueue_stub, stub_id, container_id)
+            if not task:
+                time.sleep(TASK_POLLING_INTERVAL)
+                continue
+
             start_time = time.time()
 
             task_status = TaskStatus.Complete
