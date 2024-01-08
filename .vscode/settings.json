@@ -1,15 +1,15 @@
 {
-  "[python]": {
-    "editor.defaultFormatter": "charliermarsh.ruff",
-    "editor.formatOnSave": true,
-    "editor.codeActionsOnSave": {
-      "source.fixAll.ruff": "explicit",
-      "source.organizeImports.ruff": "explicit"
-    }
-  },
-  "[proto3]": {
-    "editor.defaultFormatter": "xaver.clang-format",
-    "editor.formatOnSave": true
-  },
-  "python.defaultInterpreterPath": "sdk/.venv/bin/python"
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.fixAll.ruff": "explicit",
+          "source.organizeImports.ruff": "explicit"
+        }
+    },
+    "[proto3]": {
+        "editor.defaultFormatter": "xaver.clang-format",
+        "editor.formatOnSave": true
+    },
+    "python.defaultInterpreterPath": "sdk/.venv/bin/python"
 }
