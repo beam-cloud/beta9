@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 type taskQueueState struct {
@@ -183,7 +184,10 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 	src := rand.NewSource(time.Now().UnixNano())
 	rnd := rand.New(src)
 
-	containerIds := []string{} // TODO: get stoppable containers...
+	containerIds, err := i.stoppableContainers()
+	if err != nil {
+		return err
+	}
 
 	for c := 0; c < containersToStop && len(containerIds) > 0; c++ {
 		idx := rnd.Intn(len(containerIds))
@@ -201,6 +205,56 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 	}
 
 	return nil
+}
+
+func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
+	patternPrefix := fmt.Sprintf("%s%s-*", taskQueueContainerPrefix, i.stub.ExternalId)
+	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a slice to hold the keys
+	keys := make([]string, 0, len(containers))
+	for _, container := range containers {
+		if container.Status == types.ContainerStatusStopping || container.Status == types.ContainerStatusPending {
+			continue
+		}
+
+		// Skip containers with keep warm locks
+		keepWarmVal, err := i.rdb.Get(context.TODO(), Keys.taskQueueKeepWarmLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId)).Int()
+		if err != nil && err != redis.Nil {
+			log.Printf("<taskqueue %s> error getting keep warm lock for container: %v\n", i.name, err)
+			continue
+		}
+
+		keepWarm := keepWarmVal > 0
+		if keepWarm {
+			continue
+		}
+
+		// Check if a queue processing lock exists for the container and skip if it does
+		// This indicates the container is currently processing an item in the queue
+		_, err = i.rdb.Get(context.TODO(), Keys.taskQueueProcessingLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId)).Result()
+		if err == nil || err != redis.Nil {
+			continue
+		}
+
+		// If any tasks are currently running, skip this container
+		tasksRunning, err := i.rdb.Keys(context.TODO(), Keys.taskQueueTaskRunningLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId, "*"))
+		if err != nil && err != redis.Nil {
+			log.Printf("<taskqueue %s> error getting task running locks for container: %v\n", i.name, err)
+			continue
+		}
+
+		if len(tasksRunning) > 0 {
+			continue
+		}
+
+		keys = append(keys, container.ContainerId)
+	}
+
+	return keys, nil
 }
 
 func (i *taskQueueInstance) genContainerId() string {
