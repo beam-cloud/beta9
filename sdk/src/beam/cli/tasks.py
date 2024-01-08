@@ -1,10 +1,13 @@
+from typing import Dict, List
+
 import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
 from beam import aio, terminal
 from beam.cli.contexts import get_gateway_service
-from beam.clients.gateway import GatewayServiceStub, ListTasksResponse, StopTaskResponse
+from beam.cli.formatters import EpilogFormatter
+from beam.clients.gateway import GatewayServiceStub, ListTasksResponse, StopTaskResponse, StringList
 
 
 @click.group(
@@ -16,9 +19,42 @@ def cli(ctx: click.Context):
     ctx.obj = ctx.with_resource(get_gateway_service())
 
 
+def parse_filter_values(
+    ctx: click.Context,
+    param: click.Option,
+    values: List[str],
+) -> Dict[str, StringList]:
+    filters: Dict[str, StringList] = {}
+
+    for value in values:
+        key, value = value.split("=")
+        value_list = value.split(",") if "," in value else [value]
+
+        if key == "status":
+            value_list = [v.upper() for v in value_list]
+
+        if not key or not value:
+            raise click.BadParameter("Filter must be in the format key=value")
+
+        filters[key] = StringList(values=value_list)
+
+    return filters
+
+
 @cli.command(
     name="list",
     help="List all tasks",
+    cls=EpilogFormatter,
+    epilog="""
+    # List the first 10 tasks
+    beam tasks list --limit 10
+
+    # List tasks with status 'running' or 'pending' and stub-id 'function/test:handler'
+    beam tasks list --filter status=running,pending --filter stub-id=function/test:handler
+
+    # List tasks and output in JSON format
+    beam tasks list --format json
+    """,
 )
 @click.option(
     "--limit",
@@ -33,9 +69,15 @@ def cli(ctx: click.Context):
     show_default=True,
     help="Change the format of the output.",
 )
+@click.option(
+    "--filter",
+    multiple=True,
+    callback=parse_filter_values,
+    help="Filters tasks. Add this option for each field you want to filter on.",
+)
 @click.pass_obj
-def list_tasks(service: GatewayServiceStub, limit: int, format: str):
-    response: ListTasksResponse = aio.run_sync(service.list_tasks(limit=limit))
+def list_tasks(service: GatewayServiceStub, limit: int, format: str, filter: Dict[str, StringList]):
+    response: ListTasksResponse = aio.run_sync(service.list_tasks(filters=filter, limit=limit))
 
     if not response.ok:
         terminal.error(response.err_msg)
@@ -51,8 +93,8 @@ def list_tasks(service: GatewayServiceStub, limit: int, format: str):
         Column("Started At"),
         Column("Ended At"),
         Column("Container ID"),
-        Column("Stub"),
-        Column("Workspace"),
+        Column("Stub Name"),
+        Column("Workspace Name"),
         box=box.SIMPLE,
     )
 

@@ -166,3 +166,11 @@ func (g *GpuType) UnmarshalJSON(data []byte) error {
 
 	return nil
 }
+
+// FilterFieldMapping represents a mapping between a client-provided field and
+// its corresponding database field, along with the values for filtering on the database field.
+type FilterFieldMapping struct {
+	ClientField   string
+	ClientValues  []string
+	DatabaseField string
+}
