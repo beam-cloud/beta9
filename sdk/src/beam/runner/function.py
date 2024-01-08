@@ -70,13 +70,13 @@ def main(channel: Channel):
     # Invoke function
     task_status = TaskStatus.Complete
     current_wkdir = os.getcwd()
+    error = None
 
     try:
         os.chdir(USER_CODE_VOLUME)
         result = handler(*args.get("args", ()), **args.get("kwargs", {}))
     except BaseException as exc:
-        print(traceback.format_exc())  # This is necessary to print the exception to the logs
-        result = exc
+        result = error = exc
         task_status = TaskStatus.Error
     finally:
         os.chdir(current_wkdir)
@@ -102,6 +102,9 @@ def main(channel: Channel):
     )
     if not end_task_response.ok:
         raise RunnerException("Unable to end task")
+
+    if task_status == TaskStatus.Error:
+        raise error.with_traceback(error.__traceback__)
 
 
 if __name__ == "__main__":

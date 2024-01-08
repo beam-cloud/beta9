@@ -208,7 +208,7 @@ def runner_context():
             channel.close()
 
         if exit_code != 0:
-            traceback.print_exc()
+            print(traceback.format_exc())
             sys.exit(exit_code)
 
 
