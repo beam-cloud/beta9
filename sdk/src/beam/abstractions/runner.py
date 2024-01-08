@@ -73,8 +73,8 @@ class RunnerAbstraction(BaseAbstraction):
         function_name = func.__name__
         self.handler = f"{module_name}:{function_name}"
 
-    def prepare_runtime(self, *, stub_type: str) -> bool:
-        self._load_handler()
+    def prepare_runtime(self, *, func: Callable, stub_type: str) -> bool:
+        self._load_handler(func)
 
         stub_name = ""
         if stub_type == FUNCTION_STUB_TYPE:

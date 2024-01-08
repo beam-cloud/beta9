@@ -44,6 +44,7 @@ class _CallableWrapper:
             return self.local(*args, **kwargs)
 
         if not self.parent.prepare_runtime(
+            func=self.func,
             stub_type=FUNCTION_STUB_TYPE,
         ):
             return
@@ -101,6 +102,7 @@ class _CallableWrapper:
 
     def map(self, inputs: Iterable):
         if not self.parent.prepare_runtime(
+            func=self.func,
             stub_type=FUNCTION_STUB_TYPE,
         ):
             return

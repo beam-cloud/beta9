@@ -52,6 +52,7 @@ class _CallableWrapper:
             return self.local(*args, **kwargs)
 
         if not self.parent.prepare_runtime(
+            func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,
         ):
             return
@@ -61,6 +62,7 @@ class _CallableWrapper:
 
     def put(self, *args, **kwargs) -> bool:
         if not self.parent.prepare_runtime(
+            func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,
         ):
             return
