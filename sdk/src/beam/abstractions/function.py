@@ -109,7 +109,6 @@ class _CallableWrapper:
                 )
             )
 
-            print(stub_response)
             if stub_response.ok:
                 self.parent.stub_created = True
                 self.parent.stub_id = stub_response.stub_id
