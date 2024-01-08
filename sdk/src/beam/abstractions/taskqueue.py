@@ -4,11 +4,8 @@ from typing import Any, Callable
 
 from beam import terminal
 from beam.abstractions.image import Image
-from beam.abstractions.runner import RunnerAbstraction
+from beam.abstractions.runner import TASKQUEUE_STUB_TYPE, RunnerAbstraction
 from beam.clients.taskqueue import TaskQueuePutResponse, TaskQueueServiceStub
-
-TASKQUEUE_STUB_TYPE = "TASK_QUEUE"
-TASKQUEUE_STUB_PREFIX = "taskqueue"
 
 
 class TaskQueue(RunnerAbstraction):
@@ -54,11 +51,9 @@ class _CallableWrapper:
         if container_id is not None:
             return self.local(*args, **kwargs)
 
-        self.parent.load_handler(self.func)
-
         if not self.parent.prepare_runtime(
+            func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,
-            stub_name=f"{TASKQUEUE_STUB_PREFIX}/{self.parent.handler}",
         ):
             return
 
@@ -66,11 +61,9 @@ class _CallableWrapper:
         return self.func(*args, **kwargs)
 
     def put(self, *args, **kwargs) -> bool:
-        self.parent.load_handler(self.func)
-
         if not self.parent.prepare_runtime(
+            func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,
-            stub_name=f"{TASKQUEUE_STUB_PREFIX}/{self.parent.handler}",
         ):
             return
 
