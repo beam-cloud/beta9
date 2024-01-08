@@ -347,7 +347,7 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 	return stub, nil
 }
 
-func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, workspaceId uint) (*types.StubWithRelated, error) {
+func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string) (*types.StubWithRelated, error) {
 	var stub types.StubWithRelated
 
 	query := `
@@ -358,9 +358,9 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	FROM stub s
 	JOIN workspace w ON s.workspace_id = w.id
 	LEFT JOIN object o ON s.object_id = o.id
-	WHERE s.external_id = $1 AND s.workspace_id = $2;
+	WHERE s.external_id = $1;
 	`
-	err := r.client.GetContext(ctx, &stub, query, externalId, workspaceId)
+	err := r.client.GetContext(ctx, &stub, query, externalId)
 	if err != nil {
 		return &types.StubWithRelated{}, err
 	}

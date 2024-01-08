@@ -56,7 +56,7 @@ func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, backen
 
 func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
-	stub, err := fs.backendRepo.GetStubByExternalId(stream.Context(), in.StubId, authInfo.Workspace.Id)
+	stub, err := fs.backendRepo.GetStubByExternalId(stream.Context(), in.StubId)
 	if err != nil {
 		return err
 	}

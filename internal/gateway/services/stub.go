@@ -2,7 +2,6 @@ package gatewayservices
 
 import (
 	"context"
-	"log"
 
 	"github.com/beam-cloud/beam/internal/auth"
 	"github.com/beam-cloud/beam/internal/common"
@@ -60,16 +59,15 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 }
 
 func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequest) (*pb.DeployStubResponse, error) {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	_, _ = auth.AuthInfoFromContext(ctx)
 
-	stub, err := gws.backendRepo.GetStubByExternalId(ctx, in.StubId, authInfo.Workspace.Id)
+	_, err := gws.backendRepo.GetStubByExternalId(ctx, in.StubId)
 	if err != nil {
 		return &pb.DeployStubResponse{
 			Ok: false,
 		}, nil
 	}
 
-	log.Println("stub: ", stub)
 	return &pb.DeployStubResponse{
 		Ok: true,
 	}, nil

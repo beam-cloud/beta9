@@ -86,7 +86,7 @@ func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 
 	queue, exists := tq.queueInstances.Get(in.StubId)
 	if !exists {
-		err := tq.createQueueInstance(in.StubId, authInfo.Workspace)
+		err := tq.createQueueInstance(in.StubId)
 		if err != nil {
 			return &pb.TaskQueuePutResponse{
 				Ok: false,
@@ -125,7 +125,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 
 	queue, exists := tq.queueInstances.Get(in.StubId)
 	if !exists {
-		err := tq.createQueueInstance(in.StubId, authInfo.Workspace)
+		err := tq.createQueueInstance(in.StubId)
 		if err != nil {
 			return &pb.TaskQueuePopResponse{
 				Ok: false,
@@ -226,7 +226,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 		return err
 	}
 
-	stub, err := tq.backendRepo.GetStubByExternalId(stream.Context(), req.StubId, authInfo.Workspace.Id)
+	stub, err := tq.backendRepo.GetStubByExternalId(stream.Context(), req.StubId)
 	if err != nil {
 		return err
 	}
@@ -382,13 +382,13 @@ func (tq *RedisTaskQueue) TaskQueueLength(ctx context.Context, in *pb.TaskQueueL
 	}, nil
 }
 
-func (tq *RedisTaskQueue) createQueueInstance(stubId string, workspace *types.Workspace) error {
+func (tq *RedisTaskQueue) createQueueInstance(stubId string) error {
 	_, exists := tq.queueInstances.Get(stubId)
 	if exists {
 		return errors.New("queue already in memory")
 	}
 
-	stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId, workspace.Id)
+	stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId)
 	if err != nil {
 		return err
 	}
@@ -411,7 +411,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string, workspace *types.Wo
 		cancelFunc:         cancelFunc,
 		lock:               lock,
 		name:               fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
-		workspace:          workspace,
+		workspace:          &stub.Workspace,
 		stub:               &stub.Stub,
 		object:             &stub.Object,
 		token:              token,
@@ -555,7 +555,7 @@ func (tq *RedisTaskQueue) handleContainerEvents() {
 
 			queue, exists := tq.queueInstances.Get(stubId)
 			if !exists {
-				err := tq.createQueueInstance(stubId, &types.Workspace{Id: 1})
+				err := tq.createQueueInstance(stubId)
 				if err != nil {
 					continue
 				}
