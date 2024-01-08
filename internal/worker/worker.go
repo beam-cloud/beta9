@@ -375,9 +375,13 @@ func (s *Worker) processStopContainerEvents() {
 	}
 }
 
+const ExitCodeSigterm = 143
+
 func (s *Worker) terminateContainer(containerId string, request *types.ContainerRequest, exitCode *int, containerErr *error) {
 	if *exitCode < 0 {
 		*exitCode = 1
+	} else if *exitCode == ExitCodeSigterm {
+		*exitCode = 0
 	}
 
 	err := s.containerRepo.SetContainerExitCode(containerId, *exitCode)

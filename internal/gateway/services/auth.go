@@ -16,7 +16,7 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 		}, nil
 	}
 
-	// See if the this gateway has been configured previously
+	// See if this gateway has been configured previously
 	existingContexts, err := gws.backendRepo.ListWorkspaces(ctx)
 	if err != nil || len(existingContexts) >= 1 {
 		return &pb.AuthorizeResponse{
