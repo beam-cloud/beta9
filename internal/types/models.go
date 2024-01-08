@@ -87,12 +87,6 @@ const (
 	BeamAppTaskStatusTimeout   string = "TIMEOUT"
 )
 
-const (
-	DeploymentStatusReady   string = "READY"
-	DeploymentStatusError   string = "ERROR"
-	DeploymentStatusStopped string = "STOPPED"
-)
-
 type BeamAppTask struct {
 	ID              uint      `gorm:"primarykey"`
 	AppDeploymentId *uint     `gorm:"foreignKey:BeamAppDeploymentId"`

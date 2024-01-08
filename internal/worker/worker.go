@@ -15,7 +15,6 @@ import (
 	"time"
 
 	common "github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/gateway"
 	repo "github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/storage"
 	types "github.com/beam-cloud/beam/internal/types"
@@ -76,9 +75,9 @@ type ContainerOptions struct {
 var (
 	//go:embed base_runc_config.json
 	baseRuncConfigRaw          string
+	baseConfigPath             string  = "/tmp"
 	imagePath                  string  = "/images"
 	containerLogsPath          string  = "/var/log/worker"
-	baseConfigPath             string  = "/tmp"
 	defaultContainerDirectory  string  = "/workspace"
 	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
 )
@@ -125,19 +124,9 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	storage, err := storage.NewJuiceFsStorage()
+	storage, err := storage.NewStorage()
 	if err != nil {
 		return nil, err
-	}
-
-	err = storage.Format(gateway.GatewayConfig.DefaultFilesystemName)
-	if err != nil {
-		log.Fatalf("Unable to format filesystem: %+v\n", err)
-	}
-
-	err = storage.Mount(gateway.GatewayConfig.DefaultFilesystemPath)
-	if err != nil {
-		log.Fatalf("Unable to mount filesystem: %+v\n", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -206,9 +195,6 @@ func (s *Worker) Run() error {
 				if err != nil {
 					log.Printf("Unable to run container <%s>: %v\n", containerId, err)
 
-					// HOTFIX: set a non-zero exit code for deployments that failed to launch due to some
-					// unhandled issue. This is just here to prevent infinite crashlooping
-					// TODO: handle these sorts of failures in a more graceful way
 					err := s.containerRepo.SetContainerExitCode(containerId, 1)
 					if err != nil {
 						log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
@@ -549,13 +535,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, containerConfig *ContainerConfigResponse, options *ContainerOptions) []string {
 	env := []string{
-		fmt.Sprintf("IDENTITY_ID=%s", containerConfig.IdentityId),
-		fmt.Sprintf("S2S_TOKEN=%s", containerConfig.S2SToken),
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
-		fmt.Sprintf("STATSD_HOST=%s", os.Getenv("STATSD_HOST")),
-		fmt.Sprintf("STATSD_PORT=%s", os.Getenv("STATSD_PORT")),
 		fmt.Sprintf("BEAM_GATEWAY_HOST=%s", os.Getenv("BEAM_GATEWAY_HOST")),
 		fmt.Sprintf("BEAM_GATEWAY_PORT=%s", os.Getenv("BEAM_GATEWAY_PORT")),
 		"PYTHONUNBUFFERED=1",
@@ -618,7 +600,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		existingCudaFound := false
 		env, existingCudaFound = s.containerCudaManager.InjectCudaEnvVars(env, options)
 		if !existingCudaFound {
-			// If the container image does not have cuda libraries installed, mount cuda from the host
+			// If the container image does not have cuda libraries installed, mount cuda libs from the host
 			spec.Mounts = s.containerCudaManager.InjectCudaMounts(spec.Mounts)
 		}
 	} else {
@@ -638,10 +620,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			mode = "ro"
 		}
 
-		if strings.HasPrefix(m.MountPath, "/volumes") {
-			// Creates a symlink in the local workspace path to the container's volume path
-			linkPath := filepath.Join(containerConfig.WorkspacePath, filepath.Base(m.MountPath))
-			err = forceSymlink(m.MountPath, linkPath)
+		if m.LinkPath != "" {
+			err = forceSymlink(m.MountPath, m.LinkPath)
 			if err != nil {
 				log.Printf("unable to symlink volume: %v", err)
 			}
@@ -684,7 +664,7 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 		return err
 	}
 
-	// NOTE: because we only handle one GPU request at a time
+	// NOTE: because we only handle one GPU request at a time per worker
 	// We need to reset this back to the original worker pool limits
 	// TODO: Manage number of GPUs explicitly instead of this
 	if s.gpuType != "" {

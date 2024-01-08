@@ -2,35 +2,44 @@
 # sources: function.proto
 # plugin: python-betterproto
 from dataclasses import dataclass
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List
 
 import betterproto
 import grpclib
 
 
 @dataclass
+class FVolume(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    mount_path: str = betterproto.string_field(2)
+
+
+@dataclass
 class FunctionInvokeRequest(betterproto.Message):
     object_id: str = betterproto.string_field(1)
     image_id: str = betterproto.string_field(2)
-    args: bytes = betterproto.bytes_field(3)
-    handler: str = betterproto.string_field(4)
-    python_version: str = betterproto.string_field(5)
-    cpu: int = betterproto.int64_field(6)
-    memory: int = betterproto.int64_field(7)
-    gpu: str = betterproto.string_field(8)
+    stub_id: str = betterproto.string_field(3)
+    args: bytes = betterproto.bytes_field(4)
+    handler: str = betterproto.string_field(5)
+    python_version: str = betterproto.string_field(6)
+    cpu: int = betterproto.int64_field(7)
+    memory: int = betterproto.int64_field(8)
+    gpu: str = betterproto.string_field(9)
+    volumes: List["FVolume"] = betterproto.message_field(10)
 
 
 @dataclass
 class FunctionInvokeResponse(betterproto.Message):
-    output: str = betterproto.string_field(1)
-    done: bool = betterproto.bool_field(2)
-    exit_code: int = betterproto.uint32_field(3)
-    result: bytes = betterproto.bytes_field(4)
+    task_id: str = betterproto.string_field(1)
+    output: str = betterproto.string_field(2)
+    done: bool = betterproto.bool_field(3)
+    exit_code: int = betterproto.uint32_field(4)
+    result: bytes = betterproto.bytes_field(5)
 
 
 @dataclass
 class FunctionGetArgsRequest(betterproto.Message):
-    invocation_id: str = betterproto.string_field(1)
+    task_id: str = betterproto.string_field(1)
 
 
 @dataclass
@@ -41,7 +50,7 @@ class FunctionGetArgsResponse(betterproto.Message):
 
 @dataclass
 class FunctionSetResultRequest(betterproto.Message):
-    invocation_id: str = betterproto.string_field(1)
+    task_id: str = betterproto.string_field(1)
     result: bytes = betterproto.bytes_field(2)
 
 
@@ -56,22 +65,27 @@ class FunctionServiceStub(betterproto.ServiceStub):
         *,
         object_id: str = "",
         image_id: str = "",
+        stub_id: str = "",
         args: bytes = b"",
         handler: str = "",
         python_version: str = "",
         cpu: int = 0,
         memory: int = 0,
         gpu: str = "",
+        volumes: List["FVolume"] = [],
     ) -> AsyncGenerator[FunctionInvokeResponse, None]:
         request = FunctionInvokeRequest()
         request.object_id = object_id
         request.image_id = image_id
+        request.stub_id = stub_id
         request.args = args
         request.handler = handler
         request.python_version = python_version
         request.cpu = cpu
         request.memory = memory
         request.gpu = gpu
+        if volumes is not None:
+            request.volumes = volumes
 
         async for response in self._unary_stream(
             "/function.FunctionService/FunctionInvoke",
@@ -80,11 +94,9 @@ class FunctionServiceStub(betterproto.ServiceStub):
         ):
             yield response
 
-    async def function_get_args(
-        self, *, invocation_id: str = ""
-    ) -> FunctionGetArgsResponse:
+    async def function_get_args(self, *, task_id: str = "") -> FunctionGetArgsResponse:
         request = FunctionGetArgsRequest()
-        request.invocation_id = invocation_id
+        request.task_id = task_id
 
         return await self._unary_unary(
             "/function.FunctionService/FunctionGetArgs",
@@ -93,10 +105,10 @@ class FunctionServiceStub(betterproto.ServiceStub):
         )
 
     async def function_set_result(
-        self, *, invocation_id: str = "", result: bytes = b""
+        self, *, task_id: str = "", result: bytes = b""
     ) -> FunctionSetResultResponse:
         request = FunctionSetResultRequest()
-        request.invocation_id = invocation_id
+        request.task_id = task_id
         request.result = result
 
         return await self._unary_unary(

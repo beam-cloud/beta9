@@ -13,32 +13,40 @@ service FunctionService {
       returns (FunctionSetResultResponse) {}
 }
 
+message FVolume {
+  string id = 1;
+  string mount_path = 2;
+}
+
 message FunctionInvokeRequest {
   string object_id = 1;
   string image_id = 2;
-  bytes args = 3;
-  string handler = 4;
-  string python_version = 5;
-  int64 cpu = 6;
-  int64 memory = 7;
-  string gpu = 8;
+  string stub_id = 3;
+  bytes args = 4;
+  string handler = 5;
+  string python_version = 6;
+  int64 cpu = 7;
+  int64 memory = 8;
+  string gpu = 9;
+  repeated FVolume volumes = 10;
 }
 
 message FunctionInvokeResponse {
-  string output = 1;
-  bool done = 2;
-  uint32 exit_code = 3;
-  bytes result = 4;
+  string task_id = 1;
+  string output = 2;
+  bool done = 3;
+  uint32 exit_code = 4;
+  bytes result = 5;
 }
 
-message FunctionGetArgsRequest { string invocation_id = 1; }
+message FunctionGetArgsRequest { string task_id = 1; }
 message FunctionGetArgsResponse {
   bool ok = 1;
   bytes args = 2;
 }
 
 message FunctionSetResultRequest {
-  string invocation_id = 1;
+  string task_id = 1;
   bytes result = 2;
 }
 

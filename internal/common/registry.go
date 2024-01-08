@@ -17,6 +17,8 @@ import (
 )
 
 const (
+	DefaultAWSRegion string = "us-east-1"
+
 	s3ImageRegistryStoreName       = "s3"
 	remoteImageFileExtension       = "rclip"
 	localImageFileExtension        = "clip"

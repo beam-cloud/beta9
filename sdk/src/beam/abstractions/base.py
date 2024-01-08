@@ -24,4 +24,7 @@ class BaseAbstraction(ABC):
             raise ConnectionError from None
 
     def __del__(self) -> None:
-        self.channel.close()
+        try:
+            self.channel.close()
+        except AttributeError:
+            return

@@ -1,10 +1,10 @@
 package repository
 
 import (
+	"context"
 	"time"
 
 	"github.com/beam-cloud/beam/internal/types"
-	pb "github.com/beam-cloud/beam/proto"
 )
 
 type SchedulerRepository interface{}
@@ -36,6 +36,25 @@ type ContainerRepository interface {
 	GetContainerWorkerHostname(containerId string) (string, error)
 }
 
+type BackendRepository interface {
+	ListWorkspaces(ctx context.Context) ([]types.Workspace, error)
+	CreateWorkspace(ctx context.Context) (types.Workspace, error)
+	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error)
+	GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error)
+	GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error)
+	CreateToken(ctx context.Context, workspaceId uint) (types.Token, error)
+	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error)
+	GetTask(ctx context.Context, externalId string) (*types.Task, error)
+	CreateTask(ctx context.Context, containerId string, workspaceId, stubId uint) (*types.Task, error)
+	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error)
+	DeleteTask(ctx context.Context, externalId string) error
+	ListTasks(ctx context.Context) ([]types.Task, error)
+	ListTasksWithRelated(ctx context.Context, filters []types.FilterFieldMapping, limit uint32) ([]types.TaskWithRelated, error)
+	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint) (types.Stub, error)
+	GetStubByExternalId(ctx context.Context, externalId string, workspaceId uint) (*types.Stub, error)
+	GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
+}
+
 type BeamRepository interface {
 	GetAgent(name, identityExternalId string) (*types.Agent, error)
 	GetAgentByToken(token string) (*types.Agent, error)
@@ -64,8 +83,6 @@ type BeamRepository interface {
 type TaskRepository interface {
 	StartTask(taskId, queueName, containerId, identityExternalId string) error
 	EndTask(taskId, queueName, containerId, containerHostname, identityExternalId string, taskDuration, scaleDownDelay float64) error
-	MonitorTask(task *types.BeamAppTask, queueName, containerId, identityExternalId string, timeout int64, stream pb.Scheduler_MonitorTaskServer, timeoutCallback func() error) error
-	GetTaskStream(queueName, containerId, identityExternalId string, stream pb.Scheduler_GetTaskStreamServer) error
 	GetNextTask(queueName, containerId, identityExternalId string) ([]byte, error)
 	GetTasksInFlight(queueName, identityExternalId string) (int, error)
 	IncrementTasksInFlight(queueName, identityExternalId string) error

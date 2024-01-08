@@ -11,8 +11,11 @@ import (
 	"github.com/beam-cloud/beam/internal/abstractions/function"
 	"github.com/beam-cloud/beam/internal/abstractions/image"
 	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
-	dqueue "github.com/beam-cloud/beam/internal/abstractions/queue"
+	simplequeue "github.com/beam-cloud/beam/internal/abstractions/queue"
+	volumesvc "github.com/beam-cloud/beam/internal/abstractions/volume"
+	"github.com/beam-cloud/beam/internal/auth"
 	common "github.com/beam-cloud/beam/internal/common"
+	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/storage"
@@ -28,6 +31,7 @@ type Gateway struct {
 	beatService      *beat.BeatService
 	eventBus         *common.EventBus
 	redisClient      *common.RedisClient
+	BackendRepo      repository.BackendRepository
 	BeamRepo         repository.BeamRepository
 	metricsRepo      repository.MetricsStatsdRepository
 	Storage          storage.Storage
@@ -50,21 +54,9 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	Storage, err := storage.NewJuiceFsStorage()
+	Storage, err := storage.NewStorage()
 	if err != nil {
 		return nil, err
-	}
-
-	// Format filesystem
-	err = Storage.Format(GatewayConfig.DefaultFilesystemName)
-	if err != nil {
-		log.Fatalf("Unable to format filesystem: %+v\n", err)
-	}
-
-	// Mount filesystem
-	err = Storage.Mount(GatewayConfig.DefaultFilesystemPath)
-	if err != nil {
-		log.Fatalf("Unable to mount filesystem: %+v\n", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -78,7 +70,14 @@ func NewGateway() (*Gateway, error) {
 		Scheduler:        Scheduler,
 	}
 
+	eventBus := common.NewEventBus(redisClient)
+
 	beamRepo, err := repository.NewBeamPostgresRepository()
+	if err != nil {
+		return nil, err
+	}
+
+	backendRepo, err := repository.NewBackendPostgresRepository()
 	if err != nil {
 		return nil, err
 	}
@@ -95,14 +94,16 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
+	gateway.BackendRepo = backendRepo
 	gateway.BeamRepo = beamRepo
 	gateway.metricsRepo = metricsRepo
 	gateway.keyEventManager = keyEventManager
 	gateway.beatService = beatService
+	gateway.eventBus = eventBus
 
 	// go gateway.keyEventManager.ListenForPattern(gateway.ctx, common.RedisKeys.SchedulerContainerState(types.DeploymentContainerPrefix), gateway.keyEventChan)
 	go gateway.beatService.Run(gateway.ctx)
-	// go gateway.eventBus.ReceiveEvents(gateway.ctx)
+	go gateway.eventBus.ReceiveEvents(gateway.ctx)
 
 	return gateway, nil
 }
@@ -114,7 +115,16 @@ func (g *Gateway) Start() error {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
+	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo)
+
+	serverOptions := []grpc.ServerOption{
+		grpc.UnaryInterceptor(authInterceptor.Unary()),
+		grpc.StreamInterceptor(authInterceptor.Stream()),
+	}
+
+	grpcServer := grpc.NewServer(
+		serverOptions...,
+	)
 
 	// Create and register abstractions
 	rm, err := dmap.NewRedisMapService(g.redisClient)
@@ -123,7 +133,7 @@ func (g *Gateway) Start() error {
 	}
 	pb.RegisterMapServiceServer(grpcServer, rm)
 
-	rq, err := dqueue.NewRedisSimpleQueueService(g.redisClient)
+	rq, err := simplequeue.NewRedisSimpleQueueService(g.redisClient)
 	if err != nil {
 		return err
 	}
@@ -137,11 +147,18 @@ func (g *Gateway) Start() error {
 	pb.RegisterImageServiceServer(grpcServer, is)
 
 	// Register function service
-	fs, err := function.NewRuncFunctionService(context.TODO(), g.redisClient, g.Scheduler, g.keyEventManager)
+	fs, err := function.NewRuncFunctionService(context.TODO(), g.BackendRepo, g.redisClient, g.Scheduler, g.keyEventManager)
 	if err != nil {
 		return err
 	}
 	pb.RegisterFunctionServiceServer(grpcServer, fs)
+
+	// Register volume service
+	vs, err := volumesvc.NewGlobalVolumeService(g.BackendRepo)
+	if err != nil {
+		return err
+	}
+	pb.RegisterVolumeServiceServer(grpcServer, vs)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService()
@@ -151,8 +168,8 @@ func (g *Gateway) Start() error {
 	pb.RegisterSchedulerServer(grpcServer, s)
 
 	// Register gateway services
-	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction yet)
-	gws, err := NewGatewayService(g)
+	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction)
+	gws, err := gatewayservices.NewGatewayService(g.BackendRepo, s.Scheduler)
 	if err != nil {
 		return err
 	}

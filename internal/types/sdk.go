@@ -122,42 +122,10 @@ func (c *BeamAppConfig) Scan(value interface{}) error {
 	return json.Unmarshal(bytes, (*BeamAppConfig)(c))
 }
 
-type GpuType string
-
-func (g *GpuType) UnmarshalJSON(data []byte) error {
-	var gpuStr string
-	err := json.Unmarshal(data, &gpuStr)
-	if err == nil {
-		*g = GpuType(gpuStr)
-		return nil
-	}
-
-	var gpuInt int
-	err = json.Unmarshal(data, &gpuInt)
-	if err != nil {
-		return err
-	}
-
-	if gpuInt == 0 {
-		*g = GpuType("")
-	} else if gpuInt > 0 {
-		*g = GpuType("T4")
-	}
-
-	return nil
-}
-
 type Output struct {
 	Name       string `json:"name"`
 	Path       string `json:"path"`
 	OutputType string `json:"output_type"`
-}
-
-type Runtime struct {
-	Cpu    string  `json:"cpu"`
-	Gpu    GpuType `json:"gpu"`
-	Memory string  `json:"memory"`
-	Image  Image   `json:"image"`
 }
 
 type TaskPolicy struct {
@@ -171,14 +139,6 @@ type RunConfig struct {
 	Outputs     []Output    `json:"outputs"`
 	Runtime     *Runtime    `json:"runtime"`
 	TaskPolicy  *TaskPolicy `json:"task_policy"`
-}
-
-type Image struct {
-	Commands             []string `json:"commands"`
-	PythonVersion        string   `json:"python_version"`
-	PythonPackages       []string `json:"python_packages"`
-	BaseImage            *string  `json:"base_image"`
-	BaseImageCredentials *string  `json:"base_image_creds"`
 }
 
 type AutoScaling struct {

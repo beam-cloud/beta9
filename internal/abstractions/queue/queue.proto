@@ -2,48 +2,46 @@ syntax = "proto3";
 
 option go_package = "github.com/beam-cloud/beam/proto";
 
-package queue;
+package simplequeue;
 
 service SimpleQueueService {
-  rpc Enqueue(SimpleQueueEnqueueRequest) returns (SimpleQueueEnqueueResponse) {}
-  rpc Dequeue(SimpleQueueDequeueRequest) returns (SimpleQueueDequeueResponse) {}
+  rpc Put(SimpleQueuePutRequest) returns (SimpleQueuePutResponse) {}
+  rpc Pop(SimpleQueuePopRequest) returns (SimpleQueuePopResponse) {}
   rpc Peek(SimpleQueueRequest) returns (SimpleQueuePeekResponse) {}
   rpc Empty(SimpleQueueRequest) returns (SimpleQueueEmptyResponse) {}
   rpc Size(SimpleQueueRequest) returns (SimpleQueueSizeResponse) {}
 }
 
-message SimpleQueueEnqueueRequest {
+message SimpleQueuePutRequest {
     string name = 1;
     bytes value = 2;
 }
 
-message SimpleQueueEnqueueResponse { bool ok = 1; }
+message SimpleQueuePutResponse { bool ok = 1; }
 
-message SimpleQueueDequeueRequest {
+message SimpleQueuePopRequest {
     string name = 1;
     bytes value = 2;
 }
 
-message SimpleQueueDequeueResponse {
+message SimpleQueuePopResponse {
   bool ok = 1;
   bytes value = 2;
 }
 
 message SimpleQueuePeekResponse {
-    bool ok = 1;
-    bytes value = 2;
+  bool ok = 1;
+  bytes value = 2;
 }
 
 message SimpleQueueEmptyResponse {
-    bool ok = 1;
-    bool empty = 2;
+  bool ok = 1;
+  bool empty = 2;
 }
 
 message SimpleQueueSizeResponse {
-    bool ok = 1;
-    uint64 size = 2;
+  bool ok = 1;
+  uint64 size = 2;
 }
 
-message SimpleQueueRequest {
-    string name = 1;
-}
+message SimpleQueueRequest { string name = 1; }
