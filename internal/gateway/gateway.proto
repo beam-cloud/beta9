@@ -72,8 +72,13 @@ message EndTaskRequest {
 
 message EndTaskResponse { bool ok = 1; }
 
+message StringList {
+  repeated string values = 1;
+}
+
 message ListTasksRequest {
-  uint32 limit = 1;
+  map<string, StringList> filters = 1;
+  uint32 limit = 2;
 }
 
 message Task {
@@ -82,10 +87,10 @@ message Task {
   string container_id = 4;
   google.protobuf.Timestamp started_at = 5;
   google.protobuf.Timestamp ended_at = 6;
-  string workspace_id = 7;
-  string workspace_name = 8;
-  string stub_id = 9;
-  string stub_name = 10;
+  string stub_id = 7;
+  string stub_name = 8;
+  string workspace_id = 9;
+  string workspace_name = 10;
   google.protobuf.Timestamp created_at = 11;
   google.protobuf.Timestamp updated_at = 12;
 }
