@@ -13,9 +13,15 @@ service FunctionService {
       returns (FunctionSetResultResponse) {}
 }
 
+message FVolume {
+  string id = 1;
+  string mount_path = 2;
+}
+
 message FunctionInvokeRequest {
-  string stub_id = 3;
-  bytes args = 4;
+  string stub_id = 1;
+  bytes args = 2;
+  repeated FVolume volumes = 3;
 }
 
 message FunctionInvokeResponse {

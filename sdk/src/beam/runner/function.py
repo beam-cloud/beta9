@@ -1,5 +1,10 @@
 import os
 import time
+<<<<<<< HEAD
+=======
+import traceback
+from typing import Callable
+>>>>>>> master
 
 import cloudpickle
 from grpclib.client import Channel
@@ -16,6 +21,27 @@ from beam.exceptions import RunnerException
 from beam.runner.common import load_handler
 from beam.type import TaskStatus
 
+<<<<<<< HEAD
+=======
+USER_CODE_VOLUME = "/mnt/code"
+
+
+def _load_handler() -> Callable:
+    sys.path.insert(0, USER_CODE_VOLUME)
+
+    handler = os.getenv("HANDLER")
+    if not handler:
+        raise RunnerException("Handler not specified")
+
+    try:
+        module, func = handler.split(":")
+        target_module = importlib.import_module(module)
+        method = getattr(target_module, func)
+        return method
+    except BaseException:
+        raise RunnerException("Unable to load handler", traceback.format_exc())
+
+>>>>>>> master
 
 @with_runner_context
 def main(channel: Channel):
@@ -48,13 +74,18 @@ def main(channel: Channel):
 
     # Invoke function
     task_status = TaskStatus.Complete
+    current_wkdir = os.getcwd()
+    error = None
+
     try:
+        os.chdir(USER_CODE_VOLUME)
         result = handler(*args.get("args", ()), **args.get("kwargs", {}))
-        result = cloudpickle.dumps(result)
     except BaseException as exc:
-        result = cloudpickle.dumps(exc)
+        result = error = exc
         task_status = TaskStatus.Error
     finally:
+        os.chdir(current_wkdir)
+        result = cloudpickle.dumps(result)
         set_result_resp: FunctionSetResultResponse = run_sync(
             function_stub.function_set_result(task_id=task_id, result=result),
         )
@@ -76,6 +107,9 @@ def main(channel: Channel):
     )
     if not end_task_response.ok:
         raise RunnerException("Unable to end task")
+
+    if task_status == TaskStatus.Error:
+        raise error.with_traceback(error.__traceback__)
 
 
 if __name__ == "__main__":

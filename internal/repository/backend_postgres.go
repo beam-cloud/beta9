@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/beam-cloud/beam/internal/common"
 	_ "github.com/beam-cloud/beam/internal/repository/backend_postgres_migrations"
@@ -293,17 +294,33 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 	return tasks, nil
 }
 
-func (r *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, limit uint32) ([]types.TaskWithRelated, error) {
-	var tasks []types.TaskWithRelated
-	query := `
-	SELECT w.external_id AS "workspace.external_id", w.name AS "workspace.name", s.external_id AS "stub.external_id", s.name AS "stub.name", t.*
+func (r *PostgresBackendRepository) ListTasksWithRelated(
+	ctx context.Context,
+	filters []types.FilterFieldMapping,
+	limit uint32,
+) ([]types.TaskWithRelated, error) {
+	allArgs := []any{}
+	whereParts := buildWhereParts(filters, &allArgs)
+	whereClause := buildWhereClause(whereParts)
+	limitClause := buildLimitClause(&allArgs, limit)
+
+	query := fmt.Sprintf(`
+	SELECT
+		w.external_id AS "workspace.external_id",
+		w.name AS "workspace.name",
+		s.external_id AS "stub.external_id",
+		s.name AS "stub.name",
+		t.*
 	FROM task t
 	JOIN workspace w ON t.workspace_id = w.id
 	JOIN stub s ON t.stub_id = s.id
+	%s
 	ORDER BY t.id DESC
-	LIMIT $1;
-	`
-	err := r.client.SelectContext(ctx, &tasks, query, limit)
+	%s;
+	`, whereClause, limitClause)
+
+	var tasks []types.TaskWithRelated
+	err := r.client.SelectContext(ctx, &tasks, query, allArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -366,4 +383,65 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	}
 
 	return &stub, nil
+}
+
+func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
+	var volume types.Volume
+
+	queryGet := `SELECT id, external_id, name, workspace_id, created_at FROM volume WHERE name = $1 AND workspace_id = $2;`
+
+	err := c.client.GetContext(ctx, &volume, queryGet, name, workspaceId)
+	if err == nil {
+		return &volume, err
+	}
+
+	queryCreate := `INSERT INTO volume (name, workspace_id) VALUES ($1, $2) RETURNING id, external_id, name, workspace_id, created_at;`
+
+	err = c.client.GetContext(ctx, &volume, queryCreate, name, workspaceId)
+	if err != nil {
+		return &types.Volume{}, err
+	}
+
+	return &volume, nil
+}
+
+// Helpers
+
+// buildLimitClause generates a LIMIT clause for a SQL query.
+func buildLimitClause(allArgs *[]any, limit uint32) string {
+	*allArgs = append(*allArgs, limit)
+	return fmt.Sprintf("LIMIT $%d", len(*allArgs))
+}
+
+// buildWhereParts constructs the WHERE clause parts for a SQL query based on the provided filters.
+func buildWhereParts(filters []types.FilterFieldMapping, allArgs *[]any) []string {
+	whereParts := make([]string, 0, len(filters))
+	for _, filterInfo := range filters {
+		inClause, newArgs := buildInClause(len(*allArgs)+1, filterInfo.ClientValues)
+		*allArgs = append(*allArgs, newArgs...)
+		whereParts = append(whereParts, fmt.Sprintf("%s %s", filterInfo.DatabaseField, inClause))
+	}
+	return whereParts
+}
+
+// buildInClause generates an IN clause for a SQL query.
+// It constructs the IN clause using placeholders for the provided values and
+// prepares a slice of arguments for the clause.
+func buildInClause[T any](startIdx int, values []T) (string, []any) {
+	place := make([]string, len(values))
+	items := make([]any, len(values))
+	for i, item := range values {
+		place[i] = fmt.Sprintf("$%d", startIdx+i)
+		items[i] = item
+	}
+	return fmt.Sprintf("IN (%s)", strings.Join(place, ", ")), items
+}
+
+// buildWhereClause constructs the WHERE clause for a SQL query.
+// It joins the given whereParts using "AND" to form a complete WHERE clause.
+func buildWhereClause(whereParts []string) string {
+	if len(whereParts) > 0 {
+		return "WHERE " + strings.Join(whereParts, " AND ")
+	}
+	return ""
 }

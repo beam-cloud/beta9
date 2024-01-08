@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
+
+	pb "github.com/beam-cloud/beam/proto"
 )
 
 type Workspace struct {
@@ -98,16 +100,17 @@ type TaskWithRelated struct {
 }
 
 type StubConfigV1 struct {
-	Runtime         Runtime    `json:"runtime"`
-	Handler         string     `json:"handler"`
-	PythonVersion   string     `json:"python_version"`
-	KeepWarmSeconds uint       `json:"keep_warm_seconds"`
-	MaxPendingTasks uint       `json:"max_pending_tasks"`
-	CallbackUrl     string     `json:"callback_url"`
-	TaskPolicy      TaskPolicy `json:"task_policy"`
-	Concurrency     uint       `json:"concurrency"`
-	Authorized      bool       `json:"authorized"`
-	MaxContainers   uint       `json:"max_containers"`
+	Runtime         Runtime      `json:"runtime"`
+	Handler         string       `json:"handler"`
+	PythonVersion   string       `json:"python_version"`
+	KeepWarmSeconds uint         `json:"keep_warm_seconds"`
+	MaxPendingTasks uint         `json:"max_pending_tasks"`
+	CallbackUrl     string       `json:"callback_url"`
+	TaskPolicy      TaskPolicy   `json:"task_policy"`
+	Concurrency     uint         `json:"concurrency"`
+	Authorized      bool         `json:"authorized"`
+	MaxContainers   uint         `json:"max_containers"`
+	Volumes         []*pb.Volume `json:"volumes"`
 }
 
 const (
@@ -172,4 +175,12 @@ func (g *GpuType) UnmarshalJSON(data []byte) error {
 	}
 
 	return nil
+}
+
+// FilterFieldMapping represents a mapping between a client-provided field and
+// its corresponding database field, along with the values for filtering on the database field.
+type FilterFieldMapping struct {
+	ClientField   string
+	ClientValues  []string
+	DatabaseField string
 }

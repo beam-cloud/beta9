@@ -101,6 +101,23 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
+	mounts := []types.Mount{
+		{
+			LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, stub.Object.ExternalId),
+			MountPath: types.WorkerUserCodeVolume,
+			ReadOnly:  true,
+		},
+	}
+
+	for _, v := range in.Volumes {
+		mounts = append(mounts, types.Mount{
+			LocalPath: path.Join(types.DefaultVolumesPath, authInfo.Workspace.Name, v.Id),
+			LinkPath:  path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, stub.Object.ExternalId, v.MountPath),
+			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
+			ReadOnly:  false,
+		})
+	}
+
 	err = fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env: []string{
@@ -113,12 +130,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		Gpu:        string(stubConfig.Runtime.Gpu),
 		ImageId:    stubConfig.Runtime.ImageId,
 		EntryPoint: []string{stubConfig.PythonVersion, "-m", "beam.runner.function"},
-		Mounts: []types.Mount{
-			{
-				LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, stub.Object.ExternalId),
-				MountPath: types.WorkerUserCodeVolume, ReadOnly: true,
-			},
-		},
+		Mounts:     mounts,
 	})
 	if err != nil {
 		return err

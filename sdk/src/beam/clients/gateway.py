@@ -3,7 +3,7 @@
 # plugin: python-betterproto
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import betterproto
 import grpclib
@@ -86,8 +86,16 @@ class EndTaskResponse(betterproto.Message):
 
 
 @dataclass
+class StringList(betterproto.Message):
+    values: List[str] = betterproto.string_field(1)
+
+
+@dataclass
 class ListTasksRequest(betterproto.Message):
-    limit: int = betterproto.uint32_field(1)
+    filters: Dict[str, "StringList"] = betterproto.map_field(
+        1, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
+    )
+    limit: int = betterproto.uint32_field(2)
 
 
 @dataclass
@@ -97,10 +105,10 @@ class Task(betterproto.Message):
     container_id: str = betterproto.string_field(4)
     started_at: datetime = betterproto.message_field(5)
     ended_at: datetime = betterproto.message_field(6)
-    workspace_id: str = betterproto.string_field(7)
-    workspace_name: str = betterproto.string_field(8)
-    stub_id: str = betterproto.string_field(9)
-    stub_name: str = betterproto.string_field(10)
+    stub_id: str = betterproto.string_field(7)
+    stub_name: str = betterproto.string_field(8)
+    workspace_id: str = betterproto.string_field(9)
+    workspace_name: str = betterproto.string_field(10)
     created_at: datetime = betterproto.message_field(11)
     updated_at: datetime = betterproto.message_field(12)
 
@@ -125,6 +133,12 @@ class StopTaskResponse(betterproto.Message):
 
 
 @dataclass
+class Volume(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    mount_path: str = betterproto.string_field(2)
+
+
+@dataclass
 class GetOrCreateStubRequest(betterproto.Message):
     object_id: str = betterproto.string_field(1)
     image_id: str = betterproto.string_field(2)
@@ -141,6 +155,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     concurrency: int = betterproto.uint32_field(13)
     max_containers: int = betterproto.uint32_field(14)
     max_pending_tasks: int = betterproto.uint32_field(15)
+    volumes: List["Volume"] = betterproto.message_field(16)
 
 
 @dataclass
@@ -248,8 +263,11 @@ class GatewayServiceStub(betterproto.ServiceStub):
             StopTaskResponse,
         )
 
-    async def list_tasks(self, *, limit: int = 0) -> ListTasksResponse:
+    async def list_tasks(
+        self, *, filters: Optional[Dict[str, "StringList"]] = None, limit: int = 0
+    ) -> ListTasksResponse:
         request = ListTasksRequest()
+        request.filters = filters
         request.limit = limit
 
         return await self._unary_unary(
@@ -276,6 +294,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
         concurrency: int = 0,
         max_containers: int = 0,
         max_pending_tasks: int = 0,
+        volumes: List["Volume"] = [],
     ) -> GetOrCreateStubResponse:
         request = GetOrCreateStubRequest()
         request.object_id = object_id
@@ -293,6 +312,8 @@ class GatewayServiceStub(betterproto.ServiceStub):
         request.concurrency = concurrency
         request.max_containers = max_containers
         request.max_pending_tasks = max_pending_tasks
+        if volumes is not None:
+            request.volumes = volumes
 
         return await self._unary_unary(
             "/gateway.GatewayService/GetOrCreateStub",

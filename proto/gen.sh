@@ -25,3 +25,6 @@ protoc -I ../internal/abstractions/queue/ --python_betterproto_out=../sdk/src/be
 
 protoc -I ../internal/abstractions/taskqueue/ --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ../internal/abstractions/taskqueue/taskqueue.proto
 protoc -I ../internal/abstractions/taskqueue/ --python_betterproto_out=../sdk/src/beam/clients/  ../internal/abstractions/taskqueue/taskqueue.proto
+
+protoc -I ../internal/abstractions/volume/ --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ../internal/abstractions/volume/volume.proto
+protoc -I ../internal/abstractions/volume/ --python_betterproto_out=../sdk/src/beam/clients/  ../internal/abstractions/volume/volume.proto

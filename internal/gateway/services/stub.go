@@ -29,6 +29,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Concurrency:     uint(in.Concurrency),
 		MaxContainers:   uint(in.MaxContainers),
 		MaxPendingTasks: uint(in.MaxPendingTasks),
+		Volumes:         in.Volumes,
 	}
 
 	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
