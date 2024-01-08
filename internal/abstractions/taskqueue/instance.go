@@ -152,6 +152,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 				fmt.Sprintf("HANDLER=%s", i.stubConfig.Handler),
 				fmt.Sprintf("BEAM_TOKEN=%s", i.token.Key),
 				fmt.Sprintf("STUB_ID=%s", i.stub.ExternalId),
+				fmt.Sprintf("CONCURRENCY=%d", i.stubConfig.Concurrency),
 			},
 			Cpu:        i.stubConfig.Runtime.Cpu,
 			Memory:     i.stubConfig.Runtime.Memory,
