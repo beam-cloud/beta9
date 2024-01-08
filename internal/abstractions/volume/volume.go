@@ -17,12 +17,7 @@ type StructWorkspaceVolumeService struct {
 	backendRepo repository.BackendRepository
 }
 
-func NewStructWorkspaceVolumeService() (*StructWorkspaceVolumeService, error) {
-	backendRepo, err := repository.NewBackendPostgresRepository()
-	if err != nil {
-		return nil, err
-	}
-
+func NewStructWorkspaceVolumeService(backendRepo repository.BackendRepository) (*StructWorkspaceVolumeService, error) {
 	return &StructWorkspaceVolumeService{
 		backendRepo: backendRepo,
 	}, nil
@@ -36,7 +31,7 @@ func (vs *StructWorkspaceVolumeService) GetOrCreateVolume(ctx context.Context, i
 	if err != nil {
 		return &pb.GetOrCreateVolumeResponse{
 			Ok: false,
-		}, err
+		}, nil
 	}
 
 	return &pb.GetOrCreateVolumeResponse{
