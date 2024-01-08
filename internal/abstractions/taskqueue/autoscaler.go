@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	AutoScalingModeQueueDepth int = 0
-	AutoScalingModeDefault    int = 1
+	autoScalingModeQueueDepth int = 0
+	autoScalingModeDefault    int = 1
 )
 
 type autoscaler struct {
@@ -35,27 +35,29 @@ type autoscalerSample struct {
 	TaskDuration      float64
 }
 
-type AutoscaleResult struct {
+type autoscaleResult struct {
 	DesiredContainers int
 	ResultValid       bool
 }
 
-const MaxReplicas uint = 5                                              // Maximum number of desired replicas that can be returned
-const WindowSize int = 60                                               // Number of samples in the sampling window
-const SampleRate time.Duration = time.Duration(1000) * time.Millisecond // Time between samples
+const (
+	maxReplicas uint          = 5                                      // Maximum number of desired replicas that can be returned
+	windowSize  int           = 60                                     // Number of samples in the sampling window
+	sampleRate  time.Duration = time.Duration(1000) * time.Millisecond // Time between samples
+)
 
 // Create a new autoscaler
 func newAutoscaler(i *taskQueueInstance) *autoscaler {
-	var autoscalingMode = AutoScalingModeDefault
+	var autoscalingMode = autoScalingModeDefault
 
 	return &autoscaler{
 		instance:        i,
 		autoscalingMode: autoscalingMode,
 		samples: &autoscalingWindows{
-			QueueLength:       rolling.NewPointPolicy(rolling.NewWindow(WindowSize)),
-			RunningTasks:      rolling.NewPointPolicy(rolling.NewWindow(WindowSize)),
-			CurrentContainers: rolling.NewPointPolicy(rolling.NewWindow(WindowSize)),
-			TaskDuration:      rolling.NewPointPolicy(rolling.NewWindow(WindowSize)),
+			QueueLength:       rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
+			RunningTasks:      rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
+			CurrentContainers: rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
+			TaskDuration:      rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
 		},
 		mostRecentSample: nil,
 	}
@@ -114,14 +116,14 @@ func (as *autoscaler) start(ctx context.Context) {
 	}
 
 	// Fill windows with -1 so we can avoid using those values in the scaling logic
-	for i := 0; i < WindowSize; i += 1 {
+	for i := 0; i < windowSize; i += 1 {
 		as.samples.QueueLength.Append(-1)
 		as.samples.RunningTasks.Append(-1)
 		as.samples.CurrentContainers.Append(-1)
 		as.samples.TaskDuration.Append(-1)
 	}
 
-	ticker := time.NewTicker(SampleRate)
+	ticker := time.NewTicker(sampleRate)
 	defer ticker.Stop()
 
 	for {
@@ -140,11 +142,11 @@ func (as *autoscaler) start(ctx context.Context) {
 			as.samples.RunningTasks.Append(float64(sample.RunningTasks))
 			as.samples.TaskDuration.Append(float64(sample.TaskDuration))
 
-			var scaleResult *AutoscaleResult = nil
+			var scaleResult *autoscaleResult = nil
 			switch as.autoscalingMode {
-			case AutoScalingModeQueueDepth:
+			case autoScalingModeQueueDepth:
 				scaleResult = as.scaleByQueueDepth(sample)
-			case AutoScalingModeDefault:
+			case autoScalingModeDefault:
 				scaleResult = as.scaleToOne(sample)
 			default:
 			}
@@ -165,14 +167,14 @@ func (as *autoscaler) start(ctx context.Context) {
 }
 
 // Scale up to 1 if the queue has items in it - not really autoscaling, just spinning the container up and down
-func (as *autoscaler) scaleToOne(sample *autoscalerSample) *AutoscaleResult {
+func (as *autoscaler) scaleToOne(sample *autoscalerSample) *autoscaleResult {
 	desiredContainers := 0
 
 	if sample.QueueLength > 0 || sample.RunningTasks > 0 {
 		desiredContainers = 1
 	}
 
-	return &AutoscaleResult{
+	return &autoscaleResult{
 		DesiredContainers: desiredContainers,
 		ResultValid:       true,
 	}
@@ -180,7 +182,7 @@ func (as *autoscaler) scaleToOne(sample *autoscalerSample) *AutoscaleResult {
 }
 
 // Scale based on the number of items in the queue
-func (as *autoscaler) scaleByQueueDepth(sample *autoscalerSample) *AutoscaleResult {
+func (as *autoscaler) scaleByQueueDepth(sample *autoscalerSample) *autoscaleResult {
 	desiredContainers := 0
 
 	if sample.QueueLength == 0 {
@@ -192,11 +194,11 @@ func (as *autoscaler) scaleByQueueDepth(sample *autoscalerSample) *AutoscaleResu
 		}
 
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
-		maxReplicas := math.Min(float64(as.instance.stubConfig.MaxContainers), float64(MaxReplicas))
+		maxReplicas := math.Min(float64(as.instance.stubConfig.MaxContainers), float64(maxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
 
-	return &AutoscaleResult{
+	return &autoscaleResult{
 		DesiredContainers: desiredContainers,
 		ResultValid:       true,
 	}
