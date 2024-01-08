@@ -9,22 +9,6 @@ from beam.exceptions import RunnerException
 USER_CODE_VOLUME = "/mnt/code"
 
 
-def load_handler() -> Callable:
-    sys.path.insert(0, USER_CODE_VOLUME)
-
-    handler = os.getenv("HANDLER")
-    if not handler:
-        raise RunnerException()
-
-    try:
-        module, func = handler.split(":")
-        target_module = importlib.import_module(module)
-        method = getattr(target_module, func)
-        return method
-    except BaseException:
-        raise RunnerException()
-
-
 @dataclass
 class Config:
     container_id: Optional[str]
@@ -32,6 +16,7 @@ class Config:
     stub_id: Optional[str]
     concurrency: Optional[int]
     scale_down_delay: Optional[float]
+    handler: str
 
     @staticmethod
     def load_from_env() -> "Config":
@@ -47,10 +32,30 @@ class Config:
         if not container_id or not stub_id:
             raise RunnerException("Invalid runner environment")
 
+        handler = os.getenv("HANDLER")
+        if not handler:
+            raise RunnerException("Invalid handler")
+
         return Config(
             container_id=container_id,
             container_hostname=container_hostname,
             stub_id=stub_id,
             concurrency=concurrency,
             scale_down_delay=scale_down_delay,
+            handler=handler,
         )
+
+
+config: Config = Config.load_from_env()
+
+
+def load_handler() -> Callable:
+    sys.path.insert(0, USER_CODE_VOLUME)
+
+    try:
+        module, func = config.handler.split(":")
+        target_module = importlib.import_module(module)
+        method = getattr(target_module, func)
+        return method
+    except BaseException:
+        raise RunnerException()

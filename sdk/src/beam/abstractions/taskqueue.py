@@ -18,13 +18,25 @@ class TaskQueue(RunnerAbstraction):
         cpu: int = 100,
         memory: int = 128,
         gpu="",
+        timeout: int = 3600,
+        retries: int = 3,
         concurrency: int = 1,
+        max_pending_tasks: int = 100,
         max_containers: int = 1,
+        keep_warm_seconds: float = 10.0,
     ) -> None:
-        super().__init__(image=image, cpu=cpu, memory=memory, gpu=gpu)
-
-        self.concurrency = concurrency
-        self.max_containers = max_containers
+        super().__init__(
+            image=image,
+            cpu=cpu,
+            memory=memory,
+            gpu=gpu,
+            concurrency=concurrency,
+            max_containers=max_containers,
+            max_pending_tasks=max_pending_tasks,
+            timeout=timeout,
+            retries=retries,
+            keep_warm_seconds=keep_warm_seconds,
+        )
 
         self.taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(self.channel)
 
@@ -42,8 +54,9 @@ class _CallableWrapper:
         if container_id is not None:
             return self.local(*args, **kwargs)
 
+        self.parent.load_handler(self.func)
+
         if not self.parent.prepare_runtime(
-            func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,
             stub_name=f"{TASKQUEUE_STUB_PREFIX}/{self.parent.handler}",
         ):
@@ -53,8 +66,9 @@ class _CallableWrapper:
         return self.func(*args, **kwargs)
 
     def put(self, *args, **kwargs) -> bool:
+        self.parent.load_handler(self.func)
+
         if not self.parent.prepare_runtime(
-            func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,
             stub_name=f"{TASKQUEUE_STUB_PREFIX}/{self.parent.handler}",
         ):

@@ -23,13 +23,15 @@ type TaskQueueService interface {
 	TaskQueuePut(context.Context, *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error)
 	TaskQueuePop(context.Context, *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error)
 	TaskQueueLength(context.Context, *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error)
+	TaskQueueComplete(ctx context.Context, in *pb.TaskQueueCompleteRequest) (*pb.TaskQueueCompleteResponse, error)
+	TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error
 }
 
 const (
 	taskQueueContainerPrefix string = "taskqueue-"
 )
 
-type TaskQueueRedis struct {
+type RedisTaskQueue struct {
 	ctx           context.Context
 	rdb           *common.RedisClient
 	containerRepo repository.ContainerRepository
@@ -42,12 +44,12 @@ type TaskQueueRedis struct {
 	queueClient     *taskQueueClient
 }
 
-func NewTaskQueueRedis(ctx context.Context,
+func NewRedisTaskQueue(ctx context.Context,
 	rdb *common.RedisClient,
 	scheduler *scheduler.Scheduler,
 	containerRepo repository.ContainerRepository,
 	backendRepo repository.BackendRepository,
-) (*TaskQueueRedis, error) {
+) (*RedisTaskQueue, error) {
 	keyEventChan := make(chan common.KeyEvent)
 	keyEventManager, err := common.NewKeyEventManager(rdb)
 	if err != nil {
@@ -56,7 +58,7 @@ func NewTaskQueueRedis(ctx context.Context,
 
 	go keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(taskQueueContainerPrefix), keyEventChan)
 
-	tq := &TaskQueueRedis{
+	tq := &RedisTaskQueue{
 		ctx:             ctx,
 		rdb:             rdb,
 		scheduler:       scheduler,
@@ -79,7 +81,7 @@ type TaskPayload struct {
 	Kwargs map[string]interface{} `json:"kwargs"`
 }
 
-func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
+func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	queue, exists := tq.queueInstances.Get(in.StubId)
@@ -118,7 +120,7 @@ func (tq *TaskQueueRedis) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 	}, nil
 }
 
-func (tq *TaskQueueRedis) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error) {
+func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	queue, exists := tq.queueInstances.Get(in.StubId)
@@ -166,7 +168,7 @@ func (tq *TaskQueueRedis) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 	}, nil
 }
 
-func (tq *TaskQueueRedis) TaskQueueComplete(ctx context.Context, in *pb.TaskQueueCompleteRequest) (*pb.TaskQueueCompleteResponse, error) {
+func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueueCompleteRequest) (*pb.TaskQueueCompleteResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	task, err := tq.backendRepo.GetTask(ctx, in.TaskId)
@@ -213,7 +215,7 @@ func (tq *TaskQueueRedis) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}, nil
 }
 
-func (tq *TaskQueueRedis) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error {
+func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error {
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 
 	ctx, cancel := context.WithCancel(stream.Context())
@@ -318,8 +320,10 @@ func (tq *TaskQueueRedis) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 			if err != nil {
 				return err
 			}
+
 			stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: true, Complete: false, TimedOut: false})
 			return nil
+
 		case <-timeoutFlag:
 			err := tq.rdb.Del(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Err()
 			if err != nil {
@@ -364,7 +368,7 @@ func (tq *TaskQueueRedis) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 	}
 }
 
-func (tq *TaskQueueRedis) TaskQueueLength(ctx context.Context, in *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error) {
+func (tq *RedisTaskQueue) TaskQueueLength(ctx context.Context, in *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	length, err := tq.queueClient.QueueLength(authInfo.Workspace.Name, in.StubId)
@@ -378,7 +382,7 @@ func (tq *TaskQueueRedis) TaskQueueLength(ctx context.Context, in *pb.TaskQueueL
 	}, nil
 }
 
-func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Workspace) error {
+func (tq *RedisTaskQueue) createQueueInstance(stubId string, workspace *types.Workspace) error {
 	_, exists := tq.queueInstances.Get(stubId)
 	if exists {
 		return errors.New("queue already in memory")
@@ -437,7 +441,7 @@ func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Wo
 }
 
 // Monitor tasks -- if a container is killed unexpectedly, it will automatically be re-added to the queue
-func (tq *TaskQueueRedis) monitorTasks(ctx context.Context) {
+func (tq *RedisTaskQueue) monitorTasks(ctx context.Context) {
 	monitorRate := time.Duration(5) * time.Second
 	ticker := time.NewTicker(monitorRate)
 	defer ticker.Stop()
@@ -534,7 +538,7 @@ func (tq *TaskQueueRedis) monitorTasks(ctx context.Context) {
 	}
 }
 
-func (tq *TaskQueueRedis) handleContainerEvents() {
+func (tq *RedisTaskQueue) handleContainerEvents() {
 	for {
 		select {
 		case event := <-tq.keyEventChan:
@@ -542,31 +546,32 @@ func (tq *TaskQueueRedis) handleContainerEvents() {
 
 			log.Println("(rx event) container ID: ", containerId)
 
-			// operation := event.Operation
-			// containerIdParts := strings.Split(containerId, "-")
-			// stubId := strings.Join(containerIdParts[1:3], "-")
+			operation := event.Operation
+			containerIdParts := strings.Split(containerId, "-")
+			stubId := strings.Join(containerIdParts[1:6], "-")
 
-			// queue, exists := tq.queueInstances.Get(stubId)
-			// if !exists {
-			// 	err := tq.createQueueInstance("", nil)
-			// 	if err != nil {
-			// 		log.Printf("err creating instance: %+v\n", err)
-			// 		continue
-			// 	}
-			// }
+			queue, exists := tq.queueInstances.Get(stubId)
+			if !exists {
+				err := tq.createQueueInstance(stubId, &types.Workspace{Id: 1})
+				if err != nil {
+					continue
+				}
 
-			// switch operation {
-			// case common.KeyOperationSet, common.KeyOperationHSet:
-			// 	queue.containerEventChan <- types.ContainerEvent{
-			// 		ContainerId: containerId,
-			// 		Change:      +1,
-			// 	}
-			// case common.KeyOperationDel, common.KeyOperationExpired:
-			// 	queue.containerEventChan <- types.ContainerEvent{
-			// 		ContainerId: containerId,
-			// 		Change:      -1,
-			// 	}
-			// }
+				queue, _ = tq.queueInstances.Get(stubId)
+			}
+
+			switch operation {
+			case common.KeyOperationSet, common.KeyOperationHSet:
+				queue.containerEventChan <- types.ContainerEvent{
+					ContainerId: containerId,
+					Change:      +1,
+				}
+			case common.KeyOperationDel, common.KeyOperationExpired:
+				queue.containerEventChan <- types.ContainerEvent{
+					ContainerId: containerId,
+					Change:      -1,
+				}
+			}
 		case <-tq.ctx.Done():
 			return
 		}

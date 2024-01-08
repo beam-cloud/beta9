@@ -15,6 +15,12 @@ class RunnerAbstraction(BaseAbstraction):
         cpu: int = 100,
         memory: int = 128,
         gpu="",
+        concurrency: int = 1,
+        max_containers: int = 1,
+        keep_warm_seconds: float = 10.0,
+        max_pending_tasks: int = 100,
+        retries: int = 3,
+        timeout: int = 3600,
     ) -> None:
         super().__init__()
 
@@ -34,12 +40,19 @@ class RunnerAbstraction(BaseAbstraction):
         self.memory = memory
         self.gpu = gpu
 
+        self.concurrency = concurrency
+        self.keep_warm_seconds = keep_warm_seconds
+        self.max_pending_tasks = max_pending_tasks
+        self.max_containers = max_containers
+        self.retries = retries
+        self.timeout = timeout
+
         self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
 
-    def prepare_runtime(self, *, func: Callable, stub_type: str, stub_name: str) -> bool:
-        if self.runtime_ready:
-            return True
+    def load_handler(self, func: Callable) -> None:
+        if self.handler:
+            return
 
         module = inspect.getmodule(func)  # Determine module / function name
         if module:
@@ -50,6 +63,10 @@ class RunnerAbstraction(BaseAbstraction):
 
         function_name = func.__name__
         self.handler = f"{module_name}:{function_name}"
+
+    def prepare_runtime(self, *, stub_type: str, stub_name: str) -> bool:
+        if self.runtime_ready:
+            return True
 
         if not self.image_available:
             image_build_result: ImageBuildResult = self.image.build()
@@ -81,6 +98,12 @@ class RunnerAbstraction(BaseAbstraction):
                     memory=self.memory,
                     gpu=self.gpu,
                     handler=self.handler,
+                    retries=self.retries,
+                    timeout=self.timeout,
+                    keep_warm_seconds=self.keep_warm_seconds,
+                    concurrency=self.concurrency,
+                    max_containers=self.max_containers,
+                    max_pending_tasks=self.max_pending_tasks,
                 )
             )
 

@@ -136,7 +136,7 @@ func (g *Gateway) Start() error {
 	pb.RegisterFunctionServiceServer(grpcServer, fs)
 
 	// Register task queue service
-	tq, err := taskqueue.NewTaskQueueRedis(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo)
+	tq, err := taskqueue.NewRedisTaskQueue(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo)
 	if err != nil {
 		return err
 	}

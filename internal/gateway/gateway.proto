@@ -113,6 +113,12 @@ message GetOrCreateStubRequest {
   int64 memory = 7;
   string gpu = 8;
   string handler = 9;
+  uint32 retries = 10;
+  int64 timeout = 11;
+  float keep_warm_seconds = 12;
+  uint32 concurrency = 13;
+  uint32 max_containers = 14;
+  uint32 max_pending_tasks = 15;
 }
 
 message GetOrCreateStubResponse {

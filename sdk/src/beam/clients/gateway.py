@@ -135,6 +135,12 @@ class GetOrCreateStubRequest(betterproto.Message):
     memory: int = betterproto.int64_field(7)
     gpu: str = betterproto.string_field(8)
     handler: str = betterproto.string_field(9)
+    retries: int = betterproto.uint32_field(10)
+    timeout: int = betterproto.int64_field(11)
+    keep_warm_seconds: float = betterproto.float_field(12)
+    concurrency: int = betterproto.uint32_field(13)
+    max_containers: int = betterproto.uint32_field(14)
+    max_pending_tasks: int = betterproto.uint32_field(15)
 
 
 @dataclass
@@ -264,6 +270,12 @@ class GatewayServiceStub(betterproto.ServiceStub):
         memory: int = 0,
         gpu: str = "",
         handler: str = "",
+        retries: int = 0,
+        timeout: int = 0,
+        keep_warm_seconds: float = 0,
+        concurrency: int = 0,
+        max_containers: int = 0,
+        max_pending_tasks: int = 0,
     ) -> GetOrCreateStubResponse:
         request = GetOrCreateStubRequest()
         request.object_id = object_id
@@ -275,6 +287,12 @@ class GatewayServiceStub(betterproto.ServiceStub):
         request.memory = memory
         request.gpu = gpu
         request.handler = handler
+        request.retries = retries
+        request.timeout = timeout
+        request.keep_warm_seconds = keep_warm_seconds
+        request.concurrency = concurrency
+        request.max_containers = max_containers
+        request.max_pending_tasks = max_pending_tasks
 
         return await self._unary_unary(
             "/gateway.GatewayService/GetOrCreateStub",

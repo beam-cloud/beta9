@@ -6,7 +6,6 @@ import signal
 import sys
 import threading
 import time
-import traceback
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Event, Process, set_start_method
 from typing import Any, List, NamedTuple, Union
@@ -26,14 +25,11 @@ from beam.clients.taskqueue import (
 )
 from beam.config import with_runner_context
 from beam.exceptions import RunnerException
-from beam.runner.common import Config, load_handler
+from beam.runner.common import config, load_handler
 from beam.type import TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.01
-
-
-config: Config = Config.load_from_env()
 
 
 class TaskQueueManager:
@@ -205,7 +201,6 @@ class TaskQueueWorker:
                 return
 
             except BaseException:
-                print(traceback.format_exc())
                 print("Unexpected error occurred in task monitor")
                 os._exit(0)
 
