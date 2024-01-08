@@ -18,8 +18,8 @@ class Config:
     scale_down_delay: Optional[float]
     handler: str
 
-    @staticmethod
-    def load_from_env() -> "Config":
+    @classmethod
+    def load_from_env(cls) -> "Config":
         container_id = os.getenv("CONTAINER_ID")
         container_hostname = os.getenv("CONTAINER_HOSTNAME")
         stub_id = os.getenv("STUB_ID")
@@ -36,7 +36,7 @@ class Config:
         if not handler:
             raise RunnerException("Invalid handler")
 
-        return Config(
+        return cls(
             container_id=container_id,
             container_hostname=container_hostname,
             stub_id=stub_id,
