@@ -42,6 +42,22 @@ class TaskQueueLengthResponse(betterproto.Message):
     length: int = betterproto.int64_field(2)
 
 
+@dataclass
+class TaskQueueCompleteRequest(betterproto.Message):
+    task_id: str = betterproto.string_field(1)
+    stub_id: str = betterproto.string_field(2)
+    task_duration: float = betterproto.float_field(3)
+    task_status: str = betterproto.string_field(4)
+    container_id: str = betterproto.string_field(5)
+    container_hostname: str = betterproto.string_field(6)
+    scale_down_delay: float = betterproto.float_field(7)
+
+
+@dataclass
+class TaskQueueCompleteResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+
+
 class TaskQueueServiceStub(betterproto.ServiceStub):
     async def task_queue_put(
         self, *, stub_id: str = "", payload: bytes = b""
@@ -67,6 +83,32 @@ class TaskQueueServiceStub(betterproto.ServiceStub):
             "/taskqueue.TaskQueueService/TaskQueuePop",
             request,
             TaskQueuePopResponse,
+        )
+
+    async def task_queue_complete(
+        self,
+        *,
+        task_id: str = "",
+        stub_id: str = "",
+        task_duration: float = 0,
+        task_status: str = "",
+        container_id: str = "",
+        container_hostname: str = "",
+        scale_down_delay: float = 0,
+    ) -> TaskQueueCompleteResponse:
+        request = TaskQueueCompleteRequest()
+        request.task_id = task_id
+        request.stub_id = stub_id
+        request.task_duration = task_duration
+        request.task_status = task_status
+        request.container_id = container_id
+        request.container_hostname = container_hostname
+        request.scale_down_delay = scale_down_delay
+
+        return await self._unary_unary(
+            "/taskqueue.TaskQueueService/TaskQueueComplete",
+            request,
+            TaskQueueCompleteResponse,
         )
 
     async def task_queue_length(self, *, stub_id: str = "") -> TaskQueueLengthResponse:

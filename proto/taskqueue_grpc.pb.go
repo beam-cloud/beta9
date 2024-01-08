@@ -19,9 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	TaskQueueService_TaskQueuePut_FullMethodName    = "/taskqueue.TaskQueueService/TaskQueuePut"
-	TaskQueueService_TaskQueuePop_FullMethodName    = "/taskqueue.TaskQueueService/TaskQueuePop"
-	TaskQueueService_TaskQueueLength_FullMethodName = "/taskqueue.TaskQueueService/TaskQueueLength"
+	TaskQueueService_TaskQueuePut_FullMethodName      = "/taskqueue.TaskQueueService/TaskQueuePut"
+	TaskQueueService_TaskQueuePop_FullMethodName      = "/taskqueue.TaskQueueService/TaskQueuePop"
+	TaskQueueService_TaskQueueComplete_FullMethodName = "/taskqueue.TaskQueueService/TaskQueueComplete"
+	TaskQueueService_TaskQueueLength_FullMethodName   = "/taskqueue.TaskQueueService/TaskQueueLength"
 )
 
 // TaskQueueServiceClient is the client API for TaskQueueService service.
@@ -30,6 +31,7 @@ const (
 type TaskQueueServiceClient interface {
 	TaskQueuePut(ctx context.Context, in *TaskQueuePutRequest, opts ...grpc.CallOption) (*TaskQueuePutResponse, error)
 	TaskQueuePop(ctx context.Context, in *TaskQueuePopRequest, opts ...grpc.CallOption) (*TaskQueuePopResponse, error)
+	TaskQueueComplete(ctx context.Context, in *TaskQueueCompleteRequest, opts ...grpc.CallOption) (*TaskQueueCompleteResponse, error)
 	TaskQueueLength(ctx context.Context, in *TaskQueueLengthRequest, opts ...grpc.CallOption) (*TaskQueueLengthResponse, error)
 }
 
@@ -59,6 +61,15 @@ func (c *taskQueueServiceClient) TaskQueuePop(ctx context.Context, in *TaskQueue
 	return out, nil
 }
 
+func (c *taskQueueServiceClient) TaskQueueComplete(ctx context.Context, in *TaskQueueCompleteRequest, opts ...grpc.CallOption) (*TaskQueueCompleteResponse, error) {
+	out := new(TaskQueueCompleteResponse)
+	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueueComplete_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *taskQueueServiceClient) TaskQueueLength(ctx context.Context, in *TaskQueueLengthRequest, opts ...grpc.CallOption) (*TaskQueueLengthResponse, error) {
 	out := new(TaskQueueLengthResponse)
 	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueueLength_FullMethodName, in, out, opts...)
@@ -74,6 +85,7 @@ func (c *taskQueueServiceClient) TaskQueueLength(ctx context.Context, in *TaskQu
 type TaskQueueServiceServer interface {
 	TaskQueuePut(context.Context, *TaskQueuePutRequest) (*TaskQueuePutResponse, error)
 	TaskQueuePop(context.Context, *TaskQueuePopRequest) (*TaskQueuePopResponse, error)
+	TaskQueueComplete(context.Context, *TaskQueueCompleteRequest) (*TaskQueueCompleteResponse, error)
 	TaskQueueLength(context.Context, *TaskQueueLengthRequest) (*TaskQueueLengthResponse, error)
 	mustEmbedUnimplementedTaskQueueServiceServer()
 }
@@ -87,6 +99,9 @@ func (UnimplementedTaskQueueServiceServer) TaskQueuePut(context.Context, *TaskQu
 }
 func (UnimplementedTaskQueueServiceServer) TaskQueuePop(context.Context, *TaskQueuePopRequest) (*TaskQueuePopResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TaskQueuePop not implemented")
+}
+func (UnimplementedTaskQueueServiceServer) TaskQueueComplete(context.Context, *TaskQueueCompleteRequest) (*TaskQueueCompleteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method TaskQueueComplete not implemented")
 }
 func (UnimplementedTaskQueueServiceServer) TaskQueueLength(context.Context, *TaskQueueLengthRequest) (*TaskQueueLengthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TaskQueueLength not implemented")
@@ -140,6 +155,24 @@ func _TaskQueueService_TaskQueuePop_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskQueueService_TaskQueueComplete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TaskQueueCompleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskQueueServiceServer).TaskQueueComplete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskQueueService_TaskQueueComplete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskQueueServiceServer).TaskQueueComplete(ctx, req.(*TaskQueueCompleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TaskQueueService_TaskQueueLength_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TaskQueueLengthRequest)
 	if err := dec(in); err != nil {
@@ -172,6 +205,10 @@ var TaskQueueService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TaskQueuePop",
 			Handler:    _TaskQueueService_TaskQueuePop_Handler,
+		},
+		{
+			MethodName: "TaskQueueComplete",
+			Handler:    _TaskQueueService_TaskQueueComplete_Handler,
 		},
 		{
 			MethodName: "TaskQueueLength",

@@ -2,10 +2,12 @@ package taskqueue
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/beam-cloud/beam/internal/auth"
 	common "github.com/beam-cloud/beam/internal/common"
@@ -19,13 +21,6 @@ type TaskQueueService interface {
 	TaskQueuePut(context.Context, *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error)
 	TaskQueuePop(context.Context, *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error)
 	TaskQueueLength(context.Context, *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error)
-
-	// TaskRunning(identityId, queueName string) (bool, error)
-	// TasksRunning(identityId, queueName string) (int, error)
-	// GetTaskDuration(identityId, queueName string) (float64, error)
-	// SetAverageTaskDuration(identityId, queueName string, duration float64) error
-	// GetAverageTaskDuration(identityId, queueName string) (float64, error)
-	// MonitorTasks(ctx context.Context, beamRepo repository.BeamRepository)
 }
 
 const (
@@ -135,17 +130,82 @@ func (tq *TaskQueueRedis) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 	}
 
 	msg, err := queue.client.Pop(authInfo.Workspace.Name, in.StubId, in.ContainerId)
+	if err != nil || msg == nil {
+		return &pb.TaskQueuePopResponse{Ok: false}, nil
+	}
+
+	var tm types.TaskMessage
+	err = tm.Decode(msg)
 	if err != nil {
-		return &pb.TaskQueuePopResponse{Ok: false}, nil
+		return nil, err
 	}
 
-	// TODO: handle this more gracefully
-	if msg == nil {
-		return &pb.TaskQueuePopResponse{Ok: false}, nil
+	task, err := tq.backendRepo.GetTask(ctx, tm.ID)
+	if err != nil {
+		return &pb.TaskQueuePopResponse{
+			Ok: false,
+		}, nil
+	}
+	task.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	task.Status = types.TaskStatusRunning
+
+	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, tm.ID), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
+	if err != nil {
+		return &pb.TaskQueuePopResponse{
+			Ok: false,
+		}, nil
 	}
 
+	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
 	return &pb.TaskQueuePopResponse{
 		Ok: true, TaskMsg: msg,
+	}, nil
+}
+
+func (tq *TaskQueueRedis) TaskQueueComplete(ctx context.Context, in *pb.TaskQueueCompleteRequest) (*pb.TaskQueueCompleteResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	task, err := tq.backendRepo.GetTask(ctx, in.TaskId)
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{
+			Ok: false,
+		}, nil
+	}
+
+	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.ScaleDownDelay)*time.Second).Err()
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{
+			Ok: false,
+		}, nil
+	}
+
+	err = tq.rdb.Del(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, in.StubId, task.ExternalId)).Err()
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{
+			Ok: false,
+		}, nil
+	}
+
+	err = tq.rdb.Del(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId)).Err()
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{
+			Ok: false,
+		}, nil
+	}
+
+	err = tq.rdb.RPush(context.TODO(), Keys.taskQueueTaskDuration(authInfo.Workspace.Name, in.StubId), in.TaskDuration).Err()
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{
+			Ok: false,
+		}, nil
+	}
+
+	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	task.Status = types.TaskStatus(in.TaskStatus)
+
+	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
+	return &pb.TaskQueueCompleteResponse{
+		Ok: err == nil,
 	}, nil
 }
 
@@ -211,6 +271,12 @@ func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Wo
 
 	tq.queueInstances.Set(stubId, queue)
 	go queue.monitor()
+
+	// Clean up the queue instance once it's done
+	go func(q *taskQueueInstance) {
+		<-q.ctx.Done()
+		tq.queueInstances.Delete(stubId)
+	}(queue)
 
 	return nil
 }

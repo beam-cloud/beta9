@@ -54,7 +54,6 @@ func (qc *taskQueueClient) Push(workspaceName, stubId, taskId string, args []int
 }
 
 func (qc *taskQueueClient) Pop(workspaceName, stubId, containerId string) ([]byte, error) {
-	// Check if there are any tasks in the queue
 	queueLength, err := qc.rdb.LLen(context.TODO(), Keys.taskQueueList(workspaceName, stubId)).Result()
 	if err != nil {
 		return nil, err

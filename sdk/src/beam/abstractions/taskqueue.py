@@ -2,6 +2,7 @@ import json
 import os
 from typing import Any, Callable
 
+from beam import terminal
 from beam.abstractions.image import Image
 from beam.abstractions.runner import RunnerAbstraction
 from beam.clients.taskqueue import TaskQueuePutResponse, TaskQueueServiceStub
@@ -51,7 +52,7 @@ class _CallableWrapper:
     def local(self, *args, **kwargs) -> Any:
         return self.func(*args, **kwargs)
 
-    def put(self, *args, **kwargs):
+    def put(self, *args, **kwargs) -> bool:
         if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,
@@ -67,5 +68,9 @@ class _CallableWrapper:
                 stub_id=self.parent.stub_id, payload=json_payload.encode("utf-8")
             )
         )
+        if not r.ok:
+            terminal.error("Failed to enqueue task")
+            return False
 
-        print(r)
+        terminal.detail(f"Enqueued task: {r.task_id}")
+        return True
