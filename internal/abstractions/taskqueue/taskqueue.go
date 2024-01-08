@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beam/internal/auth"
@@ -15,6 +16,7 @@ import (
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
+	"gorm.io/gorm"
 )
 
 type TaskQueueService interface {
@@ -67,6 +69,8 @@ func NewTaskQueueRedis(ctx context.Context,
 	}
 
 	go tq.handleContainerEvents()
+	go tq.monitorTasks(ctx)
+
 	return tq, nil
 }
 
@@ -279,6 +283,104 @@ func (tq *TaskQueueRedis) createQueueInstance(stubId string, workspace *types.Wo
 	}(queue)
 
 	return nil
+}
+
+// Monitor tasks -- if a container is killed unexpectedly, it will automatically be re-added to the queue
+func (tq *TaskQueueRedis) monitorTasks(ctx context.Context) {
+	monitorRate := time.Duration(5) * time.Second
+	ticker := time.NewTicker(monitorRate)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		claimedTasks, err := tq.rdb.Scan(context.TODO(), Keys.taskQueueTaskClaim("*", "*", "*"))
+		if err != nil {
+			return
+		}
+
+		for _, claimKey := range claimedTasks {
+			v := strings.Split(claimKey, ":")
+			workspaceName := v[1]
+			stubId := v[2]
+			taskId := v[5]
+
+			res, err := tq.rdb.Exists(context.TODO(), Keys.taskQueueTaskHeartbeat(workspaceName, stubId, taskId)).Result()
+			if err != nil {
+				continue
+			}
+
+			recentHeartbeat := res > 0
+			if !recentHeartbeat {
+				log.Printf("<taskqueue> missing heartbeat, reinserting task<%s:%s> into queue: %s\n", workspaceName, taskId, stubId)
+
+				retries, err := tq.rdb.Get(context.TODO(), Keys.taskQueueTaskRetries(workspaceName, stubId, taskId)).Int()
+				if err != nil {
+					retries = 0
+				}
+
+				task, err := tq.backendRepo.GetTask(ctx, taskId)
+				if err != nil {
+					continue
+				}
+
+				taskPolicy := types.DefaultTaskPolicy // types.TaskPolicy{}
+
+				// err = json.Unmarshal(
+				// 	task.TaskPolicy,
+				// 	&taskPolicy,
+				// )
+				// if err != nil {
+				// 	taskPolicy = types.DefaultTaskPolicy
+				// }
+
+				if retries >= int(taskPolicy.MaxRetries) {
+					log.Printf("<taskqueue> hit retry limit, not reinserting task <%s> into queue: %s\n", taskId, stubId)
+
+					task.Status = types.TaskStatusError
+					_, err = tq.backendRepo.UpdateTask(ctx, taskId, *task)
+					if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+						continue
+					}
+
+					err = tq.rdb.Del(context.TODO(), Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Err()
+					if err != nil {
+						log.Printf("<taskqueue> unable to delete task claim: %s\n", taskId)
+					}
+
+					continue
+				}
+
+				retries += 1
+				err = tq.rdb.Set(context.TODO(), Keys.taskQueueTaskRetries(workspaceName, stubId, taskId), retries, 0).Err()
+				if err != nil {
+					continue
+				}
+
+				task.Status = types.TaskStatusRetry
+				_, err = tq.backendRepo.UpdateTask(ctx, taskId, *task)
+				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					continue
+				}
+
+				encodedMessage, err := tq.rdb.Get(context.TODO(), Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Result()
+				if err != nil {
+					continue
+				}
+
+				err = tq.rdb.Del(context.TODO(), Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Err()
+				if err != nil {
+					log.Printf("<taskqueue> unable to delete task claim: %s\n", taskId)
+					continue
+				}
+
+				err = tq.rdb.RPush(context.TODO(), Keys.taskQueueList(workspaceName, stubId), encodedMessage).Err()
+				if err != nil {
+					log.Printf("<taskqueue> unable to insert task <%s> into queue <%s>: %v\n", taskId, stubId, err)
+					continue
+				}
+
+			}
+		}
+	}
 }
 
 func (tq *TaskQueueRedis) handleContainerEvents() {
