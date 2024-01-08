@@ -1,7 +1,7 @@
 import asyncio
 import inspect
 import os
-from typing import Any, Callable, Iterable, List, Union
+from typing import Any, Callable, Iterable, List, Optional, Union
 
 import cloudpickle
 
@@ -22,7 +22,12 @@ FUNCTION_STUB_PREFIX = "function"
 
 class Function(BaseAbstraction):
     def __init__(
-        self, image: Image, cpu: int = 100, memory: int = 128, gpu="", volumes: List[Volume] = []
+        self,
+        image: Image,
+        cpu: int = 100,
+        memory: int = 128,
+        gpu="",
+        volumes: Optional[List[Volume]] = None,
     ) -> None:
         super().__init__()
 
@@ -41,7 +46,7 @@ class Function(BaseAbstraction):
         self.cpu = cpu
         self.memory = memory
         self.gpu = gpu
-        self.volumes = volumes
+        self.volumes = volumes or []
 
         self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
@@ -100,7 +105,7 @@ class _CallableWrapper:
                     cpu=self.parent.cpu,
                     memory=self.parent.memory,
                     gpu=self.parent.gpu,
-                    volumes=[volume.to_dict() for volume in self.parent.volumes],
+                    volumes=[volume.export() for volume in self.parent.volumes],
                 )
             )
 
@@ -146,7 +151,7 @@ class _CallableWrapper:
             cpu=self.parent.cpu,
             memory=self.parent.memory,
             gpu=self.parent.gpu,
-            volumes=[volume.to_dict() for volume in self.parent.volumes],
+            volumes=[volume.export() for volume in self.parent.volumes],
         ):
             if r.output != "":
                 terminal.detail(r.output)

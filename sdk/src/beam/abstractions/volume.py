@@ -23,7 +23,7 @@ class Volume(BaseAbstraction):
 
         return False
 
-    def to_dict(self):
+    def export(self):
         return VolumeConfig(
             id=self.volume_id,
             mount_path=self.mount_path,
