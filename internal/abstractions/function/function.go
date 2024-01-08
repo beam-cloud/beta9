@@ -109,7 +109,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		},
 	}
 
-	for _, v := range in.Volumes {
+	for _, v := range stubConfig.Volumes {
 		mounts = append(mounts, types.Mount{
 			LocalPath: path.Join(types.DefaultVolumesPath, authInfo.Workspace.Name, v.Id),
 			LinkPath:  path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, stub.Object.ExternalId, v.MountPath),
