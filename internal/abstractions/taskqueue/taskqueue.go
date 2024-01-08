@@ -178,7 +178,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}, nil
 	}
 
-	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.ScaleDownDelay)*time.Second).Err()
+	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
 			Ok: false,

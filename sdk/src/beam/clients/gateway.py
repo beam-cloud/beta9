@@ -77,7 +77,7 @@ class EndTaskRequest(betterproto.Message):
     task_status: str = betterproto.string_field(3)
     container_id: str = betterproto.string_field(4)
     container_hostname: str = betterproto.string_field(5)
-    scale_down_delay: float = betterproto.float_field(6)
+    keep_warm_seconds: float = betterproto.float_field(6)
 
 
 @dataclass
@@ -222,7 +222,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
         task_status: str = "",
         container_id: str = "",
         container_hostname: str = "",
-        scale_down_delay: float = 0,
+        keep_warm_seconds: float = 0,
     ) -> EndTaskResponse:
         request = EndTaskRequest()
         request.task_id = task_id
@@ -230,7 +230,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
         request.task_status = task_status
         request.container_id = container_id
         request.container_hostname = container_hostname
-        request.scale_down_delay = scale_down_delay
+        request.keep_warm_seconds = keep_warm_seconds
 
         return await self._unary_unary(
             "/gateway.GatewayService/EndTask",

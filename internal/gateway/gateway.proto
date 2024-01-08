@@ -68,7 +68,7 @@ message EndTaskRequest {
   string task_status = 3;
   string container_id = 4;
   string container_hostname = 5;
-  float scale_down_delay = 6;
+  float keep_warm_seconds = 6;
 }
 
 message EndTaskResponse { bool ok = 1; }

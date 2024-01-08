@@ -49,7 +49,7 @@ message TaskQueueCompleteRequest {
   string task_status = 4;
   string container_id = 5;
   string container_hostname = 6;
-  float scale_down_delay = 7;
+  float keep_warm_seconds = 7;
 }
 
 message TaskQueueCompleteResponse { bool ok = 1; }

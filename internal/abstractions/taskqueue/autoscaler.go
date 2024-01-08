@@ -11,7 +11,6 @@ import (
 
 const (
 	autoScalingModeQueueDepth int = 0
-	autoScalingModeDefault    int = 1
 )
 
 type autoscaler struct {
@@ -48,7 +47,7 @@ const (
 
 // Create a new autoscaler
 func newAutoscaler(i *taskQueueInstance) *autoscaler {
-	var autoscalingMode = autoScalingModeDefault
+	var autoscalingMode = autoScalingModeQueueDepth
 
 	return &autoscaler{
 		instance:        i,
@@ -146,8 +145,6 @@ func (as *autoscaler) start(ctx context.Context) {
 			switch as.autoscalingMode {
 			case autoScalingModeQueueDepth:
 				scaleResult = as.scaleByQueueDepth(sample)
-			case autoScalingModeDefault:
-				scaleResult = as.scaleToOne(sample)
 			default:
 			}
 

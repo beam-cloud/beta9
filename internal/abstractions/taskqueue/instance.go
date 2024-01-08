@@ -151,7 +151,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 				fmt.Sprintf("BEAM_TOKEN=%s", i.token.Key),
 				fmt.Sprintf("STUB_ID=%s", i.stub.ExternalId),
 				fmt.Sprintf("CONCURRENCY=%d", i.stubConfig.Concurrency),
-				fmt.Sprintf("SCALE_DOWN_DELAY=%d", i.stubConfig.KeepWarmSeconds),
+				fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.stubConfig.KeepWarmSeconds),
 			},
 			Cpu:        i.stubConfig.Runtime.Cpu,
 			Memory:     i.stubConfig.Runtime.Memory,

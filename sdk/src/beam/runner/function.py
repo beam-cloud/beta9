@@ -71,7 +71,7 @@ def main(channel: Channel):
             task_status=task_status,
             container_id=container_id,
             container_hostname=container_hostname,
-            scale_down_delay=0,
+            keep_warm_seconds=0,
         )
     )
     if not end_task_response.ok:

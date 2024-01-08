@@ -51,7 +51,7 @@ class TaskQueueCompleteRequest(betterproto.Message):
     task_status: str = betterproto.string_field(4)
     container_id: str = betterproto.string_field(5)
     container_hostname: str = betterproto.string_field(6)
-    scale_down_delay: float = betterproto.float_field(7)
+    keep_warm_seconds: float = betterproto.float_field(7)
 
 
 @dataclass
@@ -125,7 +125,7 @@ class TaskQueueServiceStub(betterproto.ServiceStub):
         task_status: str = "",
         container_id: str = "",
         container_hostname: str = "",
-        scale_down_delay: float = 0,
+        keep_warm_seconds: float = 0,
     ) -> TaskQueueCompleteResponse:
         request = TaskQueueCompleteRequest()
         request.task_id = task_id
@@ -134,7 +134,7 @@ class TaskQueueServiceStub(betterproto.ServiceStub):
         request.task_status = task_status
         request.container_id = container_id
         request.container_hostname = container_hostname
-        request.scale_down_delay = scale_down_delay
+        request.keep_warm_seconds = keep_warm_seconds
 
         return await self._unary_unary(
             "/taskqueue.TaskQueueService/TaskQueueComplete",

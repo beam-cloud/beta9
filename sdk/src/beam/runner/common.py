@@ -15,7 +15,7 @@ class Config:
     container_hostname: Optional[str]
     stub_id: Optional[str]
     concurrency: Optional[int]
-    scale_down_delay: Optional[float]
+    keep_warm_seconds: Optional[int]
     handler: str
 
     @classmethod
@@ -24,7 +24,7 @@ class Config:
         container_hostname = os.getenv("CONTAINER_HOSTNAME")
         stub_id = os.getenv("STUB_ID")
         concurrency = int(os.getenv("CONCURRENCY", 1))
-        scale_down_delay = float(os.getenv("SCALE_DOWN_DELAY", 10))
+        keep_warm_seconds = float(os.getenv("KEEP_WARM_SECONDS", 10))
 
         if concurrency <= 0:
             concurrency = 1
@@ -41,7 +41,7 @@ class Config:
             container_hostname=container_hostname,
             stub_id=stub_id,
             concurrency=concurrency,
-            scale_down_delay=scale_down_delay,
+            keep_warm_seconds=keep_warm_seconds,
             handler=handler,
         )
 

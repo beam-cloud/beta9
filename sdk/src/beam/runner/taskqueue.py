@@ -52,6 +52,7 @@ class TaskQueueManager:
 
     def run(self):
         for worker_index in range(self.task_worker_count):
+            print(f"Starting task worker[{worker_index}]")
             self._start_worker(worker_index)
 
         for task_process in self.task_processes:
@@ -249,7 +250,7 @@ class TaskQueueWorker:
                             task_status=task_status,
                             container_id=config.container_id,
                             container_hostname=config.container_hostname,
-                            scale_down_delay=config.scale_down_delay,
+                            keep_warm_seconds=config.keep_warm_seconds,
                         )
                     )
 
