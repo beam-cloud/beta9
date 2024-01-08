@@ -1,4 +1,5 @@
 import asyncio
+import os
 from asyncio import AbstractEventLoop
 from typing import Any, Coroutine, Union
 
@@ -15,4 +16,7 @@ def run_sync(coroutine: Coroutine, loop: Union[AbstractEventLoop, None] = None) 
         grpclib.exceptions.GRPCError,
         grpclib.exceptions.StreamTerminatedError,
     ):
+        if os.getenv("BEAM_DEBUG"):
+            raise
+
         raise ConnectionError from None

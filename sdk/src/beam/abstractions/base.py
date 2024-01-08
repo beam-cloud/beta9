@@ -1,4 +1,5 @@
 import asyncio
+import os
 from abc import ABC
 from asyncio import AbstractEventLoop
 from typing import Any, Coroutine
@@ -21,6 +22,9 @@ class BaseAbstraction(ABC):
             grpclib.exceptions.GRPCError,
             grpclib.exceptions.StreamTerminatedError,
         ):
+            if os.getenv("BEAM_DEBUG"):
+                raise
+
             raise ConnectionError from None
 
     def __del__(self) -> None:
