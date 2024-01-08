@@ -60,7 +60,6 @@ def main(channel: Channel):
     finally:
         os.chdir(current_wkdir)
         result = cloudpickle.dumps(result)
-        print(result)
         set_result_resp: FunctionSetResultResponse = run_sync(
             function_stub.function_set_result(task_id=task_id, result=result),
         )
