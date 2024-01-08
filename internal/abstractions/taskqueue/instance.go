@@ -120,12 +120,6 @@ func (i *taskQueueInstance) handleScalingEvent(desiredContainers int) error {
 		desiredContainers = 0
 	}
 
-	// TODO: put this back...?
-	// Stubs currently have no concept of status so this is meaningless
-	// if rb.Status == types.DeploymentStatusStopped {
-	// 	desiredContainers = 0
-	// }
-
 	noContainersRunning := (state.PendingContainers == 0) && (state.RunningContainers == 0) && (state.StoppingContainers == 0)
 	if desiredContainers == 0 && noContainersRunning {
 		i.cancelFunc()
