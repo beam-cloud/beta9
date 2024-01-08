@@ -224,10 +224,25 @@ func (cr *ContainerRedisRepository) GetActiveContainersByPrefix(patternPrefix st
 func (cr *ContainerRedisRepository) GetFailedContainerCountByPrefix(patternPrefix string) (int, error) {
 	pattern := common.RedisKeys.SchedulerContainerExitCode(patternPrefix)
 
+	// Retrieve keys with the specified pattern
 	keys, err := cr.rdb.Scan(context.Background(), pattern)
 	if err != nil {
 		return -1, fmt.Errorf("failed to get keys with pattern <%v>: %w", pattern, err)
 	}
 
-	return len(keys), nil
+	failedCount := 0
+	for _, key := range keys {
+		// Retrieve the value (exit code) for each key
+		exitCode, err := cr.rdb.Get(context.Background(), key).Int()
+		if err != nil {
+			return -1, fmt.Errorf("failed to get value for key <%v>: %w", key, err)
+		}
+
+		// Check if the exit code is non-zero
+		if exitCode != 0 {
+			failedCount++
+		}
+	}
+
+	return failedCount, nil
 }

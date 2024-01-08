@@ -82,11 +82,10 @@ func (i *taskQueueInstance) state() (*taskQueueState, error) {
 		return nil, err
 	}
 
-	_, err = i.containerRepo.GetFailedContainerCountByPrefix(patternPrefix)
+	failedContainers, err := i.containerRepo.GetFailedContainerCountByPrefix(patternPrefix)
 	if err != nil {
 		return nil, err
 	}
-	failedContainers := 0
 
 	state := taskQueueState{}
 	for _, container := range containers {
