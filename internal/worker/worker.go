@@ -620,7 +620,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			mode = "ro"
 		}
 
-		// if strings.HasPrefix(m.MountPath, "/volumes") {
 		if m.LinkPath != "" {
 			err = forceSymlink(m.MountPath, m.LinkPath)
 			if err != nil {
