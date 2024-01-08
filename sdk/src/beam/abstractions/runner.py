@@ -1,9 +1,10 @@
 import inspect
 import os
-from typing import Callable
+from typing import Callable, List, Optional
 
 from beam.abstractions.base import BaseAbstraction
 from beam.abstractions.image import Image, ImageBuildResult
+from beam.abstractions.volume import Volume
 from beam.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
 from beam.sync import FileSyncer
 
@@ -21,6 +22,7 @@ class RunnerAbstraction(BaseAbstraction):
         max_pending_tasks: int = 100,
         retries: int = 3,
         timeout: int = 3600,
+        volumes: Optional[List[Volume]] = None,
     ) -> None:
         super().__init__()
 
@@ -39,6 +41,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.cpu = cpu
         self.memory = memory
         self.gpu = gpu
+        self.volumes = volumes or []
 
         self.concurrency = concurrency
         self.keep_warm_seconds = keep_warm_seconds
@@ -86,6 +89,10 @@ class RunnerAbstraction(BaseAbstraction):
             else:
                 return False
 
+        for v in self.volumes:
+            if not v.ready and not v.get_or_create():
+                return False
+
         if not self.stub_created:
             stub_response: GetOrCreateStubResponse = self.run_sync(
                 self.gateway_stub.get_or_create_stub(
@@ -104,6 +111,7 @@ class RunnerAbstraction(BaseAbstraction):
                     concurrency=self.concurrency,
                     max_containers=self.max_containers,
                     max_pending_tasks=self.max_pending_tasks,
+                    volumes=[v.export() for v in self.volumes],
                 )
             )
 

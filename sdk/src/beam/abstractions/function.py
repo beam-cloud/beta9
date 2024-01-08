@@ -1,12 +1,13 @@
 import asyncio
 import os
-from typing import Any, Callable, Iterable, Union
+from typing import Any, Callable, Iterable, List, Optional, Union
 
 import cloudpickle
 
 from beam import terminal
 from beam.abstractions.image import Image
 from beam.abstractions.runner import RunnerAbstraction
+from beam.abstractions.volume import Volume
 from beam.clients.function import (
     FunctionInvokeResponse,
     FunctionServiceStub,
@@ -18,8 +19,15 @@ FUNCTION_STUB_PREFIX = "function"
 
 
 class Function(RunnerAbstraction):
-    def __init__(self, image: Image, cpu: int = 100, memory: int = 128, gpu="") -> None:
-        super().__init__(image=image, cpu=cpu, memory=memory, gpu=gpu)
+    def __init__(
+        self,
+        image: Image,
+        cpu: int = 100,
+        memory: int = 128,
+        gpu="",
+        volumes: Optional[List[Volume]] = None,
+    ) -> None:
+        super().__init__(image=image, cpu=cpu, memory=memory, gpu=gpu, volumes=volumes)
 
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)

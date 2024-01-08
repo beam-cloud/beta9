@@ -1,6 +1,5 @@
 import os
 import time
-import traceback
 
 import cloudpickle
 from grpclib.client import Channel
@@ -56,7 +55,6 @@ def main(channel: Channel):
         os.chdir(USER_CODE_VOLUME)
         result = handler(*args.get("args", ()), **args.get("kwargs", {}))
     except BaseException as exc:
-        print(traceback.format_exc())
         result = error = exc
         task_status = TaskStatus.Error
     finally:
