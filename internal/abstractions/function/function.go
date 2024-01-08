@@ -124,6 +124,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 			fmt.Sprintf("TASK_ID=%s", taskId),
 			fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
 			fmt.Sprintf("BEAM_TOKEN=%s", authInfo.Token.Key),
+			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		},
 		Cpu:        stubConfig.Runtime.Cpu,
 		Memory:     stubConfig.Runtime.Memory,
