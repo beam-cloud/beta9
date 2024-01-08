@@ -155,21 +155,6 @@ func (as *autoscaler) start(ctx context.Context) {
 	}
 }
 
-// Scale up to 1 if the queue has items in it - not really autoscaling, just spinning the container up and down
-func (as *autoscaler) scaleToOne(sample *autoscalerSample) *autoscaleResult {
-	desiredContainers := 0
-
-	if sample.QueueLength > 0 || sample.RunningTasks > 0 {
-		desiredContainers = 1
-	}
-
-	return &autoscaleResult{
-		DesiredContainers: desiredContainers,
-		ResultValid:       true,
-	}
-
-}
-
 // Scale based on the number of items in the queue
 func (as *autoscaler) scaleByQueueDepth(sample *autoscalerSample) *autoscaleResult {
 	desiredContainers := 0
