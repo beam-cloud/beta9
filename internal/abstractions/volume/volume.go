@@ -9,21 +9,21 @@ import (
 )
 
 type VolumeService interface {
-	GetORCreateVolume(ctx context.Context, in *pb.GetOrCreateVolumeRequest) (*pb.GetOrCreateVolumeResponse, error)
+	GetOrCreateVolume(ctx context.Context, in *pb.GetOrCreateVolumeRequest) (*pb.GetOrCreateVolumeResponse, error)
 }
 
-type StructWorkspaceVolumeService struct {
+type GlobalVolumeService struct {
 	pb.UnimplementedVolumeServiceServer
 	backendRepo repository.BackendRepository
 }
 
-func NewStructWorkspaceVolumeService(backendRepo repository.BackendRepository) (*StructWorkspaceVolumeService, error) {
-	return &StructWorkspaceVolumeService{
+func NewGlobalVolumeService(backendRepo repository.BackendRepository) (*GlobalVolumeService, error) {
+	return &GlobalVolumeService{
 		backendRepo: backendRepo,
 	}, nil
 }
 
-func (vs *StructWorkspaceVolumeService) GetOrCreateVolume(ctx context.Context, in *pb.GetOrCreateVolumeRequest) (*pb.GetOrCreateVolumeResponse, error) {
+func (vs *GlobalVolumeService) GetOrCreateVolume(ctx context.Context, in *pb.GetOrCreateVolumeRequest) (*pb.GetOrCreateVolumeResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceId := authInfo.Workspace.Id
 

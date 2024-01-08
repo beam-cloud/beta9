@@ -154,7 +154,7 @@ func (g *Gateway) Start() error {
 	pb.RegisterFunctionServiceServer(grpcServer, fs)
 
 	// Register volume service
-	vs, err := volumesvc.NewStructWorkspaceVolumeService(g.BackendRepo)
+	vs, err := volumesvc.NewGlobalVolumeService(g.BackendRepo)
 	if err != nil {
 		return err
 	}
