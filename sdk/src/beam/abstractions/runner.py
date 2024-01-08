@@ -8,6 +8,12 @@ from beam.abstractions.volume import Volume
 from beam.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
 from beam.sync import FileSyncer
 
+FUNCTION_STUB_TYPE = "FUNCTION"
+FUNCTION_STUB_PREFIX = "function"
+
+TASKQUEUE_STUB_TYPE = "TASK_QUEUE"
+TASKQUEUE_STUB_PREFIX = "taskqueue"
+
 
 class RunnerAbstraction(BaseAbstraction):
     def __init__(
@@ -53,7 +59,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
 
-    def load_handler(self, func: Callable) -> None:
+    def _load_handler(self, func: Callable) -> None:
         if self.handler:
             return
 
@@ -67,7 +73,15 @@ class RunnerAbstraction(BaseAbstraction):
         function_name = func.__name__
         self.handler = f"{module_name}:{function_name}"
 
-    def prepare_runtime(self, *, stub_type: str, stub_name: str) -> bool:
+    def prepare_runtime(self, *, stub_type: str) -> bool:
+        self._load_handler()
+
+        stub_name = ""
+        if stub_type == FUNCTION_STUB_TYPE:
+            stub_name = f"{FUNCTION_STUB_PREFIX}/{self.handler}"
+        elif stub_type == TASKQUEUE_STUB_TYPE:
+            stub_name = f"{TASKQUEUE_STUB_PREFIX}/{self.handler}"
+
         if self.runtime_ready:
             return True
 

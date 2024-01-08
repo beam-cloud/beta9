@@ -6,16 +6,13 @@ import cloudpickle
 
 from beam import terminal
 from beam.abstractions.image import Image
-from beam.abstractions.runner import RunnerAbstraction
+from beam.abstractions.runner import FUNCTION_STUB_TYPE, RunnerAbstraction
 from beam.abstractions.volume import Volume
 from beam.clients.function import (
     FunctionInvokeResponse,
     FunctionServiceStub,
 )
 from beam.sync import FileSyncer
-
-FUNCTION_STUB_TYPE = "FUNCTION"
-FUNCTION_STUB_PREFIX = "function"
 
 
 class Function(RunnerAbstraction):
@@ -24,7 +21,7 @@ class Function(RunnerAbstraction):
         image: Image,
         cpu: int = 100,
         memory: int = 128,
-        gpu="",
+        gpu: str = "",
         volumes: Optional[List[Volume]] = None,
     ) -> None:
         super().__init__(image=image, cpu=cpu, memory=memory, gpu=gpu, volumes=volumes)
@@ -46,11 +43,8 @@ class _CallableWrapper:
         if container_id:
             return self.local(*args, **kwargs)
 
-        self.parent.load_handler(self.func)
-
         if not self.parent.prepare_runtime(
             stub_type=FUNCTION_STUB_TYPE,
-            stub_name=f"{FUNCTION_STUB_PREFIX}/{self.parent.handler}",
         ):
             return
 
@@ -106,11 +100,8 @@ class _CallableWrapper:
                 break
 
     def map(self, inputs: Iterable):
-        self.parent.load_handler(self.func)
-
         if not self.parent.prepare_runtime(
             stub_type=FUNCTION_STUB_TYPE,
-            stub_name=f"{FUNCTION_STUB_PREFIX}/{self.parent.handler}",
         ):
             return
 
