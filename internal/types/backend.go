@@ -35,18 +35,10 @@ type Volume struct {
 	CreatedAt   time.Time `db:"created_at"`
 }
 
-const (
-	DeploymentStatusPending string = "PENDING"
-	DeploymentStatusReady   string = "READY"
-	DeploymentStatusError   string = "ERROR"
-	DeploymentStatusStopped string = "STOPPED"
-)
-
 type Deployment struct {
 	Id          uint      `db:"id"`
 	ExternalId  string    `db:"external_id"`
-	Version     uint      `db:"version"`
-	Status      string    `db:"status"`
+	Active      bool      `db:"active"`
 	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
 	StubId      uint      `db:"stub_id"`      // Foreign key to Stub
 	CreatedAt   time.Time `db:"created_at"`
@@ -108,8 +100,17 @@ type TaskWithRelated struct {
 }
 
 type StubConfigV1 struct {
-	Runtime Runtime      `json:"runtime"`
-	Volumes []*pb.Volume `json:"volumes"`
+	Runtime         Runtime      `json:"runtime"`
+	Handler         string       `json:"handler"`
+	PythonVersion   string       `json:"python_version"`
+	KeepWarmSeconds uint         `json:"keep_warm_seconds"`
+	MaxPendingTasks uint         `json:"max_pending_tasks"`
+	CallbackUrl     string       `json:"callback_url"`
+	TaskPolicy      TaskPolicy   `json:"task_policy"`
+	Concurrency     uint         `json:"concurrency"`
+	Authorized      bool         `json:"authorized"`
+	MaxContainers   uint         `json:"max_containers"`
+	Volumes         []*pb.Volume `json:"volumes"`
 }
 
 const (
@@ -128,6 +129,12 @@ type Stub struct {
 	WorkspaceId   uint      `db:"workspace_id"` // Foreign key to Workspace
 	CreatedAt     time.Time `db:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at"`
+}
+
+type StubWithRelated struct {
+	Stub
+	Workspace Workspace `db:"workspace"`
+	Object    Object    `db:"object"`
 }
 
 type Image struct {

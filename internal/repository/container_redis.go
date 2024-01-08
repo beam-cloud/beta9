@@ -194,3 +194,55 @@ func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId strin
 		}
 	}
 }
+
+func (cr *ContainerRedisRepository) GetActiveContainersByPrefix(patternPrefix string) ([]types.ContainerState, error) {
+	pattern := common.RedisKeys.SchedulerContainerState(patternPrefix)
+
+	keys, err := cr.rdb.Scan(context.Background(), pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get keys for pattern <%v>: %v", pattern, err)
+	}
+
+	containerStates := make([]types.ContainerState, 0, len(keys))
+	for _, key := range keys {
+		res, err := cr.rdb.HGetAll(context.Background(), key).Result()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get container state for key %s: %w", key, err)
+		}
+
+		state := &types.ContainerState{}
+		if err = common.ToStruct(res, state); err != nil {
+			return nil, fmt.Errorf("failed to deserialize container state <%v>: %v", key, err)
+		}
+
+		containerStates = append(containerStates, *state)
+	}
+
+	return containerStates, nil
+}
+
+func (cr *ContainerRedisRepository) GetFailedContainerCountByPrefix(patternPrefix string) (int, error) {
+	pattern := common.RedisKeys.SchedulerContainerExitCode(patternPrefix)
+
+	// Retrieve keys with the specified pattern
+	keys, err := cr.rdb.Scan(context.Background(), pattern)
+	if err != nil {
+		return -1, fmt.Errorf("failed to get keys with pattern <%v>: %w", pattern, err)
+	}
+
+	failedCount := 0
+	for _, key := range keys {
+		// Retrieve the value (exit code) for each key
+		exitCode, err := cr.rdb.Get(context.Background(), key).Int()
+		if err != nil {
+			return -1, fmt.Errorf("failed to get value for key <%v>: %w", key, err)
+		}
+
+		// Check if the exit code is non-zero
+		if exitCode != 0 {
+			failedCount++
+		}
+	}
+
+	return failedCount, nil
+}

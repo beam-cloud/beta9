@@ -16,16 +16,9 @@ class FVolume(betterproto.Message):
 
 @dataclass
 class FunctionInvokeRequest(betterproto.Message):
-    object_id: str = betterproto.string_field(1)
-    image_id: str = betterproto.string_field(2)
-    stub_id: str = betterproto.string_field(3)
-    args: bytes = betterproto.bytes_field(4)
-    handler: str = betterproto.string_field(5)
-    python_version: str = betterproto.string_field(6)
-    cpu: int = betterproto.int64_field(7)
-    memory: int = betterproto.int64_field(8)
-    gpu: str = betterproto.string_field(9)
-    volumes: List["FVolume"] = betterproto.message_field(10)
+    stub_id: str = betterproto.string_field(1)
+    args: bytes = betterproto.bytes_field(2)
+    volumes: List["FVolume"] = betterproto.message_field(3)
 
 
 @dataclass
@@ -61,29 +54,11 @@ class FunctionSetResultResponse(betterproto.Message):
 
 class FunctionServiceStub(betterproto.ServiceStub):
     async def function_invoke(
-        self,
-        *,
-        object_id: str = "",
-        image_id: str = "",
-        stub_id: str = "",
-        args: bytes = b"",
-        handler: str = "",
-        python_version: str = "",
-        cpu: int = 0,
-        memory: int = 0,
-        gpu: str = "",
-        volumes: List["FVolume"] = [],
+        self, *, stub_id: str = "", args: bytes = b"", volumes: List["FVolume"] = []
     ) -> AsyncGenerator[FunctionInvokeResponse, None]:
         request = FunctionInvokeRequest()
-        request.object_id = object_id
-        request.image_id = image_id
         request.stub_id = stub_id
         request.args = args
-        request.handler = handler
-        request.python_version = python_version
-        request.cpu = cpu
-        request.memory = memory
-        request.gpu = gpu
         if volumes is not None:
             request.volumes = volumes
 

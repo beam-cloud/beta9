@@ -77,7 +77,7 @@ class EndTaskRequest(betterproto.Message):
     task_status: str = betterproto.string_field(3)
     container_id: str = betterproto.string_field(4)
     container_hostname: str = betterproto.string_field(5)
-    scale_down_delay: float = betterproto.float_field(6)
+    keep_warm_seconds: float = betterproto.float_field(6)
 
 
 @dataclass
@@ -148,13 +148,31 @@ class GetOrCreateStubRequest(betterproto.Message):
     cpu: int = betterproto.int64_field(6)
     memory: int = betterproto.int64_field(7)
     gpu: str = betterproto.string_field(8)
-    volumes: List["Volume"] = betterproto.message_field(9)
+    handler: str = betterproto.string_field(9)
+    retries: int = betterproto.uint32_field(10)
+    timeout: int = betterproto.int64_field(11)
+    keep_warm_seconds: float = betterproto.float_field(12)
+    concurrency: int = betterproto.uint32_field(13)
+    max_containers: int = betterproto.uint32_field(14)
+    max_pending_tasks: int = betterproto.uint32_field(15)
+    volumes: List["Volume"] = betterproto.message_field(16)
 
 
 @dataclass
 class GetOrCreateStubResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     stub_id: str = betterproto.string_field(2)
+
+
+@dataclass
+class DeployStubRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+
+
+@dataclass
+class DeployStubResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    deployment_id: str = betterproto.string_field(2)
 
 
 class GatewayServiceStub(betterproto.ServiceStub):
@@ -219,7 +237,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
         task_status: str = "",
         container_id: str = "",
         container_hostname: str = "",
-        scale_down_delay: float = 0,
+        keep_warm_seconds: float = 0,
     ) -> EndTaskResponse:
         request = EndTaskRequest()
         request.task_id = task_id
@@ -227,7 +245,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
         request.task_status = task_status
         request.container_id = container_id
         request.container_hostname = container_hostname
-        request.scale_down_delay = scale_down_delay
+        request.keep_warm_seconds = keep_warm_seconds
 
         return await self._unary_unary(
             "/gateway.GatewayService/EndTask",
@@ -269,6 +287,13 @@ class GatewayServiceStub(betterproto.ServiceStub):
         cpu: int = 0,
         memory: int = 0,
         gpu: str = "",
+        handler: str = "",
+        retries: int = 0,
+        timeout: int = 0,
+        keep_warm_seconds: float = 0,
+        concurrency: int = 0,
+        max_containers: int = 0,
+        max_pending_tasks: int = 0,
         volumes: List["Volume"] = [],
     ) -> GetOrCreateStubResponse:
         request = GetOrCreateStubRequest()
@@ -280,6 +305,13 @@ class GatewayServiceStub(betterproto.ServiceStub):
         request.cpu = cpu
         request.memory = memory
         request.gpu = gpu
+        request.handler = handler
+        request.retries = retries
+        request.timeout = timeout
+        request.keep_warm_seconds = keep_warm_seconds
+        request.concurrency = concurrency
+        request.max_containers = max_containers
+        request.max_pending_tasks = max_pending_tasks
         if volumes is not None:
             request.volumes = volumes
 
@@ -287,4 +319,14 @@ class GatewayServiceStub(betterproto.ServiceStub):
             "/gateway.GatewayService/GetOrCreateStub",
             request,
             GetOrCreateStubResponse,
+        )
+
+    async def deploy_stub(self, *, stub_id: str = "") -> DeployStubResponse:
+        request = DeployStubRequest()
+        request.stub_id = stub_id
+
+        return await self._unary_unary(
+            "/gateway.GatewayService/DeployStub",
+            request,
+            DeployStubResponse,
         )

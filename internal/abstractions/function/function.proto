@@ -19,16 +19,9 @@ message FVolume {
 }
 
 message FunctionInvokeRequest {
-  string object_id = 1;
-  string image_id = 2;
-  string stub_id = 3;
-  bytes args = 4;
-  string handler = 5;
-  string python_version = 6;
-  int64 cpu = 7;
-  int64 memory = 8;
-  string gpu = 9;
-  repeated FVolume volumes = 10;
+  string stub_id = 1;
+  bytes args = 2;
+  repeated FVolume volumes = 3;
 }
 
 message FunctionInvokeResponse {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
 
@@ -29,8 +30,9 @@ const (
 )
 
 type Builder struct {
-	scheduler *scheduler.Scheduler
-	registry  *common.ImageRegistry
+	scheduler     *scheduler.Scheduler
+	registry      *common.ImageRegistry
+	containerRepo repository.ContainerRepository
 }
 
 type BuildOpts struct {
@@ -45,7 +47,7 @@ type BuildOpts struct {
 	ForceRebuild       bool
 }
 
-func NewBuilder(scheduler *scheduler.Scheduler) (*Builder, error) {
+func NewBuilder(scheduler *scheduler.Scheduler, containerRepo repository.ContainerRepository) (*Builder, error) {
 	storeName := common.Secrets().GetWithDefault("BEAM_IMAGESERVICE_IMAGE_REGISTRY_STORE", "s3")
 	registry, err := common.NewImageRegistry(storeName)
 	if err != nil {
@@ -53,8 +55,9 @@ func NewBuilder(scheduler *scheduler.Scheduler) (*Builder, error) {
 	}
 
 	return &Builder{
-		scheduler: scheduler,
-		registry:  registry,
+		scheduler:     scheduler,
+		registry:      registry,
+		containerRepo: containerRepo,
 	}, nil
 }
 
@@ -140,7 +143,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	hostname, err := b.scheduler.ContainerRepo.GetContainerWorkerHostname(containerId)
+	hostname, err := b.containerRepo.GetContainerWorkerHostname(containerId)
 	if err != nil {
 		return err
 	}

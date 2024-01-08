@@ -19,7 +19,17 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Memory:  in.Memory,
 			ImageId: in.ImageId,
 		},
-		Volumes: in.Volumes,
+		Handler:       in.Handler,
+		PythonVersion: in.PythonVersion,
+		TaskPolicy: types.TaskPolicy{
+			MaxRetries: uint(in.Retries),
+			Timeout:    int(in.Timeout),
+		},
+		KeepWarmSeconds: uint(in.KeepWarmSeconds),
+		Concurrency:     uint(in.Concurrency),
+		MaxContainers:   uint(in.MaxContainers),
+		MaxPendingTasks: uint(in.MaxPendingTasks),
+		Volumes:         in.Volumes,
 	}
 
 	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
@@ -46,5 +56,20 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	return &pb.GetOrCreateStubResponse{
 		Ok:     err == nil,
 		StubId: stub.ExternalId,
+	}, nil
+}
+
+func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequest) (*pb.DeployStubResponse, error) {
+	_, _ = auth.AuthInfoFromContext(ctx)
+
+	_, err := gws.backendRepo.GetStubByExternalId(ctx, in.StubId)
+	if err != nil {
+		return &pb.DeployStubResponse{
+			Ok: false,
+		}, nil
+	}
+
+	return &pb.DeployStubResponse{
+		Ok: true,
 	}, nil
 }

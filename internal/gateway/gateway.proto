@@ -14,6 +14,7 @@ service GatewayService {
   rpc StopTask(StopTaskRequest) returns (StopTaskResponse);
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
   rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse);
+  rpc DeployStub(DeployStubRequest) returns (DeployStubResponse);
 }
 
 message AuthorizeRequest {}
@@ -67,20 +68,17 @@ message EndTaskRequest {
   string task_status = 3;
   string container_id = 4;
   string container_hostname = 5;
-  float scale_down_delay = 6;
+  float keep_warm_seconds = 6;
 }
 
 message EndTaskResponse { bool ok = 1; }
 
-message StringList {
-  repeated string values = 1;
-}
+message StringList { repeated string values = 1; }
 
 message ListTasksRequest {
   map<string, StringList> filters = 1;
   uint32 limit = 2;
 }
-
 
 message Task {
   string id = 2;
@@ -103,9 +101,7 @@ message ListTasksResponse {
   int32 total = 4;
 }
 
-message StopTaskRequest {
-  string task_id = 1;
-}
+message StopTaskRequest { string task_id = 1; }
 
 message StopTaskResponse {
   bool ok = 1;
@@ -126,10 +122,24 @@ message GetOrCreateStubRequest {
   int64 cpu = 6;
   int64 memory = 7;
   string gpu = 8;
-  repeated Volume volumes = 9;
+  string handler = 9;
+  uint32 retries = 10;
+  int64 timeout = 11;
+  float keep_warm_seconds = 12;
+  uint32 concurrency = 13;
+  uint32 max_containers = 14;
+  uint32 max_pending_tasks = 15;
+  repeated Volume volumes = 16;
 }
 
 message GetOrCreateStubResponse {
   bool ok = 1;
   string stub_id = 2;
+}
+
+message DeployStubRequest { string stub_id = 1; }
+
+message DeployStubResponse {
+  bool ok = 1;
+  string deployment_id = 2;
 }

@@ -153,6 +153,24 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	return &token, &workspace, nil
 }
 
+func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error) {
+	query := `
+	SELECT id, external_id, key, created_at, updated_at, active, workspace_id
+	FROM token
+	WHERE workspace_id = $1 AND active = TRUE
+	ORDER BY updated_at DESC
+	LIMIT 1;
+	`
+
+	var token types.Token
+	err := r.client.GetContext(ctx, &token, query, workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &token, nil
+}
+
 // Object
 
 func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error) {
@@ -247,6 +265,24 @@ func (r *PostgresBackendRepository) GetTask(ctx context.Context, externalId stri
 	return &task, nil
 }
 
+func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error) {
+	var taskWithRelated types.TaskWithRelated
+	query := `
+    SELECT w.external_id AS "workspace.external_id", w.name AS "workspace.name", 
+           s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", t.*
+    FROM task t
+    JOIN workspace w ON t.workspace_id = w.id
+    JOIN stub s ON t.stub_id = s.id
+    WHERE t.external_id = $1;
+    `
+	err := r.client.GetContext(ctx, &taskWithRelated, query, externalId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &taskWithRelated, nil
+}
+
 func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task, error) {
 	var tasks []types.Task
 	query := `SELECT id, external_id, status, container_id, started_at, ended_at, workspace_id, stub_id, created_at, updated_at FROM task;`
@@ -328,13 +364,22 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 	return stub, nil
 }
 
-func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, workspaceId uint) (*types.Stub, error) {
-	var stub types.Stub
+func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string) (*types.StubWithRelated, error) {
+	var stub types.StubWithRelated
 
-	query := `SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at FROM stub WHERE external_id = $1 AND workspace_id = $2;`
-	err := r.client.GetContext(ctx, &stub, query, externalId, workspaceId)
+	query := `
+	SELECT 
+	    s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at,
+	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at",
+	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"
+	FROM stub s
+	JOIN workspace w ON s.workspace_id = w.id
+	LEFT JOIN object o ON s.object_id = o.id
+	WHERE s.external_id = $1;
+	`
+	err := r.client.GetContext(ctx, &stub, query, externalId)
 	if err != nil {
-		return &types.Stub{}, err
+		return &types.StubWithRelated{}, err
 	}
 
 	return &stub, nil
