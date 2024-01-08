@@ -151,7 +151,7 @@ class TaskQueueWorker:
 
             task = json.loads(r.task_msg)
             return Task(id=task["id"], args=task["args"], kwargs=task["kwargs"])
-        except grpclib.exceptions.StreamTerminatedError:
+        except (grpclib.exceptions.StreamTerminatedError, OSError):
             return None
 
     async def _monitor_task(

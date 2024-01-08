@@ -518,7 +518,7 @@ func (tq *RedisTaskQueue) monitorTasks() {
 						continue
 					}
 
-					encodedMessage, err := tq.rdb.Get(tq.ctx, Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Result()
+					encodedMessage, err := tq.rdb.Get(tq.ctx, Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Bytes()
 					if err != nil {
 						continue
 					}
@@ -546,8 +546,6 @@ func (tq *RedisTaskQueue) handleContainerEvents() {
 		select {
 		case event := <-tq.keyEventChan:
 			containerId := fmt.Sprintf("%s%s", taskQueueContainerPrefix, event.Key)
-
-			log.Println("(rx event) container ID: ", containerId)
 
 			operation := event.Operation
 			containerIdParts := strings.Split(containerId, "-")
