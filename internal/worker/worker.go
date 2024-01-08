@@ -627,8 +627,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			}
 		}
 
-		log.Println(m)
-
 		// If the local mount path does not exist, create it
 		if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
 			err := os.MkdirAll(m.LocalPath, 0755)

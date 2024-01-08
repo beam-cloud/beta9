@@ -19,7 +19,6 @@ class Volume(BaseAbstraction):
         if resp.ok:
             self.ready = True
             self.volume_id = resp.volume_id
-
             return True
 
         return False
