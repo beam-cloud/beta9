@@ -23,7 +23,7 @@ class TaskQueue(RunnerAbstraction):
         concurrency: int = 1,
         max_pending_tasks: int = 100,
         max_containers: int = 1,
-        keep_warm_seconds: float = 10.0,
+        keep_warm_seconds: int = 10,
     ) -> None:
         super().__init__(
             image=image,

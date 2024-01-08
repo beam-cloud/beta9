@@ -6,6 +6,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Event, Process, set_start_method
 from typing import Any, List, NamedTuple, Union
@@ -233,11 +234,12 @@ class TaskQueueWorker:
                     )
                     result = cloudpickle.dumps(result)
                 except BaseException as exc:
+                    print(traceback.format_exc())
                     result = cloudpickle.dumps(exc)
                     task_status = TaskStatus.Error
                 finally:
-                    complete_task_response: TaskQueueCompleteResponse = run_sync(
-                        taskqueue_stub.task_queue_complete(
+                    complete_task_response: TaskQueueCompleteResponse = (
+                        await taskqueue_stub.task_queue_complete(
                             task_id=task.id,
                             stub_id=config.stub_id,
                             task_duration=time.time() - start_time,
@@ -247,6 +249,7 @@ class TaskQueueWorker:
                             scale_down_delay=config.scale_down_delay,
                         )
                     )
+
                     if not complete_task_response.ok:
                         raise RunnerException("Unable to end task")
 
