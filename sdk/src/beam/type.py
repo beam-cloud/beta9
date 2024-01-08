@@ -6,6 +6,19 @@ class TaskStatus(str, Enum):
     Error = "ERROR"
     Pending = "PENDING"
     Running = "RUNNING"
+    Cancelled = "CANCELLED"
+    Retry = "RETRY"
+
+
+class TaskExitCode:
+    SigTerm = -15
+    SigKill = -9
+    Success = 0
+    Error = 1
+    ErrorLoadingApp = 2
+    Cancelled = 3
+    Timeout = 4
+    Disconnect = 5
 
 
 class PythonVersion(str, Enum):

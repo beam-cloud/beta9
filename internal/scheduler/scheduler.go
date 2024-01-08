@@ -22,8 +22,7 @@ type Scheduler struct {
 	workerRepo        repo.WorkerRepository
 	workerPoolManager *WorkerPoolManager
 	requestBacklog    *RequestBacklog
-	ContainerRepo     repo.ContainerRepository
-	taskRepo          repo.TaskRepository
+	containerRepo     repo.ContainerRepository
 	beamRepo          repo.BeamRepository
 	metricsRepo       repo.MetricsStatsdRepository
 	eventBus          *common.EventBus
@@ -39,7 +38,6 @@ func NewScheduler() (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
-	taskRepo := repo.NewTaskRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 
@@ -65,20 +63,19 @@ func NewScheduler() (*Scheduler, error) {
 		workerRepo:        workerRepo,
 		workerPoolManager: workerPoolManager,
 		requestBacklog:    requestBacklog,
-		ContainerRepo:     containerRepo,
-		taskRepo:          taskRepo,
+		containerRepo:     containerRepo,
 		metricsRepo:       repo.NewMetricsStatsdRepository(),
 		redisClient:       redisClient,
 	}, nil
 }
 
-func (wb *Scheduler) Run(request *types.ContainerRequest) error {
+func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	log.Printf("Received RUN request: %+v\n", request)
 
 	request.Timestamp = time.Now()
 	request.OnScheduleChan = make(chan bool, 1)
 
-	containerState, err := wb.ContainerRepo.GetContainerState(request.ContainerId)
+	containerState, err := s.containerRepo.GetContainerState(request.ContainerId)
 	if err == nil {
 		switch types.ContainerStatus(containerState.Status) {
 		case types.ContainerStatusPending, types.ContainerStatusRunning:
@@ -88,9 +85,9 @@ func (wb *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	wb.metricsRepo.ContainerRequested(request.ContainerId)
+	s.metricsRepo.ContainerRequested(request.ContainerId)
 
-	err = wb.ContainerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
+	err = s.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
 		Status:      types.ContainerStatusPending,
 		ScheduledAt: time.Now().Unix(),
 	})
@@ -98,18 +95,18 @@ func (wb *Scheduler) Run(request *types.ContainerRequest) error {
 		return err
 	}
 
-	return wb.addRequestToBacklog(request)
+	return s.addRequestToBacklog(request)
 }
 
-func (wb *Scheduler) Stop(containerId string) error {
+func (s *Scheduler) Stop(containerId string) error {
 	log.Printf("Received STOP request: %s\n", containerId)
 
-	err := wb.ContainerRepo.UpdateContainerStatus(containerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
+	err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	if err != nil {
 		return err
 	}
 
-	_, err = wb.eventBus.Send(&common.Event{
+	_, err = s.eventBus.Send(&common.Event{
 		Type: common.EventTypeStopContainer,
 		Args: map[string]any{
 			"container_id": containerId,
@@ -127,9 +124,9 @@ func (wb *Scheduler) Stop(containerId string) error {
 // Get a controller.
 // When an agent is provided by the user, we attempt to find a worker pool controller associated with that
 // agent. If we don't find a controller, we default to returning a Beam hosted controller.
-func (wb *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolController, error) {
+func (s *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolController, error) {
 	if request.Agent != "" {
-		controller, err := wb.getRemoteController(request)
+		controller, err := s.getRemoteController(request)
 		if err != nil {
 			log.Printf("unable to find remote controllers for user-specified agent <%v>: %v", request.Agent, err)
 		} else {
@@ -137,10 +134,10 @@ func (wb *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolC
 		}
 	}
 
-	return wb.getHostedController(request)
+	return s.getHostedController(request)
 }
 
-func (wb *Scheduler) getHostedController(request *types.ContainerRequest) (WorkerPoolController, error) {
+func (s *Scheduler) getHostedController(request *types.ContainerRequest) (WorkerPoolController, error) {
 	poolName := "beam-cpu"
 
 	if request.Gpu != "" {
@@ -154,7 +151,7 @@ func (wb *Scheduler) getHostedController(request *types.ContainerRequest) (Worke
 		}
 	}
 
-	workerPool, ok := wb.workerPoolManager.GetPool(poolName)
+	workerPool, ok := s.workerPoolManager.GetPool(poolName)
 	if !ok {
 		return nil, fmt.Errorf("no controller found for worker pool name: %s", poolName)
 	}
@@ -162,10 +159,10 @@ func (wb *Scheduler) getHostedController(request *types.ContainerRequest) (Worke
 	return workerPool.Controller, nil
 }
 
-func (wb *Scheduler) getRemoteController(request *types.ContainerRequest) (WorkerPoolController, error) {
+func (s *Scheduler) getRemoteController(request *types.ContainerRequest) (WorkerPoolController, error) {
 	agentName := request.Agent
 
-	agent, err := wb.beamRepo.GetAgent(agentName, "")
+	agent, err := s.beamRepo.GetAgent(agentName, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get agent <%s> from database: %v", agentName, err)
 	}
@@ -184,7 +181,7 @@ func (wb *Scheduler) getRemoteController(request *types.ContainerRequest) (Worke
 	}
 
 	for poolName := range pools {
-		workerPool, ok := wb.workerPoolManager.GetPool(poolName)
+		workerPool, ok := s.workerPoolManager.GetPool(poolName)
 		if ok {
 			return workerPool.Controller, nil
 		}
@@ -193,25 +190,25 @@ func (wb *Scheduler) getRemoteController(request *types.ContainerRequest) (Worke
 	return nil, fmt.Errorf("unable to find controllers for agent <%s>", agentName)
 }
 
-func (wb *Scheduler) processRequests() {
+func (s *Scheduler) processRequests() {
 	for {
-		if wb.requestBacklog.Len() == 0 {
+		if s.requestBacklog.Len() == 0 {
 			time.Sleep(RequestProcessingInterval)
 			continue
 		}
 
-		request, err := wb.requestBacklog.Pop()
+		request, err := s.requestBacklog.Pop()
 		if err != nil {
 			time.Sleep(RequestProcessingInterval)
 			continue
 		}
 
 		// Find a worker to schedule ContainerRequests on
-		worker, err := wb.selectWorker(request)
+		worker, err := s.selectWorker(request)
 		if err != nil || worker == nil {
 			// We didn't find a Worker that fit the ContainerRequest's requirements. Let's find a controller
 			// so we can add a new worker.
-			controller, err := wb.getController(request)
+			controller, err := s.getController(request)
 			if err != nil {
 				log.Printf("No controller found for request: %+v, error: %v\n", request, err)
 				continue
@@ -220,15 +217,15 @@ func (wb *Scheduler) processRequests() {
 			newWorker, err := controller.AddWorker(request.Cpu, request.Memory, request.Gpu)
 			if err != nil {
 				log.Printf("Unable to add job for worker: %+v\n", err)
-				wb.addRequestToBacklog(request)
+				s.addRequestToBacklog(request)
 				continue
 			}
 
 			log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
-			err = wb.scheduleRequest(newWorker, request)
+			err = s.scheduleRequest(newWorker, request)
 			if err != nil {
 				log.Printf("Unable to schedule request for container %s: %v\n", request.ContainerId, err)
-				wb.addRequestToBacklog(request)
+				s.addRequestToBacklog(request)
 			}
 
 			continue
@@ -236,21 +233,21 @@ func (wb *Scheduler) processRequests() {
 
 		// We found a worker with that met the ContainerRequest's requirements. Schedule the request
 		// on that worker.
-		err = wb.scheduleRequest(worker, request)
+		err = s.scheduleRequest(worker, request)
 		if err != nil {
-			wb.addRequestToBacklog(request)
+			s.addRequestToBacklog(request)
 		}
 
 	}
 }
 
-func (wb *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	wb.metricsRepo.ContainerScheduled(request.ContainerId)
-	return wb.workerRepo.ScheduleContainerRequest(worker, request)
+func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
+	s.metricsRepo.ContainerScheduled(request.ContainerId)
+	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 
-func (wb *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker, error) {
-	workers, err := wb.workerRepo.GetAllWorkers()
+func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker, error) {
+	workers, err := s.workerRepo.GetAllWorkers()
 	if err != nil {
 		return nil, err
 	}
@@ -276,6 +273,6 @@ func (wb *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worke
 	return nil, &types.ErrNoSuitableWorkerFound{}
 }
 
-func (wb *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
-	return wb.requestBacklog.Push(request)
+func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
+	return s.requestBacklog.Push(request)
 }

@@ -28,7 +28,6 @@ type BeamUserAppConfig struct {
 	Mounts []Mount `json:"mounts"`
 
 	AutoScaling AutoScaling `json:"autoscaling"`
-	AutoScaler  Autoscaler  `json:"autoscaler"`
 
 	Outputs []Output `json:"outputs"`
 }
@@ -157,29 +156,13 @@ type QueueDepthAutoscaler struct {
 	MaxReplicas        uint `json:"max_replicas"`
 }
 
-type Autoscaler struct {
-	RequestLatency *RequestLatencyAutoscaler `json:"request_latency,omitempty"`
-	QueueDepth     *QueueDepthAutoscaler     `json:"queue_depth,omitempty"`
-}
-
-func (a *Autoscaler) TakeNonNil() interface{} {
-	if a.RequestLatency != nil {
-		return a.RequestLatency
-	}
-	if a.QueueDepth != nil {
-		return a.QueueDepth
-	}
-	return nil
-}
-
 type Trigger struct {
-	Outputs     []Output    `json:"outputs"`
-	TriggerType string      `json:"trigger_type"`
-	Handler     string      `json:"handler"`
-	Method      *string     `json:"method"`
-	Path        *string     `json:"path"`
-	Runtime     *Runtime    `json:"runtime"`
-	Autoscaler  *Autoscaler `json:"autoscaler"`
+	Outputs     []Output `json:"outputs"`
+	TriggerType string   `json:"trigger_type"`
+	Handler     string   `json:"handler"`
+	Method      *string  `json:"method"`
+	Path        *string  `json:"path"`
+	Runtime     *Runtime `json:"runtime"`
 
 	// This is deprecated
 	AutoScaling *AutoScaling `json:"autoscaling"`

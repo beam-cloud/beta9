@@ -61,7 +61,7 @@ func NewschedulerForTest() (*Scheduler, error) {
 		workerPoolManager: workerPoolManager,
 		metricsRepo:       repo.NewMetricsStatsdRepositoryForTest(),
 		requestBacklog:    requestBacklog,
-		ContainerRepo:     containerRepo,
+		containerRepo:     containerRepo,
 	}, nil
 }
 

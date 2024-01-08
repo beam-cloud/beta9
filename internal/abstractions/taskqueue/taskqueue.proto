@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package taskqueue;
+
+service TaskQueueService {
+  rpc TaskQueuePut(TaskQueuePutRequest) returns (TaskQueuePutResponse) {}
+  rpc TaskQueuePop(TaskQueuePopRequest) returns (TaskQueuePopResponse) {}
+  rpc TaskQueueMonitor(TaskQueueMonitorRequest)
+      returns (stream TaskQueueMonitorResponse);
+  rpc TaskQueueComplete(TaskQueueCompleteRequest)
+      returns (TaskQueueCompleteResponse) {}
+  rpc TaskQueueLength(TaskQueueLengthRequest)
+      returns (TaskQueueLengthResponse) {}
+}
+
+message TaskQueuePutRequest {
+  string stub_id = 1;
+  bytes payload = 2;
+}
+
+message TaskQueuePutResponse {
+  bool ok = 1;
+  string task_id = 2;
+}
+
+message TaskQueuePopRequest {
+  string stub_id = 1;
+  string container_id = 2;
+}
+
+message TaskQueuePopResponse {
+  bool ok = 1;
+  bytes task_msg = 2;
+}
+
+message TaskQueueLengthRequest { string stub_id = 1; }
+
+message TaskQueueLengthResponse {
+  bool ok = 1;
+  int64 length = 2;
+}
+
+message TaskQueueCompleteRequest {
+  string task_id = 1;
+  string stub_id = 2;
+  float task_duration = 3;
+  string task_status = 4;
+  string container_id = 5;
+  string container_hostname = 6;
+  float keep_warm_seconds = 7;
+}
+
+message TaskQueueCompleteResponse { bool ok = 1; }
+
+message TaskQueueMonitorRequest {
+  string task_id = 1;
+  string stub_id = 2;
+  string container_id = 3;
+}
+
+message TaskQueueMonitorResponse {
+  bool ok = 1;
+  bool cancelled = 2;
+  bool complete = 3;
+  bool timed_out = 4;
+}

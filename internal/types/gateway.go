@@ -1,15 +1,12 @@
 package types
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"regexp"
 	"strconv"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/gofrs/uuid"
 )
 
@@ -46,13 +43,6 @@ type RequestedVersion struct {
 	Value uint
 }
 
-type RequestBucket interface {
-	ForwardRequest(*gin.Context) error
-	GetName() string
-	GetContainerEventChan() chan ContainerEvent
-	Close()
-}
-
 type ContainerEvent struct {
 	ContainerId string
 	Change      int
@@ -62,17 +52,13 @@ type ContainerEvent struct {
 // to be added to the task queue
 type TaskMessage struct {
 	ID      string                 `json:"id"`
-	Task    string                 `json:"task"`
 	Args    []interface{}          `json:"args"`
 	Kwargs  map[string]interface{} `json:"kwargs"`
-	Retries int                    `json:"retries"`
-	ETA     *string                `json:"eta"`
 	Expires *time.Time             `json:"expires"`
 }
 
 func (tm *TaskMessage) Reset() {
 	tm.ID = uuid.Must(uuid.NewV4()).String()
-	tm.Task = ""
 	tm.Args = nil
 	tm.Kwargs = nil
 }
@@ -95,19 +81,7 @@ func (tm *TaskMessage) Encode() ([]byte, error) {
 func (tm *TaskMessage) Decode(encodedData []byte) error {
 	err := json.Unmarshal(encodedData, tm)
 	if err != nil {
-		// NOTE: this is needed for backwards compatibility with existing tasks
-		// Once all queues have been emptied, this block becomes unnecessary
-		log.Println("Decoding deprecated task message.")
-
-		jsonData, err := base64.StdEncoding.DecodeString(string(encodedData))
-		if err != nil {
-			return err
-		}
-
-		err = json.Unmarshal(jsonData, tm)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 
 	return nil

@@ -27,22 +27,6 @@ var (
 )
 
 var (
-	queuePrefix              string = "queue"
-	queueList                string = "queue:%s:%s"
-	queueTaskDuration        string = "queue:%s:%s:task_duration"
-	queueAverageTaskDuration string = "queue:%s:%s:avg_task_duration"
-	queueTasksInFlight       string = "queue:%s:%s:task:in_flight"
-	queueTaskClaim           string = "queue:%s:%s:task:claim:%s"
-	queueTaskRetries         string = "queue:%s:%s:task:retries:%s"
-	queueTaskHeartbeat       string = "queue:%s:%s:task:heartbeat:%s"
-	queueTaskCompleteEvent   string = "queue:%s:%s:task:complete:%s"
-	queueTaskCancel          string = "queue:%s:%s:task:cancel:%s"
-	queueProcessingLock      string = "queue:%s:%s:processing_lock:%s"
-	queueKeepWarmLock        string = "queue:%s:%s:keep_warm_lock:%s"
-	queueTaskRunningLock     string = "queue:%s:%s:task_running:%s:%s"
-)
-
-var (
 	workerPrefix                 string = "worker"
 	workerContainerRequest       string = "worker:%s:container:%s:request"
 	workerContainerResourceUsage string = "worker:%s:container:%s:resource_usage"
@@ -107,59 +91,6 @@ func (rk *redisKeys) SchedulerWorkerContainerHost(containerId string) string {
 
 func (rk *redisKeys) SchedulerContainerExitCode(containerId string) string {
 	return fmt.Sprintf(schedulerContainerExitCode, containerId)
-}
-
-// Queue keys
-func (rk *redisKeys) QueuePrefix() string {
-	return queuePrefix
-}
-
-func (rk *redisKeys) QueueList(contextId, queueName string) string {
-	return fmt.Sprintf(queueList, contextId, queueName)
-}
-
-func (rk *redisKeys) QueueTaskClaim(contextId, queueName, taskId string) string {
-	return fmt.Sprintf(queueTaskClaim, contextId, queueName, taskId)
-}
-
-func (rk *redisKeys) QueueTasksInFlight(contextId, queueName string) string {
-	return fmt.Sprintf(queueTasksInFlight, contextId, queueName)
-}
-
-func (rk *redisKeys) QueueTaskHeartbeat(contextId, queueName, taskId string) string {
-	return fmt.Sprintf(queueTaskHeartbeat, contextId, queueName, taskId)
-}
-
-func (rk *redisKeys) QueueTaskRetries(contextId, queueName, taskId string) string {
-	return fmt.Sprintf(queueTaskRetries, contextId, queueName, taskId)
-}
-
-func (rk *redisKeys) QueueTaskDuration(contextId, queueName string) string {
-	return fmt.Sprintf(queueTaskDuration, contextId, queueName)
-}
-
-func (rk *redisKeys) QueueAverageTaskDuration(contextId, queueName string) string {
-	return fmt.Sprintf(queueAverageTaskDuration, contextId, queueName)
-}
-
-func (rk *redisKeys) QueueTaskCompleteEvent(contextId, bucketName, taskId string) string {
-	return fmt.Sprintf(queueTaskCompleteEvent, contextId, bucketName, taskId)
-}
-
-func (rk *redisKeys) QueueTaskRunningLock(contextId, bucketName, containerId, taskId string) string {
-	return fmt.Sprintf(queueTaskRunningLock, contextId, bucketName, containerId, taskId)
-}
-
-func (rk *redisKeys) QueueProcessingLock(contextId, bucketName, containerId string) string {
-	return fmt.Sprintf(queueProcessingLock, contextId, bucketName, containerId)
-}
-
-func (rk *redisKeys) QueueKeepWarmLock(contextId, bucketName, containerId string) string {
-	return fmt.Sprintf(queueKeepWarmLock, contextId, bucketName, containerId)
-}
-
-func (rk *redisKeys) QueueTaskCancel(contextId, bucketName, taskId string) string {
-	return fmt.Sprintf(queueTaskCancel, contextId, bucketName, taskId)
 }
 
 // Gateway keys
