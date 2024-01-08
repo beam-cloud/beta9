@@ -1,13 +1,14 @@
 import asyncio
 import inspect
 import os
-from typing import Any, Callable, Iterable, Union
+from typing import Any, Callable, Iterable, List, Optional, Union
 
 import cloudpickle
 
 from beam import terminal
 from beam.abstractions.base import BaseAbstraction
 from beam.abstractions.image import Image, ImageBuildResult
+from beam.abstractions.volume import Volume
 from beam.clients.function import (
     FunctionInvokeResponse,
     FunctionServiceStub,
@@ -20,7 +21,14 @@ FUNCTION_STUB_PREFIX = "function"
 
 
 class Function(BaseAbstraction):
-    def __init__(self, image: Image, cpu: int = 100, memory: int = 128, gpu="") -> None:
+    def __init__(
+        self,
+        image: Image,
+        cpu: int = 100,
+        memory: int = 128,
+        gpu="",
+        volumes: Optional[List[Volume]] = None,
+    ) -> None:
         super().__init__()
 
         if image is None:
@@ -38,6 +46,7 @@ class Function(BaseAbstraction):
         self.cpu = cpu
         self.memory = memory
         self.gpu = gpu
+        self.volumes = volumes or []
 
         self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
@@ -81,6 +90,10 @@ class _CallableWrapper:
             else:
                 return False
 
+        for volume in self.parent.volumes:
+            if not volume.ready and not volume.get_or_create():
+                return False
+
         if not self.parent.stub_created:
             stub_response: GetOrCreateStubResponse = self.parent.run_sync(
                 self.parent.gateway_stub.get_or_create_stub(
@@ -92,6 +105,7 @@ class _CallableWrapper:
                     cpu=self.parent.cpu,
                     memory=self.parent.memory,
                     gpu=self.parent.gpu,
+                    volumes=[volume.export() for volume in self.parent.volumes],
                 )
             )
 
@@ -136,6 +150,7 @@ class _CallableWrapper:
             cpu=self.parent.cpu,
             memory=self.parent.memory,
             gpu=self.parent.gpu,
+            volumes=[volume.export() for volume in self.parent.volumes],
         ):
             if r.output != "":
                 terminal.detail(r.output)

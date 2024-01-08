@@ -620,10 +620,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			mode = "ro"
 		}
 
-		if strings.HasPrefix(m.MountPath, "/volumes") {
-			// Creates a symlink in the local workspace path to the container's volume path
-			linkPath := filepath.Join(containerConfig.WorkspacePath, filepath.Base(m.MountPath))
-			err = forceSymlink(m.MountPath, linkPath)
+		if m.LinkPath != "" {
+			err = forceSymlink(m.MountPath, m.LinkPath)
 			if err != nil {
 				log.Printf("unable to symlink volume: %v", err)
 			}

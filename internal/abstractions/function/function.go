@@ -85,6 +85,23 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		in.Memory = defaultFunctionContainerMemory
 	}
 
+	mounts := []types.Mount{
+		{
+			LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId),
+			MountPath: types.WorkerUserCodeVolume,
+			ReadOnly:  true,
+		},
+	}
+
+	for _, v := range in.Volumes {
+		mounts = append(mounts, types.Mount{
+			LocalPath: path.Join(types.DefaultVolumesPath, authInfo.Workspace.Name, v.Id),
+			LinkPath:  path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId, v.MountPath),
+			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
+			ReadOnly:  false,
+		})
+	}
+
 	err = fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env: []string{
@@ -97,9 +114,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		Gpu:        in.Gpu,
 		ImageId:    in.ImageId,
 		EntryPoint: []string{in.PythonVersion, "-m", "beam.runner.function"},
-		Mounts: []types.Mount{
-			{LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId), MountPath: types.WorkerUserCodeVolume, ReadOnly: true},
-		},
+		Mounts:     mounts,
 	})
 	if err != nil {
 		return err

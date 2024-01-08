@@ -52,6 +52,7 @@ type BackendRepository interface {
 	ListTasksWithRelated(ctx context.Context, filters []types.FilterFieldMapping, limit uint32) ([]types.TaskWithRelated, error)
 	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint) (types.Stub, error)
 	GetStubByExternalId(ctx context.Context, externalId string, workspaceId uint) (*types.Stub, error)
+	GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
 }
 
 type BeamRepository interface {

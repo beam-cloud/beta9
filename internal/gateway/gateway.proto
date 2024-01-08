@@ -81,6 +81,7 @@ message ListTasksRequest {
   uint32 limit = 2;
 }
 
+
 message Task {
   string id = 2;
   string status = 3;
@@ -111,6 +112,11 @@ message StopTaskResponse {
   string err_msg = 2;
 }
 
+message Volume {
+  string id = 1;
+  string mount_path = 2;
+}
+
 message GetOrCreateStubRequest {
   string object_id = 1;
   string image_id = 2;
@@ -120,6 +126,7 @@ message GetOrCreateStubRequest {
   int64 cpu = 6;
   int64 memory = 7;
   string gpu = 8;
+  repeated Volume volumes = 9;
 }
 
 message GetOrCreateStubResponse {

@@ -2,6 +2,7 @@ import importlib
 import os
 import sys
 import time
+import traceback
 from typing import Callable
 
 import cloudpickle
@@ -26,7 +27,7 @@ def _load_handler() -> Callable:
 
     handler = os.getenv("HANDLER")
     if not handler:
-        raise RunnerException()
+        raise RunnerException("Handler not specified")
 
     try:
         module, func = handler.split(":")
@@ -34,7 +35,7 @@ def _load_handler() -> Callable:
         method = getattr(target_module, func)
         return method
     except BaseException:
-        raise RunnerException()
+        raise RunnerException("Unable to load handler", traceback.format_exc())
 
 
 @with_runner_context
@@ -68,13 +69,18 @@ def main(channel: Channel):
 
     # Invoke function
     task_status = TaskStatus.Complete
+    current_wkdir = os.getcwd()
+    error = None
+
     try:
+        os.chdir(USER_CODE_VOLUME)
         result = handler(*args.get("args", ()), **args.get("kwargs", {}))
-        result = cloudpickle.dumps(result)
     except BaseException as exc:
-        result = cloudpickle.dumps(exc)
+        result = error = exc
         task_status = TaskStatus.Error
     finally:
+        os.chdir(current_wkdir)
+        result = cloudpickle.dumps(result)
         set_result_resp: FunctionSetResultResponse = run_sync(
             function_stub.function_set_result(task_id=task_id, result=result),
         )
@@ -96,6 +102,9 @@ def main(channel: Channel):
     )
     if not end_task_response.ok:
         raise RunnerException("Unable to end task")
+
+    if task_status == TaskStatus.Error:
+        raise error.with_traceback(error.__traceback__)
 
 
 if __name__ == "__main__":
