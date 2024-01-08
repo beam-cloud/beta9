@@ -476,26 +476,24 @@ func (tq *RedisTaskQueue) monitorTasks() {
 						retries = 0
 					}
 
-					task, err := tq.backendRepo.GetTask(tq.ctx, taskId)
+					task, err := tq.backendRepo.GetTaskWithRelated(tq.ctx, taskId)
 					if err != nil {
 						continue
 					}
 
-					taskPolicy := types.DefaultTaskPolicy // types.TaskPolicy{}
+					var stubConfig types.StubConfigV1 = types.StubConfigV1{}
+					err = json.Unmarshal([]byte(task.Stub.Config), &stubConfig)
+					if err != nil {
+						continue
+					}
 
-					// err = json.Unmarshal(
-					// 	task.TaskPolicy,
-					// 	&taskPolicy,
-					// )
-					// if err != nil {
-					// 	taskPolicy = types.DefaultTaskPolicy
-					// }
+					taskPolicy := stubConfig.TaskPolicy
 
 					if retries >= int(taskPolicy.MaxRetries) {
 						log.Printf("<taskqueue> hit retry limit, not reinserting task <%s> into queue: %s\n", taskId, stubId)
 
-						task.Status = types.TaskStatusError
-						_, err = tq.backendRepo.UpdateTask(tq.ctx, taskId, *task)
+						task.Task.Status = types.TaskStatusError
+						_, err = tq.backendRepo.UpdateTask(tq.ctx, taskId, task.Task)
 						if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 							continue
 						}
@@ -514,8 +512,8 @@ func (tq *RedisTaskQueue) monitorTasks() {
 						continue
 					}
 
-					task.Status = types.TaskStatusRetry
-					_, err = tq.backendRepo.UpdateTask(tq.ctx, taskId, *task)
+					task.Task.Status = types.TaskStatusRetry
+					_, err = tq.backendRepo.UpdateTask(tq.ctx, taskId, task.Task)
 					if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 						continue
 					}

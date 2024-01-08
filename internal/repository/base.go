@@ -48,6 +48,7 @@ type BackendRepository interface {
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error)
 	RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error)
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
+	GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error)
 	CreateTask(ctx context.Context, containerId string, workspaceId, stubId uint) (*types.Task, error)
 	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error)
 	DeleteTask(ctx context.Context, externalId string) error

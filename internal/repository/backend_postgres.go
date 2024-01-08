@@ -264,6 +264,24 @@ func (r *PostgresBackendRepository) GetTask(ctx context.Context, externalId stri
 	return &task, nil
 }
 
+func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error) {
+	var taskWithRelated types.TaskWithRelated
+	query := `
+    SELECT w.external_id AS "workspace.external_id", w.name AS "workspace.name", 
+           s.external_id AS "stub.external_id", s.name AS "stub.name", t.*
+    FROM task t
+    JOIN workspace w ON t.workspace_id = w.id
+    JOIN stub s ON t.stub_id = s.id
+    WHERE t.external_id = $1;
+    `
+	err := r.client.GetContext(ctx, &taskWithRelated, query, externalId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &taskWithRelated, nil
+}
+
 func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task, error) {
 	var tasks []types.Task
 	query := `SELECT id, external_id, status, container_id, started_at, ended_at, workspace_id, stub_id, created_at, updated_at FROM task;`
