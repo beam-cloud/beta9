@@ -1,4 +1,4 @@
-package apiv1
+package function
 
 import (
 	"net/http"
@@ -8,18 +8,17 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-type DeployGroup struct {
-	backendRepo repository.BackendRepository
+type FunctionGroup struct {
 	routerGroup *echo.Group
 }
 
-func NewDeployGroup(g *echo.Group, backendRepo repository.BackendRepository) *DeployGroup {
-	group := &DeployGroup{routerGroup: g, backendRepo: backendRepo}
-	g.GET("/", group.ListDeploys)
+func NewFunctionGroup(g *echo.Group, backendRepo repository.BackendRepository) *FunctionGroup {
+	group := &FunctionGroup{routerGroup: g}
+	g.GET("/", group.FunctionInvoke)
 	return group
 }
 
-func (g *DeployGroup) ListDeploys(ctx echo.Context) error {
+func (g *FunctionGroup) FunctionInvoke(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{

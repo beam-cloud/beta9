@@ -14,6 +14,7 @@ import (
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
+	"github.com/labstack/echo/v4"
 )
 
 type FunctionService interface {
@@ -37,6 +38,7 @@ type RunCFunctionService struct {
 	scheduler       *scheduler.Scheduler
 	keyEventManager *common.KeyEventManager
 	rdb             *common.RedisClient
+	routeGroup      *echo.Group
 }
 
 func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, scheduler *scheduler.Scheduler) (*RunCFunctionService, error) {
@@ -51,6 +53,7 @@ func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, backen
 		scheduler:       scheduler,
 		rdb:             rdb,
 		keyEventManager: keyEventManager,
+		// routeGroup:      NewFunctionGroup(echo.New().Group()),
 	}, nil
 }
 

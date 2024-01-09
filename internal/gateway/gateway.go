@@ -14,11 +14,13 @@ import (
 	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
 	simplequeue "github.com/beam-cloud/beam/internal/abstractions/queue"
 	"github.com/beam-cloud/beam/internal/abstractions/taskqueue"
+	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
+
 	volumesvc "github.com/beam-cloud/beam/internal/abstractions/volume"
+
 	apiv1 "github.com/beam-cloud/beam/internal/api/v1"
 	"github.com/beam-cloud/beam/internal/auth"
 	common "github.com/beam-cloud/beam/internal/common"
-	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/storage"
@@ -98,22 +100,14 @@ func (g *Gateway) initHttp() error {
 	baseGroup := g.httpServer.Group(apiv1.HttpServerBaseRoute)
 
 	apiv1.NewHealthGroup(baseGroup.Group("/health"), g.redisClient)
-	apiv1.NewDeployGroup(baseGroup.Group("/deploy", authMiddleware), g.redisClient)
+	apiv1.NewDeployGroup(baseGroup.Group("/deploy", authMiddleware), g.BackendRepo)
+
+	// Create and register abstractions
+
 	return nil
 }
 
-func (g *Gateway) initGrpc() error {
-	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo)
-
-	serverOptions := []grpc.ServerOption{
-		grpc.UnaryInterceptor(authInterceptor.Unary()),
-		grpc.StreamInterceptor(authInterceptor.Stream()),
-	}
-
-	g.grpcServer = grpc.NewServer(
-		serverOptions...,
-	)
-
+func (g *Gateway) registerAbstractions() error {
 	// Create and register abstractions
 	rm, err := dmap.NewRedisMapService(g.redisClient)
 	if err != nil {
@@ -174,6 +168,21 @@ func (g *Gateway) initGrpc() error {
 	return nil
 }
 
+func (g *Gateway) initGrpc() error {
+	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo)
+
+	serverOptions := []grpc.ServerOption{
+		grpc.UnaryInterceptor(authInterceptor.Unary()),
+		grpc.StreamInterceptor(authInterceptor.Stream()),
+	}
+
+	g.grpcServer = grpc.NewServer(
+		serverOptions...,
+	)
+
+	return nil
+}
+
 // Gateway entry point
 func (g *Gateway) Start() error {
 	listener, err := net.Listen("tcp", GatewayConfig.GrpcServerAddress)
@@ -189,6 +198,11 @@ func (g *Gateway) Start() error {
 	err = g.initHttp()
 	if err != nil {
 		log.Fatalf("Failed to initialize http server: %v", err)
+	}
+
+	err = g.registerAbstractions()
+	if err != nil {
+		log.Fatalf("Failed to register abstraction services: %v", err)
 	}
 
 	go func() {
