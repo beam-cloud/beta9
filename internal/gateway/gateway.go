@@ -94,8 +94,11 @@ func (g *Gateway) initHttp() error {
 	g.httpServer.Use(middleware.Logger())
 	g.httpServer.Use(middleware.Recover())
 
+	authMiddleware := auth.AuthMiddleware(g.BackendRepo)
 	baseGroup := g.httpServer.Group(apiv1.HttpServerBaseRoute)
+
 	apiv1.NewHealthGroup(baseGroup.Group("/health"), g.redisClient)
+	apiv1.NewHealthGroup(baseGroup.Group("/deploy", authMiddleware), g.redisClient)
 	return nil
 }
 
