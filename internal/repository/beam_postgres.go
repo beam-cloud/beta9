@@ -528,17 +528,19 @@ func (c *PostgresBeamRepository) AuthorizeApiKeyWithAppId(appId string, clientId
 }
 
 func (c *PostgresBeamRepository) DeploymentRequiresAuthorization(appId string, appVersion string) (bool, error) {
-	v, err := types.ParseAppVersion(appVersion)
-	if err != nil {
-		return false, err
-	}
+	// v, err := types.ParseAppVersion(appVersion)
+	// if err != nil {
+	// 	return false, err
+	// }
 
-	version := &v.Value
-	if v.Value == 0 {
-		version = nil
-	}
+	// version := &v.Value
+	// if v.Value == 0 {
+	// 	version = nil
+	// }
 
-	_, _, deploymentPackage, err := c.GetDeployment(appId, version)
+	version := uint(1)
+
+	_, _, deploymentPackage, err := c.GetDeployment(appId, &version)
 	if err != nil {
 		return false, err
 	}
