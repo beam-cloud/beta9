@@ -41,11 +41,20 @@ type RunCFunctionService struct {
 	routeGroup      *echo.Group
 }
 
-func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, scheduler *scheduler.Scheduler) (*RunCFunctionService, error) {
+func NewRuncFunctionService(ctx context.Context,
+	rdb *common.RedisClient,
+	backendRepo repository.BackendRepository,
+	containerRepo repository.ContainerRepository,
+	scheduler *scheduler.Scheduler,
+	baseGroup *echo.Group,
+) (*RunCFunctionService, error) {
 	keyEventManager, err := common.NewKeyEventManager(rdb)
 	if err != nil {
 		return nil, err
 	}
+
+	authMiddleware := auth.AuthMiddleware(backendRepo)
+	RegisterFunctionRoutes(baseGroup.Group("/function", authMiddleware), backendRepo)
 
 	return &RunCFunctionService{
 		backendRepo:     backendRepo,
@@ -53,7 +62,6 @@ func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, backen
 		scheduler:       scheduler,
 		rdb:             rdb,
 		keyEventManager: keyEventManager,
-		// routeGroup:      NewFunctionGroup(echo.New().Group()),
 	}, nil
 }
 

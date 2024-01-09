@@ -12,7 +12,7 @@ type FunctionGroup struct {
 	routerGroup *echo.Group
 }
 
-func NewFunctionGroup(g *echo.Group, backendRepo repository.BackendRepository) *FunctionGroup {
+func RegisterFunctionRoutes(g *echo.Group, backendRepo repository.BackendRepository) *FunctionGroup {
 	group := &FunctionGroup{routerGroup: g}
 	g.GET("/", group.FunctionInvoke)
 	return group

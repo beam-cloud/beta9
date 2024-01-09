@@ -43,6 +43,7 @@ type Gateway struct {
 	Scheduler     *scheduler.Scheduler
 	ctx           context.Context
 	cancelFunc    context.CancelFunc
+	baseGroup     *echo.Group
 }
 
 func NewGateway() (*Gateway, error) {
@@ -97,18 +98,15 @@ func (g *Gateway) initHttp() error {
 	g.httpServer.Use(middleware.Recover())
 
 	authMiddleware := auth.AuthMiddleware(g.BackendRepo)
-	baseGroup := g.httpServer.Group(apiv1.HttpServerBaseRoute)
+	g.baseGroup = g.httpServer.Group(apiv1.HttpServerBaseRoute)
 
-	apiv1.NewHealthGroup(baseGroup.Group("/health"), g.redisClient)
-	apiv1.NewDeployGroup(baseGroup.Group("/deploy", authMiddleware), g.BackendRepo)
-
-	// Create and register abstractions
-
+	apiv1.NewHealthGroup(g.baseGroup.Group("/health"), g.redisClient)
+	apiv1.NewDeployGroup(g.baseGroup.Group("/deploy", authMiddleware), g.BackendRepo)
 	return nil
 }
 
-func (g *Gateway) registerAbstractions() error {
-	// Create and register abstractions
+func (g *Gateway) registerServices() error {
+	// Register map service
 	rm, err := dmap.NewRedisMapService(g.redisClient)
 	if err != nil {
 		return err
@@ -130,7 +128,7 @@ func (g *Gateway) registerAbstractions() error {
 	pb.RegisterImageServiceServer(g.grpcServer, is)
 
 	// Register function service
-	fs, err := function.NewRuncFunctionService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler)
+	fs, err := function.NewRuncFunctionService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler, g.baseGroup)
 	if err != nil {
 		return err
 	}
@@ -200,9 +198,9 @@ func (g *Gateway) Start() error {
 		log.Fatalf("Failed to initialize http server: %v", err)
 	}
 
-	err = g.registerAbstractions()
+	err = g.registerServices()
 	if err != nil {
-		log.Fatalf("Failed to register abstraction services: %v", err)
+		log.Fatalf("Failed to register services: %v", err)
 	}
 
 	go func() {
