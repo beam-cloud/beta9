@@ -16,7 +16,6 @@ import (
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
-	"gorm.io/gorm"
 )
 
 type TaskQueueService interface {
@@ -494,7 +493,7 @@ func (tq *RedisTaskQueue) monitorTasks() {
 
 						task.Task.Status = types.TaskStatusError
 						_, err = tq.backendRepo.UpdateTask(tq.ctx, taskId, task.Task)
-						if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+						if err != nil {
 							continue
 						}
 
@@ -514,7 +513,7 @@ func (tq *RedisTaskQueue) monitorTasks() {
 
 					task.Task.Status = types.TaskStatusRetry
 					_, err = tq.backendRepo.UpdateTask(tq.ctx, taskId, task.Task)
-					if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					if err != nil {
 						continue
 					}
 
