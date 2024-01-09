@@ -60,12 +60,12 @@ class TestTaskQueue(TestCase):
         test_func.parent.prepare_runtime = MagicMock(return_value=True)
         test_func.parent.run_sync = override_run_sync
 
-        test_func()
-
-        test_func.parent.taskqueue_stub.task_queue_put.return_value = TaskQueuePutResponse(
-            ok=False, task_id=""
+        self.assertRaises(
+            NotImplementedError,
+            test_func,
         )
 
+        # Test calling in container
         import os
 
         os.environ["CONTAINER_ID"] = "1234"

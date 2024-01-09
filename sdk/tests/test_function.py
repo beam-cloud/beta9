@@ -68,3 +68,27 @@ class TestTaskQueue(TestCase):
         )
 
         self.assertRaises(SystemExit, test_func)
+
+    def test_map(self):
+        @Function(Image(python_version="python3.7"), cpu=100, memory=128)
+        def test_func(*args, **kwargs):
+            return 1998
+
+        pickled_value = cloudpickle.dumps(1998)
+
+        test_func.parent.function_stub = MagicMock()
+        test_func.parent.syncer = MagicMock()
+
+        test_func.parent.function_stub.function_invoke.return_value = AsyncIterator(
+            [
+                FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
+                FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
+                FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
+            ]
+        )
+
+        test_func.parent.prepare_runtime = MagicMock(return_value=True)
+        test_func.parent.run_sync = override_run_sync
+
+        for val in test_func.map([1, 2, 3]):
+            self.assertEqual(val, 1998)

@@ -51,11 +51,10 @@ class _CallableWrapper:
         if container_id is not None:
             return self.local(*args, **kwargs)
 
-        if not self.parent.prepare_runtime(
-            func=self.func,
-            stub_type=TASKQUEUE_STUB_TYPE,
-        ):
-            return
+        raise NotImplementedError(
+            "Direct calls to TaskQueues are not yet supported."
+            + " To enqueue items use .put(*args, **kwargs)"
+        )
 
     def local(self, *args, **kwargs) -> Any:
         return self.func(*args, **kwargs)
