@@ -16,7 +16,7 @@ import (
 	"github.com/beam-cloud/beam/internal/abstractions/taskqueue"
 	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
 
-	volumesvc "github.com/beam-cloud/beam/internal/abstractions/volume"
+	volume "github.com/beam-cloud/beam/internal/abstractions/volume"
 
 	apiv1 "github.com/beam-cloud/beam/internal/api/v1"
 	"github.com/beam-cloud/beam/internal/auth"
@@ -157,7 +157,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterTaskQueueServiceServer(g.grpcServer, tq)
 
 	// Register volume service
-	vs, err := volumesvc.NewGlobalVolumeService(g.BackendRepo)
+	vs, err := volume.NewGlobalVolumeService(g.BackendRepo)
 	if err != nil {
 		return err
 	}
