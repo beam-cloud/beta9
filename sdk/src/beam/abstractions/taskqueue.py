@@ -3,8 +3,8 @@ import os
 from typing import Any, Callable
 
 from beam import terminal
+from beam.abstractions.base.runner import TASKQUEUE_STUB_TYPE, RunnerAbstraction
 from beam.abstractions.image import Image
-from beam.abstractions.runner import TASKQUEUE_STUB_TYPE, RunnerAbstraction
 from beam.clients.taskqueue import TaskQueuePutResponse, TaskQueueServiceStub
 
 

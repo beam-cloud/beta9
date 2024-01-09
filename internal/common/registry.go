@@ -19,11 +19,9 @@ import (
 const (
 	DefaultAWSRegion string = "us-east-1"
 
-	s3ImageRegistryStoreName       = "s3"
-	remoteImageFileExtension       = "rclip"
-	localImageFileExtension        = "clip"
-	legacyImageFileExtension       = "tar"
-	S3LegacyImageRegistryStoreName = "s3_legacy"
+	s3ImageRegistryStoreName = "s3"
+	remoteImageFileExtension = "rclip"
+	localImageFileExtension  = "clip"
 )
 
 type ImageRegistry struct {
@@ -39,12 +37,6 @@ func NewImageRegistry(storeName string) (*ImageRegistry, error) {
 	switch storeName {
 	case s3ImageRegistryStoreName:
 		imageFileExtension = remoteImageFileExtension
-		store, err = NewS3Store()
-		if err != nil {
-			return nil, err
-		}
-	case S3LegacyImageRegistryStoreName:
-		imageFileExtension = legacyImageFileExtension
 		store, err = NewS3Store()
 		if err != nil {
 			return nil, err
