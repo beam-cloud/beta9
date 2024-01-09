@@ -166,7 +166,6 @@ func (g *Gateway) initGrpc() error {
 	if err != nil {
 		return err
 	}
-
 	pb.RegisterGatewayServiceServer(g.grpcServer, gws)
 
 	return nil
