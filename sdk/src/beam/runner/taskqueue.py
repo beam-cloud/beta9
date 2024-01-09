@@ -226,6 +226,7 @@ class TaskQueueWorker:
                 continue
 
             async def _run_task():
+                print(f"Running task <{task.id}>")
                 monitor_task = loop.create_task(
                     self._monitor_task(config.stub_id, config.container_id, taskqueue_stub, task),
                 )
@@ -257,6 +258,7 @@ class TaskQueueWorker:
                     if not complete_task_response.ok:
                         raise RunnerException("Unable to end task")
 
+                    print(f"Task completed <{task.id}>")
                     monitor_task.cancel()
 
             loop.run_until_complete(_run_task())
