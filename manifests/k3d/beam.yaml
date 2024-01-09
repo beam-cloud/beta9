@@ -116,6 +116,10 @@ spec:
     port: 1993
     targetPort: 1993
     protocol: TCP
+  - name: http
+    port: 1994
+    targetPort: 1994
+    protocol: TCP
 ---
 apiVersion: traefik.containo.us/v1alpha1
 kind: IngressRouteTCP
