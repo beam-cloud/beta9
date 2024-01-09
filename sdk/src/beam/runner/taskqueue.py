@@ -234,14 +234,9 @@ class TaskQueueWorker:
                 start_time = time.time()
                 task_status = TaskStatus.Complete
                 try:
-                    if task.args is None:
-                        task.args = []
-                    if task.kwargs is None:
-                        task.kwargs = {}
-
-                    result = await loop.run_in_executor(
-                        executor, lambda: handler(*task.args, **task.kwargs)
-                    )
+                    args = task.args or []
+                    kwargs = task.kwargs or {}
+                    result = await loop.run_in_executor(executor, lambda: handler(*args, **kwargs))
                     result = cloudpickle.dumps(result)
                 except BaseException as exc:
                     print(traceback.format_exc())
