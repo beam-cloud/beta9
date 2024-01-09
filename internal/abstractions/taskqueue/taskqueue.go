@@ -106,7 +106,6 @@ func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 }
 
 func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *TaskPayload) (string, error) {
-
 	queue, exists := tq.queueInstances.Get(stubId)
 	if !exists {
 		err := tq.createQueueInstance(stubId)
@@ -117,16 +116,10 @@ func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stub
 		queue, _ = tq.queueInstances.Get(stubId)
 	}
 
-	log.Println("WE ARE HERE")
-
 	task, err := tq.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, queue.stub.Id)
 	if err != nil {
 		return "", err
 	}
-
-	log.Println("serializing payload")
-
-	log.Printf("payload: %+v\n", payload)
 
 	err = queue.client.Push(queue.workspace.Name, queue.stub.ExternalId, task.ExternalId, payload.Args, payload.Kwargs)
 	if err != nil {
