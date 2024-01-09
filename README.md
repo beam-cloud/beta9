@@ -1,10 +1,6 @@
-<div align="center">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/beam-cloud/beam/assets/10925686/860052a1-2a96-4bad-a991-dd2b24e3b524">
-  <source media="(prefers-color-scheme: light)" srcset="https://github.com/beam-cloud/beam/assets/10925686/860052a1-2a96-4bad-a991-dd2b24e3b524">
-  <img alt="beam logo" src="https://github.com/beam-cloud/beam/assets/10925686/860052a1-2a96-4bad-a991-dd2b24e3b524">
-</picture>
-</div>
+<p align="center">
+<img alt="Logo" src="https://github.com/beam-cloud/beam/assets/10925686/860052a1-2a96-4bad-a991-dd2b24e3b524"/ width="40%">
+</p>
 
 <p align="center">
   <a href="https://docs.beam.cloud">
