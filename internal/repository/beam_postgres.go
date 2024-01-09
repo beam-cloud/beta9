@@ -528,51 +528,51 @@ func (c *PostgresBeamRepository) AuthorizeApiKeyWithAppId(appId string, clientId
 }
 
 func (c *PostgresBeamRepository) DeploymentRequiresAuthorization(appId string, appVersion string) (bool, error) {
-	v, err := types.ParseAppVersion(appVersion)
-	if err != nil {
-		return false, err
-	}
+	// v, err := types.ParseAppVersion(appVersion)
+	// if err != nil {
+	// 	return false, err
+	// }
 
-	version := &v.Value
-	if v.Value == 0 {
-		version = nil
-	}
+	// version := &v.Value
+	// if v.Value == 0 {
+	// 	version = nil
+	// }
 
-	_, _, deploymentPackage, err := c.GetDeployment(appId, version)
-	if err != nil {
-		return false, err
-	}
+	// _, _, deploymentPackage, err := c.GetDeployment(appId, &version)
+	// if err != nil {
+	// 	return false, err
+	// }
 
-	var appConfig types.BeamAppConfig
-	err = json.Unmarshal(deploymentPackage.Config, &appConfig)
-	if err != nil {
-		return false, err
-	}
+	// var appConfig types.BeamAppConfig
+	// err = json.Unmarshal(deploymentPackage.Config, &appConfig)
+	// if err != nil {
+	// 	return false, err
+	// }
 
-	// If either the authorized field is nil, or it is true, don't allow user in
-	if appConfig.Triggers[0].Authorized == nil || *appConfig.Triggers[0].Authorized {
-		return false, nil
-	}
+	// // If either the authorized field is nil, or it is true, don't allow user in
+	// if appConfig.Triggers[0].Authorized == nil || *appConfig.Triggers[0].Authorized {
+	// 	return false, nil
+	// }
 
 	return true, nil
 }
 
 func (c *PostgresBeamRepository) ServeRequiresAuthorization(appId string, serveId string) (bool, error) {
-	serve, _, err := c.GetServe(appId, serveId)
-	if err != nil {
-		return false, err
-	}
+	// serve, _, err := c.GetServe(appId, serveId)
+	// if err != nil {
+	// 	return false, err
+	// }
 
-	var appConfig types.BeamAppConfig
-	err = json.Unmarshal(serve.Config, &appConfig)
-	if err != nil {
-		return false, err
-	}
+	// var appConfig types.BeamAppConfig
+	// err = json.Unmarshal(serve.Config, &appConfig)
+	// if err != nil {
+	// 	return false, err
+	// }
 
-	// If either the authorized field is nil, or it is true, don't allow user in
-	if appConfig.Triggers[0].Authorized == nil || *appConfig.Triggers[0].Authorized {
-		return false, nil
-	}
+	// // If either the authorized field is nil, or it is true, don't allow user in
+	// if appConfig.Triggers[0].Authorized == nil || *appConfig.Triggers[0].Authorized {
+	// 	return false, nil
+	// }
 
 	return true, nil
 }

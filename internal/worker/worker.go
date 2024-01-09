@@ -537,7 +537,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 }
 
-func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, containerConfig *ContainerConfigResponse, options *ContainerOptions) []string {
+func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
 	env := []string{
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
@@ -546,7 +546,6 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, contai
 		fmt.Sprintf("BEAM_GATEWAY_PORT=%s", os.Getenv("BEAM_GATEWAY_PORT")),
 		"PYTHONUNBUFFERED=1",
 	}
-	env = append(env, containerConfig.Env...)
 	env = append(env, request.Env...)
 	return env
 }
@@ -593,11 +592,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
 
-	var containerConfig *ContainerConfigResponse = &ContainerConfigResponse{
-		WorkspacePath: defaultWorkingDirectory,
-	}
-
-	env := s.getContainerEnvironment(request, containerConfig, options)
+	env := s.getContainerEnvironment(request, options)
 	if request.Gpu != "" {
 		spec.Hooks.Prestart[0].Args = append(spec.Hooks.Prestart[0].Args, configPath, "prestart")
 
@@ -615,7 +610,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Root.Readonly = false
 
 	// Create local workspace path so we can symlink volumes before the container starts
-	os.MkdirAll(containerConfig.WorkspacePath, os.FileMode(0755))
+	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
 
 	// Add bind mounts to runc spec
 	for _, m := range request.Mounts {

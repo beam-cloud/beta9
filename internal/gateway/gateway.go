@@ -27,7 +27,6 @@ import (
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
 
-	eventBus      *common.EventBus
 	redisClient   *common.RedisClient
 	ContainerRepo repository.ContainerRepository
 	BackendRepo   repository.BackendRepository
@@ -64,8 +63,6 @@ func NewGateway() (*Gateway, error) {
 		Scheduler:   Scheduler,
 	}
 
-	eventBus := common.NewEventBus(redisClient)
-
 	beamRepo, err := repository.NewBeamPostgresRepository()
 	if err != nil {
 		return nil, err
@@ -83,9 +80,6 @@ func NewGateway() (*Gateway, error) {
 	gateway.BackendRepo = backendRepo
 	gateway.BeamRepo = beamRepo
 	gateway.metricsRepo = metricsRepo
-	gateway.eventBus = eventBus
-
-	go gateway.eventBus.ReceiveEvents(gateway.ctx)
 
 	return gateway, nil
 }
