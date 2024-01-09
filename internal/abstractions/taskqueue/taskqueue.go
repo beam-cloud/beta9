@@ -489,7 +489,6 @@ func (tq *RedisTaskQueue) monitorTasks() {
 					}
 
 					taskPolicy := stubConfig.TaskPolicy
-
 					if retries >= int(taskPolicy.MaxRetries) {
 						log.Printf("<taskqueue> hit retry limit, not reinserting task <%s> into queue: %s\n", taskId, stubId)
 
@@ -534,6 +533,14 @@ func (tq *RedisTaskQueue) monitorTasks() {
 					if err != nil {
 						log.Printf("<taskqueue> unable to insert task <%s> into queue <%s>: %v\n", taskId, stubId, err)
 						continue
+					}
+
+					_, exists := tq.queueInstances.Get(stubId)
+					if !exists {
+						err := tq.createQueueInstance(stubId)
+						if err != nil {
+							continue
+						}
 					}
 
 				}
