@@ -94,7 +94,8 @@ func (g *Gateway) initHttp() error {
 	g.httpServer.Use(middleware.Logger())
 	g.httpServer.Use(middleware.Recover())
 
-	apiv1.NewHealthGroup(g.httpServer.Group("/health"), g.redisClient)
+	baseGroup := g.httpServer.Group(apiv1.HttpServerBaseRoute)
+	apiv1.NewHealthGroup(baseGroup.Group("/health"), g.redisClient)
 	return nil
 }
 

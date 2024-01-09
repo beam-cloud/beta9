@@ -18,6 +18,8 @@ func NewHealthGroup(g *echo.Group, rdb *common.RedisClient) *HealthGroup {
 	group := &HealthGroup{routerGroup: g, redisClient: rdb}
 
 	g.GET("", group.HealthCheck)
+	g.GET("/", group.HealthCheck)
+
 	return group
 }
 
