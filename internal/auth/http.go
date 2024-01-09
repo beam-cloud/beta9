@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"strings"
 
 	"github.com/beam-cloud/beam/internal/repository"
@@ -20,7 +19,7 @@ func AuthMiddleware(backendRepo repository.BackendRepository) echo.MiddlewareFun
 			authHeader := req.Header.Get("Authorization")
 			tokenKey := strings.TrimPrefix(authHeader, "Bearer ")
 
-			token, workspace, err := backendRepo.AuthorizeToken(context.TODO(), tokenKey)
+			token, workspace, err := backendRepo.AuthorizeToken(c.Request().Context(), tokenKey)
 			if err != nil {
 				return echo.ErrUnauthorized
 			}
