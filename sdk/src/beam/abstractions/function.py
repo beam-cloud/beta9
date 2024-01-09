@@ -5,8 +5,8 @@ from typing import Any, Callable, Iterable, List, Optional, Union
 import cloudpickle
 
 from beam import terminal
+from beam.abstractions.base.runner import FUNCTION_STUB_TYPE, RunnerAbstraction
 from beam.abstractions.image import Image
-from beam.abstractions.runner import FUNCTION_STUB_TYPE, RunnerAbstraction
 from beam.abstractions.volume import Volume
 from beam.clients.function import (
     FunctionInvokeResponse,
