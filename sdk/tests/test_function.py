@@ -79,6 +79,10 @@ class TestTaskQueue(TestCase):
         test_func.parent.function_stub = MagicMock()
         test_func.parent.syncer = MagicMock()
 
+        # Since the return value is a reference to this same aysnc iterator, everytime it
+        # it will iterate to the next value. This iterator in testing is persisted across
+        # multiple calls to the function, so we can simulate multiple responses.
+        # (ONLY HAPPENS DURING TESTING)
         test_func.parent.function_stub.function_invoke.return_value = AsyncIterator(
             [
                 FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
