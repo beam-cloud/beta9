@@ -70,7 +70,7 @@ class _CallableWrapper:
             if r.output != "":
                 terminal.detail(r.output)
 
-            if r.done:
+            if r.done or r.exit_code != 0:
                 last_response = r
                 break
 
