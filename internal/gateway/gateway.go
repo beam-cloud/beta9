@@ -32,18 +32,18 @@ import (
 
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
-	httpServer    *echo.Echo
-	grpcServer    *grpc.Server
-	redisClient   *common.RedisClient
-	ContainerRepo repository.ContainerRepository
-	BackendRepo   repository.BackendRepository
-	BeamRepo      repository.BeamRepository
-	metricsRepo   repository.MetricsStatsdRepository
-	Storage       storage.Storage
-	Scheduler     *scheduler.Scheduler
-	ctx           context.Context
-	cancelFunc    context.CancelFunc
-	baseGroup     *echo.Group
+	httpServer     *echo.Echo
+	grpcServer     *grpc.Server
+	redisClient    *common.RedisClient
+	ContainerRepo  repository.ContainerRepository
+	BackendRepo    repository.BackendRepository
+	BeamRepo       repository.BeamRepository
+	metricsRepo    repository.MetricsStatsdRepository
+	Storage        storage.Storage
+	Scheduler      *scheduler.Scheduler
+	ctx            context.Context
+	cancelFunc     context.CancelFunc
+	baseRouteGroup *echo.Group
 }
 
 func NewGateway() (*Gateway, error) {
@@ -98,10 +98,25 @@ func (g *Gateway) initHttp() error {
 	g.httpServer.Use(middleware.Recover())
 
 	authMiddleware := auth.AuthMiddleware(g.BackendRepo)
-	g.baseGroup = g.httpServer.Group(apiv1.HttpServerBaseRoute)
+	g.baseRouteGroup = g.httpServer.Group(apiv1.HttpServerBaseRoute)
 
-	apiv1.NewHealthGroup(g.baseGroup.Group("/health"), g.redisClient)
-	apiv1.NewDeployGroup(g.baseGroup.Group("/deploy", authMiddleware), g.BackendRepo)
+	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.redisClient)
+	apiv1.NewDeployGroup(g.baseRouteGroup.Group("/deploy", authMiddleware), g.BackendRepo)
+	return nil
+}
+
+func (g *Gateway) initGrpc() error {
+	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo)
+
+	serverOptions := []grpc.ServerOption{
+		grpc.UnaryInterceptor(authInterceptor.Unary()),
+		grpc.StreamInterceptor(authInterceptor.Stream()),
+	}
+
+	g.grpcServer = grpc.NewServer(
+		serverOptions...,
+	)
+
 	return nil
 }
 
@@ -128,14 +143,14 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterImageServiceServer(g.grpcServer, is)
 
 	// Register function service
-	fs, err := function.NewRuncFunctionService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler, g.baseGroup)
+	fs, err := function.NewRuncFunctionService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}
 	pb.RegisterFunctionServiceServer(g.grpcServer, fs)
 
 	// Register task queue service
-	tq, err := taskqueue.NewRedisTaskQueue(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo)
+	tq, err := taskqueue.NewRedisTaskQueue(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}
@@ -162,21 +177,6 @@ func (g *Gateway) registerServices() error {
 		return err
 	}
 	pb.RegisterGatewayServiceServer(g.grpcServer, gws)
-
-	return nil
-}
-
-func (g *Gateway) initGrpc() error {
-	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo)
-
-	serverOptions := []grpc.ServerOption{
-		grpc.UnaryInterceptor(authInterceptor.Unary()),
-		grpc.StreamInterceptor(authInterceptor.Stream()),
-	}
-
-	g.grpcServer = grpc.NewServer(
-		serverOptions...,
-	)
 
 	return nil
 }

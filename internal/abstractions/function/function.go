@@ -25,6 +25,7 @@ type FunctionService interface {
 
 const (
 	functionContainerPrefix         string        = "function-"
+	functionRoutePrefix             string        = "/function"
 	defaultFunctionContainerCpu     int64         = 100
 	defaultFunctionContainerMemory  int64         = 128
 	functionArgsExpirationTimeout   time.Duration = 600 * time.Second
@@ -46,15 +47,16 @@ func NewRuncFunctionService(ctx context.Context,
 	backendRepo repository.BackendRepository,
 	containerRepo repository.ContainerRepository,
 	scheduler *scheduler.Scheduler,
-	baseGroup *echo.Group,
+	baseRouteGroup *echo.Group,
 ) (*RunCFunctionService, error) {
 	keyEventManager, err := common.NewKeyEventManager(rdb)
 	if err != nil {
 		return nil, err
 	}
 
+	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(backendRepo)
-	RegisterFunctionRoutes(baseGroup.Group("/function", authMiddleware), backendRepo)
+	registerFunctionRoutes(baseRouteGroup.Group(functionRoutePrefix, authMiddleware))
 
 	return &RunCFunctionService{
 		backendRepo:     backendRepo,
