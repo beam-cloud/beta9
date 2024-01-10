@@ -401,7 +401,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string) error {
 
 	stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId)
 	if err != nil {
-		return err
+		return errors.New("invalid stub id")
 	}
 
 	var stubConfig *types.StubConfigV1 = &types.StubConfigV1{}
