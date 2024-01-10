@@ -18,6 +18,7 @@ import (
 )
 
 type FunctionService interface {
+	pb.FunctionServiceServer
 	FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error
 	FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error)
 	FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error)
@@ -48,7 +49,7 @@ func NewRuncFunctionService(ctx context.Context,
 	containerRepo repository.ContainerRepository,
 	scheduler *scheduler.Scheduler,
 	baseRouteGroup *echo.Group,
-) (*RunCFunctionService, error) {
+) (FunctionService, error) {
 	keyEventManager, err := common.NewKeyEventManager(rdb)
 	if err != nil {
 		return nil, err
