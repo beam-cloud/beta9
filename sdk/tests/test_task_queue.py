@@ -13,15 +13,15 @@ class TestTaskQueue(TestCase):
     def test_init(self):
         mock_stub = MagicMock()
 
-        queue = TaskQueue(Image(python_version="python3.7"), cpu=100, memory=128)
+        queue = TaskQueue(Image(python_version="python3.8"), cpu=100, memory=128)
         queue.stub = mock_stub
 
-        self.assertEqual(queue.image.python_version, "python3.7")
+        self.assertEqual(queue.image.python_version, "python3.8")
         self.assertEqual(queue.cpu, 100)
         self.assertEqual(queue.memory, 128)
 
     def test_run_local(self):
-        @TaskQueue(Image(python_version="python3.7"), cpu=100, memory=128)
+        @TaskQueue(Image(python_version="python3.8"), cpu=100, memory=128)
         def test_func():
             return 1
 
@@ -30,7 +30,7 @@ class TestTaskQueue(TestCase):
         self.assertEqual(resp, 1)
 
     def test_put(self):
-        @TaskQueue(Image(python_version="python3.7"), cpu=100, memory=128)
+        @TaskQueue(Image(python_version="python3.8"), cpu=100, memory=128)
         def test_func():
             return 1
 
@@ -49,7 +49,7 @@ class TestTaskQueue(TestCase):
         self.assertRaises(SystemExit, test_func.put)
 
     def test__call__(self):
-        @TaskQueue(Image(python_version="python3.7"), cpu=100, memory=128)
+        @TaskQueue(Image(python_version="python3.8"), cpu=100, memory=128)
         def test_func():
             return 1
 
