@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,30 +14,36 @@ import (
 	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
 	simplequeue "github.com/beam-cloud/beam/internal/abstractions/queue"
 	"github.com/beam-cloud/beam/internal/abstractions/taskqueue"
-	volumesvc "github.com/beam-cloud/beam/internal/abstractions/volume"
+	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
+
+	volume "github.com/beam-cloud/beam/internal/abstractions/volume"
+
+	apiv1 "github.com/beam-cloud/beam/internal/api/v1"
 	"github.com/beam-cloud/beam/internal/auth"
 	common "github.com/beam-cloud/beam/internal/common"
-	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/storage"
 	pb "github.com/beam-cloud/beam/proto"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"google.golang.org/grpc"
 )
 
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
-
-	eventBus      *common.EventBus
-	redisClient   *common.RedisClient
-	ContainerRepo repository.ContainerRepository
-	BackendRepo   repository.BackendRepository
-	BeamRepo      repository.BeamRepository
-	metricsRepo   repository.MetricsStatsdRepository
-	Storage       storage.Storage
-	Scheduler     *scheduler.Scheduler
-	ctx           context.Context
-	cancelFunc    context.CancelFunc
+	httpServer     *echo.Echo
+	grpcServer     *grpc.Server
+	redisClient    *common.RedisClient
+	ContainerRepo  repository.ContainerRepository
+	BackendRepo    repository.BackendRepository
+	BeamRepo       repository.BeamRepository
+	metricsRepo    repository.MetricsStatsdRepository
+	Storage        storage.Storage
+	Scheduler      *scheduler.Scheduler
+	ctx            context.Context
+	cancelFunc     context.CancelFunc
+	baseRouteGroup *echo.Group
 }
 
 func NewGateway() (*Gateway, error) {
@@ -64,8 +71,6 @@ func NewGateway() (*Gateway, error) {
 		Scheduler:   Scheduler,
 	}
 
-	eventBus := common.NewEventBus(redisClient)
-
 	beamRepo, err := repository.NewBeamPostgresRepository()
 	if err != nil {
 		return nil, err
@@ -83,20 +88,24 @@ func NewGateway() (*Gateway, error) {
 	gateway.BackendRepo = backendRepo
 	gateway.BeamRepo = beamRepo
 	gateway.metricsRepo = metricsRepo
-	gateway.eventBus = eventBus
-
-	go gateway.eventBus.ReceiveEvents(gateway.ctx)
 
 	return gateway, nil
 }
 
-// Gateway entry point
-func (g *Gateway) Start() error {
-	listener, err := net.Listen("tcp", GatewayConfig.GrpcServerAddress)
-	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
-	}
+func (g *Gateway) initHttp() error {
+	g.httpServer = echo.New()
+	g.httpServer.Use(middleware.Logger())
+	g.httpServer.Use(middleware.Recover())
 
+	authMiddleware := auth.AuthMiddleware(g.BackendRepo)
+	g.baseRouteGroup = g.httpServer.Group(apiv1.HttpServerBaseRoute)
+
+	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.redisClient)
+	apiv1.NewDeployGroup(g.baseRouteGroup.Group("/deploy", authMiddleware), g.BackendRepo)
+	return nil
+}
+
+func (g *Gateway) initGrpc() error {
 	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo)
 
 	serverOptions := []grpc.ServerOption{
@@ -104,58 +113,62 @@ func (g *Gateway) Start() error {
 		grpc.StreamInterceptor(authInterceptor.Stream()),
 	}
 
-	grpcServer := grpc.NewServer(
+	g.grpcServer = grpc.NewServer(
 		serverOptions...,
 	)
 
-	// Create and register abstractions
+	return nil
+}
+
+func (g *Gateway) registerServices() error {
+	// Register map service
 	rm, err := dmap.NewRedisMapService(g.redisClient)
 	if err != nil {
 		return err
 	}
-	pb.RegisterMapServiceServer(grpcServer, rm)
+	pb.RegisterMapServiceServer(g.grpcServer, rm)
 
 	// Register simple queue service
 	rq, err := simplequeue.NewRedisSimpleQueueService(g.redisClient)
 	if err != nil {
 		return err
 	}
-	pb.RegisterSimpleQueueServiceServer(grpcServer, rq)
+	pb.RegisterSimpleQueueServiceServer(g.grpcServer, rq)
 
 	// Register image service
 	is, err := image.NewRuncImageService(g.ctx, g.Scheduler, g.ContainerRepo)
 	if err != nil {
 		return err
 	}
-	pb.RegisterImageServiceServer(grpcServer, is)
+	pb.RegisterImageServiceServer(g.grpcServer, is)
 
 	// Register function service
-	fs, err := function.NewRuncFunctionService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler)
+	fs, err := function.NewRuncFunctionService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}
-	pb.RegisterFunctionServiceServer(grpcServer, fs)
+	pb.RegisterFunctionServiceServer(g.grpcServer, fs)
 
 	// Register task queue service
-	tq, err := taskqueue.NewRedisTaskQueue(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo)
+	tq, err := taskqueue.NewRedisTaskQueue(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}
-	pb.RegisterTaskQueueServiceServer(grpcServer, tq)
+	pb.RegisterTaskQueueServiceServer(g.grpcServer, tq)
 
 	// Register volume service
-	vs, err := volumesvc.NewGlobalVolumeService(g.BackendRepo)
+	vs, err := volume.NewGlobalVolumeService(g.BackendRepo)
 	if err != nil {
 		return err
 	}
-	pb.RegisterVolumeServiceServer(grpcServer, vs)
+	pb.RegisterVolumeServiceServer(g.grpcServer, vs)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService()
 	if err != nil {
 		return err
 	}
-	pb.RegisterSchedulerServer(grpcServer, s)
+	pb.RegisterSchedulerServer(g.grpcServer, s)
 
 	// Register gateway services
 	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction)
@@ -163,16 +176,47 @@ func (g *Gateway) Start() error {
 	if err != nil {
 		return err
 	}
+	pb.RegisterGatewayServiceServer(g.grpcServer, gws)
 
-	pb.RegisterGatewayServiceServer(grpcServer, gws)
+	return nil
+}
+
+// Gateway entry point
+func (g *Gateway) Start() error {
+	listener, err := net.Listen("tcp", GatewayConfig.GrpcServerAddress)
+	if err != nil {
+		log.Fatalf("Failed to listen: %v", err)
+	}
+
+	err = g.initGrpc()
+	if err != nil {
+		log.Fatalf("Failed to initialize grpc server: %v", err)
+	}
+
+	err = g.initHttp()
+	if err != nil {
+		log.Fatalf("Failed to initialize http server: %v", err)
+	}
+
+	err = g.registerServices()
+	if err != nil {
+		log.Fatalf("Failed to register services: %v", err)
+	}
 
 	go func() {
-		err := grpcServer.Serve(listener)
+		err := g.grpcServer.Serve(listener)
 		if err != nil {
 			log.Printf("Failed to start grpc server: %v\n", err)
 		}
 	}()
 
+	go func() {
+		if err := g.httpServer.Start(GatewayConfig.HttpServerAddress); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start http server: %v", err)
+		}
+	}()
+
+	log.Println("Gateway http server running @", GatewayConfig.HttpServerAddress)
 	log.Println("Gateway grpc server running @", GatewayConfig.GrpcServerAddress)
 
 	terminationSignal := make(chan os.Signal, 1)

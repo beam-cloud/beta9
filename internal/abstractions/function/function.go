@@ -14,9 +14,11 @@ import (
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
+	"github.com/labstack/echo/v4"
 )
 
 type FunctionService interface {
+	pb.FunctionServiceServer
 	FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error
 	FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error)
 	FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error)
@@ -24,6 +26,7 @@ type FunctionService interface {
 
 const (
 	functionContainerPrefix         string        = "function-"
+	functionRoutePrefix             string        = "/function"
 	defaultFunctionContainerCpu     int64         = 100
 	defaultFunctionContainerMemory  int64         = 128
 	functionArgsExpirationTimeout   time.Duration = 600 * time.Second
@@ -37,13 +40,24 @@ type RunCFunctionService struct {
 	scheduler       *scheduler.Scheduler
 	keyEventManager *common.KeyEventManager
 	rdb             *common.RedisClient
+	routeGroup      *echo.Group
 }
 
-func NewRuncFunctionService(ctx context.Context, rdb *common.RedisClient, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, scheduler *scheduler.Scheduler) (*RunCFunctionService, error) {
+func NewRuncFunctionService(ctx context.Context,
+	rdb *common.RedisClient,
+	backendRepo repository.BackendRepository,
+	containerRepo repository.ContainerRepository,
+	scheduler *scheduler.Scheduler,
+	baseRouteGroup *echo.Group,
+) (FunctionService, error) {
 	keyEventManager, err := common.NewKeyEventManager(rdb)
 	if err != nil {
 		return nil, err
 	}
+
+	// Register HTTP routes
+	authMiddleware := auth.AuthMiddleware(backendRepo)
+	registerFunctionRoutes(baseRouteGroup.Group(functionRoutePrefix, authMiddleware))
 
 	return &RunCFunctionService{
 		backendRepo:     backendRepo,

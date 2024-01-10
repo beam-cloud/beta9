@@ -16,10 +16,11 @@ import (
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
-	"gorm.io/gorm"
+	"github.com/labstack/echo/v4"
 )
 
 type TaskQueueService interface {
+	pb.TaskQueueServiceServer
 	TaskQueuePut(context.Context, *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error)
 	TaskQueuePop(context.Context, *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error)
 	TaskQueueLength(context.Context, *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error)
@@ -29,6 +30,7 @@ type TaskQueueService interface {
 
 const (
 	taskQueueContainerPrefix string = "taskqueue-"
+	taskQueueRoutePrefix     string = "/taskqueue"
 )
 
 type RedisTaskQueue struct {
@@ -49,7 +51,8 @@ func NewRedisTaskQueue(ctx context.Context,
 	scheduler *scheduler.Scheduler,
 	containerRepo repository.ContainerRepository,
 	backendRepo repository.BackendRepository,
-) (*RedisTaskQueue, error) {
+	baseRouteGroup *echo.Group,
+) (TaskQueueService, error) {
 	keyEventChan := make(chan common.KeyEvent)
 	keyEventManager, err := common.NewKeyEventManager(rdb)
 	if err != nil {
@@ -73,6 +76,10 @@ func NewRedisTaskQueue(ctx context.Context,
 	go tq.handleContainerEvents()
 	go tq.monitorTasks()
 
+	// Register HTTP routes
+	authMiddleware := auth.AuthMiddleware(backendRepo)
+	registerTaskQueueRoutes(baseRouteGroup.Group(taskQueueRoutePrefix, authMiddleware), tq)
+
 	return tq, nil
 }
 
@@ -84,40 +91,44 @@ type TaskPayload struct {
 func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	queue, exists := tq.queueInstances.Get(in.StubId)
-	if !exists {
-		err := tq.createQueueInstance(in.StubId)
-		if err != nil {
-			return &pb.TaskQueuePutResponse{
-				Ok: false,
-			}, nil
-		}
-
-		queue, _ = tq.queueInstances.Get(in.StubId)
-	}
-
-	task, err := tq.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, queue.stub.Id)
-	if err != nil {
-		return nil, err
-	}
-
 	var payload TaskPayload
-	err = json.Unmarshal(in.Payload, &payload)
+	err := json.Unmarshal(in.Payload, &payload)
 	if err != nil {
 		return &pb.TaskQueuePutResponse{
 			Ok: false,
 		}, nil
 	}
 
+	taskId, err := tq.put(ctx, authInfo, in.StubId, &payload)
+	return &pb.TaskQueuePutResponse{
+		Ok:     err == nil,
+		TaskId: taskId,
+	}, nil
+}
+
+func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *TaskPayload) (string, error) {
+	queue, exists := tq.queueInstances.Get(stubId)
+	if !exists {
+		err := tq.createQueueInstance(stubId)
+		if err != nil {
+			return "", err
+		}
+
+		queue, _ = tq.queueInstances.Get(stubId)
+	}
+
+	task, err := tq.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, queue.stub.Id)
+	if err != nil {
+		return "", err
+	}
+
 	err = queue.client.Push(queue.workspace.Name, queue.stub.ExternalId, task.ExternalId, payload.Args, payload.Kwargs)
 	if err != nil {
 		tq.backendRepo.DeleteTask(ctx, task.ExternalId)
+		return "", err
 	}
 
-	return &pb.TaskQueuePutResponse{
-		Ok:     err == nil,
-		TaskId: task.ExternalId,
-	}, nil
+	return task.ExternalId, nil
 }
 
 func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error) {
@@ -391,7 +402,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string) error {
 
 	stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId)
 	if err != nil {
-		return err
+		return errors.New("invalid stub id")
 	}
 
 	var stubConfig *types.StubConfigV1 = &types.StubConfigV1{}
@@ -489,13 +500,12 @@ func (tq *RedisTaskQueue) monitorTasks() {
 					}
 
 					taskPolicy := stubConfig.TaskPolicy
-
 					if retries >= int(taskPolicy.MaxRetries) {
 						log.Printf("<taskqueue> hit retry limit, not reinserting task <%s> into queue: %s\n", taskId, stubId)
 
 						task.Task.Status = types.TaskStatusError
 						_, err = tq.backendRepo.UpdateTask(tq.ctx, taskId, task.Task)
-						if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+						if err != nil {
 							continue
 						}
 
@@ -515,7 +525,7 @@ func (tq *RedisTaskQueue) monitorTasks() {
 
 					task.Task.Status = types.TaskStatusRetry
 					_, err = tq.backendRepo.UpdateTask(tq.ctx, taskId, task.Task)
-					if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					if err != nil {
 						continue
 					}
 
@@ -534,6 +544,14 @@ func (tq *RedisTaskQueue) monitorTasks() {
 					if err != nil {
 						log.Printf("<taskqueue> unable to insert task <%s> into queue <%s>: %v\n", taskId, stubId, err)
 						continue
+					}
+
+					_, exists := tq.queueInstances.Get(stubId)
+					if !exists {
+						err := tq.createQueueInstance(stubId)
+						if err != nil {
+							continue
+						}
 					}
 
 				}

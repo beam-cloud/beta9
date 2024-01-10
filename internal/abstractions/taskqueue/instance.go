@@ -141,8 +141,8 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		runRequest := &types.ContainerRequest{
 			ContainerId: i.genContainerId(),
 			Env: []string{
-				fmt.Sprintf("HANDLER=%s", i.stubConfig.Handler),
 				fmt.Sprintf("BEAM_TOKEN=%s", i.token.Key),
+				fmt.Sprintf("HANDLER=%s", i.stubConfig.Handler),
 				fmt.Sprintf("STUB_ID=%s", i.stub.ExternalId),
 				fmt.Sprintf("CONCURRENCY=%d", i.stubConfig.Concurrency),
 				fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.stubConfig.KeepWarmSeconds),

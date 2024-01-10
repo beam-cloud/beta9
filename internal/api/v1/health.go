@@ -6,37 +6,35 @@ import (
 	"net/http"
 
 	"github.com/beam-cloud/beam/internal/common"
-	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
 )
 
 type HealthGroup struct {
 	redisClient *common.RedisClient
-	routerGroup *gin.RouterGroup
+	routerGroup *echo.Group
 }
 
-func NewHealthGroup(rg *gin.RouterGroup, rdb *common.RedisClient) *HealthGroup {
-	group := &HealthGroup{routerGroup: rg, redisClient: rdb}
+func NewHealthGroup(g *echo.Group, rdb *common.RedisClient) *HealthGroup {
+	group := &HealthGroup{routerGroup: g, redisClient: rdb}
 
-	rg.GET("", group.HealthCheck)
+	g.GET("", group.HealthCheck)
+	g.GET("/", group.HealthCheck)
 
 	return group
 }
 
-func (h *HealthGroup) HealthCheck(ctx *gin.Context) {
+func (h *HealthGroup) HealthCheck(ctx echo.Context) error {
 	err := h.redisClient.Ping(context.Background()).Err()
 
 	if err != nil {
 		log.Printf("health check failed: %v\n", err)
-
-		ctx.JSON(http.StatusInternalServerError, gin.H{
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"status": "not ok",
 			"error":  err.Error(),
 		})
-
-		return
 	}
 
-	ctx.JSON(http.StatusOK, gin.H{
+	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"status": "ok",
 	})
 }
