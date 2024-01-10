@@ -1,0 +1,55 @@
+name: CI
+
+on: [push]
+
+defaults:
+  run:
+    working-directory: sdk
+
+jobs:
+  lint_and_test:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 4
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Set up Poetry
+        env:
+          ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.5.1
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          installer-parallel: true
+
+      - name: Load cached venv
+        id: cached-poetry-dependencies
+        uses: actions/cache@v3
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install dependencies
+        run: poetry install
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+
+      - name: Code formatting
+        run: poetry run ruff format .
+
+      # todo: remove exit-zero once ruff issues are fixed
+      - name: Code linting
+        run: poetry run ruff check .
+
+      - name: Run tests
+        env: 
+          CI: true
+        run: make tests
