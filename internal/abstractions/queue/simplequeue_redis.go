@@ -15,7 +15,7 @@ type RedisSimpleQueueService struct {
 	rdb *common.RedisClient
 }
 
-func NewRedisSimpleQueueService(rdb *common.RedisClient) (*RedisSimpleQueueService, error) {
+func NewRedisSimpleQueueService(rdb *common.RedisClient) (SimpleQueueService, error) {
 	return &RedisSimpleQueueService{
 		rdb: rdb,
 	}, nil

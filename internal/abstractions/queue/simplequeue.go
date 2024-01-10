@@ -6,7 +6,8 @@ import (
 	pb "github.com/beam-cloud/beam/proto"
 )
 
-type SimpleQueue interface {
+type SimpleQueueService interface {
+	pb.SimpleQueueServiceServer
 	Put(ctx context.Context, in *pb.SimpleQueuePutRequest) (*pb.SimpleQueuePutResponse, error)
 	Pop(ctx context.Context, in *pb.SimpleQueuePopRequest) (*pb.SimpleQueuePopResponse, error)
 	Peek(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueuePeekResponse, error)

@@ -9,6 +9,7 @@ import (
 )
 
 type VolumeService interface {
+	pb.VolumeServiceServer
 	GetOrCreateVolume(ctx context.Context, in *pb.GetOrCreateVolumeRequest) (*pb.GetOrCreateVolumeResponse, error)
 }
 
@@ -17,7 +18,7 @@ type GlobalVolumeService struct {
 	backendRepo repository.BackendRepository
 }
 
-func NewGlobalVolumeService(backendRepo repository.BackendRepository) (*GlobalVolumeService, error) {
+func NewGlobalVolumeService(backendRepo repository.BackendRepository) (VolumeService, error) {
 	return &GlobalVolumeService{
 		backendRepo: backendRepo,
 	}, nil
