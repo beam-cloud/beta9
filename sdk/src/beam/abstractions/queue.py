@@ -36,7 +36,7 @@ class SimpleQueue(BaseAbstraction):
     def pop(self) -> Any:
         r = self.run_sync(self.stub.pop(name=self.name))
         if not r.ok:
-            return SimpleQueueInternalServerError
+            raise SimpleQueueInternalServerError
 
         if len(r.value) > 0:
             return cloudpickle.loads(r.value)
