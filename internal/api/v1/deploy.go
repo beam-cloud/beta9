@@ -4,17 +4,17 @@ import (
 	"net/http"
 
 	"github.com/beam-cloud/beam/internal/auth"
-	"github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/labstack/echo/v4"
 )
 
 type DeployGroup struct {
-	redisClient *common.RedisClient
+	backendRepo repository.BackendRepository
 	routerGroup *echo.Group
 }
 
-func NewDeployGroup(g *echo.Group, rdb *common.RedisClient) *DeployGroup {
-	group := &DeployGroup{routerGroup: g, redisClient: rdb}
+func NewDeployGroup(g *echo.Group, backendRepo repository.BackendRepository) *DeployGroup {
+	group := &DeployGroup{routerGroup: g, backendRepo: backendRepo}
 	g.GET("/", group.ListDeploys)
 	return group
 }
