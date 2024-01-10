@@ -2,23 +2,16 @@
 # sources: function.proto
 # plugin: python-betterproto
 from dataclasses import dataclass
-from typing import AsyncGenerator, List
+from typing import AsyncGenerator
 
 import betterproto
 import grpclib
 
 
 @dataclass
-class FVolume(betterproto.Message):
-    id: str = betterproto.string_field(1)
-    mount_path: str = betterproto.string_field(2)
-
-
-@dataclass
 class FunctionInvokeRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     args: bytes = betterproto.bytes_field(2)
-    volumes: List["FVolume"] = betterproto.message_field(3)
 
 
 @dataclass
@@ -54,13 +47,11 @@ class FunctionSetResultResponse(betterproto.Message):
 
 class FunctionServiceStub(betterproto.ServiceStub):
     async def function_invoke(
-        self, *, stub_id: str = "", args: bytes = b"", volumes: List["FVolume"] = []
+        self, *, stub_id: str = "", args: bytes = b""
     ) -> AsyncGenerator[FunctionInvokeResponse, None]:
         request = FunctionInvokeRequest()
         request.stub_id = stub_id
         request.args = args
-        if volumes is not None:
-            request.volumes = volumes
 
         async for response in self._unary_stream(
             "/function.FunctionService/FunctionInvoke",
