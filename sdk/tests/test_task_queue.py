@@ -1,3 +1,4 @@
+import os
 from unittest import TestCase
 from unittest.mock import MagicMock
 
@@ -5,7 +6,7 @@ from beam import Image
 from beam.abstractions.taskqueue import TaskQueue
 from beam.clients.taskqueue import TaskQueuePutResponse
 
-from .utils import override_run_sync
+from .utils import mock_coroutine_with_result
 
 
 class TestTaskQueue(TestCase):
@@ -34,16 +35,15 @@ class TestTaskQueue(TestCase):
             return 1
 
         test_func.parent.taskqueue_stub = MagicMock()
-        test_func.parent.taskqueue_stub.task_queue_put.return_value = TaskQueuePutResponse(
-            ok=True, task_id="1234"
+        test_func.parent.taskqueue_stub.task_queue_put = mock_coroutine_with_result(
+            TaskQueuePutResponse(ok=True, task_id="1234")
         )
         test_func.parent.prepare_runtime = MagicMock(return_value=True)
-        test_func.parent.run_sync = override_run_sync
 
         test_func.put()
 
-        test_func.parent.taskqueue_stub.task_queue_put.return_value = TaskQueuePutResponse(
-            ok=False, task_id=""
+        test_func.parent.taskqueue_stub.task_queue_put = mock_coroutine_with_result(
+            TaskQueuePutResponse(ok=False, task_id="")
         )
 
         self.assertRaises(SystemExit, test_func.put)
@@ -54,11 +54,11 @@ class TestTaskQueue(TestCase):
             return 1
 
         test_func.parent.taskqueue_stub = MagicMock()
-        test_func.parent.taskqueue_stub.task_queue_put.return_value = TaskQueuePutResponse(
-            ok=True, task_id="1234"
+        test_func.parent.taskqueue_stub.task_queue_put = mock_coroutine_with_result(
+            TaskQueuePutResponse(ok=True, task_id="1234")
         )
+
         test_func.parent.prepare_runtime = MagicMock(return_value=True)
-        test_func.parent.run_sync = override_run_sync
 
         self.assertRaises(
             NotImplementedError,
@@ -66,7 +66,5 @@ class TestTaskQueue(TestCase):
         )
 
         # Test calling in container
-        import os
-
         os.environ["CONTAINER_ID"] = "1234"
         self.assertEqual(test_func(), 1)

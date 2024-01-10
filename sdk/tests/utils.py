@@ -1,10 +1,7 @@
-import asyncio
-import inspect
+# Helps mock out results that should return from a coroutine function
+# that you want to override
+def mock_coroutine_with_result(result):
+    async def _result(*args, **kwargs):
+        return result
 
-
-def override_run_sync(f):
-    if inspect.isawaitable(f):
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(f)
-
-    return f
+    return _result

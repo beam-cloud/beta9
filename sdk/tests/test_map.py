@@ -12,7 +12,7 @@ from beam.clients.map import (
     MapSetResponse,
 )
 
-from .utils import override_run_sync
+from .utils import mock_coroutine_with_result
 
 
 class TestMap(TestCase):
@@ -22,19 +22,17 @@ class TestMap(TestCase):
     def test_set(self):
         mock_stub = MagicMock()
 
-        mock_stub.map_set.return_value = MapSetResponse(ok=True)
+        mock_stub.map_set = mock_coroutine_with_result(MapSetResponse(ok=True))
 
         map = Map(name="test")
         map.stub = mock_stub
-        map.run_sync = override_run_sync
 
         self.assertTrue(map.set("test", "test"))
 
-        mock_stub.map_set.return_value = MapSetResponse(ok=False)
+        mock_stub.map_set = mock_coroutine_with_result(MapSetResponse(ok=False))
 
         map = Map(name="test")
         map.stub = mock_stub
-        map.run_sync = override_run_sync
 
         self.assertFalse(map.set("test", "test"))
 
@@ -43,38 +41,34 @@ class TestMap(TestCase):
 
         pickled_value = cloudpickle.dumps("test")
 
-        mock_stub.map_get.return_value = MapGetResponse(ok=True, value=pickled_value)
+        mock_stub.map_get = mock_coroutine_with_result(MapGetResponse(ok=True, value=pickled_value))
 
         map = Map(name="test")
         map.stub = mock_stub
-        map.run_sync = override_run_sync
 
         self.assertEqual(map.get("test"), "test")
 
-        mock_stub.map_get.return_value = MapGetResponse(ok=False, value=b"")
+        mock_stub.map_get = mock_coroutine_with_result(MapGetResponse(ok=False, value=b""))
 
         map = Map(name="test")
         map.stub = mock_stub
-        map.run_sync = override_run_sync
 
         self.assertEqual(map.get("test"), None)
 
     def test_delitem(self):
         mock_stub = MagicMock()
 
-        mock_stub.map_delete.return_value = MapDeleteResponse(ok=True)
+        mock_stub.map_delete = mock_coroutine_with_result(MapDeleteResponse(ok=True))
 
         map = Map(name="test")
         map.stub = mock_stub
-        map.run_sync = override_run_sync
 
         del map["test"]
 
-        mock_stub.map_delete.return_value = MapDeleteResponse(ok=False)
+        mock_stub.map_delete = mock_coroutine_with_result(MapDeleteResponse(ok=False))
 
         map = Map(name="test")
         map.stub = mock_stub
-        map.run_sync = override_run_sync
 
         def _del():
             del map["test"]
@@ -84,38 +78,34 @@ class TestMap(TestCase):
     def test_len(self):
         mock_stub = MagicMock()
 
-        mock_stub.map_count.return_value = MapCountResponse(ok=True, count=1)
+        mock_stub.map_count = mock_coroutine_with_result(MapCountResponse(ok=True, count=1))
 
         map = Map(name="test")
         map.stub = mock_stub
-        map.run_sync = override_run_sync
 
         self.assertEqual(len(map), 1)
 
-        mock_stub.map_count.return_value = MapCountResponse(ok=False, count=1)
+        mock_stub.map_count = mock_coroutine_with_result(MapCountResponse(ok=False, count=1))
 
         map = Map(name="test")
         map.stub = mock_stub
-        map.run_sync = override_run_sync
 
         self.assertEqual(len(map), 0)
 
     def test_iter(self):
         mock_stub = MagicMock()
 
-        mock_stub.map_keys.return_value = MapKeysResponse(ok=True, keys=["test"])
+        mock_stub.map_keys = mock_coroutine_with_result(MapKeysResponse(ok=True, keys=["test"]))
 
         map = Map(name="test")
         map.stub = mock_stub
-        map.run_sync = override_run_sync
 
         self.assertEqual(list(map), ["test"])
 
-        mock_stub.map_keys.return_value = MapKeysResponse(ok=False, keys=[])
+        mock_stub.map_keys = mock_coroutine_with_result(MapKeysResponse(ok=False, keys=[]))
 
         map = Map(name="test")
         map.stub = mock_stub
-        map.run_sync = override_run_sync
 
         self.assertEqual(list(map), [])
 
@@ -124,19 +114,16 @@ class TestMap(TestCase):
 
         pickled_value = cloudpickle.dumps("test")
 
-        mock_stub.map_keys.return_value = MapKeysResponse(ok=True, keys=["test"])
-        mock_stub.map_get.return_value = MapGetResponse(ok=True, value=pickled_value)
+        mock_stub.map_keys = mock_coroutine_with_result(MapKeysResponse(ok=True, keys=["test"]))
+        mock_stub.map_get = mock_coroutine_with_result(MapGetResponse(ok=True, value=pickled_value))
 
         map = Map(name="test")
         map.stub = mock_stub
-        map.run_sync = override_run_sync
+        self.assertListEqual(list(map.items()), [("test", "test")])
 
-        self.assertEqual(list(map.items()), [("test", "test")])
-
-        mock_stub.map_keys.return_value = MapKeysResponse(ok=False, keys=[])
+        mock_stub.map_keys = mock_coroutine_with_result(MapKeysResponse(ok=False, keys=[]))
 
         map = Map(name="test")
         map.stub = mock_stub
-        map.run_sync = override_run_sync
 
         self.assertEqual(list(map.items()), [])

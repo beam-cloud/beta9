@@ -7,8 +7,6 @@ from beam import Image
 from beam.abstractions.function import Function
 from beam.clients.function import FunctionInvokeResponse
 
-from .utils import override_run_sync
-
 
 class AsyncIterator:
     def __init__(self, seq):
@@ -59,7 +57,6 @@ class TestTaskQueue(TestCase):
         )
 
         test_func.parent.prepare_runtime = MagicMock(return_value=True)
-        test_func.parent.run_sync = override_run_sync
 
         self.assertEqual(test_func(), 1998)
 
@@ -92,7 +89,6 @@ class TestTaskQueue(TestCase):
         )
 
         test_func.parent.prepare_runtime = MagicMock(return_value=True)
-        test_func.parent.run_sync = override_run_sync
 
         for val in test_func.map([1, 2, 3]):
             self.assertEqual(val, 1998)
