@@ -13,6 +13,7 @@ import (
 )
 
 type ImageService interface {
+	pb.ImageServiceServer
 	VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error)
 	BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error
 }
@@ -23,7 +24,7 @@ type RuncImageService struct {
 	scheduler *scheduler.Scheduler
 }
 
-func NewRuncImageService(ctx context.Context, scheduler *scheduler.Scheduler, containerRepo repository.ContainerRepository) (*RuncImageService, error) {
+func NewRuncImageService(ctx context.Context, scheduler *scheduler.Scheduler, containerRepo repository.ContainerRepository) (ImageService, error) {
 	builder, err := NewBuilder(scheduler, containerRepo)
 	if err != nil {
 		return nil, err

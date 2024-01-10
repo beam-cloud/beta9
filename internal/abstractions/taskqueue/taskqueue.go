@@ -20,6 +20,7 @@ import (
 )
 
 type TaskQueueService interface {
+	pb.TaskQueueServiceServer
 	TaskQueuePut(context.Context, *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error)
 	TaskQueuePop(context.Context, *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error)
 	TaskQueueLength(context.Context, *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error)
@@ -51,7 +52,7 @@ func NewRedisTaskQueue(ctx context.Context,
 	containerRepo repository.ContainerRepository,
 	backendRepo repository.BackendRepository,
 	baseRouteGroup *echo.Group,
-) (*RedisTaskQueue, error) {
+) (TaskQueueService, error) {
 	keyEventChan := make(chan common.KeyEvent)
 	keyEventManager, err := common.NewKeyEventManager(rdb)
 	if err != nil {
