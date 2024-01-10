@@ -50,4 +50,6 @@ jobs:
         run: poetry run ruff check .
 
       - name: Run tests
+        env: 
+          CI: true
         run: make tests
