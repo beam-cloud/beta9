@@ -2,9 +2,9 @@ name: CI
 
 on: [push]
 
-defaults:
-  run:
-    working-directory: sdk
+# defaults:
+#   run:
+#     working-directory: sdk
 
 jobs:
   lint_and_test:
@@ -36,8 +36,10 @@ jobs:
           key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
 
       - name: Install dependencies
-        run: poetry install
-        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd sdk
+          poetry install
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
 
       - name: Code formatting
         run: poetry run black . --check
