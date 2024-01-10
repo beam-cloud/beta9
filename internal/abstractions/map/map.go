@@ -7,6 +7,7 @@ import (
 )
 
 type MapService interface {
+	pb.MapServiceServer
 	MapSet(ctx context.Context, in *pb.MapSetRequest) (*pb.MapSetResponse, error)
 	MapGet(ctx context.Context, in *pb.MapGetRequest) (*pb.MapGetResponse, error)
 	MapDelete(ctx context.Context, in *pb.MapDeleteRequest) (*pb.MapDeleteResponse, error)

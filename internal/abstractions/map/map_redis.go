@@ -15,7 +15,7 @@ type RedisMapService struct {
 	rdb *common.RedisClient
 }
 
-func NewRedisMapService(rdb *common.RedisClient) (*RedisMapService, error) {
+func NewRedisMapService(rdb *common.RedisClient) (MapService, error) {
 	return &RedisMapService{
 		rdb: rdb,
 	}, nil
