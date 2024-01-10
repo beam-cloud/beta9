@@ -4,7 +4,7 @@ on: [push]
 
 defaults:
   run:
-    working-directory: ./sdk
+    working-directory: sdk
 
 jobs:
   lint_and_test:
