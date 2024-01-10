@@ -11,6 +11,7 @@ from beam.config import get_gateway_channel
 class BaseAbstraction(ABC):
     def __init__(self) -> None:
         self.loop: AbstractEventLoop = asyncio.get_event_loop()
+
         self.channel: Channel = get_gateway_channel()
 
     def run_sync(self, coroutine: Coroutine) -> Any:
