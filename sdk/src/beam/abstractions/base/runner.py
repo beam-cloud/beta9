@@ -8,10 +8,10 @@ from beam.abstractions.volume import Volume
 from beam.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
 from beam.sync import FileSyncer
 
-FUNCTION_STUB_TYPE = "FUNCTION"
+FUNCTION_STUB_TYPE = "function"
 FUNCTION_STUB_PREFIX = "function"
 
-TASKQUEUE_STUB_TYPE = "TASK_QUEUE"
+TASKQUEUE_STUB_TYPE = "taskqueue"
 TASKQUEUE_STUB_PREFIX = "taskqueue"
 
 
