@@ -14,11 +14,13 @@ import (
 	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
 	simplequeue "github.com/beam-cloud/beam/internal/abstractions/queue"
 	"github.com/beam-cloud/beam/internal/abstractions/taskqueue"
-	volumesvc "github.com/beam-cloud/beam/internal/abstractions/volume"
+	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
+
+	volume "github.com/beam-cloud/beam/internal/abstractions/volume"
+
 	apiv1 "github.com/beam-cloud/beam/internal/api/v1"
 	"github.com/beam-cloud/beam/internal/auth"
 	common "github.com/beam-cloud/beam/internal/common"
-	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/storage"
@@ -30,17 +32,18 @@ import (
 
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
-	httpServer    *echo.Echo
-	grpcServer    *grpc.Server
-	redisClient   *common.RedisClient
-	ContainerRepo repository.ContainerRepository
-	BackendRepo   repository.BackendRepository
-	BeamRepo      repository.BeamRepository
-	metricsRepo   repository.MetricsStatsdRepository
-	Storage       storage.Storage
-	Scheduler     *scheduler.Scheduler
-	ctx           context.Context
-	cancelFunc    context.CancelFunc
+	httpServer     *echo.Echo
+	grpcServer     *grpc.Server
+	redisClient    *common.RedisClient
+	ContainerRepo  repository.ContainerRepository
+	BackendRepo    repository.BackendRepository
+	BeamRepo       repository.BeamRepository
+	metricsRepo    repository.MetricsStatsdRepository
+	Storage        storage.Storage
+	Scheduler      *scheduler.Scheduler
+	ctx            context.Context
+	cancelFunc     context.CancelFunc
+	baseRouteGroup *echo.Group
 }
 
 func NewGateway() (*Gateway, error) {
@@ -95,10 +98,10 @@ func (g *Gateway) initHttp() error {
 	g.httpServer.Use(middleware.Recover())
 
 	authMiddleware := auth.AuthMiddleware(g.BackendRepo)
-	baseGroup := g.httpServer.Group(apiv1.HttpServerBaseRoute)
+	g.baseRouteGroup = g.httpServer.Group(apiv1.HttpServerBaseRoute)
 
-	apiv1.NewHealthGroup(baseGroup.Group("/health"), g.redisClient)
-	apiv1.NewDeployGroup(baseGroup.Group("/deploy", authMiddleware), g.redisClient)
+	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.redisClient)
+	apiv1.NewDeployGroup(g.baseRouteGroup.Group("/deploy", authMiddleware), g.BackendRepo)
 	return nil
 }
 
@@ -114,7 +117,11 @@ func (g *Gateway) initGrpc() error {
 		serverOptions...,
 	)
 
-	// Create and register abstractions
+	return nil
+}
+
+func (g *Gateway) registerServices() error {
+	// Register map service
 	rm, err := dmap.NewRedisMapService(g.redisClient)
 	if err != nil {
 		return err
@@ -136,21 +143,21 @@ func (g *Gateway) initGrpc() error {
 	pb.RegisterImageServiceServer(g.grpcServer, is)
 
 	// Register function service
-	fs, err := function.NewRuncFunctionService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler)
+	fs, err := function.NewRuncFunctionService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}
 	pb.RegisterFunctionServiceServer(g.grpcServer, fs)
 
 	// Register task queue service
-	tq, err := taskqueue.NewRedisTaskQueue(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo)
+	tq, err := taskqueue.NewRedisTaskQueue(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}
 	pb.RegisterTaskQueueServiceServer(g.grpcServer, tq)
 
 	// Register volume service
-	vs, err := volumesvc.NewGlobalVolumeService(g.BackendRepo)
+	vs, err := volume.NewGlobalVolumeService(g.BackendRepo)
 	if err != nil {
 		return err
 	}
@@ -189,6 +196,11 @@ func (g *Gateway) Start() error {
 	err = g.initHttp()
 	if err != nil {
 		log.Fatalf("Failed to initialize http server: %v", err)
+	}
+
+	err = g.registerServices()
+	if err != nil {
+		log.Fatalf("Failed to register services: %v", err)
 	}
 
 	go func() {
