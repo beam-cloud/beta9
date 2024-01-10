@@ -43,11 +43,11 @@ jobs:
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
 
       - name: Code formatting
-        run: poetry run ruff format . --exit-zero
+        run: poetry run ruff format .
 
       # todo: remove exit-zero once ruff issues are fixed
       - name: Code linting
-        run: poetry run ruff . --exit-zero
+        run: poetry run ruff check .
 
       - name: Run tests
         run: make test
