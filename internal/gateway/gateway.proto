@@ -130,6 +130,7 @@ message GetOrCreateStubRequest {
   uint32 max_containers = 14;
   uint32 max_pending_tasks = 15;
   repeated Volume volumes = 16;
+  bool force_create = 17;
 }
 
 message GetOrCreateStubResponse {

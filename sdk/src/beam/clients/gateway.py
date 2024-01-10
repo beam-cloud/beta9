@@ -156,6 +156,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     max_containers: int = betterproto.uint32_field(14)
     max_pending_tasks: int = betterproto.uint32_field(15)
     volumes: List["Volume"] = betterproto.message_field(16)
+    force_create: bool = betterproto.bool_field(17)
 
 
 @dataclass
@@ -295,6 +296,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
         max_containers: int = 0,
         max_pending_tasks: int = 0,
         volumes: List["Volume"] = [],
+        force_create: bool = False,
     ) -> GetOrCreateStubResponse:
         request = GetOrCreateStubRequest()
         request.object_id = object_id
@@ -314,6 +316,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
         request.max_pending_tasks = max_pending_tasks
         if volumes is not None:
             request.volumes = volumes
+        request.force_create = force_create
 
         return await self._unary_unary(
             "/gateway.GatewayService/GetOrCreateStub",

@@ -17,7 +17,7 @@ func upCreateTables(tx *sql.Tx) error {
 	}
 
 	createStatements := []string{
-		`CREATE TYPE stub_type AS ENUM ('TASK_QUEUE', 'REST_API', 'FUNCTION');`,
+		`CREATE TYPE stub_type AS ENUM ('taskqueue', 'function', 'taskqueue/deployment', 'function/deployment');`,
 		`CREATE TYPE task_status AS ENUM ('PENDING', 'RUNNING', 'CANCELLED', 'COMPLETE', 'ERROR', 'TIMEOUT', 'RETRY');`,
 
 		`CREATE TABLE IF NOT EXISTS workspace (
@@ -72,11 +72,14 @@ func upCreateTables(tx *sql.Tx) error {
 		`CREATE TABLE IF NOT EXISTS deployment (
             id SERIAL PRIMARY KEY,
             external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
+            name VARCHAR(255) NOT NULL,
             active BOOLEAN NOT NULL DEFAULT true,
             workspace_id INT REFERENCES workspace(id),
             stub_id INT REFERENCES stub(id),
+            version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (name, version, workspace_id)
         );`,
 
 		`CREATE TABLE IF NOT EXISTS task (
