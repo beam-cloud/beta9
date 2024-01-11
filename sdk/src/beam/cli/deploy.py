@@ -24,7 +24,7 @@ def cli(ctx: click.Context):
 @click.option("--name", help="The name the deployment.", required=True)
 @click.option("--function", help="The name the entry point and function.", required=True)
 @click.pass_obj
-def create_deployment(service: GatewayServiceStub, name: str, function: str):
+def create_deployment(_: GatewayServiceStub, name: str, function: str):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
@@ -34,5 +34,4 @@ def create_deployment(service: GatewayServiceStub, name: str, function: str):
     module = importlib.import_module(module_name)
 
     func = getattr(module, func_name)
-
     func.deploy(name=name)

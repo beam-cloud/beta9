@@ -80,6 +80,7 @@ class _CallableWrapper:
         if deploy_response.ok:
             gateway_config: GatewayConfig = get_gateway_config()
             gateway_url = f"{gateway_config.gateway_host}:{gateway_config.gateway_port}"
+
             terminal.header("Deployed 🎉")
             terminal.detail(
                 f"Call your deployment at: {gateway_url}/api/v1/taskqueue/{name}/v{deploy_response.version}"
