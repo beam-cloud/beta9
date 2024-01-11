@@ -17,6 +17,7 @@ class Config:
     concurrency: Optional[int]
     keep_warm_seconds: Optional[int]
     handler: str
+    task_id: Optional[str]
 
     @classmethod
     def load_from_env(cls) -> "Config":
@@ -36,6 +37,8 @@ class Config:
         if not handler:
             raise RunnerException("Invalid handler")
 
+        task_id = os.getenv("TASK_ID")
+
         return cls(
             container_id=container_id,
             container_hostname=container_hostname,
@@ -43,6 +46,7 @@ class Config:
             concurrency=concurrency,
             keep_warm_seconds=keep_warm_seconds,
             handler=handler,
+            task_id=task_id,
         )
 
 
