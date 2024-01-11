@@ -17,7 +17,7 @@ from beam.config import GatewayConfig, get_gateway_config
 class TaskQueue(RunnerAbstraction):
     def __init__(
         self,
-        cpu: Union[int, str] = 100,
+        cpu: Union[float, str] = 1.0,
         memory: int = 128,
         gpu: str = "",
         image: Image = Image(),
@@ -36,8 +36,8 @@ class TaskQueue(RunnerAbstraction):
         in python through the .put() method.
 
         Parameters:
-            cpu (Union[int, str]):
-                The number of CPU cores allocated to the container. Default is 1.
+            cpu (Union[float, str]):
+                The number of CPU cores allocated to the container. Default is 1.0.
             memory (int):
                 The amount of memory allocated to the container. It should be specified in
                 megabytes (e.g., 128 for 128 megabytes). Default is 128.
@@ -74,7 +74,7 @@ class TaskQueue(RunnerAbstraction):
             ```python
             from beam import TaskQueue
 
-            @TaskQueue(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
+            @TaskQueue(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), gikeep_warm_seconds=1000)
             def transcribe(filename: str):
                 print(filename)
                 return

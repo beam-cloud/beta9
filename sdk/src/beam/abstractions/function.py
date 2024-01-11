@@ -24,7 +24,7 @@ from beam.sync import FileSyncer
 class Function(RunnerAbstraction):
     def __init__(
         self,
-        cpu: int = 100,
+        cpu: int = 1.0,
         memory: int = 128,
         gpu: str = "",
         image: Image = Image(),
