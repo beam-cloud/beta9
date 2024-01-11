@@ -71,7 +71,7 @@ class _CallableWrapper:
         ):
             return False
 
-        terminal.header("Deploying")
+        terminal.header("Deploying task queue")
         deploy_response: DeployStubResponse = self.parent.run_sync(
             self.parent.gateway_stub.deploy_stub(stub_id=self.parent.stub_id, name=name)
         )

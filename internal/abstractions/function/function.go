@@ -55,56 +55,79 @@ func NewRuncFunctionService(ctx context.Context,
 		return nil, err
 	}
 
-	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(backendRepo)
-	registerFunctionRoutes(baseRouteGroup.Group(functionRoutePrefix, authMiddleware))
-
-	return &RunCFunctionService{
+	fs := &RunCFunctionService{
 		backendRepo:     backendRepo,
 		containerRepo:   containerRepo,
 		scheduler:       scheduler,
 		rdb:             rdb,
 		keyEventManager: keyEventManager,
-	}, nil
+	}
+
+	// Register HTTP routes
+	authMiddleware := auth.AuthMiddleware(backendRepo)
+	registerFunctionRoutes(baseRouteGroup.Group(functionRoutePrefix, authMiddleware), fs)
+
+	return fs, nil
 }
 
 func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
-	stub, err := fs.backendRepo.GetStubByExternalId(stream.Context(), in.StubId)
+
+	ctx := stream.Context()
+	outputChan := make(chan common.OutputMsg)
+	keyEventChan := make(chan common.KeyEvent)
+
+	task, err := fs.invoke(ctx, authInfo, in.StubId, in.Args, keyEventChan)
 	if err != nil {
 		return err
 	}
 
-	task, err := fs.createTask(stream.Context(), in, authInfo, &stub.Stub)
+	hostname, err := fs.containerRepo.GetContainerWorkerHostname(task.ContainerId)
 	if err != nil {
 		return err
+	}
+
+	client, err := common.NewRunCClient(hostname, authInfo.Token.Key)
+	if err != nil {
+		return err
+	}
+
+	go client.StreamLogs(ctx, task.ContainerId, outputChan)
+	return fs.handleStreams(ctx, stream, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
+}
+
+func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, args []byte, keyEventChan chan common.KeyEvent) (*types.Task, error) {
+	stub, err := fs.backendRepo.GetStubByExternalId(ctx, stubId)
+	if err != nil {
+		return nil, err
+	}
+
+	task, err := fs.createTask(ctx, authInfo, &stub.Stub)
+	if err != nil {
+		return nil, err
 	}
 
 	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
 	err = json.Unmarshal([]byte(stub.Config), &stubConfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	taskId := task.ExternalId
 	containerId := fs.genContainerId(taskId)
 	task.ContainerId = containerId
 
-	_, err = fs.backendRepo.UpdateTask(stream.Context(), task.ExternalId, *task)
-	if err != nil {
-		return err
-	}
-
-	err = fs.rdb.Set(stream.Context(), Keys.FunctionArgs(taskId), in.Args, functionArgsExpirationTimeout).Err()
-	if err != nil {
-		return errors.New("unable to store function args")
-	}
-
-	ctx := stream.Context()
-	outputChan := make(chan common.OutputMsg)
-	keyEventChan := make(chan common.KeyEvent)
-
 	go fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
+
+	_, err = fs.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
+	if err != nil {
+		return nil, err
+	}
+
+	err = fs.rdb.Set(ctx, Keys.FunctionArgs(taskId), args, functionArgsExpirationTimeout).Err()
+	if err != nil {
+		return nil, errors.New("unable to store function args")
+	}
 
 	// Don't allow negative compute requests
 	if stubConfig.Runtime.Cpu <= 0 {
@@ -148,24 +171,13 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		Mounts:     mounts,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	hostname, err := fs.containerRepo.GetContainerWorkerHostname(containerId)
-	if err != nil {
-		return err
-	}
-
-	client, err := common.NewRunCClient(hostname, authInfo.Token.Key)
-	if err != nil {
-		return err
-	}
-
-	go client.StreamLogs(ctx, containerId, outputChan)
-	return fs.handleStreams(ctx, stream, taskId, containerId, outputChan, keyEventChan)
+	return task, nil
 }
 
-func (fs *RunCFunctionService) createTask(ctx context.Context, in *pb.FunctionInvokeRequest, authInfo *auth.AuthInfo, stub *types.Stub) (*types.Task, error) {
+func (fs *RunCFunctionService) createTask(ctx context.Context, authInfo *auth.AuthInfo, stub *types.Stub) (*types.Task, error) {
 	task, err := fs.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, stub.Id)
 	if err != nil {
 		return nil, err

@@ -6,7 +6,8 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/beam-cloud/beam/proto"
+	pb "github.com/beam-cloud/blobcache/proto"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -17,7 +18,7 @@ type CacheClient struct {
 	ServiceUrl   string
 	ServiceToken string
 	conn         *grpc.ClientConn
-	client       pb.CacheClient
+	client       pb.BlobCacheClient
 }
 
 const getContentRequestTimeout = 5 * time.Second
@@ -63,7 +64,7 @@ func (c *CacheClient) connect() error {
 	}
 
 	c.conn = conn
-	c.client = pb.NewCacheClient(conn)
+	c.client = pb.NewBlobCacheClient(conn)
 	return nil
 }
 
