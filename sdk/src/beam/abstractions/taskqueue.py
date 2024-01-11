@@ -17,7 +17,7 @@ from beam.config import GatewayConfig, get_gateway_config
 class TaskQueue(RunnerAbstraction):
     def __init__(
         self,
-        cpu: Union[float, str] = 1.0,
+        cpu: Union[int, float, str] = 1.0,
         memory: int = 128,
         gpu: str = "",
         image: Image = Image(),
@@ -36,7 +36,7 @@ class TaskQueue(RunnerAbstraction):
         in python through the .put() method.
 
         Parameters:
-            cpu (Union[float, str]):
+            cpu (Union[int, float, str]):
                 The number of CPU cores allocated to the container. Default is 1.0.
             memory (int):
                 The amount of memory allocated to the container. It should be specified in

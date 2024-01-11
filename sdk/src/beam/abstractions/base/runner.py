@@ -1,6 +1,6 @@
 import inspect
 import os
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Union
 
 from beam.abstractions.base import BaseAbstraction
 from beam.abstractions.image import Image, ImageBuildResult
@@ -17,7 +17,7 @@ FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
 class RunnerAbstraction(BaseAbstraction):
     def __init__(
         self,
-        cpu: int = 100,
+        cpu: Union[int, float, str] = 1.0,
         memory: int = 128,
         gpu="",
         image: Image = Image(),
@@ -58,6 +58,43 @@ class RunnerAbstraction(BaseAbstraction):
         self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
 
+    def _parse_cpu_to_millicores(self, cpu: Union[float, str]) -> int:
+        """
+        Parse the cpu argument to an integer value in millicores.
+
+        Args:
+        cpu (Union[int, float, str]): The CPU requirement specified as a float (cores) or string (millicores).
+
+        Returns:
+        int: The CPU requirement in millicores.
+
+        Raises:
+        ValueError: If the input is invalid or out of the specified range.
+        """
+        min_cores = 0.1
+        max_cores = 64.0
+
+        if isinstance(cpu, float) or isinstance(cpu, int):
+            if min_cores <= cpu <= max_cores:
+                return int(cpu * 1000)  # convert cores to millicores
+            else:
+                raise ValueError("CPU value out of range. Must be between 0.1 and 64 cores.")
+
+        elif isinstance(cpu, str):
+            if cpu.endswith("m") and cpu[:-1].isdigit():
+                millicores = int(cpu[:-1])
+                if min_cores * 1000 <= millicores <= max_cores * 1000:
+                    return millicores
+                else:
+                    raise ValueError("CPU value out of range. Must be between 100m and 64000m.")
+            else:
+                raise ValueError(
+                    "Invalid CPU string format. Must be a digit followed by 'm' (e.g., '1000m')."
+                )
+
+        else:
+            raise TypeError("CPU must be a float or a string.")
+
     def _load_handler(self, func: Callable) -> None:
         if self.handler:
             return
@@ -80,6 +117,8 @@ class RunnerAbstraction(BaseAbstraction):
         stub_name = f"{stub_type}/{self.handler}"
         if self.runtime_ready:
             return True
+
+        self.cpu = self._parse_cpu_to_millicores(self.cpu)
 
         if not self.image_available:
             image_build_result: ImageBuildResult = self.image.build()
