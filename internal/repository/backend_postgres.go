@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -405,6 +406,47 @@ func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, works
 	}
 
 	return &volume, nil
+}
+
+// Deployment
+
+func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string) (*types.Deployment, error) {
+	var deployment types.Deployment
+
+	query := `
+        SELECT id, external_id, name, active, workspace_id, stub_id, version, created_at, updated_at
+        FROM deployment
+        WHERE workspace_id = $1 AND name = $2
+        ORDER BY version DESC
+        LIMIT 1;
+    `
+
+	err := c.client.GetContext(ctx, &deployment, query, workspaceId, name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // Return nil if no deployment found
+		}
+		return nil, err
+	}
+
+	return &deployment, nil
+}
+
+func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint) (*types.Deployment, error) {
+	var deployment types.Deployment
+
+	query := `
+        INSERT INTO deployment (name, active, workspace_id, stub_id, version)
+        VALUES ($1, true, $2, $3, $4)
+        RETURNING id, external_id, name, active, workspace_id, stub_id, version, created_at, updated_at;
+    `
+
+	err := c.client.GetContext(ctx, &deployment, query, name, workspaceId, stubId, version)
+	if err != nil {
+		return nil, err
+	}
+
+	return &deployment, nil
 }
 
 // Helpers

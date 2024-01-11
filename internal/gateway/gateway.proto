@@ -138,7 +138,10 @@ message GetOrCreateStubResponse {
   string stub_id = 2;
 }
 
-message DeployStubRequest { string stub_id = 1; }
+message DeployStubRequest {
+  string stub_id = 1;
+  string name = 2;
+}
 
 message DeployStubResponse {
   bool ok = 1;

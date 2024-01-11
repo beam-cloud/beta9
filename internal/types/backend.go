@@ -39,9 +39,11 @@ type Volume struct {
 type Deployment struct {
 	Id          uint      `db:"id"`
 	ExternalId  string    `db:"external_id"`
+	Name        string    `db:"name"`
 	Active      bool      `db:"active"`
 	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
 	StubId      uint      `db:"stub_id"`      // Foreign key to Stub
+	Version     uint      `db:"version"`
 	CreatedAt   time.Time `db:"created_at"`
 	UpdatedAt   time.Time `db:"updated_at"`
 }
