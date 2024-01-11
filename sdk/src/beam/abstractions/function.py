@@ -116,17 +116,20 @@ class _CallableWrapper:
         return deploy_response.ok
 
     def _gather_and_yield_results(self, inputs: Iterable):
+        container_count = len(inputs)
+
         async def _gather_async():
             tasks = [asyncio.create_task(self._call_remote(input)) for input in inputs]
             for task in asyncio.as_completed(tasks):
                 yield await task
 
         async_gen = _gather_async()
-        while True:
-            try:
-                yield self.parent.loop.run_until_complete(async_gen.__anext__())
-            except StopAsyncIteration:
-                break
+        with terminal.progress(f"Running {container_count} containers..."):
+            while True:
+                try:
+                    yield self.parent.loop.run_until_complete(async_gen.__anext__())
+                except StopAsyncIteration:
+                    break
 
     def map(self, inputs: Iterable):
         if not self.parent.prepare_runtime(
