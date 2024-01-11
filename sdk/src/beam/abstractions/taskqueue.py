@@ -83,9 +83,9 @@ class TaskQueue(RunnerAbstraction):
         max_containers: int = 1,
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
-    ) -> None:
+    ) -> "TaskQueue":
         """
-        Decorator used for defining a task queue.
+        Decorator for defining a task queue.
 
         This method allows you to create a task queue out of the decorated function. The tasks are executed
         asynchronously. You can interact with the task queue either through an API (when deployed), or directly

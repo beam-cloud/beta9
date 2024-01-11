@@ -68,7 +68,7 @@ class Function(RunnerAbstraction):
         volumes: Optional[List[Volume]] = None,
     ) -> None:
         """
-        Decorator used for defining a remote function.
+        Decorator for defining a remote function.
 
         This method allows you to run the decorated function in a remote container.
 
