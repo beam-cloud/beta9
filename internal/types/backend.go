@@ -48,6 +48,12 @@ type Deployment struct {
 	UpdatedAt   time.Time `db:"updated_at"`
 }
 
+type DeploymentWithRelated struct {
+	Deployment
+	Workspace Workspace `db:"workspace"`
+	Stub      Stub      `db:"stub"`
+}
+
 type Object struct {
 	Id          uint      `db:"id"`
 	ExternalId  string    `db:"external_id"`

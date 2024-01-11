@@ -2,6 +2,7 @@ package taskqueue
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/beam-cloud/beam/internal/auth"
 	"github.com/labstack/echo/v4"
@@ -14,7 +15,10 @@ type taskQueueGroup struct {
 
 func registerTaskQueueRoutes(g *echo.Group, tq *RedisTaskQueue) *taskQueueGroup {
 	group := &taskQueueGroup{routerGroup: g, tq: tq}
-	g.POST("/:stubId", group.TaskQueuePut)
+
+	g.POST("/id/:stubId", group.TaskQueuePut)
+	g.POST("/:deploymentName/v:version", group.TaskQueuePut)
+
 	return group
 }
 
@@ -22,6 +26,27 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	stubId := ctx.Param("stubId")
+	deploymentName := ctx.Param("deploymentName")
+	version := ctx.Param("version")
+
+	if deploymentName != "" && version != "" {
+		version, err := strconv.Atoi(version)
+		if err != nil {
+			return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error": "invalid version number",
+			})
+		}
+
+		deployment, err := g.tq.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version))
+		if err != nil {
+			ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error": "invalid deployment",
+			})
+		}
+
+		stubId = deployment.Stub.ExternalId
+	}
+
 	var payload TaskPayload
 
 	if err := ctx.Bind(&payload); err != nil {

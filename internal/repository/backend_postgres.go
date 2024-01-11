@@ -432,6 +432,28 @@ func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Contex
 	return &deployment, nil
 }
 
+func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint) (*types.DeploymentWithRelated, error) {
+	var deploymentWithRelated types.DeploymentWithRelated
+
+	query := `
+        SELECT d.*, 
+               w.external_id AS "workspace.external_id", w.name AS "workspace.name", 
+               s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
+        FROM deployment d
+        JOIN workspace w ON d.workspace_id = w.id
+        JOIN stub s ON d.stub_id = s.id
+        WHERE d.workspace_id = $1 AND d.name = $2 AND d.version = $3
+        LIMIT 1;
+    `
+
+	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, name, version)
+	if err != nil {
+		return nil, err
+	}
+
+	return &deploymentWithRelated, nil
+}
+
 func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint) (*types.Deployment, error) {
 	var deployment types.Deployment
 
