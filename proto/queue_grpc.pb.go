@@ -19,22 +19,22 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	SimpleQueueService_Put_FullMethodName   = "/simplequeue.SimpleQueueService/Put"
-	SimpleQueueService_Pop_FullMethodName   = "/simplequeue.SimpleQueueService/Pop"
-	SimpleQueueService_Peek_FullMethodName  = "/simplequeue.SimpleQueueService/Peek"
-	SimpleQueueService_Empty_FullMethodName = "/simplequeue.SimpleQueueService/Empty"
-	SimpleQueueService_Size_FullMethodName  = "/simplequeue.SimpleQueueService/Size"
+	SimpleQueueService_SimpleQueuePut_FullMethodName   = "/simplequeue.SimpleQueueService/SimpleQueuePut"
+	SimpleQueueService_SimpleQueuePop_FullMethodName   = "/simplequeue.SimpleQueueService/SimpleQueuePop"
+	SimpleQueueService_SimpleQueuePeek_FullMethodName  = "/simplequeue.SimpleQueueService/SimpleQueuePeek"
+	SimpleQueueService_SimpleQueueEmpty_FullMethodName = "/simplequeue.SimpleQueueService/SimpleQueueEmpty"
+	SimpleQueueService_SimpleQueueSize_FullMethodName  = "/simplequeue.SimpleQueueService/SimpleQueueSize"
 )
 
 // SimpleQueueServiceClient is the client API for SimpleQueueService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type SimpleQueueServiceClient interface {
-	Put(ctx context.Context, in *SimpleQueuePutRequest, opts ...grpc.CallOption) (*SimpleQueuePutResponse, error)
-	Pop(ctx context.Context, in *SimpleQueuePopRequest, opts ...grpc.CallOption) (*SimpleQueuePopResponse, error)
-	Peek(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueuePeekResponse, error)
-	Empty(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueueEmptyResponse, error)
-	Size(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueueSizeResponse, error)
+	SimpleQueuePut(ctx context.Context, in *SimpleQueuePutRequest, opts ...grpc.CallOption) (*SimpleQueuePutResponse, error)
+	SimpleQueuePop(ctx context.Context, in *SimpleQueuePopRequest, opts ...grpc.CallOption) (*SimpleQueuePopResponse, error)
+	SimpleQueuePeek(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueuePeekResponse, error)
+	SimpleQueueEmpty(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueueEmptyResponse, error)
+	SimpleQueueSize(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueueSizeResponse, error)
 }
 
 type simpleQueueServiceClient struct {
@@ -45,45 +45,45 @@ func NewSimpleQueueServiceClient(cc grpc.ClientConnInterface) SimpleQueueService
 	return &simpleQueueServiceClient{cc}
 }
 
-func (c *simpleQueueServiceClient) Put(ctx context.Context, in *SimpleQueuePutRequest, opts ...grpc.CallOption) (*SimpleQueuePutResponse, error) {
+func (c *simpleQueueServiceClient) SimpleQueuePut(ctx context.Context, in *SimpleQueuePutRequest, opts ...grpc.CallOption) (*SimpleQueuePutResponse, error) {
 	out := new(SimpleQueuePutResponse)
-	err := c.cc.Invoke(ctx, SimpleQueueService_Put_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueuePut_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *simpleQueueServiceClient) Pop(ctx context.Context, in *SimpleQueuePopRequest, opts ...grpc.CallOption) (*SimpleQueuePopResponse, error) {
+func (c *simpleQueueServiceClient) SimpleQueuePop(ctx context.Context, in *SimpleQueuePopRequest, opts ...grpc.CallOption) (*SimpleQueuePopResponse, error) {
 	out := new(SimpleQueuePopResponse)
-	err := c.cc.Invoke(ctx, SimpleQueueService_Pop_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueuePop_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *simpleQueueServiceClient) Peek(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueuePeekResponse, error) {
+func (c *simpleQueueServiceClient) SimpleQueuePeek(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueuePeekResponse, error) {
 	out := new(SimpleQueuePeekResponse)
-	err := c.cc.Invoke(ctx, SimpleQueueService_Peek_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueuePeek_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *simpleQueueServiceClient) Empty(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueueEmptyResponse, error) {
+func (c *simpleQueueServiceClient) SimpleQueueEmpty(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueueEmptyResponse, error) {
 	out := new(SimpleQueueEmptyResponse)
-	err := c.cc.Invoke(ctx, SimpleQueueService_Empty_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueueEmpty_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *simpleQueueServiceClient) Size(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueueSizeResponse, error) {
+func (c *simpleQueueServiceClient) SimpleQueueSize(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueueSizeResponse, error) {
 	out := new(SimpleQueueSizeResponse)
-	err := c.cc.Invoke(ctx, SimpleQueueService_Size_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueueSize_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -94,11 +94,11 @@ func (c *simpleQueueServiceClient) Size(ctx context.Context, in *SimpleQueueRequ
 // All implementations must embed UnimplementedSimpleQueueServiceServer
 // for forward compatibility
 type SimpleQueueServiceServer interface {
-	Put(context.Context, *SimpleQueuePutRequest) (*SimpleQueuePutResponse, error)
-	Pop(context.Context, *SimpleQueuePopRequest) (*SimpleQueuePopResponse, error)
-	Peek(context.Context, *SimpleQueueRequest) (*SimpleQueuePeekResponse, error)
-	Empty(context.Context, *SimpleQueueRequest) (*SimpleQueueEmptyResponse, error)
-	Size(context.Context, *SimpleQueueRequest) (*SimpleQueueSizeResponse, error)
+	SimpleQueuePut(context.Context, *SimpleQueuePutRequest) (*SimpleQueuePutResponse, error)
+	SimpleQueuePop(context.Context, *SimpleQueuePopRequest) (*SimpleQueuePopResponse, error)
+	SimpleQueuePeek(context.Context, *SimpleQueueRequest) (*SimpleQueuePeekResponse, error)
+	SimpleQueueEmpty(context.Context, *SimpleQueueRequest) (*SimpleQueueEmptyResponse, error)
+	SimpleQueueSize(context.Context, *SimpleQueueRequest) (*SimpleQueueSizeResponse, error)
 	mustEmbedUnimplementedSimpleQueueServiceServer()
 }
 
@@ -106,20 +106,20 @@ type SimpleQueueServiceServer interface {
 type UnimplementedSimpleQueueServiceServer struct {
 }
 
-func (UnimplementedSimpleQueueServiceServer) Put(context.Context, *SimpleQueuePutRequest) (*SimpleQueuePutResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Put not implemented")
+func (UnimplementedSimpleQueueServiceServer) SimpleQueuePut(context.Context, *SimpleQueuePutRequest) (*SimpleQueuePutResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SimpleQueuePut not implemented")
 }
-func (UnimplementedSimpleQueueServiceServer) Pop(context.Context, *SimpleQueuePopRequest) (*SimpleQueuePopResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Pop not implemented")
+func (UnimplementedSimpleQueueServiceServer) SimpleQueuePop(context.Context, *SimpleQueuePopRequest) (*SimpleQueuePopResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SimpleQueuePop not implemented")
 }
-func (UnimplementedSimpleQueueServiceServer) Peek(context.Context, *SimpleQueueRequest) (*SimpleQueuePeekResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Peek not implemented")
+func (UnimplementedSimpleQueueServiceServer) SimpleQueuePeek(context.Context, *SimpleQueueRequest) (*SimpleQueuePeekResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SimpleQueuePeek not implemented")
 }
-func (UnimplementedSimpleQueueServiceServer) Empty(context.Context, *SimpleQueueRequest) (*SimpleQueueEmptyResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Empty not implemented")
+func (UnimplementedSimpleQueueServiceServer) SimpleQueueEmpty(context.Context, *SimpleQueueRequest) (*SimpleQueueEmptyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SimpleQueueEmpty not implemented")
 }
-func (UnimplementedSimpleQueueServiceServer) Size(context.Context, *SimpleQueueRequest) (*SimpleQueueSizeResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Size not implemented")
+func (UnimplementedSimpleQueueServiceServer) SimpleQueueSize(context.Context, *SimpleQueueRequest) (*SimpleQueueSizeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SimpleQueueSize not implemented")
 }
 func (UnimplementedSimpleQueueServiceServer) mustEmbedUnimplementedSimpleQueueServiceServer() {}
 
@@ -134,92 +134,92 @@ func RegisterSimpleQueueServiceServer(s grpc.ServiceRegistrar, srv SimpleQueueSe
 	s.RegisterService(&SimpleQueueService_ServiceDesc, srv)
 }
 
-func _SimpleQueueService_Put_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _SimpleQueueService_SimpleQueuePut_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SimpleQueuePutRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(SimpleQueueServiceServer).Put(ctx, in)
+		return srv.(SimpleQueueServiceServer).SimpleQueuePut(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: SimpleQueueService_Put_FullMethodName,
+		FullMethod: SimpleQueueService_SimpleQueuePut_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SimpleQueueServiceServer).Put(ctx, req.(*SimpleQueuePutRequest))
+		return srv.(SimpleQueueServiceServer).SimpleQueuePut(ctx, req.(*SimpleQueuePutRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _SimpleQueueService_Pop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _SimpleQueueService_SimpleQueuePop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SimpleQueuePopRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(SimpleQueueServiceServer).Pop(ctx, in)
+		return srv.(SimpleQueueServiceServer).SimpleQueuePop(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: SimpleQueueService_Pop_FullMethodName,
+		FullMethod: SimpleQueueService_SimpleQueuePop_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SimpleQueueServiceServer).Pop(ctx, req.(*SimpleQueuePopRequest))
+		return srv.(SimpleQueueServiceServer).SimpleQueuePop(ctx, req.(*SimpleQueuePopRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _SimpleQueueService_Peek_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _SimpleQueueService_SimpleQueuePeek_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SimpleQueueRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(SimpleQueueServiceServer).Peek(ctx, in)
+		return srv.(SimpleQueueServiceServer).SimpleQueuePeek(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: SimpleQueueService_Peek_FullMethodName,
+		FullMethod: SimpleQueueService_SimpleQueuePeek_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SimpleQueueServiceServer).Peek(ctx, req.(*SimpleQueueRequest))
+		return srv.(SimpleQueueServiceServer).SimpleQueuePeek(ctx, req.(*SimpleQueueRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _SimpleQueueService_Empty_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _SimpleQueueService_SimpleQueueEmpty_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SimpleQueueRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(SimpleQueueServiceServer).Empty(ctx, in)
+		return srv.(SimpleQueueServiceServer).SimpleQueueEmpty(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: SimpleQueueService_Empty_FullMethodName,
+		FullMethod: SimpleQueueService_SimpleQueueEmpty_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SimpleQueueServiceServer).Empty(ctx, req.(*SimpleQueueRequest))
+		return srv.(SimpleQueueServiceServer).SimpleQueueEmpty(ctx, req.(*SimpleQueueRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _SimpleQueueService_Size_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _SimpleQueueService_SimpleQueueSize_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SimpleQueueRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(SimpleQueueServiceServer).Size(ctx, in)
+		return srv.(SimpleQueueServiceServer).SimpleQueueSize(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: SimpleQueueService_Size_FullMethodName,
+		FullMethod: SimpleQueueService_SimpleQueueSize_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SimpleQueueServiceServer).Size(ctx, req.(*SimpleQueueRequest))
+		return srv.(SimpleQueueServiceServer).SimpleQueueSize(ctx, req.(*SimpleQueueRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -232,24 +232,24 @@ var SimpleQueueService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*SimpleQueueServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "Put",
-			Handler:    _SimpleQueueService_Put_Handler,
+			MethodName: "SimpleQueuePut",
+			Handler:    _SimpleQueueService_SimpleQueuePut_Handler,
 		},
 		{
-			MethodName: "Pop",
-			Handler:    _SimpleQueueService_Pop_Handler,
+			MethodName: "SimpleQueuePop",
+			Handler:    _SimpleQueueService_SimpleQueuePop_Handler,
 		},
 		{
-			MethodName: "Peek",
-			Handler:    _SimpleQueueService_Peek_Handler,
+			MethodName: "SimpleQueuePeek",
+			Handler:    _SimpleQueueService_SimpleQueuePeek_Handler,
 		},
 		{
-			MethodName: "Empty",
-			Handler:    _SimpleQueueService_Empty_Handler,
+			MethodName: "SimpleQueueEmpty",
+			Handler:    _SimpleQueueService_SimpleQueueEmpty_Handler,
 		},
 		{
-			MethodName: "Size",
-			Handler:    _SimpleQueueService_Size_Handler,
+			MethodName: "SimpleQueueSize",
+			Handler:    _SimpleQueueService_SimpleQueueSize_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

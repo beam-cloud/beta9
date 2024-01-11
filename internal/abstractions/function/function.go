@@ -93,7 +93,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	}
 
 	go client.StreamLogs(ctx, task.ContainerId, outputChan)
-	return fs.handleStreams(ctx, stream, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
+	return fs.handleStreams(ctx, stream, authInfo.Workspace.Name, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
 }
 
 func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, args []byte, keyEventChan chan common.KeyEvent) (*types.Task, error) {
@@ -124,7 +124,7 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 		return nil, err
 	}
 
-	err = fs.rdb.Set(ctx, Keys.FunctionArgs(taskId), args, functionArgsExpirationTimeout).Err()
+	err = fs.rdb.Set(ctx, Keys.FunctionArgs(authInfo.Workspace.Name, taskId), args, functionArgsExpirationTimeout).Err()
 	if err != nil {
 		return nil, errors.New("unable to store function args")
 	}
@@ -188,7 +188,7 @@ func (fs *RunCFunctionService) createTask(ctx context.Context, authInfo *auth.Au
 
 func (fs *RunCFunctionService) handleStreams(ctx context.Context,
 	stream pb.FunctionService_FunctionInvokeServer,
-	taskId string, containerId string,
+	workspaceName, taskId, containerId string,
 	outputChan chan common.OutputMsg, keyEventChan chan common.KeyEvent) error {
 
 	var lastMessage common.OutputMsg
@@ -207,7 +207,7 @@ _stream:
 				break _stream
 			}
 		case <-keyEventChan:
-			result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(taskId)).Bytes()
+			result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(workspaceName, taskId)).Bytes()
 			if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: 0}); err != nil {
 				break
 			}
@@ -224,7 +224,9 @@ _stream:
 }
 
 func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {
-	value, err := fs.rdb.Get(ctx, Keys.FunctionArgs(in.TaskId)).Bytes()
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	value, err := fs.rdb.Get(ctx, Keys.FunctionArgs(authInfo.Workspace.Name, in.TaskId)).Bytes()
 	if err != nil {
 		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, nil
 	}
@@ -236,7 +238,9 @@ func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.Funct
 }
 
 func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error) {
-	err := fs.rdb.Set(ctx, Keys.FunctionResult(in.TaskId), in.Result, functionResultExpirationTimeout).Err()
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	err := fs.rdb.Set(ctx, Keys.FunctionResult(authInfo.Workspace.Name, in.TaskId), in.Result, functionResultExpirationTimeout).Err()
 	if err != nil {
 		return &pb.FunctionSetResultResponse{Ok: false}, nil
 	}
@@ -253,8 +257,8 @@ func (fs *RunCFunctionService) genContainerId(taskId string) string {
 // Redis keys
 var (
 	functionPrefix string = "function"
-	functionArgs   string = "function:%s:args"
-	functionResult string = "function:%s:result"
+	functionArgs   string = "function:%s:%s:args"
+	functionResult string = "function:%s:%s:result"
 )
 
 var Keys = &keys{}
@@ -265,10 +269,10 @@ func (k *keys) FunctionPrefix() string {
 	return functionPrefix
 }
 
-func (k *keys) FunctionArgs(taskId string) string {
-	return fmt.Sprintf(functionArgs, taskId)
+func (k *keys) FunctionArgs(workspaceName, taskId string) string {
+	return fmt.Sprintf(functionArgs, workspaceName, taskId)
 }
 
-func (k *keys) FunctionResult(taskId string) string {
-	return fmt.Sprintf(functionResult, taskId)
+func (k *keys) FunctionResult(workspaceName, taskId string) string {
+	return fmt.Sprintf(functionResult, workspaceName, taskId)
 }

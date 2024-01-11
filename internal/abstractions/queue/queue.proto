@@ -5,23 +5,23 @@ option go_package = "github.com/beam-cloud/beam/proto";
 package simplequeue;
 
 service SimpleQueueService {
-  rpc Put(SimpleQueuePutRequest) returns (SimpleQueuePutResponse) {}
-  rpc Pop(SimpleQueuePopRequest) returns (SimpleQueuePopResponse) {}
-  rpc Peek(SimpleQueueRequest) returns (SimpleQueuePeekResponse) {}
-  rpc Empty(SimpleQueueRequest) returns (SimpleQueueEmptyResponse) {}
-  rpc Size(SimpleQueueRequest) returns (SimpleQueueSizeResponse) {}
+  rpc SimpleQueuePut(SimpleQueuePutRequest) returns (SimpleQueuePutResponse) {}
+  rpc SimpleQueuePop(SimpleQueuePopRequest) returns (SimpleQueuePopResponse) {}
+  rpc SimpleQueuePeek(SimpleQueueRequest) returns (SimpleQueuePeekResponse) {}
+  rpc SimpleQueueEmpty(SimpleQueueRequest) returns (SimpleQueueEmptyResponse) {}
+  rpc SimpleQueueSize(SimpleQueueRequest) returns (SimpleQueueSizeResponse) {}
 }
 
 message SimpleQueuePutRequest {
-    string name = 1;
-    bytes value = 2;
+  string name = 1;
+  bytes value = 2;
 }
 
 message SimpleQueuePutResponse { bool ok = 1; }
 
 message SimpleQueuePopRequest {
-    string name = 1;
-    bytes value = 2;
+  string name = 1;
+  bytes value = 2;
 }
 
 message SimpleQueuePopResponse {
