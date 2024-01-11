@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -13,130 +12,64 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beam/internal/types"
 	"github.com/bsm/redislock"
 	"github.com/redis/go-redis/v9"
 )
 
 var (
-	ErrChannelClosed       = errors.New("redis: channel closed")
-	ErrConnectionIssue     = errors.New("redis: connection issue")
-	ErrUnknownRedisClient  = errors.New("redis: unknown client type")
-	ErrUnknownRedisOptions = errors.New("redis: unknown options type")
-	ErrLockNotReleased     = errors.New("redislock: lock not released")
-	RedisModeCluster       = "cluster"
+	ErrChannelClosed    = errors.New("redis: channel closed")
+	ErrConnectionIssue  = errors.New("redis: connection issue")
+	ErrUnknownRedisMode = errors.New("redis: unknown mode")
+	ErrLockNotReleased  = errors.New("redislock: lock not released")
 )
 
-type redisCmdable interface {
-	ClientGetName(ctx context.Context) *redis.StringCmd
-	Close() error
-	Del(ctx context.Context, keys ...string) *redis.IntCmd
-	Do(ctx context.Context, args ...interface{}) *redis.Cmd
-	Eval(ctx context.Context, script string, keys []string, args ...interface{}) *redis.Cmd
-	EvalRO(ctx context.Context, script string, keys []string, args ...interface{}) *redis.Cmd
-	EvalSha(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd
-	EvalShaRO(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd
-	Exists(ctx context.Context, keys ...string) *redis.IntCmd
-	Expire(ctx context.Context, key string, expiration time.Duration) *redis.BoolCmd
-	ExpireAt(ctx context.Context, key string, tm time.Time) *redis.BoolCmd
-	Get(ctx context.Context, key string) *redis.StringCmd
-	HGetAll(ctx context.Context, key string) *redis.MapStringStringCmd
-	HMSet(ctx context.Context, key string, values ...interface{}) *redis.BoolCmd
-	HSet(ctx context.Context, key string, values ...interface{}) *redis.IntCmd
-	Keys(ctx context.Context, pattern string) *redis.StringSliceCmd
-	LLen(ctx context.Context, key string) *redis.IntCmd
-	LPop(ctx context.Context, key string) *redis.StringCmd
-	Ping(ctx context.Context) *redis.StatusCmd
-	LRange(ctx context.Context, key string, start, stop int64) *redis.StringSliceCmd
-	PSubscribe(ctx context.Context, channels ...string) *redis.PubSub
-	Publish(ctx context.Context, channel string, message interface{}) *redis.IntCmd
-	RPush(ctx context.Context, key string, values ...interface{}) *redis.IntCmd
-	Scan(ctx context.Context, cursor uint64, match string, count int64) *redis.ScanCmd
-	ScriptExists(ctx context.Context, hashes ...string) *redis.BoolSliceCmd
-	ScriptLoad(ctx context.Context, script string) *redis.StringCmd
-	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
-	SetEx(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
-	Subscribe(ctx context.Context, channels ...string) *redis.PubSub
-	ZAdd(ctx context.Context, key string, members ...redis.Z) *redis.IntCmd
-	ZCard(ctx context.Context, key string) *redis.IntCmd
-	ZPopMin(ctx context.Context, key string, count ...int64) *redis.ZSliceCmd
-	Incr(ctx context.Context, key string) *redis.IntCmd
-	Decr(ctx context.Context, key string) *redis.IntCmd
-}
-
 type RedisClient struct {
-	// Embedded Redis client. All functions defined on interface will be available
-	// to this struct.
-	redisCmdable
+	redis.UniversalClient
 }
 
-func WithAddress(a string) func(*RedisOptions) {
-	return func(ro *RedisOptions) {
-		ro.Addr = a
-	}
-}
+func WithClientName(name string) func(*redis.UniversalOptions) {
+	// Remove empty spaces and new lines
+	name = strings.ReplaceAll(name, " ", "")
+	name = strings.ReplaceAll(name, "\n", "")
 
-func WithClientName(n string) func(*RedisOptions) {
-	return func(ro *RedisOptions) {
-		// Remove empty spaces and new lines
-		n = strings.ReplaceAll(n, " ", "")
-		n = strings.ReplaceAll(n, "\n", "")
+	// Remove special characters using a regular expression
+	reg := regexp.MustCompile("[^a-zA-Z0-9]+")
+	name = reg.ReplaceAllString(name, "")
 
-		// Remove special characters using a regular expression
-		reg := regexp.MustCompile("[^a-zA-Z0-9]+")
-		n = reg.ReplaceAllString(n, "")
-
-		ro.ClientName = n
+	return func(uo *redis.UniversalOptions) {
+		uo.ClientName = name
 	}
 }
 
-func NewRedisClient(opts ...func(*RedisOptions)) (*RedisClient, error) {
-	// Get options from secrets and env vars
-	options, err := GetRedisConfig()
-	if err != nil {
-		return nil, err
+func NewRedisClient(config types.RedisConfig, options ...func(*redis.UniversalOptions)) (*RedisClient, error) {
+	opts := &redis.UniversalOptions{}
+	CopyStruct(&config, opts)
+
+	for _, opt := range options {
+		opt(opts)
 	}
 
-	// Apply overrides
-	for _, opt := range opts {
-		opt(options)
+	if config.EnableTLS {
+		opts.TLSConfig = &tls.Config{}
 	}
 
-	// Optionally enable TLS
-	if options.TLSEnabled {
-		options.TLSConfig = &tls.Config{}
+	var client redis.UniversalClient
+	switch config.Mode {
+	case types.RedisModeSingle:
+		client = redis.NewClient(opts.Simple())
+	case types.RedisModeCluster:
+		client = redis.NewClusterClient(opts.Cluster())
+	default:
+		return nil, ErrUnknownRedisMode
 	}
 
-	// Initialize a client
-	var client *RedisClient
-
-	if options.Mode == RedisModeCluster {
-		log.Println("Running Redis in cluster mode.")
-
-		ro := &redis.ClusterOptions{}
-		CopyStruct(options, ro)
-		ro.Addrs = options.Addrs()
-
-		client = &RedisClient{redis.NewClusterClient(ro)}
-	} else {
-		log.Println("Running Redis in standalone mode.")
-
-		ro := &redis.Options{}
-		CopyStruct(options, ro)
-
-		client = &RedisClient{redis.NewClient(ro)}
-	}
-
-	// Connection test
-	err = client.Ping(context.TODO()).Err()
+	err := client.Ping(context.TODO()).Err()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %s", ErrConnectionIssue, err)
 	}
 
-	return client, nil
-}
-
-func (r *RedisClient) Close() error {
-	return r.redisCmdable.Close()
+	return &RedisClient{UniversalClient: client}, nil
 }
 
 func (r *RedisClient) ToSlice(v interface{}) []interface{} {
@@ -180,7 +113,7 @@ func (r *RedisClient) Scan(ctx context.Context, pattern string) ([]string, error
 		defer close(outCh)
 		defer close(errCh)
 
-		switch client := r.redisCmdable.(type) {
+		switch client := r.UniversalClient.(type) {
 		case *redis.Client:
 			scanAndCollect(client)
 
@@ -208,16 +141,16 @@ func (r *RedisClient) Scan(ctx context.Context, pattern string) ([]string, error
 }
 
 func (r *RedisClient) LRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
-	return r.redisCmdable.LRange(ctx, key, start, stop).Result()
+	return r.UniversalClient.LRange(ctx, key, start, stop).Result()
 }
 
 func (r *RedisClient) Publish(ctx context.Context, channel string, message interface{}) *redis.IntCmd {
-	client, ok := r.redisCmdable.(*redis.ClusterClient)
+	client, ok := r.UniversalClient.(*redis.ClusterClient)
 	if ok {
 		return client.SPublish(ctx, channel, message)
 	}
 
-	return r.redisCmdable.Publish(ctx, channel, message)
+	return r.UniversalClient.Publish(ctx, channel, message)
 }
 
 func (r *RedisClient) PSubscribe(ctx context.Context, channels ...string) (<-chan *redis.Message, <-chan error) {
@@ -228,7 +161,7 @@ func (r *RedisClient) PSubscribe(ctx context.Context, channels ...string) (<-cha
 		defer close(outCh)
 		defer close(errCh)
 
-		switch client := r.redisCmdable.(type) {
+		switch client := r.UniversalClient.(type) {
 		case *redis.Client:
 			r.handleChannelSubs(ctx, client.PSubscribe, outCh, errCh, channels...)
 
@@ -256,7 +189,7 @@ func (r *RedisClient) Subscribe(ctx context.Context, channels ...string) (<-chan
 		defer close(outCh)
 		defer close(errCh)
 
-		switch client := r.redisCmdable.(type) {
+		switch client := r.UniversalClient.(type) {
 		case *redis.Client:
 			r.handleChannelSubs(ctx, client.Subscribe, outCh, errCh, channels...)
 
@@ -295,44 +228,6 @@ func (r *RedisClient) handleChannelSubs(
 			outCh <- message
 		}
 	}
-}
-
-// https://pkg.go.dev/github.com/redis/go-redis/v9#Options
-type RedisOptions struct {
-	Mode                  string        `env:"REDIS_MODE"`
-	Addr                  string        `env:"REDIS_HOSTS"`
-	ClientName            string        `env:"REDIS_CLIENT_NAME"`
-	ContextTimeoutEnabled bool          `env:"REDIS_CONTEXT_TIMEOUT_ENABLED"`
-	MinIdleConns          int           `env:"REDIS_MIN_IDLE_CONNS"`
-	MaxIdleConns          int           `env:"REDIS_MAX_IDLE_CONNS"`
-	ConnMaxIdleTime       time.Duration `env:"REDIS_CONN_MAX_IDLE_TIME"`
-	ConnMaxLifetime       time.Duration `env:"REDIS_CONN_MAX_LIFETIME"`
-	DialTimeout           time.Duration `env:"REDIS_DIAL_TIMEOUT"`
-	ReadTimeout           time.Duration `env:"REDIS_READ_TIMEOUT"`
-	WriteTimeout          time.Duration `env:"REDIS_WRITE_TIMEOUT"`
-	MaxRedirects          int           `env:"REDIS_MAX_REDIRECTS"`
-	MaxRetries            int           `env:"REDIS_MAX_RETRIES"`
-	PoolSize              int           `env:"REDIS_POOL_SIZE"`
-	Username              string        `env:"REDIS_USERNAME"`
-	Password              string        `env:"REDIS_PASSWORD"`
-	TLSEnabled            bool          `env:"REDIS_TLS_ENABLED"`
-	TLSConfig             *tls.Config
-}
-
-func (ro *RedisOptions) Addrs() []string {
-	return strings.Split(ro.Addr, ",")
-}
-
-func GetRedisConfig() (*RedisOptions, error) {
-	secrets := Secrets()
-	options := &RedisOptions{}
-
-	err := secrets.EnvUnmarshal(options)
-	if err != nil {
-		return nil, err
-	}
-
-	return options, nil
 }
 
 type RedisLockOptions struct {

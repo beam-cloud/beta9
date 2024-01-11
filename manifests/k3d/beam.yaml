@@ -136,23 +136,6 @@ spec:
     - name: beam
       port: 1993
 ---
-apiVersion: beam.cloud/v1
-kind: WorkerPool
-metadata:
-  name: beam-cpu
-  namespace: beam
-spec:
-  # jobSpec:
-  #   nodeSelector:
-  #     node-label-key: node-label-value
-  poolSizing:
-    defaultWorkerCpu: 1000m
-    defaultWorkerGpuType: ""
-    defaultWorkerMemory: 1Gi
-    minFreeCpu: 1000m
-    minFreeGpu: 0
-    minFreeMemory: 1Gi
----
 apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:

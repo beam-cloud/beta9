@@ -3,7 +3,6 @@ package common
 import (
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"time"
 )
@@ -18,9 +17,9 @@ var sender *StatsdSender
 func (s *StatsdSender) begin() {
 	s.queue = make(chan string, 100)
 	if s.uri == "" {
-		sec := Secrets()
-		host := sec.GetWithDefault("STATSD_HOST", fmt.Sprintf("beam-statsd.%s.svc.cluster.local", sec.Get("BEAM_NAMESPACE")))
-		port := sec.GetIntWithDefault("STATSD_PORT", 8125)
+		// TODO: Read from config or env
+		host := "statsd.beam"
+		port := 8125
 
 		s.uri = fmt.Sprintf("%s:%v", host, port)
 	}
@@ -41,8 +40,6 @@ func (s *StatsdSender) gauge(metric string, value int) {
 }
 
 func (s *StatsdSender) process() {
-	log.Println("Connecting to statsd at uri", s.uri)
-
 	for msg := range s.queue {
 		if conn, err := net.Dial("udp", s.uri); err == nil {
 			io.WriteString(conn, msg)

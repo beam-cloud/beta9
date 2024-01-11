@@ -8,7 +8,6 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	ecr "github.com/aws/aws-sdk-go-v2/service/ecr"
-	"github.com/beam-cloud/beam/internal/common"
 )
 
 type CredentialProvider interface {
@@ -19,6 +18,8 @@ type CredentialProvider interface {
 
 // AWS auth provider
 type AWSCredentialProvider struct {
+	CredentialProvider
+	Region string
 }
 
 func (p *AWSCredentialProvider) GetUsername() string {
@@ -26,7 +27,7 @@ func (p *AWSCredentialProvider) GetUsername() string {
 }
 
 func (p *AWSCredentialProvider) GetAuthorizationToken() (string, error) {
-	cfg, err := awsconfig.LoadDefaultConfig(context.TODO(), awsconfig.WithRegion(common.Secrets().Get("AWS_REGION")))
+	cfg, err := awsconfig.LoadDefaultConfig(context.TODO(), awsconfig.WithRegion(p.Region))
 	if err != nil {
 		log.Fatalf("unable to load SDK config, %v", err)
 		return "", nil
@@ -49,27 +50,30 @@ func (p *AWSCredentialProvider) GetAuthorizationToken() (string, error) {
 func (p *AWSCredentialProvider) GetAuthString() (string, error) {
 	token, err := p.GetAuthorizationToken()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get aws provider auth string: %v", err)
 	}
 	return token, nil
 }
 
 // Docker provider
 type DockerCredentialProvider struct {
+	CredentialProvider
+	Username string
+	Password string
 }
 
 func (p *DockerCredentialProvider) GetUsername() string {
-	return common.Secrets().Get("DOCKER_USERNAME")
+	return p.Username
 }
 
 func (p *DockerCredentialProvider) GetAuthorizationToken() (string, error) {
-	return common.Secrets().Get("DOCKER_PASSWORD"), nil
+	return p.Password, nil
 }
 
 func (p *DockerCredentialProvider) GetAuthString() (string, error) {
 	token, err := p.GetAuthorizationToken()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get docker provider auth string: %v", err)
 	}
 	return fmt.Sprintf("%s:%s", p.GetUsername(), token), nil
 }

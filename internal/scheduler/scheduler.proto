@@ -8,10 +8,6 @@ service Scheduler {
   rpc GetVersion(VersionRequest) returns (VersionResponse) {}
   rpc RunContainer(RunContainerRequest) returns (RunContainerResponse) {}
   rpc StopContainer(StopContainerRequest) returns (StopContainerResponse) {}
-  // rpc StreamLogs(stream StreamLogRequest) returns (StreamLogResponse);
-  rpc SubscribeWorkerEvents(SubscribeWorkerEventRequest)
-      returns (stream SubscribeWorkerEventResponse);
-  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
 }
 
 message VersionRequest {}
@@ -39,48 +35,3 @@ message StopContainerResponse {
   bool success = 3;
   string error = 4;
 }
-
-message AgentInfo {
-  string token = 1;
-  string version = 2;
-  string cloud_provider = 3;
-}
-
-message WorkerPool { string name = 1; }
-
-message Worker {
-  string id = 1;
-  int64 cpu = 2;
-  int64 memory = 3;
-  string gpu_type = 4;
-  string status = 5;
-  string pool_id = 6;
-}
-
-message SubscribeWorkerEventRequest {
-  AgentInfo agent_info = 1;
-  repeated WorkerPool worker_pools = 2;
-}
-
-message SubscribeWorkerEventResponse {
-  Worker worker = 1;
-  WorkerPool workerPool = 2;
-}
-
-message StatusRequest {}
-
-message StatusResponse { string status = 1; }
-
-message StreamLogRequest {
-  string id = 1;
-  string log = 2;
-}
-
-message StreamLogResponse { bool ok = 1; }
-
-message RegisterWorkerRequest {
-  AgentInfo agent_info = 1;
-  Worker worker = 2;
-}
-
-message RegisterWorkerResponse {}

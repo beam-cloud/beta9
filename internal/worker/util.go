@@ -60,7 +60,7 @@ func (fl *FileLock) Release() error {
 		return err
 	}
 
-	err = fl.file.Close()
+	fl.file.Close()
 	fl.file = nil
 
 	err = os.Remove(fl.path)

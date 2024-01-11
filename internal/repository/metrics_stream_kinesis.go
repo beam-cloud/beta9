@@ -3,36 +3,31 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"os"
 
 	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/types"
 	"github.com/okteto/okteto/pkg/log"
 )
 
-const (
-	RealtimeMetricsStreamName = "beam-realtime-metrics"
-)
-
 type MetricsStream struct {
 	client types.EventClient
 }
 
-func NewMetricsStreamRepository(ctx context.Context) *MetricsStream {
+func NewMetricsStreamRepository(ctx context.Context, config types.MetricsConfig) *MetricsStream {
 	opts := []common.KinesisClientOption{}
 
-	// Localstack is used only for local (okteto) development
-	localstackEndpoint := common.Secrets().GetWithDefault("LOCALSTACK_ENDPOINT", "")
-	if localstackEndpoint != "" {
-		opts = append(opts, common.WithKinesisEndpoint(localstackEndpoint))
+	if config.Kinesis.Endpoint != "" {
+		opts = append(opts, common.WithKinesisEndpoint(config.Kinesis.Endpoint))
+	}
+	if config.Kinesis.AccessKeyID != "" && config.Kinesis.SecretAccessKey != "" {
 		opts = append(opts, common.WithCredentials(
-			common.Secrets().Get("LOCALSTACK_AWS_ACCESS_KEY"),
-			common.Secrets().Get("LOCALSTACK_AWS_SECRET_KEY"),
-			common.Secrets().Get("LOCALSTACK_AWS_SESSION"),
+			config.Kinesis.AccessKeyID,
+			config.Kinesis.SecretAccessKey,
+			config.Kinesis.SessionKey,
 		))
 	}
 
-	client, err := common.NewKinesisClient(ctx, RealtimeMetricsStreamName, os.Getenv("KINESIS_STREAM_REGION"), opts...) // TODO: Override
+	client, err := common.NewKinesisClient(ctx, config.Kinesis.StreamName, config.Kinesis.Region, opts...)
 	if err != nil {
 		log.Infof("error creating kinesis client: %s", err)
 	}

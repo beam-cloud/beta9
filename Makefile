@@ -37,8 +37,5 @@ start:
 stop:
 	cd hack && okteto down --file okteto.yml
 
-secrets:
-	unset GITHUB_TOKEN && OKTETO_NAMESPACE=beam python3 bin/populate_secrets.py
-
 protocol:
 	cd proto && ./gen.sh
