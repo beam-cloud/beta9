@@ -54,7 +54,7 @@ class SimpleQueueRequest(betterproto.Message):
 
 
 class SimpleQueueServiceStub(betterproto.ServiceStub):
-    async def put(
+    async def simple_queue_put(
         self, *, name: str = "", value: bytes = b""
     ) -> SimpleQueuePutResponse:
         request = SimpleQueuePutRequest()
@@ -62,12 +62,12 @@ class SimpleQueueServiceStub(betterproto.ServiceStub):
         request.value = value
 
         return await self._unary_unary(
-            "/simplequeue.SimpleQueueService/Put",
+            "/simplequeue.SimpleQueueService/SimpleQueuePut",
             request,
             SimpleQueuePutResponse,
         )
 
-    async def pop(
+    async def simple_queue_pop(
         self, *, name: str = "", value: bytes = b""
     ) -> SimpleQueuePopResponse:
         request = SimpleQueuePopRequest()
@@ -75,37 +75,37 @@ class SimpleQueueServiceStub(betterproto.ServiceStub):
         request.value = value
 
         return await self._unary_unary(
-            "/simplequeue.SimpleQueueService/Pop",
+            "/simplequeue.SimpleQueueService/SimpleQueuePop",
             request,
             SimpleQueuePopResponse,
         )
 
-    async def peek(self, *, name: str = "") -> SimpleQueuePeekResponse:
+    async def simple_queue_peek(self, *, name: str = "") -> SimpleQueuePeekResponse:
         request = SimpleQueueRequest()
         request.name = name
 
         return await self._unary_unary(
-            "/simplequeue.SimpleQueueService/Peek",
+            "/simplequeue.SimpleQueueService/SimpleQueuePeek",
             request,
             SimpleQueuePeekResponse,
         )
 
-    async def empty(self, *, name: str = "") -> SimpleQueueEmptyResponse:
+    async def simple_queue_empty(self, *, name: str = "") -> SimpleQueueEmptyResponse:
         request = SimpleQueueRequest()
         request.name = name
 
         return await self._unary_unary(
-            "/simplequeue.SimpleQueueService/Empty",
+            "/simplequeue.SimpleQueueService/SimpleQueueEmpty",
             request,
             SimpleQueueEmptyResponse,
         )
 
-    async def size(self, *, name: str = "") -> SimpleQueueSizeResponse:
+    async def simple_queue_size(self, *, name: str = "") -> SimpleQueueSizeResponse:
         request = SimpleQueueRequest()
         request.name = name
 
         return await self._unary_unary(
-            "/simplequeue.SimpleQueueService/Size",
+            "/simplequeue.SimpleQueueService/SimpleQueueSize",
             request,
             SimpleQueueSizeResponse,
         )
