@@ -67,6 +67,42 @@ class Function(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
     ) -> None:
+        """
+        Decorator used for defining a remote function.
+
+        This method allows you to run the decorated function in a remote container.
+
+        Parameters:
+            cpu (Union[float, str]):
+                The number of CPU cores allocated to the container. Default is 1.
+            memory (int):
+                The amount of memory allocated to the container. It should be specified in
+                megabytes (e.g., 128 for 128 megabytes). Default is 128.
+            gpu (Union[GpuType, str]):
+                The type or name of the GPU device to be used for GPU-accelerated tasks. If not
+                applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
+            image (Union[Image, dict]):
+                The container image used for the task execution. Default is [Image](#image).
+        Example:
+            ```python
+            from beam import Function
+
+            @Function(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
+            def transcribe(filename: str):
+                print(filename)
+                return "some_result"
+
+            # Call a function in a remote container
+            function.remote("some_file.mp4")
+
+            # Map the function over several inputs
+            # Each of these inputs will be routed to remote containers
+            for result in function.map(["file1.mp4", "file2.mp4"]):
+                print(result)
+
+
+            ```
+        """
         super().__init__(cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes)
 
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
