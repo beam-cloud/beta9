@@ -73,8 +73,8 @@ class Function(RunnerAbstraction):
         This method allows you to run the decorated function in a remote container.
 
         Parameters:
-            cpu (Union[float, str]):
-                The number of CPU cores allocated to the container. Default is 1.
+            cpu (Union[int, float, str]):
+                The number of CPU cores allocated to the container. Default is 1.0.
             memory (int):
                 The amount of memory allocated to the container. It should be specified in
                 megabytes (e.g., 128 for 128 megabytes). Default is 128.
