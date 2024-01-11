@@ -37,8 +37,8 @@ class Map(BaseAbstraction):
         m["some_key"] = True
         m["another_key"] = True
 
-        print(m["somekey"])
-        del m["somekey"]
+        print(m["some_key"])
+        del m["some_key"]
 
         for k, v in m.items():
             print("key: ", k)
