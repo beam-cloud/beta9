@@ -34,7 +34,7 @@ class TestTaskQueue(TestCase):
         queue.stub = mock_stub
 
         self.assertEqual(queue.image.python_version, "python3.8")
-        self.assertEqual(queue.cpu, 100)
+        self.assertEqual(queue.cpu, 1)
         self.assertEqual(queue.memory, 128)
 
     def test_run_local(self):
