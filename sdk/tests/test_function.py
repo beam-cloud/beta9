@@ -27,7 +27,7 @@ class TestTaskQueue(TestCase):
         mock_stub = MagicMock()
 
         queue = Function(
-            cpu=100,
+            cpu=1,
             memory=128,
             image=Image(python_version="python3.8"),
         )
@@ -38,7 +38,7 @@ class TestTaskQueue(TestCase):
         self.assertEqual(queue.memory, 128)
 
     def test_run_local(self):
-        @Function(cpu=100, memory=128, image=Image(python_version="python3.8"))
+        @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))
         def test_func():
             return 1
 
@@ -47,7 +47,7 @@ class TestTaskQueue(TestCase):
         self.assertEqual(resp, 1)
 
     def test_function_invoke(self):
-        @Function(cpu=100, memory=128, image=Image(python_version="python3.8"))
+        @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))
         def test_func(*args, **kwargs):
             return 1998
 
@@ -71,7 +71,7 @@ class TestTaskQueue(TestCase):
         self.assertRaises(SystemExit, test_func)
 
     def test_map(self):
-        @Function(cpu=100, memory=128, image=Image(python_version="python3.8"))
+        @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))
         def test_func(*args, **kwargs):
             return 1998
 
