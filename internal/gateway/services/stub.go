@@ -91,5 +91,6 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	return &pb.DeployStubResponse{
 		Ok:           true,
 		DeploymentId: deployment.ExternalId,
+		Version:      uint32(deployment.Version),
 	}, nil
 }

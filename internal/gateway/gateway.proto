@@ -146,4 +146,5 @@ message DeployStubRequest {
 message DeployStubResponse {
   bool ok = 1;
   string deployment_id = 2;
+  uint32 version = 3;
 }

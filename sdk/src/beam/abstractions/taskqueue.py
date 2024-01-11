@@ -11,6 +11,7 @@ from beam.abstractions.base.runner import (
 from beam.abstractions.image import Image
 from beam.clients.gateway import DeployStubResponse
 from beam.clients.taskqueue import TaskQueuePutResponse, TaskQueueServiceStub
+from beam.config import GatewayConfig, get_gateway_config
 
 
 class TaskQueue(RunnerAbstraction):
@@ -75,7 +76,15 @@ class _CallableWrapper:
         deploy_response: DeployStubResponse = self.parent.run_sync(
             self.parent.gateway_stub.deploy_stub(stub_id=self.parent.stub_id, name=name)
         )
-        print(deploy_response)
+
+        if deploy_response.ok:
+            gateway_config: GatewayConfig = get_gateway_config()
+            gateway_url = f"{gateway_config.gateway_host}:{gateway_config.gateway_port}"
+            terminal.header("Deployed 🎉")
+            terminal.detail(
+                f"Call your deployment at: {gateway_url}/api/v1/taskqueue/{name}/v{deploy_response.version}"
+            )
+
         return deploy_response.ok
 
     def put(self, *args, **kwargs) -> bool:

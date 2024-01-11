@@ -175,6 +175,7 @@ class DeployStubRequest(betterproto.Message):
 class DeployStubResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     deployment_id: str = betterproto.string_field(2)
+    version: int = betterproto.uint32_field(3)
 
 
 class GatewayServiceStub(betterproto.ServiceStub):
