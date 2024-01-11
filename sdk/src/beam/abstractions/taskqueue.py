@@ -82,8 +82,62 @@ class TaskQueue(RunnerAbstraction):
         concurrency: int = 1,
         max_containers: int = 1,
         keep_warm_seconds: int = 10,
-        max_pending_tasks: int = 100,
-    ) -> "TaskQueue":
+    ) -> None:
+        """
+        Decorator used for defining a task queue.
+
+        This method allows you to create a task queue out of the decorated function. The tasks are executed
+        asynchronously. You can interact with the task queue either through an API (when deployed), or directly
+        in python through the .put() method.
+
+        Parameters:
+            cpu (Union[int, str]):
+                The number of CPU cores allocated to the container. Default is 1.
+            memory (str):
+                The amount of memory allocated to the container. It should be specified in
+                as an integer (e.g., 128 for 128 megabytes). Default is 128.
+            gpu (Union[GpuType, str]):
+                The type or name of the GPU device to be used for GPU-accelerated tasks. If not
+                applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
+            image (Union[Image, dict]):
+                The container image used for the task execution. Default is [Image](#image).
+            timeout (Optional[int]):
+                The maximum number of seconds a task can run before it times out.
+                Default is 3600. Set it to -1 to disable the timeout.
+            retries (Optional[int]):
+                The maximum number of times a task will be retried if the container crashes. Default is 3.
+            concurrency (Optional[int]):
+                The number of concurrent tasks to handle per container.
+                Modifying this parameter can improve throughput for certain workloads.
+                Workers will share the CPU, Memory, and GPU defined.
+                You may need to increase these values to increase concurrency.
+                Default is 1.
+            max_pending_tasks (int):
+                The maximum number of tasks that can be pending in the queue. If the number of
+                pending tasks exceeds this value, the task queue will stop accepting new tasks.
+                Default is 100.
+            max_containers (int):
+                The maximum number of containers that the task queue will autoscale to. If the number of tasks
+                in the queue goes over the concurrency value, the task queue will automatically add containers to
+                handle the load.
+                Default is 1.
+            keep_warm_seconds (int):
+                The duration in seconds to keep the task queue warm even if there are no pending
+                tasks. Keeping the queue warm helps to reduce the latency when new tasks arrive.
+                Default is 10s.
+        Example:
+            ```python
+            from beam import TaskQueue
+
+            @TaskQueue(image=Image(python_packages=["torch"]), cpu=1.0, memory=128, gpu="T4", keep_warm_seconds=1000)
+            def transcribe(filename: str):
+                print(filename)
+                return
+
+            transcribe.put("some_file.mp4")
+
+            ```
+        """
         super().__init__(
             cpu=cpu,
             memory=memory,
