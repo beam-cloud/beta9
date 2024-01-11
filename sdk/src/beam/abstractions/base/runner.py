@@ -19,7 +19,7 @@ class RunnerAbstraction(BaseAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: int = 128,
-        gpu="",
+        gpu: str = "",
         image: Image = Image(),
         concurrency: int = 1,
         max_containers: int = 1,
