@@ -24,13 +24,13 @@ from beam.sync import FileSyncer
 class Function(RunnerAbstraction):
     def __init__(
         self,
-        image: Image,
         cpu: int = 100,
         memory: int = 128,
         gpu: str = "",
+        image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
     ) -> None:
-        super().__init__(image=image, cpu=cpu, memory=memory, gpu=gpu, volumes=volumes)
+        super().__init__(cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes)
 
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)

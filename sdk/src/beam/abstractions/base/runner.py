@@ -17,10 +17,10 @@ FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
 class RunnerAbstraction(BaseAbstraction):
     def __init__(
         self,
-        image: Image,
         cpu: int = 100,
         memory: int = 128,
         gpu="",
+        image: Image = Image(),
         concurrency: int = 1,
         max_containers: int = 1,
         keep_warm_seconds: float = 10.0,
