@@ -23,13 +23,13 @@ func NewWorkerPoolRedisRepository(rdb *common.RedisClient) WorkerPoolRepository 
 
 // Get a pool without locking.
 // Should only be called by public functions of this struct.
-func (r *WorkerPoolRedisRepository) getPool(name string) (*types.WorkerPoolResource, error) {
+func (r *WorkerPoolRedisRepository) getPool(name string) (*types.WorkerPoolConfig, error) {
 	bytes, err := r.rdb.Get(context.TODO(), common.RedisKeys.WorkerPoolState(name)).Bytes()
 	if err != nil {
 		return nil, err
 	}
 
-	p := &types.WorkerPoolResource{}
+	p := &types.WorkerPoolConfig{}
 	if err := json.Unmarshal(bytes, p); err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func (r *WorkerPoolRedisRepository) getPool(name string) (*types.WorkerPoolResou
 	return p, nil
 }
 
-func (r *WorkerPoolRedisRepository) GetPool(name string) (*types.WorkerPoolResource, error) {
+func (r *WorkerPoolRedisRepository) GetPool(name string) (*types.WorkerPoolConfig, error) {
 	lockKey := common.RedisKeys.WorkerPoolLock(name)
 	if err := r.lock.Acquire(context.TODO(), lockKey, r.lockOptions); err != nil {
 		return nil, err
@@ -47,13 +47,13 @@ func (r *WorkerPoolRedisRepository) GetPool(name string) (*types.WorkerPoolResou
 	return r.getPool(name)
 }
 
-func (r *WorkerPoolRedisRepository) GetPools() ([]types.WorkerPoolResource, error) {
+func (r *WorkerPoolRedisRepository) GetPools() ([]types.WorkerPoolConfig, error) {
 	keys, err := r.rdb.Scan(context.TODO(), common.RedisKeys.WorkerPoolState("*"))
 	if err != nil {
 		return nil, err
 	}
 
-	pools := []types.WorkerPoolResource{}
+	pools := []types.WorkerPoolConfig{}
 	for _, key := range keys {
 		name := strings.Split(key, ":")[2]
 
@@ -68,8 +68,8 @@ func (r *WorkerPoolRedisRepository) GetPools() ([]types.WorkerPoolResource, erro
 	return pools, nil
 }
 
-func (r *WorkerPoolRedisRepository) SetPool(pool *types.WorkerPoolResource) error {
-	lockKey := common.RedisKeys.WorkerPoolLock(pool.Name)
+func (r *WorkerPoolRedisRepository) SetPool(name string, pool *types.WorkerPoolConfig) error {
+	lockKey := common.RedisKeys.WorkerPoolLock(name)
 	if err := r.lock.Acquire(context.TODO(), lockKey, r.lockOptions); err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func (r *WorkerPoolRedisRepository) SetPool(pool *types.WorkerPoolResource) erro
 		return err
 	}
 
-	return r.rdb.Set(context.TODO(), common.RedisKeys.WorkerPoolState(pool.Name), bytes, 0).Err()
+	return r.rdb.Set(context.TODO(), common.RedisKeys.WorkerPoolState(name), bytes, 0).Err()
 }
 
 func (r *WorkerPoolRedisRepository) RemovePool(name string) error {
@@ -91,31 +91,4 @@ func (r *WorkerPoolRedisRepository) RemovePool(name string) error {
 	defer r.lock.Release(lockKey)
 
 	return r.rdb.Del(context.TODO(), common.RedisKeys.WorkerPoolState(name)).Err()
-}
-
-// Used when access to a storage backend like Redis is not needed e.g. by the Agent or for testing purposes
-type WorkerPoolNoOpRepository struct{}
-
-func NewWorkerPoolNoOpRepository() WorkerPoolRepository {
-	return &WorkerPoolNoOpRepository{}
-}
-
-func (r *WorkerPoolNoOpRepository) getPool(name string) (*types.WorkerPoolResource, error) {
-	return &types.WorkerPoolResource{}, nil
-}
-
-func (r *WorkerPoolNoOpRepository) GetPool(name string) (*types.WorkerPoolResource, error) {
-	return &types.WorkerPoolResource{}, nil
-}
-
-func (r *WorkerPoolNoOpRepository) GetPools() ([]types.WorkerPoolResource, error) {
-	return []types.WorkerPoolResource{}, nil
-}
-
-func (r *WorkerPoolNoOpRepository) SetPool(pool *types.WorkerPoolResource) error {
-	return nil
-}
-
-func (r *WorkerPoolNoOpRepository) RemovePool(name string) error {
-	return nil
 }

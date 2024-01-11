@@ -13,7 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	awstypes "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/beam-cloud/beam/internal/types"
 )
 
 const (
@@ -26,18 +27,19 @@ const (
 
 type ImageRegistry struct {
 	store              ObjectStore
+	config             types.ImageServiceConfig
 	ImageFileExtension string
 }
 
-func NewImageRegistry(storeName string) (*ImageRegistry, error) {
+func NewImageRegistry(config types.ImageServiceConfig) (*ImageRegistry, error) {
 	var err error
 	var store ObjectStore
 
 	var imageFileExtension string = "clip"
-	switch storeName {
+	switch config.RegistryStore {
 	case s3ImageRegistryStoreName:
 		imageFileExtension = remoteImageFileExtension
-		store, err = NewS3Store()
+		store, err = NewS3Store(config.Registries.S3)
 		if err != nil {
 			return nil, err
 		}
@@ -51,6 +53,7 @@ func NewImageRegistry(storeName string) (*ImageRegistry, error) {
 
 	return &ImageRegistry{
 		store:              store,
+		config:             config,
 		ImageFileExtension: imageFileExtension,
 	}, nil
 }
@@ -78,11 +81,8 @@ type ObjectStore interface {
 	Size(ctx context.Context, key string) (int64, error)
 }
 
-func NewS3Store() (*S3Store, error) {
-	accessKey := os.Getenv("AWS_ACCESS_KEY_ID")
-	secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
-
-	cfg, err := getAWSConfig(accessKey, secretKey, Secrets().GetWithDefault("AWS_REGION", DefaultAWSRegion))
+func NewS3Store(config types.S3ImageRegistryConfig) (*S3Store, error) {
+	cfg, err := getAWSConfig(config.AccessKeyID, config.SecretAccessKey, config.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +108,7 @@ func getAWSConfig(accessKey string, secretKey string, region string) (aws.Config
 
 type S3Store struct {
 	client *s3.Client
+	config types.S3ImageRegistryConfig
 }
 
 func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
@@ -118,10 +119,10 @@ func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 	}
 	defer file.Close()
 
-	var sse types.ServerSideEncryption = "aws:kms"
+	var sse awstypes.ServerSideEncryption = "aws:kms"
 	uploader := manager.NewUploader(s.client)
 	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
-		Bucket:               aws.String(Secrets().Get("BEAM_IMAGESERVICE_IMAGE_REGISTRY_S3_BUCKET")),
+		Bucket:               aws.String(s.config.Bucket),
 		Key:                  aws.String(key),
 		Body:                 file,
 		ServerSideEncryption: sse,
@@ -143,7 +144,7 @@ func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 
 	downloader := manager.NewDownloader(s.client)
 	_, err = downloader.Download(ctx, f, &s3.GetObjectInput{
-		Bucket: aws.String(Secrets().Get("BEAM_IMAGESERVICE_IMAGE_REGISTRY_S3_BUCKET")),
+		Bucket: aws.String(s.config.Bucket),
 		Key:    aws.String(key),
 	}, func(d *manager.Downloader) {
 		d.PartSize = 100 * 1024 * 1024 // 100MiB per part
@@ -178,7 +179,7 @@ func (s *S3Store) Size(ctx context.Context, key string) (int64, error) {
 // headObject returns the metadata of an object
 func (s *S3Store) headObject(ctx context.Context, key string) (*s3.HeadObjectOutput, error) {
 	return s.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(Secrets().Get("BEAM_IMAGESERVICE_IMAGE_REGISTRY_S3_BUCKET")),
+		Bucket: aws.String(s.config.Bucket),
 		Key:    aws.String(key),
 	})
 }

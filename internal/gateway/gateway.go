@@ -20,10 +20,12 @@ import (
 
 	apiv1 "github.com/beam-cloud/beam/internal/api/v1"
 	"github.com/beam-cloud/beam/internal/auth"
-	common "github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/common"
+
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/storage"
+	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -32,6 +34,7 @@ import (
 
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
+	config         types.AppConfig
 	httpServer     *echo.Echo
 	grpcServer     *grpc.Server
 	redisClient    *common.RedisClient
@@ -47,17 +50,23 @@ type Gateway struct {
 }
 
 func NewGateway() (*Gateway, error) {
-	redisClient, err := common.NewRedisClient(common.WithClientName("BeamGateway"))
+	configManager, err := common.NewConfigManager[types.AppConfig]()
+	if err != nil {
+		return nil, err
+	}
+	config := configManager.GetConfig()
+
+	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("BeamGateway"))
 	if err != nil {
 		return nil, err
 	}
 
-	Scheduler, err := scheduler.NewScheduler()
+	scheduler, err := scheduler.NewScheduler(config, redisClient)
 	if err != nil {
 		return nil, err
 	}
 
-	Storage, err := storage.NewStorage()
+	storage, err := storage.NewStorage(config.Storage)
 	if err != nil {
 		return nil, err
 	}
@@ -67,16 +76,16 @@ func NewGateway() (*Gateway, error) {
 		redisClient: redisClient,
 		ctx:         ctx,
 		cancelFunc:  cancel,
-		Storage:     Storage,
-		Scheduler:   Scheduler,
+		Storage:     storage,
+		Scheduler:   scheduler,
 	}
 
-	beamRepo, err := repository.NewBeamPostgresRepository()
+	beamRepo, err := repository.NewBeamPostgresRepository(config.Database.Postgres)
 	if err != nil {
 		return nil, err
 	}
 
-	backendRepo, err := repository.NewBackendPostgresRepository()
+	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +93,7 @@ func NewGateway() (*Gateway, error) {
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	metricsRepo := repository.NewMetricsStatsdRepository()
 
+	gateway.config = config
 	gateway.ContainerRepo = containerRepo
 	gateway.BackendRepo = backendRepo
 	gateway.BeamRepo = beamRepo
@@ -139,7 +149,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterSimpleQueueServiceServer(g.grpcServer, rq)
 
 	// Register image service
-	is, err := image.NewRuncImageService(g.ctx, g.Scheduler, g.ContainerRepo)
+	is, err := image.NewRuncImageService(g.ctx, g.config.ImageService, g.Scheduler, g.ContainerRepo)
 	if err != nil {
 		return err
 	}
@@ -167,7 +177,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterVolumeServiceServer(g.grpcServer, vs)
 
 	// Register scheduler
-	s, err := scheduler.NewSchedulerService()
+	s, err := scheduler.NewSchedulerService(g.config, g.redisClient)
 	if err != nil {
 		return err
 	}

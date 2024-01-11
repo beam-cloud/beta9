@@ -15,7 +15,7 @@ func TestAddWorkerIfNeeded(t *testing.T) {
 	assert.NotNil(t, s)
 	assert.Nil(t, err)
 
-	redisClient, err := common.NewRedisClient(common.WithAddress(s.Addr()))
+	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
 	assert.NotNil(t, redisClient)
 	assert.Nil(t, err)
 
@@ -79,11 +79,10 @@ func TestAddWorkerIfNeeded(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			controller, _ := NewWorkerPoolControllerForTest("TestPool", &WorkerPoolControllerConfigForTest{
-				namespace:        "namespace",
-				workerPoolConfig: &WorkerPoolConfig{},
-				workerRepo:       workerRepo,
-			})
+			controller := &WorkerPoolControllerForTest{
+				name:       "TestPool",
+				workerRepo: workerRepo,
+			}
 			sizer := &WorkerPoolSizer{
 				controller: controller,
 				config:     tt.config,
@@ -103,14 +102,14 @@ func TestAddWorkerIfNeeded(t *testing.T) {
 
 func TestParsePoolSizingConfig(t *testing.T) {
 	tests := []struct {
-		name                 string
-		sizingConfigJSON     string
-		sizingConfigExpected *types.WorkerPoolSizingConfig
+		name             string
+		sizingConfigHave *types.WorkerPoolJobSpecPoolSizingConfig
+		sizingConfigWant *types.WorkerPoolSizingConfig
 	}{
 		{
 			name:             "should set defaults when no values provided",
-			sizingConfigJSON: "{}",
-			sizingConfigExpected: &types.WorkerPoolSizingConfig{
+			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{},
+			sizingConfigWant: &types.WorkerPoolSizingConfig{
 				MinFreeCpu:           0,
 				MinFreeMemory:        0,
 				MinFreeGpu:           0,
@@ -121,17 +120,15 @@ func TestParsePoolSizingConfig(t *testing.T) {
 		},
 		{
 			name: "should ignore bad values and use default values",
-			sizingConfigJSON: `
-				{
-					"minFreeCpu": "bad value",
-					"minFreeMemory": "bad value",
-					"minFreeGpu": "bad value",
-					"defaultWorkerCpu": -10,
-					"defaultWorkerMemory": -10,
-					"defaultWorkerGpuType": "bad value"
-				}
-			`,
-			sizingConfigExpected: &types.WorkerPoolSizingConfig{
+			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{
+				MinFreeCPU:           "bad value",
+				MinFreeMemory:        "bad value",
+				MinFreeGPU:           "bad value",
+				DefaultWorkerCPU:     "bad value",
+				DefaultWorkerMemory:  "bad value",
+				DefaultWorkerGPUType: "bad value",
+			},
+			sizingConfigWant: &types.WorkerPoolSizingConfig{
 				MinFreeCpu:           0,
 				MinFreeMemory:        0,
 				MinFreeGpu:           0,
@@ -142,14 +139,12 @@ func TestParsePoolSizingConfig(t *testing.T) {
 		},
 		{
 			name: "should parse minFreeCpu minFreeMemory and minFreeGpu",
-			sizingConfigJSON: `
-				{
-					"minFreeCpu": "132000m",
-					"minFreeMemory": "100Gi",
-					"minFreeGpu": 0
-				}
-			`,
-			sizingConfigExpected: &types.WorkerPoolSizingConfig{
+			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{
+				MinFreeCPU:    "132000m",
+				MinFreeMemory: "100Gi",
+				MinFreeGPU:    "0",
+			},
+			sizingConfigWant: &types.WorkerPoolSizingConfig{
 				MinFreeCpu:          132000,
 				MinFreeMemory:       102400,
 				MinFreeGpu:          0,
@@ -159,8 +154,8 @@ func TestParsePoolSizingConfig(t *testing.T) {
 		},
 		{
 			name:             "should parse defaultWorkerGpuType as T4",
-			sizingConfigJSON: `{"defaultWorkerGpuType": "T4"}`,
-			sizingConfigExpected: &types.WorkerPoolSizingConfig{
+			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGPUType: "T4"},
+			sizingConfigWant: &types.WorkerPoolSizingConfig{
 				DefaultWorkerCpu:     1000,
 				DefaultWorkerMemory:  1024,
 				DefaultWorkerGpuType: "T4",
@@ -168,8 +163,8 @@ func TestParsePoolSizingConfig(t *testing.T) {
 		},
 		{
 			name:             "should parse defaultWorkerGpuType as A100-40",
-			sizingConfigJSON: `{"defaultWorkerGpuType": "A100-40"}`,
-			sizingConfigExpected: &types.WorkerPoolSizingConfig{
+			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGPUType: "A100-40"},
+			sizingConfigWant: &types.WorkerPoolSizingConfig{
 				DefaultWorkerCpu:     1000,
 				DefaultWorkerMemory:  1024,
 				DefaultWorkerGpuType: "A100-40",
@@ -177,8 +172,8 @@ func TestParsePoolSizingConfig(t *testing.T) {
 		},
 		{
 			name:             "should return empty DefaultWorkerGpuType when using 3060 (str) as defaultWorkerGpuType",
-			sizingConfigJSON: `{"defaultWorkerGpuType": "3060"}`,
-			sizingConfigExpected: &types.WorkerPoolSizingConfig{
+			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGPUType: "3060"},
+			sizingConfigWant: &types.WorkerPoolSizingConfig{
 				DefaultWorkerCpu:     1000,
 				DefaultWorkerMemory:  1024,
 				DefaultWorkerGpuType: "",
@@ -186,8 +181,8 @@ func TestParsePoolSizingConfig(t *testing.T) {
 		},
 		{
 			name:             "should set empty DefaultWorkerGpuType when using 4090 (int) as defaultWorkerGpuType",
-			sizingConfigJSON: `{"defaultWorkerGpuType": 4090}`,
-			sizingConfigExpected: &types.WorkerPoolSizingConfig{
+			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGPUType: "4090"},
+			sizingConfigWant: &types.WorkerPoolSizingConfig{
 				DefaultWorkerCpu:     1000,
 				DefaultWorkerMemory:  1024,
 				DefaultWorkerGpuType: "",
@@ -197,11 +192,10 @@ func TestParsePoolSizingConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			raw := []byte(tt.sizingConfigJSON)
-			config, err := ParsePoolSizingConfig(raw)
+			config, err := ParsePoolSizingConfig(*tt.sizingConfigHave)
 			assert.NoError(t, err)
 
-			assert.Equal(t, tt.sizingConfigExpected, config)
+			assert.Equal(t, tt.sizingConfigWant, config)
 		})
 	}
 }

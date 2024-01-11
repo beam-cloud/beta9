@@ -2,12 +2,12 @@ package image
 
 import (
 	"context"
-	"fmt"
 	"log"
 
 	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
+	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
 	"github.com/pkg/errors"
 )
@@ -22,16 +22,28 @@ type RuncImageService struct {
 	pb.UnimplementedImageServiceServer
 	builder   *Builder
 	scheduler *scheduler.Scheduler
+	config    types.ImageServiceConfig
 }
 
-func NewRuncImageService(ctx context.Context, scheduler *scheduler.Scheduler, containerRepo repository.ContainerRepository) (ImageService, error) {
-	builder, err := NewBuilder(scheduler, containerRepo)
+func NewRuncImageService(
+	ctx context.Context,
+	config types.ImageServiceConfig,
+	scheduler *scheduler.Scheduler,
+	containerRepo repository.ContainerRepository,
+) (ImageService, error) {
+	registry, err := common.NewImageRegistry(config)
+	if err != nil {
+		return nil, err
+	}
+
+	builder, err := NewBuilder(registry, scheduler, containerRepo)
 	if err != nil {
 		return nil, err
 	}
 
 	return &RuncImageService{
 		builder: builder,
+		config:  config,
 	}, nil
 }
 
@@ -39,12 +51,13 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 	var valid bool = true
 
 	imageId, err := is.builder.GetImageId(&BuildOpts{
-		BaseImageName:    common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_NAME"),
-		BaseImageTag:     is.getBaseImageTag(in.PythonVersion),
-		PythonVersion:    in.PythonVersion,
-		PythonPackages:   in.PythonPackages,
-		Commands:         in.Commands,
-		ExistingImageUri: in.ExistingImageUri,
+		BaseImageTag:      is.config.Runner.Tags[in.PythonVersion],
+		BaseImageName:     is.config.Runner.BaseImageName,
+		BaseImageRegistry: is.config.Runner.BaseImageRegistry,
+		PythonVersion:     in.PythonVersion,
+		PythonPackages:    in.PythonPackages,
+		Commands:          in.Commands,
+		ExistingImageUri:  in.ExistingImageUri,
 	})
 	if err != nil {
 		valid = false
@@ -61,12 +74,13 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	log.Printf("incoming image build request: %+v", in)
 
 	buildOptions := &BuildOpts{
-		BaseImageName:    common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_NAME"),
-		BaseImageTag:     is.getBaseImageTag(in.PythonVersion),
-		PythonVersion:    in.PythonVersion,
-		PythonPackages:   in.PythonPackages,
-		Commands:         in.Commands,
-		ExistingImageUri: in.ExistingImageUri,
+		BaseImageTag:      is.config.Runner.Tags[in.PythonVersion],
+		BaseImageName:     is.config.Runner.BaseImageName,
+		BaseImageRegistry: is.config.Runner.BaseImageRegistry,
+		PythonVersion:     in.PythonVersion,
+		PythonPackages:    in.PythonPackages,
+		Commands:          in.Commands,
+		ExistingImageUri:  in.ExistingImageUri,
 	}
 
 	ctx := stream.Context()
@@ -95,28 +109,4 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 	log.Println("build completed successfully")
 	return nil
-}
-
-// Get latest image tag from secrets
-func (is *RuncImageService) getBaseImageTag(pythonVersion string) string {
-	var baseImageTag string
-
-	switch pythonVersion {
-	case "python3.8":
-		baseImageTag = fmt.Sprintf("py38-%s", common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_TAG"))
-
-	case "python3.9":
-		baseImageTag = fmt.Sprintf("py39-%s", common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_TAG"))
-
-	case "python3.10":
-		baseImageTag = fmt.Sprintf("py310-%s", common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_TAG"))
-
-	case "python3.11":
-		baseImageTag = fmt.Sprintf("py311-%s", common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_TAG"))
-
-	case "python3.12":
-		baseImageTag = fmt.Sprintf("py312-%s", common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_TAG"))
-	}
-
-	return baseImageTag
 }

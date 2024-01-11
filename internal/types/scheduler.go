@@ -65,7 +65,6 @@ type ContainerRequest struct {
 	ScheduleTimeout float64   `json:"schedule_timeout"`
 	Mounts          []Mount   `json:"mounts"`
 	OnScheduleChan  chan bool `json:"-"`
-	Agent           string    `json:"agent"`
 }
 
 const ContainerExitCodeTtlS int = 300

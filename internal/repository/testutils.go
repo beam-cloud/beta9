@@ -3,6 +3,7 @@ package repository
 import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beam/internal/types"
 )
 
 func NewRedisClientForTest() (*common.RedisClient, error) {
@@ -11,7 +12,7 @@ func NewRedisClientForTest() (*common.RedisClient, error) {
 		return nil, err
 	}
 
-	rdb, err := common.NewRedisClient(common.WithAddress(s.Addr()))
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
 	if err != nil {
 		return nil, err
 	}

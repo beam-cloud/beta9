@@ -53,6 +53,7 @@ type Worker struct {
 	storage              storage.Storage
 	ctx                  context.Context
 	cancel               func()
+	config               types.AppConfig
 }
 
 type ContainerInstance struct {
@@ -104,12 +105,18 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	redisClient, err := common.NewRedisClient(common.WithClientName("BeamWorker"))
+	configManager, err := common.NewConfigManager[types.AppConfig]()
+	if err != nil {
+		return nil, err
+	}
+	config := configManager.GetConfig()
+
+	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("BeamWorker"))
 	if err != nil {
 		return nil, err
 	}
 
-	imageClient, err := NewImageClient()
+	imageClient, err := NewImageClient(config.ImageService)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +131,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	storage, err := storage.NewStorage()
+	storage, err := storage.NewStorage(config.Storage)
 	if err != nil {
 		return nil, err
 	}
@@ -135,12 +142,13 @@ func NewWorker() (*Worker, error) {
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	statsdRepo := repo.NewMetricsStatsdRepository()
 
-	workerMetrics := NewWorkerMetrics(ctx, podHostName, statsdRepo, workerRepo, repo.NewMetricsStreamRepository(ctx))
+	workerMetrics := NewWorkerMetrics(ctx, podHostName, statsdRepo, workerRepo, repo.NewMetricsStreamRepository(ctx, config.Metrics))
 	workerMetrics.InitNvml()
 
 	return &Worker{
 		ctx:                  ctx,
 		cancel:               cancel,
+		config:               config,
 		userImagePath:        imagePath,
 		cpuLimit:             cpuLimit,
 		memoryLimit:          memoryLimit,
@@ -542,8 +550,8 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
-		fmt.Sprintf("BEAM_GATEWAY_HOST=%s", os.Getenv("BEAM_GATEWAY_HOST")),
-		fmt.Sprintf("BEAM_GATEWAY_PORT=%s", os.Getenv("BEAM_GATEWAY_PORT")),
+		fmt.Sprintf("BEAM_GATEWAY_HOST=%s", s.config.GatewayService.Host),
+		fmt.Sprintf("BEAM_GATEWAY_PORT=%d", s.config.GatewayService.Port),
 		"PYTHONUNBUFFERED=1",
 	}
 	env = append(env, request.Env...)

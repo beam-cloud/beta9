@@ -2,13 +2,10 @@ package scheduler
 
 import (
 	"context"
-	"errors"
-	"log"
 
+	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type SchedulerService struct {
@@ -16,16 +13,16 @@ type SchedulerService struct {
 	Scheduler *Scheduler
 }
 
-func NewSchedulerService() (*SchedulerService, error) {
-	Scheduler, err := NewScheduler()
+func NewSchedulerService(config types.AppConfig, redisClient *common.RedisClient) (*SchedulerService, error) {
+	scheduler, err := NewScheduler(config, redisClient)
 	if err != nil {
 		return nil, err
 	}
 
-	go Scheduler.processRequests() // Start processing ContainerRequests
+	go scheduler.processRequests() // Start processing ContainerRequests
 
 	return &SchedulerService{
-		Scheduler: Scheduler,
+		Scheduler: scheduler,
 	}, nil
 }
 
@@ -91,93 +88,4 @@ func (wbs *SchedulerService) StopContainer(ctx context.Context, in *pb.StopConta
 		Success: true,
 		Error:   "",
 	}, nil
-}
-
-// Sets up worker pools reported by the agent/client.
-func (wbs *SchedulerService) SubscribeWorkerEvents(
-	req *pb.SubscribeWorkerEventRequest,
-	stream pb.Scheduler_SubscribeWorkerEventsServer,
-) error {
-	if req.AgentInfo == nil {
-		return status.Error(codes.InvalidArgument, "invalid agent token")
-	}
-
-	// Get and update agent
-	agent, err := wbs.Scheduler.beamRepo.GetAgentByToken(req.AgentInfo.Token)
-	if err != nil {
-		return status.Error(codes.Internal, "invalid agent token")
-	}
-
-	agent.IsOnline = true
-	agent.CloudProvider = req.AgentInfo.CloudProvider
-	agent.Version = req.AgentInfo.Version
-	workerPools := make(map[string]string, len(req.WorkerPools))
-	for _, pool := range req.WorkerPools {
-		workerPools[pool.Name] = ""
-	}
-	agent.SetPools(workerPools)
-
-	agent, err = wbs.Scheduler.beamRepo.UpdateAgent(agent)
-	if err != nil {
-		log.Printf("Unable to update agent in database: %v\n", err)
-	}
-
-	// Register worker pools
-	for _, pool := range req.WorkerPools {
-		// Find an existing pool. If found, don't register/overwrite it and prevent it from being removed
-		// when the client disconects later on.
-		if _, ok := wbs.Scheduler.workerPoolManager.GetPool(pool.Name); ok {
-			delete(workerPools, pool.Name)
-			continue
-		}
-
-		// No pool registered, lets add one
-		controller := NewRemoteWorkerPoolController(pool.Name, &RemoteWorkerPoolControllerConfig{
-			agent:             agent,
-			workerEventStream: stream,
-			workerRepo:        wbs.Scheduler.workerRepo,
-		})
-
-		// Create a WorkerPool and register it with the WorkerPoolManager.
-		// WorkerPoolManager only needs the pool name to find a controller. So we'll create a
-		// WorkerPoolResource with just the name and register it with the WorkerPoolManager.
-		resource := types.NewWorkerPoolResource(pool.Name)
-		wbs.Scheduler.workerPoolManager.SetPool(resource, controller)
-	}
-
-	log.Printf("Agent <%v> has connected with pools %+v\n", agent.ExternalID, workerPools)
-	<-stream.Context().Done()
-	log.Printf("Agent <%v> has disconnected\n", agent.ExternalID)
-
-	// Clean up
-	for poolName := range workerPools {
-		wbs.Scheduler.workerPoolManager.RemovePool(poolName)
-	}
-
-	agent.IsOnline = false
-	if _, err = wbs.Scheduler.beamRepo.UpdateAgent(agent); err != nil {
-		log.Printf("Unable to update agent info on client disconnect: %v\n", err)
-	}
-
-	return status.Error(codes.Canceled, "client disconnected")
-}
-
-func (wbs *SchedulerService) RegisterWorker(ctx context.Context, in *pb.RegisterWorkerRequest) (*pb.RegisterWorkerResponse, error) {
-	if in.AgentInfo == nil {
-		return nil, errors.New("invalid agent token")
-	}
-
-	_, err := wbs.Scheduler.beamRepo.GetAgentByToken(in.AgentInfo.Token)
-	if err != nil {
-		return nil, errors.New("invalid agent token")
-	}
-
-	return &pb.RegisterWorkerResponse{}, wbs.Scheduler.workerRepo.AddWorker(&types.Worker{
-		Id:     in.Worker.Id,
-		Cpu:    in.Worker.Cpu,
-		Memory: in.Worker.Memory,
-		Gpu:    in.Worker.GpuType,
-		PoolId: in.Worker.PoolId,
-		Status: types.WorkerStatus(in.Worker.Status),
-	})
 }
