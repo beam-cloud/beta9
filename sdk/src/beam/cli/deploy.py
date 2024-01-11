@@ -1,8 +1,11 @@
+import importlib
+import os
+import sys
+
 import click
 
-from beam import aio, terminal
 from beam.cli.contexts import get_gateway_service
-from beam.clients.gateway import GatewayServiceStub, StopTaskResponse
+from beam.clients.gateway import GatewayServiceStub
 
 
 @click.group(
@@ -18,15 +21,18 @@ def cli(ctx: click.Context):
     name="create",
     help="Create a new deployment",
 )
-@click.option(
-    "--name",
-    help="The name the deployment.",
-)
+@click.option("--name", help="The name the deployment.", required=True)
+@click.option("--function", help="The name the entry point and function.", required=True)
 @click.pass_obj
-def stop_task(service: GatewayServiceStub, name: str):
-    response: StopTaskResponse = aio.run_sync(service.stop_task(task_id=task_id))
+def create_deployment(service: GatewayServiceStub, name: str, function: str):
+    current_dir = os.getcwd()
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
 
-    if response.ok:
-        terminal.detail(f"Stopped task {name}", dim=False)
-    else:
-        terminal.error(f"{response.err_msg}\nFailed to stop task {task_id}")
+    module_path, func_name = function.split(":")
+    module_name = module_path.replace(".py", "").replace(os.path.sep, ".")
+    module = importlib.import_module(module_name)
+
+    func = getattr(module, func_name)
+
+    func.deploy(name=name)
