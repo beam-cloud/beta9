@@ -12,8 +12,8 @@ from beam.clients.function import (
 )
 from beam.clients.gateway import EndTaskResponse, GatewayServiceStub, StartTaskResponse
 from beam.config import with_runner_context
-from beam.exceptions import RunnerException
-from beam.runner.common import USER_CODE_VOLUME, load_handler
+from beam.exceptions import InvalidFunctionArgumentsException, RunnerException
+from beam.runner.common import USER_CODE_VOLUME, config, load_handler
 from beam.type import TaskStatus
 
 
@@ -22,10 +22,10 @@ def main(channel: Channel):
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
 
-    task_id = os.getenv("TASK_ID")
-    container_id = os.getenv("CONTAINER_ID")
-    container_hostname = os.getenv("CONTAINER_HOSTNAME")
-    if not task_id or not container_id:
+    task_id = config.task_id
+    container_id = config.container_id
+    container_hostname = config.container_hostname
+    if not task_id:
         raise RunnerException("Invalid runner environment")
 
     # Start the task
@@ -47,7 +47,7 @@ def main(channel: Channel):
             function_stub.function_get_args(task_id=task_id),
         )
         if not get_args_resp.ok:
-            raise RuntimeError("invalid args")
+            raise InvalidFunctionArgumentsException
 
         args: dict = cloudpickle.loads(get_args_resp.args)
         os.chdir(USER_CODE_VOLUME)
