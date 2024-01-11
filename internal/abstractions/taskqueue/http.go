@@ -33,7 +33,7 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 		version, err := strconv.Atoi(version)
 		if err != nil {
 			return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-				"error": "invalid version number",
+				"error": "invalid deployment version",
 			})
 		}
 
