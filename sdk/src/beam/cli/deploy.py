@@ -4,6 +4,7 @@ import sys
 
 import click
 
+from beam import terminal
 from beam.cli.contexts import get_gateway_service
 from beam.clients.gateway import GatewayServiceStub
 
@@ -34,4 +35,5 @@ def create_deployment(_: GatewayServiceStub, name: str, function: str):
     module = importlib.import_module(module_name)
 
     func = getattr(module, func_name)
-    func.deploy(name=name)
+    if not func.deploy(name=name):
+        terminal.header("Deployment failed ☠️")
