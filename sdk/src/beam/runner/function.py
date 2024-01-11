@@ -28,16 +28,6 @@ def main(channel: Channel):
     if not task_id or not container_id:
         raise RunnerException("Invalid runner environment")
 
-    # Load user function and arguments
-    handler = load_handler()
-    get_args_resp: FunctionGetArgsResponse = run_sync(
-        function_stub.function_get_args(task_id=task_id),
-    )
-    if not get_args_resp.ok:
-        raise RunnerException("Unable to retrieve function arguments")
-
-    args: dict = cloudpickle.loads(get_args_resp.args)
-
     # Start the task
     start_time = time.time()
     start_task_response: StartTaskResponse = run_sync(
@@ -46,12 +36,20 @@ def main(channel: Channel):
     if not start_task_response.ok:
         raise RunnerException("Unable to start task")
 
-    # Invoke function
     task_status = TaskStatus.Complete
     current_wkdir = os.getcwd()
     error = None
 
+    # Invoke function
     try:
+        handler = load_handler()
+        get_args_resp: FunctionGetArgsResponse = run_sync(
+            function_stub.function_get_args(task_id=task_id),
+        )
+        if not get_args_resp.ok:
+            raise RuntimeError("invalid args")
+
+        args: dict = cloudpickle.loads(get_args_resp.args)
         os.chdir(USER_CODE_VOLUME)
         result = handler(*args.get("args", ()), **args.get("kwargs", {}))
     except BaseException as exc:
