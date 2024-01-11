@@ -1,3 +1,4 @@
+import json
 import os
 import time
 
@@ -12,9 +13,20 @@ from beam.clients.function import (
 )
 from beam.clients.gateway import EndTaskResponse, GatewayServiceStub, StartTaskResponse
 from beam.config import with_runner_context
-from beam.exceptions import RunnerException
-from beam.runner.common import USER_CODE_VOLUME, load_handler
+from beam.exceptions import InvalidFunctionArgumentsException, RunnerException
+from beam.runner.common import USER_CODE_VOLUME, config, load_handler
 from beam.type import TaskStatus
+
+
+def _load_args(args: bytes) -> dict:
+    try:
+        return cloudpickle.loads(args)
+    except BaseException:
+        # If cloudpickle fails, fall back to JSON
+        try:
+            return json.loads(args.decode("utf-8"))
+        except json.JSONDecodeError:
+            raise InvalidFunctionArgumentsException
 
 
 @with_runner_context
@@ -22,21 +34,11 @@ def main(channel: Channel):
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
 
-    task_id = os.getenv("TASK_ID")
-    container_id = os.getenv("CONTAINER_ID")
-    container_hostname = os.getenv("CONTAINER_HOSTNAME")
-    if not task_id or not container_id:
+    task_id = config.task_id
+    container_id = config.container_id
+    container_hostname = config.container_hostname
+    if not task_id:
         raise RunnerException("Invalid runner environment")
-
-    # Load user function and arguments
-    handler = load_handler()
-    get_args_resp: FunctionGetArgsResponse = run_sync(
-        function_stub.function_get_args(task_id=task_id),
-    )
-    if not get_args_resp.ok:
-        raise RunnerException("Unable to retrieve function arguments")
-
-    args: dict = cloudpickle.loads(get_args_resp.args)
 
     # Start the task
     start_time = time.time()
@@ -46,14 +48,25 @@ def main(channel: Channel):
     if not start_task_response.ok:
         raise RunnerException("Unable to start task")
 
-    # Invoke function
     task_status = TaskStatus.Complete
     current_wkdir = os.getcwd()
     error = None
 
+    # Invoke function
     try:
+        handler = load_handler()
+        get_args_resp: FunctionGetArgsResponse = run_sync(
+            function_stub.function_get_args(task_id=task_id),
+        )
+        if not get_args_resp.ok:
+            raise InvalidFunctionArgumentsException
+
+        payload: dict = _load_args(get_args_resp.args)
+        args = payload.get("args") or []
+        kwargs = payload.get("kwargs") or {}
+
         os.chdir(USER_CODE_VOLUME)
-        result = handler(*args.get("args", ()), **args.get("kwargs", {}))
+        result = handler(*args, **kwargs)
     except BaseException as exc:
         result = error = exc
         task_status = TaskStatus.Error
