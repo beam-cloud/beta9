@@ -40,7 +40,6 @@ type Gateway struct {
 	redisClient    *common.RedisClient
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
-	BeamRepo       repository.BeamRepository
 	metricsRepo    repository.MetricsStatsdRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
@@ -80,11 +79,6 @@ func NewGateway() (*Gateway, error) {
 		Scheduler:   scheduler,
 	}
 
-	beamRepo, err := repository.NewBeamPostgresRepository(config.Database.Postgres)
-	if err != nil {
-		return nil, err
-	}
-
 	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
 	if err != nil {
 		return nil, err
@@ -96,7 +90,6 @@ func NewGateway() (*Gateway, error) {
 	gateway.config = config
 	gateway.ContainerRepo = containerRepo
 	gateway.BackendRepo = backendRepo
-	gateway.BeamRepo = beamRepo
 	gateway.metricsRepo = metricsRepo
 
 	return gateway, nil
