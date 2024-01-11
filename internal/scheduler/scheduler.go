@@ -22,7 +22,6 @@ type Scheduler struct {
 	workerPoolManager *WorkerPoolManager
 	requestBacklog    *RequestBacklog
 	containerRepo     repo.ContainerRepository
-	beamRepo          repo.BeamRepository
 	metricsRepo       repo.MetricsStatsdRepository
 	eventBus          *common.EventBus
 }
