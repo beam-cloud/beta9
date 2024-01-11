@@ -12,13 +12,17 @@ import (
 
 type RedisMapService struct {
 	pb.UnimplementedMapServiceServer
+	lock *common.RedisLock
 
 	rdb *common.RedisClient
 }
 
 func NewRedisMapService(rdb *common.RedisClient) (MapService, error) {
+	lock := common.NewRedisLock(rdb)
+
 	return &RedisMapService{
-		rdb: rdb,
+		rdb:  rdb,
+		lock: lock,
 	}, nil
 }
 
@@ -26,9 +30,15 @@ func NewRedisMapService(rdb *common.RedisClient) (MapService, error) {
 func (m *RedisMapService) MapSet(ctx context.Context, in *pb.MapSetRequest) (*pb.MapSetResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	err := m.rdb.Set(context.TODO(), Keys.MapEntry(authInfo.Workspace.Name, in.Name, in.Key), in.Value, 0).Err()
+	err := m.lock.Acquire(ctx, Keys.MapEntryLock(authInfo.Workspace.Name, in.Name, in.Key), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
-		return &pb.MapSetResponse{Ok: false}, err
+		return &pb.MapSetResponse{Ok: false}, nil
+	}
+	defer m.lock.Release(Keys.MapEntryLock(authInfo.Workspace.Name, in.Name, in.Key))
+
+	err = m.rdb.Set(ctx, Keys.MapEntry(authInfo.Workspace.Name, in.Name, in.Key), in.Value, 0).Err()
+	if err != nil {
+		return &pb.MapSetResponse{Ok: false}, nil
 	}
 
 	return &pb.MapSetResponse{Ok: true}, nil
@@ -37,9 +47,9 @@ func (m *RedisMapService) MapSet(ctx context.Context, in *pb.MapSetRequest) (*pb
 func (m *RedisMapService) MapGet(ctx context.Context, in *pb.MapGetRequest) (*pb.MapGetResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	value, err := m.rdb.Get(context.TODO(), Keys.MapEntry(authInfo.Workspace.Name, in.Name, in.Key)).Bytes()
+	value, err := m.rdb.Get(ctx, Keys.MapEntry(authInfo.Workspace.Name, in.Name, in.Key)).Bytes()
 	if err != nil {
-		return &pb.MapGetResponse{Ok: false, Value: nil}, err
+		return &pb.MapGetResponse{Ok: false, Value: nil}, nil
 	}
 
 	return &pb.MapGetResponse{Ok: true, Value: value}, nil
@@ -48,7 +58,7 @@ func (m *RedisMapService) MapGet(ctx context.Context, in *pb.MapGetRequest) (*pb
 func (m *RedisMapService) MapDelete(ctx context.Context, in *pb.MapDeleteRequest) (*pb.MapDeleteResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	err := m.rdb.Del(context.TODO(), Keys.MapEntry(authInfo.Workspace.Name, in.Name, in.Key)).Err()
+	err := m.rdb.Del(ctx, Keys.MapEntry(authInfo.Workspace.Name, in.Name, in.Key)).Err()
 	if err != nil {
 		return &pb.MapDeleteResponse{Ok: false}, err
 	}
@@ -59,7 +69,7 @@ func (m *RedisMapService) MapDelete(ctx context.Context, in *pb.MapDeleteRequest
 func (m *RedisMapService) MapCount(ctx context.Context, in *pb.MapCountRequest) (*pb.MapCountResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	keys, err := m.rdb.Scan(context.TODO(), Keys.MapEntry(authInfo.Workspace.Name, in.Name, "*"))
+	keys, err := m.rdb.Scan(ctx, Keys.MapEntry(authInfo.Workspace.Name, in.Name, "*"))
 	if err != nil {
 		return &pb.MapCountResponse{Ok: false, Count: 0}, err
 	}
@@ -70,7 +80,7 @@ func (m *RedisMapService) MapCount(ctx context.Context, in *pb.MapCountRequest) 
 func (m *RedisMapService) MapKeys(ctx context.Context, in *pb.MapKeysRequest) (*pb.MapKeysResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	keys, err := m.rdb.Scan(context.TODO(), Keys.MapEntry(authInfo.Workspace.Name, in.Name, "*"))
+	keys, err := m.rdb.Scan(ctx, Keys.MapEntry(authInfo.Workspace.Name, in.Name, "*"))
 	if err != nil {
 		return &pb.MapKeysResponse{Ok: false, Keys: []string{}}, err
 	}
@@ -85,8 +95,9 @@ func (m *RedisMapService) MapKeys(ctx context.Context, in *pb.MapKeysRequest) (*
 
 // Redis keys
 var (
-	mapPrefix string = "map"
-	mapEntry  string = "map:%s:%s:%s"
+	mapPrefix    string = "map"
+	mapEntry     string = "map:%s:%s:%s"
+	mapEntryLock string = "map:%s:%s:%s:lock"
 )
 
 var Keys = &keys{}
@@ -98,5 +109,9 @@ func (k *keys) MapPrefix() string {
 }
 
 func (k *keys) MapEntry(workspaceName, name, key string) string {
+	return fmt.Sprintf(mapEntry, workspaceName, name, key)
+}
+
+func (k *keys) MapEntryLock(workspaceName, name, key string) string {
 	return fmt.Sprintf(mapEntry, workspaceName, name, key)
 }
