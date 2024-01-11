@@ -36,4 +36,4 @@ def create_deployment(_: GatewayServiceStub, name: str, function: str):
 
     func = getattr(module, func_name)
     if not func.deploy(name=name):
-        terminal.header("Deployment failed ☠️")
+        terminal.error("Deployment failed ☠️")
