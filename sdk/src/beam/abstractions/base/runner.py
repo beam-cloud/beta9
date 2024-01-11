@@ -11,6 +11,7 @@ from beam.sync import FileSyncer
 FUNCTION_STUB_TYPE = "function"
 TASKQUEUE_STUB_TYPE = "taskqueue"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
+FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
 
 
 class RunnerAbstraction(BaseAbstraction):

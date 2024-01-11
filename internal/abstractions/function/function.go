@@ -55,17 +55,19 @@ func NewRuncFunctionService(ctx context.Context,
 		return nil, err
 	}
 
-	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(backendRepo)
-	registerFunctionRoutes(baseRouteGroup.Group(functionRoutePrefix, authMiddleware))
-
-	return &RunCFunctionService{
+	fs := &RunCFunctionService{
 		backendRepo:     backendRepo,
 		containerRepo:   containerRepo,
 		scheduler:       scheduler,
 		rdb:             rdb,
 		keyEventManager: keyEventManager,
-	}, nil
+	}
+
+	// Register HTTP routes
+	authMiddleware := auth.AuthMiddleware(backendRepo)
+	registerFunctionRoutes(baseRouteGroup.Group(functionRoutePrefix, authMiddleware), fs)
+
+	return fs, nil
 }
 
 func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {

@@ -5,13 +5,19 @@ from typing import Any, Callable, Iterable, List, Optional, Union
 import cloudpickle
 
 from beam import terminal
-from beam.abstractions.base.runner import FUNCTION_STUB_TYPE, RunnerAbstraction
+from beam.abstractions.base.runner import (
+    FUNCTION_DEPLOYMENT_STUB_TYPE,
+    FUNCTION_STUB_TYPE,
+    RunnerAbstraction,
+)
 from beam.abstractions.image import Image
 from beam.abstractions.volume import Volume
 from beam.clients.function import (
     FunctionInvokeResponse,
     FunctionServiceStub,
 )
+from beam.clients.gateway import DeployStubResponse
+from beam.config import GatewayConfig, get_gateway_config
 from beam.sync import FileSyncer
 
 
@@ -86,6 +92,28 @@ class _CallableWrapper:
 
     def remote(self, *args, **kwargs) -> Any:
         return self(*args, **kwargs)
+
+    def deploy(self, name: str) -> bool:
+        if not self.parent.prepare_runtime(
+            func=self.func, stub_type=FUNCTION_DEPLOYMENT_STUB_TYPE, force_create_stub=True
+        ):
+            return False
+
+        terminal.header("Deploying")
+        deploy_response: DeployStubResponse = self.parent.run_sync(
+            self.parent.gateway_stub.deploy_stub(stub_id=self.parent.stub_id, name=name)
+        )
+
+        if deploy_response.ok:
+            gateway_config: GatewayConfig = get_gateway_config()
+            gateway_url = f"{gateway_config.gateway_host}:{gateway_config.gateway_port}"
+
+            terminal.header("Deployed 🎉")
+            terminal.detail(
+                f"Call your deployment at: {gateway_url}/api/v1/function/{name}/v{deploy_response.version}"
+            )
+
+        return deploy_response.ok
 
     def _gather_and_yield_results(self, inputs: Iterable):
         async def _gather_async():
