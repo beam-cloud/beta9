@@ -62,31 +62,6 @@ type BackendRepository interface {
 	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error)
 }
 
-type BeamRepository interface {
-	GetAgent(name, identityExternalId string) (*types.Agent, error)
-	GetAgentByToken(token string) (*types.Agent, error)
-	UpdateAgent(agent *types.Agent) (*types.Agent, error)
-	GetDeployments(appId string) ([]types.BeamAppDeployment, error)
-	GetDeployment(appId string, version *uint) (*types.BeamAppDeployment, *types.BeamApp, *types.BeamAppDeploymentPackage, error)
-	GetDeploymentById(appDeploymentId string) (*types.BeamAppDeployment, *types.BeamApp, *types.BeamAppDeploymentPackage, error)
-	GetServe(appId string, serveId string) (*types.BeamAppServe, *types.BeamApp, error)
-	EndServe(appId string, serveId string, identityId string) error
-	UpdateDeployment(appDeploymentId string, status string, errorMsg string) (*types.BeamAppDeployment, error)
-	CreateDeploymentTask(appDeploymentId string, taskId string, taskPolicyRaw []byte) (*types.BeamAppTask, error)
-	CreateServeTask(appDeploymentId string, taskId string, taskPolicyRaw []byte) (*types.BeamAppTask, error)
-	GetAppTask(taskId string) (*types.BeamAppTask, error)
-	UpdateActiveTask(taskId string, status string, identityExternalId string) (*types.BeamAppTask, error)
-	DeleteTask(taskId string) error
-	GetTotalUsageOfUserMs(identity types.Identity) (totalUsageMs float64, err error)
-	RetrieveUserByPk(pk uint) (*types.Identity, error)
-	AuthorizeApiKey(clientId string, clientSecret string) (bool, *types.Identity, error)
-	AuthorizeApiKeyWithAppId(appId string, clientId string, clientSecret string) (bool, error)
-	DeploymentRequiresAuthorization(appId string, appVersion string) (bool, error)
-	ServeRequiresAuthorization(appId string, serveId string) (bool, error)
-	AuthorizeServiceToServiceToken(token string) (*types.Identity, bool, error)
-	GetIdentityQuota(identityId string) (*types.IdentityQuota, error)
-}
-
 type WorkerPoolRepository interface {
 	GetPool(name string) (*types.WorkerPoolConfig, error)
 	GetPools() ([]types.WorkerPoolConfig, error)
