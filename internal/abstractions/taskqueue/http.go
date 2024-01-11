@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/beam-cloud/beam/internal/auth"
+	"github.com/beam-cloud/beam/internal/types"
 	"github.com/labstack/echo/v4"
 )
 
@@ -23,6 +24,12 @@ func registerTaskQueueRoutes(g *echo.Group, tq *RedisTaskQueue) *taskQueueGroup 
 }
 
 func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
+	/*
+		 TODO: support three different unmarshalling strategies
+		 	- explicit args/kwargs (nested under {"args", "kwargs"})
+			- just kwargs (key/value)
+			- just args (in list)
+	*/
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	stubId := ctx.Param("stubId")
@@ -37,7 +44,7 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 			})
 		}
 
-		deployment, err := g.tq.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version))
+		deployment, err := g.tq.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), types.StubTypeTaskQueueDeployment)
 		if err != nil {
 			ctx.JSON(http.StatusBadRequest, map[string]interface{}{
 				"error": "invalid deployment",
