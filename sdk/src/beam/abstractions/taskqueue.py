@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Callable
+from typing import Any, Callable, Union
 
 from beam import terminal
 from beam.abstractions.base.runner import (
@@ -17,9 +17,9 @@ from beam.config import GatewayConfig, get_gateway_config
 class TaskQueue(RunnerAbstraction):
     def __init__(
         self,
-        cpu: int = 100,
+        cpu: Union[int, str] = 100,
         memory: int = 128,
-        gpu="",
+        gpu: str = "",
         image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,
@@ -38,9 +38,9 @@ class TaskQueue(RunnerAbstraction):
         Parameters:
             cpu (Union[int, str]):
                 The number of CPU cores allocated to the container. Default is 1.
-            memory (str):
+            memory (int):
                 The amount of memory allocated to the container. It should be specified in
-                as an integer (e.g., 128 for 128 megabytes). Default is 128.
+                megabytes (e.g., 128 for 128 megabytes). Default is 128.
             gpu (Union[GpuType, str]):
                 The type or name of the GPU device to be used for GPU-accelerated tasks. If not
                 applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
