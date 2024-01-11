@@ -24,9 +24,9 @@ class TaskQueue(RunnerAbstraction):
         timeout: int = 3600,
         retries: int = 3,
         concurrency: int = 1,
-        max_pending_tasks: int = 100,
         max_containers: int = 1,
         keep_warm_seconds: int = 10,
+        max_pending_tasks: int = 100,
     ) -> None:
         """
         Decorator used for defining a task queue.
@@ -57,10 +57,6 @@ class TaskQueue(RunnerAbstraction):
                 Workers will share the CPU, Memory, and GPU defined.
                 You may need to increase these values to increase concurrency.
                 Default is 1.
-            max_pending_tasks (int):
-                The maximum number of tasks that can be pending in the queue. If the number of
-                pending tasks exceeds this value, the task queue will stop accepting new tasks.
-                Default is 100.
             max_containers (int):
                 The maximum number of containers that the task queue will autoscale to. If the number of tasks
                 in the queue goes over the concurrency value, the task queue will automatically add containers to
@@ -70,6 +66,10 @@ class TaskQueue(RunnerAbstraction):
                 The duration in seconds to keep the task queue warm even if there are no pending
                 tasks. Keeping the queue warm helps to reduce the latency when new tasks arrive.
                 Default is 10s.
+            max_pending_tasks (int):
+                The maximum number of tasks that can be pending in the queue. If the number of
+                pending tasks exceeds this value, the task queue will stop accepting new tasks.
+                Default is 100.
         Example:
             ```python
             from beam import TaskQueue
@@ -84,16 +84,16 @@ class TaskQueue(RunnerAbstraction):
             ```
         """
         super().__init__(
-            image=image,
             cpu=cpu,
             memory=memory,
             gpu=gpu,
+            image=image,
             concurrency=concurrency,
             max_containers=max_containers,
-            max_pending_tasks=max_pending_tasks,
             timeout=timeout,
             retries=retries,
             keep_warm_seconds=keep_warm_seconds,
+            max_pending_tasks=max_pending_tasks,
         )
 
         self.taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(self.channel)
