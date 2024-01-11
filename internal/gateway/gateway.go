@@ -94,6 +94,9 @@ func NewGateway() (*Gateway, error) {
 
 func (g *Gateway) initHttp() error {
 	g.httpServer = echo.New()
+	g.httpServer.HideBanner = true
+	g.httpServer.HidePort = true
+
 	g.httpServer.Use(middleware.Logger())
 	g.httpServer.Use(middleware.Recover())
 

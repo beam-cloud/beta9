@@ -8,11 +8,9 @@ from beam.abstractions.volume import Volume
 from beam.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
 from beam.sync import FileSyncer
 
-FUNCTION_STUB_TYPE = "FUNCTION"
-FUNCTION_STUB_PREFIX = "function"
-
-TASKQUEUE_STUB_TYPE = "TASK_QUEUE"
-TASKQUEUE_STUB_PREFIX = "taskqueue"
+FUNCTION_STUB_TYPE = "function"
+TASKQUEUE_STUB_TYPE = "taskqueue"
+TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -73,15 +71,12 @@ class RunnerAbstraction(BaseAbstraction):
         function_name = func.__name__
         self.handler = f"{module_name}:{function_name}"
 
-    def prepare_runtime(self, *, func: Callable, stub_type: str) -> bool:
+    def prepare_runtime(
+        self, *, func: Callable, stub_type: str, force_create_stub: bool = False
+    ) -> bool:
         self._load_handler(func)
 
-        stub_name = ""
-        if stub_type == FUNCTION_STUB_TYPE:
-            stub_name = f"{FUNCTION_STUB_PREFIX}/{self.handler}"
-        elif stub_type == TASKQUEUE_STUB_TYPE:
-            stub_name = f"{TASKQUEUE_STUB_PREFIX}/{self.handler}"
-
+        stub_name = f"{stub_type}/{self.handler}"
         if self.runtime_ready:
             return True
 
@@ -126,6 +121,7 @@ class RunnerAbstraction(BaseAbstraction):
                     max_containers=self.max_containers,
                     max_pending_tasks=self.max_pending_tasks,
                     volumes=[v.export() for v in self.volumes],
+                    force_create=force_create_stub,
                 )
             )
 

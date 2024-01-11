@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -330,7 +331,7 @@ func (r *PostgresBackendRepository) ListTasksWithRelated(
 
 // Stub
 
-func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint) (types.Stub, error) {
+func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool) (types.Stub, error) {
 	var stub types.Stub
 
 	// Serialize config to JSON
@@ -339,16 +340,18 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 		return types.Stub{}, err
 	}
 
-	// Query to check if a stub with the same name, type, object_id, and config exists
-	queryGet := `
+	if !forceCreate {
+		// Query to check if a stub with the same name, type, object_id, and config exists
+		queryGet := `
     SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at
     FROM stub
     WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb;
     `
-	err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON))
-	if err == nil {
-		// Stub found, return it
-		return stub, nil
+		err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON))
+		if err == nil {
+			// Stub found, return it
+			return stub, nil
+		}
 	}
 
 	// Stub not found, create a new one
@@ -403,6 +406,69 @@ func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, works
 	}
 
 	return &volume, nil
+}
+
+// Deployment
+
+func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string) (*types.Deployment, error) {
+	var deployment types.Deployment
+
+	query := `
+        SELECT id, external_id, name, active, workspace_id, stub_id, version, created_at, updated_at
+        FROM deployment
+        WHERE workspace_id = $1 AND name = $2
+        ORDER BY version DESC
+        LIMIT 1;
+    `
+
+	err := c.client.GetContext(ctx, &deployment, query, workspaceId, name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // Return nil if no deployment found
+		}
+		return nil, err
+	}
+
+	return &deployment, nil
+}
+
+func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint) (*types.DeploymentWithRelated, error) {
+	var deploymentWithRelated types.DeploymentWithRelated
+
+	query := `
+        SELECT d.*, 
+               w.external_id AS "workspace.external_id", w.name AS "workspace.name", 
+               s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
+        FROM deployment d
+        JOIN workspace w ON d.workspace_id = w.id
+        JOIN stub s ON d.stub_id = s.id
+        WHERE d.workspace_id = $1 AND d.name = $2 AND d.version = $3
+        LIMIT 1;
+    `
+
+	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, name, version)
+	if err != nil {
+		return nil, err
+	}
+
+	return &deploymentWithRelated, nil
+}
+
+func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint) (*types.Deployment, error) {
+	var deployment types.Deployment
+
+	query := `
+        INSERT INTO deployment (name, active, workspace_id, stub_id, version)
+        VALUES ($1, true, $2, $3, $4)
+        RETURNING id, external_id, name, active, workspace_id, stub_id, version, created_at, updated_at;
+    `
+
+	err := c.client.GetContext(ctx, &deployment, query, name, workspaceId, stubId, version)
+	if err != nil {
+		return nil, err
+	}
+
+	return &deployment, nil
 }
 
 // Helpers
