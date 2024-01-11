@@ -54,9 +54,12 @@ type BackendRepository interface {
 	DeleteTask(ctx context.Context, externalId string) error
 	ListTasks(ctx context.Context) ([]types.Task, error)
 	ListTasksWithRelated(ctx context.Context, filters []types.FilterFieldMapping, limit uint32) ([]types.TaskWithRelated, error)
-	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint) (types.Stub, error)
+	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool) (types.Stub, error)
 	GetStubByExternalId(ctx context.Context, externalId string) (*types.StubWithRelated, error)
 	GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
+	GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string) (*types.Deployment, error)
+	GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint) (*types.DeploymentWithRelated, error)
+	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint) (*types.Deployment, error)
 }
 
 type BeamRepository interface {

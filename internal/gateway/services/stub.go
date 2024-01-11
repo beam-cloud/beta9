@@ -46,7 +46,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	stub, err := gws.backendRepo.GetOrCreateStub(ctx, in.Name, in.StubType, stubConfig, object.Id, authInfo.Workspace.Id)
+	stub, err := gws.backendRepo.GetOrCreateStub(ctx, in.Name, in.StubType, stubConfig, object.Id, authInfo.Workspace.Id, in.ForceCreate)
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok: false,
@@ -60,9 +60,28 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 }
 
 func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequest) (*pb.DeployStubResponse, error) {
-	_, _ = auth.AuthInfoFromContext(ctx)
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	_, err := gws.backendRepo.GetStubByExternalId(ctx, in.StubId)
+	stub, err := gws.backendRepo.GetStubByExternalId(ctx, in.StubId)
+	if err != nil {
+		return &pb.DeployStubResponse{
+			Ok: false,
+		}, nil
+	}
+
+	lastestDeployment, err := gws.backendRepo.GetLatestDeploymentByName(ctx, authInfo.Workspace.Id, in.Name)
+	if err != nil {
+		return &pb.DeployStubResponse{
+			Ok: false,
+		}, nil
+	}
+
+	version := uint(1)
+	if lastestDeployment != nil {
+		version = lastestDeployment.Version + 1
+	}
+
+	deployment, err := gws.backendRepo.CreateDeployment(ctx, authInfo.Workspace.Id, in.Name, version, stub.Id)
 	if err != nil {
 		return &pb.DeployStubResponse{
 			Ok: false,
@@ -70,6 +89,8 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	}
 
 	return &pb.DeployStubResponse{
-		Ok: true,
+		Ok:           true,
+		DeploymentId: deployment.ExternalId,
+		Version:      uint32(deployment.Version),
 	}, nil
 }

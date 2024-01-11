@@ -130,6 +130,7 @@ message GetOrCreateStubRequest {
   uint32 max_containers = 14;
   uint32 max_pending_tasks = 15;
   repeated Volume volumes = 16;
+  bool force_create = 17;
 }
 
 message GetOrCreateStubResponse {
@@ -137,9 +138,13 @@ message GetOrCreateStubResponse {
   string stub_id = 2;
 }
 
-message DeployStubRequest { string stub_id = 1; }
+message DeployStubRequest {
+  string stub_id = 1;
+  string name = 2;
+}
 
 message DeployStubResponse {
   bool ok = 1;
   string deployment_id = 2;
+  uint32 version = 3;
 }
