@@ -410,18 +410,18 @@ func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, works
 
 // Deployment
 
-func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string) (*types.Deployment, error) {
+func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string) (*types.Deployment, error) {
 	var deployment types.Deployment
 
 	query := `
         SELECT id, external_id, name, active, workspace_id, stub_id, version, created_at, updated_at
         FROM deployment
-        WHERE workspace_id = $1 AND name = $2
+        WHERE workspace_id = $1 AND name = $2 AND stub_type = $3
         ORDER BY version DESC
         LIMIT 1;
     `
 
-	err := c.client.GetContext(ctx, &deployment, query, workspaceId, name)
+	err := c.client.GetContext(ctx, &deployment, query, workspaceId, name, stubType)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Return nil if no deployment found
@@ -432,7 +432,7 @@ func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Contex
 	return &deployment, nil
 }
 
-func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint) (*types.DeploymentWithRelated, error) {
+func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint, stubType string) (*types.DeploymentWithRelated, error) {
 	var deploymentWithRelated types.DeploymentWithRelated
 
 	query := `
@@ -442,11 +442,11 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
         JOIN stub s ON d.stub_id = s.id
-        WHERE d.workspace_id = $1 AND d.name = $2 AND d.version = $3
+        WHERE d.workspace_id = $1 AND d.name = $2 AND d.version = $3 AND d.stub_type = $4
         LIMIT 1;
     `
 
-	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, name, version)
+	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, name, version, stubType)
 	if err != nil {
 		return nil, err
 	}
@@ -454,16 +454,16 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	return &deploymentWithRelated, nil
 }
 
-func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint) (*types.Deployment, error) {
+func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error) {
 	var deployment types.Deployment
 
 	query := `
-        INSERT INTO deployment (name, active, workspace_id, stub_id, version)
-        VALUES ($1, true, $2, $3, $4)
+        INSERT INTO deployment (name, active, workspace_id, stub_id, version, stub_type)
+        VALUES ($1, true, $2, $3, $4, $5)
         RETURNING id, external_id, name, active, workspace_id, stub_id, version, created_at, updated_at;
     `
 
-	err := c.client.GetContext(ctx, &deployment, query, name, workspaceId, stubId, version)
+	err := c.client.GetContext(ctx, &deployment, query, name, workspaceId, stubId, version, stubType)
 	if err != nil {
 		return nil, err
 	}
