@@ -1,3 +1,4 @@
+import json
 import os
 import time
 
@@ -15,6 +16,17 @@ from beam.config import with_runner_context
 from beam.exceptions import InvalidFunctionArgumentsException, RunnerException
 from beam.runner.common import USER_CODE_VOLUME, config, load_handler
 from beam.type import TaskStatus
+
+
+def _load_args(args: bytes) -> dict:
+    try:
+        return cloudpickle.loads(args)
+    except BaseException:
+        # If cloudpickle fails, fall back to JSON
+        try:
+            return json.loads(args.decode("utf-8"))
+        except json.JSONDecodeError:
+            raise InvalidFunctionArgumentsException
 
 
 @with_runner_context
@@ -49,9 +61,12 @@ def main(channel: Channel):
         if not get_args_resp.ok:
             raise InvalidFunctionArgumentsException
 
-        args: dict = cloudpickle.loads(get_args_resp.args)
+        payload: dict = _load_args(get_args_resp.args)
+        args = payload.get("args") or []
+        kwargs = payload.get("kwargs") or {}
+
         os.chdir(USER_CODE_VOLUME)
-        result = handler(*args.get("args", ()), **args.get("kwargs", {}))
+        result = handler(*args, **kwargs)
     except BaseException as exc:
         result = error = exc
         task_status = TaskStatus.Error

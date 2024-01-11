@@ -1,6 +1,7 @@
 package function
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -15,7 +16,8 @@ type functionGroup struct {
 }
 
 type functionPayload struct {
-	Args []interface{} `json:"args"`
+	Args   []interface{} `json:"args"`
+	Kwargs []interface{} `json:"kwargs"`
 }
 
 func registerFunctionRoutes(g *echo.Group, fs *RunCFunctionService) *functionGroup {
@@ -59,14 +61,20 @@ func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
 	}
 
 	var payload functionPayload
-
 	if err := ctx.Bind(&payload); err != nil {
 		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error": "invalid request payload",
+			"error": "invalid function payload",
 		})
 	}
 
-	task, err := g.fs.invoke(ctx.Request().Context(), cc.AuthInfo, stubId, []byte{}, nil)
+	args, err := json.Marshal(payload)
+	if err != nil {
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "error marshaling function payload",
+		})
+	}
+
+	task, err := g.fs.invoke(ctx.Request().Context(), cc.AuthInfo, stubId, args, nil)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": err.Error(),
