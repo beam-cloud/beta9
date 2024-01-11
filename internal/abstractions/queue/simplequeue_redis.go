@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/beam-cloud/beam/internal/auth"
 	"github.com/beam-cloud/beam/internal/common"
 	pb "github.com/beam-cloud/beam/proto"
 	"github.com/redis/go-redis/v9"
@@ -22,8 +23,9 @@ func NewRedisSimpleQueueService(rdb *common.RedisClient) (SimpleQueueService, er
 }
 
 // Simple queue service implementations
-func (s *RedisSimpleQueueService) Put(ctx context.Context, in *pb.SimpleQueuePutRequest) (*pb.SimpleQueuePutResponse, error) {
-	queueName := Keys.SimpleQueueName(in.Name)
+func (s *RedisSimpleQueueService) SimpleQueuePut(ctx context.Context, in *pb.SimpleQueuePutRequest) (*pb.SimpleQueuePutResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	queueName := Keys.SimpleQueueName(authInfo.Workspace.Name, in.Name)
 
 	err := s.rdb.RPush(context.TODO(), queueName, in.Value).Err()
 	if err != nil {
@@ -37,8 +39,9 @@ func (s *RedisSimpleQueueService) Put(ctx context.Context, in *pb.SimpleQueuePut
 	}, nil
 }
 
-func (s *RedisSimpleQueueService) Pop(ctx context.Context, in *pb.SimpleQueuePopRequest) (*pb.SimpleQueuePopResponse, error) {
-	queueName := Keys.SimpleQueueName(in.Name)
+func (s *RedisSimpleQueueService) SimpleQueuePop(ctx context.Context, in *pb.SimpleQueuePopRequest) (*pb.SimpleQueuePopResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	queueName := Keys.SimpleQueueName(authInfo.Workspace.Name, in.Name)
 
 	value, err := s.rdb.LPop(context.TODO(), queueName).Bytes()
 	if err == redis.Nil {
@@ -59,8 +62,9 @@ func (s *RedisSimpleQueueService) Pop(ctx context.Context, in *pb.SimpleQueuePop
 	}, nil
 }
 
-func (s *RedisSimpleQueueService) Peek(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueuePeekResponse, error) {
-	queueName := Keys.SimpleQueueName(in.Name)
+func (s *RedisSimpleQueueService) SimpleQueuePeek(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueuePeekResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	queueName := Keys.SimpleQueueName(authInfo.Workspace.Name, in.Name)
 
 	res, err := s.rdb.LRange(context.TODO(), queueName, 0, 0)
 	if err != nil {
@@ -81,8 +85,9 @@ func (s *RedisSimpleQueueService) Peek(ctx context.Context, in *pb.SimpleQueueRe
 	}, nil
 }
 
-func (s *RedisSimpleQueueService) Empty(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueueEmptyResponse, error) {
-	queueName := Keys.SimpleQueueName(in.Name)
+func (s *RedisSimpleQueueService) SimpleQueueEmpty(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueueEmptyResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	queueName := Keys.SimpleQueueName(authInfo.Workspace.Name, in.Name)
 
 	length, err := s.rdb.LLen(context.TODO(), queueName).Result()
 	if err != nil {
@@ -105,8 +110,9 @@ func (s *RedisSimpleQueueService) Empty(ctx context.Context, in *pb.SimpleQueueR
 	}, nil
 }
 
-func (s *RedisSimpleQueueService) Size(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueueSizeResponse, error) {
-	queueName := Keys.SimpleQueueName(in.Name)
+func (s *RedisSimpleQueueService) SimpleQueueSize(ctx context.Context, in *pb.SimpleQueueRequest) (*pb.SimpleQueueSizeResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	queueName := Keys.SimpleQueueName(authInfo.Workspace.Name, in.Name)
 
 	length, err := s.rdb.LLen(context.TODO(), queueName).Result()
 	if err != nil {
@@ -136,6 +142,6 @@ func (k *keys) SimpleQueuePrefix() string {
 	return queuePrefix
 }
 
-func (k *keys) SimpleQueueName(name string) string {
-	return fmt.Sprintf(queueName, name)
+func (k *keys) SimpleQueueName(workspaceName, name string) string {
+	return fmt.Sprintf(queueName, workspaceName, name)
 }
