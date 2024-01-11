@@ -66,7 +66,7 @@ func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
 		})
 	}
 
-	taskId, err := g.fs.invoke(ctx.Request().Context(), cc.AuthInfo, stubId, []byte{}, nil)
+	task, err := g.fs.invoke(ctx.Request().Context(), cc.AuthInfo, stubId, []byte{}, nil)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": err.Error(),
@@ -74,6 +74,6 @@ func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"task_id": taskId,
+		"task_id": task.ExternalId,
 	})
 }
