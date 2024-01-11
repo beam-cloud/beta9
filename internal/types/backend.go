@@ -43,6 +43,7 @@ type Deployment struct {
 	Active      bool      `db:"active"`
 	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
 	StubId      uint      `db:"stub_id"`      // Foreign key to Stub
+	StubType    string    `db:"stub_type"`
 	Version     uint      `db:"version"`
 	CreatedAt   time.Time `db:"created_at"`
 	UpdatedAt   time.Time `db:"updated_at"`
@@ -167,8 +168,10 @@ type StubConfigV1 struct {
 }
 
 const (
-	StubTypeFunction  string = "FUNCTION"
-	StubTypeTaskQueue string = "TASK_QUEUE"
+	StubTypeFunction            string = "function"
+	StubTypeFunctionDeployment  string = "function/deployment"
+	StubTypeTaskQueue           string = "taskqueue"
+	StubTypeTaskQueueDeployment string = "taskqueue/deployment"
 )
 
 type Stub struct {

@@ -75,11 +75,12 @@ func upCreateTables(tx *sql.Tx) error {
             name VARCHAR(255) NOT NULL,
             active BOOLEAN NOT NULL DEFAULT true,
             workspace_id INT REFERENCES workspace(id),
+            stub_type stub_type NOT NULL,
             stub_id INT REFERENCES stub(id),
             version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (name, version, workspace_id)
+            UNIQUE (name, version, workspace_id, stub_type)
         );`,
 
 		`CREATE TABLE IF NOT EXISTS task (
