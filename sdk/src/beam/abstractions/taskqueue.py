@@ -3,9 +3,15 @@ import os
 from typing import Any, Callable
 
 from beam import terminal
-from beam.abstractions.base.runner import TASKQUEUE_STUB_TYPE, RunnerAbstraction
+from beam.abstractions.base.runner import (
+    TASKQUEUE_DEPLOYMENT_STUB_TYPE,
+    TASKQUEUE_STUB_TYPE,
+    RunnerAbstraction,
+)
 from beam.abstractions.image import Image
+from beam.clients.gateway import DeployStubResponse
 from beam.clients.taskqueue import TaskQueuePutResponse, TaskQueueServiceStub
+from beam.config import GatewayConfig, get_gateway_config
 
 
 class TaskQueue(RunnerAbstraction):
@@ -59,12 +65,34 @@ class _CallableWrapper:
     def local(self, *args, **kwargs) -> Any:
         return self.func(*args, **kwargs)
 
+    def deploy(self, name: str) -> bool:
+        if not self.parent.prepare_runtime(
+            func=self.func, stub_type=TASKQUEUE_DEPLOYMENT_STUB_TYPE, force_create_stub=True
+        ):
+            return False
+
+        terminal.header("Deploying")
+        deploy_response: DeployStubResponse = self.parent.run_sync(
+            self.parent.gateway_stub.deploy_stub(stub_id=self.parent.stub_id, name=name)
+        )
+
+        if deploy_response.ok:
+            gateway_config: GatewayConfig = get_gateway_config()
+            gateway_url = f"{gateway_config.gateway_host}:{gateway_config.gateway_port}"
+
+            terminal.header("Deployed 🎉")
+            terminal.detail(
+                f"Call your deployment at: {gateway_url}/api/v1/taskqueue/{name}/v{deploy_response.version}"
+            )
+
+        return deploy_response.ok
+
     def put(self, *args, **kwargs) -> bool:
         if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,
         ):
-            return
+            return False
 
         payload = {"args": args, "kwargs": kwargs}
         json_payload = json.dumps(payload)

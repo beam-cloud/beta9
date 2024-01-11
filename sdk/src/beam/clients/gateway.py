@@ -156,6 +156,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     max_containers: int = betterproto.uint32_field(14)
     max_pending_tasks: int = betterproto.uint32_field(15)
     volumes: List["Volume"] = betterproto.message_field(16)
+    force_create: bool = betterproto.bool_field(17)
 
 
 @dataclass
@@ -167,12 +168,14 @@ class GetOrCreateStubResponse(betterproto.Message):
 @dataclass
 class DeployStubRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
+    name: str = betterproto.string_field(2)
 
 
 @dataclass
 class DeployStubResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     deployment_id: str = betterproto.string_field(2)
+    version: int = betterproto.uint32_field(3)
 
 
 class GatewayServiceStub(betterproto.ServiceStub):
@@ -295,6 +298,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
         max_containers: int = 0,
         max_pending_tasks: int = 0,
         volumes: List["Volume"] = [],
+        force_create: bool = False,
     ) -> GetOrCreateStubResponse:
         request = GetOrCreateStubRequest()
         request.object_id = object_id
@@ -314,6 +318,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
         request.max_pending_tasks = max_pending_tasks
         if volumes is not None:
             request.volumes = volumes
+        request.force_create = force_create
 
         return await self._unary_unary(
             "/gateway.GatewayService/GetOrCreateStub",
@@ -321,9 +326,12 @@ class GatewayServiceStub(betterproto.ServiceStub):
             GetOrCreateStubResponse,
         )
 
-    async def deploy_stub(self, *, stub_id: str = "") -> DeployStubResponse:
+    async def deploy_stub(
+        self, *, stub_id: str = "", name: str = ""
+    ) -> DeployStubResponse:
         request = DeployStubRequest()
         request.stub_id = stub_id
+        request.name = name
 
         return await self._unary_unary(
             "/gateway.GatewayService/DeployStub",
