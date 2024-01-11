@@ -1,5 +1,0 @@
-[flake8]
-ignore = E226,E302,E41,W503,E731
-max-line-length = 100
-exclude = tests/*
-max-complexity = 10

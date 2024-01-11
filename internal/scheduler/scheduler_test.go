@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"errors"
 	"log"
 	"testing"
 	"time"
@@ -12,48 +11,43 @@ import (
 	repo "github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/types"
 	"github.com/google/uuid"
+	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/tj/assert"
 )
 
-func NewschedulerForTest() (*Scheduler, error) {
+func NewSchedulerForTest() (*Scheduler, error) {
 	s, err := miniredis.Run()
 	if err != nil {
 		return nil, err
 	}
 
-	rdb, err := common.NewRedisClient(common.WithAddress(s.Addr()))
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
 	if err != nil {
 		return nil, err
 	}
 
 	eventBus := common.NewEventBus(rdb)
 	workerRepo := repo.NewWorkerRedisRepositoryForTest(rdb)
-	workerPoolRepo := repo.NewWorkerPoolRedisRepository(rdb)
 	containerRepo := repo.NewContainerRedisRepositoryForTest(rdb)
 	requestBacklog := NewRequestBacklogForTest(rdb)
 
-	workerPoolConfig := &WorkerPoolConfig{
-		DataVolumeName:             "beam-data-volume-name",
-		DefaultWorkerCpuRequest:    1000,
-		DefaultWorkerMemoryRequest: 1000,
-		DefaultMaxGpuCpuRequest:    1000,
-		DefaultMaxGpuMemoryRequest: 1000,
+	configManager, err := common.NewConfigManager[types.AppConfig]()
+	if err != nil {
+		return nil, err
 	}
 
-	factory := WorkerPoolControllerFactoryForTest()
-	factoryConfig := &WorkerPoolControllerConfigForTest{
-		namespace:        "beam-namespace",
-		workerPoolConfig: workerPoolConfig,
-		workerRepo:       workerRepo,
-	}
+	poolJson := []byte(`{"worker":{"pools":{"beam-cpu":{},"beam-a10g":{},"beam-t4":{}}}}}`)
+	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
+	config := configManager.GetConfig()
 
-	workerPoolManager := NewWorkerPoolManager(workerPoolRepo)
-	workerPoolResources := []types.WorkerPoolResource{
-		types.NewWorkerPoolResource("beam-cpu"),
-		types.NewWorkerPoolResource("beam-a10g"),
-		types.NewWorkerPoolResource("beam-t4"),
+	workerPoolManager := NewWorkerPoolManager(repo.NewWorkerPoolRedisRepository(rdb))
+	for name, pool := range config.Worker.Pools {
+		workerPoolManager.SetPool(name, &pool, &WorkerPoolControllerForTest{
+			name:       name,
+			config:     config,
+			workerRepo: workerRepo,
+		})
 	}
-	workerPoolManager.LoadPools(factory, factoryConfig, workerPoolResources)
 
 	return &Scheduler{
 		eventBus:          eventBus,
@@ -65,32 +59,10 @@ func NewschedulerForTest() (*Scheduler, error) {
 	}, nil
 }
 
-func WorkerPoolControllerFactoryForTest() WorkerPoolControllerFactory {
-	return func(resource *types.WorkerPoolResource, config WorkerPoolControllerConfig) (WorkerPoolController, error) {
-		if c, ok := config.(*WorkerPoolControllerConfigForTest); ok {
-			return NewWorkerPoolControllerForTest(resource.Name, c)
-		}
-
-		return nil, errors.New("test worker pool controller factory received invalid config")
-	}
-}
-
-type WorkerPoolControllerConfigForTest struct {
-	namespace        string
-	workerPoolConfig *WorkerPoolConfig
-	workerRepo       repo.WorkerRepository
-}
-
 type WorkerPoolControllerForTest struct {
-	name   string
-	config *WorkerPoolControllerConfigForTest
-}
-
-func NewWorkerPoolControllerForTest(workerPoolName string, config *WorkerPoolControllerConfigForTest) (WorkerPoolController, error) {
-	return &WorkerPoolControllerForTest{
-		name:   workerPoolName,
-		config: config,
-	}, nil
+	name       string
+	config     types.AppConfig
+	workerRepo repo.WorkerRepository
 }
 
 func (wpc *WorkerPoolControllerForTest) generateWorkerId() string {
@@ -113,7 +85,7 @@ func (wpc *WorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuTy
 	}
 
 	// Add the worker state
-	err := wpc.config.workerRepo.AddWorker(worker)
+	err := wpc.workerRepo.AddWorker(worker)
 	if err != nil {
 		log.Printf("Unable to create worker: %+v\n", err)
 		return nil, err
@@ -131,13 +103,13 @@ func (wpc *WorkerPoolControllerForTest) FreeCapacity() (*WorkerPoolCapacity, err
 }
 
 func TestNewschedulerForTest(t *testing.T) {
-	wb, err := NewschedulerForTest()
+	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 }
 
 func TestRunContainer(t *testing.T) {
-	wb, err := NewschedulerForTest()
+	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 
@@ -161,7 +133,7 @@ func TestRunContainer(t *testing.T) {
 }
 
 func TestProcessRequests(t *testing.T) {
-	wb, err := NewschedulerForTest()
+	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 
@@ -217,7 +189,7 @@ func TestProcessRequests(t *testing.T) {
 
 func TestGetController(t *testing.T) {
 	t.Run("returns correct controller", func(t *testing.T) {
-		wb, _ := NewschedulerForTest()
+		wb, _ := NewSchedulerForTest()
 
 		cpuRequest := &types.ContainerRequest{Gpu: ""}
 		cpuController, err := wb.getController(cpuRequest)
@@ -239,7 +211,7 @@ func TestGetController(t *testing.T) {
 	})
 
 	t.Run("returns error if no suitable controller found", func(t *testing.T) {
-		wb, _ := NewschedulerForTest()
+		wb, _ := NewSchedulerForTest()
 
 		unknownRequest := &types.ContainerRequest{Gpu: "UNKNOWN_GPU"}
 		_, err := wb.getController(unknownRequest)
@@ -250,7 +222,7 @@ func TestGetController(t *testing.T) {
 }
 
 func TestSelectGPUWorker(t *testing.T) {
-	wb, err := NewschedulerForTest()
+	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 
@@ -298,7 +270,7 @@ func TestSelectGPUWorker(t *testing.T) {
 }
 
 func TestSelectCPUWorker(t *testing.T) {
-	wb, err := NewschedulerForTest()
+	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 

@@ -19,11 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	Scheduler_GetVersion_FullMethodName            = "/scheduler.Scheduler/GetVersion"
-	Scheduler_RunContainer_FullMethodName          = "/scheduler.Scheduler/RunContainer"
-	Scheduler_StopContainer_FullMethodName         = "/scheduler.Scheduler/StopContainer"
-	Scheduler_SubscribeWorkerEvents_FullMethodName = "/scheduler.Scheduler/SubscribeWorkerEvents"
-	Scheduler_RegisterWorker_FullMethodName        = "/scheduler.Scheduler/RegisterWorker"
+	Scheduler_GetVersion_FullMethodName    = "/scheduler.Scheduler/GetVersion"
+	Scheduler_RunContainer_FullMethodName  = "/scheduler.Scheduler/RunContainer"
+	Scheduler_StopContainer_FullMethodName = "/scheduler.Scheduler/StopContainer"
 )
 
 // SchedulerClient is the client API for Scheduler service.
@@ -33,9 +31,6 @@ type SchedulerClient interface {
 	GetVersion(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*VersionResponse, error)
 	RunContainer(ctx context.Context, in *RunContainerRequest, opts ...grpc.CallOption) (*RunContainerResponse, error)
 	StopContainer(ctx context.Context, in *StopContainerRequest, opts ...grpc.CallOption) (*StopContainerResponse, error)
-	// rpc StreamLogs(stream StreamLogRequest) returns (StreamLogResponse);
-	SubscribeWorkerEvents(ctx context.Context, in *SubscribeWorkerEventRequest, opts ...grpc.CallOption) (Scheduler_SubscribeWorkerEventsClient, error)
-	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
 }
 
 type schedulerClient struct {
@@ -73,47 +68,6 @@ func (c *schedulerClient) StopContainer(ctx context.Context, in *StopContainerRe
 	return out, nil
 }
 
-func (c *schedulerClient) SubscribeWorkerEvents(ctx context.Context, in *SubscribeWorkerEventRequest, opts ...grpc.CallOption) (Scheduler_SubscribeWorkerEventsClient, error) {
-	stream, err := c.cc.NewStream(ctx, &Scheduler_ServiceDesc.Streams[0], Scheduler_SubscribeWorkerEvents_FullMethodName, opts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &schedulerSubscribeWorkerEventsClient{stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-type Scheduler_SubscribeWorkerEventsClient interface {
-	Recv() (*SubscribeWorkerEventResponse, error)
-	grpc.ClientStream
-}
-
-type schedulerSubscribeWorkerEventsClient struct {
-	grpc.ClientStream
-}
-
-func (x *schedulerSubscribeWorkerEventsClient) Recv() (*SubscribeWorkerEventResponse, error) {
-	m := new(SubscribeWorkerEventResponse)
-	if err := x.ClientStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-func (c *schedulerClient) RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error) {
-	out := new(RegisterWorkerResponse)
-	err := c.cc.Invoke(ctx, Scheduler_RegisterWorker_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // SchedulerServer is the server API for Scheduler service.
 // All implementations must embed UnimplementedSchedulerServer
 // for forward compatibility
@@ -121,9 +75,6 @@ type SchedulerServer interface {
 	GetVersion(context.Context, *VersionRequest) (*VersionResponse, error)
 	RunContainer(context.Context, *RunContainerRequest) (*RunContainerResponse, error)
 	StopContainer(context.Context, *StopContainerRequest) (*StopContainerResponse, error)
-	// rpc StreamLogs(stream StreamLogRequest) returns (StreamLogResponse);
-	SubscribeWorkerEvents(*SubscribeWorkerEventRequest, Scheduler_SubscribeWorkerEventsServer) error
-	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
 	mustEmbedUnimplementedSchedulerServer()
 }
 
@@ -139,12 +90,6 @@ func (UnimplementedSchedulerServer) RunContainer(context.Context, *RunContainerR
 }
 func (UnimplementedSchedulerServer) StopContainer(context.Context, *StopContainerRequest) (*StopContainerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StopContainer not implemented")
-}
-func (UnimplementedSchedulerServer) SubscribeWorkerEvents(*SubscribeWorkerEventRequest, Scheduler_SubscribeWorkerEventsServer) error {
-	return status.Errorf(codes.Unimplemented, "method SubscribeWorkerEvents not implemented")
-}
-func (UnimplementedSchedulerServer) RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RegisterWorker not implemented")
 }
 func (UnimplementedSchedulerServer) mustEmbedUnimplementedSchedulerServer() {}
 
@@ -213,45 +158,6 @@ func _Scheduler_StopContainer_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Scheduler_SubscribeWorkerEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(SubscribeWorkerEventRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(SchedulerServer).SubscribeWorkerEvents(m, &schedulerSubscribeWorkerEventsServer{stream})
-}
-
-type Scheduler_SubscribeWorkerEventsServer interface {
-	Send(*SubscribeWorkerEventResponse) error
-	grpc.ServerStream
-}
-
-type schedulerSubscribeWorkerEventsServer struct {
-	grpc.ServerStream
-}
-
-func (x *schedulerSubscribeWorkerEventsServer) Send(m *SubscribeWorkerEventResponse) error {
-	return x.ServerStream.SendMsg(m)
-}
-
-func _Scheduler_RegisterWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RegisterWorkerRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SchedulerServer).RegisterWorker(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Scheduler_RegisterWorker_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SchedulerServer).RegisterWorker(ctx, req.(*RegisterWorkerRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // Scheduler_ServiceDesc is the grpc.ServiceDesc for Scheduler service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -271,17 +177,7 @@ var Scheduler_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "StopContainer",
 			Handler:    _Scheduler_StopContainer_Handler,
 		},
-		{
-			MethodName: "RegisterWorker",
-			Handler:    _Scheduler_RegisterWorker_Handler,
-		},
 	},
-	Streams: []grpc.StreamDesc{
-		{
-			StreamName:    "SubscribeWorkerEvents",
-			Handler:       _Scheduler_SubscribeWorkerEvents_Handler,
-			ServerStreams: true,
-		},
-	},
+	Streams:  []grpc.StreamDesc{},
 	Metadata: "scheduler.proto",
 }

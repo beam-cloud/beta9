@@ -1,7 +1,6 @@
 package scheduler
 
 import (
-	"encoding/json"
 	"log"
 	"time"
 
@@ -55,51 +54,33 @@ func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*
 	return newWorker, nil
 }
 
-// Parses a JSON string represented as []byte.
+// ParsePoolSizingConfig converts a common.WorkerPoolJobSpecPoolSizingConfig to a types.WorkerPoolSizingConfig.
 // When a value is not parsable or is invalid, we ignore the error and set a default.
-func ParsePoolSizingConfig(raw []byte) (*types.WorkerPoolSizingConfig, error) {
-	var configMap map[string]interface{}
-	err := json.Unmarshal(raw, &configMap)
-	if err != nil {
-		return nil, err
-	}
-
+func ParsePoolSizingConfig(config types.WorkerPoolJobSpecPoolSizingConfig) (*types.WorkerPoolSizingConfig, error) {
 	c := types.NewWorkerPoolSizingConfig()
 
-	if val, ok := configMap["minFreeCpu"]; ok {
-		if minFreeCpu, err := ParseCPU(val); err == nil {
-			c.MinFreeCpu = minFreeCpu
-		}
+	if minFreeCpu, err := ParseCPU(config.MinFreeCPU); err == nil {
+		c.MinFreeCpu = minFreeCpu
 	}
 
-	if val, ok := configMap["minFreeMemory"]; ok {
-		if minFreeMemory, err := ParseMemory(val); err == nil {
-			c.MinFreeMemory = minFreeMemory
-		}
+	if minFreeMemory, err := ParseMemory(config.MinFreeMemory); err == nil {
+		c.MinFreeMemory = minFreeMemory
 	}
 
-	if val, ok := configMap["minFreeGpu"]; ok {
-		if minFreeGpu, err := ParseGPU(val); err == nil {
-			c.MinFreeGpu = minFreeGpu
-		}
+	if minFreeGpu, err := ParseGPU(config.MinFreeGPU); err == nil {
+		c.MinFreeGpu = minFreeGpu
 	}
 
-	if val, ok := configMap["defaultWorkerCpu"]; ok {
-		if defaultWorkerCpu, err := ParseCPU(val); err == nil {
-			c.DefaultWorkerCpu = defaultWorkerCpu
-		}
+	if defaultWorkerCpu, err := ParseCPU(config.DefaultWorkerCPU); err == nil {
+		c.DefaultWorkerCpu = defaultWorkerCpu
 	}
 
-	if val, ok := configMap["defaultWorkerMemory"]; ok {
-		if defaultWorkerMemory, err := ParseMemory(val); err == nil {
-			c.DefaultWorkerMemory = defaultWorkerMemory
-		}
+	if defaultWorkerMemory, err := ParseMemory(config.DefaultWorkerMemory); err == nil {
+		c.DefaultWorkerMemory = defaultWorkerMemory
 	}
 
-	if val, ok := configMap["defaultWorkerGpuType"]; ok {
-		if defaultWorkerGpuType, err := ParseGPUType(val); err == nil {
-			c.DefaultWorkerGpuType = defaultWorkerGpuType.String()
-		}
+	if defaultWorkerGpuType, err := ParseGPUType(config.DefaultWorkerGPUType); err == nil {
+		c.DefaultWorkerGpuType = defaultWorkerGpuType.String()
 	}
 
 	return c, nil

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
 )
 
 func GetRandomFreePort() (int, error) {
@@ -21,25 +20,6 @@ func GetRandomFreePort() (int, error) {
 	defer l.Close()
 
 	return l.Addr().(*net.TCPAddr).Port, nil
-}
-
-func GetPodFQDN() (string, error) {
-	podIP := os.Getenv("POD_IP")
-	podNamespace := os.Getenv("POD_NAMESPACE")
-	clusterDomain := os.Getenv("CLUSTER_DOMAIN")
-
-	if podIP == "" || podNamespace == "" || clusterDomain == "" {
-		return "", fmt.Errorf("environment variables POD_IP, POD_NAMESPACE, or CLUSTER_DOMAIN are not set")
-	}
-
-	dnsName := fmt.Sprintf(
-		"%s.%s.pod.%s",
-		strings.ReplaceAll(podIP, ".", "-"),
-		podNamespace,
-		clusterDomain,
-	)
-
-	return dnsName, nil
 }
 
 // GetPodIP gets the IP from the POD_IP env var.
@@ -62,7 +42,7 @@ func getIPFromInterface(ifname string) (string, error) {
 	}
 
 	if len(addrs) < 1 {
-		return "", fmt.Errorf("no IP addresses found on <%s> interface", ifname)
+		return "", fmt.Errorf("no ip addresses found on <%s> interface", ifname)
 	}
 
 	ip, _, err := net.ParseCIDR(addrs[0].String())
@@ -77,7 +57,7 @@ func getIPFromInterface(ifname string) (string, error) {
 func getIPFromEnv(varName string) (string, error) {
 	addr := os.Getenv(varName)
 	if addr == "" {
-		return "", fmt.Errorf("no IP found in environment variable")
+		return "", fmt.Errorf("no ip found in environment variable")
 	}
 
 	ip := net.ParseIP(addr)

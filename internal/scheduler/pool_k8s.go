@@ -4,14 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/types"
 	"github.com/google/uuid"
@@ -24,85 +22,42 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-func KubernetesWorkerPoolControllerFactory() WorkerPoolControllerFactory {
-	return func(resource *types.WorkerPoolResource, config WorkerPoolControllerConfig) (WorkerPoolController, error) {
-		if config, ok := config.(*KubernetesWorkerPoolControllerConfig); ok {
-			return NewKubernetesWorkerPoolController(resource.Name, config)
-		}
-
-		return nil, errors.New("kubernetes worker pool controller factory received invalid config")
-	}
-}
-
-type KubernetesWorkerPoolControllerConfig struct {
-	IsRemote         bool
-	ImagePullSecrets []string
-	EnvVars          []corev1.EnvVar
-	HostNetwork      bool
-	Namespace        string
-	WorkerPoolConfig *WorkerPoolConfig
-	WorkerRepo       repository.WorkerRepository
-}
-
-func NewKubernetesWorkerPoolControllerConfig(workerRepo repository.WorkerRepository) (*KubernetesWorkerPoolControllerConfig, error) {
-	namespace := common.Secrets().GetWithDefault("WORKER_NAMESPACE", "beam")
-
-	workerPoolConfig, err := NewWorkerPoolConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	return &KubernetesWorkerPoolControllerConfig{
-		Namespace:        namespace,
-		WorkerPoolConfig: workerPoolConfig,
-		WorkerRepo:       workerRepo,
-	}, nil
-}
-
 type KubernetesWorkerPoolController struct {
-	name             string
-	controllerConfig *KubernetesWorkerPoolControllerConfig
-	provisioner      string
-	nodeSelector     map[string]string
-	kubeClient       *kubernetes.Clientset
-	workerPoolClient *WorkerPoolClient
-	workerPoolConfig *WorkerPoolConfig
-	workerRepo       repository.WorkerRepository
+	name         string
+	config       types.AppConfig
+	provisioner  string
+	nodeSelector map[string]string
+	kubeClient   *kubernetes.Clientset
+	workerRepo   repository.WorkerRepository
 }
 
-func NewKubernetesWorkerPoolController(workerPoolName string, config *KubernetesWorkerPoolControllerConfig) (WorkerPoolController, error) {
-	cfg, err := rest.InClusterConfig()
+func NewKubernetesWorkerPoolController(config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository) (WorkerPoolController, error) {
+	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	workerPoolClient, err := NewWorkerPoolClient(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	kubeClient, err := kubernetes.NewForConfig(cfg)
+	kubeClient, err := kubernetes.NewForConfig(kubeConfig)
 	if err != nil {
 		return nil, err
 	}
 
 	wpc := &KubernetesWorkerPoolController{
-		name:             workerPoolName,
-		controllerConfig: config,
-		workerPoolClient: workerPoolClient,
-		kubeClient:       kubeClient,
+		name:       workerPoolName,
+		config:     config,
+		kubeClient: kubeClient,
 	}
 
-	workerPool, err := wpc.getWorkerPool()
+	workerPool, err := wpc.GetWorkerPoolConfig()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("worker pool %s not found", workerPoolName)
 	}
 
 	wpc.name = workerPoolName
-	wpc.provisioner = workerPool.Spec.JobSpec.NodeSelector[defaultProvisionerLabel]
-	wpc.nodeSelector = workerPool.Spec.JobSpec.NodeSelector
-	wpc.workerPoolConfig = config.WorkerPoolConfig
-	wpc.workerRepo = config.WorkerRepo
+	wpc.config = config
+	wpc.provisioner = workerPool.JobSpec.NodeSelector[defaultProvisionerLabel]
+	wpc.nodeSelector = workerPool.JobSpec.NodeSelector
+	wpc.workerRepo = workerRepo
 
 	// Start monitoring worker pool size
 	err = wpc.monitorPoolSize(workerPool)
@@ -115,23 +70,29 @@ func NewKubernetesWorkerPoolController(workerPoolName string, config *Kubernetes
 	return wpc, nil
 }
 
+func (wpc *KubernetesWorkerPoolController) GetWorkerPoolConfig() (*types.WorkerPoolConfig, error) {
+	w, ok := wpc.config.Worker.Pools[wpc.name]
+	if !ok {
+		return nil, fmt.Errorf("worker pool %v not found", wpc.name)
+	}
+	return &w, nil
+}
+
 func (wpc *KubernetesWorkerPoolController) Name() string {
 	return wpc.name
 }
 
 func (wpc *KubernetesWorkerPoolController) poolId() string {
-	data := fmt.Sprintf("%s-%s", wpc.workerPoolConfig.AgentToken, wpc.name)
-
 	hasher := sha256.New()
-	hasher.Write([]byte(data))
+	hasher.Write([]byte(wpc.name))
 	hash := hasher.Sum(nil)
 	poolId := hex.EncodeToString(hash[:8])
 
 	return poolId
 }
 
-func (wpc *KubernetesWorkerPoolController) monitorPoolSize(workerPool *types.WorkerPoolResource) error {
-	config, err := ParsePoolSizingConfig(workerPool.Spec.PoolSizing.Raw)
+func (wpc *KubernetesWorkerPoolController) monitorPoolSize(workerPool *types.WorkerPoolConfig) error {
+	config, err := ParsePoolSizingConfig(workerPool.JobSpec.PoolSizing)
 	if err != nil {
 		return err
 	}
@@ -179,28 +140,18 @@ func (wpc *KubernetesWorkerPoolController) AddWorkerWithId(workerId string, cpu 
 }
 
 func (wpc *KubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu int64, memory int64, gpuType string) (*types.Worker, error) {
-	workerPool, err := wpc.getWorkerPool()
-	if err != nil {
-		return nil, err
-	}
-
 	// Create a new worker job
-	job, worker := wpc.createWorkerJob(workerId, cpu, memory, gpuType, workerPool)
-
-	// Set the WorkerPool resouce as the owner of the new job
-	wpc.setJobOwner(job, workerPool)
+	job, worker := wpc.createWorkerJob(workerId, cpu, memory, gpuType)
 
 	// Create the job in the cluster
-	err = wpc.createJobInCluster(job)
-	if err != nil {
+	if err := wpc.createJobInCluster(job); err != nil {
 		return nil, err
 	}
 
 	worker.PoolId = wpc.poolId()
 
 	// Add the worker state
-	err = wpc.workerRepo.AddWorker(worker)
-	if err != nil {
+	if err := wpc.workerRepo.AddWorker(worker); err != nil {
 		log.Printf("Unable to create worker: %+v\n", err)
 		return nil, err
 	}
@@ -208,17 +159,8 @@ func (wpc *KubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu 
 	return worker, nil
 }
 
-// Gets worker pool (Custom Resource) from Kubernetes API
-func (wpc *KubernetesWorkerPoolController) getWorkerPool() (*types.WorkerPoolResource, error) {
-	workerPool, err := wpc.workerPoolClient.GetWorkerPool(wpc.controllerConfig.Namespace, wpc.name)
-	if err != nil {
-		return nil, err
-	}
-	return workerPool, nil
-}
-
-func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string, workerPool *types.WorkerPoolResource) (*batchv1.Job, *types.Worker) {
-	jobName := fmt.Sprintf("%s-%s-%s", BeamWorkerJobPrefix, workerPool.Name, workerId)
+func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string) (*batchv1.Job, *types.Worker) {
+	jobName := fmt.Sprintf("%s-%s-%s", BeamWorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
 		BeamWorkerLabelKey: BeamWorkerLabelValue,
 	}
@@ -228,20 +170,21 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 	workerGpu := gpuType
 
 	resourceRequests := corev1.ResourceList{}
-	if cpu > 0 && cpu > wpc.workerPoolConfig.DefaultWorkerCpuRequest {
+
+	if cpu > 0 && cpu > wpc.config.Worker.DefaultWorkerCPURequest {
 		cpuString := fmt.Sprintf("%dm", cpu) // convert cpu to millicores string
 		resourceRequests[corev1.ResourceCPU] = resource.MustParse(cpuString)
 	} else {
-		resourceRequests[corev1.ResourceCPU] = resource.MustParse(fmt.Sprintf("%dm", wpc.workerPoolConfig.DefaultWorkerCpuRequest))
-		workerCpu = wpc.workerPoolConfig.DefaultWorkerCpuRequest
+		resourceRequests[corev1.ResourceCPU] = resource.MustParse(fmt.Sprintf("%dm", wpc.config.Worker.DefaultWorkerCPURequest))
+		workerCpu = wpc.config.Worker.DefaultWorkerCPURequest
 	}
 
-	if memory > 0 && memory > wpc.workerPoolConfig.DefaultWorkerMemoryRequest {
+	if memory > 0 && memory > wpc.config.Worker.DefaultWorkerMemoryRequest {
 		memoryString := fmt.Sprintf("%dMi", memory) // convert memory to Mi string
 		resourceRequests[corev1.ResourceMemory] = resource.MustParse(memoryString)
 	} else {
-		resourceRequests[corev1.ResourceMemory] = resource.MustParse(fmt.Sprintf("%dMi", wpc.workerPoolConfig.DefaultWorkerMemoryRequest))
-		workerMemory = wpc.workerPoolConfig.DefaultWorkerMemoryRequest
+		resourceRequests[corev1.ResourceMemory] = resource.MustParse(fmt.Sprintf("%dMi", wpc.config.Worker.DefaultWorkerMemoryRequest))
+		workerMemory = wpc.config.Worker.DefaultWorkerMemoryRequest
 	}
 
 	if gpuType != "" {
@@ -249,13 +192,13 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 	}
 
 	workerImage := fmt.Sprintf("%s/%s:%s",
-		common.Secrets().Get("BEAM_WORKER_IMAGE_REGISTRY"),
-		common.Secrets().Get("BEAM_WORKER_IMAGE_NAME"),
-		common.Secrets().Get("BEAM_WORKER_IMAGE_TAG"),
+		wpc.config.Worker.ImageRegistry,
+		wpc.config.Worker.ImageName,
+		wpc.config.Worker.ImageTag,
 	)
 
 	resources := corev1.ResourceRequirements{}
-	if common.Secrets().GetWithDefault("BEAM_WORKER_RESOURCES_ENFORCED", "true") != "false" {
+	if wpc.config.Worker.ResourcesEnforced {
 		resources.Requests = resourceRequests
 		resources.Limits = resourceRequests
 	}
@@ -278,7 +221,7 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 
 	// Add user-defined image pull secrets
 	imagePullSecrets := []corev1.LocalObjectReference{}
-	for _, s := range wpc.controllerConfig.ImagePullSecrets {
+	for _, s := range wpc.config.Worker.ImagePullSecrets {
 		imagePullSecrets = append(imagePullSecrets, corev1.LocalObjectReference{Name: s})
 	}
 
@@ -287,13 +230,12 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 			Labels: labels,
 		},
 		Spec: corev1.PodSpec{
-			// TODO: change ServiceAccountName to be pulled from the CR instead of from a secret
-			ServiceAccountName:           common.Secrets().GetWithDefault("BEAM_WORKER_SERVICE_ACCOUNT_NAME", "default"),
+			ServiceAccountName:           wpc.config.Worker.ServiceAccountName,
 			AutomountServiceAccountToken: ptr.To(true),
-			HostNetwork:                  wpc.controllerConfig.HostNetwork,
+			HostNetwork:                  wpc.config.Worker.HostNetwork,
 			ImagePullSecrets:             imagePullSecrets,
 			RestartPolicy:                corev1.RestartPolicyOnFailure,
-			NodeSelector:                 wpc.getWorkerNodeSelector(),
+			NodeSelector:                 map[string]string{},
 			Containers:                   containers,
 			Volumes:                      wpc.getWorkerVolumes(workerMemory),
 			EnableServiceLinks:           ptr.To(false),
@@ -304,7 +246,7 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
-			Namespace: wpc.controllerConfig.Namespace,
+			Namespace: wpc.config.Worker.Namespace,
 			Labels:    labels,
 		},
 		Spec: batchv1.JobSpec{
@@ -322,38 +264,12 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 	}
 }
 
-// Set the WorkerPool resource as the owner of the worker job
-func (wpc *KubernetesWorkerPoolController) setJobOwner(job *batchv1.Job, workerPool *types.WorkerPoolResource) {
-	controllerFlag := true
-	controllerRef := metav1.OwnerReference{
-		APIVersion:         workerPool.APIVersion,
-		Kind:               workerPool.Kind,
-		Name:               workerPool.Name,
-		UID:                workerPool.UID,
-		Controller:         &controllerFlag,
-		BlockOwnerDeletion: &controllerFlag,
-	}
-	job.SetOwnerReferences(append(job.GetOwnerReferences(), controllerRef))
-}
-
 func (wpc *KubernetesWorkerPoolController) createJobInCluster(job *batchv1.Job) error {
-	_, err := wpc.kubeClient.BatchV1().Jobs(wpc.controllerConfig.Namespace).Create(context.Background(), job, metav1.CreateOptions{})
+	_, err := wpc.kubeClient.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(context.Background(), job, metav1.CreateOptions{})
 	return err
 }
 
-func (wpc *KubernetesWorkerPoolController) getWorkerNodeSelector() map[string]string {
-	stage := common.Secrets().GetWithDefault("STAGE", common.EnvLocal)
-
-	if stage == common.EnvLocal {
-		return map[string]string{}
-	}
-
-	return wpc.nodeSelector
-}
-
 func (wpc *KubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
-	stage := common.Secrets().GetWithDefault("STAGE", common.EnvLocal)
-
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	sharedMemoryLimit := resource.MustParse(fmt.Sprintf("%dMi", workerMemory/2))
 
@@ -386,48 +302,21 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) 
 			},
 		},
 		{
-			Name: wpc.workerPoolConfig.DataVolumeName,
+			Name: wpc.config.Worker.DataVolumeName,
 			VolumeSource: corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: wpc.workerPoolConfig.DataVolumeName,
+					ClaimName: wpc.config.Worker.DataVolumeName,
 				},
 			},
 		},
 	}
 
-	// Local volumes
-	if stage == common.EnvLocal {
-		return append(volumes,
-			corev1.Volume{
-				Name: imagesVolumeName,
-				VolumeSource: corev1.VolumeSource{
-					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: "images",
-					},
-				},
-			},
-		)
-
-	}
-
-	// Staging/Production volumes
 	return append(volumes,
-		corev1.Volume{
-			Name: configVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName:  configSecretName,
-					DefaultMode: func(mode int32) *int32 { return &mode }(420),
-					Optional:    func(optional bool) *bool { return &optional }(false),
-				},
-			},
-		},
 		corev1.Volume{
 			Name: imagesVolumeName,
 			VolumeSource: corev1.VolumeSource{
-				HostPath: &corev1.HostPathVolumeSource{
-					Path: "/images",
-					Type: &hostPathType,
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: "images",
 				},
 			},
 		},
@@ -435,9 +324,7 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) 
 }
 
 func (wpc *KubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMount {
-	stage := common.Secrets().GetWithDefault("STAGE", common.EnvLocal)
-
-	volumeMounts := []corev1.VolumeMount{
+	return []corev1.VolumeMount{
 		{
 			Name:      tmpVolumeName,
 			MountPath: "/tmp",
@@ -458,51 +345,31 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1.Volu
 			Name:      "dshm",
 		},
 		{
-			Name:      wpc.workerPoolConfig.DataVolumeName,
+			Name:      wpc.config.Worker.DataVolumeName,
 			MountPath: "/snapshots",
 			SubPath:   "snapshots/",
 			ReadOnly:  false,
 		},
 		{
-			Name:      wpc.workerPoolConfig.DataVolumeName,
+			Name:      wpc.config.Worker.DataVolumeName,
 			MountPath: "/workspaces",
 			SubPath:   "workspaces/",
 			ReadOnly:  false,
 		},
 		{
-			Name:      wpc.workerPoolConfig.DataVolumeName,
+			Name:      wpc.config.Worker.DataVolumeName,
 			MountPath: "/volumes",
 			SubPath:   "volumes/",
 			ReadOnly:  false,
 		},
 	}
-
-	if stage == common.EnvLocal {
-		return volumeMounts
-	}
-
-	// Staging/Production volumes
-	return append(volumeMounts,
-		corev1.VolumeMount{
-			Name:      configVolumeName,
-			MountPath: "/etc/config",
-			ReadOnly:  true,
-		},
-	)
 }
 
 func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string) []corev1.EnvVar {
-	stage := common.Secrets().GetWithDefault("STAGE", common.EnvLocal)
-
-	// Base environment (common to both local/staging/production)
-	env := []corev1.EnvVar{
+	return []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
 			Value: workerId,
-		},
-		{
-			Name:  "BEAM_NAMESPACE",
-			Value: common.Secrets().Get("BEAM_NAMESPACE"),
 		},
 		{
 			Name:  "CPU_LIMIT",
@@ -517,14 +384,6 @@ func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string,
 			Value: gpuType,
 		},
 		{
-			Name:  "WORKER_S2S_TOKEN",
-			Value: common.Secrets().Get("WORKER_S2S_TOKEN"),
-		},
-		{
-			Name:  "BEAM_RUNNER_BASE_IMAGE_REGISTRY",
-			Value: common.Secrets().Get("BEAM_RUNNER_BASE_IMAGE_REGISTRY"),
-		},
-		{
 			Name: "POD_IP",
 			ValueFrom: &corev1.EnvVarSource{
 				FieldRef: &corev1.ObjectFieldSelector{
@@ -534,68 +393,31 @@ func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string,
 		},
 		{
 			Name:  "POD_NAMESPACE",
-			Value: common.Secrets().Get("WORKER_NAMESPACE"),
+			Value: wpc.config.Worker.Namespace,
 		},
 		{
 			Name:  "CLUSTER_DOMAIN",
 			Value: defaultClusterDomain,
 		},
 		{
-			Name:  "BEAM_CACHE_URL",
-			Value: common.Secrets().Get("BEAM_CACHE_URL"),
-		},
-		{
 			Name:  "BEAM_GATEWAY_HOST",
-			Value: common.Secrets().Get("BEAM_GATEWAY_HOST"),
+			Value: wpc.config.GatewayService.Host,
 		},
 		{
 			Name:  "BEAM_GATEWAY_PORT",
-			Value: common.Secrets().Get("BEAM_GATEWAY_PORT"),
-		},
-		{
-			Name:  "STATSD_HOST",
-			Value: common.Secrets().Get("STATSD_HOST"),
-		},
-		{
-			Name:  "STATSD_PORT",
-			Value: common.Secrets().Get("STATSD_PORT"),
+			Value: fmt.Sprint(wpc.config.GatewayService.Port),
 		},
 	}
-
-	// Add env var to let Worker know it should run in remote mode
-	if wpc.controllerConfig.IsRemote {
-		env = append(env, corev1.EnvVar{Name: "WORKER_IS_REMOTE", Value: "true"})
-	}
-
-	// Add user-defined env vars
-	env = append(env, wpc.controllerConfig.EnvVars...)
-
-	// Local environmental variables
-	if stage == common.EnvLocal {
-		return env
-	}
-
-	// Staging/Production
-	return append(
-		env,
-		corev1.EnvVar{
-			Name:  "CONFIG_PATH",
-			Value: "/etc/config/settings.env",
-		},
-		corev1.EnvVar{
-			Name:  "KINESIS_STREAM_REGION",
-			Value: common.Secrets().Get("KINESIS_STREAM_REGION"),
-		},
-	)
-
 }
+
+var AddWorkerTimeout = 10 * time.Minute
 
 // deleteStalePendingWorkerJobs ensures that jobs are deleted if they don't
 // start a pod after a certain amount of time.
 func (wpc *KubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 	ctx := context.Background()
 	maxAge := AddWorkerTimeout
-	namespace := wpc.controllerConfig.Namespace
+	namespace := wpc.config.Worker.Namespace
 
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()

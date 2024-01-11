@@ -4,18 +4,11 @@ import (
 	"errors"
 	"log"
 
-	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/types"
 )
 
 const (
-	DefaultFilesystemName string = types.DefaultFilesystemName
-	DefaultFilesystemPath string = types.DefaultFilesystemPath
-	DefaultObjectPath     string = types.DefaultObjectPath
-)
-
-const (
-	StorageModeJuiceFs string = "JUICEFS"
+	StorageModeJuiceFS string = "juicefs"
 )
 
 type Storage interface {
@@ -24,25 +17,24 @@ type Storage interface {
 	Unmount(localPath string) error
 }
 
-func NewStorage() (Storage, error) {
-	storageMode := common.Secrets().GetWithDefault("BEAM_STORAGE_MODE", StorageModeJuiceFs)
+func NewStorage(config types.StorageConfig) (Storage, error) {
 
-	switch storageMode {
-	case StorageModeJuiceFs:
-		s, err := NewJuiceFsStorage()
+	switch config.Mode {
+	case StorageModeJuiceFS:
+		s, err := NewJuiceFsStorage(config.JuiceFS)
 		if err != nil {
 			return nil, err
 		}
 
 		// Format filesystem
 		// NOTE: this is a no-op if already formatted
-		err = s.Format(DefaultFilesystemName)
+		err = s.Format(config.FilesystemName)
 		if err != nil {
 			log.Fatalf("Unable to format filesystem: %+v\n", err)
 		}
 
 		// Mount filesystem
-		err = s.Mount(DefaultFilesystemPath)
+		err = s.Mount(config.FilesystemPath)
 		if err != nil {
 			log.Fatalf("Unable to mount filesystem: %+v\n", err)
 		}

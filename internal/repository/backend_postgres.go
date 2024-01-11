@@ -10,7 +10,6 @@ import (
 	"log"
 	"strings"
 
-	"github.com/beam-cloud/beam/internal/common"
 	_ "github.com/beam-cloud/beam/internal/repository/backend_postgres_migrations"
 	"github.com/beam-cloud/beam/internal/types"
 	"github.com/google/uuid"
@@ -23,14 +22,22 @@ type PostgresBackendRepository struct {
 	client *sqlx.DB
 }
 
-func NewBackendPostgresRepository() (*PostgresBackendRepository, error) {
-	host := common.Secrets().Get("DB_HOST")
-	port := common.Secrets().GetInt("DB_PORT")
-	user := common.Secrets().Get("DB_USER")
-	password := common.Secrets().Get("DB_PASS")
-	dbName := common.Secrets().Get("DB_NAME")
+func NewBackendPostgresRepository(config types.PostgresConfig) (*PostgresBackendRepository, error) {
+	sslMode := "disable"
+	if config.EnableTLS {
+		sslMode = "require"
+	}
 
-	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=disable TimeZone=UTC", host, user, password, dbName, port)
+	dsn := fmt.Sprintf(
+		"host=%s user=%s password=%s dbname=%s port=%d sslmode=%s TimeZone=%s",
+		config.Host,
+		config.Username,
+		config.Password,
+		config.Name,
+		config.Port,
+		sslMode,
+		config.TimeZone,
+	)
 	db, err := sqlx.Connect("postgres", dsn)
 	if err != nil {
 		return nil, err
@@ -269,7 +276,7 @@ func (r *PostgresBackendRepository) GetTask(ctx context.Context, externalId stri
 func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error) {
 	var taskWithRelated types.TaskWithRelated
 	query := `
-    SELECT w.external_id AS "workspace.external_id", w.name AS "workspace.name", 
+    SELECT w.external_id AS "workspace.external_id", w.name AS "workspace.name",
            s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", t.*
     FROM task t
     JOIN workspace w ON t.workspace_id = w.id
@@ -371,7 +378,7 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	var stub types.StubWithRelated
 
 	query := `
-	SELECT 
+	SELECT
 	    s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at,
 	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at",
 	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"

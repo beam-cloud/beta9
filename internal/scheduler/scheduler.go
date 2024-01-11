@@ -11,7 +11,6 @@ import (
 	"github.com/beam-cloud/beam/internal/common"
 	repo "github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/types"
-	"github.com/samber/lo"
 )
 
 const (
@@ -26,36 +25,19 @@ type Scheduler struct {
 	beamRepo          repo.BeamRepository
 	metricsRepo       repo.MetricsStatsdRepository
 	eventBus          *common.EventBus
-	redisClient       *common.RedisClient
 }
 
-func NewScheduler() (*Scheduler, error) {
-	redisClient, err := common.NewRedisClient(common.WithClientName("BeamScheduler"))
-	if err != nil {
-		return nil, err
-	}
-
+func NewScheduler(config types.AppConfig, redisClient *common.RedisClient) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 
-	controllerFactory := KubernetesWorkerPoolControllerFactory()
-	controllerFactoryConfig, err := NewKubernetesWorkerPoolControllerConfig(workerRepo)
-	if err != nil {
-		return nil, err
-	}
-
 	workerPoolManager := NewWorkerPoolManager(workerPoolRepo)
-	workerPoolResources, err := GetWorkerPoolResources(controllerFactoryConfig.Namespace)
-	if err != nil {
-		return nil, err
-	}
-
-	err = workerPoolManager.LoadPools(controllerFactory, controllerFactoryConfig, workerPoolResources)
-	if err != nil {
-		return nil, err
+	for name, pool := range config.Worker.Pools {
+		controller, _ := NewKubernetesWorkerPoolController(config, name, workerRepo)
+		workerPoolManager.SetPool(name, &pool, controller)
 	}
 
 	return &Scheduler{
@@ -65,7 +47,6 @@ func NewScheduler() (*Scheduler, error) {
 		requestBacklog:    requestBacklog,
 		containerRepo:     containerRepo,
 		metricsRepo:       repo.NewMetricsStatsdRepository(),
-		redisClient:       redisClient,
 	}, nil
 }
 
@@ -121,23 +102,7 @@ func (s *Scheduler) Stop(containerId string) error {
 	return nil
 }
 
-// Get a controller.
-// When an agent is provided by the user, we attempt to find a worker pool controller associated with that
-// agent. If we don't find a controller, we default to returning a Beam hosted controller.
 func (s *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolController, error) {
-	if request.Agent != "" {
-		controller, err := s.getRemoteController(request)
-		if err != nil {
-			log.Printf("unable to find remote controllers for user-specified agent <%v>: %v", request.Agent, err)
-		} else {
-			return controller, nil
-		}
-	}
-
-	return s.getHostedController(request)
-}
-
-func (s *Scheduler) getHostedController(request *types.ContainerRequest) (WorkerPoolController, error) {
 	poolName := "beam-cpu"
 
 	if request.Gpu != "" {
@@ -157,37 +122,6 @@ func (s *Scheduler) getHostedController(request *types.ContainerRequest) (Worker
 	}
 
 	return workerPool.Controller, nil
-}
-
-func (s *Scheduler) getRemoteController(request *types.ContainerRequest) (WorkerPoolController, error) {
-	agentName := request.Agent
-
-	agent, err := s.beamRepo.GetAgent(agentName, "")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get agent <%s> from database: %v", agentName, err)
-	}
-
-	if !agent.IsOnline {
-		return nil, errors.New("unable to use worker pools because agent is not online")
-	}
-
-	pools, err := agent.GetPools()
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse pools on agent <%s>: %v", agentName, err)
-	}
-
-	if len(pools) == 0 {
-		return nil, fmt.Errorf("unable to find worker pools because agent <%s> does not have any pools", agentName)
-	}
-
-	for poolName := range pools {
-		workerPool, ok := s.workerPoolManager.GetPool(poolName)
-		if ok {
-			return workerPool.Controller, nil
-		}
-	}
-
-	return nil, fmt.Errorf("unable to find controllers for agent <%s>", agentName)
 }
 
 func (s *Scheduler) processRequests() {
@@ -250,13 +184,6 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	workers, err := s.workerRepo.GetAllWorkers()
 	if err != nil {
 		return nil, err
-	}
-
-	// When agent is present, filter workers with agents
-	if request.Agent != "" {
-		workers = lo.Filter(workers, func(w *types.Worker, _ int) bool {
-			return w.Agent == request.Agent
-		})
 	}
 
 	// Sort workers: available first, then pending

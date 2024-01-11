@@ -19,7 +19,7 @@ func TestRequestBacklogOrdering(t *testing.T) {
 	assert.NotNil(t, s)
 	assert.NoError(t, err)
 
-	redisClient, err := common.NewRedisClient(common.WithAddress(s.Addr()))
+	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
 	assert.NotNil(t, redisClient)
 	assert.NoError(t, err)
 

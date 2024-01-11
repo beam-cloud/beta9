@@ -66,7 +66,6 @@ RUN GOPRIVATE=github.com/beam-cloud/* \
 # ========================
 FROM nvidia/cuda:12.3.1-base-ubuntu20.04 AS release
 FROM release AS dev
-ONBUILD COPY .secrets /workspace/.secrets
 
 FROM ${BASE_STAGE} AS final
 

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/common"
 	"github.com/beam-cloud/beam/internal/types"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -23,7 +22,7 @@ type PostgresBeamRepository struct {
 	client *gorm.DB
 }
 
-func NewBeamPostgresRepository() (BeamRepository, error) {
+func NewBeamPostgresRepository(config types.PostgresConfig) (BeamRepository, error) {
 	// If client is not nil, it was already initialized. Just return a new PostgresBeamRepository with the existing client.
 	if client != nil {
 		return &PostgresBeamRepository{
@@ -31,13 +30,22 @@ func NewBeamPostgresRepository() (BeamRepository, error) {
 		}, nil
 	}
 
-	host := common.Secrets().Get("DB_HOST")
-	port := common.Secrets().GetInt("DB_PORT")
-	user := common.Secrets().Get("DB_USER")
-	password := common.Secrets().Get("DB_PASS")
-	dbName := common.Secrets().Get("DB_NAME")
+	sslMode := "prefer"
+	if config.EnableTLS {
+		sslMode = "require"
+	}
 
-	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=disable", host, user, password, dbName, port)
+	dsn := fmt.Sprintf(
+		"host=%s user=%s password=%s dbname=%s port=%d sslmode=%s TimeZone=%s",
+		config.Host,
+		config.Username,
+		config.Password,
+		config.Name,
+		config.Port,
+		sslMode,
+		config.TimeZone,
+	)
+
 	var err error
 	client, err = gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {

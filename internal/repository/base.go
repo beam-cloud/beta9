@@ -88,9 +88,9 @@ type BeamRepository interface {
 }
 
 type WorkerPoolRepository interface {
-	GetPool(name string) (*types.WorkerPoolResource, error)
-	GetPools() ([]types.WorkerPoolResource, error)
-	SetPool(pool *types.WorkerPoolResource) error
+	GetPool(name string) (*types.WorkerPoolConfig, error)
+	GetPools() ([]types.WorkerPoolConfig, error)
+	SetPool(name string, pool *types.WorkerPoolConfig) error
 	RemovePool(name string) error
 }
 
