@@ -13,11 +13,8 @@ WORKDIR /workspace
 RUN apt install -y libfuse3-dev && \
     go install github.com/cosmtrek/air@latest
 
-ENV GOPRIVATE=github.com/beam-cloud/*
 COPY go.mod go.sum ./
-RUN --mount=type=secret,id=github-token,required=true \
-    echo "machine github.com login beam-cloud password $(cat /run/secrets/github-token)" > /root/.netrc && \
-    go mod download && go mod verify
+RUN go mod download && go mod verify
 
 COPY . .
 
