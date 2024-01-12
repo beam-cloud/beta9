@@ -5,7 +5,10 @@ on: [push]
 
 jobs:
   lint_and_test_python_sdk:
-    working-directory: sdk
+    defaults:
+      run:
+        working-directory: sdk
+
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 4
