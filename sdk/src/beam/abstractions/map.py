@@ -14,7 +14,40 @@ from beam.clients.map import (
 
 
 class Map(BaseAbstraction):
-    def __init__(self, *, name: str) -> None:
+    """A distributed python dictionary."""
+
+    def __init__(self, *, name: str) -> "Map":
+        """
+        Creates a Map Instance.
+
+        Use this a concurrency safe key/value store, accessible both locally and within
+        remote containers. Serialization is done using cloudpickle, so any object that supported
+        by that should work here. The interface is that of a standard python dictionary.
+
+        Because this is backed by a distributed dictionary, it will persist between runs.
+
+        Parameters:
+            name (str):
+                The name of the map (any arbitrary string).
+
+        Example:
+        ```python
+        from beam import Map
+
+        m = Map(name="test")
+
+        m["some_key"] = True
+        m["another_key"] = True
+
+        print(m["some_key"])
+        del m["some_key"]
+
+        for k, v in m.items():
+            print("key: ", k)
+            print("value: ", v)
+
+        ```
+        """
         super().__init__()
 
         self.name: str = name
