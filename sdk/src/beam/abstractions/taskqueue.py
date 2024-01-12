@@ -16,7 +16,7 @@ from beam.config import GatewayConfig, get_gateway_config
 
 class TaskQueue(RunnerAbstraction):
     """
-    This method allows you to create a task queue out of the decorated function. The tasks are executed
+    Decorator which allows you to create a task queue out of the decorated function. The tasks are executed
     asynchronously, in remote containers. You can interact with the task queue either through an API (when deployed), or directly
     in python through the .put() method.
 
