@@ -17,7 +17,7 @@
 
 
 <h3 align="center">
-    The distributed container runtime
+    The distributed Python container runtime
 </h3>
 
 ---
