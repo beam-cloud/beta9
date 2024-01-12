@@ -39,3 +39,6 @@ stop:
 
 protocol:
 	cd proto && ./gen.sh
+
+test-internal:
+	go test -v ./internal/... -bench=./internal/..
