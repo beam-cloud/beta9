@@ -23,9 +23,7 @@ from beam.sync import FileSyncer
 
 class Function(RunnerAbstraction):
     """
-    Decorator for defining a remote function.
-
-    This method allows you to run the decorated function in a remote container.
+    Decorator which allows you to run the decorated function in a remote container.
 
     Parameters:
         cpu (Union[int, float, str]):
@@ -40,9 +38,9 @@ class Function(RunnerAbstraction):
             The container image used for the task execution. Default is [Image](#image).
     Example:
         ```python
-        from beam import Function
+        from beam import function, Image
 
-        @Function(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
+        @function(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
         def transcribe(filename: str):
             print(filename)
             return "some_result"
