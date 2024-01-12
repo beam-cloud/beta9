@@ -16,30 +16,33 @@
 </p>
 
 
-
-
 <h3 align="center">
-    The GPU container runtime
+    The distributed container runtime
 </h3>
 
 ---
 
-Beam is an open-source platform for running cloud GPU workloads. It allows you to scale out Python code to hundreds of machines, easily deploy task queues and REST APIs, and distribute workloads across cloud providers.
+Beam is an open-source platform for running remote containers directly from Python. It supports GPU/CUDA acceleration, and allows you to scale out arbitrary Python code to hundreds of machines, easily deploy functions and task queues, and distribute workloads across various cloud providers (including bare metal providers).
 
 ## Features
 
-- Scale out workloads to hundreds of GPUs
-- Instant remote containers, right from your Python interpreter
-- Distribute GPU workloads across cloud providers, including cloud VMs and bare metal
-- Easily deploy task queues and REST APIs using a simple Python interface
+- Scale out workloads to hundreds of machines (with GPU support!)
+- Instantly run remote containers, right from your Python interpreter
+- Distribute GPU workloads across multiple cloud providers
+- Easily deploy task queues and functions using simple Python abstractions
 
 ## How it works
 
-Beam is designed for launching remote serverless containers very quickly. There are a few things that make this possible: 
+Beam is designed for launching remote serverless containers very quickly. There are a few things that make this possible:
 
-- Content addressed storage for caching images and files
-- Lazy loading image format (CLIP)
-- Runc based workload scheduler
+- A custom, lazy loading image format (CLIP) backed by S3/FUSE
+- A fast, redis-based scheduling engine
+- Content-addressed storage for caching images and files
+- A custom runc container runtime
+
+## Local development
+
+Beam can run on your laptop! To get started developing
 
 ## Community & Support
 
