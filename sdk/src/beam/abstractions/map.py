@@ -34,18 +34,19 @@ class Map(BaseAbstraction):
         ```python
         from beam import Map
 
+        # Name the map
         m = Map(name="test")
 
+        # Set a key
         m["some_key"] = True
-        m["another_key"] = True
 
-        print(m["some_key"])
+        # Delete a key
         del m["some_key"]
 
+        # Iterate through the map
         for k, v in m.items():
             print("key: ", k)
             print("value: ", v)
-
         ```
         """
         super().__init__()

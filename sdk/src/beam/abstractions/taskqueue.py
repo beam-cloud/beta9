@@ -16,10 +16,8 @@ from beam.config import GatewayConfig, get_gateway_config
 
 class TaskQueue(RunnerAbstraction):
     """
-    Decorator for defining a task queue.
-
-    This method allows you to create a task queue out of the decorated function. The tasks are executed
-    asynchronously. You can interact with the task queue either through an API (when deployed), or directly
+    Decorator which allows you to create a task queue out of the decorated function. The tasks are executed
+    asynchronously, in remote containers. You can interact with the task queue either through an API (when deployed), or directly
     in python through the .put() method.
 
     Parameters:
@@ -59,9 +57,9 @@ class TaskQueue(RunnerAbstraction):
             Default is 100.
     Example:
         ```python
-        from beam import task_queue
+        from beam import task_queue, Image
 
-        @task_queue(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), gikeep_warm_seconds=1000)
+        @task_queue(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
         def transcribe(filename: str):
             print(filename)
             return
