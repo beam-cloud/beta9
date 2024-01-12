@@ -2,12 +2,10 @@ name: CI
 
 on: [push]
 
-defaults:
-  run:
-    working-directory: sdk
 
 jobs:
   lint_and_test_python_sdk:
+    working-directory: sdk
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 4
