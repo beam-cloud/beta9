@@ -21,9 +21,9 @@ volumes:
 
 registries:
   create:
-    name: registry.beam.lan
+    name: registry.localhost
     host: "0.0.0.0"
-    hostPort: "5000"
+    hostPort: "5001"
     volumes:
     - $PWD/.k3d/registry:/var/lib/registry
 
@@ -31,11 +31,6 @@ options:
   k3d:
     wait: true
     timeout: "60s"
-  k3s:
-    extraArgs:
-    - arg: "--tls-san=beam.lan"
-      nodeFilters:
-      - server:*
   kubeconfig:
     updateDefaultKubeconfig: true
     switchCurrentContext: true

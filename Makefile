@@ -1,5 +1,7 @@
 SHELL := /bin/bash
-imageVersion := latest
+tag := latest
+workerTag := latest
+runnerTag := latest
 
 setup:
 	make k3d-up beam-runner beam-worker beam
@@ -17,18 +19,18 @@ k3d-down:
 	k3d cluster delete --config hack/k3d.yaml
 
 beam:
-	docker build . --target build -f ./docker/Dockerfile.beam -t localhost:5000/beam:$(imageVersion)
-	docker push localhost:5000/beam:$(imageVersion)
+	docker build . --target build -f ./docker/Dockerfile.beam -t localhost:5001/beam:$(tag)
+	docker push localhost:5001/beam:$(tag)
 
 beam-worker:
-	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5000/beam-worker:$(imageVersion)
-	docker push localhost:5000/beam-worker:latest
+	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beam-worker:$(workerTag)
+	docker push localhost:5001/beam-worker:$(workerTag)
 	bin/delete_workers.sh
 
 beam-runner:
 	for target in py312 py311 py310 py39 py38; do \
-		docker build . --target $$target --platform=linux/amd64 -f ./docker/Dockerfile.runner -t localhost:5000/beam-runner:$$target-latest; \
-		docker push localhost:5000/beam-runner:$$target-latest; \
+		docker build . --target $$target --platform=linux/amd64 -f ./docker/Dockerfile.runner -t localhost:5001/beam-runner:$$target-$(runnerTag); \
+		docker push localhost:5001/beam-runner:$$target-$(runnerTag); \
 	done
 
 start:
