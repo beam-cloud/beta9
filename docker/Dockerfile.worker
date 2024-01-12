@@ -7,7 +7,6 @@ RUN --mount=type=secret,id=github-token,required=true <<EOT
 set -eux
 apt-get update
 apt-get install -y --no-install-recommends curl git
-echo "machine github.com login beam-cloud password $(cat /run/secrets/github-token)" > /root/.netrc
 EOT
 
 
