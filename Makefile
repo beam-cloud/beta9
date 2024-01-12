@@ -4,6 +4,7 @@ workerTag := latest
 runnerTag := latest
 
 setup:
+	bash bin/setup.sh
 	make k3d-up beam-runner beam-worker beam
 	kubectl delete pod -l app=beam
 

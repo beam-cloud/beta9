@@ -13,6 +13,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/kinesis v1.20.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.38.3
+	github.com/beam-cloud/blobcache v0.0.0-20240111193326-cae10a611c3f
 	github.com/beam-cloud/clip v0.0.0-20230822004255-4ecd939864f9
 	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
 	github.com/bsm/redislock v0.9.4
@@ -67,7 +68,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.15.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.21.3 // indirect
 	github.com/aws/smithy-go v1.19.0 // indirect
-	github.com/beam-cloud/blobcache v0.0.0-20240111193326-cae10a611c3f // indirect
 	github.com/briandowns/spinner v1.23.0 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/containerd/console v1.0.3 // indirect

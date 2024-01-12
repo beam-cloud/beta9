@@ -52,7 +52,7 @@ imageService:
       python3.12: py312-latest
 worker:
   pools:
-    beam-cpu:
+    default:
       jobSpec:
         nodeSelector: {}
       poolSizing:
@@ -62,6 +62,17 @@ worker:
         minFreeCpu: 1000m
         minFreeGpu: 0
         minFreeMemory: 1Gi
+    nvidia:
+      gpuType: A40
+      jobSpec:
+        nodeSelector: {}
+      poolSizing:
+        defaultWorkerCpu: 1000m
+        defaultWorkerGpuType: ""
+        defaultWorkerMemory: 1Gi
+        minFreeCpu:
+        minFreeGpu:
+        minFreeMemory:
   # global pool attributes
   hostNetwork: false
   imageTag: latest

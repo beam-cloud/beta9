@@ -67,10 +67,21 @@ FROM release AS dev
 
 FROM ${BASE_STAGE} AS final
 
+ENV DEBIAN_FRONTEND="noninteractive"
 WORKDIR /workspace
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends --no-install-recommends curl gpg fuse3
+RUN rm /etc/apt/sources.list.d/cuda.list && apt-get update && apt-get install -y wget git curl \
+    libseccomp-dev libsndfile1 libsndfile1-dev \
+    libaio-dev asciidoc xmlto libzmq3-dev iptables \
+    build-essential git libprotobuf-dev libprotobuf-c-dev \
+    protobuf-c-compiler protobuf-compiler \
+    pkg-config libbsd-dev iproute2 \
+    libnftnl-dev libcap-dev libnet1-dev libnl-3-dev \
+    python3 python3.8 python3-distutils python3-pip \
+    curl gpg fuse3
+
+COPY --from=golang /usr/local/go/ /usr/local/go/
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 RUN <<EOT
 set -eux
@@ -79,8 +90,16 @@ set -eux
 curl -sSL https://d.juicefs.com/install | sh -
 
 # nvidia-container-toolkit repo
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-echo 'deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH) /' > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+# curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+# echo 'deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH) /' > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+curl -s -L https://nvidia.github.io/nvidia-container-runtime/gpgkey | apt-key add -
+curl -s -L https://nvidia.github.io/nvidia-container-runtime/ubuntu20.04/nvidia-container-runtime.list | tee /etc/apt/sources.list.d/nvidia-container-runtime.list
+apt-get update && apt-get install -y nvidia-container-runtime fuse3 libfuse3-dev
+
+# Build and install custom nvidia-container-toolkit
+git clone https://github.com/beam-cloud/nvidia-container-toolkit.git
+cd /workspace/nvidia-container-toolkit && make build && make binaries
+cp /workspace/nvidia-container-toolkit/nvidia-container-runtime* /usr/bin/
 
 # criu repo
 curl -fsSL https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04/Release.key | gpg --dearmor -o /usr/share/keyrings/criu.gpg

@@ -2,10 +2,8 @@ package scheduler
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/beam-cloud/beam/internal/common"
@@ -36,7 +34,7 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient) (*Sch
 	workerPoolManager := NewWorkerPoolManager(workerPoolRepo)
 	for name, pool := range config.Worker.Pools {
 		controller, _ := NewKubernetesWorkerPoolController(config, name, workerRepo)
-		workerPoolManager.SetPool(name, &pool, controller)
+		workerPoolManager.SetPool(name, pool, controller)
 	}
 
 	return &Scheduler{
@@ -102,22 +100,17 @@ func (s *Scheduler) Stop(containerId string) error {
 }
 
 func (s *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolController, error) {
-	poolName := "beam-cpu"
+	var ok bool
+	var workerPool *WorkerPool
 
-	if request.Gpu != "" {
-		switch types.GPUType(request.Gpu) {
-		case types.GPU_T4, types.GPU_A10G:
-			poolName = fmt.Sprintf("beam-%s", strings.ToLower(request.Gpu))
-		case types.GPU_L4, types.GPU_A100_40, types.GPU_A100_80:
-			poolName = fmt.Sprintf("beam-%s-gcp", strings.ToLower(request.Gpu))
-		default:
-			return nil, errors.New("unsupported gpu")
-		}
+	if request.Gpu == "" {
+		workerPool, ok = s.workerPoolManager.GetPool("default")
+	} else {
+		workerPool, ok = s.workerPoolManager.GetPoolByGPU(request.Gpu)
 	}
 
-	workerPool, ok := s.workerPoolManager.GetPool(poolName)
 	if !ok {
-		return nil, fmt.Errorf("no controller found for worker pool name: %s", poolName)
+		return nil, errors.New("no controller found for request")
 	}
 
 	return workerPool.Controller, nil
