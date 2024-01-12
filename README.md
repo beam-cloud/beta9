@@ -12,6 +12,9 @@
     <a href="https://twitter.com/beam_cloud">
     <img alt="Twitter" src="https://img.shields.io/twitter/follow/beam_cloud.svg?style=social&logo=twitter">
   </a>
+  <a href="https://github.com/beam-cloud/beam/actions">
+    <img alt="Tests Passing" src="https://github.com/beam-cloud/beam/workflows/tests/badge.svg?branch=master">
+  </a>
   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-ff69b4"/>
 </p>
 
