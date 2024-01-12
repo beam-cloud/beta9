@@ -70,7 +70,7 @@ func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
 	args, err := json.Marshal(payload)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "error marshaling function payload",
+			"error": "error marshalling function payload",
 		})
 	}
 
