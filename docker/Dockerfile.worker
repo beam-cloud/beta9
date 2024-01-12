@@ -3,7 +3,7 @@ ARG BASE_STAGE=dev
 
 FROM golang:1.21-bullseye AS golang
 
-RUN --mount=type=secret,id=github-token,required=true <<EOT
+RUN <<EOT
 set -eux
 apt-get update
 apt-get install -y --no-install-recommends curl git
@@ -57,8 +57,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN GOPRIVATE=github.com/beam-cloud/* \
-    go build -o /usr/local/bin/worker ./cmd/worker/main.go
+RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 
 
 # NVIDIA CUDA - Final Stage

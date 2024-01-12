@@ -13,7 +13,6 @@ WORKDIR /workspace
 RUN apt install -y libfuse3-dev && \
     go install github.com/cosmtrek/air@latest
 
-ENV GOPRIVATE=github.com/beam-cloud/*
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 
