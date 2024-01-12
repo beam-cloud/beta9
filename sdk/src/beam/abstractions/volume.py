@@ -18,14 +18,10 @@ class Volume(BaseAbstraction):
 
         Example:
             ```python
-            from beam import Volume,
+            from beam import Volume
 
             # Shared Volume
-            shared_volume = Volume(
-                name='model_weights',
-                mount_path='./my-weights'
-            )
-
+            shared_volume = Volume(name="model_weights", mount_path="./my-weights")
             ```
         """
         super().__init__()
