@@ -203,7 +203,7 @@ def function(
             The container image used for the task execution. Default is [Image](#image).
     Example:
         ```python
-        from beam import Function
+        from beam import Function, Image
 
         @Function(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
         def transcribe(filename: str):

@@ -222,15 +222,23 @@ def task_queue(
             Default is 100.
     Example:
         ```python
-        from beam import task_queue
+        from beam import Image, task_queue
 
-        @task_queue(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), gikeep_warm_seconds=1000)
+
+        # Define the task queue
+        @task_queue(
+            cpu=1.0,
+            memory=128,
+            gpu="T4",
+            image=Image(python_packages=["torch"]),
+            keep_warm_seconds=1000,
+        )
+
         def transcribe(filename: str):
-            print(filename)
-            return
+            return {}
+
 
         transcribe.put("some_file.mp4")
-
         ```
     """
     return TaskQueue(
