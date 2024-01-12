@@ -1,6 +1,6 @@
 dev:
   beam:
-    image: registry.beam.lan:5000/beam:latest
+    image: registry.localhost:5000/beam:latest
     command:
     - /workspace/bin/hotreload.sh
     sync:

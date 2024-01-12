@@ -307,21 +307,21 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}
 
 	if err != nil {
-		log.Printf("unable to create archive: %v\n", err)
+		log.Printf("Unable to create archive: %v\n", err)
 		// outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to archive image."}
 		return err
 	}
-	log.Printf("container <%v> archive took %v\n", imageId, time.Since(startTime))
+	log.Printf("Container <%v> archive took %v\n", imageId, time.Since(startTime))
 
 	// Push the archive to a registry
 	startTime = time.Now()
 	err = i.registry.Push(ctx, archivePath, imageId)
 	if err != nil {
-		log.Printf("failed to push image for image <%v>: %v\n", imageId, err)
+		log.Printf("Failed to push image for image <%v>: %v\n", imageId, err)
 		// outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to push image."}
 		return err
 	}
 
-	log.Printf("container <%v> push took %v\n", imageId, time.Since(startTime))
+	log.Printf("Container <%v> push took %v\n", imageId, time.Since(startTime))
 	return nil
 }
