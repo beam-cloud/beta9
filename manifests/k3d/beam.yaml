@@ -53,7 +53,7 @@ spec:
     spec:
       containers:
       - name: beam
-        image: registry.beam.lan:5000/beam:latest
+        image: registry.localhost:5000/beam:latest
         command:
         - /workspace/bin/beam
         ports:

@@ -30,6 +30,4 @@ RUN apt autoclean
 
 COPY --from=build /usr/local/bin/beam /usr/local/bin/
 
-ENV GIN_MODE=release
-
 CMD ["tail", "-f", "/dev/null"]

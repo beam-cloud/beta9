@@ -1,6 +1,6 @@
 import asyncio
 import os
-from typing import Any, Callable, Iterable, List, Optional, Union
+from typing import Any, Callable, Iterator, List, Optional, Sequence, Union
 
 import cloudpickle
 
@@ -75,7 +75,7 @@ class Function(RunnerAbstraction):
 
 
 class _CallableWrapper:
-    def __init__(self, func: Callable, parent: Function):
+    def __init__(self, func: Callable, parent: Function) -> None:
         self.func: Callable = func
         self.parent: Function = parent
 
@@ -150,7 +150,7 @@ class _CallableWrapper:
 
         return deploy_response.ok
 
-    def _gather_and_yield_results(self, inputs: Iterable):
+    def _gather_and_yield_results(self, inputs: Sequence) -> Iterator[Any]:
         container_count = len(inputs)
 
         async def _gather_async():
@@ -166,11 +166,11 @@ class _CallableWrapper:
                 except StopAsyncIteration:
                     break
 
-    def map(self, inputs: Iterable):
+    def map(self, inputs: Sequence[Any]) -> Iterator[Any]:
         if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=FUNCTION_STUB_TYPE,
         ):
-            return
+            return  # type: ignore
 
         return self._gather_and_yield_results(inputs)
