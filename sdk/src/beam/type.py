@@ -37,7 +37,6 @@ class PythonVersion(str, Enum):
         ```
     """
 
-    Python37 = "python3.7"
     Python38 = "python3.8"
     Python39 = "python3.9"
     Python310 = "python3.10"
@@ -49,15 +48,18 @@ class GpuType(str, Enum):
     """
     An enum that defines types of GPUs.
 
-    <Info>
-        GPUs L4 and A100 are coming soon. Email us at founders@beam.cloud to learn more.
-    </Info>
-
     Example:
         ```python
-        from beam import Runtime, GpuType
+        from beam import GpuType, function
 
-        r = Runtime(gpu=GpuType.T4)
+        @function(gpu=GpuType.T4)
+        def some_func()
+            print("I will run on a T4 gpu!")
+
+        # This is equivalent to the above ^
+        @function(gpu="T4")
+        def some_other_func()
+            print("I will run on a T4 gpu!")
         ```
     """
 
@@ -68,42 +70,3 @@ class GpuType(str, Enum):
     A10G = "A10G"
     A100_40 = "A100-40"
     A100_80 = "A100-80"
-
-
-class VolumeType(str, Enum):
-    """
-    An enum that defines types of volumes.
-
-    Example:
-        ```python
-        from beam import Volume, VolumeType
-
-        pv = Volume(
-            name='my-persistent-data',
-            path='./my-persistent-volume'
-            volume_type=VolumeType.Persistent,
-        )
-        ```
-    """
-
-    Persistent = "persistent"
-    Shared = "shared"
-
-
-class AutoscalingType(str, Enum):
-    """
-    An enum that defines types of autoscaling.
-
-    <Warning>
-        This is deprecated. Please see the [RequestLatencyAutoscaler](#requestlatencyautoscaler).
-    </Warning>
-
-    Example:
-        ```python
-        from beam import Autoscaling, AutoscalingType
-
-        a = Autoscaling(autoscaling_type=AutoscalingType.MaxRequestLatency)
-        ```
-    """
-
-    MaxRequestLatency = "max_request_latency"

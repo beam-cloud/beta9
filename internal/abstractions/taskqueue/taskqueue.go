@@ -592,6 +592,7 @@ func (tq *RedisTaskQueue) handleContainerEvents() {
 					Change:      -1,
 				}
 			}
+
 		case <-tq.ctx.Done():
 			return
 		}
