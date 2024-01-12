@@ -4,8 +4,32 @@ from beam.clients.volume import VolumeServiceStub
 
 
 class Volume(BaseAbstraction):
-    def __init__(self, name: str, mount_path: str) -> None:
+    def __init__(self, name: str, mount_path: str) -> "Volume":
+        """
+        Creates a Volume instance.
+
+        When your container runs, your volume will be available at `./{name}` and `/volumes/{name}`.
+
+        Parameters:
+            name (str):
+                The name of the volume, a descriptive identifier for the data volume.
+            mount_path (str):
+                The path where the volume is mounted within the container environment.
+
+        Example:
+            ```python
+            from beam import Volume,
+
+            # Shared Volume
+            shared_volume = Volume(
+                name='model_weights',
+                mount_path='./my-weights'
+            )
+
+            ```
+        """
         super().__init__()
+
         self.name = name
         self.ready = False
         self.volume_id = None

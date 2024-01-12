@@ -17,7 +17,37 @@ class SimpleQueueInternalServerError(Exception):
 
 
 class SimpleQueue(BaseAbstraction):
-    def __init__(self, *, name: str, max_size=100) -> None:
+    """A distributed python queue."""
+
+    def __init__(self, *, name: str, max_size=100) -> "SimpleQueue":
+        """
+        Creates a Queue instance.
+
+        Use this a concurrency safe distributed queue, accessible both locally and within
+        remote containers. Serialization is done using cloudpickle, so any object that supported
+        by that should work here. The interface is that of a standard python queue.
+
+        Because this is backed by a distributed queue, it will persist between runs.
+
+        Parameters:
+            name (str):
+                The name of the queue (any arbitrary string).
+
+        Example:
+        ```python
+        from beam import Queue
+
+        val = [1, 2, 3]
+        q = Queue(name="myqueue")
+        for i in range(100):
+            q.put(val)
+
+        while not q.empty():
+            val = q.pop()
+            print(val)
+
+        ```
+        """
         super().__init__()
 
         self.name: str = name
