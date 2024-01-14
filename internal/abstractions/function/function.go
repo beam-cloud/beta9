@@ -209,7 +209,7 @@ _stream:
 		case <-keyEventChan:
 			exitCode, err := fs.containerRepo.GetContainerExitCode(containerId)
 			if err != nil {
-				return err
+				exitCode = -1
 			}
 
 			result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(workspaceName, taskId)).Bytes()
