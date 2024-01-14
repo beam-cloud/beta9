@@ -207,8 +207,13 @@ _stream:
 				break _stream
 			}
 		case <-keyEventChan:
+			exitCode, err := fs.containerRepo.GetContainerExitCode(containerId)
+			if err != nil {
+				return err
+			}
+
 			result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(workspaceName, taskId)).Bytes()
-			if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: 0}); err != nil {
+			if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: int32(exitCode)}); err != nil {
 				break
 			}
 		case <-ctx.Done():

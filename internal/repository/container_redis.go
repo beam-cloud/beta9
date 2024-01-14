@@ -85,6 +85,16 @@ func (cr *ContainerRedisRepository) SetContainerExitCode(containerId string, exi
 	return nil
 }
 
+func (cr *ContainerRedisRepository) GetContainerExitCode(containerId string) (int, error) {
+	exitCodeKey := common.RedisKeys.SchedulerContainerExitCode(containerId)
+	exitCode, err := cr.rdb.Get(context.TODO(), exitCodeKey).Int()
+	if err != nil {
+		return -1, err
+	}
+
+	return exitCode, nil
+}
+
 func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, status types.ContainerStatus, expiry time.Duration) error {
 	switch status {
 	case types.ContainerStatusPending, types.ContainerStatusRunning, types.ContainerStatusStopping:
