@@ -124,12 +124,12 @@ type WorkerConfig struct {
 }
 
 type WorkerPoolConfig struct {
-	JobSpec WorkerPoolJobSpecConfig `key:"jobSpec"`
+	JobSpec    WorkerPoolJobSpecConfig           `key:"jobSpec"`
+	PoolSizing WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing"`
 }
 
 type WorkerPoolJobSpecConfig struct {
-	NodeSelector map[string]string                 `key:"nodeSelector"`
-	PoolSizing   WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing"`
+	NodeSelector map[string]string `key:"nodeSelector"`
 }
 
 type WorkerPoolJobSpecPoolSizingConfig struct {

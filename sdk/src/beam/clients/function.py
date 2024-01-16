@@ -19,7 +19,7 @@ class FunctionInvokeResponse(betterproto.Message):
     task_id: str = betterproto.string_field(1)
     output: str = betterproto.string_field(2)
     done: bool = betterproto.bool_field(3)
-    exit_code: int = betterproto.uint32_field(4)
+    exit_code: int = betterproto.int32_field(4)
     result: bytes = betterproto.bytes_field(5)
 
 

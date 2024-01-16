@@ -92,7 +92,7 @@ func (wpc *KubernetesWorkerPoolController) poolId() string {
 }
 
 func (wpc *KubernetesWorkerPoolController) monitorPoolSize(workerPool *types.WorkerPoolConfig) error {
-	config, err := ParsePoolSizingConfig(workerPool.JobSpec.PoolSizing)
+	config, err := ParsePoolSizingConfig(workerPool.PoolSizing)
 	if err != nil {
 		return err
 	}
