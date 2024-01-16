@@ -179,3 +179,54 @@ spec:
     persistence:
       enabled: true
       size: 1Gi
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: headscale
+  namespace: beam
+spec:
+  repo: https://charts.gabe565.com
+  chart: headscale
+  createNamespace: false
+  version: 0.12.7
+  valuesContent: |-
+    postgresql:
+      enabled: false
+
+    env:
+      HEADSCALE_SERVER_URL: http://localhost:8080
+      HEADSCALE_DB_HOST: postgres-postgresql.beam
+      HEADSCALE_DB_PORT: 5432
+      HEADSCALE_DB_NAME: main
+      HEADSCALE_DB_USER: root
+      HEADSCALE_DB_PASS: password
+
+    persistence:
+      config:
+        enabled: true
+        mountPath: /etc/headscale
+        retain: true
+        size: 1Gi
+
+    sidecars:
+      ui:
+        image: ghcr.io/gurucomputing/headscale-ui:latest
+        ports:
+          - name: http
+            containerPort: 80
+
+    service:
+      main:
+        ports:
+          http:
+            port: 8080
+          metrics:
+            port: 9090
+          grpc:
+            enabled: false
+            port: 50443
+      ui:
+        ports:
+          ui:
+            port: 80
