@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package endpoint;
+
+service WebEndpointService {
+  rpc WebEndpointServe(WebEndpointServeRequest)
+      returns (WebEndpointServeResponse) {}
+}
+
+message WebEndpointServeRequest { string stub_id = 1; }
+
+message WebEndpointServeResponse {}

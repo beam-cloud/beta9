@@ -22,7 +22,7 @@ message FunctionInvokeResponse {
   string task_id = 1;
   string output = 2;
   bool done = 3;
-  uint32 exit_code = 4;
+  int32 exit_code = 4;
   bytes result = 5;
 }
 
