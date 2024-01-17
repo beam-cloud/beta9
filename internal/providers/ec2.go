@@ -10,7 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
-// EC2Provider struct to handle EC2 operations.
 type EC2Provider struct {
 	client *ec2.Client
 }
