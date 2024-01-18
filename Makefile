@@ -44,6 +44,3 @@ protocol:
 
 test-internal:
 	go test -v ./internal/... -bench=./internal/..
-
-prometheus:
-	cd charts/kube-prometheus-stack && helm upgrade --install prometheus prometheus-community/kube-prometheus-stack --values values.yml
