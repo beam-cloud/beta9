@@ -22,7 +22,7 @@ type Scheduler struct {
 	workerPoolManager *WorkerPoolManager
 	requestBacklog    *RequestBacklog
 	containerRepo     repo.ContainerRepository
-	metricsRepo       repo.MetricsStatsdRepository
+	metricsRepo       repo.MetricsRepository
 	eventBus          *common.EventBus
 }
 
@@ -45,7 +45,6 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient) (*Sch
 		workerPoolManager: workerPoolManager,
 		requestBacklog:    requestBacklog,
 		containerRepo:     containerRepo,
-		metricsRepo:       repo.NewMetricsStatsdRepository(),
 	}, nil
 }
 
@@ -65,7 +64,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	s.metricsRepo.ContainerRequested(request.ContainerId)
+	// s.metricsRepo.ContainerRequested(request.ContainerId)
 
 	err = s.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
 		Status:      types.ContainerStatusPending,
@@ -175,7 +174,7 @@ func (s *Scheduler) processRequests() {
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	s.metricsRepo.ContainerScheduled(request.ContainerId)
+	// s.metricsRepo.ContainerScheduled(request.ContainerId)
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 

@@ -2,26 +2,26 @@ package worker
 
 import (
 	"context"
+	"log"
 	"time"
 
 	repo "github.com/beam-cloud/beam/internal/repository"
 	types "github.com/beam-cloud/beam/internal/types"
-	"github.com/okteto/okteto/pkg/log"
 )
 
 type WorkerMetrics struct {
+	ctx               context.Context
 	workerId          string
-	metricsRepo       repo.MetricsStatsdRepository
+	metricsRepo       repo.MetricsRepository
 	workerRepo        repo.WorkerRepository
 	metricsStreamRepo repo.MetricsStreamRepository
-	ctx               context.Context
 	nvmlActive        bool
 }
 
 func NewWorkerMetrics(
 	ctx context.Context,
 	workerId string,
-	metricsRepo repo.MetricsStatsdRepository,
+	metricsRepo repo.MetricsRepository,
 	workerRepo repo.WorkerRepository,
 	metricsStreamRepo repo.MetricsStreamRepository,
 ) *WorkerMetrics {
@@ -35,46 +35,51 @@ func NewWorkerMetrics(
 	}
 }
 
-func (wm *WorkerMetrics) WorkerStarted() {
-	wm.metricsRepo.WorkerStarted(wm.workerId)
+func (wm *WorkerMetrics) Init() {
+	wm.InitNvml()
+	go wm.metricsRepo.Init()
 }
 
-func (wm *WorkerMetrics) WorkerStopped() {
-	wm.metricsRepo.WorkerStopped(wm.workerId)
-}
+// func (wm *WorkerMetrics) WorkerStarted() {
+// 	wm.metricsRepo.WorkerStarted(wm.workerId)
+// }
 
-func (wm *WorkerMetrics) ContainerStarted(containerId string) {
-	wm.metricsRepo.ContainerStarted(
-		containerId,
-		wm.workerId,
-	)
-}
+// func (wm *WorkerMetrics) WorkerStopped() {
+// 	wm.metricsRepo.WorkerStopped(wm.workerId)
+// }
 
-func (wm *WorkerMetrics) ContainerStopped(containerId string) {
-	wm.metricsRepo.ContainerStopped(
-		containerId,
-		wm.workerId,
-	)
-}
+// func (wm *WorkerMetrics) ContainerStarted(containerId string) {
+// 	wm.metricsRepo.ContainerStarted(
+// 		containerId,
+// 		wm.workerId,
+// 	)
+// }
 
-// Periodically send statsd metrics to track worker duration
-func (wm *WorkerMetrics) EmitWorkerDuration() {
-	cursorTime := time.Now()
-	ticker := time.NewTicker(types.WorkerDurationEmissionInterval)
-	defer ticker.Stop()
+// func (wm *WorkerMetrics) ContainerStopped(containerId string) {
+// 	wm.metricsRepo.ContainerStopped(
+// 		containerId,
+// 		wm.workerId,
+// 	)
+// }
 
-	for {
-		select {
-		case <-ticker.C:
-			wm.metricsRepo.WorkerDuration(wm.workerId, time.Now().UnixNano(), time.Since(cursorTime))
-			cursorTime = time.Now()
-		case <-wm.ctx.Done():
-			// Consolidate any remaining time
-			wm.metricsRepo.WorkerDuration(wm.workerId, time.Now().UnixNano(), time.Since(cursorTime))
-			return
-		}
-	}
-}
+// // Periodically send statsd metrics to track worker duration
+// func (wm *WorkerMetrics) EmitWorkerDuration() {
+// 	cursorTime := time.Now()
+// 	ticker := time.NewTicker(types.WorkerDurationEmissionInterval)
+// 	defer ticker.Stop()
+
+// 	for {
+// 		select {
+// 		case <-ticker.C:
+// 			wm.metricsRepo.WorkerDuration(wm.workerId, time.Now().UnixNano(), time.Since(cursorTime))
+// 			cursorTime = time.Now()
+// 		case <-wm.ctx.Done():
+// 			// Consolidate any remaining time
+// 			wm.metricsRepo.WorkerDuration(wm.workerId, time.Now().UnixNano(), time.Since(cursorTime))
+// 			return
+// 		}
+// 	}
+// }
 
 func (wm *WorkerMetrics) EmitResourceUsage(request *types.ContainerRequest, pidChan <-chan int, done chan bool) {
 	gpuEnabled := request.Gpu != ""
@@ -165,11 +170,11 @@ func (wm *WorkerMetrics) EmitContainerUsage(request *types.ContainerRequest, don
 	for {
 		select {
 		case <-ticker.C:
-			wm.metricsRepo.ContainerDuration(request.ContainerId, wm.workerId, time.Now().UnixNano(), time.Since(cursorTime))
+			wm.metricsRepo.ContainerDurationSeconds(request.ContainerId, wm.workerId, time.Since(cursorTime))
 			cursorTime = time.Now()
 		case <-done:
 			// Consolidate any remaining time
-			wm.metricsRepo.ContainerDuration(request.ContainerId, wm.workerId, time.Now().UnixNano(), time.Since(cursorTime))
+			wm.metricsRepo.ContainerDurationSeconds(request.ContainerId, wm.workerId, time.Since(cursorTime))
 			return
 		}
 	}

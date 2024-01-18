@@ -40,7 +40,7 @@ type Gateway struct {
 	redisClient    *common.RedisClient
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
-	metricsRepo    repository.MetricsStatsdRepository
+	metricsRepo    repository.MetricsRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
 	ctx            context.Context
@@ -85,7 +85,7 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
-	metricsRepo := repository.NewMetricsStatsdRepository()
+	metricsRepo := repository.NewMetricsPrometheusRepository(config.Metrics.Prometheus.Enabled)
 
 	gateway.config = config
 	gateway.ContainerRepo = containerRepo
@@ -219,6 +219,12 @@ func (g *Gateway) Start() error {
 	go func() {
 		if err := g.httpServer.Start(GatewayConfig.HttpServerAddress); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start http server: %v", err)
+		}
+	}()
+
+	go func() {
+		if err := g.metricsRepo.Init(); err != nil {
+			log.Fatalf("Failed to start metrics server: %v", err)
 		}
 	}()
 

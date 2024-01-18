@@ -76,6 +76,8 @@ worker:
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
 metrics:
+  prometheus:
+    enabled: false
   kinesis:
     streamName: beam-realtime-metrics
     region: us-east-1

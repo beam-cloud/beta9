@@ -142,7 +142,12 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 }
 
 type MetricsConfig struct {
-	Kinesis KinesisConfig `key:"kinesis"`
+	Kinesis    KinesisConfig    `key:"kinesis"`
+	Prometheus PrometheusConfig `key:"prometheus"`
+}
+
+type PrometheusConfig struct {
+	Enabled bool `key:"enabled"`
 }
 
 type KinesisConfig struct {

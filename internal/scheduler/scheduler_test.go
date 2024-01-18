@@ -53,7 +53,6 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		eventBus:          eventBus,
 		workerRepo:        workerRepo,
 		workerPoolManager: workerPoolManager,
-		metricsRepo:       repo.NewMetricsStatsdRepositoryForTest(),
 		requestBacklog:    requestBacklog,
 		containerRepo:     containerRepo,
 	}, nil

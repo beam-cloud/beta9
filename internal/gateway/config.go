@@ -1,8 +1,9 @@
 package gateway
 
 type config struct {
-	GrpcServerAddress string
-	HttpServerAddress string
+	GrpcServerAddress        string
+	HttpServerAddress        string
+	PrometheusMetricsAddress string
 }
 
 var GatewayConfig config = config{
