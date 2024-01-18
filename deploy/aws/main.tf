@@ -389,6 +389,32 @@ resource "helm_release" "aws-load-balancer-controller" {
   ]
 }
 
+
+resource "helm_release" "nginx_ingress" {
+  name       = "nginx-ingress"
+  repository = "https://charts.bitnami.com/bitnami"
+  chart      = "nginx-ingress-controller"
+  version    = "10.0.1"
+
+  values = [<<EOF
+defaultBackend:
+  enabled: true
+service:
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    service.beta.kubernetes.io/aws-load-balancer-alpn-policy: "HTTP2Preferred"
+    service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "60"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-proxy-protocol: "*"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "${aws_acm_certificate.ssl_cert.arn}"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "https"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy: "ELBSecurityPolicy-TLS13-1-2-2021-06"
+EOF
+  ]
+}
+
+
 # S3 Buckets
 resource "aws_s3_bucket" "image_bucket" {
   bucket = "${var.prefix}-image-bucket"
