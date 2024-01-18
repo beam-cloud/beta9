@@ -140,10 +140,10 @@ func NewWorker() (*Worker, error) {
 
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
-	statsdRepo := repo.NewMetricsStatsdRepository()
+	metricsRepo := repo.NewMetricsPrometheusRepository(config.Metrics.Prometheus.Enabled)
 
-	workerMetrics := NewWorkerMetrics(ctx, podHostName, statsdRepo, workerRepo, repo.NewMetricsStreamRepository(ctx, config.Metrics))
-	workerMetrics.InitNvml()
+	workerMetrics := NewWorkerMetrics(ctx, podHostName, metricsRepo, workerRepo, repo.NewMetricsStreamRepository(ctx, config.Metrics))
+	workerMetrics.Init()
 
 	return &Worker{
 		ctx:                  ctx,
@@ -514,11 +514,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(request, done)
-	s.workerMetrics.ContainerStarted(containerId)
-	defer s.workerMetrics.ContainerStopped(containerId)
+	// s.workerMetrics.ContainerStarted(containerId)
+	// defer s.workerMetrics.ContainerStopped(containerId)
 
 	pidChan := make(chan int, 1)
-	go s.workerMetrics.EmitResourceUsage(request, pidChan, done)
+	// go s.workerMetrics.EmitResourceUsage(request, pidChan, done)
 
 	// Invoke runc process (launch the container)
 	// This will return exit code 137 even if the container is stopped gracefully. We don't know why.
@@ -684,8 +684,8 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 
 func (s *Worker) startup() error {
 	log.Printf("Worker starting up.")
-	s.workerMetrics.WorkerStarted()
-	go s.workerMetrics.EmitWorkerDuration()
+	// s.workerMetrics.WorkerStarted()
+	// go s.workerMetrics.EmitWorkerDuration()
 
 	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
 	if err != nil {
@@ -710,7 +710,7 @@ func (s *Worker) startup() error {
 
 func (s *Worker) shutdown() error {
 	log.Printf("Worker spinning down.")
-	s.workerMetrics.WorkerStopped()
+	// s.workerMetrics.WorkerStopped()
 
 	worker, err := s.workerRepo.GetWorkerById(s.workerId)
 	if err != nil {
