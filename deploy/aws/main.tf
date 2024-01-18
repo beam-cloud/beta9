@@ -397,6 +397,12 @@ resource "helm_release" "nginx_ingress" {
   version    = "10.0.1"
 
   values = [<<EOF
+ingressClassResource:
+  name: nginx
+  enabled: true
+  default: true
+  controllerClass: "k8s.io/ingress-nginx"
+  parameters: {}
 defaultBackend:
   enabled: true
 service:
