@@ -10,7 +10,3 @@ cli = click.Group()
 cli.add_command(configure.configure)
 cli.add_command(tasks.cli)
 cli.add_command(deploy.cli)
-
-
-if __name__ == "__main__":
-    cli()
