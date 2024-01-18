@@ -408,14 +408,24 @@ resource "aws_elasticache_cluster" "redis_cluster" {
   engine_version       = "7.0"
   port                 = 6379
   subnet_group_name    = aws_elasticache_subnet_group.private_subnet_group.name
+
+  depends_on = [aws_elasticache_subnet_group.private_subnet_group]
 }
 
+resource "aws_db_subnet_group" "default" {
+  name       = "main"
+  subnet_ids = [aws_subnet.private-us-east-1a.id, aws_subnet.private-us-east-1b.id]
+
+  tags = {
+    Name = "${var.prefix}-rds-subnet-group"
+  }
+}
 
 resource "aws_db_instance" "postgres_db" {
   identifier           = "${var.prefix}-postgres"
   engine               = "postgres"
   engine_version       = "13.8"
-  db_subnet_group_name = aws_elasticache_subnet_group.private_subnet_group.name
+  db_subnet_group_name = aws_db_subnet_group.default.name
   instance_class       = "db.t4g.medium"
   allocated_storage    = 20
   storage_type         = "gp2"
@@ -423,4 +433,6 @@ resource "aws_db_instance" "postgres_db" {
   password             = "password"
   db_name              = "main"
   skip_final_snapshot  = true
+
+  depends_on = [aws_db_subnet_group.default]
 }
