@@ -34,5 +34,3 @@ options:
   kubeconfig:
     updateDefaultKubeconfig: true
     switchCurrentContext: true
-  # runtime:
-  #   gpuRequest: all

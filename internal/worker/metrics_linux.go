@@ -9,7 +9,9 @@ import (
 )
 
 func (wm *WorkerMetrics) InitNvml() {
-	wm.nvmlActive = nvml.Init() == nvml.SUCCESS
+	// TODO: investigate segmentation violation
+	// wm.nvmlActive = nvml.Init() == nvml.SUCCESS
+	wm.nvmlActive = false
 }
 
 func (wm *WorkerMetrics) Shutdown() {
