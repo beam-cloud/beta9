@@ -311,7 +311,7 @@ output "aws_load_balancer_controller_role_arn" {
 
 # SSL Certificate for the service exposed
 resource "aws_acm_certificate" "ssl_cert" {
-  domain_name       = "eng-stage.slai.io"
+  domain_name       = var.domain
   validation_method = "DNS"
 
   lifecycle {
@@ -335,8 +335,7 @@ resource "aws_route53_record" "cert_validation" {
     }
   }
 
-  # TODO: don't hardcode this
-  zone_id = "Z07081541B2HAA9KWC78W" # aws_route53_zone.eng_stage.zone_id
+  zone_id = var.domain_hosted_zone_id
   name    = each.value.name
   type    = each.value.type
   ttl     = 60

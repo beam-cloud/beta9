@@ -11,3 +11,11 @@ variable "cluster_name" {
 variable "cluster_version" {
   default = "1.28"
 }
+
+variable "domain" {
+  default = "eng-stage.slai.io"
+}
+
+variable "domain_hosted_zone_id" {
+  default = "Z07081541B2HAA9KWC78W"
+}
