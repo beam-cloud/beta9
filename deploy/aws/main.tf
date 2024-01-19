@@ -43,16 +43,6 @@ resource "aws_subnet" "private-us-east-1b" {
   }
 }
 
-resource "aws_elasticache_subnet_group" "private_subnet_group" {
-  name       = "${var.prefix}-private-subnet-group"
-  subnet_ids = [aws_subnet.private-us-east-1a.id, aws_subnet.private-us-east-1b.id]
-
-  tags = {
-    Name = "${var.prefix}-private-subnet-group"
-  }
-}
-
-
 resource "aws_subnet" "public-us-east-1a" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "10.0.64.0/19"
@@ -147,279 +137,38 @@ resource "aws_route_table_association" "public-us-east-1b" {
   route_table_id = aws_route_table.public.id
 }
 
-# Cluster role
-resource "aws_iam_role" "eks-cluster" {
-  name = "${var.prefix}-${var.cluster_name}"
+resource "aws_security_group" "k3s_cluster" {
+  name        = "${var.prefix}-k3s-sg"
+  description = "Security group for K3s cluster"
+  vpc_id      = aws_vpc.main.id
 
-  assume_role_policy = <<POLICY
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "eks.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}
-POLICY
-}
-
-resource "aws_iam_role_policy_attachment" "amazon-eks-cluster-policy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
-  role       = aws_iam_role.eks-cluster.name
-}
-
-# EKS Cluster
-resource "aws_eks_cluster" "cluster" {
-  name     = var.cluster_name
-  version  = var.cluster_version
-  role_arn = aws_iam_role.eks-cluster.arn
-
-  vpc_config {
-    subnet_ids = [
-      aws_subnet.private-us-east-1a.id,
-      aws_subnet.private-us-east-1b.id,
-      aws_subnet.public-us-east-1a.id,
-      aws_subnet.public-us-east-1b.id
-    ]
+  // Allow internal communication within the VPC
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["10.0.0.0/16"]
   }
 
-  depends_on = [aws_iam_role_policy_attachment.amazon-eks-cluster-policy]
-}
-
-# EKS Node IAM role
-resource "aws_iam_role" "nodes" {
-  name = "eks-node-group-nodes"
-
-  assume_role_policy = jsonencode({
-    Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
-      Principal = {
-        Service = "ec2.amazonaws.com"
-      }
-    }]
-    Version = "2012-10-17"
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "amazon-eks-worker-node-policy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-  role       = aws_iam_role.nodes.name
-}
-
-resource "aws_iam_role_policy_attachment" "amazon-eks-cni-policy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-  role       = aws_iam_role.nodes.name
-}
-
-resource "aws_iam_role_policy_attachment" "amazon-ec2-container-registry-read-only" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-  role       = aws_iam_role.nodes.name
-}
-
-# Node group
-resource "aws_eks_node_group" "private-nodes" {
-  cluster_name    = aws_eks_cluster.cluster.name
-  version         = var.cluster_version
-  node_group_name = "${var.prefix}-private-nodes"
-  node_role_arn   = aws_iam_role.nodes.arn
-
-  subnet_ids = [
-    aws_subnet.private-us-east-1a.id,
-    aws_subnet.private-us-east-1b.id
-  ]
-
-  capacity_type  = "ON_DEMAND"
-  instance_types = ["t3.small"]
-
-  scaling_config {
-    desired_size = 2
-    max_size     = 5
-    min_size     = 0
+  // K3s specific ports
+  ingress {
+    from_port   = 6443
+    to_port     = 6443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
-  update_config {
-    max_unavailable = 1
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
-  labels = {
-    role = "general"
-  }
-
-  depends_on = [
-    aws_iam_role_policy_attachment.amazon-eks-worker-node-policy,
-    aws_iam_role_policy_attachment.amazon-eks-cni-policy,
-    aws_iam_role_policy_attachment.amazon-ec2-container-registry-read-only,
-  ]
-
-  # Allow external changes without Terraform plan difference
-  lifecycle {
-    ignore_changes = [scaling_config[0].desired_size]
+  tags = {
+    Name = "${var.prefix}-k3s-sg"
   }
 }
-
-data "tls_certificate" "eks" {
-  url = aws_eks_cluster.cluster.identity[0].oidc[0].issuer
-}
-
-resource "aws_iam_openid_connect_provider" "eks" {
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = [data.tls_certificate.eks.certificates[0].sha1_fingerprint]
-  url             = aws_eks_cluster.cluster.identity[0].oidc[0].issuer
-}
-
-data "aws_iam_policy_document" "aws_load_balancer_controller_assume_role_policy" {
-  statement {
-    actions = ["sts:AssumeRoleWithWebIdentity"]
-    effect  = "Allow"
-
-    condition {
-      test     = "StringEquals"
-      variable = "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub"
-      values   = ["system:serviceaccount:kube-system:aws-load-balancer-controller"]
-    }
-
-    principals {
-      identifiers = [aws_iam_openid_connect_provider.eks.arn]
-      type        = "Federated"
-    }
-  }
-}
-
-resource "aws_iam_role" "aws_load_balancer_controller" {
-  assume_role_policy = data.aws_iam_policy_document.aws_load_balancer_controller_assume_role_policy.json
-  name               = "aws-load-balancer-controller"
-}
-
-resource "aws_iam_policy" "aws_load_balancer_controller" {
-  policy = file("./AWSLoadBalancerController.json")
-  name   = "AWSLoadBalancerController"
-}
-
-resource "aws_iam_role_policy_attachment" "aws_load_balancer_controller_attach" {
-  role       = aws_iam_role.aws_load_balancer_controller.name
-  policy_arn = aws_iam_policy.aws_load_balancer_controller.arn
-}
-
-output "aws_load_balancer_controller_role_arn" {
-  value = aws_iam_role.aws_load_balancer_controller.arn
-}
-
-# SSL Certificate for the service exposed
-resource "aws_acm_certificate" "ssl_cert" {
-  domain_name       = var.domain
-  validation_method = "DNS"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-# Certificate validation
-resource "aws_acm_certificate_validation" "ssl_cert" {
-  certificate_arn         = aws_acm_certificate.ssl_cert.arn
-  validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
-}
-
-# DNS records for certificate validation
-resource "aws_route53_record" "cert_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.ssl_cert.domain_validation_options : dvo.domain_name => {
-      name   = dvo.resource_record_name
-      record = dvo.resource_record_value
-      type   = dvo.resource_record_type
-    }
-  }
-
-  zone_id = var.domain_hosted_zone_id
-  name    = each.value.name
-  type    = each.value.type
-  ttl     = 60
-  records = [each.value.record]
-}
-
-# K8S helm
-provider "helm" {
-  kubernetes {
-    host                   = aws_eks_cluster.cluster.endpoint
-    cluster_ca_certificate = base64decode(aws_eks_cluster.cluster.certificate_authority[0].data)
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.cluster.id]
-      command     = "aws"
-    }
-  }
-}
-
-resource "helm_release" "aws-load-balancer-controller" {
-  name = "aws-load-balancer-controller"
-
-  repository = "https://aws.github.io/eks-charts"
-  chart      = "aws-load-balancer-controller"
-  namespace  = "kube-system"
-  version    = "1.4.1"
-
-  set {
-    name  = "clusterName"
-    value = aws_eks_cluster.cluster.id
-  }
-
-  set {
-    name  = "image.tag"
-    value = "v2.4.2"
-  }
-
-  set {
-    name  = "serviceAccount.name"
-    value = "aws-load-balancer-controller"
-  }
-
-  set {
-    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
-    value = aws_iam_role.aws_load_balancer_controller.arn
-  }
-
-  depends_on = [
-    aws_eks_node_group.private-nodes,
-    aws_iam_role_policy_attachment.aws_load_balancer_controller_attach
-  ]
-}
-
-
-resource "helm_release" "nginx_ingress" {
-  name       = "nginx-ingress"
-  repository = "https://charts.bitnami.com/bitnami"
-  chart      = "nginx-ingress-controller"
-  version    = "10.0.1"
-
-  values = [<<EOF
-ingressClassResource:
-  name: nginx
-  enabled: true
-  default: true
-  controllerClass: "k8s.io/ingress-nginx"
-  parameters: {}
-defaultBackend:
-  enabled: true
-service:
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
-    service.beta.kubernetes.io/aws-load-balancer-alpn-policy: "HTTP2Preferred"
-    service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "60"
-    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
-    service.beta.kubernetes.io/aws-load-balancer-proxy-protocol: "*"
-    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "${aws_acm_certificate.ssl_cert.arn}"
-    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "https"
-    service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy: "ELBSecurityPolicy-TLS13-1-2-2021-06"
-EOF
-  ]
-}
-
 
 # S3 Buckets
 resource "aws_s3_bucket" "image_bucket" {
@@ -430,19 +179,198 @@ resource "aws_s3_bucket" "juicefs_bucket" {
   bucket = "${var.prefix}-juicefs-bucket"
 }
 
-# Redis (ElastiCache)
-resource "aws_elasticache_cluster" "redis_cluster" {
-  cluster_id           = "${var.prefix}-redis"
-  engine               = "redis"
-  node_type            = "cache.t4g.micro"
-  num_cache_nodes      = 1
-  parameter_group_name = "default.redis7"
-  engine_version       = "7.0"
-  port                 = 6379
-  subnet_group_name    = aws_elasticache_subnet_group.private_subnet_group.name
+resource "aws_iam_role" "k3s_role" {
+  name = "${var.prefix}-k3s-role"
 
-  depends_on = [aws_elasticache_subnet_group.private_subnet_group]
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = "sts:AssumeRole",
+        Effect = "Allow",
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      },
+    ]
+  })
 }
+
+resource "aws_iam_policy" "k3s_instance_policy" {
+  name        = "${var.prefix}-k3s-instance"
+  description = "Policy for allowing access to S3 & SSM"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket"
+        ],
+        Effect = "Allow",
+        Resource = [
+          "${aws_s3_bucket.image_bucket.arn}",
+          "${aws_s3_bucket.image_bucket.arn}/*",
+          "${aws_s3_bucket.juicefs_bucket.arn}",
+          "${aws_s3_bucket.juicefs_bucket.arn}/*"
+        ]
+      },
+      {
+        Action   = ["ssm:PutParameter", "ssm:GetParameter"],
+        Effect   = "Allow",
+        Resource = "arn:aws:ssm:*:*:parameter/${var.prefix}/k3s/*"
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "k3_instance_access_attachment" {
+  role       = aws_iam_role.k3s_role.name
+  policy_arn = aws_iam_policy.k3s_instance_policy.arn
+  depends_on = [aws_iam_policy.k3s_instance_policy]
+}
+
+resource "aws_iam_instance_profile" "k3s_instance_profile" {
+  name       = "${var.prefix}-k3s-instance-profile"
+  role       = aws_iam_role.k3s_role.name
+  depends_on = [aws_iam_role_policy_attachment.k3_instance_access_attachment]
+}
+
+# New Elastic IP for k3s_master
+resource "aws_eip" "k3s_master_eip" {
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.prefix}-k3s-master-eip"
+  }
+}
+
+resource "aws_instance" "k3s_master" {
+  ami                         = var.k3s_cluster_ami
+  instance_type               = "t3.small"
+  subnet_id                   = aws_subnet.public-us-east-1a.id
+  security_groups             = [aws_security_group.k3s_cluster.id]
+  iam_instance_profile        = aws_iam_instance_profile.k3s_instance_profile.name
+  user_data_replace_on_change = true
+
+  tags = {
+    Name = "${var.prefix}-k3s-master"
+  }
+
+  user_data_base64 = base64encode(<<-EOF
+    #!/bin/bash
+
+    # Install K3s with the Elastic IP in the certificate SAN
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--tls-san ${aws_eip.k3s_master_eip.public_ip}" sh -
+
+    # Wait for K3s to start, create the kubeconfig file, and the node token
+    while [ ! -f /etc/rancher/k3s/k3s.yaml ] || [ ! -f /var/lib/rancher/k3s/server/node-token ]
+    do
+      sleep 1
+    done
+
+    # Update the kubeconfig file with the public IP
+    sed -i "s/127.0.0.1/${aws_eip.k3s_master_eip.public_ip}/g" /etc/rancher/k3s/k3s.yaml
+
+    # Write cluster config to AWS Parameter Store
+    aws ssm put-parameter --name "/${var.prefix}/k3s/node-token" --type "String" --value "$(cat /var/lib/rancher/k3s/server/node-token)" --overwrite
+    aws ssm put-parameter --name "/${var.prefix}/k3s/kubeconfig" --type "String" --value "$(cat /etc/rancher/k3s/k3s.yaml)" --overwrite
+    EOF
+  )
+
+  depends_on = [aws_eip.k3s_master_eip, aws_iam_instance_profile.k3s_instance_profile]
+}
+
+# Association of EIP with k3s_master
+resource "aws_eip_association" "eip_assoc_k3s_master" {
+  instance_id   = aws_instance.k3s_master.id
+  allocation_id = aws_eip.k3s_master_eip.id
+  depends_on    = [aws_eip.k3s_master_eip]
+}
+
+resource "null_resource" "fetch_k3s_kubeconfig" {
+  triggers = {
+    instance_id = aws_instance.k3s_master.id
+  }
+
+  provisioner "local-exec" {
+    command = <<EOF
+      success=0
+      for i in {1..10}; do
+        if aws ssm get-parameter --name '/${var.prefix}/k3s/kubeconfig' --query 'Parameter.Value' --output text > ${path.module}/kubeconfig.yaml; then
+          echo "SSM parameter fetched successfully."
+          success=1
+          break
+        fi
+        echo "Attempt $i failed, retrying in 10 seconds..."
+        sleep 10
+      done
+      if [ "$success" -ne 1 ]; then
+        echo "Failed to fetch SSM parameter after 5 attempts."
+        exit 1
+      fi
+    EOF
+  }
+
+  depends_on = [aws_instance.k3s_master]
+}
+
+resource "null_resource" "fetch_k3s_nodetoken" {
+  triggers = {
+    instance_id = aws_instance.k3s_master.id
+  }
+
+  provisioner "local-exec" {
+    command = <<EOF
+      success=0
+      for i in {1..10}; do
+        if aws ssm get-parameter --name '/${var.prefix}/k3s/node-token' --query 'Parameter.Value' --output text > ${path.module}/nodetoken; then
+          echo "SSM parameter fetched successfully."
+          success=1
+          break
+        fi
+        echo "Attempt $i failed, retrying in 10 seconds..."
+        sleep 10
+      done
+      if [ "$success" -ne 1 ]; then
+        echo "Failed to fetch SSM parameter after 5 attempts."
+        exit 1
+      fi
+    EOF
+  }
+
+  depends_on = [aws_instance.k3s_master]
+}
+
+
+resource "aws_instance" "k3s_worker" {
+  count                       = 2
+  ami                         = var.k3s_cluster_ami
+  instance_type               = "t3.small"
+  subnet_id                   = aws_subnet.private-us-east-1a.id
+  security_groups             = [aws_security_group.k3s_cluster.id]
+  iam_instance_profile        = aws_iam_instance_profile.k3s_instance_profile.name
+  user_data_replace_on_change = true
+
+  tags = {
+    Name = "${var.prefix}-k3s-worker-${count.index}"
+  }
+
+  user_data_base64 = base64encode(<<-EOF
+    #!/bin/bash
+    MASTER=https://${aws_eip.k3s_master_eip.public_ip}:6443
+    TOKEN=$(aws ssm get-parameter --name "/${var.prefix}/k3s/node-token" --query "Parameter.Value" --output text)
+    curl -sfL https://get.k3s.io | K3S_URL=$MASTER K3S_TOKEN=$TOKEN sh -
+    EOF
+  )
+
+  depends_on = [aws_instance.k3s_master, null_resource.fetch_k3s_nodetoken, aws_nat_gateway.nat]
+}
+
+# Postgres (RDS)
 
 resource "aws_db_subnet_group" "default" {
   name       = "main"
@@ -467,4 +395,26 @@ resource "aws_db_instance" "postgres_db" {
   skip_final_snapshot  = true
 
   depends_on = [aws_db_subnet_group.default]
+}
+
+# Redis (ElastiCache)
+
+resource "aws_elasticache_subnet_group" "private_subnet_group" {
+  name       = "${var.prefix}-private-subnet-group"
+  subnet_ids = [aws_subnet.private-us-east-1a.id, aws_subnet.private-us-east-1b.id]
+
+  tags = {
+    Name = "${var.prefix}-private-subnet-group"
+  }
+}
+
+resource "aws_elasticache_cluster" "redis_cluster" {
+  cluster_id           = "${var.prefix}-redis"
+  engine               = "redis"
+  node_type            = "cache.t4g.micro"
+  num_cache_nodes      = 1
+  parameter_group_name = "default.redis7"
+  engine_version       = "7.0"
+  port                 = 6379
+  subnet_group_name    = aws_elasticache_subnet_group.private_subnet_group.name
 }

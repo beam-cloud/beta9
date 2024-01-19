@@ -1,3 +1,5 @@
 .terraform
 .terraform*
 terraform*
+nodetoken
+kubeconfig.yaml
