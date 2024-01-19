@@ -15,7 +15,6 @@ type WorkerMetrics struct {
 	workerRepo        repo.WorkerRepository
 	metricsStreamRepo repo.MetricsStreamRepository
 	ctx               context.Context
-	nvmlActive        bool
 }
 
 func NewWorkerMetrics(
@@ -31,7 +30,6 @@ func NewWorkerMetrics(
 		metricsRepo:       metricsRepo,
 		workerRepo:        workerRepo,
 		metricsStreamRepo: metricsStreamRepo,
-		nvmlActive:        false,
 	}
 }
 
@@ -104,7 +102,7 @@ func (wm *WorkerMetrics) EmitResourceUsage(request *types.ContainerRequest, pidC
 			var gpuMemUsed int64 = -1
 			var gpuMemTotal int64 = -1
 
-			if gpuEnabled && wm.nvmlActive {
+			if gpuEnabled {
 				stats, err := GetGpuMemoryUsage(0) // TODO: Support multiple GPUs
 				if err == nil {
 					gpuMemUsed = stats.UsedCapacity
