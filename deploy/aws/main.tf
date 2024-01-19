@@ -390,7 +390,6 @@ resource "aws_db_instance" "postgres_db" {
 }
 
 # Redis (ElastiCache)
-
 resource "aws_elasticache_subnet_group" "private_subnet_group" {
   name       = "${var.prefix}-private-subnet-group"
   subnet_ids = [aws_subnet.private-us-east-1a.id, aws_subnet.private-us-east-1b.id]
