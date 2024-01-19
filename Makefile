@@ -44,3 +44,12 @@ protocol:
 
 test-internal:
 	go test -v ./internal/... -bench=./internal/..
+
+kube-prometheus-stack:
+	cd charts/kube-prometheus-stack && helm upgrade --install --values values.yml kube-prometheus-stack prometheus-community/kube-prometheus-stack -n monitoring --create-namespace
+
+loki:
+	cd charts/loki && helm install --values values.yml loki grafana/loki -n monitoring --create-namespace
+
+fluentbit:
+	cd charts/fluentbit && helm upgrade --install --values values.yml fluent-bit fluent/fluent-bit

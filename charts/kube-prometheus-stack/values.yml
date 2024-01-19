@@ -1,0 +1,36 @@
+grafana:
+  enabled: true
+  additionalDataSources:
+    - name: cluster-loki
+      uid: "_cluster-loki"
+      type: loki
+      access: proxy
+      version: 1
+      editable: true
+      is_default: false
+      url: "http://loki.monitoring.svc.cluster.local:3100"
+
+prometheus:
+  enabled: true
+  prometheusSpec:
+    additionalScrapeConfigs:
+    - job_name: beam-pods
+      metrics_path: /metrics
+      scheme: http
+      honor_labels: true
+      scrape_timeout: 10s
+      scrape_interval: 15s
+      enable_http2: true
+      follow_redirects: true
+      kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+          - beam
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_prometheus_io_scrape]
+        action: keep
+        regex: true
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        action: keep
+        regex: 9090

@@ -77,7 +77,7 @@ worker:
   defaultWorkerMemoryRequest: 1024
 metrics:
   prometheus:
-    enabled: false
+    enabled: true
   kinesis:
     streamName: beam-realtime-metrics
     region: us-east-1
