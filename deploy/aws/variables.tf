@@ -4,14 +4,6 @@ variable "prefix" {
   default     = "beamtest" # Set your desired prefix here
 }
 
-variable "cluster_name" {
-  default = "demo2"
-}
-
-variable "cluster_version" {
-  default = "1.28"
-}
-
 variable "domain" {
   default = "eng-stage.slai.io"
 }
