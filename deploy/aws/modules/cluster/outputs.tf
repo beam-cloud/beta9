@@ -20,5 +20,15 @@ output "client_key" {
 
 output "cluster_name" {
   description = "The k3s cluster name"
-  value       = "${var.prefix}-k3s-cluster"
+  value       = var.k3s_cluster_name
+}
+
+output "vpc_id" {
+  description = "VPC ID"
+  value       = aws_vpc.main.id
+}
+
+output "public_subnets" {
+  description = "Public subnets"
+  value       = "${aws_subnet.public-us-east-1a.id},${aws_subnet.public-us-east-1b.id}"
 }

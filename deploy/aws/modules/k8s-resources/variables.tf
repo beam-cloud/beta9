@@ -17,3 +17,11 @@ variable "cluster_client_key" {
 variable "cluster_client_certificate" {
   type = string
 }
+
+variable "vpc_id" {
+  type = string
+}
+
+variable "public_subnets" {
+  type = string
+}
