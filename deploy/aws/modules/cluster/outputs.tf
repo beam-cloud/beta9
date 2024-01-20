@@ -17,3 +17,8 @@ output "client_key" {
   description = "The client key for the K3s cluster"
   value       = data.aws_ssm_parameter.client_key.value
 }
+
+output "cluster_name" {
+  description = "The k3s cluster name"
+  value       = "${var.prefix}-k3s-cluster"
+}
