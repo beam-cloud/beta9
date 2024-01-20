@@ -150,6 +150,20 @@ resource "aws_security_group" "k3s_cluster" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  ingress {
+    from_port   = 10250
+    to_port     = 10250
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 51820
+    to_port     = 51821
+    protocol    = "udp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -215,6 +229,31 @@ resource "aws_iam_policy" "k3s_instance_policy" {
         Effect   = "Allow",
         Resource = "arn:aws:ssm:*:*:parameter/${var.prefix}/k3s/*"
       },
+      {
+        Action = [
+          "ssm:DescribeAssociation",
+          "ssm:GetDeployablePatchSnapshotForInstance",
+          "ssm:GetDocument",
+          "ssm:DescribeDocument",
+          "ssm:GetManifest",
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:ListAssociations",
+          "ssm:ListInstanceAssociations",
+          "ssm:PutInventory",
+          "ssm:PutComplianceItems",
+          "ssm:PutConfigurePackageResult",
+          "ssm:UpdateAssociationStatus",
+          "ssm:UpdateInstanceAssociationStatus",
+          "ssm:UpdateInstanceInformation",
+          "ssmmessages:CreateControlChannel",
+          "ssmmessages:CreateDataChannel",
+          "ssmmessages:OpenControlChannel",
+          "ssmmessages:OpenDataChannel"
+        ],
+        Effect   = "Allow",
+        Resource = "*"
+      }
     ]
   })
 }
@@ -240,6 +279,8 @@ resource "aws_eip" "k3s_master_eip" {
   }
 }
 
+data "aws_region" "this" {}
+
 resource "aws_instance" "k3s_master" {
   ami                         = var.k3s_cluster_ami
   instance_type               = "t3.small"
@@ -255,8 +296,12 @@ resource "aws_instance" "k3s_master" {
   user_data_base64 = base64encode(<<-EOF
     #!/bin/bash
 
+    # Install wireguard
+    apt update && apt install -y wireguard awscli
+    aws configure set region ${data.aws_region.this.name}
+
     # Install K3s with the Elastic IP in the certificate SAN
-    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--tls-san ${aws_eip.k3s_master_eip.public_ip}" sh -
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--tls-san ${aws_eip.k3s_master_eip.public_ip} --node-external-ip=${aws_eip.k3s_master_eip.public_ip} --flannel-backend=wireguard-native --flannel-external-ip" sh -
 
     # Wait for K3s to start, create the kubeconfig file, and the node token
     while [ ! -f /etc/rancher/k3s/k3s.yaml ] || [ ! -f /var/lib/rancher/k3s/server/node-token ]
@@ -291,7 +336,7 @@ resource "null_resource" "fetch_k3s_kubeconfig" {
   provisioner "local-exec" {
     command = <<EOF
       success=0
-      for i in {1..10}; do
+      for i in {1..20}; do
         if aws ssm get-parameter --name '/${var.prefix}/k3s/kubeconfig' --query 'Parameter.Value' --output text > ${path.module}/kubeconfig.yaml; then
           echo "SSM parameter fetched successfully."
           success=1
@@ -318,7 +363,7 @@ resource "null_resource" "fetch_k3s_nodetoken" {
   provisioner "local-exec" {
     command = <<EOF
       success=0
-      for i in {1..10}; do
+      for i in {1..20}; do
         if aws ssm get-parameter --name '/${var.prefix}/k3s/node-token' --query 'Parameter.Value' --output text > ${path.module}/nodetoken; then
           echo "SSM parameter fetched successfully."
           success=1
@@ -353,6 +398,11 @@ resource "aws_instance" "k3s_worker" {
 
   user_data_base64 = base64encode(<<-EOF
     #!/bin/bash
+
+    # Install wireguard
+    apt update && apt install -y wireguard awscli
+    aws configure set region ${data.aws_region.this.name}
+
     MASTER=https://${aws_eip.k3s_master_eip.public_ip}:6443
     TOKEN=$(aws ssm get-parameter --name "/${var.prefix}/k3s/node-token" --query "Parameter.Value" --output text)
     curl -sfL https://get.k3s.io | K3S_URL=$MASTER K3S_TOKEN=$TOKEN sh -
@@ -363,7 +413,6 @@ resource "aws_instance" "k3s_worker" {
 }
 
 # Postgres (RDS)
-
 resource "aws_db_subnet_group" "default" {
   name       = "main"
   subnet_ids = [aws_subnet.private-us-east-1a.id, aws_subnet.private-us-east-1b.id]
@@ -387,25 +436,4 @@ resource "aws_db_instance" "postgres_db" {
   skip_final_snapshot  = true
 
   depends_on = [aws_db_subnet_group.default]
-}
-
-# Redis (ElastiCache)
-resource "aws_elasticache_subnet_group" "private_subnet_group" {
-  name       = "${var.prefix}-private-subnet-group"
-  subnet_ids = [aws_subnet.private-us-east-1a.id, aws_subnet.private-us-east-1b.id]
-
-  tags = {
-    Name = "${var.prefix}-private-subnet-group"
-  }
-}
-
-resource "aws_elasticache_cluster" "redis_cluster" {
-  cluster_id           = "${var.prefix}-redis"
-  engine               = "redis"
-  node_type            = "cache.t4g.micro"
-  num_cache_nodes      = 1
-  parameter_group_name = "default.redis7"
-  engine_version       = "7.0"
-  port                 = 6379
-  subnet_group_name    = aws_elasticache_subnet_group.private_subnet_group.name
 }

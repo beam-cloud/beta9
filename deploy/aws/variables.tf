@@ -13,5 +13,5 @@ variable "domain_hosted_zone_id" {
 }
 
 variable "k3s_cluster_ami" {
-  default = "ami-00b56546df5a8bc0e"
+  default = "ami-027a754129abb5386" # ubuntu 20.04
 }
