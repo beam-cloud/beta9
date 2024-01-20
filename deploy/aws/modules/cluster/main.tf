@@ -527,9 +527,13 @@ resource "aws_instance" "k3s_master" {
     wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
     chmod a+x /usr/local/bin/yq
 
+    INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+    REGION=$(curl http://169.254.169.254/latest/meta-data/placement/region)
+    PROVIDER_ID="aws:///$REGION/$INSTANCE_ID"
+
     # Install K3s with the Elastic IP in the certificate SAN
     curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--tls-san ${aws_eip.k3s_master_eip.public_ip} --node-external-ip=${aws_eip.k3s_master_eip.public_ip} \
-    --disable traefik --flannel-backend=wireguard-native --flannel-external-ip" sh -
+    --disable traefik --flannel-backend=wireguard-native --flannel-external-ip --kubelet-arg=provider-id=$PROVIDER_ID" sh -    
 
     # Wait for K3s to start, create the kubeconfig file, and the node token
     while [ ! -f /etc/rancher/k3s/k3s.yaml ] || [ ! -f /var/lib/rancher/k3s/server/node-token ]
@@ -636,9 +640,14 @@ resource "aws_instance" "k3s_worker" {
     apt update && apt install -y wireguard awscli
     aws configure set region ${data.aws_region.this.name}
 
+    INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+    REGION=$(curl http://169.254.169.254/latest/meta-data/placement/region)
+    PROVIDER_ID="aws:///$REGION/$INSTANCE_ID"
+
+    KUBELET_ARG="--kubelet-arg=provider-id=$PROVIDER_ID"
     MASTER=https://${aws_eip.k3s_master_eip.public_ip}:6443
     TOKEN=$(aws ssm get-parameter --name "/${var.prefix}/k3s/node-token" --query "Parameter.Value" --output text)
-    curl -sfL https://get.k3s.io | K3S_URL=$MASTER K3S_TOKEN=$TOKEN sh -
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC=$KUBELET_ARG K3S_URL=$MASTER K3S_TOKEN=$TOKEN sh -
     EOF
   )
 
