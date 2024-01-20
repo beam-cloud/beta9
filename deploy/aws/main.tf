@@ -297,8 +297,12 @@ resource "aws_instance" "k3s_master" {
     #!/bin/bash
 
     # Install wireguard
-    apt update && apt install -y wireguard awscli
+    apt update && apt install -y wireguard awscli wget
     aws configure set region ${data.aws_region.this.name}
+
+    # Install yq for yaml parsing
+    wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+    chmod a+x /usr/local/bin/yq
 
     # Install K3s with the Elastic IP in the certificate SAN
     curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--tls-san ${aws_eip.k3s_master_eip.public_ip} --node-external-ip=${aws_eip.k3s_master_eip.public_ip} --flannel-backend=wireguard-native --flannel-external-ip" sh -
@@ -312,11 +316,26 @@ resource "aws_instance" "k3s_master" {
     # Update the kubeconfig file with the public IP
     sed -i "s/127.0.0.1/${aws_eip.k3s_master_eip.public_ip}/g" /etc/rancher/k3s/k3s.yaml
 
+    # Extract CA certificate, client certificate, and key from kubeconfig
+    ca_certificate=$(yq e '.clusters[0].cluster."certificate-authority-data"' /etc/rancher/k3s/k3s.yaml)
+    client_certificate=$(yq e '.users[0].user."client-certificate-data"' /etc/rancher/k3s/k3s.yaml)
+    client_key=$(yq e '.users[0].user."client-key-data"' /etc/rancher/k3s/k3s.yaml)
+
     # Write cluster config to AWS Parameter Store
     aws ssm put-parameter --name "/${var.prefix}/k3s/node-token" --type "String" --value "$(cat /var/lib/rancher/k3s/server/node-token)" --overwrite
     aws ssm put-parameter --name "/${var.prefix}/k3s/kubeconfig" --type "String" --value "$(cat /etc/rancher/k3s/k3s.yaml)" --overwrite
+    aws ssm put-parameter --name "/${var.prefix}/k3s/ca-certificate" --type "String" --value "$ca_certificate" --overwrite
+    aws ssm put-parameter --name "/${var.prefix}/k3s/client-certificate" --type "String" --value "$client_certificate" --overwrite
+    aws ssm put-parameter --name "/${var.prefix}/k3s/client-key" --type "String" --value "$client_key" --overwrite
+
     EOF
   )
+
+  lifecycle {
+    ignore_changes = [
+      security_groups,
+    ]
+  }
 
   depends_on = [aws_eip.k3s_master_eip, aws_iam_instance_profile.k3s_instance_profile]
 }
@@ -328,7 +347,7 @@ resource "aws_eip_association" "eip_assoc_k3s_master" {
   depends_on    = [aws_eip.k3s_master_eip]
 }
 
-resource "null_resource" "fetch_k3s_kubeconfig" {
+resource "null_resource" "fetch_k3s_parameters" {
   triggers = {
     instance_id = aws_instance.k3s_master.id
   }
@@ -337,43 +356,33 @@ resource "null_resource" "fetch_k3s_kubeconfig" {
     command = <<EOF
       success=0
       for i in {1..20}; do
-        if aws ssm get-parameter --name '/${var.prefix}/k3s/kubeconfig' --query 'Parameter.Value' --output text > ${path.module}/kubeconfig.yaml; then
-          echo "SSM parameter fetched successfully."
+        all_parameters_exist=true
+
+        # List of SSM parameters to check
+        params="kubeconfig node-token ca-certificate client-certificate client-key"
+
+        # Check each parameter and break if any are missing
+        for param in $params; do
+          parameter_name="/${var.prefix}/k3s/$param"
+          if ! aws ssm get-parameter --name "$parameter_name" --query 'Parameter.Value' --output text > "${path.module}/$param"; then
+            echo "Waiting for SSM parameter '$parameter_name' to be available..."
+            all_parameters_exist=false
+            break
+          fi
+        done
+
+        if [ "$all_parameters_exist" = true ]; then
+          echo "All SSM parameters fetched successfully."
           success=1
           break
         fi
+
         echo "Attempt $i failed, retrying in 10 seconds..."
         sleep 10
       done
+
       if [ "$success" -ne 1 ]; then
-        echo "Failed to fetch SSM parameter after 5 attempts."
-        exit 1
-      fi
-    EOF
-  }
-
-  depends_on = [aws_instance.k3s_master]
-}
-
-resource "null_resource" "fetch_k3s_nodetoken" {
-  triggers = {
-    instance_id = aws_instance.k3s_master.id
-  }
-
-  provisioner "local-exec" {
-    command = <<EOF
-      success=0
-      for i in {1..20}; do
-        if aws ssm get-parameter --name '/${var.prefix}/k3s/node-token' --query 'Parameter.Value' --output text > ${path.module}/nodetoken; then
-          echo "SSM parameter fetched successfully."
-          success=1
-          break
-        fi
-        echo "Attempt $i failed, retrying in 10 seconds..."
-        sleep 10
-      done
-      if [ "$success" -ne 1 ]; then
-        echo "Failed to fetch SSM parameter after 5 attempts."
+        echo "Failed to fetch all SSM parameters after 20 attempts."
         exit 1
       fi
     EOF
@@ -409,8 +418,61 @@ resource "aws_instance" "k3s_worker" {
     EOF
   )
 
-  depends_on = [aws_instance.k3s_master, null_resource.fetch_k3s_nodetoken, aws_nat_gateway.nat]
+  lifecycle {
+    ignore_changes = [
+      security_groups,
+    ]
+  }
+
+  depends_on = [aws_instance.k3s_master, null_resource.fetch_k3s_parameters, aws_nat_gateway.nat]
 }
+
+data "aws_ssm_parameter" "kubeconfig" {
+  name       = "/${var.prefix}/k3s/kubeconfig"
+  depends_on = [null_resource.fetch_k3s_parameters]
+}
+
+data "aws_ssm_parameter" "ca_certificate" {
+  name       = "/${var.prefix}/k3s/ca-certificate"
+  depends_on = [null_resource.fetch_k3s_parameters]
+}
+
+data "aws_ssm_parameter" "client_certificate" {
+  name       = "/${var.prefix}/k3s/client-certificate"
+  depends_on = [null_resource.fetch_k3s_parameters]
+}
+
+data "aws_ssm_parameter" "client_key" {
+  name       = "/${var.prefix}/k3s/client-key"
+  depends_on = [null_resource.fetch_k3s_parameters]
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = "https://${aws_eip.k3s_master_eip.public_ip}:6443"
+    cluster_ca_certificate = base64decode(data.aws_ssm_parameter.ca_certificate.value)
+    client_certificate     = base64decode(data.aws_ssm_parameter.client_certificate.value)
+    client_key             = base64decode(data.aws_ssm_parameter.client_key.value)
+  }
+}
+
+resource "helm_release" "nginx_ingress" {
+  name       = "nginx-ingress"
+  repository = "https://helm.nginx.com/stable"
+  chart      = "nginx-ingress"
+  namespace  = "kube-system"
+
+  set {
+    name  = "controller.service.type"
+    value = "LoadBalancer"
+  }
+
+  depends_on = [
+    aws_instance.k3s_master,
+    aws_instance.k3s_worker
+  ]
+}
+
 
 # Postgres (RDS)
 resource "aws_db_subnet_group" "default" {

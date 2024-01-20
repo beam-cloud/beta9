@@ -1,5 +1,7 @@
 .terraform
 .terraform*
 terraform*
-nodetoken
-kubeconfig.yaml
+node-token
+kubeconfig
+client-*
+ca-certificate
