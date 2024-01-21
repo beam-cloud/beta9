@@ -30,10 +30,11 @@ resource "helm_release" "aws_lb_controller" {
 
 
 resource "helm_release" "nginx_ingress" {
-  name       = "nginx-ingress"
-  chart      = "nginx-ingress-controller"
-  repository = "https://charts.bitnami.com/bitnami"
+  name       = "ingress-nginx"
+  chart      = "ingress-nginx"
+  repository = "https://kubernetes.github.io/ingress-nginx"
   namespace  = "kube-system"
+  version    = "4.6.0"
 
   values = [
     <<-EOF
@@ -45,10 +46,11 @@ resource "helm_release" "nginx_ingress" {
         enableHttp: true
         enableHttps: true
         annotations:
-          service.beta.kubernetes.io/aws-load-balancer-type: nlb
-          service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
-          service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
-          service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+          service.beta.kubernetes.io/aws-load-balancer-name: beam
+          service.beta.kubernetes.io/aws-load-balancer-type: external
+          service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: instance
+          service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+          service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
           service.beta.kubernetes.io/aws-load-balancer-subnets: ${var.public_subnets}
         targetPorts:
           http: http
@@ -61,7 +63,6 @@ resource "helm_release" "nginx_ingress" {
         enable-access-log-for-default-backend: "true"
         enable-real-ip: "true"
         use-forwarded-headers: "true"
-        use-proxy-protocol: "true"
         use-gzip: "true"
         gzip-level: 9
         enable-brotli: "true"
@@ -76,9 +77,7 @@ resource "helm_release" "nginx_ingress" {
         ssl-reject-handshake: "true"
         enable-ocsp: "true"
         log-format-escape-json: "true"
-        log-format-upstream: |
-          {"time_iso8601": "$time_iso8601", "http_x_forwarded_for": "$http_x_forwarded_for", "http_x_ingress_token": "$http_x_ingress_token", "remote_addr": "$remote_addr", "remote_user": "$remote_user", "request_id": "$req_id", "request_method": "$request_method", "request_length": "$request_length", "request_time": "$request_time", "request_uri": "$request_uri", "query_string": "$query_string", "server_protocol": "$server_protocol", "host": "$host", "status": "$status", "bytes_sent": "$bytes_sent", "body_bytes_sent": "$body_bytes_sent", "http_referer": "$http_referer", "http_user_agent": "$http_user_agent", "proxy_upstream_name": "$proxy_upstream_name", "proxy_alternative_upstream_name": "$proxy_alternative_upstream_name", "upstream_addr": "$upstream_addr", "upstream_response_length": "$upstream_response_length", "upstream_response_time": "$upstream_response_time", "upstream_bytes_received": "$upstream_bytes_received", "upstream_bytes_sent": "$upstream_bytes_sent", "upstream_status": "$upstream_status"}
-    defaultBackend:
+       defaultBackend:
       enabled: true
     EOF
   ]
