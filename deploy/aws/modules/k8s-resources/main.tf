@@ -77,7 +77,7 @@ resource "helm_release" "nginx_ingress" {
         ssl-reject-handshake: "true"
         enable-ocsp: "true"
         log-format-escape-json: "true"
-       defaultBackend:
+    defaultBackend:
       enabled: true
     EOF
   ]
