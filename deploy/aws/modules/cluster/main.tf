@@ -705,3 +705,4 @@ resource "aws_db_instance" "postgres_db" {
 
   depends_on = [aws_db_subnet_group.default]
 }
+
