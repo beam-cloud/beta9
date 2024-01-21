@@ -1,3 +1,7 @@
+variable "prefix" {
+  type = string
+}
+
 variable "cluster_endpoint" {
   type = string
 }

@@ -1,10 +1,13 @@
 module "cluster" {
   source = "./modules/cluster"
+
+  prefix = var.prefix
 }
 
 module "k8s_resources" {
   source = "./modules/k8s-resources"
 
+  prefix                     = var.prefix
   cluster_name               = module.cluster.cluster_name
   cluster_endpoint           = module.cluster.endpoint
   cluster_ca_certificate     = module.cluster.ca_certificate

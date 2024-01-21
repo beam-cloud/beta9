@@ -46,7 +46,7 @@ resource "helm_release" "nginx_ingress" {
         enableHttp: true
         enableHttps: true
         annotations:
-          service.beta.kubernetes.io/aws-load-balancer-name: beam
+          service.beta.kubernetes.io/aws-load-balancer-name: ${var.prefix}-ingress
           service.beta.kubernetes.io/aws-load-balancer-type: external
           service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: instance
           service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
@@ -84,3 +84,5 @@ resource "helm_release" "nginx_ingress" {
 
   depends_on = [helm_release.aws_lb_controller]
 }
+
+# test deployment
