@@ -84,5 +84,3 @@ resource "helm_release" "nginx_ingress" {
 
   depends_on = [helm_release.aws_lb_controller]
 }
-
-# test deployment
