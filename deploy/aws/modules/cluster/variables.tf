@@ -3,7 +3,6 @@ variable "prefix" {
   type        = string
 }
 
-
 variable "k3s_cluster_ami" {
   default = "ami-027a754129abb5386" # ubuntu 20.04
 }
