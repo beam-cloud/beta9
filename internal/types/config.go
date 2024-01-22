@@ -125,6 +125,7 @@ type WorkerConfig struct {
 
 type WorkerPoolConfig struct {
 	GPUType    string                            `key:"gpuType"`
+	Runtime    string                            `key:"runtime"`
 	JobSpec    WorkerPoolJobSpecConfig           `key:"jobSpec"`
 	PoolSizing WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing"`
 }

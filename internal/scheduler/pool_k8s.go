@@ -188,7 +188,8 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 		workerMemory = wpc.config.Worker.DefaultWorkerMemoryRequest
 	}
 
-	if gpuType != "" {
+	workerPool, _ := wpc.GetWorkerPoolConfig()
+	if gpuType != "" && workerPool.Runtime == "nvidia" {
 		resourceRequests[corev1.ResourceName("nvidia.com/gpu")] = *resource.NewQuantity(1, resource.DecimalSI)
 	}
 
@@ -241,6 +242,10 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 			Volumes:                      wpc.getWorkerVolumes(workerMemory),
 			EnableServiceLinks:           ptr.To(false),
 		},
+	}
+
+	if workerPool.Runtime != "" {
+		podTemplate.Spec.RuntimeClassName = ptr.To(workerPool.Runtime)
 	}
 
 	ttl := int32(30)

@@ -26,7 +26,6 @@ rm -rf /var/lib/apt/lists/* /var/log/*
 EOT
 
 COPY --from=k3s /bin /bin
-COPY docker/config.toml.tmpl /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
 
 VOLUME /var/lib/kubelet
 VOLUME /var/lib/rancher/k3s
