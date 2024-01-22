@@ -18,7 +18,6 @@ const (
 	defaultContainerName    string = "worker"
 	defaultWorkerEntrypoint string = "/usr/local/bin/worker"
 	defaultWorkerLogPath    string = "/var/log/worker"
-	defaultProvisionerLabel string = "karpenter.sh/provisioner-name"
 )
 
 type WorkerPoolController interface {
