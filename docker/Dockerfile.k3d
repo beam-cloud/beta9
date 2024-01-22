@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1.6
+FROM rancher/k3s:v1.28.5-k3s1 as k3s
+FROM nvidia/cuda:12.3.1-base-ubuntu20.04
+
+ENV CRI_CONFIG_FILE=/var/lib/rancher/k3s/agent/etc/crictl.yaml
+ENV PATH="$PATH:/bin/aux"
+
+RUN <<EOT
+set -eu
+echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+apt-get update
+apt-get -y install gnupg2 curl
+curl -sL https://nvidia.github.io/nvidia-container-runtime/gpgkey | apt-key add -
+curl -sL https://nvidia.github.io/nvidia-container-runtime/ubuntu20.04/nvidia-container-runtime.list | tee /etc/apt/sources.list.d/nvidia-container-runtime.list
+apt-get update
+apt-get -y install nvidia-container-toolkit-base nvidia-container-toolkit nvidia-container-runtime util-linux
+
+mkdir -vp /etc && echo 'hosts: files dns' > /etc/nsswitch.conf
+chmod 1777 /tmp
+mkdir -vp /var/lib/rancher/k3s/agent/etc/containerd/
+
+apt-get clean
+apt-get autoremove -y
+apt-get autopurge -y
+rm -rf /var/lib/apt/lists/* /var/log/*
+EOT
+
+COPY --from=k3s /bin /bin
+
+VOLUME /var/lib/kubelet
+VOLUME /var/lib/rancher/k3s
+VOLUME /var/lib/cni
+VOLUME /var/log
+
+ENTRYPOINT ["/bin/k3s"]
+CMD ["agent"]

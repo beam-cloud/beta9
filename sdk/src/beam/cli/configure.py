@@ -11,8 +11,8 @@ from beam.config import (
 @click.command()
 @click.option("--name", default=None)
 @click.option("--token", default=None)
-@click.option("--gateway_host", default=None)
-@click.option("--gateway_port", default=None)
+@click.option("--gateway-host", default=None)
+@click.option("--gateway-port", default=None)
 def configure(name: str, token: str, gateway_host: str, gateway_port: str):
     config = load_config_from_file()
 

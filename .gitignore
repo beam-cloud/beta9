@@ -11,5 +11,8 @@ __pycache__
 venv
 .python-version
 .DS_Store
+.terraform*
+terraform.tfstate*
+terraform.tfvars
 sdk/src/build
 sdk/src/Beam.egg-info

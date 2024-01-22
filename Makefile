@@ -4,6 +4,7 @@ workerTag := latest
 runnerTag := latest
 
 setup:
+	bash bin/setup.sh
 	make k3d-up beam-runner beam-worker beam
 	kubectl delete pod -l app=beam
 
@@ -11,12 +12,10 @@ setup-sdk:
 	poetry install -C sdk
 
 k3d-up:
-	k3d cluster create --config hack/k3d.yaml
-	kubectl config set contexts.k3d-beam.namespace beam
-	okteto context use k3d-beam --namespace beam
+	bash bin/k3d.sh up
 
 k3d-down:
-	k3d cluster delete --config hack/k3d.yaml
+	bash bin/k3d.sh down
 
 beam:
 	docker build . --target build -f ./docker/Dockerfile.beam -t localhost:5001/beam:$(tag)
