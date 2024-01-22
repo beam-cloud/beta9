@@ -36,13 +36,13 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		return nil, err
 	}
 
-	poolJson := []byte(`{"worker":{"pools":{"beam-cpu":{},"beam-a10g":{},"beam-t4":{}}}}}`)
+	poolJson := []byte(`{"worker":{"pools":{"beam-cpu":{},"beam-a10g":{"gpuType": "A10G"},"beam-t4":{"gpuType": "T4"}}}}}`)
 	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
 
 	workerPoolManager := NewWorkerPoolManager(repo.NewWorkerPoolRedisRepository(rdb))
 	for name, pool := range config.Worker.Pools {
-		workerPoolManager.SetPool(name, &pool, &WorkerPoolControllerForTest{
+		workerPoolManager.SetPool(name, pool, &WorkerPoolControllerForTest{
 			name:       name,
 			config:     config,
 			workerRepo: workerRepo,
@@ -192,9 +192,9 @@ func TestGetController(t *testing.T) {
 		wb, _ := NewSchedulerForTest()
 
 		cpuRequest := &types.ContainerRequest{Gpu: ""}
-		cpuController, err := wb.getController(cpuRequest)
-		if err != nil || cpuController.Name() != "beam-cpu" {
-			t.Errorf("Expected beam-cpu controller, got %v, error: %v", cpuController, err)
+		defaultController, err := wb.getController(cpuRequest)
+		if err != nil || defaultController.Name() != "default" {
+			t.Errorf("Expected default controller, got %v, error: %v", defaultController, err)
 		}
 
 		a10gRequest := &types.ContainerRequest{Gpu: "A10G"}

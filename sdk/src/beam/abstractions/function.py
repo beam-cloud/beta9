@@ -171,6 +171,6 @@ class _CallableWrapper:
             func=self.func,
             stub_type=FUNCTION_STUB_TYPE,
         ):
-            return  # type: ignore
+            terminal.error("Function failed to prepare runtime ☠️")
 
         return self._gather_and_yield_results(inputs)
