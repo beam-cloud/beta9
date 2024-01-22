@@ -64,6 +64,7 @@ worker:
         minFreeMemory: 1Gi
     nvidia:
       gpuType: A40
+      runtime: nvidia
       jobSpec:
         nodeSelector: {}
       poolSizing:
