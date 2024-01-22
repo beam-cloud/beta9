@@ -1,9 +1,9 @@
 provider "helm" {
   kubernetes {
-    host                   = var.cluster_endpoint
-    cluster_ca_certificate = base64decode(var.cluster_ca_certificate)
-    client_certificate     = base64decode(var.cluster_client_certificate)
-    client_key             = base64decode(var.cluster_client_key)
+    host                   = var.k3s_cluster_config.endpoint.value
+    cluster_ca_certificate = base64decode(var.k3s_cluster_config.ca_certificate.value)
+    client_certificate     = base64decode(var.k3s_cluster_config.client_certificate.value)
+    client_key             = base64decode(var.k3s_cluster_config.client_key.value)
   }
 }
 
@@ -50,15 +50,15 @@ resource "helm_release" "aws_lb_controller" {
 
   set {
     name  = "clusterName"
-    value = var.cluster_name
+    value = var.k3s_cluster_config.cluster_name.value
   }
 
   set {
     name  = "vpcId"
-    value = var.vpc_id
+    value = var.vpc_config.vpc_id.value
   }
 
-  depends_on = [var.cluster_ca_certificate]
+  depends_on = [var.k3s_cluster_config]
 }
 
 
@@ -84,7 +84,7 @@ resource "helm_release" "nginx_ingress" {
           service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: instance
           service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
           service.beta.kubernetes.io/aws-load-balancer-backend-protocol: http
-          service.beta.kubernetes.io/aws-load-balancer-subnets: ${var.public_subnets}
+          service.beta.kubernetes.io/aws-load-balancer-subnets: ${var.vpc_config.public_subnets.value}
           service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "${aws_acm_certificate.ssl_cert.arn}"
           service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "https"
           service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy: "ELBSecurityPolicy-TLS13-1-2-2021-06"

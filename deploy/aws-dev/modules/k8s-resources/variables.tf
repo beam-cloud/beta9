@@ -1,3 +1,32 @@
+variable "k3s_cluster_config" {
+  type = object({
+    endpoint           = object({ description = string, value = string })
+    ca_certificate     = object({ description = string, value = string })
+    client_certificate = object({ description = string, value = string })
+    client_key         = object({ description = string, value = string })
+    cluster_name       = object({ description = string, value = string })
+  })
+  description = "K3S Cluster config."
+}
+
+variable "vpc_config" {
+  type = object({
+    vpc_id         = object({ description = string, value = string })
+    public_subnets = object({ description = string, value = string })
+  })
+  description = "VPC config."
+}
+
+variable "db_config" {
+  type = object({
+    host     = object({ value = string })
+    username = object({ value = string })
+    password = object({ value = string })
+  })
+  description = "Postgres db config."
+  sensitive   = true
+}
+
 variable "domain" {
   type        = string
   description = "Domain name"
@@ -11,39 +40,4 @@ variable "domain_hosted_zone_id" {
 variable "prefix" {
   type        = string
   description = "Identifier prefix for resource naming."
-}
-
-variable "cluster_endpoint" {
-  type        = string
-  description = "Endpoint URL of the cluster."
-}
-
-variable "cluster_name" {
-  type        = string
-  description = "Name of the cluster."
-}
-
-variable "cluster_ca_certificate" {
-  type        = string
-  description = "CA certificate for the cluster."
-}
-
-variable "cluster_client_key" {
-  type        = string
-  description = "Private key for cluster client."
-}
-
-variable "cluster_client_certificate" {
-  type        = string
-  description = "Client certificate for cluster access."
-}
-
-variable "vpc_id" {
-  type        = string
-  description = "ID of the VPC."
-}
-
-variable "public_subnets" {
-  type        = string
-  description = "Public subnets in the VPC."
 }

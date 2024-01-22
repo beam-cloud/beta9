@@ -3,7 +3,7 @@ database:
   postgres:
     host: ${var.db_host}
     port: 5432
-    username: root
+    username: ${var.db_user}
     password: ${var.db_password}
     name: main
     timezone: UTC
