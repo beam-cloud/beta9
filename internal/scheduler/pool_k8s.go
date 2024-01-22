@@ -302,14 +302,14 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) 
 				},
 			},
 		},
-		{
-			Name: wpc.config.Worker.DataVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: wpc.config.Worker.DataVolumeName,
-				},
-			},
-		},
+		// {
+		// 	Name: wpc.config.Worker.DataVolumeName,
+		// 	VolumeSource: corev1.VolumeSource{
+		// 		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+		// 			ClaimName: wpc.config.Worker.DataVolumeName,
+		// 		},
+		// 	},
+		// },
 	}
 
 	return append(volumes,
@@ -345,24 +345,24 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1.Volu
 			MountPath: "/dev/shm",
 			Name:      "dshm",
 		},
-		{
-			Name:      wpc.config.Worker.DataVolumeName,
-			MountPath: "/snapshots",
-			SubPath:   "snapshots/",
-			ReadOnly:  false,
-		},
-		{
-			Name:      wpc.config.Worker.DataVolumeName,
-			MountPath: "/workspaces",
-			SubPath:   "workspaces/",
-			ReadOnly:  false,
-		},
-		{
-			Name:      wpc.config.Worker.DataVolumeName,
-			MountPath: "/volumes",
-			SubPath:   "volumes/",
-			ReadOnly:  false,
-		},
+		// {
+		// 	Name:      wpc.config.Worker.DataVolumeName,
+		// 	MountPath: "/snapshots",
+		// 	SubPath:   "snapshots/",
+		// 	ReadOnly:  false,
+		// },
+		// {
+		// 	Name:      wpc.config.Worker.DataVolumeName,
+		// 	MountPath: "/workspaces",
+		// 	SubPath:   "workspaces/",
+		// 	ReadOnly:  false,
+		// },
+		// {
+		// 	Name:      wpc.config.Worker.DataVolumeName,
+		// 	MountPath: "/volumes",
+		// 	SubPath:   "volumes/",
+		// 	ReadOnly:  false,
+		// },
 	}
 }
 

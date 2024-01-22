@@ -79,18 +79,18 @@ func NewGateway() (*Gateway, error) {
 		Scheduler:   scheduler,
 	}
 
-	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
-	if err != nil {
-		return nil, err
-	}
+	// backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
-	metricsRepo := repository.NewMetricsStatsdRepository()
+	// metricsRepo := repository.NewMetricsStatsdRepository()
 
 	gateway.config = config
 	gateway.ContainerRepo = containerRepo
-	gateway.BackendRepo = backendRepo
-	gateway.metricsRepo = metricsRepo
+	// gateway.BackendRepo = backendRepo
+	// gateway.metricsRepo = metricsRepo
 
 	return gateway, nil
 }

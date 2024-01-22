@@ -1,7 +1,7 @@
 variable "domain" {
   type        = string
   default     = "eng-stage.slai.io"
-  description = "Domain name, defaults to 'eng-stage.slai.io'."
+  description = "Domain name"
 }
 
 variable "domain_hosted_zone_id" {
