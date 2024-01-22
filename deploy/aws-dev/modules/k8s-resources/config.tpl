@@ -74,11 +74,3 @@ worker:
   resourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
-metrics:
-  kinesis:
-    streamName: beam-realtime-metrics
-    region: us-east-1
-    accessKeyID: test
-    secretAccessKey: test
-    sessionKey: test
-    stackEndpoint: http://localstack.beam:4566

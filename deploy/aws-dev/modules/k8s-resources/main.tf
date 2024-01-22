@@ -1,3 +1,12 @@
+
+provider "kubernetes" {
+  host                   = var.k3s_cluster_config.endpoint.value
+  cluster_ca_certificate = base64decode(var.k3s_cluster_config.ca_certificate.value)
+  client_certificate     = base64decode(var.k3s_cluster_config.client_certificate.value)
+  client_key             = base64decode(var.k3s_cluster_config.client_key.value)
+}
+
+
 provider "helm" {
   kubernetes {
     host                   = var.k3s_cluster_config.endpoint.value
@@ -6,7 +15,6 @@ provider "helm" {
     client_key             = base64decode(var.k3s_cluster_config.client_key.value)
   }
 }
-
 
 # SSL Certificate for the service exposed
 resource "aws_acm_certificate" "ssl_cert" {
@@ -119,4 +127,87 @@ resource "helm_release" "nginx_ingress" {
   ]
 
   depends_on = [helm_release.aws_lb_controller]
+}
+
+
+resource "random_password" "redis_password" {
+  length  = 16
+  special = true
+}
+
+resource "random_password" "juicefs_redis_password" {
+  length  = 16
+  special = true
+}
+
+resource "kubernetes_secret" "juicefs_redis_secret" {
+  metadata {
+    name      = "juicefs-redis-secret"
+    namespace = "beam"
+  }
+
+  data = {
+    "redis-password" = random_password.redis_password.result
+  }
+}
+resource "kubernetes_secret" "redis_secret" {
+  metadata {
+    name      = "redis-secret"
+    namespace = "beam"
+  }
+
+  data = {
+    "redis-password" = random_password.juicefs_redis_password.result
+  }
+
+}
+
+
+resource "helm_release" "redis" {
+  name             = "redis"
+  repository       = "https://charts.bitnami.com/bitnami"
+  chart            = "redis"
+  version          = "18.6.1"
+  namespace        = "beam"
+  create_namespace = true
+
+  set {
+    name  = "architecture"
+    value = "standalone"
+  }
+
+  set {
+    name  = "master.persistence.size"
+    value = "5Gi"
+  }
+
+  set {
+    name  = "password"
+    value = kubernetes_secret.redis_secret.data["redis-password"]
+  }
+}
+
+
+resource "helm_release" "juicefs_redis" {
+  name             = "juicefs-redis"
+  repository       = "https://charts.bitnami.com/bitnami"
+  chart            = "redis"
+  version          = "18.6.1"
+  namespace        = "beam"
+  create_namespace = true
+
+  set {
+    name  = "architecture"
+    value = "standalone"
+  }
+
+  set {
+    name  = "master.persistence.size"
+    value = "5Gi"
+  }
+
+  set {
+    name  = "password"
+    value = kubernetes_secret.redis_secret.data["redis-password"]
+  }
 }
