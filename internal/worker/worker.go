@@ -143,7 +143,6 @@ func NewWorker() (*Worker, error) {
 	statsdRepo := repo.NewMetricsStatsdRepository()
 
 	workerMetrics := NewWorkerMetrics(ctx, podHostName, statsdRepo, workerRepo, repo.NewMetricsStreamRepository(ctx, config.Metrics))
-	workerMetrics.InitNvml()
 
 	return &Worker{
 		ctx:                  ctx,
@@ -722,7 +721,6 @@ func (s *Worker) shutdown() error {
 		return err
 	}
 
-	s.workerMetrics.Shutdown()
 	s.cancel()
 	return nil
 }
