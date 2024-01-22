@@ -16,10 +16,10 @@ k3d_up() {
   os_type="$(uname)"
   case "$os_type" in
     Linux*)
-      if check_gpu_linux; do
+      if check_gpu_linux; then
         extra_args="--gpus=all --image=localhost:5001/rancher/k3s:latest"
         docker build . -f ./docker/Dockerfile.k3d -t localhost:5001/rancher/k3s:latest
-      elif
+      else
         extra_args=""
       fi
       ;;
