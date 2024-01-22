@@ -7,6 +7,8 @@ module "cluster" {
 module "k8s_resources" {
   source = "./modules/k8s-resources"
 
+  domain                     = var.domain
+  domain_hosted_zone_id      = var.domain_hosted_zone_id
   prefix                     = var.prefix
   cluster_name               = module.cluster.cluster_name
   cluster_endpoint           = module.cluster.endpoint
