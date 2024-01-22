@@ -691,18 +691,25 @@ resource "aws_db_subnet_group" "default" {
 }
 
 resource "aws_db_instance" "postgres_db" {
-  identifier           = "${var.prefix}-postgres"
-  engine               = "postgres"
-  engine_version       = "13.8"
-  db_subnet_group_name = aws_db_subnet_group.default.name
-  instance_class       = "db.t4g.medium"
-  allocated_storage    = 20
-  storage_type         = "gp2"
-  username             = "postgres"
-  password             = "password"
-  db_name              = "main"
-  skip_final_snapshot  = true
+  identifier                  = "${var.prefix}-postgres"
+  engine                      = "postgres"
+  engine_version              = "13.8"
+  db_subnet_group_name        = aws_db_subnet_group.default.name
+  instance_class              = "db.t4g.medium"
+  allocated_storage           = 20
+  storage_type                = "gp2"
+  username                    = "postgres"
+  manage_master_user_password = true
+  db_name                     = "main"
+  skip_final_snapshot         = true
 
   depends_on = [aws_db_subnet_group.default]
 }
 
+data "aws_secretsmanager_secret" "rds_secret" {
+  arn = aws_db_instance.postgres_db.master_user_secret[0].secret_arn
+}
+
+data "aws_secretsmanager_secret_version" "current" {
+  secret_id = data.aws_secretsmanager_secret.rds_secret.id
+}

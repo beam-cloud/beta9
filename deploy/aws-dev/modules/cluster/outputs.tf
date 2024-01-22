@@ -32,3 +32,9 @@ output "public_subnets" {
   description = "Public subnets"
   value       = "${aws_subnet.public-us-east-1a.id},${aws_subnet.public-us-east-1b.id}"
 }
+
+output "db_secret" {
+  value       = data.aws_secretsmanager_secret_version.current.secret_string
+  description = "The database master secret"
+  sensitive   = true
+}
