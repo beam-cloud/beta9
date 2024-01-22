@@ -186,11 +186,11 @@ resource "aws_security_group" "k3s_cluster" {
 
 # S3 Buckets
 resource "aws_s3_bucket" "image_bucket" {
-  bucket = "${var.prefix}-image-bucket"
+  bucket = "${var.prefix}-images"
 }
 
 resource "aws_s3_bucket" "juicefs_bucket" {
-  bucket = "${var.prefix}-juicefs-bucket"
+  bucket = "${var.prefix}-juicefs"
 }
 
 resource "aws_iam_role" "k3s_role" {
