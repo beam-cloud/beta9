@@ -272,7 +272,7 @@
 				"path": "/usr/bin/nvidia-container-runtime-hook",
 				"args": [
 					"/usr/bin/nvidia-container-runtime-hook",
-					"-config"
+					"-ociconfig"
 				]
 			}
 		]

@@ -23,12 +23,11 @@ import (
 )
 
 type KubernetesWorkerPoolController struct {
-	name         string
-	config       types.AppConfig
-	provisioner  string
-	nodeSelector map[string]string
-	kubeClient   *kubernetes.Clientset
-	workerRepo   repository.WorkerRepository
+	name       string
+	config     types.AppConfig
+	kubeClient *kubernetes.Clientset
+	workerPool types.WorkerPoolConfig
+	workerRepo repository.WorkerRepository
 }
 
 func NewKubernetesWorkerPoolController(config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository) (WorkerPoolController, error) {
@@ -42,25 +41,21 @@ func NewKubernetesWorkerPoolController(config types.AppConfig, workerPoolName st
 		return nil, err
 	}
 
+	workerPool, ok := config.Worker.Pools[workerPoolName]
+	if !ok {
+		return nil, fmt.Errorf("worker pool %s not found", workerPoolName)
+	}
+
 	wpc := &KubernetesWorkerPoolController{
 		name:       workerPoolName,
 		config:     config,
 		kubeClient: kubeClient,
+		workerPool: workerPool,
+		workerRepo: workerRepo,
 	}
-
-	workerPool, err := wpc.GetWorkerPoolConfig()
-	if err != nil {
-		return nil, fmt.Errorf("worker pool %s not found", workerPoolName)
-	}
-
-	wpc.name = workerPoolName
-	wpc.config = config
-	wpc.provisioner = workerPool.JobSpec.NodeSelector[defaultProvisionerLabel]
-	wpc.nodeSelector = workerPool.JobSpec.NodeSelector
-	wpc.workerRepo = workerRepo
 
 	// Start monitoring worker pool size
-	err = wpc.monitorPoolSize(workerPool)
+	err = wpc.monitorPoolSize(&workerPool)
 	if err != nil {
 		log.Printf("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
 	}
@@ -68,14 +63,6 @@ func NewKubernetesWorkerPoolController(config types.AppConfig, workerPoolName st
 	go wpc.deleteStalePendingWorkerJobs()
 
 	return wpc, nil
-}
-
-func (wpc *KubernetesWorkerPoolController) GetWorkerPoolConfig() (*types.WorkerPoolConfig, error) {
-	w, ok := wpc.config.Worker.Pools[wpc.name]
-	if !ok {
-		return nil, fmt.Errorf("worker pool %v not found", wpc.name)
-	}
-	return &w, nil
 }
 
 func (wpc *KubernetesWorkerPoolController) Name() string {
@@ -188,7 +175,7 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 		workerMemory = wpc.config.Worker.DefaultWorkerMemoryRequest
 	}
 
-	if gpuType != "" {
+	if gpuType != "" && wpc.workerPool.Runtime == "nvidia" {
 		resourceRequests[corev1.ResourceName("nvidia.com/gpu")] = *resource.NewQuantity(1, resource.DecimalSI)
 	}
 
@@ -236,11 +223,15 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 			HostNetwork:                  wpc.config.Worker.HostNetwork,
 			ImagePullSecrets:             imagePullSecrets,
 			RestartPolicy:                corev1.RestartPolicyOnFailure,
-			NodeSelector:                 map[string]string{},
+			NodeSelector:                 wpc.workerPool.JobSpec.NodeSelector,
 			Containers:                   containers,
 			Volumes:                      wpc.getWorkerVolumes(workerMemory),
 			EnableServiceLinks:           ptr.To(false),
 		},
+	}
+
+	if wpc.workerPool.Runtime != "" {
+		podTemplate.Spec.RuntimeClassName = ptr.To(wpc.workerPool.Runtime)
 	}
 
 	ttl := int32(30)
