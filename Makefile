@@ -27,7 +27,7 @@ beam-worker:
 	bin/delete_workers.sh
 
 beam-runner:
-	for target in py312 py311 py310 py39 py38; do \
+	for target in py311 py310 py39 py38; do \
 		docker build . --target $$target --platform=linux/amd64 -f ./docker/Dockerfile.runner -t localhost:5001/beam-runner:$$target-$(runnerTag); \
 		docker push localhost:5001/beam-runner:$$target-$(runnerTag); \
 	done
