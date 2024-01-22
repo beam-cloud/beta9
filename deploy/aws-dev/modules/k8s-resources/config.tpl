@@ -72,7 +72,6 @@ worker:
   serviceAccountName: default
   # non-standard k8s job spec
   resourcesEnforced: false
-  dataVolumeName: worker-data
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
 metrics:
