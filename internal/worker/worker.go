@@ -47,6 +47,7 @@ type Worker struct {
 	containerRepo        repo.ContainerRepository
 	containerLogger      *ContainerLogger
 	workerMetrics        *WorkerMetrics
+	eventsRepo           repo.EventRepository
 	completedRequests    chan *types.ContainerRequest
 	stopContainerChan    chan string
 	workerRepo           repo.WorkerRepository
@@ -142,8 +143,10 @@ func NewWorker() (*Worker, error) {
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	metricsRepo := repo.NewMetricsPrometheusRepository(config.Metrics.Prometheus.Enabled)
 
-	workerMetrics := NewWorkerMetrics(ctx, podHostName, metricsRepo, workerRepo, repo.NewMetricsStreamRepository(ctx, config.Metrics))
+	workerMetrics := NewWorkerMetrics(ctx, podHostName, metricsRepo, workerRepo)
 	workerMetrics.Init()
+
+	eventsRepo := repo.NewEventRepo(repo.DefaultEventStreamName)
 
 	return &Worker{
 		ctx:                  ctx,
@@ -170,6 +173,7 @@ func NewWorker() (*Worker, error) {
 			containerInstances: containerInstances,
 		},
 		workerMetrics:     workerMetrics,
+		eventsRepo:        eventsRepo,
 		workerRepo:        workerRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
 		stopContainerChan: make(chan string, 1000),

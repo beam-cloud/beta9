@@ -51,12 +51,11 @@ config:
         Skip_Long_Lines   Off
         Refresh_Interval  5
 
+    
     [INPUT]
-        Name prometheus_scrape
-        tag metrics
-        host kube-prometheus-stack-prometheus.monitoring.svc.cluster.local
-        port 9090
-        metrics_path /metrics
+        Name tcp
+        Tag events
+        Port 8888
 
   outputs: |
     [OUTPUT]
@@ -68,8 +67,7 @@ config:
     
     [OUTPUT]
         name stdout
-        match worker-logs
-        format json_lines
+        match events
     
     [OUTPUT]
         name s3
@@ -116,3 +114,9 @@ daemonSetVolumeMounts:
     readOnly: true
 
 logLevel: info
+
+extraPorts:
+  - port: 8888
+    containerPort: 8888
+    protocol: TCP
+    name: tcp

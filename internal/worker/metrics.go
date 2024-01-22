@@ -23,15 +23,13 @@ func NewWorkerMetrics(
 	workerId string,
 	metricsRepo repo.MetricsRepository,
 	workerRepo repo.WorkerRepository,
-	metricsStreamRepo repo.MetricsStreamRepository,
 ) *WorkerMetrics {
 	return &WorkerMetrics{
-		ctx:               ctx,
-		workerId:          workerId,
-		metricsRepo:       metricsRepo,
-		workerRepo:        workerRepo,
-		metricsStreamRepo: metricsStreamRepo,
-		nvmlActive:        false,
+		ctx:         ctx,
+		workerId:    workerId,
+		metricsRepo: metricsRepo,
+		workerRepo:  workerRepo,
+		nvmlActive:  false,
 	}
 }
 

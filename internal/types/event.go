@@ -1,22 +1,22 @@
 package types
 
-import "time"
-
-const (
-	EventNameContainerResourceStats = "CONTAINER_RESOURCE_STATS"
-)
-
 type Event struct {
-	Name                        string
-	Data                        []byte
-	ApproximateArrivalTimestamp *time.Time
+	Id         string `json:"id"`
+	Name       string `json:"name"`
+	ApiVersion string `json:"api_version"`
+	Created    int64  `json:"created"`
+	Data       []byte `json:"data"`
 }
 
 type EventSink = func(event []Event)
 
 type EventClient interface {
-	ListenToStream()
-	AddSink(sinkId string, sink *EventSink) error
-	RemoveSink(sinkId string) error
 	PushEvent(event Event) error
 }
+
+var (
+	EventContainerScheduled = "container.scheduled"
+	EventContainerRequested = "container.requested"
+	EventContainerStarted   = "container.started"
+	EventContainerStopped   = "container.stopped"
+)
