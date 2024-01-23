@@ -506,7 +506,7 @@ data "aws_region" "this" {}
 
 resource "aws_instance" "k3s_master" {
   ami                         = var.k3s_cluster_ami
-  instance_type               = "t3.small"
+  instance_type               = var.k3s_instance_type
   subnet_id                   = aws_subnet.public-us-east-1a.id
   security_groups             = [aws_security_group.k3s_cluster.id]
   iam_instance_profile        = aws_iam_instance_profile.k3s_instance_profile.name
@@ -621,9 +621,9 @@ resource "null_resource" "fetch_k3s_parameters" {
 
 
 resource "aws_instance" "k3s_worker" {
-  count                       = 2
+  count                       = var.k3s_worker_count
   ami                         = var.k3s_cluster_ami
-  instance_type               = "t3.small"
+  instance_type               = var.k3s_instance_type
   subnet_id                   = aws_subnet.private-us-east-1a.id
   security_groups             = [aws_security_group.k3s_cluster.id]
   iam_instance_profile        = aws_iam_instance_profile.k3s_instance_profile.name
