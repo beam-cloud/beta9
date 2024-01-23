@@ -12,12 +12,12 @@ from grpclib.metadata import Deadline
 from multidict import MultiDict
 from rich import prompt
 
-from beam import terminal
-from beam.aio import run_sync
-from beam.clients.gateway import AuthorizeResponse, GatewayServiceStub
-from beam.exceptions import RunnerException
+from beta9 import terminal
+from beta9.aio import run_sync
+from beta9.clients.gateway import AuthorizeResponse, GatewayServiceStub
+from beta9.exceptions import RunnerException
 
-DEFAULT_CONFIG_FILE_PATH = "~/.beam/creds"
+DEFAULT_CONFIG_FILE_PATH = "~/.beta9/creds"
 DEFAULT_PROFILE_NAME = "default"
 DEFAULT_GATEWAY_HOST = "0.0.0.0"
 DEFAULT_GATEWAY_PORT = "1993"
@@ -102,9 +102,9 @@ def save_config_to_file(*, config: GatewayConfig, name: str) -> None:
 
 
 def get_gateway_config() -> GatewayConfig:
-    gateway_host = os.getenv("BEAM_GATEWAY_HOST", None)
-    gateway_port = os.getenv("BEAM_GATEWAY_PORT", None)
-    token = os.getenv("BEAM_TOKEN", None)
+    gateway_host = os.getenv("BETA9_GATEWAY_HOST", None)
+    gateway_port = os.getenv("BETA9_GATEWAY_PORT", None)
+    token = os.getenv("BETA9_TOKEN", None)
 
     if gateway_host and gateway_port and token:
         return GatewayConfig(gateway_host=gateway_host, gateway_port=gateway_port, token=token)
@@ -120,7 +120,7 @@ def configure_gateway_credentials(
     gateway_port: Optional[str] = None,
     token: Optional[str] = None,
 ) -> GatewayConfig:
-    terminal.header("Welcome to Beam! Let's get started 📡")
+    terminal.header("Welcome to Beta9! Let's get started 📡")
 
     name = name or terminal.prompt(text="Profile name", default=DEFAULT_PROFILE_NAME)
     gateway_host = gateway_host or terminal.prompt(

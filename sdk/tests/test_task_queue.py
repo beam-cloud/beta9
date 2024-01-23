@@ -2,9 +2,9 @@ import os
 from unittest import TestCase
 from unittest.mock import MagicMock
 
-from beam import Image
-from beam.abstractions.taskqueue import TaskQueue
-from beam.clients.taskqueue import TaskQueuePutResponse
+from beta9 import Image
+from beta9.abstractions.taskqueue import TaskQueue
+from beta9.clients.taskqueue import TaskQueuePutResponse
 
 from .utils import mock_coroutine_with_result
 

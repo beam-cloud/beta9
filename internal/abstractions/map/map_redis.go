@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/beam-cloud/beam/internal/auth"
-	"github.com/beam-cloud/beam/internal/common"
-	pb "github.com/beam-cloud/beam/proto"
+	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/internal/common"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 type RedisMapService struct {

@@ -1,8 +1,7 @@
 import shutil
 
 import click
-
-from beam.cli import configure, deploy, tasks
+from beta9.cli import configure, deploy, tasks
 
 click.formatting.FORCED_WIDTH = shutil.get_terminal_size().columns
 

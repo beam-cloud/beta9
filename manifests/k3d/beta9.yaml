@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: beam
+  name: beta9
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: beam-role
-  namespace: beam
+  name: gateway-role
+  namespace: beta9
 rules:
 - apiGroups:
   - '*'
@@ -25,37 +25,37 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: beam-role-binding
-  namespace: beam
+  name: gateway-role-binding
+  namespace: beta9
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: beam-role
+  name: gateway-role
 subjects:
 - kind: ServiceAccount
   name: default
-  namespace: beam
+  namespace: beta9
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: beam
-  namespace: beam
+  name: gateway
+  namespace: beta9
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: beam
+      app: gateway
   template:
     metadata:
       labels:
-        app: beam
+        app: gateway
     spec:
       containers:
-      - name: beam
-        image: registry.localhost:5000/beam:latest
+      - name: gateway
+        image: registry.localhost:5000/beta9-gateway:latest
         command:
-        - /workspace/bin/beam
+        - /workspace/bin/gateway
         ports:
         - name: grpc
           containerPort: 1993
@@ -81,7 +81,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: images
-  namespace: beam
+  namespace: beta9
 spec:
   accessModes:
   - ReadWriteOnce
@@ -94,7 +94,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: worker-data
-  namespace: beam
+  namespace: beta9
 spec:
   accessModes:
   - ReadWriteOnce
@@ -106,11 +106,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: beam
-  namespace: beam
+  name: gateway
+  namespace: beta9
 spec:
   selector:
-    app: beam
+    app: gateway
   ports:
   - name: grpc
     port: 1993
@@ -124,8 +124,8 @@ spec:
 apiVersion: traefik.containo.us/v1alpha1
 kind: IngressRouteTCP
 metadata:
-  name: beam
-  namespace: beam
+  name: gateway
+  namespace: beta9
 spec:
   entryPoints:
   - web
@@ -133,14 +133,14 @@ spec:
   - match: HostSNI(`*`)
     kind: Rule
     services:
-    - name: beam
+    - name: gateway
       port: 1993
 ---
 apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:
   name: redis
-  namespace: beam
+  namespace: beta9
 spec:
   repo: https://charts.bitnami.com/bitnami
   chart: redis
@@ -161,7 +161,7 @@ apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:
   name: postgres
-  namespace: beam
+  namespace: beta9
 spec:
   repo: https://charts.bitnami.com/bitnami
   chart: postgresql

@@ -3,7 +3,7 @@ package scheduler
 import (
 	"testing"
 
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/tj/assert"
 )
 

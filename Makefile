@@ -5,8 +5,8 @@ runnerTag := latest
 
 setup:
 	bash bin/setup.sh
-	make k3d-up beam-runner beam-worker beam
-	kubectl delete pod -l app=beam
+	make k3d-up runner worker gateway
+	kubectl delete pod -l app=gateway
 
 setup-sdk:
 	poetry install -C sdk
@@ -17,19 +17,19 @@ k3d-up:
 k3d-down:
 	bash bin/k3d.sh down
 
-beam:
-	docker build . --target build -f ./docker/Dockerfile.beam -t localhost:5001/beam:$(tag)
-	docker push localhost:5001/beam:$(tag)
+gateway:
+	docker build . --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
+	docker push localhost:5001/beta9-gateway:$(tag)
 
-beam-worker:
-	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beam-worker:$(workerTag)
-	docker push localhost:5001/beam-worker:$(workerTag)
+worker:
+	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker push localhost:5001/beta9-worker:$(workerTag)
 	bin/delete_workers.sh
 
-beam-runner:
+runner:
 	for target in py311 py310 py39 py38; do \
-		docker build . --target $$target --platform=linux/amd64 -f ./docker/Dockerfile.runner -t localhost:5001/beam-runner:$$target-$(runnerTag); \
-		docker push localhost:5001/beam-runner:$$target-$(runnerTag); \
+		docker build . --target $$target --platform=linux/amd64 -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:$$target-$(runnerTag); \
+		docker push localhost:5001/beta9-runner:$$target-$(runnerTag); \
 	done
 
 start:

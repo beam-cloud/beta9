@@ -8,12 +8,12 @@ import (
 	"path"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/auth"
-	"github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/scheduler"
-	"github.com/beam-cloud/beam/internal/types"
-	pb "github.com/beam-cloud/beam/proto"
+	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/scheduler"
+	"github.com/beam-cloud/beta9/internal/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
 )
 
@@ -160,14 +160,14 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 		Env: []string{
 			fmt.Sprintf("TASK_ID=%s", taskId),
 			fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
-			fmt.Sprintf("BEAM_TOKEN=%s", authInfo.Token.Key),
+			fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
 			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		},
 		Cpu:        stubConfig.Runtime.Cpu,
 		Memory:     stubConfig.Runtime.Memory,
 		Gpu:        string(stubConfig.Runtime.Gpu),
 		ImageId:    stubConfig.Runtime.ImageId,
-		EntryPoint: []string{stubConfig.PythonVersion, "-m", "beam.runner.function"},
+		EntryPoint: []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
 		Mounts:     mounts,
 	})
 	if err != nil {

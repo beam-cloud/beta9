@@ -8,10 +8,10 @@ import (
 	"path"
 	"time"
 
-	common "github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/scheduler"
-	"github.com/beam-cloud/beam/internal/types"
+	common "github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/scheduler"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
@@ -141,7 +141,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		runRequest := &types.ContainerRequest{
 			ContainerId: i.genContainerId(),
 			Env: []string{
-				fmt.Sprintf("BEAM_TOKEN=%s", i.token.Key),
+				fmt.Sprintf("BETA9_TOKEN=%s", i.token.Key),
 				fmt.Sprintf("HANDLER=%s", i.stubConfig.Handler),
 				fmt.Sprintf("STUB_ID=%s", i.stub.ExternalId),
 				fmt.Sprintf("CONCURRENCY=%d", i.stubConfig.Concurrency),
@@ -151,7 +151,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			Memory:     i.stubConfig.Runtime.Memory,
 			Gpu:        string(i.stubConfig.Runtime.Gpu),
 			ImageId:    i.stubConfig.Runtime.ImageId,
-			EntryPoint: []string{i.stubConfig.PythonVersion, "-m", "beam.runner.taskqueue"},
+			EntryPoint: []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.taskqueue"},
 			Mounts: []types.Mount{
 				{
 					LocalPath: path.Join(types.DefaultExtractedObjectPath, i.workspace.Name, i.object.ExternalId),

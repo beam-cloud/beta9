@@ -1,4 +1,4 @@
-module github.com/beam-cloud/beam
+module github.com/beam-cloud/beta9
 
 go 1.21
 

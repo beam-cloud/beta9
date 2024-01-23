@@ -2,7 +2,7 @@ apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:
   name: localstack
-  namespace: beam
+  namespace: beta9
 spec:
   repo: https://localstack.github.io/helm-charts
   chart: localstack

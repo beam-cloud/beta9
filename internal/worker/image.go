@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/abstractions/image"
-	common "github.com/beam-cloud/beam/internal/common"
-	types "github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/abstractions/image"
+	common "github.com/beam-cloud/beta9/internal/common"
+	types "github.com/beam-cloud/beta9/internal/types"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/moby/sys/mountinfo"

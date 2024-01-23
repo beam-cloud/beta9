@@ -2,9 +2,8 @@ from unittest import TestCase
 from unittest.mock import MagicMock
 
 import cloudpickle
-
-from beam.abstractions.map import Map
-from beam.clients.map import (
+from beta9.abstractions.map import Map
+from beta9.clients.map import (
     MapCountResponse,
     MapDeleteResponse,
     MapGetResponse,

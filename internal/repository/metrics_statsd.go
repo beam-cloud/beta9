@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	common "github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/types"
+	common "github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 type MetricsStatsd struct {
@@ -77,14 +77,14 @@ func (m *MetricsStatsd) WorkerDuration(workerId string, timestampNs int64, durat
 	})
 }
 
-func (m *MetricsStatsd) BeamDeploymentRequestDuration(bucketName string, duration time.Duration) {
-	m.statSender.StatTime(fmt.Sprintf("beam.deployment.request.%s.duration", bucketName), duration)
+func (m *MetricsStatsd) Beta9DeploymentRequestDuration(bucketName string, duration time.Duration) {
+	m.statSender.StatTime(fmt.Sprintf("beta9.deployment.request.%s.duration", bucketName), duration)
 }
 
-func (m *MetricsStatsd) BeamDeploymentRequestStatus(bucketName string, status int) {
-	m.statSender.StatCount(fmt.Sprintf("beam.deployment.request.%s.http_status_%d", bucketName, status), 1)
+func (m *MetricsStatsd) Beta9DeploymentRequestStatus(bucketName string, status int) {
+	m.statSender.StatCount(fmt.Sprintf("beta9.deployment.request.%s.http_status_%d", bucketName, status), 1)
 }
 
-func (m *MetricsStatsd) BeamDeploymentRequestCount(bucketName string) {
-	m.statSender.StatCount(fmt.Sprintf("beam.deployment.request.%s.count", bucketName), 1)
+func (m *MetricsStatsd) Beta9DeploymentRequestCount(bucketName string) {
+	m.statSender.StatCount(fmt.Sprintf("beta9.deployment.request.%s.count", bucketName), 1)
 }

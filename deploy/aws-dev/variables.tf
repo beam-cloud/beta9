@@ -1,7 +1,7 @@
 variable "prefix" {
   description = "Global prefix for all resources"
   type        = string
-  default     = "beamtest" # Set your desired prefix here
+  default     = "beta9test" # Set your desired prefix here
 }
 
 variable "domain" {
