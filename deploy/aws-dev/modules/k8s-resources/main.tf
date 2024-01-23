@@ -162,6 +162,8 @@ resource "helm_release" "redis" {
     name  = "auth.password"
     value = random_password.redis_password.result
   }
+
+  depends_on = [helm_release.nginx_ingress]
 }
 
 
@@ -187,6 +189,8 @@ resource "helm_release" "juicefs_redis" {
     name  = "auth.password"
     value = random_password.juicefs_redis_password.result
   }
+
+  depends_on = [helm_release.nginx_ingress]
 }
 
 locals {
@@ -216,5 +220,6 @@ resource "kubernetes_secret" "app_config" {
   depends_on = [
     random_password.juicefs_redis_password,
     random_password.redis_password,
+    helm_release.nginx_ingress
   ]
 }
