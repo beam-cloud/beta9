@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -23,12 +23,11 @@ import (
 )
 
 type KubernetesWorkerPoolController struct {
-	name         string
-	config       types.AppConfig
-	provisioner  string
-	nodeSelector map[string]string
-	kubeClient   *kubernetes.Clientset
-	workerRepo   repository.WorkerRepository
+	name       string
+	config     types.AppConfig
+	kubeClient *kubernetes.Clientset
+	workerPool types.WorkerPoolConfig
+	workerRepo repository.WorkerRepository
 }
 
 func NewKubernetesWorkerPoolController(config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository) (WorkerPoolController, error) {
@@ -42,25 +41,21 @@ func NewKubernetesWorkerPoolController(config types.AppConfig, workerPoolName st
 		return nil, err
 	}
 
+	workerPool, ok := config.Worker.Pools[workerPoolName]
+	if !ok {
+		return nil, fmt.Errorf("worker pool %s not found", workerPoolName)
+	}
+
 	wpc := &KubernetesWorkerPoolController{
 		name:       workerPoolName,
 		config:     config,
 		kubeClient: kubeClient,
+		workerPool: workerPool,
+		workerRepo: workerRepo,
 	}
-
-	workerPool, err := wpc.GetWorkerPoolConfig()
-	if err != nil {
-		return nil, fmt.Errorf("worker pool %s not found", workerPoolName)
-	}
-
-	wpc.name = workerPoolName
-	wpc.config = config
-	wpc.provisioner = workerPool.JobSpec.NodeSelector[defaultProvisionerLabel]
-	wpc.nodeSelector = workerPool.JobSpec.NodeSelector
-	wpc.workerRepo = workerRepo
 
 	// Start monitoring worker pool size
-	err = wpc.monitorPoolSize(workerPool)
+	err = wpc.monitorPoolSize(&workerPool)
 	if err != nil {
 		log.Printf("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
 	}
@@ -68,14 +63,6 @@ func NewKubernetesWorkerPoolController(config types.AppConfig, workerPoolName st
 	go wpc.deleteStalePendingWorkerJobs()
 
 	return wpc, nil
-}
-
-func (wpc *KubernetesWorkerPoolController) GetWorkerPoolConfig() (*types.WorkerPoolConfig, error) {
-	w, ok := wpc.config.Worker.Pools[wpc.name]
-	if !ok {
-		return nil, fmt.Errorf("worker pool %v not found", wpc.name)
-	}
-	return &w, nil
 }
 
 func (wpc *KubernetesWorkerPoolController) Name() string {
@@ -160,11 +147,11 @@ func (wpc *KubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu 
 }
 
 func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string) (*batchv1.Job, *types.Worker) {
-	jobName := fmt.Sprintf("%s-%s-%s", BeamWorkerJobPrefix, wpc.name, workerId)
+	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
-		"app":                  "beam-" + BeamWorkerLabelValue,
-		BeamWorkerLabelKey:     BeamWorkerLabelValue,
+		"app":                  "beta9-" + Beta9WorkerLabelValue,
 		"prometheus.io/scrape": "true",
+		Beta9WorkerLabelKey:    Beta9WorkerLabelValue,
 	}
 
 	workerCpu := cpu
@@ -189,7 +176,7 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 		workerMemory = wpc.config.Worker.DefaultWorkerMemoryRequest
 	}
 
-	if gpuType != "" {
+	if gpuType != "" && wpc.workerPool.Runtime == "nvidia" {
 		resourceRequests[corev1.ResourceName("nvidia.com/gpu")] = *resource.NewQuantity(1, resource.DecimalSI)
 	}
 
@@ -243,11 +230,15 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 			HostNetwork:                  wpc.config.Worker.HostNetwork,
 			ImagePullSecrets:             imagePullSecrets,
 			RestartPolicy:                corev1.RestartPolicyOnFailure,
-			NodeSelector:                 map[string]string{},
+			NodeSelector:                 wpc.workerPool.JobSpec.NodeSelector,
 			Containers:                   containers,
 			Volumes:                      wpc.getWorkerVolumes(workerMemory),
 			EnableServiceLinks:           ptr.To(false),
 		},
+	}
+
+	if wpc.workerPool.Runtime != "" {
+		podTemplate.Spec.RuntimeClassName = ptr.To(wpc.workerPool.Runtime)
 	}
 
 	ttl := int32(30)
@@ -309,14 +300,6 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) 
 				},
 			},
 		},
-		{
-			Name: wpc.config.Worker.DataVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: wpc.config.Worker.DataVolumeName,
-				},
-			},
-		},
 	}
 
 	return append(volumes,
@@ -351,24 +334,6 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1.Volu
 		{
 			MountPath: "/dev/shm",
 			Name:      "dshm",
-		},
-		{
-			Name:      wpc.config.Worker.DataVolumeName,
-			MountPath: "/snapshots",
-			SubPath:   "snapshots/",
-			ReadOnly:  false,
-		},
-		{
-			Name:      wpc.config.Worker.DataVolumeName,
-			MountPath: "/workspaces",
-			SubPath:   "workspaces/",
-			ReadOnly:  false,
-		},
-		{
-			Name:      wpc.config.Worker.DataVolumeName,
-			MountPath: "/volumes",
-			SubPath:   "volumes/",
-			ReadOnly:  false,
 		},
 	}
 }
@@ -408,11 +373,11 @@ func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string,
 			Value: defaultClusterDomain,
 		},
 		{
-			Name:  "BEAM_GATEWAY_HOST",
+			Name:  "BETA9_GATEWAY_HOST",
 			Value: wpc.config.GatewayService.Host,
 		},
 		{
-			Name:  "BEAM_GATEWAY_PORT",
+			Name:  "BETA9_GATEWAY_PORT",
 			Value: fmt.Sprint(wpc.config.GatewayService.Port),
 		},
 	}
@@ -431,7 +396,7 @@ func (wpc *KubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		jobSelector := fmt.Sprintf("%s=%s", BeamWorkerLabelKey, BeamWorkerLabelValue)
+		jobSelector := fmt.Sprintf("%s=%s", Beta9WorkerLabelKey, Beta9WorkerLabelValue)
 		jobs, err := wpc.kubeClient.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{LabelSelector: jobSelector})
 		if err != nil {
 			log.Printf("Failed to list jobs for controller <%s>: %v\n", wpc.name, err)

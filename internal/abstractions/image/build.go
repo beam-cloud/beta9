@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/scheduler"
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/scheduler"
+	"github.com/beam-cloud/beta9/internal/types"
 
 	"github.com/google/uuid"
 	"github.com/mitchellh/hashstructure/v2"

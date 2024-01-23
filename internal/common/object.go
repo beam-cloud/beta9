@@ -5,7 +5,7 @@ import (
 	"os"
 	"path"
 
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/mholt/archiver/v3"
 )
 

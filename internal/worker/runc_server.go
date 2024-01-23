@@ -13,9 +13,9 @@ import (
 	"strings"
 	"syscall"
 
-	pb "github.com/beam-cloud/beam/proto"
+	pb "github.com/beam-cloud/beta9/proto"
 
-	common "github.com/beam-cloud/beam/internal/common"
+	common "github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/go-runc"
 	"github.com/google/shlex"
 	"github.com/opencontainers/runtime-spec/specs-go"

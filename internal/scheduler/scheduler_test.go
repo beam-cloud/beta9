@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/beam-cloud/beam/internal/common"
-	repo "github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/common"
+	repo "github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/tj/assert"
@@ -36,13 +36,13 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		return nil, err
 	}
 
-	poolJson := []byte(`{"worker":{"pools":{"beam-cpu":{},"beam-a10g":{},"beam-t4":{}}}}}`)
+	poolJson := []byte(`{"worker":{"pools":{"beta9-cpu":{},"beta9-a10g":{"gpuType": "A10G"},"beta9-t4":{"gpuType": "T4"}}}}}`)
 	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
 
 	workerPoolManager := NewWorkerPoolManager(repo.NewWorkerPoolRedisRepository(rdb))
 	for name, pool := range config.Worker.Pools {
-		workerPoolManager.SetPool(name, &pool, &WorkerPoolControllerForTest{
+		workerPoolManager.SetPool(name, pool, &WorkerPoolControllerForTest{
 			name:       name,
 			config:     config,
 			workerRepo: workerRepo,
@@ -191,21 +191,21 @@ func TestGetController(t *testing.T) {
 		wb, _ := NewSchedulerForTest()
 
 		cpuRequest := &types.ContainerRequest{Gpu: ""}
-		cpuController, err := wb.getController(cpuRequest)
-		if err != nil || cpuController.Name() != "beam-cpu" {
-			t.Errorf("Expected beam-cpu controller, got %v, error: %v", cpuController, err)
+		defaultController, err := wb.getController(cpuRequest)
+		if err != nil || defaultController.Name() != "default" {
+			t.Errorf("Expected default controller, got %v, error: %v", defaultController, err)
 		}
 
 		a10gRequest := &types.ContainerRequest{Gpu: "A10G"}
 		a10gController, err := wb.getController(a10gRequest)
-		if err != nil || a10gController.Name() != "beam-a10g" {
-			t.Errorf("Expected beam-a10g controller, got %v, error: %v", a10gController, err)
+		if err != nil || a10gController.Name() != "beta9-a10g" {
+			t.Errorf("Expected beta9-a10g controller, got %v, error: %v", a10gController, err)
 		}
 
 		t4Request := &types.ContainerRequest{Gpu: "T4"}
 		t4Controller, err := wb.getController(t4Request)
-		if err != nil || t4Controller.Name() != "beam-t4" {
-			t.Errorf("Expected beam-t4 controller, got %v, error: %v", t4Controller, err)
+		if err != nil || t4Controller.Name() != "beta9-t4" {
+			t.Errorf("Expected beta9-t4 controller, got %v, error: %v", t4Controller, err)
 		}
 	})
 

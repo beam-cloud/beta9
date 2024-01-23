@@ -3,15 +3,15 @@ package scheduler
 import (
 	"sync"
 
-	repo "github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/types"
+	repo "github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 // WorkerPool represents a pool of workers with a specific name, configuration,
 // and a controller responsible for managing its worker instances.
 type WorkerPool struct {
 	Name       string
-	Config     *types.WorkerPoolConfig
+	Config     types.WorkerPoolConfig
 	Controller WorkerPoolController
 }
 
@@ -50,9 +50,22 @@ func (m *WorkerPoolManager) GetPool(name string) (*WorkerPool, bool) {
 	return pool, true
 }
 
+func (m *WorkerPoolManager) GetPoolByGPU(gpuType string) (*WorkerPool, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, pool := range m.pools {
+		if pool.Config.GPUType == gpuType {
+			return pool, true
+		}
+	}
+
+	return nil, false
+}
+
 // Set/add WorkerPool.
 // This will overwrite any existing WorkerPools with the same name defined in WorkerPoolResource.
-func (m *WorkerPoolManager) SetPool(name string, config *types.WorkerPoolConfig, controller WorkerPoolController) error {
+func (m *WorkerPoolManager) SetPool(name string, config types.WorkerPoolConfig, controller WorkerPoolController) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

@@ -71,8 +71,8 @@ const ContainerExitCodeTtlS int = 300
 
 // Container Stats
 const (
-	ContainerDurationStatsKey              string        = "beam.worker.usage.container.duration"
-	ContainerLifecycleStatsKey             string        = "beam.worker.usage.container.lifecycle"
+	ContainerDurationStatsKey              string        = "beta9.worker.usage.container.duration"
+	ContainerLifecycleStatsKey             string        = "beta9.worker.usage.container.lifecycle"
 	ContainerDurationEmissionInterval      time.Duration = 30 * time.Second
 	ContainerResourceUsageEmissionInterval time.Duration = 3 * time.Second
 

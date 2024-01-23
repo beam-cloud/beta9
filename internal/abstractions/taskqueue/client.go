@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	common "github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/types"
+	common "github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/gofrs/uuid"
 	"github.com/redis/go-redis/v9"
 )

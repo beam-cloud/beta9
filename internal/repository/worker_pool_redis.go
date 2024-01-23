@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 type WorkerPoolRedisRepository struct {
@@ -68,7 +68,7 @@ func (r *WorkerPoolRedisRepository) GetPools() ([]types.WorkerPoolConfig, error)
 	return pools, nil
 }
 
-func (r *WorkerPoolRedisRepository) SetPool(name string, pool *types.WorkerPoolConfig) error {
+func (r *WorkerPoolRedisRepository) SetPool(name string, pool types.WorkerPoolConfig) error {
 	lockKey := common.RedisKeys.WorkerPoolLock(name)
 	if err := r.lock.Acquire(context.TODO(), lockKey, r.lockOptions); err != nil {
 		return err

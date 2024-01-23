@@ -81,7 +81,7 @@ func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix 
 				return
 
 			case err := <-errs:
-				log.Printf("beam: error with key manager subscription: %v", err)
+				log.Printf("error with key manager subscription: %v", err)
 				break retry
 			}
 		}

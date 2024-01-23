@@ -3,7 +3,7 @@ package dmap
 import (
 	"context"
 
-	pb "github.com/beam-cloud/beam/proto"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 type MapService interface {
