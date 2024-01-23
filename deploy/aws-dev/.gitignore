@@ -1,0 +1,4 @@
+modules/cluster/node-token
+modules/cluster/kubeconfig
+modules/cluster/client-*
+modules/cluster/ca-certificate
