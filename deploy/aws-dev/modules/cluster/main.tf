@@ -745,7 +745,7 @@ resource "aws_iam_user" "bucket_user" {
   name = "${var.prefix}-bucket-user"
 }
 
-resource "aws_iam_policy" "bucket_access_for_juicefs_and_images" {
+resource "aws_iam_policy" "bucket_access_policy" {
   name        = "${var.prefix}-juicefs-images-bucket-access"
   description = "Policy for JuiceFS and images buckets"
 
@@ -784,7 +784,7 @@ resource "aws_iam_policy" "bucket_access_for_juicefs_and_images" {
 
 resource "aws_iam_user_policy_attachment" "bucket_access_attachment" {
   user       = aws_iam_user.bucket_user.name
-  policy_arn = aws_iam_policy.bucket_full_access.arn
+  policy_arn = aws_iam_policy.bucket_access_policy.arn
 }
 
 resource "aws_iam_access_key" "bucket_user_key" {
