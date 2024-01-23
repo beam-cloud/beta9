@@ -8,5 +8,5 @@ type Provider interface {
 	ListMachines() ([]types.Instance, error)
 	StartMachine(id string) error
 	StopMachine(id string) error
-	ProvisionMachine(config MachineConfig) (*types.Instance, error)
+	// ProvisionMachine(config MachineConfig) (*types.Instance, error)
 }

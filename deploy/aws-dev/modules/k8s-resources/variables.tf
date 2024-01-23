@@ -27,6 +27,26 @@ variable "db_config" {
   sensitive   = true
 }
 
+variable "bucket_user_credentials" {
+  type = object({
+    access_key = string
+    secret_key = string
+  })
+  description = "IAM credentials with access to buckets needed for images/juicefs"
+  sensitive   = true
+}
+
+variable "s3_buckets" {
+  type = object({
+    image_bucket_name   = string
+    juicefs_bucket_name = string
+  })
+}
+
+variable "aws_region" {
+  type = string
+}
+
 variable "domain" {
   type        = string
   description = "Domain name"

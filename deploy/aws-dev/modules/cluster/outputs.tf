@@ -62,3 +62,20 @@ output "db_config" {
   description = "Postgres database config"
   sensitive   = true
 }
+
+
+output "bucket_user_credentials" {
+  value = {
+    access_key = aws_iam_access_key.bucket_user_key.id
+    secret_key = aws_iam_access_key.bucket_user_key.secret
+  }
+
+  sensitive = true
+}
+
+output "s3_buckets" {
+  value = {
+    image_bucket_name   = aws_s3_bucket.image_bucket.bucket
+    juicefs_bucket_name = aws_s3_bucket.juicefs_bucket.bucket
+  }
+}

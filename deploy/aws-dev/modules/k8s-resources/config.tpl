@@ -1,17 +1,17 @@
 debugMode: false
 database:
   postgres:
-    host: ${var.db_host}
+    host: ${db_host}
     port: 5432
-    username: ${var.db_user}
-    password: ${var.db_password}
+    username: ${db_user}
+    password: ${db_password}
     name: main
     timezone: UTC
   redis:
     mode: single
     addrs:
     - redis-master.beam:6379
-    password:
+    password: ${redis_password}
     enableTLS: false
     dialTimeout: 3s
 storage:
@@ -21,29 +21,29 @@ storage:
   objectPath: /data/objects
   juicefs:
     redisURI: redis://juicefs-redis-master.beam:6379/0
-    awsS3Bucket: ${var.juicefs_bucket}
-    awsAccessKeyID: ${var.s3_access_key}
-    awsSecretAccessKey: ${var.s3_secret_key}
+    awsS3Bucket: ${juicefs_bucket}
+    awsAccessKeyID: ${aws_access_key_id}
+    awsSecretAccessKey: ${aws_secret_access_key}
 gateway:
   host: beam.beam
   port: 1993
 imageService:
   cacheURL:
-  registryStore: local
-  registryCredentialProvider: docker
+  registryStore: s3
+  registryCredentialProvider: aws
   registries:
     docker:
       username: beamcloud
       password:
     s3:
-      bucket: beam-images
-      region: us-east-1
-      accessKeyID: test
-      secretAccessKey: test
+      bucket: ${images_bucket}
+      region: ${aws_region}
+      accessKeyID: ${aws_access_key_id}
+      secretAccessKey: ${aws_secret_access_key}
   runner:
     baseImageTag: latest
     baseImageName: beam-runner
-    baseImageRegistry: registry.localhost:5000
+    baseImageRegistry: public.ecr.aws/k2t1v1n6
     tags:
       python3.8: py38-latest
       python3.9: py39-latest
@@ -66,7 +66,7 @@ worker:
   hostNetwork: false
   imageTag: latest
   imageName: beam-worker
-  imageRegistry: registry.localhost:5000
+  imageRegistry: public.ecr.aws/k2t1v1n6
   imagePullSecrets: []
   namespace: beam
   serviceAccountName: default

@@ -713,3 +713,39 @@ data "aws_secretsmanager_secret" "rds_secret" {
 data "aws_secretsmanager_secret_version" "current" {
   secret_id = data.aws_secretsmanager_secret.rds_secret.id
 }
+
+resource "aws_iam_user" "bucket_user" {
+  name = "${var.prefix}-bucket-user"
+}
+
+resource "aws_iam_policy" "bucket_full_access" {
+  name        = "${var.prefix}-bucket-full-access"
+  description = "A policy that grants full access to the specified S3 buckets"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = [
+          "s3:*"
+        ],
+        Effect = "Allow",
+        Resource = [
+          aws_s3_bucket.image_bucket.arn,
+          "${aws_s3_bucket.image_bucket.arn}/*",
+          aws_s3_bucket.juicefs_bucket.arn,
+          "${aws_s3_bucket.juicefs_bucket.arn}/*"
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_iam_user_policy_attachment" "bucket_access_attachment" {
+  user       = aws_iam_user.bucket_user.name
+  policy_arn = aws_iam_policy.bucket_full_access.arn
+}
+
+resource "aws_iam_access_key" "bucket_user_key" {
+  user = aws_iam_user.bucket_user.name
+}
