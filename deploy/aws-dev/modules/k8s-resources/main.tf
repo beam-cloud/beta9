@@ -132,12 +132,12 @@ resource "helm_release" "nginx_ingress" {
 
 resource "random_password" "redis_password" {
   length  = 16
-  special = true
+  special = false
 }
 
 resource "random_password" "juicefs_redis_password" {
   length  = 16
-  special = true
+  special = false
 }
 
 resource "kubernetes_secret" "juicefs_redis_secret" {
@@ -147,7 +147,7 @@ resource "kubernetes_secret" "juicefs_redis_secret" {
   }
 
   data = {
-    "redis-password" = random_password.redis_password.result
+    "redis-password" = base64encode(random_password.juicefs_redis_password.result)
   }
 }
 resource "kubernetes_secret" "redis_secret" {
@@ -157,7 +157,7 @@ resource "kubernetes_secret" "redis_secret" {
   }
 
   data = {
-    "redis-password" = random_password.juicefs_redis_password.result
+    "redis-password" = base64encode(random_password.redis_password.result)
   }
 }
 
@@ -182,7 +182,7 @@ resource "helm_release" "redis" {
 
   set {
     name  = "password"
-    value = kubernetes_secret.redis_secret.data["redis-password"]
+    value = random_password.redis_password.result
   }
 }
 
@@ -207,7 +207,7 @@ resource "helm_release" "juicefs_redis" {
 
   set {
     name  = "password"
-    value = kubernetes_secret.juicefs_redis_secret.data["redis-password"]
+    value = random_password.juicefs_redis_password.result
   }
 }
 
@@ -216,8 +216,8 @@ locals {
     db_user                = var.db_config.username.value
     db_host                = var.db_config.host.value
     db_password            = var.db_config.password.value
-    redis_password         = kubernetes_secret.redis_secret.data["redis-password"]
-    juicefs_redis_password = kubernetes_secret.juicefs_redis_secret.data["redis-password"]
+    redis_password         = random_password.redis_password.result
+    juicefs_redis_password = random_password.juicefs_redis_password.result
     juicefs_bucket         = var.s3_buckets.juicefs_bucket_name
     aws_access_key_id      = var.bucket_user_credentials.access_key
     aws_secret_access_key  = var.bucket_user_credentials.secret_key
@@ -232,7 +232,7 @@ resource "kubernetes_secret" "app_config" {
   }
 
   data = {
-    "config.yml" = base64encode(local.config_content)
+    "config.yml" = local.config_content
   }
 
   depends_on = [

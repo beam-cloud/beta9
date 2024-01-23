@@ -4,14 +4,14 @@ database:
     host: ${db_host}
     port: 5432
     username: ${db_user}
-    password: ${db_password}
+    password: "${db_password}"
     name: main
     timezone: UTC
   redis:
     mode: single
     addrs:
     - redis-master.beam:6379
-    password: ${redis_password}
+    password: "${redis_password}"
     enableTLS: false
     dialTimeout: 3s
 storage:
@@ -20,7 +20,7 @@ storage:
   fsPath: /data
   objectPath: /data/objects
   juicefs:
-    redisURI: redis://juicefs-redis-master.beam:6379/0
+    redisURI: redis://:${juicefs_redis_password}@juicefs-redis-master.beam:6379/0
     awsS3Bucket: ${juicefs_bucket}
     awsAccessKeyID: ${aws_access_key_id}
     awsSecretAccessKey: ${aws_secret_access_key}
@@ -57,7 +57,6 @@ worker:
         nodeSelector: {}
       poolSizing:
         defaultWorkerCpu: 1000m
-        defaultWorkerGpuType: ""
         defaultWorkerMemory: 1Gi
         minFreeCpu: 1000m
         minFreeGpu: 0
