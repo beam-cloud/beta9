@@ -530,9 +530,10 @@ resource "aws_instance" "k3s_master" {
     INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
     REGION=$(curl http://169.254.169.254/latest/meta-data/placement/region)
     PROVIDER_ID="aws:///$REGION/$INSTANCE_ID"
+    INSTALL_K3S_VERSION="v1.28.5+k3s1"
 
     # Install K3s with the Elastic IP in the certificate SAN
-    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--tls-san ${aws_eip.k3s_master_eip.public_ip} --node-external-ip=${aws_eip.k3s_master_eip.public_ip} \
+    curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$INSTALL_K3S_VERSION INSTALL_K3S_EXEC="--tls-san ${aws_eip.k3s_master_eip.public_ip} --node-external-ip=${aws_eip.k3s_master_eip.public_ip} \
     --disable traefik --flannel-backend=wireguard-native --flannel-external-ip --kubelet-arg=provider-id=$PROVIDER_ID" sh -    
 
     # Wait for K3s to start, create the kubeconfig file, and the node token
@@ -644,10 +645,11 @@ resource "aws_instance" "k3s_worker" {
     REGION=$(curl http://169.254.169.254/latest/meta-data/placement/region)
     PROVIDER_ID="aws:///$REGION/$INSTANCE_ID"
 
+    INSTALL_K3S_VERSION="v1.28.5+k3s1"
     KUBELET_ARG="--kubelet-arg=provider-id=$PROVIDER_ID"
     MASTER=https://${aws_eip.k3s_master_eip.public_ip}:6443
     TOKEN=$(aws ssm get-parameter --name "/${var.prefix}/k3s/node-token" --query "Parameter.Value" --output text)
-    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC=$KUBELET_ARG K3S_URL=$MASTER K3S_TOKEN=$TOKEN sh -
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC=$KUBELET_ARG K3S_URL=$MASTER K3S_TOKEN=$TOKEN INSTALL_K3S_VERSION=$INSTALL_K3S_VERSION sh -
     EOF
   )
 
