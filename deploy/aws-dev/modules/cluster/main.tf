@@ -238,31 +238,6 @@ resource "aws_iam_policy" "k3s_instance_policy" {
         Resource = "arn:aws:ssm:*:*:parameter/${var.prefix}/k3s/*"
       },
       {
-        Action = [
-          "ssm:DescribeAssociation",
-          "ssm:GetDeployablePatchSnapshotForInstance",
-          "ssm:GetDocument",
-          "ssm:DescribeDocument",
-          "ssm:GetManifest",
-          "ssm:GetParameter",
-          "ssm:GetParameters",
-          "ssm:ListAssociations",
-          "ssm:ListInstanceAssociations",
-          "ssm:PutInventory",
-          "ssm:PutComplianceItems",
-          "ssm:PutConfigurePackageResult",
-          "ssm:UpdateAssociationStatus",
-          "ssm:UpdateInstanceAssociationStatus",
-          "ssm:UpdateInstanceInformation",
-          "ssmmessages:CreateControlChannel",
-          "ssmmessages:CreateDataChannel",
-          "ssmmessages:OpenControlChannel",
-          "ssmmessages:OpenDataChannel"
-        ],
-        Effect   = "Allow",
-        Resource = "*"
-      },
-      {
         "Effect" : "Allow",
         "Action" : [
           "iam:CreateServiceLinkedRole"
@@ -307,23 +282,10 @@ resource "aws_iam_policy" "k3s_instance_policy" {
       {
         "Effect" : "Allow",
         "Action" : [
-          "cognito-idp:DescribeUserPoolClient",
           "acm:ListCertificates",
           "acm:DescribeCertificate",
           "iam:ListServerCertificates",
           "iam:GetServerCertificate",
-          "waf-regional:GetWebACL",
-          "waf-regional:GetWebACLForResource",
-          "waf-regional:AssociateWebACL",
-          "waf-regional:DisassociateWebACL",
-          "wafv2:GetWebACL",
-          "wafv2:GetWebACLForResource",
-          "wafv2:AssociateWebACL",
-          "wafv2:DisassociateWebACL",
-          "shield:GetSubscriptionState",
-          "shield:DescribeProtection",
-          "shield:CreateProtection",
-          "shield:DeleteProtection"
         ],
         "Resource" : "*"
       },
