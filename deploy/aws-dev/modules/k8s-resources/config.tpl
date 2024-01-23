@@ -1,17 +1,17 @@
 debugMode: false
 database:
   postgres:
-    host: postgres-postgresql.beam
+    host: ${db_host}
     port: 5432
-    username: root
-    password: password
+    username: ${db_user}
+    password: "${db_password}"
     name: main
     timezone: UTC
   redis:
     mode: single
     addrs:
     - redis-master.beam:6379
-    password:
+    password: "${redis_password}"
     enableTLS: false
     dialTimeout: 3s
 storage:
@@ -20,30 +20,30 @@ storage:
   fsPath: /data
   objectPath: /data/objects
   juicefs:
-    redisURI: redis://juicefs-redis-master.beam:6379/0
-    awsS3Bucket: http://localstack.beam:4566/juicefs
-    awsAccessKeyID: test
-    awsSecretAccessKey: test
+    redisURI: redis://:${juicefs_redis_password}@juicefs-redis-master.beam:6379/0
+    awsS3Bucket: ${juicefs_bucket}
+    awsAccessKeyID: ${aws_access_key_id}
+    awsSecretAccessKey: ${aws_secret_access_key}
 gateway:
   host: beam.beam
   port: 1993
 imageService:
   cacheURL:
-  registryStore: local
-  registryCredentialProvider: docker
+  registryStore: s3
+  registryCredentialProvider: aws
   registries:
     docker:
       username: beamcloud
       password:
     s3:
-      bucket: beam-images
-      region: us-east-1
-      accessKeyID: test
-      secretAccessKey: test
+      bucket: ${images_bucket}
+      region: ${aws_region}
+      accessKeyID: ${aws_access_key_id}
+      secretAccessKey: ${aws_secret_access_key}
   runner:
     baseImageTag: latest
     baseImageName: beam-runner
-    baseImageRegistry: registry.localhost:5000
+    baseImageRegistry: public.ecr.aws/k2t1v1n6
     tags:
       python3.8: py38-latest
       python3.9: py39-latest
@@ -52,34 +52,20 @@ imageService:
       python3.12: py312-latest
 worker:
   pools:
-    default:
+    beam-cpu:
       jobSpec:
         nodeSelector: {}
       poolSizing:
         defaultWorkerCpu: 1000m
-        defaultWorkerGpuType: ""
         defaultWorkerMemory: 1Gi
         minFreeCpu: 1000m
         minFreeGpu: 0
         minFreeMemory: 1Gi
-    # example gpu worker pool
-    # nvidia:
-    #   gpuType: A40
-    #   runtime: nvidia
-    #   jobSpec:
-    #     nodeSelector: {}
-    #   poolSizing:
-    #     defaultWorkerCpu: 1000m
-    #     defaultWorkerGpuType: ""
-    #     defaultWorkerMemory: 1Gi
-    #     minFreeCpu:
-    #     minFreeGpu:
-    #     minFreeMemory:
   # global pool attributes
   hostNetwork: false
   imageTag: latest
   imageName: beam-worker
-  imageRegistry: registry.localhost:5000
+  imageRegistry: public.ecr.aws/k2t1v1n6
   imagePullSecrets: []
   namespace: beam
   serviceAccountName: default
@@ -87,11 +73,3 @@ worker:
   resourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
-metrics:
-  kinesis:
-    streamName: beam-realtime-metrics
-    region: us-east-1
-    accessKeyID: test
-    secretAccessKey: test
-    sessionKey: test
-    stackEndpoint: http://localstack.beam:4566

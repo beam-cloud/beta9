@@ -117,10 +117,9 @@ type WorkerConfig struct {
 	Namespace          string                      `key:"namespace"`
 	ServiceAccountName string                      `key:"serviceAccountName"`
 
-	ResourcesEnforced          bool   `key:"resourcesEnforced"`
-	DataVolumeName             string `key:"dataVolumeName"`
-	DefaultWorkerCPURequest    int64  `key:"defaultWorkerCPURequest"`
-	DefaultWorkerMemoryRequest int64  `key:"defaultWorkerMemoryRequest"`
+	ResourcesEnforced          bool  `key:"resourcesEnforced"`
+	DefaultWorkerCPURequest    int64 `key:"defaultWorkerCPURequest"`
+	DefaultWorkerMemoryRequest int64 `key:"defaultWorkerMemoryRequest"`
 }
 
 type WorkerPoolConfig struct {

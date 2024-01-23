@@ -27,10 +27,7 @@ type WorkerPoolController interface {
 	FreeCapacity() (*WorkerPoolCapacity, error)
 }
 
-// TODO: Some of these variables are tied to the worker pool jobs and should really live on the CR
-// Once things are stable we can move those over.
 type WorkerPoolConfig struct {
-	DataVolumeName             string
 	DefaultWorkerCpuRequest    int64
 	DefaultWorkerMemoryRequest int64
 }
