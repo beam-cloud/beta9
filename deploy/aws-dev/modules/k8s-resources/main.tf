@@ -140,33 +140,11 @@ resource "random_password" "juicefs_redis_password" {
   special = false
 }
 
-resource "kubernetes_secret" "juicefs_redis_secret" {
-  metadata {
-    name      = "juicefs-redis-secret"
-    namespace = "beam"
-  }
-
-  data = {
-    "redis-password" = base64encode(random_password.juicefs_redis_password.result)
-  }
-}
-resource "kubernetes_secret" "redis_secret" {
-  metadata {
-    name      = "redis-secret"
-    namespace = "beam"
-  }
-
-  data = {
-    "redis-password" = base64encode(random_password.redis_password.result)
-  }
-}
-
-
 resource "helm_release" "redis" {
   name             = "redis"
   repository       = "https://charts.bitnami.com/bitnami"
   chart            = "redis"
-  version          = "18.6.1"
+  version          = "18.7.1"
   namespace        = "beam"
   create_namespace = true
 
@@ -181,8 +159,8 @@ resource "helm_release" "redis" {
   }
 
   set {
-    name  = "password"
-    value = random_password.redis_password.result
+    name  = "auth.password"
+    value = random_password.juicefs_redis_password.result
   }
 }
 
@@ -191,7 +169,7 @@ resource "helm_release" "juicefs_redis" {
   name             = "juicefs-redis"
   repository       = "https://charts.bitnami.com/bitnami"
   chart            = "redis"
-  version          = "18.6.1"
+  version          = "18.7.1"
   namespace        = "beam"
   create_namespace = true
 
@@ -206,7 +184,7 @@ resource "helm_release" "juicefs_redis" {
   }
 
   set {
-    name  = "password"
+    name  = "auth.password"
     value = random_password.juicefs_redis_password.result
   }
 }
@@ -236,7 +214,7 @@ resource "kubernetes_secret" "app_config" {
   }
 
   depends_on = [
-    kubernetes_secret.redis_secret,
-    kubernetes_secret.juicefs_redis_secret,
+    random_password.juicefs_redis_password,
+    random_password.redis_password,
   ]
 }
