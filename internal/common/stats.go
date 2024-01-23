@@ -18,7 +18,7 @@ func (s *StatsdSender) begin() {
 	s.queue = make(chan string, 100)
 	if s.uri == "" {
 		// TODO: Read from config or env
-		host := "statsd.beam"
+		host := "statsd.beta9"
 		port := 8125
 
 		s.uri = fmt.Sprintf("%s:%v", host, port)

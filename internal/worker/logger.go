@@ -9,7 +9,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/sirupsen/logrus"
 )
 

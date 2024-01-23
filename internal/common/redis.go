@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/bsm/redislock"
 	"github.com/redis/go-redis/v9"
 )

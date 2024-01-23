@@ -3,10 +3,9 @@ import os
 import sys
 
 import click
-
-from beam import terminal
-from beam.cli.contexts import get_gateway_service
-from beam.clients.gateway import GatewayServiceStub
+from beta9 import terminal
+from beta9.cli.contexts import get_gateway_service
+from beta9.clients.gateway import GatewayServiceStub
 
 
 @click.group(

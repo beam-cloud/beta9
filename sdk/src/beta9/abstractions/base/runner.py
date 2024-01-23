@@ -2,11 +2,11 @@ import inspect
 import os
 from typing import Callable, List, Optional, Union
 
-from beam.abstractions.base import BaseAbstraction
-from beam.abstractions.image import Image, ImageBuildResult
-from beam.abstractions.volume import Volume
-from beam.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
-from beam.sync import FileSyncer
+from beta9.abstractions.base import BaseAbstraction
+from beta9.abstractions.image import Image, ImageBuildResult
+from beta9.abstractions.volume import Volume
+from beta9.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
+from beta9.sync import FileSyncer
 
 FUNCTION_STUB_TYPE = "function"
 TASKQUEUE_STUB_TYPE = "taskqueue"

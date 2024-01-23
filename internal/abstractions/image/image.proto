@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = "github.com/beam-cloud/beam/proto";
+option go_package = "github.com/beam-cloud/beta9/proto";
 
 package image;
 
@@ -25,7 +25,7 @@ message VerifyImageBuildResponse {
 }
 
 message BuildImageRequest {
-  // These parameters are used for a "beam" managed image
+  // These parameters are used for a "beta9" managed image
   string python_version = 1;
   repeated string python_packages = 2;
   repeated string commands = 3;

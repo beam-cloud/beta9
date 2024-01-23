@@ -1,6 +1,6 @@
-from beam.abstractions.base import BaseAbstraction
-from beam.clients.gateway import Volume as VolumeConfig
-from beam.clients.volume import VolumeServiceStub
+from beta9.abstractions.base import BaseAbstraction
+from beta9.clients.gateway import Volume as VolumeConfig
+from beta9.clients.volume import VolumeServiceStub
 
 
 class Volume(BaseAbstraction):
@@ -18,7 +18,7 @@ class Volume(BaseAbstraction):
 
         Example:
             ```python
-            from beam import Volume
+            from beta9 import Volume
 
             # Shared Volume
             shared_volume = Volume(name="model_weights", mount_path="./my-weights")

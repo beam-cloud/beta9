@@ -3,8 +3,8 @@ package scheduler
 import (
 	"sync"
 
-	repo "github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/types"
+	repo "github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 // WorkerPool represents a pool of workers with a specific name, configuration,

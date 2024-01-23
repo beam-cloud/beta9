@@ -1,5 +1,5 @@
 locals {
-  name            = "beam-arc"
+  name            = "beam-beta9"
   ssh_key_content = file(var.ssh_key_path)
 }
 
@@ -18,8 +18,8 @@ resource "crusoe_compute_instance" "this" {
   mount -t ext4 /dev/vda /data
 
   # cd /data
-  # git clone https://github.com/beam-cloud/beam.git
-  # cd beam
+  # git clone https://github.com/beam-cloud/beta9.git
+  # cd beta9
   # make setup
   EOF
 

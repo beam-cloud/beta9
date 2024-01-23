@@ -3,22 +3,21 @@ import os
 from typing import Any, Callable, Iterator, List, Optional, Sequence, Union
 
 import cloudpickle
-
-from beam import terminal
-from beam.abstractions.base.runner import (
+from beta9 import terminal
+from beta9.abstractions.base.runner import (
     FUNCTION_DEPLOYMENT_STUB_TYPE,
     FUNCTION_STUB_TYPE,
     RunnerAbstraction,
 )
-from beam.abstractions.image import Image
-from beam.abstractions.volume import Volume
-from beam.clients.function import (
+from beta9.abstractions.image import Image
+from beta9.abstractions.volume import Volume
+from beta9.clients.function import (
     FunctionInvokeResponse,
     FunctionServiceStub,
 )
-from beam.clients.gateway import DeployStubResponse
-from beam.config import GatewayConfig, get_gateway_config
-from beam.sync import FileSyncer
+from beta9.clients.gateway import DeployStubResponse
+from beta9.config import GatewayConfig, get_gateway_config
+from beta9.sync import FileSyncer
 
 
 class Function(RunnerAbstraction):
@@ -38,7 +37,7 @@ class Function(RunnerAbstraction):
             The container image used for the task execution. Default is [Image](#image).
     Example:
         ```python
-        from beam import function, Image
+        from beta9 import function, Image
 
         @function(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
         def transcribe(filename: str):

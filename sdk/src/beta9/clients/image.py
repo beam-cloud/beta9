@@ -26,7 +26,7 @@ class VerifyImageBuildResponse(betterproto.Message):
 
 @dataclass
 class BuildImageRequest(betterproto.Message):
-    # These parameters are used for a "beam" managed image
+    # These parameters are used for a "beta9" managed image
     python_version: str = betterproto.string_field(1)
     python_packages: List[str] = betterproto.string_field(2)
     commands: List[str] = betterproto.string_field(3)

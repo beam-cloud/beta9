@@ -16,5 +16,5 @@ variable "k3s_worker_count" {
 }
 
 variable "k3s_cluster_name" {
-  default = "beamtest-cluster"
+  default = "beta9test-cluster"
 }

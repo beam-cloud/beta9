@@ -1,9 +1,9 @@
 from typing import List, NamedTuple, Optional, Tuple, Union
 
-from beam import terminal
-from beam.abstractions.base import BaseAbstraction
-from beam.clients.image import BuildImageResponse, ImageServiceStub, VerifyImageBuildResponse
-from beam.type import (
+from beta9 import terminal
+from beta9.abstractions.base import BaseAbstraction
+from beta9.clients.image import BuildImageResponse, ImageServiceStub, VerifyImageBuildResponse
+from beta9.type import (
     PythonVersion,
 )
 
