@@ -1,5 +1,5 @@
 dev:
-  beta9:
+  gateway:
     image: registry.localhost:5000/beta9-gateway:latest
     command:
     - /workspace/bin/hotreload.sh

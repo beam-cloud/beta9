@@ -6,7 +6,7 @@ runnerTag := latest
 setup:
 	bash bin/setup.sh
 	make k3d-up runner worker gateway
-	kubectl delete pod -l app=beta9
+	kubectl delete pod -l app=gateway
 
 setup-sdk:
 	poetry install -C sdk
