@@ -2,16 +2,16 @@ import json
 import os
 from typing import Any, Callable, Union
 
-from beam import terminal
-from beam.abstractions.base.runner import (
+from beta9 import terminal
+from beta9.abstractions.base.runner import (
     TASKQUEUE_DEPLOYMENT_STUB_TYPE,
     TASKQUEUE_STUB_TYPE,
     RunnerAbstraction,
 )
-from beam.abstractions.image import Image
-from beam.clients.gateway import DeployStubResponse
-from beam.clients.taskqueue import TaskQueuePutResponse, TaskQueueServiceStub
-from beam.config import GatewayConfig, get_gateway_config
+from beta9.abstractions.image import Image
+from beta9.clients.gateway import DeployStubResponse
+from beta9.clients.taskqueue import TaskQueuePutResponse, TaskQueueServiceStub
+from beta9.config import GatewayConfig, get_gateway_config
 
 
 class TaskQueue(RunnerAbstraction):
@@ -57,7 +57,7 @@ class TaskQueue(RunnerAbstraction):
             Default is 100.
     Example:
         ```python
-        from beam import task_queue, Image
+        from beta9 import task_queue, Image
 
         @task_queue(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
         def transcribe(filename: str):

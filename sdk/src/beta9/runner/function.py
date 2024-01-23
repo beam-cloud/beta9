@@ -3,19 +3,18 @@ import os
 import time
 
 import cloudpickle
-from grpclib.client import Channel
-
-from beam.aio import run_sync
-from beam.clients.function import (
+from beta9.aio import run_sync
+from beta9.clients.function import (
     FunctionGetArgsResponse,
     FunctionServiceStub,
     FunctionSetResultResponse,
 )
-from beam.clients.gateway import EndTaskResponse, GatewayServiceStub, StartTaskResponse
-from beam.config import with_runner_context
-from beam.exceptions import InvalidFunctionArgumentsException, RunnerException
-from beam.runner.common import USER_CODE_VOLUME, config, load_handler
-from beam.type import TaskStatus
+from beta9.clients.gateway import EndTaskResponse, GatewayServiceStub, StartTaskResponse
+from beta9.config import with_runner_context
+from beta9.exceptions import InvalidFunctionArgumentsException, RunnerException
+from beta9.runner.common import USER_CODE_VOLUME, config, load_handler
+from beta9.type import TaskStatus
+from grpclib.client import Channel
 
 
 def _load_args(args: bytes) -> dict:

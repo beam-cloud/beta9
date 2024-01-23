@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/types"
-	pb "github.com/beam-cloud/beam/proto"
+	"github.com/beam-cloud/beta9/internal/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

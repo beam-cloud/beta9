@@ -10,8 +10,8 @@ import (
 	"log"
 	"strings"
 
-	_ "github.com/beam-cloud/beam/internal/repository/backend_postgres_migrations"
-	"github.com/beam-cloud/beam/internal/types"
+	_ "github.com/beam-cloud/beta9/internal/repository/backend_postgres_migrations"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"

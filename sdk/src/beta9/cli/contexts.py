@@ -1,8 +1,8 @@
 from contextlib import contextmanager
 from typing import Iterator
 
-from beam import config
-from beam.clients.gateway import GatewayServiceStub
+from beta9 import config
+from beta9.clients.gateway import GatewayServiceStub
 
 
 @contextmanager

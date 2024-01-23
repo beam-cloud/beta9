@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/beam-cloud/beam/internal/gateway"
+	"github.com/beam-cloud/beta9/internal/gateway"
 )
 
 func main() {
@@ -22,5 +22,5 @@ func main() {
 
 	<-stop
 
-	log.Println("beam stopped")
+	log.Println("gateway stopped")
 }

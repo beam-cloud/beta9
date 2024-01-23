@@ -2,10 +2,9 @@ from unittest import TestCase
 from unittest.mock import MagicMock
 
 import cloudpickle
-
-from beam import Image
-from beam.abstractions.function import Function
-from beam.clients.function import FunctionInvokeResponse
+from beta9 import Image
+from beta9.abstractions.function import Function
+from beta9.clients.function import FunctionInvokeResponse
 
 
 class AsyncIterator:

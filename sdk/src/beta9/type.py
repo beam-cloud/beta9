@@ -27,7 +27,7 @@ class PythonVersion(str, Enum):
 
     Example:
         ```python
-        from beam import Image, PythonVersion
+        from beta9 import Image, PythonVersion
 
         # with an enum
         image = Image(python_version=PythonVersion.Python310)
@@ -50,7 +50,7 @@ class GpuType(str, Enum):
 
     Example:
         ```python
-        from beam import GpuType, function
+        from beta9 import GpuType, function
 
         @function(gpu=GpuType.T4)
         def some_func()

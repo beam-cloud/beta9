@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/tj/assert"
 )
 

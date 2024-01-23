@@ -145,7 +145,7 @@ resource "helm_release" "redis" {
   repository       = "https://charts.bitnami.com/bitnami"
   chart            = "redis"
   version          = "18.7.1"
-  namespace        = "beam"
+  namespace        = "beta9"
   create_namespace = true
 
   set {
@@ -172,7 +172,7 @@ resource "helm_release" "juicefs_redis" {
   repository       = "https://charts.bitnami.com/bitnami"
   chart            = "redis"
   version          = "18.7.1"
-  namespace        = "beam"
+  namespace        = "beta9"
   create_namespace = true
 
   set {

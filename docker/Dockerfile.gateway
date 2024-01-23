@@ -18,7 +18,7 @@ RUN go mod download && go mod verify
 
 COPY . .
 
-RUN go build -o /workspace/bin/beam /workspace/cmd/beam/main.go
+RUN go build -o /workspace/bin/gateway /workspace/cmd/gateway/main.go
 
 
 # Target used in production-like environments
@@ -28,6 +28,6 @@ WORKDIR /workspace
 
 RUN apt autoclean
 
-COPY --from=build /usr/local/bin/beam /usr/local/bin/
+COPY --from=build /usr/local/bin/gateway /usr/local/bin/
 
 CMD ["tail", "-f", "/dev/null"]

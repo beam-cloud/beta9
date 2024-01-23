@@ -5,7 +5,7 @@ import (
 	"log"
 	"os/exec"
 
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 type JuiceFsStorage struct {

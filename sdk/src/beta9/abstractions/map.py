@@ -1,9 +1,8 @@
 from typing import Any
 
 import cloudpickle
-
-from beam.abstractions.base import BaseAbstraction
-from beam.clients.map import (
+from beta9.abstractions.base import BaseAbstraction
+from beta9.clients.map import (
     MapCountResponse,
     MapDeleteResponse,
     MapGetResponse,
@@ -32,7 +31,7 @@ class Map(BaseAbstraction):
 
         Example:
         ```python
-        from beam import Map
+        from beta9 import Map
 
         # Name the map
         m = Map(name="test")

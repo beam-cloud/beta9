@@ -6,15 +6,15 @@ import uuid
 import zipfile
 from typing import Generator, NamedTuple, Union
 
-from beam import terminal
-from beam.clients.gateway import (
+from beta9 import terminal
+from beta9.clients.gateway import (
     GatewayServiceStub,
     HeadObjectResponse,
     ObjectMetadata,
     PutObjectResponse,
 )
 
-IGNORE_FILE_NAME = ".beamignore"
+IGNORE_FILE_NAME = ".beta9ignore"
 
 
 class FileSyncResult(NamedTuple):

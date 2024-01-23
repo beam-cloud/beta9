@@ -4,10 +4,15 @@ import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
-from beam import aio, terminal
-from beam.cli.contexts import get_gateway_service
-from beam.cli.formatters import EpilogFormatter
-from beam.clients.gateway import GatewayServiceStub, ListTasksResponse, StopTaskResponse, StringList
+from beta9 import aio, terminal
+from beta9.cli.contexts import get_gateway_service
+from beta9.cli.formatters import EpilogFormatter
+from beta9.clients.gateway import (
+    GatewayServiceStub,
+    ListTasksResponse,
+    StopTaskResponse,
+    StringList,
+)
 
 
 @click.group(
@@ -47,13 +52,13 @@ def parse_filter_values(
     cls=EpilogFormatter,
     epilog="""
     # List the first 10 tasks
-    beam tasks list --limit 10
+    beta9 tasks list --limit 10
 
     # List tasks with status 'running' or 'pending' and stub-id 'function/test:handler'
-    beam tasks list --filter status=running,pending --filter stub-id=function/test:handler
+    beta9 tasks list --filter status=running,pending --filter stub-id=function/test:handler
 
     # List tasks and output in JSON format
-    beam tasks list --format json
+    beta9 tasks list --format json
     """,
 )
 @click.option(

@@ -1,15 +1,15 @@
 dev:
-  beam:
-    image: registry.localhost:5000/beam:latest
+  beta9:
+    image: registry.localhost:5000/beta9-gateway:latest
     command:
     - /workspace/bin/hotreload.sh
     sync:
     - ../:/workspace
     environment:
       BUILD_COMMAND: |
-        go build -o /workspace/bin/beam /workspace/cmd/beam/main.go
+        go build -o /workspace/bin/gateway /workspace/cmd/gateway/main.go
         go build -o /workspace/bin/worker /workspace/cmd/worker/main.go
-      BUILD_BINARY_PATH: /workspace/bin/beam
+      BUILD_BINARY_PATH: /workspace/bin/gateway
     forward:
     - 1993:1993
     - 1994:1994

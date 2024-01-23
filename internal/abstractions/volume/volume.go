@@ -3,9 +3,9 @@ package volume
 import (
 	"context"
 
-	"github.com/beam-cloud/beam/internal/auth"
-	"github.com/beam-cloud/beam/internal/repository"
-	pb "github.com/beam-cloud/beam/proto"
+	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/internal/repository"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 type VolumeService interface {
