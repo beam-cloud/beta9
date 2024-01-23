@@ -27,7 +27,7 @@
 
 Beta9 is an open-source platform for running remote containers directly from Python. It supports GPU/CUDA acceleration, allows you to scale out arbitrary Python code to hundreds of machines, easily deploy functions and task queues, and distribute workloads across various cloud providers (including bare metal providers).
 
-We use this platform internally at [Beam](https://beam.cloud) to run AI applications for users at scale. 
+We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale. 
 
 ## Features
 
@@ -41,7 +41,7 @@ We use this platform internally at [Beam](https://beam.cloud) to run AI applicat
 Beta9 is designed for launching remote serverless containers very quickly. There are a few things that make this possible:
 
 - A custom, lazy loading image format (CLIP) backed by S3/FUSE
-- A fast, redis-based scheduling engine
+- A fast, redis-based container scheduling engine
 - Content-addressed storage for caching images and files
 - A custom runc container runtime
 
@@ -51,7 +51,7 @@ Beta9 is designed for launching remote serverless containers very quickly. There
 
 ## Community & Support
 
-Beta9 is powered by the community. If you need support, you can join any of these channels:
+If you need support, you can reach out through any of these channels:
 
 - [Slack](https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g) \(Chat live with our engineering team\)
 - [GitHub issues](https://github.com/beam-cloud/beta9/issues) \(Bug reports, feature requests, and anything roadmap related)
