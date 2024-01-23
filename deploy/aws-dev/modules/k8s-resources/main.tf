@@ -160,7 +160,7 @@ resource "helm_release" "redis" {
 
   set {
     name  = "auth.password"
-    value = random_password.juicefs_redis_password.result
+    value = random_password.redis_password.result
   }
 }
 
@@ -196,7 +196,7 @@ locals {
     db_password            = var.db_config.password.value
     redis_password         = random_password.redis_password.result
     juicefs_redis_password = random_password.juicefs_redis_password.result
-    juicefs_bucket         = var.s3_buckets.juicefs_bucket_name
+    juicefs_bucket         = "https://${var.s3_buckets.juicefs_bucket_name}.s3.amazonaws.com"
     aws_access_key_id      = var.bucket_user_credentials.access_key
     aws_secret_access_key  = var.bucket_user_credentials.secret_key
     images_bucket          = var.s3_buckets.image_bucket_name
