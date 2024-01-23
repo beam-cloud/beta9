@@ -641,11 +641,10 @@ resource "aws_instance" "k3s_worker" {
     apt update && apt install -y wireguard awscli
     aws configure set region ${data.aws_region.this.name}
 
+    INSTALL_K3S_VERSION="v1.28.5+k3s1"
     INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
     REGION=$(curl http://169.254.169.254/latest/meta-data/placement/region)
     PROVIDER_ID="aws:///$REGION/$INSTANCE_ID"
-
-    INSTALL_K3S_VERSION="v1.28.5+k3s1"
     KUBELET_ARG="--kubelet-arg=provider-id=$PROVIDER_ID"
     MASTER=https://${aws_eip.k3s_master_eip.public_ip}:6443
     TOKEN=$(aws ssm get-parameter --name "/${var.prefix}/k3s/node-token" --query "Parameter.Value" --output text)
@@ -746,28 +745,42 @@ resource "aws_iam_user" "bucket_user" {
   name = "${var.prefix}-bucket-user"
 }
 
-resource "aws_iam_policy" "bucket_full_access" {
-  name        = "${var.prefix}-bucket-full-access"
-  description = "A policy that grants full access to the specified S3 buckets"
+resource "aws_iam_policy" "bucket_access_for_juicefs_and_images" {
+  name        = "${var.prefix}-juicefs-images-bucket-access"
+  description = "Policy for JuiceFS and images buckets"
 
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
       {
         Action = [
-          "s3:*"
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:ListBucketMultipartUploads"
         ],
         Effect = "Allow",
         Resource = [
-          aws_s3_bucket.image_bucket.arn,
-          "${aws_s3_bucket.image_bucket.arn}/*",
           aws_s3_bucket.juicefs_bucket.arn,
-          "${aws_s3_bucket.juicefs_bucket.arn}/*"
+          aws_s3_bucket.image_bucket.arn
+        ]
+      },
+      {
+        Action = [
+          "s3:GetObject",
+          "s3:HeadObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+        ],
+        Effect = "Allow",
+        Resource = [
+          "${aws_s3_bucket.juicefs_bucket.arn}/*",
+          "${aws_s3_bucket.image_bucket.arn}/*"
         ]
       }
     ]
   })
 }
+
 
 resource "aws_iam_user_policy_attachment" "bucket_access_attachment" {
   user       = aws_iam_user.bucket_user.name
