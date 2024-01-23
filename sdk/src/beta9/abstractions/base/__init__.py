@@ -3,9 +3,8 @@ from abc import ABC
 from asyncio import AbstractEventLoop
 from typing import Any, Coroutine
 
+from beta9.config import get_gateway_channel
 from grpclib.client import Channel
-
-from beam.config import get_gateway_channel
 
 
 class BaseAbstraction(ABC):

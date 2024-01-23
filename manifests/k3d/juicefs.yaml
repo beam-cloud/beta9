@@ -2,7 +2,7 @@ apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:
   name: juicefs-redis
-  namespace: beam
+  namespace: beta9
 spec:
   repo: https://charts.bitnami.com/bitnami
   chart: redis

@@ -8,7 +8,7 @@ const (
 	DefaultExtractedObjectPath string        = "/data/unpacked"
 	DefaultVolumesPath         string        = "/data/volumes"
 	DefaultObjectPath          string        = "/data/objects"
-	DefaultFilesystemName      string        = "beam-fs"
+	DefaultFilesystemName      string        = "beta9-fs"
 	DefaultFilesystemPath      string        = "/data"
 	FailedContainerThreshold   int           = 3
 	RequestTimeoutDurationS    time.Duration = 175 * time.Second

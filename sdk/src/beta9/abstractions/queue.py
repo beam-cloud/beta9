@@ -1,9 +1,8 @@
 from typing import Any
 
 import cloudpickle
-
-from beam.abstractions.base import BaseAbstraction
-from beam.clients.simplequeue import (
+from beta9.abstractions.base import BaseAbstraction
+from beta9.clients.simplequeue import (
     SimpleQueueEmptyResponse,
     SimpleQueuePeekResponse,
     SimpleQueuePopResponse,
@@ -35,7 +34,7 @@ class SimpleQueue(BaseAbstraction):
 
         Example:
         ```python
-        from beam import Queue
+        from beta9 import Queue
 
         val = [1, 2, 3]
 
@@ -43,10 +42,10 @@ class SimpleQueue(BaseAbstraction):
         q = Queue(name="myqueue")
 
         for i in range(100):
-            # Insert something to the queue 
+            # Insert something to the queue
             q.put(val)
         while not q.empty():
-            # Remove something from the queue 
+            # Remove something from the queue
             val = q.pop()
             print(val)
         ```

@@ -1,7 +1,7 @@
 import click
 
-from beam import terminal
-from beam.config import (
+from beta9 import terminal
+from beta9.config import (
     configure_gateway_credentials,
     load_config_from_file,
     save_config_to_file,
@@ -29,4 +29,4 @@ def configure(name: str, token: str, gateway_host: str, gateway_port: str):
         name=name,
     )
 
-    terminal.success("Successfully configured Beam!")
+    terminal.success("Successfully configured Beta9!")

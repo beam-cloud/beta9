@@ -10,22 +10,22 @@ database:
   redis:
     mode: single
     addrs:
-    - redis-master.beam:6379
+    - redis-master.beta9:6379
     password: "${redis_password}"
     enableTLS: false
     dialTimeout: 3s
 storage:
   mode: juicefs
-  fsName: beam-fs
+  fsName: beta9-fs
   fsPath: /data
   objectPath: /data/objects
   juicefs:
-    redisURI: redis://:${juicefs_redis_password}@juicefs-redis-master.beam:6379/0
+    redisURI: redis://:${juicefs_redis_password}@juicefs-redis-master.beta9:6379/0
     awsS3Bucket: ${juicefs_bucket}
     awsAccessKeyID: ${aws_access_key_id}
     awsSecretAccessKey: ${aws_secret_access_key}
 gateway:
-  host: beam.beam
+  host: gateway.beta9
   port: 1993
 imageService:
   cacheURL:
@@ -42,7 +42,7 @@ imageService:
       secretAccessKey: ${aws_secret_access_key}
   runner:
     baseImageTag: latest
-    baseImageName: beam-runner
+    baseImageName: beta9-runner
     baseImageRegistry: public.ecr.aws/k2t1v1n6
     tags:
       python3.8: py38-latest
@@ -52,7 +52,7 @@ imageService:
       python3.12: py312-latest
 worker:
   pools:
-    beam-cpu:
+    default:
       jobSpec:
         nodeSelector: {}
       poolSizing:
@@ -64,10 +64,10 @@ worker:
   # global pool attributes
   hostNetwork: false
   imageTag: latest
-  imageName: beam-worker
+  imageName: beta9-worker
   imageRegistry: public.ecr.aws/k2t1v1n6
   imagePullSecrets: []
-  namespace: beam
+  namespace: beta9
   serviceAccountName: default
   # non-standard k8s job spec
   resourcesEnforced: false

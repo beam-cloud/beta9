@@ -14,20 +14,19 @@ from typing import Any, List, NamedTuple, Union
 import cloudpickle
 import grpc
 import grpclib
-from grpclib.client import Channel
-from grpclib.exceptions import StreamTerminatedError
-
-from beam.aio import run_sync
-from beam.clients.taskqueue import (
+from beta9.aio import run_sync
+from beta9.clients.taskqueue import (
     TaskQueueCompleteResponse,
     TaskQueueMonitorResponse,
     TaskQueuePopResponse,
     TaskQueueServiceStub,
 )
-from beam.config import with_runner_context
-from beam.exceptions import RunnerException
-from beam.runner.common import config, load_handler
-from beam.type import TaskExitCode, TaskStatus
+from beta9.config import with_runner_context
+from beta9.exceptions import RunnerException
+from beta9.runner.common import config, load_handler
+from beta9.type import TaskExitCode, TaskStatus
+from grpclib.client import Channel
+from grpclib.exceptions import StreamTerminatedError
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.01

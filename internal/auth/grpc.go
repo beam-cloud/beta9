@@ -4,9 +4,9 @@ import (
 	"context"
 	"strings"
 
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/types"
 
-	"github.com/beam-cloud/beam/internal/repository"
+	"github.com/beam-cloud/beta9/internal/repository"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"

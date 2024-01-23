@@ -1,18 +1,18 @@
 package scheduler
 
 import (
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 const (
-	BeamWorkerLabelKey      string = "run.beam.cloud/role"
-	BeamWorkerLabelValue    string = "worker"
-	BeamWorkerJobPrefix     string = "worker"
-	tmpVolumeName           string = "beam-tmp"
-	logVolumeName           string = "beam-logs"
-	imagesVolumeName        string = "beam-images"
-	configVolumeName        string = "beam-config"
-	configSecretName        string = "beam"
+	Beta9WorkerLabelKey     string = "run.beam.cloud/role"
+	Beta9WorkerLabelValue   string = "worker"
+	Beta9WorkerJobPrefix    string = "worker"
+	tmpVolumeName           string = "beta9-tmp"
+	logVolumeName           string = "beta9-logs"
+	imagesVolumeName        string = "beta9-images"
+	configVolumeName        string = "beta9-config"
+	configSecretName        string = "beta9"
 	configMountPath         string = "/etc/config"
 	defaultClusterDomain    string = "cluster.local"
 	defaultContainerName    string = "worker"

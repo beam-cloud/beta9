@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 func ParseCPU(cpu interface{}) (int64, error) {

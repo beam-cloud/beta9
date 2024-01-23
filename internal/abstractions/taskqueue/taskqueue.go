@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/auth"
-	common "github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/scheduler"
-	"github.com/beam-cloud/beam/internal/types"
-	pb "github.com/beam-cloud/beam/proto"
+	"github.com/beam-cloud/beta9/internal/auth"
+	common "github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/scheduler"
+	"github.com/beam-cloud/beta9/internal/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
 )
 

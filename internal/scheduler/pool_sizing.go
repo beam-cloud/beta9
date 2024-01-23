@@ -4,7 +4,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 const poolMonitoringInterval = 1 * time.Second

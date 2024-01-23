@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = "github.com/beam-cloud/beam/proto";
+option go_package = "github.com/beam-cloud/beta9/proto";
 
 package map;
 

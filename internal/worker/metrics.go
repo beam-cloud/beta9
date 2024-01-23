@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	repo "github.com/beam-cloud/beam/internal/repository"
-	types "github.com/beam-cloud/beam/internal/types"
+	repo "github.com/beam-cloud/beta9/internal/repository"
+	types "github.com/beam-cloud/beta9/internal/types"
 	"github.com/okteto/okteto/pkg/log"
 )
 

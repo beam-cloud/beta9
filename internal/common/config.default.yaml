@@ -1,7 +1,7 @@
 debugMode: false
 database:
   postgres:
-    host: postgres-postgresql.beam
+    host: postgres-postgresql.beta9
     port: 5432
     username: root
     password: password
@@ -10,22 +10,22 @@ database:
   redis:
     mode: single
     addrs:
-    - redis-master.beam:6379
+    - redis-master.beta9:6379
     password:
     enableTLS: false
     dialTimeout: 3s
 storage:
   mode: juicefs
-  fsName: beam-fs
+  fsName: beta9-fs
   fsPath: /data
   objectPath: /data/objects
   juicefs:
-    redisURI: redis://juicefs-redis-master.beam:6379/0
-    awsS3Bucket: http://localstack.beam:4566/juicefs
+    redisURI: redis://juicefs-redis-master.beta9:6379/0
+    awsS3Bucket: http://localstack.beta9:4566/juicefs
     awsAccessKeyID: test
     awsSecretAccessKey: test
 gateway:
-  host: beam.beam
+  host: gateway.beta9
   port: 1993
 imageService:
   cacheURL:
@@ -36,13 +36,13 @@ imageService:
       username: beamcloud
       password:
     s3:
-      bucket: beam-images
+      bucket: beta9-images
       region: us-east-1
       accessKeyID: test
       secretAccessKey: test
   runner:
     baseImageTag: latest
-    baseImageName: beam-runner
+    baseImageName: beta9-runner
     baseImageRegistry: registry.localhost:5000
     tags:
       python3.8: py38-latest
@@ -78,10 +78,10 @@ worker:
   # global pool attributes
   hostNetwork: false
   imageTag: latest
-  imageName: beam-worker
+  imageName: beta9-worker
   imageRegistry: registry.localhost:5000
   imagePullSecrets: []
-  namespace: beam
+  namespace: beta9
   serviceAccountName: default
   # non-standard k8s job spec
   resourcesEnforced: false
@@ -89,9 +89,9 @@ worker:
   defaultWorkerMemoryRequest: 1024
 metrics:
   kinesis:
-    streamName: beam-realtime-metrics
+    streamName: beta9-realtime-metrics
     region: us-east-1
     accessKeyID: test
     secretAccessKey: test
     sessionKey: test
-    stackEndpoint: http://localstack.beam:4566
+    stackEndpoint: http://localstack.beta9:4566
