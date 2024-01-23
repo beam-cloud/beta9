@@ -4,9 +4,9 @@ import (
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/beam-cloud/beam/internal/common"
-	repo "github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/common"
+	repo "github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/stretchr/testify/assert"
 )
 

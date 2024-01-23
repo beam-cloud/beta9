@@ -1,3 +1,3 @@
-# beam-sdk
+# beta9 sdk
 
-Python SDK for Beam. Includes configuration serialization and helper functions.
+Python SDK for Beta9.
