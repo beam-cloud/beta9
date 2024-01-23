@@ -5,7 +5,7 @@ resource "aws_vpc" "main" {
   enable_dns_hostnames = true
 
   tags = {
-    Name = "${var.prefix}-vpc"
+    Name = "${var.prefix}"
   }
 }
 
@@ -14,7 +14,7 @@ resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
 
   tags = {
-    Name = "${var.prefix}-igw"
+    Name = "${var.prefix}"
   }
 }
 
@@ -74,7 +74,7 @@ resource "aws_eip" "nat" {
   domain = "vpc"
 
   tags = {
-    Name = "${var.prefix}-nat"
+    Name = "${var.prefix}"
   }
 }
 
@@ -84,7 +84,7 @@ resource "aws_nat_gateway" "nat" {
   subnet_id     = aws_subnet.public-us-east-1a.id
 
   tags = {
-    Name = "${var.prefix}-nat"
+    Name = "${var.prefix}"
   }
 
   depends_on = [aws_internet_gateway.igw]
@@ -138,7 +138,7 @@ resource "aws_route_table_association" "public-us-east-1b" {
 }
 
 resource "aws_security_group" "k3s_cluster" {
-  name        = "${var.prefix}-k3s-sg"
+  name        = "${var.prefix}-k3s"
   description = "Security group for K3s cluster"
   vpc_id      = aws_vpc.main.id
 
@@ -682,16 +682,16 @@ data "aws_ssm_parameter" "client_key" {
 
 # Postgres (RDS)
 resource "aws_db_subnet_group" "default" {
-  name       = "${var.prefix}-rds-subnet-group"
+  name       = var.prefix
   subnet_ids = [aws_subnet.private-us-east-1a.id, aws_subnet.private-us-east-1b.id]
 
   tags = {
-    Name = "${var.prefix}-rds-subnet-group"
+    Name = "${var.prefix}"
   }
 }
 
 resource "aws_security_group" "rds_sg" {
-  name        = "${var.prefix}-rds-sg"
+  name        = var.prefix
   description = "Security group for RDS PostgreSQL instance"
   vpc_id      = aws_vpc.main.id
 
@@ -716,7 +716,7 @@ resource "aws_security_group" "rds_sg" {
 
 
 resource "aws_db_instance" "postgres_db" {
-  identifier                  = "${var.prefix}-postgres"
+  identifier                  = var.prefix
   engine                      = "postgres"
   engine_version              = "13.8"
   instance_class              = "db.t4g.medium"
