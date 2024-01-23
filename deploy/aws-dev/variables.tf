@@ -16,8 +16,6 @@ variable "domain_hosted_zone_id" {
   description = "Hosted zone ID in AWS Route 53"
 }
 
-
-
 variable "aws_region" {
   type        = string
   default     = "us-east-1"
