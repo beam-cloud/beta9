@@ -682,7 +682,7 @@ data "aws_ssm_parameter" "client_key" {
 
 # Postgres (RDS)
 resource "aws_db_subnet_group" "default" {
-  name       = "main"
+  name       = "${var.prefix}-rds-subnet-group"
   subnet_ids = [aws_subnet.private-us-east-1a.id, aws_subnet.private-us-east-1b.id]
 
   tags = {
@@ -690,11 +690,35 @@ resource "aws_db_subnet_group" "default" {
   }
 }
 
+resource "aws_security_group" "rds_sg" {
+  name        = "${var.prefix}-rds-sg"
+  description = "Security group for RDS PostgreSQL instance"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.prefix}-rds-sg"
+  }
+}
+
+
 resource "aws_db_instance" "postgres_db" {
   identifier                  = "${var.prefix}-postgres"
   engine                      = "postgres"
   engine_version              = "13.8"
-  db_subnet_group_name        = aws_db_subnet_group.default.name
   instance_class              = "db.t4g.medium"
   allocated_storage           = 20
   storage_type                = "gp2"
@@ -702,6 +726,8 @@ resource "aws_db_instance" "postgres_db" {
   manage_master_user_password = true
   db_name                     = "main"
   skip_final_snapshot         = true
+  db_subnet_group_name        = aws_db_subnet_group.default.name
+  vpc_security_group_ids      = [aws_security_group.rds_sg.id]
 
   depends_on = [aws_db_subnet_group.default]
 }
