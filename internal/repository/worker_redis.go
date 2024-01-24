@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -354,4 +355,12 @@ func (r *WorkerRedisRepository) SetContainerResourceValues(workerId string, cont
 	}
 
 	return nil
+}
+
+func (r *WorkerRedisRepository) SetImagePullLock(workerId, imageId string) error {
+	return r.rdb.Set(context.TODO(), common.RedisKeys.WorkerImageLock(workerId, imageId), true, 5*time.Minute).Err()
+}
+
+func (r *WorkerRedisRepository) RemoveImagePullLock(workerId, imageId string) error {
+	return r.rdb.Del(context.TODO(), common.RedisKeys.WorkerImageLock(workerId, imageId)).Err()
 }
