@@ -55,8 +55,10 @@ type PostgresConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host string `key:"host"`
-	Port int    `key:"port"`
+	Host           string `key:"host"`
+	Port           int    `key:"port"`
+	MaxRecvMsgSize int    `key:"max_recv_msg_size_in_mb"`
+	MaxSendMsgSize int    `key:"max_send_msg_size_in_mb"`
 }
 
 type ImageServiceConfig struct {

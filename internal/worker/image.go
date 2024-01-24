@@ -143,7 +143,7 @@ func (c *ImageClient) PullLazy(imageId string) error {
 }
 
 func (i *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds *string) error {
-	baseImage, err := i.extractImageNameAndTag(sourceImage)
+	baseImage, err := extractImageNameAndTag(sourceImage)
 	if err != nil {
 		return err
 	}
@@ -165,13 +165,13 @@ func (i *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 
 	status, err := runc.Monitor.Wait(cmd, ec)
 	if err == nil && status != 0 {
-		err = fmt.Errorf("unable to pull base image: %s", sourceImage)
+		log.Printf("unable to copy base image: %v -> %v", sourceImage, dest)
 	}
 
 	bundlePath := filepath.Join(imagePath, imageId)
 	err = i.unpack(baseImage.ImageName, baseImage.ImageTag, bundlePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to unpack image: %v", err)
 	}
 
 	defer func() {
@@ -186,34 +186,6 @@ func (i *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
 		return runc.Monitor.StartLocked(cmd)
 	}
 	return runc.Monitor.Start(cmd)
-}
-
-func (i *ImageClient) extractImageNameAndTag(sourceImage string) (image.BaseImage, error) {
-	re := regexp.MustCompile(`^(([^/]+/[^/]+)/)?([^:]+):?(.*)$`)
-	matches := re.FindStringSubmatch(sourceImage)
-
-	if matches == nil {
-		return image.BaseImage{}, errors.New("invalid image URI format")
-	}
-
-	// Use default source registry if not specified
-	sourceRegistry := "docker.io"
-	if matches[2] != "" {
-		sourceRegistry = matches[2]
-	}
-
-	imageName := matches[3]
-	imageTag := "latest"
-
-	if matches[4] != "" {
-		imageTag = matches[4]
-	}
-
-	return image.BaseImage{
-		SourceRegistry: sourceRegistry,
-		ImageName:      imageName,
-		ImageTag:       imageTag,
-	}, nil
 }
 
 func (i *ImageClient) args(creds *string) (out []string) {
@@ -322,4 +294,29 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 
 	log.Printf("Image <%v> push took %v\n", imageId, time.Since(startTime))
 	return nil
+}
+
+var imageNamePattern = regexp.MustCompile(`^(?:(.*?)\/)?(?:([^\/:]+)\/)?([^\/:]+)(?::([^\/:]+))?$`)
+
+func extractImageNameAndTag(sourceImage string) (image.BaseImage, error) {
+	matches := imageNamePattern.FindStringSubmatch(sourceImage)
+	if matches == nil {
+		return image.BaseImage{}, errors.New("invalid image URI format")
+	}
+
+	registry, name, tag := matches[1], matches[3], matches[4]
+
+	if registry == "" {
+		registry = "docker.io"
+	}
+
+	if tag == "" {
+		tag = "latest"
+	}
+
+	return image.BaseImage{
+		SourceRegistry: registry,
+		ImageName:      name,
+		ImageTag:       tag,
+	}, nil
 }
