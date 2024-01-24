@@ -27,6 +27,8 @@ storage:
 gateway:
   host: gateway.beta9
   port: 1993
+  max_recv_msg_size_in_mb: 1024
+  max_send_msg_size_in_mb: 1024
 imageService:
   cacheURL:
   registryStore: local

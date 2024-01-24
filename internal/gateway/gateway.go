@@ -117,6 +117,8 @@ func (g *Gateway) initGrpc() error {
 	serverOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(authInterceptor.Unary()),
 		grpc.StreamInterceptor(authInterceptor.Stream()),
+		grpc.MaxRecvMsgSize(g.config.GatewayService.MaxRecvMsgSize * 1024 * 1024),
+		grpc.MaxSendMsgSize(g.config.GatewayService.MaxSendMsgSize * 1024 * 1024),
 	}
 
 	g.grpcServer = grpc.NewServer(
