@@ -96,9 +96,9 @@ func (cm *ConfigManager[T]) LoadConfig(format ConfigFormat, provider koanf.Provi
 }
 
 var (
-	JSONConfigFormat ConfigFormat = "json"
-	YAMLConfigFormat ConfigFormat = "yaml"
-	YMLConfigFormat  ConfigFormat = "yml"
+	JSONConfigFormat ConfigFormat = ".json"
+	YAMLConfigFormat ConfigFormat = ".yaml"
+	YMLConfigFormat  ConfigFormat = ".yml"
 
 	parserMap map[ConfigFormat]ParserFunc = map[ConfigFormat]ParserFunc{
 		JSONConfigFormat: jsonParserFunc,

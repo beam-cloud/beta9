@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	pb "github.com/beam-cloud/beam/proto"
+	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"

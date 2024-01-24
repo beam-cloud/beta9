@@ -1,5 +1,5 @@
 <p align="center">
-<img alt="Logo" src="https://github.com/beam-cloud/beam/assets/10925686/860052a1-2a96-4bad-a991-dd2b24e3b524"/ width="40%">
+<img alt="Logo" src="https://github.com/beam-cloud/beta9/assets/10925686/860052a1-2a96-4bad-a991-dd2b24e3b524"/ width="40%">
 </p>
 
 <p align="center">
@@ -12,8 +12,8 @@
     <a href="https://twitter.com/beam_cloud">
     <img alt="Twitter" src="https://img.shields.io/twitter/follow/beam_cloud.svg?style=social&logo=twitter">
   </a>
-  <a href="https://github.com/beam-cloud/beam/actions">
-    <img alt="Tests Passing" src="https://github.com/beam-cloud/beam/actions/workflows/ci.yml/badge.svg?branch=master">
+  <a href="https://github.com/beam-cloud/beta9/actions">
+    <img alt="Tests Passing" src="https://github.com/beam-cloud/beta9/actions/workflows/ci.yml/badge.svg?branch=master">
   </a>
   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-ff69b4"/>
 </p>
@@ -25,7 +25,9 @@
 
 ---
 
-Beam is an open-source platform for running remote containers directly from Python. It supports GPU/CUDA acceleration, allows you to scale out arbitrary Python code to hundreds of machines, easily deploy functions and task queues, and distribute workloads across various cloud providers (including bare metal providers).
+Beta9 is an open-source platform for running remote containers directly from Python. It supports GPU/CUDA acceleration, allows you to scale out arbitrary Python code to hundreds of machines, easily deploy functions and task queues, and distribute workloads across various cloud providers (including bare metal providers).
+
+We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale. 
 
 ## Features
 
@@ -36,10 +38,10 @@ Beam is an open-source platform for running remote containers directly from Pyth
 
 ## How it works
 
-Beam is designed for launching remote serverless containers very quickly. There are a few things that make this possible:
+Beta9 is designed for launching remote serverless containers very quickly. There are a few things that make this possible:
 
 - A custom, lazy loading image format (CLIP) backed by S3/FUSE
-- A fast, redis-based scheduling engine
+- A fast, redis-based container scheduling engine
 - Content-addressed storage for caching images and files
 - A custom runc container runtime
 
@@ -49,8 +51,8 @@ Beam is designed for launching remote serverless containers very quickly. There 
 
 ## Community & Support
 
-Beam is powered by the community. If you need support, you can join any of these channels:
+If you need support, you can reach out through any of these channels:
 
 - [Slack](https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g) \(Chat live with our engineering team\)
-- [GitHub issues](https://github.com/slai-labs/beam/issues) \(Bug reports, feature requests, and anything roadmap related)
+- [GitHub issues](https://github.com/beam-cloud/beta9/issues) \(Bug reports, feature requests, and anything roadmap related)
 - [Twitter](https://twitter.com/beam_cloud) \(Updates on releases)

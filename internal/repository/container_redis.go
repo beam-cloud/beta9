@@ -7,8 +7,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/types"
 	redis "github.com/redis/go-redis/v9"
 )
 

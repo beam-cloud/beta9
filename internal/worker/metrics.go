@@ -5,17 +5,16 @@ import (
 	"log"
 	"time"
 
-	repo "github.com/beam-cloud/beam/internal/repository"
-	types "github.com/beam-cloud/beam/internal/types"
+	repo "github.com/beam-cloud/beta9/internal/repository"
+	types "github.com/beam-cloud/beta9/internal/types"
 )
 
 type WorkerMetrics struct {
-	ctx               context.Context
 	workerId          string
 	metricsRepo       repo.MetricsRepository
 	workerRepo        repo.WorkerRepository
 	metricsStreamRepo repo.MetricsStreamRepository
-	nvmlActive        bool
+	ctx               context.Context
 }
 
 func NewWorkerMetrics(
@@ -25,19 +24,15 @@ func NewWorkerMetrics(
 	workerRepo repo.WorkerRepository,
 	metricsStreamRepo repo.MetricsStreamRepository,
 ) *WorkerMetrics {
-	return &WorkerMetrics{
+	workerMetrics := &WorkerMetrics{
 		ctx:               ctx,
 		workerId:          workerId,
 		metricsRepo:       metricsRepo,
 		workerRepo:        workerRepo,
 		metricsStreamRepo: metricsStreamRepo,
-		nvmlActive:        false,
 	}
-}
-
-func (wm *WorkerMetrics) Init() {
-	wm.InitNvml()
-	go wm.metricsRepo.Init()
+	go workerMetrics.metricsRepo.Init()
+	return workerMetrics
 }
 
 // func (wm *WorkerMetrics) WorkerStarted() {
@@ -109,7 +104,7 @@ func (wm *WorkerMetrics) EmitResourceUsage(request *types.ContainerRequest, pidC
 			var gpuMemUsed int64 = -1
 			var gpuMemTotal int64 = -1
 
-			if gpuEnabled && wm.nvmlActive {
+			if gpuEnabled {
 				stats, err := GetGpuMemoryUsage(0) // TODO: Support multiple GPUs
 				if err == nil {
 					gpuMemUsed = stats.UsedCapacity

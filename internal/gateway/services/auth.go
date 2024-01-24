@@ -3,8 +3,8 @@ package gatewayservices
 import (
 	"context"
 
-	"github.com/beam-cloud/beam/internal/auth"
-	pb "github.com/beam-cloud/beam/proto"
+	"github.com/beam-cloud/beta9/internal/auth"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeRequest) (*pb.AuthorizeResponse, error) {

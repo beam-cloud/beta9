@@ -2,9 +2,8 @@ from unittest import TestCase
 from unittest.mock import MagicMock
 
 import cloudpickle
-
-from beam.abstractions.queue import SimpleQueue, SimpleQueueInternalServerError
-from beam.clients.simplequeue import (
+from beta9.abstractions.queue import SimpleQueue, SimpleQueueInternalServerError
+from beta9.clients.simplequeue import (
     SimpleQueueEmptyResponse,
     SimpleQueuePeekResponse,
     SimpleQueuePopResponse,

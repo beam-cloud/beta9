@@ -201,7 +201,7 @@
 			]
 		},
 		{
-			"destination": "/usr/local/lib/python3.8/dist-packages/beam",
+			"destination": "/usr/local/lib/python3.8/dist-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": [
@@ -214,7 +214,7 @@
 			]
 		},
 		{
-			"destination": "/usr/local/lib/python3.9/dist-packages/beam",
+			"destination": "/usr/local/lib/python3.9/dist-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": [
@@ -227,7 +227,7 @@
 			]
 		},
 		{
-			"destination": "/usr/local/lib/python3.10/dist-packages/beam",
+			"destination": "/usr/local/lib/python3.10/dist-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": [
@@ -240,7 +240,7 @@
 			]
 		},
 		{
-			"destination": "/usr/local/lib/python3.11/dist-packages/beam",
+			"destination": "/usr/local/lib/python3.11/dist-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": [
@@ -253,7 +253,7 @@
 			]
 		},
 		{
-			"destination": "/usr/local/lib/python3.12/dist-packages/beam",
+			"destination": "/usr/local/lib/python3.12/dist-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": [
@@ -272,7 +272,7 @@
 				"path": "/usr/bin/nvidia-container-runtime-hook",
 				"args": [
 					"/usr/bin/nvidia-container-runtime-hook",
-					"-config"
+					"-ociconfig"
 				]
 			}
 		]

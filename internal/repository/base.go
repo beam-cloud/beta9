@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 type SchedulerRepository interface{}
@@ -66,7 +66,7 @@ type BackendRepository interface {
 type WorkerPoolRepository interface {
 	GetPool(name string) (*types.WorkerPoolConfig, error)
 	GetPools() ([]types.WorkerPoolConfig, error)
-	SetPool(name string, pool *types.WorkerPoolConfig) error
+	SetPool(name string, pool types.WorkerPoolConfig) error
 	RemovePool(name string) error
 }
 
