@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"syscall"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/abstractions/image"
 	common "github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/repository"
 	types "github.com/beam-cloud/beta9/internal/types"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
@@ -46,9 +46,11 @@ type ImageClient struct {
 	Debug          bool
 	Creds          string
 	config         types.ImageServiceConfig
+	workerId       string
+	workerRepo     repository.WorkerRepository
 }
 
-func NewImageClient(config types.ImageServiceConfig) (*ImageClient, error) {
+func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
 	var provider CredentialProvider // Configure image registry credentials
 
 	switch config.RegistryCredentialProviderName {
@@ -78,8 +80,10 @@ func NewImageClient(config types.ImageServiceConfig) (*ImageClient, error) {
 		}
 	}
 
-	baseImagePath := filepath.Join(imageCachePath)
-	os.MkdirAll(baseImagePath, os.ModePerm)
+	err = os.MkdirAll(imageCachePath, os.ModePerm)
+	if err != nil {
+		return nil, err
+	}
 
 	creds, err := provider.GetAuthString()
 	if err != nil {
@@ -90,11 +94,13 @@ func NewImageClient(config types.ImageServiceConfig) (*ImageClient, error) {
 		config:         config,
 		registry:       registry,
 		cacheClient:    cacheClient,
-		ImagePath:      baseImagePath,
+		ImagePath:      imageCachePath,
 		PullCommand:    imagePullCommand,
 		CommandTimeout: -1,
 		Debug:          false,
 		Creds:          creds,
+		workerId:       workerId,
+		workerRepo:     workerRepo,
 	}, nil
 }
 
@@ -121,13 +127,12 @@ func (c *ImageClient) PullLazy(imageId string) error {
 		return nil
 	}
 
-	// Attempt to acquire the lock
-	fileLock := NewFileLock(path.Join(imagePath, fmt.Sprintf("%s_%s", imageId, imageMountLockFilename)))
-	if err := fileLock.Acquire(); err != nil {
-		fmt.Printf("Unable to acquire mount lock: %v\n", err)
+	// Get lock on image mount
+	err = c.workerRepo.SetImagePullLock(c.workerId, imageId)
+	if err != nil {
 		return err
 	}
-	defer fileLock.Release()
+	defer c.workerRepo.RemoveImagePullLock(c.workerId, imageId)
 
 	startServer, _, err := clip.MountArchive(*mountOptions)
 	if err != nil {

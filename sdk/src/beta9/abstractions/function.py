@@ -3,6 +3,7 @@ import os
 from typing import Any, Callable, Iterator, List, Optional, Sequence, Union
 
 import cloudpickle
+
 from beta9 import terminal
 from beta9.abstractions.base.runner import (
     FUNCTION_DEPLOYMENT_STUB_TYPE,
@@ -101,7 +102,7 @@ class _CallableWrapper:
         )
 
         terminal.header("Running function")
-        last_response: Union[None, FunctionInvokeResponse] = None
+        last_response: Optional[FunctionInvokeResponse] = None
 
         async for r in self.parent.function_stub.function_invoke(
             stub_id=self.parent.stub_id,
@@ -114,7 +115,7 @@ class _CallableWrapper:
                 last_response = r
                 break
 
-        if not last_response.done or last_response.exit_code != 0:
+        if last_response is None or not last_response.done or last_response.exit_code != 0:
             terminal.error("Function failed ☠️")
             return None
 
