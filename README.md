@@ -73,9 +73,7 @@ make setup-sdk
 
 ### Using the SDK
 
-After you've setup the server and SDK, you can now start accessing the system.
-
-TODO: Add walk through. Should this be a separate readme?
+After you've setup the server and SDK, check out the SDK readme [here](sdk/README.md).
 
 ## Community & Support
 
