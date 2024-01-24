@@ -69,12 +69,3 @@ type WorkerPoolRepository interface {
 	SetPool(name string, pool types.WorkerPoolConfig) error
 	RemovePool(name string) error
 }
-
-type MetricsRepository interface {
-	Init() error
-	ContainerDurationSeconds(containerId string, workerId string, duration time.Duration)
-}
-
-type MetricsStreamRepository interface {
-	ContainerResourceUsage(usage types.ContainerResourceUsage) error
-}

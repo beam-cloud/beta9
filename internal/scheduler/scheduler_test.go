@@ -176,7 +176,7 @@ func TestProcessRequests(t *testing.T) {
 			case <-ctx.Done():
 				return
 			default:
-				wb.processRequests()
+				wb.StartProcessingRequests()
 			}
 		}
 	}()

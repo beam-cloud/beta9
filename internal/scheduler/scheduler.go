@@ -20,16 +20,17 @@ type Scheduler struct {
 	workerPoolManager *WorkerPoolManager
 	requestBacklog    *RequestBacklog
 	containerRepo     repo.ContainerRepository
-	metricsRepo       repo.MetricsRepository
+	schedulerMetrics  SchedulerMetrics
 	eventBus          *common.EventBus
 }
 
-func NewScheduler(config types.AppConfig, redisClient *common.RedisClient) (*Scheduler, error) {
+func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.PrometheusRepository) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
+	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 
 	workerPoolManager := NewWorkerPoolManager(workerPoolRepo)
 	for name, pool := range config.Worker.Pools {
@@ -43,6 +44,7 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient) (*Sch
 		workerPoolManager: workerPoolManager,
 		requestBacklog:    requestBacklog,
 		containerRepo:     containerRepo,
+		schedulerMetrics:  schedulerMetrics,
 	}, nil
 }
 
@@ -62,7 +64,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	// s.metricsRepo.ContainerRequested(request.ContainerId)
+	s.schedulerMetrics.ContainerRequested()
 
 	err = s.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
 		Status:      types.ContainerStatusPending,
@@ -115,7 +117,7 @@ func (s *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolCo
 	return workerPool.Controller, nil
 }
 
-func (s *Scheduler) processRequests() {
+func (s *Scheduler) StartProcessingRequests() {
 	for {
 		if s.requestBacklog.Len() == 0 {
 			time.Sleep(RequestProcessingInterval)
@@ -167,7 +169,7 @@ func (s *Scheduler) processRequests() {
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	// s.metricsRepo.ContainerScheduled(request.ContainerId)
+	go s.schedulerMetrics.ContainerScheduled()
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 

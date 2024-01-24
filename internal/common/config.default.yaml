@@ -87,13 +87,3 @@ worker:
   resourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
-metrics:
-  prometheus:
-    enabled: true
-  kinesis:
-    streamName: beta9-realtime-metrics
-    region: us-east-1
-    accessKeyID: test
-    secretAccessKey: test
-    sessionKey: test
-    stackEndpoint: http://localstack.beta9:4566

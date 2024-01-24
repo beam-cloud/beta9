@@ -40,7 +40,7 @@ type Gateway struct {
 	redisClient    *common.RedisClient
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
-	metricsRepo    repository.MetricsRepository
+	metricsRepo    repository.PrometheusRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
 	ctx            context.Context
@@ -60,7 +60,9 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	scheduler, err := scheduler.NewScheduler(config, redisClient)
+	metricsRepo := repository.NewMetricsPrometheusRepository()
+
+	scheduler, err := scheduler.NewScheduler(config, redisClient, metricsRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +87,6 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
-	metricsRepo := repository.NewMetricsPrometheusRepository(config.Metrics.Prometheus.Enabled)
 
 	gateway.config = config
 	gateway.ContainerRepo = containerRepo
@@ -170,7 +171,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterVolumeServiceServer(g.grpcServer, vs)
 
 	// Register scheduler
-	s, err := scheduler.NewSchedulerService(g.config, g.redisClient)
+	s, err := scheduler.NewSchedulerService(g.Scheduler)
 	if err != nil {
 		return err
 	}
