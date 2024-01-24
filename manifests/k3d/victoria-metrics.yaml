@@ -12,7 +12,7 @@ spec:
   chart: victoria-metrics-k8s-stack
   repo: https://victoriametrics.github.io/helm-charts/
   version: 0.18.11
-  valuesContent: |-
+  valuesContent: |
     vmagent:
       enabled: true
       spec:
@@ -23,29 +23,26 @@ spec:
         externalLabels:
           cluster: cluster-name
         extraArgs:
-          promscrape.streamParse: "true"
-          promscrape.config: ""
-        inlineScrapeConfig: |
-          - job_name: "beam-pods"
-              metrics_path: /metrics
-              scheme: http
-              honor_labels: true
-              scrape_timeout: 10s
-              scrape_interval: 15s
-              enable_http2: true
-              follow_redirects: true
-              kubernetes_sd_configs:
-              - role: pod
-                namespaces:
-                  names:
-                  - beam
-              relabel_configs:
-              - source_labels: [__meta_kubernetes_pod_label_prometheus_io_scrape]
-                action: keep
-                regex: true
-              - source_labels: [__meta_kubernetes_pod_container_port_number]
-                action: keep
-                regex: 9090
+          promscrape.streamParse: "false"
+        inlineScrapeConfig: |-
+          - job_name: beta9-pods
+            metrics_path: /metrics
+            scheme: http
+            honor_labels: true
+            scrape_timeout: 10s
+            scrape_interval: 15s
+            kubernetes_sd_configs:
+            - role: pod
+              namespaces:
+                names:
+                - beta9
+            relabel_configs:
+            - source_labels: [__meta_kubernetes_pod_label_prometheus_io_scrape]
+              action: keep
+              regex: true
+            - source_labels: [__meta_kubernetes_pod_container_port_number]
+              action: keep
+              regex: 9090
 
     alertmanager:
       enabled: false
@@ -54,4 +51,4 @@ spec:
       enabled: false
 
     kube-state-metrics:
-      enabled: false
+      enabled: true
