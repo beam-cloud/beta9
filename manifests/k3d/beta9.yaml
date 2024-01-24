@@ -71,7 +71,7 @@ spec:
             memory: 1Gi
           limits:
             cpu: 1000m
-            memory: 1Gi
+            memory: 2Gi
       volumes:
       - name: images
         persistentVolumeClaim:
