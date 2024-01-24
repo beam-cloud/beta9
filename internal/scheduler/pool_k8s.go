@@ -149,9 +149,9 @@ func (wpc *KubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu 
 func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
-		"app":                  "beta9-" + Beta9WorkerLabelValue,
-		"prometheus.io/scrape": "true",
+		"app":                  Beta9WorkerLabelValue,
 		Beta9WorkerLabelKey:    Beta9WorkerLabelValue,
+		"prometheus.io/scrape": "true",
 	}
 
 	workerCpu := cpu

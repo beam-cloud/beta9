@@ -9,7 +9,11 @@ setup:
 	kubectl delete pod -l app=gateway
 
 setup-sdk:
+	curl -sSL https://install.python-poetry.org | python3 -
+	export PATH="$$HOME/.local/bin:$$PATH"
+	poetry config virtualenvs.in-project true
 	poetry install -C sdk
+	poetry shell -C sdk
 
 k3d-up:
 	bash bin/k3d.sh up

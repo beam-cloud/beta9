@@ -116,7 +116,10 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	imageClient, err := NewImageClient(config.ImageService)
+	containerRepo := repo.NewContainerRedisRepository(redisClient)
+	workerRepo := repo.NewWorkerRedisRepository(redisClient)
+
+	imageClient, err := NewImageClient(config.ImageService, workerId, workerRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -137,11 +140,6 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	containerRepo := repo.NewContainerRedisRepository(redisClient)
-	workerRepo := repo.NewWorkerRedisRepository(redisClient)
-
-	// workerMetrics := NewWorkerMetrics(ctx, podHostName, workerRepo)
 
 	return &Worker{
 		ctx:                  ctx,
