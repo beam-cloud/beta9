@@ -89,7 +89,7 @@ worker:
   defaultWorkerMemoryRequest: 1024
 metrics:
   prometheus:
-    enabled: false
+    enabled: true
   kinesis:
     streamName: beta9-realtime-metrics
     region: us-east-1
