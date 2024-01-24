@@ -28,6 +28,7 @@ var (
 
 var (
 	workerPrefix                 string = "worker"
+	workerImageLock              string = "worker:%s:image:%s:lock"
 	workerContainerRequest       string = "worker:%s:container:%s:request"
 	workerContainerResourceUsage string = "worker:%s:container:%s:resource_usage"
 )
@@ -125,6 +126,10 @@ func (rk *redisKeys) WorkerContainerRequest(workerId string, containerId string)
 
 func (rk *redisKeys) WorkerContainerResourceUsage(workerId string, containerId string) string {
 	return fmt.Sprintf(workerContainerResourceUsage, workerId, containerId)
+}
+
+func (rk *redisKeys) WorkerImageLock(workerId string, imageId string) string {
+	return fmt.Sprintf(workerImageLock, workerId, imageId)
 }
 
 // WorkerPool keys
