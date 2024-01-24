@@ -64,7 +64,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	s.schedulerMetrics.ContainerRequested()
+	go s.schedulerMetrics.ContainerRequested()
 
 	err = s.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
 		Status:      types.ContainerStatusPending,
