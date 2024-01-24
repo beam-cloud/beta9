@@ -43,6 +43,3 @@ protocol:
 
 test-internal:
 	go test -v ./internal/... -bench=./internal/..
-
-victoria:
-	cd charts/victoriametrics && helm upgrade --install vm vm/victoria-metrics-k8s-stack -f values.yaml -n monitoring --create-namespace
