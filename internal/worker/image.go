@@ -80,8 +80,10 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		}
 	}
 
-	baseImagePath := filepath.Join(imageCachePath)
-	os.MkdirAll(baseImagePath, os.ModePerm)
+	err = os.MkdirAll(imageCachePath, os.ModePerm)
+	if err != nil {
+		return nil, err
+	}
 
 	creds, err := provider.GetAuthString()
 	if err != nil {
@@ -92,7 +94,7 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		config:         config,
 		registry:       registry,
 		cacheClient:    cacheClient,
-		ImagePath:      baseImagePath,
+		ImagePath:      imageCachePath,
 		PullCommand:    imagePullCommand,
 		CommandTimeout: -1,
 		Debug:          false,
