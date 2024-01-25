@@ -193,7 +193,7 @@ func (g *Gateway) registerServices() error {
 
 // Gateway entry point
 func (g *Gateway) Start() error {
-	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", g.config.GatewayService.GrpcPort))
+	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", g.config.GatewayService.GRPCPort))
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
@@ -221,7 +221,7 @@ func (g *Gateway) Start() error {
 	}()
 
 	go func() {
-		if err := g.httpServer.Start(fmt.Sprintf("0.0.0.0:%d", g.config.GatewayService.HttpPort)); err != nil && err != http.ErrServerClosed {
+		if err := g.httpServer.Start(fmt.Sprintf("0.0.0.0:%d", g.config.GatewayService.HTTPPort)); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start http server: %v", err)
 		}
 	}()
@@ -232,8 +232,8 @@ func (g *Gateway) Start() error {
 		}
 	}()
 
-	log.Println("Gateway http server running @", g.config.GatewayService.HttpPort)
-	log.Println("Gateway grpc server running @", g.config.GatewayService.GrpcPort)
+	log.Println("Gateway http server running @", g.config.GatewayService.HTTPPort)
+	log.Println("Gateway grpc server running @", g.config.GatewayService.GRPCPort)
 
 	terminationSignal := make(chan os.Signal, 1)
 	defer close(terminationSignal)

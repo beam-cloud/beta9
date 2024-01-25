@@ -56,8 +56,8 @@ type PostgresConfig struct {
 
 type GatewayServiceConfig struct {
 	Host           string `key:"host"`
-	HttpPort       int    `key:"httpPort"`
-	GrpcPort       int    `key:"grpcPort"`
+	HTTPPort       int    `key:"httpPort"`
+	GRPCPort       int    `key:"grpcPort"`
 	MaxRecvMsgSize int    `key:"max_recv_msg_size_in_mb"`
 	MaxSendMsgSize int    `key:"max_send_msg_size_in_mb"`
 }

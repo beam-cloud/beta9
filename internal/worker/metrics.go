@@ -22,9 +22,9 @@ func NewWorkerMetrics(
 	ctx context.Context,
 	workerId string,
 	workerRepo repo.WorkerRepository,
-	config types.AppConfig,
+	config types.PrometheusConfig,
 ) *WorkerMetrics {
-	metricsRepo := repository.NewMetricsPrometheusRepository(config.Metrics.Prometheus)
+	metricsRepo := repository.NewMetricsPrometheusRepository(config)
 	metricsRepo.RegisterCounterVec(
 		prometheus.CounterOpts{
 			Name: types.MetricsWorkerContainerDurationSeconds,

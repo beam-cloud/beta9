@@ -378,7 +378,7 @@ func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string,
 		},
 		{
 			Name:  "BETA9_GATEWAY_PORT",
-			Value: fmt.Sprint(wpc.config.GatewayService.GrpcPort),
+			Value: fmt.Sprint(wpc.config.GatewayService.GRPCPort),
 		},
 	}
 }

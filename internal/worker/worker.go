@@ -140,7 +140,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config)
+	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config.Metrics.Prometheus)
 
 	return &Worker{
 		ctx:                  ctx,
@@ -547,7 +547,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", s.config.GatewayService.Host),
-		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.GrpcPort),
+		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.GRPCPort),
 		"PYTHONUNBUFFERED=1",
 	}
 	env = append(env, request.Env...)
