@@ -118,7 +118,6 @@ func NewWorker() (*Worker, error) {
 
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
-	statsdRepo := repo.NewMetricsStatsdRepository()
 
 	imageClient, err := NewImageClient(config.ImageService, workerId, workerRepo)
 	if err != nil {
@@ -141,7 +140,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	workerMetrics := NewWorkerMetrics(ctx, podHostName, statsdRepo, workerRepo, repo.NewMetricsStreamRepository(ctx, config.Metrics))
+	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config.Metrics.Prometheus)
 
 	return &Worker{
 		ctx:                  ctx,
@@ -512,11 +511,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(request, done)
-	s.workerMetrics.ContainerStarted(containerId)
-	defer s.workerMetrics.ContainerStopped(containerId)
+	// TODO: Handle event for ContainerStarted
+	// TODO: Handle deferred event for ContainerStopped
 
 	pidChan := make(chan int, 1)
-	go s.workerMetrics.EmitResourceUsage(request, pidChan, done)
 
 	// Invoke runc process (launch the container)
 	// This will return exit code 137 even if the container is stopped gracefully. We don't know why.
@@ -549,7 +547,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", s.config.GatewayService.Host),
-		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.Port),
+		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.GRPCPort),
 		"PYTHONUNBUFFERED=1",
 	}
 	env = append(env, request.Env...)
@@ -682,8 +680,7 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 
 func (s *Worker) startup() error {
 	log.Printf("Worker starting up.")
-	s.workerMetrics.WorkerStarted()
-	go s.workerMetrics.EmitWorkerDuration()
+	// TODO: Handle event for WorkerSarted
 
 	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
 	if err != nil {
@@ -708,7 +705,7 @@ func (s *Worker) startup() error {
 
 func (s *Worker) shutdown() error {
 	log.Printf("Worker spinning down.")
-	s.workerMetrics.WorkerStopped()
+	// TODO: Handle event for WorkerStopped
 
 	worker, err := s.workerRepo.GetWorkerById(s.workerId)
 	if err != nil {

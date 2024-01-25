@@ -53,7 +53,6 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		eventBus:          eventBus,
 		workerRepo:        workerRepo,
 		workerPoolManager: workerPoolManager,
-		metricsRepo:       repo.NewMetricsStatsdRepositoryForTest(),
 		requestBacklog:    requestBacklog,
 		containerRepo:     containerRepo,
 	}, nil
@@ -177,7 +176,7 @@ func TestProcessRequests(t *testing.T) {
 			case <-ctx.Done():
 				return
 			default:
-				wb.processRequests()
+				wb.StartProcessingRequests()
 			}
 		}
 	}()

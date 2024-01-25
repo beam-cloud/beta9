@@ -29,11 +29,3 @@ func NewContainerRedisRepositoryForTest(rdb *common.RedisClient) ContainerReposi
 	lock := common.NewRedisLock(rdb)
 	return &ContainerRedisRepository{rdb: rdb, lock: lock}
 }
-
-func NewMetricsStatsdRepositoryForTest() MetricsStatsdRepository {
-	return &MetricsStatsd{
-		statSender: common.InitStatsdSender(
-			"test:8125",
-		),
-	}
-}
