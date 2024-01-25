@@ -101,7 +101,7 @@ class _CallableWrapper:
             },
         )
 
-        terminal.header("Running function")
+        terminal.header(f"Running function: <{self.parent.handler}>")
         last_response: Optional[FunctionInvokeResponse] = None
 
         async for r in self.parent.function_stub.function_invoke(
@@ -119,7 +119,7 @@ class _CallableWrapper:
             terminal.error("Function failed ☠️")
             return None
 
-        terminal.header("Function complete 🎉")
+        terminal.header(f"Function complete <{r.task_id}>")
         return cloudpickle.loads(last_response.result)
 
     def local(self, *args, **kwargs) -> Any:
