@@ -14,12 +14,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/beam-cloud/go-runc"
+	"github.com/opencontainers/runtime-spec/specs-go"
+
 	common "github.com/beam-cloud/beta9/internal/common"
 	repo "github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/storage"
 	types "github.com/beam-cloud/beta9/internal/types"
-	"github.com/beam-cloud/go-runc"
-	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 const (
@@ -531,6 +532,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		Msg:     "",
 		Done:    true,
 		Success: err == nil,
+	}
+
+	// wait for buffer to clear before container is removed
+	for !containerInstance.LogBuffer.IsEmpty() {
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	if err != nil {
