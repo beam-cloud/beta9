@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -40,7 +41,7 @@ type Gateway struct {
 	redisClient    *common.RedisClient
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
-	metricsRepo    repository.MetricsStatsdRepository
+	metricsRepo    repository.PrometheusRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
 	ctx            context.Context
@@ -60,7 +61,9 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	scheduler, err := scheduler.NewScheduler(config, redisClient)
+	metricsRepo := repository.NewMetricsPrometheusRepository(config.Metrics.Prometheus)
+
+	scheduler, err := scheduler.NewScheduler(config, redisClient, metricsRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +88,6 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
-	metricsRepo := repository.NewMetricsStatsdRepository()
 
 	gateway.config = config
 	gateway.ContainerRepo = containerRepo
@@ -172,7 +174,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterVolumeServiceServer(g.grpcServer, vs)
 
 	// Register scheduler
-	s, err := scheduler.NewSchedulerService(g.config, g.redisClient)
+	s, err := scheduler.NewSchedulerService(g.Scheduler)
 	if err != nil {
 		return err
 	}
@@ -191,7 +193,7 @@ func (g *Gateway) registerServices() error {
 
 // Gateway entry point
 func (g *Gateway) Start() error {
-	listener, err := net.Listen("tcp", GatewayConfig.GrpcServerAddress)
+	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", g.config.GatewayService.GRPCPort))
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
@@ -219,13 +221,19 @@ func (g *Gateway) Start() error {
 	}()
 
 	go func() {
-		if err := g.httpServer.Start(GatewayConfig.HttpServerAddress); err != nil && err != http.ErrServerClosed {
+		if err := g.httpServer.Start(fmt.Sprintf("0.0.0.0:%d", g.config.GatewayService.HTTPPort)); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start http server: %v", err)
 		}
 	}()
 
-	log.Println("Gateway http server running @", GatewayConfig.HttpServerAddress)
-	log.Println("Gateway grpc server running @", GatewayConfig.GrpcServerAddress)
+	go func() {
+		if err := g.metricsRepo.Init(); err != nil {
+			log.Fatalf("Failed to start metrics server: %v", err)
+		}
+	}()
+
+	log.Println("Gateway http server running @", g.config.GatewayService.HTTPPort)
+	log.Println("Gateway grpc server running @", g.config.GatewayService.GRPCPort)
 
 	terminationSignal := make(chan os.Signal, 1)
 	defer close(terminationSignal)
