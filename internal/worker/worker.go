@@ -140,6 +140,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config)
 
 	return &Worker{
 		ctx:                  ctx,
@@ -165,7 +166,7 @@ func NewWorker() (*Worker, error) {
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
 		},
-		// workerMetrics:     workerMetrics,
+		workerMetrics:     workerMetrics,
 		workerRepo:        workerRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
 		stopContainerChan: make(chan string, 1000),
@@ -514,7 +515,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	// defer s.workerMetrics.ContainerStopped(containerId)
 
 	pidChan := make(chan int, 1)
-	// go s.workerMetrics.EmitResourceUsage(request, pidChan, done)
 
 	// Invoke runc process (launch the container)
 	// This will return exit code 137 even if the container is stopped gracefully. We don't know why.
@@ -547,7 +547,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", s.config.GatewayService.Host),
-		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.Port),
+		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.GrpcPort),
 		"PYTHONUNBUFFERED=1",
 	}
 	env = append(env, request.Env...)

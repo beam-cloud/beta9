@@ -26,7 +26,8 @@ storage:
     awsSecretAccessKey: test
 gateway:
   host: gateway.beta9
-  port: 1993
+  httpPort: 1994
+  grpcPort: 1993
   max_recv_msg_size_in_mb: 1024
   max_send_msg_size_in_mb: 1024
 imageService:
@@ -89,3 +90,7 @@ worker:
   resourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
+metrics:
+  prometheus:
+    scrapeWorkers: true
+    port: 9090

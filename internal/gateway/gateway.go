@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -60,7 +61,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	metricsRepo := repository.NewMetricsPrometheusRepository()
+	metricsRepo := repository.NewMetricsPrometheusRepository(config.Metrics.Prometheus)
 
 	scheduler, err := scheduler.NewScheduler(config, redisClient, metricsRepo)
 	if err != nil {
@@ -192,7 +193,7 @@ func (g *Gateway) registerServices() error {
 
 // Gateway entry point
 func (g *Gateway) Start() error {
-	listener, err := net.Listen("tcp", GatewayConfig.GrpcServerAddress)
+	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", g.config.GatewayService.GrpcPort))
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
@@ -220,7 +221,7 @@ func (g *Gateway) Start() error {
 	}()
 
 	go func() {
-		if err := g.httpServer.Start(GatewayConfig.HttpServerAddress); err != nil && err != http.ErrServerClosed {
+		if err := g.httpServer.Start(fmt.Sprintf("0.0.0.0:%d", g.config.GatewayService.HttpPort)); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start http server: %v", err)
 		}
 	}()
@@ -231,8 +232,8 @@ func (g *Gateway) Start() error {
 		}
 	}()
 
-	log.Println("Gateway http server running @", GatewayConfig.HttpServerAddress)
-	log.Println("Gateway grpc server running @", GatewayConfig.GrpcServerAddress)
+	log.Println("Gateway http server running @", g.config.GatewayService.HttpPort)
+	log.Println("Gateway grpc server running @", g.config.GatewayService.GrpcPort)
 
 	terminationSignal := make(chan os.Signal, 1)
 	defer close(terminationSignal)

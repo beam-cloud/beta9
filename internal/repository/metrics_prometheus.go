@@ -1,8 +1,10 @@
 package repository
 
 import (
+	"fmt"
 	"log"
 
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/prometheus/client_golang/prometheus"
@@ -11,10 +13,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-var PrometheusMetricsAddress = "0.0.0.0:9090"
-
 type PrometheusRepository struct {
 	collectorRegistrar *prometheus.Registry
+	port               int
 	counters           map[string]prometheus.Counter
 	counterVecs        map[string]*prometheus.CounterVec
 	gauges             map[string]prometheus.Gauge
@@ -25,7 +26,7 @@ type PrometheusRepository struct {
 	histogramVecs      map[string]*prometheus.HistogramVec
 }
 
-func NewMetricsPrometheusRepository() PrometheusRepository {
+func NewMetricsPrometheusRepository(promConfig types.PrometheusConfig) PrometheusRepository {
 	collectorRegistrar := prometheus.NewRegistry()
 	collectorRegistrar.MustRegister(
 		collectors.NewGoCollector(),                                       // Metrics from Go runtime.
@@ -34,6 +35,7 @@ func NewMetricsPrometheusRepository() PrometheusRepository {
 
 	return PrometheusRepository{
 		collectorRegistrar: collectorRegistrar,
+		port:               promConfig.Port,
 		counters:           map[string]prometheus.Counter{},
 		counterVecs:        map[string]*prometheus.CounterVec{},
 		gauges:             map[string]prometheus.Gauge{},
@@ -54,9 +56,9 @@ func (r *PrometheusRepository) Init() error {
 		EnableOpenMetrics: true,
 	})))
 
-	log.Printf("Starting Prometheus metrics server at %s\n", PrometheusMetricsAddress)
+	log.Printf("Starting Prometheus metrics server at :%d\n", r.port)
 
-	return prometheusServer.Start(PrometheusMetricsAddress)
+	return prometheusServer.Start(fmt.Sprintf("0.0.0.0:%d", r.port))
 }
 
 // RegisterCounter registers a new counter metric
