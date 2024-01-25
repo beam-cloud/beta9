@@ -7,63 +7,21 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 
+	"github.com/beam-cloud/beta9/internal/common"
 	_ "github.com/beam-cloud/beta9/internal/repository/backend_postgres_migrations"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
-	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
-	"github.com/pressly/goose/v3"
 )
 
 type PostgresBackendRepository struct {
-	client *sqlx.DB
+	client *common.SQLClient
 }
 
-func NewBackendPostgresRepository(config types.PostgresConfig) (*PostgresBackendRepository, error) {
-	sslMode := "disable"
-	if config.EnableTLS {
-		sslMode = "require"
-	}
-
-	dsn := fmt.Sprintf(
-		"host=%s user=%s password=%s dbname=%s port=%d sslmode=%s TimeZone=%s",
-		config.Host,
-		config.Username,
-		config.Password,
-		config.Name,
-		config.Port,
-		sslMode,
-		config.TimeZone,
-	)
-	db, err := sqlx.Connect("postgres", dsn)
-	if err != nil {
-		return nil, err
-	}
-
-	repo := &PostgresBackendRepository{
-		client: db,
-	}
-
-	if err := repo.migrate(); err != nil {
-		log.Fatalf("failed to run backend migrations: %v", err)
-	}
-
-	return repo, nil
-}
-
-func (r *PostgresBackendRepository) migrate() error {
-	if err := goose.SetDialect("postgres"); err != nil {
-		return err
-	}
-
-	if err := goose.Up(r.client.DB, "./"); err != nil {
-		return err
-	}
-
-	return nil
+func NewBackendPostgresRepository(s *common.SQLClient) *PostgresBackendRepository {
+	return &PostgresBackendRepository{s}
 }
 
 func (r *PostgresBackendRepository) generateExternalId() (string, error) {
@@ -443,8 +401,8 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	var deploymentWithRelated types.DeploymentWithRelated
 
 	query := `
-        SELECT d.*, 
-               w.external_id AS "workspace.external_id", w.name AS "workspace.name", 
+        SELECT d.*,
+               w.external_id AS "workspace.external_id", w.name AS "workspace.name",
                s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id

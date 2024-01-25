@@ -64,7 +64,7 @@ def parse_filter_values(
 @click.option(
     "--limit",
     type=click.IntRange(1, 1000),
-    default=100,
+    default=10,
     help="The number of tasks to fetch.",
 )
 @click.option(
