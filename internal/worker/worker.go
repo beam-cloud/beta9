@@ -511,8 +511,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(request, done)
-	// s.workerMetrics.ContainerStarted(containerId)
-	// defer s.workerMetrics.ContainerStopped(containerId)
+	// TODO: Handle event for ContainerStarted
+	// TODO: Handle deferred event for ContainerStopped
 
 	pidChan := make(chan int, 1)
 
@@ -680,8 +680,7 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 
 func (s *Worker) startup() error {
 	log.Printf("Worker starting up.")
-	// s.workerMetrics.WorkerStarted()
-	// go s.workerMetrics.EmitWorkerDuration()
+	// TODO: Handle event for WorkerSarted
 
 	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
 	if err != nil {
@@ -706,7 +705,7 @@ func (s *Worker) startup() error {
 
 func (s *Worker) shutdown() error {
 	log.Printf("Worker spinning down.")
-	// s.workerMetrics.WorkerStopped()
+	// TODO: Handle event for WorkerStopped
 
 	worker, err := s.workerRepo.GetWorkerById(s.workerId)
 	if err != nil {
