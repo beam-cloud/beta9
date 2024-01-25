@@ -55,8 +55,11 @@ type PostgresConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host string `key:"host"`
-	Port int    `key:"port"`
+	Host           string `key:"host"`
+	HTTPPort       int    `key:"httpPort"`
+	GRPCPort       int    `key:"grpcPort"`
+	MaxRecvMsgSize int    `key:"max_recv_msg_size_in_mb"`
+	MaxSendMsgSize int    `key:"max_send_msg_size_in_mb"`
 }
 
 type ImageServiceConfig struct {
@@ -143,19 +146,10 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 }
 
 type MetricsConfig struct {
-	Kinesis    KinesisConfig    `key:"kinesis"`
 	Prometheus PrometheusConfig `key:"prometheus"`
 }
 
 type PrometheusConfig struct {
-	Enabled bool `key:"enabled"`
-}
-
-type KinesisConfig struct {
-	StreamName      string `key:"streamName"`
-	Region          string `key:"region"`
-	AccessKeyID     string `key:"accessKeyID"`
-	SecretAccessKey string `key:"secretAccessKey"`
-	SessionKey      string `key:"sessionKey"`
-	Endpoint        string `key:"endpoint"`
+	ScrapeWorkers bool `key:"scrapeWorkers"`
+	Port          int  `key:"port"`
 }

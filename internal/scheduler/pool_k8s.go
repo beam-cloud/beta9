@@ -149,9 +149,9 @@ func (wpc *KubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu 
 func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
-		"app":                  "beta9-" + Beta9WorkerLabelValue,
-		"prometheus.io/scrape": "true",
-		Beta9WorkerLabelKey:    Beta9WorkerLabelValue,
+		"app":               Beta9WorkerLabelValue,
+		Beta9WorkerLabelKey: Beta9WorkerLabelValue,
+		PrometheusScrapeKey: strconv.FormatBool(wpc.config.Metrics.Prometheus.ScrapeWorkers),
 	}
 
 	workerCpu := cpu
@@ -206,7 +206,7 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 			Ports: []corev1.ContainerPort{
 				{
 					Name:          "metrics",
-					ContainerPort: 9090,
+					ContainerPort: int32(wpc.config.Metrics.Prometheus.Port),
 				},
 			},
 			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpu),
@@ -378,7 +378,7 @@ func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string,
 		},
 		{
 			Name:  "BETA9_GATEWAY_PORT",
-			Value: fmt.Sprint(wpc.config.GatewayService.Port),
+			Value: fmt.Sprint(wpc.config.GatewayService.GRPCPort),
 		},
 	}
 }

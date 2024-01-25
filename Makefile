@@ -9,7 +9,11 @@ setup:
 	kubectl delete pod -l app=gateway
 
 setup-sdk:
+	curl -sSL https://install.python-poetry.org | python3 -
+	export PATH="$$HOME/.local/bin:$$PATH"
+	poetry config virtualenvs.in-project true
 	poetry install -C sdk
+	poetry shell -C sdk
 
 k3d-up:
 	bash bin/k3d.sh up
@@ -43,12 +47,3 @@ protocol:
 
 test-internal:
 	go test -v ./internal/... -bench=./internal/..
-
-loki:
-	cd charts/loki && helm install --values values.yml loki grafana/loki -n monitoring --create-namespace
-
-fluentbit:
-	cd charts/fluentbit && helm upgrade --install --values values.yml fluent-bit fluent/fluent-bit
-
-victoria:
-	cd charts/victoriametrics && helm upgrade --install vm vm/victoria-metrics-k8s-stack -f values.yaml -n monitoring --create-namespace

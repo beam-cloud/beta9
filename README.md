@@ -27,7 +27,7 @@
 
 Beta9 is an open-source platform for running remote containers directly from Python. It supports GPU/CUDA acceleration, allows you to scale out arbitrary Python code to hundreds of machines, easily deploy functions and task queues, and distribute workloads across various cloud providers (including bare metal providers).
 
-We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale. 
+We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale.
 
 ## Features
 
@@ -47,7 +47,33 @@ Beta9 is designed for launching remote serverless containers very quickly. There
 
 ## Local development
 
-[TODO]
+### Setting up the server
+
+k3d is used for local development. You'll need Docker and Make to get started.
+
+To use our fully automated setup, run the `setup` make target.
+
+> [!NOTE]
+> This will overwrite some of the tools you may already have installed. Review the [setup.sh](bin/setup.sh) to learn more.
+
+```
+make setup
+```
+
+### Setting up the SDK
+
+The SDK is written in Python. You'll need Python 3.8 or higher. Use the `setup-sdk` make target to get started.
+
+> [!NOTE]
+> This will install the Poetry package manager.
+
+```
+make setup-sdk
+```
+
+### Using the SDK
+
+After you've setup the server and SDK, check out the SDK readme [here](sdk/README.md).
 
 ## Community & Support
 
