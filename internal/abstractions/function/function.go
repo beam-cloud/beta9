@@ -44,27 +44,25 @@ type RunCFunctionService struct {
 }
 
 func NewRuncFunctionService(ctx context.Context,
-	rdb *common.RedisClient,
-	backendRepo repository.BackendRepository,
-	containerRepo repository.ContainerRepository,
+	repoManager *repository.RepositoryManager,
 	scheduler *scheduler.Scheduler,
 	baseRouteGroup *echo.Group,
 ) (FunctionService, error) {
-	keyEventManager, err := common.NewKeyEventManager(rdb)
+	keyEventManager, err := common.NewKeyEventManager(repoManager.RedisClient)
 	if err != nil {
 		return nil, err
 	}
 
 	fs := &RunCFunctionService{
-		backendRepo:     backendRepo,
-		containerRepo:   containerRepo,
+		backendRepo:     repoManager.Backend,
+		containerRepo:   repoManager.Container,
 		scheduler:       scheduler,
-		rdb:             rdb,
+		rdb:             repoManager.RedisClient,
 		keyEventManager: keyEventManager,
 	}
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(backendRepo)
+	authMiddleware := auth.AuthMiddleware(repoManager.Backend)
 	registerFunctionRoutes(baseRouteGroup.Group(functionRoutePrefix, authMiddleware), fs)
 
 	return fs, nil

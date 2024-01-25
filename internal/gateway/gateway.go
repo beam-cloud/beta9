@@ -37,10 +37,7 @@ type Gateway struct {
 	config         types.AppConfig
 	httpServer     *echo.Echo
 	grpcServer     *grpc.Server
-	redisClient    *common.RedisClient
-	ContainerRepo  repository.ContainerRepository
-	BackendRepo    repository.BackendRepository
-	metricsRepo    repository.MetricsStatsdRepository
+	repoManager    *repository.RepositoryManager
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
 	ctx            context.Context
@@ -55,7 +52,17 @@ func NewGateway() (*Gateway, error) {
 	}
 	config := configManager.GetConfig()
 
+	postgresClient, err := repository.NewPostgresClient(config.Database.Postgres)
+	if err != nil {
+		return nil, err
+	}
+
 	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Gateway"))
+	if err != nil {
+		return nil, err
+	}
+
+	repoManager, err := repository.NewRepositoryManager(postgresClient, redisClient)
 	if err != nil {
 		return nil, err
 	}
@@ -71,33 +78,14 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	gateway := &Gateway{
-		redisClient: redisClient,
+	return &Gateway{
 		ctx:         ctx,
 		cancelFunc:  cancel,
+		config:      config,
+		repoManager: repoManager,
 		Storage:     storage,
 		Scheduler:   scheduler,
-	}
-
-	postgresClient, err := repository.NewPostgresClient(config.Database.Postgres)
-	if err != nil {
-		return nil, err
-	}
-
-	repoManager, err := repository.NewRepositoryManager(postgresClient, redisClient)
-	if err != nil {
-		return nil, err
-	}
-
-	containerRepo := repository.NewContainerRedisRepository(redisClient)
-	metricsRepo := repository.NewMetricsStatsdRepository()
-
-	gateway.config = config
-	gateway.ContainerRepo = containerRepo
-	gateway.BackendRepo = repoManager.Backend
-	gateway.metricsRepo = metricsRepo
-
-	return gateway, nil
+	}, nil
 }
 
 func (g *Gateway) initHttp() error {
@@ -108,16 +96,16 @@ func (g *Gateway) initHttp() error {
 	g.httpServer.Use(middleware.Logger())
 	g.httpServer.Use(middleware.Recover())
 
-	authMiddleware := auth.AuthMiddleware(g.BackendRepo)
+	authMiddleware := auth.AuthMiddleware(g.repoManager.Backend)
 	g.baseRouteGroup = g.httpServer.Group(apiv1.HttpServerBaseRoute)
 
-	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.redisClient)
-	apiv1.NewDeployGroup(g.baseRouteGroup.Group("/deploy", authMiddleware), g.BackendRepo)
+	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.repoManager.RedisClient)
+	apiv1.NewDeployGroup(g.baseRouteGroup.Group("/deploy", authMiddleware), g.repoManager.Backend)
 	return nil
 }
 
 func (g *Gateway) initGrpc() error {
-	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo)
+	authInterceptor := auth.NewAuthInterceptor(g.repoManager.Backend)
 
 	serverOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(authInterceptor.Unary()),
@@ -135,49 +123,49 @@ func (g *Gateway) initGrpc() error {
 
 func (g *Gateway) registerServices() error {
 	// Register map service
-	rm, err := dmap.NewRedisMapService(g.redisClient)
+	rm, err := dmap.NewRedisMapService(g.repoManager.RedisClient)
 	if err != nil {
 		return err
 	}
 	pb.RegisterMapServiceServer(g.grpcServer, rm)
 
 	// Register simple queue service
-	rq, err := simplequeue.NewRedisSimpleQueueService(g.redisClient)
+	rq, err := simplequeue.NewRedisSimpleQueueService(g.repoManager.RedisClient)
 	if err != nil {
 		return err
 	}
 	pb.RegisterSimpleQueueServiceServer(g.grpcServer, rq)
 
 	// Register image service
-	is, err := image.NewRuncImageService(g.ctx, g.config.ImageService, g.Scheduler, g.ContainerRepo)
+	is, err := image.NewRuncImageService(g.ctx, g.config.ImageService, g.Scheduler, g.repoManager.Container)
 	if err != nil {
 		return err
 	}
 	pb.RegisterImageServiceServer(g.grpcServer, is)
 
 	// Register function service
-	fs, err := function.NewRuncFunctionService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler, g.baseRouteGroup)
+	fs, err := function.NewRuncFunctionService(g.ctx, g.repoManager, g.Scheduler, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}
 	pb.RegisterFunctionServiceServer(g.grpcServer, fs)
 
 	// Register task queue service
-	tq, err := taskqueue.NewRedisTaskQueue(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo, g.baseRouteGroup)
+	tq, err := taskqueue.NewRedisTaskQueue(g.ctx, g.repoManager, g.Scheduler, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}
 	pb.RegisterTaskQueueServiceServer(g.grpcServer, tq)
 
 	// Register volume service
-	vs, err := volume.NewGlobalVolumeService(g.BackendRepo)
+	vs, err := volume.NewGlobalVolumeService(g.repoManager.Backend)
 	if err != nil {
 		return err
 	}
 	pb.RegisterVolumeServiceServer(g.grpcServer, vs)
 
 	// Register scheduler
-	s, err := scheduler.NewSchedulerService(g.config, g.redisClient)
+	s, err := scheduler.NewSchedulerService(g.config, g.repoManager.RedisClient)
 	if err != nil {
 		return err
 	}
@@ -185,7 +173,7 @@ func (g *Gateway) registerServices() error {
 
 	// Register gateway services
 	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction)
-	gws, err := gatewayservices.NewGatewayService(g.BackendRepo, s.Scheduler)
+	gws, err := gatewayservices.NewGatewayService(g.repoManager.Backend, s.Scheduler)
 	if err != nil {
 		return err
 	}

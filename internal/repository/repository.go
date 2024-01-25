@@ -5,6 +5,9 @@ import (
 )
 
 type RepositoryManager struct {
+	PostgresClient *SQLClient
+	RedisClient    *common.RedisClient
+
 	Backend    BackendRepository
 	Container  ContainerRepository
 	Worker     WorkerRepository
@@ -13,6 +16,9 @@ type RepositoryManager struct {
 
 func NewRepositoryManager(s *SQLClient, r *common.RedisClient) (*RepositoryManager, error) {
 	return &RepositoryManager{
+		PostgresClient: s,
+		RedisClient:    r,
+
 		Backend:    NewBackendPostgresRepository(s),
 		Container:  NewContainerRedisRepository(r),
 		Worker:     NewWorkerRedisRepository(r),

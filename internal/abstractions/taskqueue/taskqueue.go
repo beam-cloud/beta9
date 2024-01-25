@@ -47,14 +47,12 @@ type RedisTaskQueue struct {
 }
 
 func NewRedisTaskQueue(ctx context.Context,
-	rdb *common.RedisClient,
+	repoManager *repository.RepositoryManager,
 	scheduler *scheduler.Scheduler,
-	containerRepo repository.ContainerRepository,
-	backendRepo repository.BackendRepository,
 	baseRouteGroup *echo.Group,
 ) (TaskQueueService, error) {
 	keyEventChan := make(chan common.KeyEvent)
-	keyEventManager, err := common.NewKeyEventManager(rdb)
+	keyEventManager, err := common.NewKeyEventManager(repoManager.RedisClient)
 	if err != nil {
 		return nil, err
 	}
@@ -63,13 +61,13 @@ func NewRedisTaskQueue(ctx context.Context,
 
 	tq := &RedisTaskQueue{
 		ctx:             ctx,
-		rdb:             rdb,
+		rdb:             repoManager.RedisClient,
 		scheduler:       scheduler,
 		keyEventChan:    keyEventChan,
 		keyEventManager: keyEventManager,
-		containerRepo:   containerRepo,
-		backendRepo:     backendRepo,
-		queueClient:     newRedisTaskQueueClient(rdb),
+		containerRepo:   repoManager.Container,
+		backendRepo:     repoManager.Backend,
+		queueClient:     newRedisTaskQueueClient(repoManager.RedisClient),
 		queueInstances:  common.NewSafeMap[*taskQueueInstance](),
 	}
 
@@ -77,7 +75,7 @@ func NewRedisTaskQueue(ctx context.Context,
 	go tq.monitorTasks()
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(backendRepo)
+	authMiddleware := auth.AuthMiddleware(repoManager.Backend)
 	registerTaskQueueRoutes(baseRouteGroup.Group(taskQueueRoutePrefix, authMiddleware), tq)
 
 	return tq, nil

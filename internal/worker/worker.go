@@ -116,11 +116,12 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	containerRepo := repo.NewContainerRedisRepository(redisClient)
-	workerRepo := repo.NewWorkerRedisRepository(redisClient)
-	statsdRepo := repo.NewMetricsStatsdRepository()
+	repoManager, err := repo.NewRepositoryManager(nil, redisClient)
+	if err != nil {
+		return nil, err
+	}
 
-	imageClient, err := NewImageClient(config.ImageService, workerId, workerRepo)
+	imageClient, err := NewImageClient(config.ImageService, workerId, repoManager.Worker)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +142,9 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	workerMetrics := NewWorkerMetrics(ctx, podHostName, statsdRepo, workerRepo, repo.NewMetricsStreamRepository(ctx, config.Metrics))
+
+	// TODO: Make changes to this after the new metrics system is in place
+	workerMetrics := NewWorkerMetrics(ctx, podHostName, statsdRepo, repoManager.Worker, repo.NewMetricsStreamRepository(ctx, config.Metrics))
 
 	return &Worker{
 		ctx:                  ctx,
@@ -163,12 +166,12 @@ func NewWorker() (*Worker, error) {
 		containerInstances:   containerInstances,
 		containerLock:        sync.Mutex{},
 		containerWg:          sync.WaitGroup{},
-		containerRepo:        containerRepo,
+		containerRepo:        repoManager.Container,
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
 		},
 		workerMetrics:     workerMetrics,
-		workerRepo:        workerRepo,
+		workerRepo:        repoManager.Worker,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
 		stopContainerChan: make(chan string, 1000),
 		storage:           storage,
