@@ -13,7 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/kinesis"
 	"github.com/aws/aws-sdk-go-v2/service/kinesis/types"
-	beamTypes "github.com/beam-cloud/beam/internal/types"
+	beta9Types "github.com/beam-cloud/beta9/internal/types"
 )
 
 var shardRecordLimit int32 = 100
@@ -23,7 +23,7 @@ type KinesisClient struct {
 	ctx                *context.Context
 	shardIterators     map[string]*string
 	shardIteratorMutex sync.Mutex
-	sinks              map[string]*beamTypes.EventSink
+	sinks              map[string]*beta9Types.EventSink
 	sinkMutex          sync.Mutex
 	streamName         string
 }
@@ -58,7 +58,7 @@ func NewKinesisClient(ctx context.Context, streamName string, region string, opt
 	return &KinesisClient{
 		client:     client,
 		ctx:        &ctx,
-		sinks:      make(map[string]*beamTypes.EventSink),
+		sinks:      make(map[string]*beta9Types.EventSink),
 		streamName: streamName,
 	}, nil
 }
@@ -137,9 +137,9 @@ func (kcc *KinesisClient) IterateShards() {
 					shardIterator = getRecordsResp.NextShardIterator
 					kcc.shardIterators[shardId] = shardIterator
 
-					events := make([]beamTypes.Event, len(getRecordsResp.Records))
+					events := make([]beta9Types.Event, len(getRecordsResp.Records))
 					for idx, record := range getRecordsResp.Records {
-						event := beamTypes.Event{}
+						event := beta9Types.Event{}
 						err := json.Unmarshal(record.Data, &event)
 						if err != nil {
 							continue // silently skip event if it can't be unmarshalled
@@ -166,7 +166,7 @@ func (kcc *KinesisClient) IterateShards() {
 	}
 }
 
-func (kcc *KinesisClient) AddSink(sinkId string, sink *beamTypes.EventSink) error {
+func (kcc *KinesisClient) AddSink(sinkId string, sink *beta9Types.EventSink) error {
 	kcc.sinkMutex.Lock()
 	if _, exists := kcc.sinks[sinkId]; exists {
 		kcc.sinkMutex.Unlock()
@@ -190,7 +190,7 @@ func (kcc *KinesisClient) RemoveSink(sinkId string) error {
 	return nil
 }
 
-func (kcc *KinesisClient) PushEvent(event beamTypes.Event) error {
+func (kcc *KinesisClient) PushEvent(event beta9Types.Event) error {
 	data, err := json.Marshal(event)
 	if err != nil {
 		return err

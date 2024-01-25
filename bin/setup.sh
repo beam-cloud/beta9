@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 
+# ----------------------------------------------
+# This script is used to setup the environment for Kubernetes development.
+# It installs kubectl, stern, okteto, and k3d on the machine.
+# It determines the operating system and architecture of the machine to download the appropriate binaries.
+# ----------------------------------------------
+
 set +xeu
 
 os=$(uname -s | tr '[:upper:]' '[:lower:]')

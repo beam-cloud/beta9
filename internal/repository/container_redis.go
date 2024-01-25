@@ -7,8 +7,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/types"
 	redis "github.com/redis/go-redis/v9"
 )
 
@@ -70,7 +70,7 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, info *
 }
 
 func (cr *ContainerRedisRepository) SetContainerExitCode(containerId string, exitCode int) error {
-	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 1})
 	if err != nil {
 		return err
 	}

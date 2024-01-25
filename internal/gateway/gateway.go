@@ -13,22 +13,22 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"google.golang.org/grpc"
 
-	"github.com/beam-cloud/beam/internal/abstractions/container"
-	"github.com/beam-cloud/beam/internal/abstractions/function"
-	"github.com/beam-cloud/beam/internal/abstractions/image"
-	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
-	simplequeue "github.com/beam-cloud/beam/internal/abstractions/queue"
-	"github.com/beam-cloud/beam/internal/abstractions/taskqueue"
-	volume "github.com/beam-cloud/beam/internal/abstractions/volume"
-	apiv1 "github.com/beam-cloud/beam/internal/api/v1"
-	"github.com/beam-cloud/beam/internal/auth"
-	"github.com/beam-cloud/beam/internal/common"
-	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
-	"github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/scheduler"
-	"github.com/beam-cloud/beam/internal/storage"
-	"github.com/beam-cloud/beam/internal/types"
-	pb "github.com/beam-cloud/beam/proto"
+	"github.com/beam-cloud/beta9/internal/abstractions/container"
+	"github.com/beam-cloud/beta9/internal/abstractions/function"
+	"github.com/beam-cloud/beta9/internal/abstractions/image"
+	dmap "github.com/beam-cloud/beta9/internal/abstractions/map"
+	simplequeue "github.com/beam-cloud/beta9/internal/abstractions/queue"
+	"github.com/beam-cloud/beta9/internal/abstractions/taskqueue"
+	volume "github.com/beam-cloud/beta9/internal/abstractions/volume"
+	apiv1 "github.com/beam-cloud/beta9/internal/api/v1"
+	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/internal/common"
+	gatewayservices "github.com/beam-cloud/beta9/internal/gateway/services"
+	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/scheduler"
+	"github.com/beam-cloud/beta9/internal/storage"
+	"github.com/beam-cloud/beta9/internal/types"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 type Gateway struct {
@@ -54,7 +54,7 @@ func NewGateway() (*Gateway, error) {
 	}
 	config := configManager.GetConfig()
 
-	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("BeamGateway"))
+	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Gateway"))
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +116,8 @@ func (g *Gateway) initGrpc() error {
 	serverOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(authInterceptor.Unary()),
 		grpc.StreamInterceptor(authInterceptor.Stream()),
+		grpc.MaxRecvMsgSize(g.config.GatewayService.MaxRecvMsgSize * 1024 * 1024),
+		grpc.MaxSendMsgSize(g.config.GatewayService.MaxSendMsgSize * 1024 * 1024),
 	}
 
 	g.grpcServer = grpc.NewServer(

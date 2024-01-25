@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/beam-cloud/beam/internal/common"
+	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/labstack/echo/v4"
 )
 

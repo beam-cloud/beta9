@@ -1,4 +1,4 @@
-bin/beam
+bin/gateway
 bin/runner
 bin/worker
 tmp/*
@@ -15,4 +15,4 @@ venv
 terraform.tfstate*
 terraform.tfvars
 sdk/src/build
-sdk/src/Beam.egg-info
+sdk/src/beta9.egg-info

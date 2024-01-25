@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	common "github.com/beam-cloud/beam/internal/common"
-	repo "github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/storage"
-	types "github.com/beam-cloud/beam/internal/types"
+	common "github.com/beam-cloud/beta9/internal/common"
+	repo "github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/storage"
+	types "github.com/beam-cloud/beta9/internal/types"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -111,12 +111,16 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("BeamWorker"))
+	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("orker"))
 	if err != nil {
 		return nil, err
 	}
 
-	imageClient, err := NewImageClient(config.ImageService)
+	containerRepo := repo.NewContainerRedisRepository(redisClient)
+	workerRepo := repo.NewWorkerRedisRepository(redisClient)
+	statsdRepo := repo.NewMetricsStatsdRepository()
+
+	imageClient, err := NewImageClient(config.ImageService, workerId, workerRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -137,11 +141,6 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	containerRepo := repo.NewContainerRedisRepository(redisClient)
-	workerRepo := repo.NewWorkerRedisRepository(redisClient)
-	statsdRepo := repo.NewMetricsStatsdRepository()
-
 	workerMetrics := NewWorkerMetrics(ctx, podHostName, statsdRepo, workerRepo, repo.NewMetricsStreamRepository(ctx, config.Metrics))
 
 	return &Worker{
@@ -549,8 +548,8 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
-		fmt.Sprintf("BEAM_GATEWAY_HOST=%s", s.config.GatewayService.Host),
-		fmt.Sprintf("BEAM_GATEWAY_PORT=%d", s.config.GatewayService.Port),
+		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", s.config.GatewayService.Host),
+		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.Port),
 		"PYTHONUNBUFFERED=1",
 	}
 	env = append(env, request.Env...)

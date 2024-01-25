@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -147,10 +147,10 @@ func (wpc *KubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu 
 }
 
 func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string) (*batchv1.Job, *types.Worker) {
-	jobName := fmt.Sprintf("%s-%s-%s", BeamWorkerJobPrefix, wpc.name, workerId)
+	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
-		"app":              "beam-" + BeamWorkerLabelValue,
-		BeamWorkerLabelKey: BeamWorkerLabelValue,
+		"app":               Beta9WorkerLabelValue,
+		Beta9WorkerLabelKey: Beta9WorkerLabelValue,
 	}
 
 	workerCpu := cpu
@@ -366,11 +366,11 @@ func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string,
 			Value: defaultClusterDomain,
 		},
 		{
-			Name:  "BEAM_GATEWAY_HOST",
+			Name:  "BETA9_GATEWAY_HOST",
 			Value: wpc.config.GatewayService.Host,
 		},
 		{
-			Name:  "BEAM_GATEWAY_PORT",
+			Name:  "BETA9_GATEWAY_PORT",
 			Value: fmt.Sprint(wpc.config.GatewayService.Port),
 		},
 	}
@@ -389,7 +389,7 @@ func (wpc *KubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		jobSelector := fmt.Sprintf("%s=%s", BeamWorkerLabelKey, BeamWorkerLabelValue)
+		jobSelector := fmt.Sprintf("%s=%s", Beta9WorkerLabelKey, Beta9WorkerLabelValue)
 		jobs, err := wpc.kubeClient.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{LabelSelector: jobSelector})
 		if err != nil {
 			log.Printf("Failed to list jobs for controller <%s>: %v\n", wpc.name, err)

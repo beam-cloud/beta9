@@ -3,7 +3,7 @@ package auth
 import (
 	"strings"
 
-	"github.com/beam-cloud/beam/internal/repository"
+	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/labstack/echo/v4"
 )
 

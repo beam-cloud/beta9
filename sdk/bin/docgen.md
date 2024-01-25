@@ -1,6 +1,6 @@
 # docgen
 
-Use this tool to generate markdown for Beam's SDK Reference documentation page.
+Use this tool to generate markdown for beta9's SDK Reference documentation page.
 
 ## How it works
 

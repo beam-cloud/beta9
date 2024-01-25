@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 type SchedulerRepository interface{}
@@ -23,6 +23,8 @@ type WorkerRepository interface {
 	AddContainerRequestToWorker(workerId string, containerId string, request *types.ContainerRequest) error
 	RemoveContainerRequestFromWorker(workerId string, containerId string) error
 	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
+	SetImagePullLock(workerId, imageId string) error
+	RemoveImagePullLock(workerId, imageId string) error
 }
 
 type ContainerRepository interface {
@@ -76,9 +78,9 @@ type MetricsStatsdRepository interface {
 	ContainerRequested(containerId string)
 	ContainerScheduled(containerId string)
 	ContainerDuration(containerId string, workerId string, timestampNs int64, duration time.Duration)
-	BeamDeploymentRequestDuration(bucketName string, duration time.Duration)
-	BeamDeploymentRequestStatus(bucketName string, status int)
-	BeamDeploymentRequestCount(bucketName string)
+	Beta9DeploymentRequestDuration(bucketName string, duration time.Duration)
+	Beta9DeploymentRequestStatus(bucketName string, status int)
+	Beta9DeploymentRequestCount(bucketName string)
 	WorkerStarted(workerId string)
 	WorkerStopped(workerId string)
 	WorkerDuration(workerId string, timestampNs int64, duration time.Duration)

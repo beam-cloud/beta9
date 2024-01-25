@@ -1,6 +1,6 @@
-# Beam Arc on Crusoe Cloud
+# Beta9 on Crusoe Cloud
 
-This will help you run a single instance of Beam Arc on [Crusoe Cloud](https://docs.crusoecloud.com/).
+This will help you run a single instance of Beta9 on [Crusoe Cloud](https://docs.crusoecloud.com/).
 
 ## Prereqs
 
