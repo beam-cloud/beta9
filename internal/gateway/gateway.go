@@ -9,27 +9,26 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	"google.golang.org/grpc"
+
+	"github.com/beam-cloud/beam/internal/abstractions/container"
 	"github.com/beam-cloud/beam/internal/abstractions/function"
 	"github.com/beam-cloud/beam/internal/abstractions/image"
 	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
 	simplequeue "github.com/beam-cloud/beam/internal/abstractions/queue"
 	"github.com/beam-cloud/beam/internal/abstractions/taskqueue"
-	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
-
 	volume "github.com/beam-cloud/beam/internal/abstractions/volume"
-
 	apiv1 "github.com/beam-cloud/beam/internal/api/v1"
 	"github.com/beam-cloud/beam/internal/auth"
 	"github.com/beam-cloud/beam/internal/common"
-
+	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
 	"github.com/beam-cloud/beam/internal/repository"
 	"github.com/beam-cloud/beam/internal/scheduler"
 	"github.com/beam-cloud/beam/internal/storage"
 	"github.com/beam-cloud/beam/internal/types"
 	pb "github.com/beam-cloud/beam/proto"
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-	"google.golang.org/grpc"
 )
 
 type Gateway struct {
@@ -168,6 +167,13 @@ func (g *Gateway) registerServices() error {
 		return err
 	}
 	pb.RegisterVolumeServiceServer(g.grpcServer, vs)
+
+	// Register container service
+	cs, err := container.NewContainerService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler)
+	if err != nil {
+		return err
+	}
+	pb.RegisterContainerServiceServer(g.grpcServer, cs)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService(g.config, g.redisClient)

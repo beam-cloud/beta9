@@ -28,3 +28,6 @@ protoc -I ../internal/abstractions/taskqueue/ --python_betterproto_out=../sdk/sr
 
 protoc -I ../internal/abstractions/endpoint/ --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ../internal/abstractions/endpoint/endpoint.proto
 protoc -I ../internal/abstractions/endpoint/ --python_betterproto_out=../sdk/src/beam/clients/  ../internal/abstractions/endpoint/endpoint.proto
+
+protoc -I ../internal/abstractions/container/ --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ../internal/abstractions/container/container.proto
+protoc -I ../internal/abstractions/container/ --python_betterproto_out=../sdk/src/beam/clients/  ../internal/abstractions/container/container.proto
