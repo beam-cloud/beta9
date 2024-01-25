@@ -119,7 +119,7 @@ class _CallableWrapper:
             terminal.error("Function failed ☠️")
             return None
 
-        terminal.header("Function complete 🎉")
+        terminal.header(f"Function complete. <{r.task_id}>")
         return cloudpickle.loads(last_response.result)
 
     def local(self, *args, **kwargs) -> Any:
