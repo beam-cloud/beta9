@@ -9,18 +9,66 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/beam-cloud/beta9/internal/common"
 	_ "github.com/beam-cloud/beta9/internal/repository/backend_postgres_migrations"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
+	"github.com/pressly/goose/v3"
 )
 
-type PostgresBackendRepository struct {
-	client *common.SQLClient
+type SQLClient struct {
+	*sqlx.DB
 }
 
-func NewBackendPostgresRepository(s *common.SQLClient) *PostgresBackendRepository {
+func NewPostgresClient(config types.PostgresConfig) (*SQLClient, error) {
+	sslMode := "disable"
+	if config.EnableTLS {
+		sslMode = "require"
+	}
+
+	dsn := fmt.Sprintf(
+		"host=%s user=%s password=%s dbname=%s port=%d sslmode=%s TimeZone=%s",
+		config.Host,
+		config.Username,
+		config.Password,
+		config.Name,
+		config.Port,
+		sslMode,
+		config.TimeZone,
+	)
+	db, err := sqlx.Connect("postgres", dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &SQLClient{db}
+
+	// TODO: Remove this when we have a proper migration solution
+	if err := client.migrate(); err != nil {
+		return nil, err
+	}
+
+	return client, nil
+}
+
+func (c *SQLClient) migrate() error {
+	if err := goose.SetDialect("postgres"); err != nil {
+		return err
+	}
+
+	if err := goose.Up(c.DB.DB, "./"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+type PostgresBackendRepository struct {
+	client *SQLClient
+}
+
+func NewBackendPostgresRepository(s *SQLClient) *PostgresBackendRepository {
 	return &PostgresBackendRepository{s}
 }
 

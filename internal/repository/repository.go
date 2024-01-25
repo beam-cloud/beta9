@@ -11,7 +11,7 @@ type RepositoryManager struct {
 	WorkerPool WorkerPoolRepository
 }
 
-func NewRepositoryManager(s *common.SQLClient, r *common.RedisClient) (*RepositoryManager, error) {
+func NewRepositoryManager(s *SQLClient, r *common.RedisClient) (*RepositoryManager, error) {
 	return &RepositoryManager{
 		Backend:    NewBackendPostgresRepository(s),
 		Container:  NewContainerRedisRepository(r),

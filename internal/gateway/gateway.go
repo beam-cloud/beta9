@@ -79,7 +79,7 @@ func NewGateway() (*Gateway, error) {
 		Scheduler:   scheduler,
 	}
 
-	postgresClient, err := common.NewPostgresClient(config.Database.Postgres)
+	postgresClient, err := repository.NewPostgresClient(config.Database.Postgres)
 	if err != nil {
 		return nil, err
 	}
