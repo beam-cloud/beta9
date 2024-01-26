@@ -57,7 +57,7 @@ spec:
       - name: gateway
         image: registry.localhost:5000/beta9-gateway:latest
         command:
-        - /workspace/bin/gateway
+        - /usr/local/bin/gateway
         ports:
         - name: grpc
           containerPort: 1993
