@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, List, Optional, Union
+from typing import List, Optional, Union
 
 from beta9 import terminal
 from beta9.abstractions.base.runner import (
@@ -92,7 +92,7 @@ class Container(RunnerAbstraction):
 
     def _stop(self) -> bool:
         if self.container_id == "":
-            terminal.warn(f"Failed to stop container command execution: container_id not found")
+            terminal.warn("Failed to stop container command execution: container_id not found")
             return False
         stop_result: StopContainerRunResponse = self.run_sync(self.container_stub.stop_container(container_id=self.container_id))
         if not stop_result.success:
