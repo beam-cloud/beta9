@@ -1,16 +1,19 @@
-name: Build and release Gateway
+name: Build and release Runner
 
 on:
   release:
     types: [created]
     tags:
-      - 'gateway-*'
+      - 'runner-*'
 
 jobs:
-  build_and_release_gateway:
+  build_and_release_runner:
     environment: Release
     runs-on: ubuntu-latest
-
+    strategy:
+      matrix:
+        python-version: ['py38', 'py39', 'py310', 'py311']
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
@@ -30,18 +33,19 @@ jobs:
           registry-type: public
 
       - name: Extract tag name
-        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/gateway-}" >> $GITHUB_ENV
+        run: echo "RUNNER_TAG=${GITHUB_REF#refs/tags/runner-}" >> $GITHUB_ENV
 
-      - name: Build and push Docker image
+      - name: Build and push Docker image for ${{ matrix.python-version }}
         uses: docker/build-push-action@v4
         with:
           context: .
-          file: ./docker/Dockerfile.gateway
+          file: ./docker/Dockerfile.runner
           push: true
-          tags: ${{ secrets.ECR_REGISTRY }}/beta9-gateway:${{ env.TAG_NAME }}
-          build-args: --target=release
+          tags:  ${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.python-version }}-${{ env.RUNNER_TAG }}
+          build-args: |
+            TARGET=${{ matrix.python-version }}
           load: false
           registry: ${{ steps.login-ecr.outputs.registry }}
-          repository: ${{ steps.login-ecr.outputs.registry }}/beta9-gateway
+          repository: ${{ steps.login-ecr.outputs.registry }}/beta9-runner
           add_git_labels: true
           tag_with_ref: true
