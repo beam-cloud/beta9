@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 type SchedulerRepository interface{}
@@ -23,6 +23,8 @@ type WorkerRepository interface {
 	AddContainerRequestToWorker(workerId string, containerId string, request *types.ContainerRequest) error
 	RemoveContainerRequestFromWorker(workerId string, containerId string) error
 	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
+	SetImagePullLock(workerId, imageId string) error
+	RemoveImagePullLock(workerId, imageId string) error
 }
 
 type ContainerRepository interface {
@@ -66,15 +68,6 @@ type BackendRepository interface {
 type WorkerPoolRepository interface {
 	GetPool(name string) (*types.WorkerPoolConfig, error)
 	GetPools() ([]types.WorkerPoolConfig, error)
-	SetPool(name string, pool *types.WorkerPoolConfig) error
+	SetPool(name string, pool types.WorkerPoolConfig) error
 	RemovePool(name string) error
-}
-
-type MetricsRepository interface {
-	Init() error
-	ContainerDurationSeconds(containerId string, workerId string, duration time.Duration)
-}
-
-type MetricsStreamRepository interface {
-	ContainerResourceUsage(usage types.ContainerResourceUsage) error
 }

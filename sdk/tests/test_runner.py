@@ -1,6 +1,6 @@
 import unittest
 
-from beam.abstractions.base.runner import RunnerAbstraction
+from beta9.abstractions.base.runner import RunnerAbstraction
 
 
 class TestRunner(unittest.TestCase):

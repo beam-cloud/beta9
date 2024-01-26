@@ -1,4 +1,4 @@
-bin/beam
+bin/gateway
 bin/runner
 bin/worker
 tmp/*
@@ -11,5 +11,8 @@ __pycache__
 venv
 .python-version
 .DS_Store
+.terraform*
+terraform.tfstate*
+terraform.tfvars
 sdk/src/build
-sdk/src/Beam.egg-info
+sdk/src/beta9.egg-info

@@ -6,8 +6,8 @@ const (
 	WorkerLifecycleStarted string = "STARTED"
 	WorkerLifecycleStopped string = "STOPPED"
 
-	WorkerLifecycleStatsKey        string        = "beam.worker.usage.spawner.lifecycle"
-	WorkerDurationStatsKey         string        = "beam.worker.usage.spawner.duration"
+	WorkerLifecycleStatsKey        string        = "beta9.worker.usage.spawner.lifecycle"
+	WorkerDurationStatsKey         string        = "beta9.worker.usage.spawner.duration"
 	WorkerDurationEmissionInterval time.Duration = 30 * time.Second
 	WorkerUserCodeVolume           string        = "/mnt/code"
 )

@@ -6,15 +6,15 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"syscall"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/abstractions/image"
-	common "github.com/beam-cloud/beam/internal/common"
-	types "github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/abstractions/image"
+	common "github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/repository"
+	types "github.com/beam-cloud/beta9/internal/types"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/moby/sys/mountinfo"
@@ -46,9 +46,11 @@ type ImageClient struct {
 	Debug          bool
 	Creds          string
 	config         types.ImageServiceConfig
+	workerId       string
+	workerRepo     repository.WorkerRepository
 }
 
-func NewImageClient(config types.ImageServiceConfig) (*ImageClient, error) {
+func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
 	var provider CredentialProvider // Configure image registry credentials
 
 	switch config.RegistryCredentialProviderName {
@@ -78,8 +80,10 @@ func NewImageClient(config types.ImageServiceConfig) (*ImageClient, error) {
 		}
 	}
 
-	baseImagePath := filepath.Join(imageCachePath)
-	os.MkdirAll(baseImagePath, os.ModePerm)
+	err = os.MkdirAll(imageCachePath, os.ModePerm)
+	if err != nil {
+		return nil, err
+	}
 
 	creds, err := provider.GetAuthString()
 	if err != nil {
@@ -90,11 +94,13 @@ func NewImageClient(config types.ImageServiceConfig) (*ImageClient, error) {
 		config:         config,
 		registry:       registry,
 		cacheClient:    cacheClient,
-		ImagePath:      baseImagePath,
+		ImagePath:      imageCachePath,
 		PullCommand:    imagePullCommand,
 		CommandTimeout: -1,
 		Debug:          false,
 		Creds:          creds,
+		workerId:       workerId,
+		workerRepo:     workerRepo,
 	}, nil
 }
 
@@ -121,13 +127,12 @@ func (c *ImageClient) PullLazy(imageId string) error {
 		return nil
 	}
 
-	// Attempt to acquire the lock
-	fileLock := NewFileLock(path.Join(imagePath, fmt.Sprintf("%s_%s", imageId, imageMountLockFilename)))
-	if err := fileLock.Acquire(); err != nil {
-		fmt.Printf("Unable to acquire mount lock: %v\n", err)
+	// Get lock on image mount
+	err = c.workerRepo.SetImagePullLock(c.workerId, imageId)
+	if err != nil {
 		return err
 	}
-	defer fileLock.Release()
+	defer c.workerRepo.RemoveImagePullLock(c.workerId, imageId)
 
 	startServer, _, err := clip.MountArchive(*mountOptions)
 	if err != nil {
@@ -143,7 +148,7 @@ func (c *ImageClient) PullLazy(imageId string) error {
 }
 
 func (i *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds *string) error {
-	baseImage, err := i.extractImageNameAndTag(sourceImage)
+	baseImage, err := extractImageNameAndTag(sourceImage)
 	if err != nil {
 		return err
 	}
@@ -165,13 +170,13 @@ func (i *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 
 	status, err := runc.Monitor.Wait(cmd, ec)
 	if err == nil && status != 0 {
-		err = fmt.Errorf("unable to pull base image: %s", sourceImage)
+		log.Printf("unable to copy base image: %v -> %v", sourceImage, dest)
 	}
 
 	bundlePath := filepath.Join(imagePath, imageId)
 	err = i.unpack(baseImage.ImageName, baseImage.ImageTag, bundlePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to unpack image: %v", err)
 	}
 
 	defer func() {
@@ -186,34 +191,6 @@ func (i *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
 		return runc.Monitor.StartLocked(cmd)
 	}
 	return runc.Monitor.Start(cmd)
-}
-
-func (i *ImageClient) extractImageNameAndTag(sourceImage string) (image.BaseImage, error) {
-	re := regexp.MustCompile(`^(([^/]+/[^/]+)/)?([^:]+):?(.*)$`)
-	matches := re.FindStringSubmatch(sourceImage)
-
-	if matches == nil {
-		return image.BaseImage{}, errors.New("invalid image URI format")
-	}
-
-	// Use default source registry if not specified
-	sourceRegistry := "docker.io"
-	if matches[2] != "" {
-		sourceRegistry = matches[2]
-	}
-
-	imageName := matches[3]
-	imageTag := "latest"
-
-	if matches[4] != "" {
-		imageTag = matches[4]
-	}
-
-	return image.BaseImage{
-		SourceRegistry: sourceRegistry,
-		ImageName:      imageName,
-		ImageTag:       imageTag,
-	}, nil
 }
 
 func (i *ImageClient) args(creds *string) (out []string) {
@@ -322,4 +299,29 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 
 	log.Printf("Image <%v> push took %v\n", imageId, time.Since(startTime))
 	return nil
+}
+
+var imageNamePattern = regexp.MustCompile(`^(?:(.*?)\/)?(?:([^\/:]+)\/)?([^\/:]+)(?::([^\/:]+))?$`)
+
+func extractImageNameAndTag(sourceImage string) (image.BaseImage, error) {
+	matches := imageNamePattern.FindStringSubmatch(sourceImage)
+	if matches == nil {
+		return image.BaseImage{}, errors.New("invalid image URI format")
+	}
+
+	registry, name, tag := matches[1], matches[3], matches[4]
+
+	if registry == "" {
+		registry = "docker.io"
+	}
+
+	if tag == "" {
+		tag = "latest"
+	}
+
+	return image.BaseImage{
+		SourceRegistry: registry,
+		ImageName:      name,
+		ImageTag:       tag,
+	}, nil
 }

@@ -1,9 +1,9 @@
 package gatewayservices
 
 import (
-	"github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/scheduler"
-	pb "github.com/beam-cloud/beam/proto"
+	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/scheduler"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 type GatewayService struct {

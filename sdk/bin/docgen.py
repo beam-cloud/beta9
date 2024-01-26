@@ -4,9 +4,7 @@ import inspect
 import textwrap
 from enum import Enum
 
-from docstring_parser import parse
-
-from beam import (
+from beta9 import (
     App,
     Autoscaling,
     AutoscalingType,
@@ -21,6 +19,7 @@ from beam import (
     Volume,
     VolumeType,
 )
+from docstring_parser import parse
 
 EXCLUDED_FUNCS = [
     "_",

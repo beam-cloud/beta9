@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	common "github.com/beam-cloud/beam/internal/common"
-	repo "github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/storage"
-	types "github.com/beam-cloud/beam/internal/types"
+	common "github.com/beam-cloud/beta9/internal/common"
+	repo "github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/storage"
+	types "github.com/beam-cloud/beta9/internal/types"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -112,12 +112,15 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("BeamWorker"))
+	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("orker"))
 	if err != nil {
 		return nil, err
 	}
 
-	imageClient, err := NewImageClient(config.ImageService)
+	containerRepo := repo.NewContainerRedisRepository(redisClient)
+	workerRepo := repo.NewWorkerRedisRepository(redisClient)
+
+	imageClient, err := NewImageClient(config.ImageService, workerId, workerRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -138,15 +141,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	containerRepo := repo.NewContainerRedisRepository(redisClient)
-	workerRepo := repo.NewWorkerRedisRepository(redisClient)
-	metricsRepo := repo.NewMetricsPrometheusRepository(config.Metrics.Prometheus.Enabled)
-
-	workerMetrics := NewWorkerMetrics(ctx, podHostName, metricsRepo, workerRepo)
-	workerMetrics.Init()
-
-	eventsRepo := repo.NewEventRepo(repo.DefaultEventStreamName)
+	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config.Metrics.Prometheus)
 
 	return &Worker{
 		ctx:                  ctx,
@@ -518,11 +513,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(request, done)
-	// s.workerMetrics.ContainerStarted(containerId)
-	// defer s.workerMetrics.ContainerStopped(containerId)
+	// TODO: Handle event for ContainerStarted
+	// TODO: Handle deferred event for ContainerStopped
 
 	pidChan := make(chan int, 1)
-	// go s.workerMetrics.EmitResourceUsage(request, pidChan, done)
 
 	// Invoke runc process (launch the container)
 	// This will return exit code 137 even if the container is stopped gracefully. We don't know why.
@@ -554,8 +548,8 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
-		fmt.Sprintf("BEAM_GATEWAY_HOST=%s", s.config.GatewayService.Host),
-		fmt.Sprintf("BEAM_GATEWAY_PORT=%d", s.config.GatewayService.Port),
+		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", s.config.GatewayService.Host),
+		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.GRPCPort),
 		"PYTHONUNBUFFERED=1",
 	}
 	env = append(env, request.Env...)
@@ -688,8 +682,7 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 
 func (s *Worker) startup() error {
 	log.Printf("Worker starting up.")
-	// s.workerMetrics.WorkerStarted()
-	// go s.workerMetrics.EmitWorkerDuration()
+	// TODO: Handle event for WorkerSarted
 
 	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
 	if err != nil {
@@ -714,7 +707,7 @@ func (s *Worker) startup() error {
 
 func (s *Worker) shutdown() error {
 	log.Printf("Worker spinning down.")
-	// s.workerMetrics.WorkerStopped()
+	// TODO: Handle event for WorkerStopped
 
 	worker, err := s.workerRepo.GetWorkerById(s.workerId)
 	if err != nil {
@@ -726,7 +719,6 @@ func (s *Worker) shutdown() error {
 		return err
 	}
 
-	s.workerMetrics.Shutdown()
 	s.cancel()
 	return nil
 }

@@ -3,9 +3,8 @@ package scheduler
 import (
 	"context"
 
-	"github.com/beam-cloud/beam/internal/common"
-	"github.com/beam-cloud/beam/internal/types"
-	pb "github.com/beam-cloud/beam/proto"
+	"github.com/beam-cloud/beta9/internal/types"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 type SchedulerService struct {
@@ -13,13 +12,8 @@ type SchedulerService struct {
 	Scheduler *Scheduler
 }
 
-func NewSchedulerService(config types.AppConfig, redisClient *common.RedisClient) (*SchedulerService, error) {
-	scheduler, err := NewScheduler(config, redisClient)
-	if err != nil {
-		return nil, err
-	}
-
-	go scheduler.processRequests() // Start processing ContainerRequests
+func NewSchedulerService(scheduler *Scheduler) (*SchedulerService, error) {
+	go scheduler.StartProcessingRequests() // Start processing ContainerRequests
 
 	return &SchedulerService{
 		Scheduler: scheduler,

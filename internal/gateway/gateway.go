@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -9,24 +10,24 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/beam-cloud/beam/internal/abstractions/function"
-	"github.com/beam-cloud/beam/internal/abstractions/image"
-	dmap "github.com/beam-cloud/beam/internal/abstractions/map"
-	simplequeue "github.com/beam-cloud/beam/internal/abstractions/queue"
-	"github.com/beam-cloud/beam/internal/abstractions/taskqueue"
-	gatewayservices "github.com/beam-cloud/beam/internal/gateway/services"
+	"github.com/beam-cloud/beta9/internal/abstractions/function"
+	"github.com/beam-cloud/beta9/internal/abstractions/image"
+	dmap "github.com/beam-cloud/beta9/internal/abstractions/map"
+	simplequeue "github.com/beam-cloud/beta9/internal/abstractions/queue"
+	"github.com/beam-cloud/beta9/internal/abstractions/taskqueue"
+	gatewayservices "github.com/beam-cloud/beta9/internal/gateway/services"
 
-	volume "github.com/beam-cloud/beam/internal/abstractions/volume"
+	volume "github.com/beam-cloud/beta9/internal/abstractions/volume"
 
-	apiv1 "github.com/beam-cloud/beam/internal/api/v1"
-	"github.com/beam-cloud/beam/internal/auth"
-	"github.com/beam-cloud/beam/internal/common"
+	apiv1 "github.com/beam-cloud/beta9/internal/api/v1"
+	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/internal/common"
 
-	"github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/scheduler"
-	"github.com/beam-cloud/beam/internal/storage"
-	"github.com/beam-cloud/beam/internal/types"
-	pb "github.com/beam-cloud/beam/proto"
+	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/scheduler"
+	"github.com/beam-cloud/beta9/internal/storage"
+	"github.com/beam-cloud/beta9/internal/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"google.golang.org/grpc"
@@ -40,7 +41,7 @@ type Gateway struct {
 	redisClient    *common.RedisClient
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
-	metricsRepo    repository.MetricsRepository
+	metricsRepo    repository.PrometheusRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
 	ctx            context.Context
@@ -55,12 +56,14 @@ func NewGateway() (*Gateway, error) {
 	}
 	config := configManager.GetConfig()
 
-	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("BeamGateway"))
+	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Gateway"))
 	if err != nil {
 		return nil, err
 	}
 
-	scheduler, err := scheduler.NewScheduler(config, redisClient)
+	metricsRepo := repository.NewMetricsPrometheusRepository(config.Metrics.Prometheus)
+
+	scheduler, err := scheduler.NewScheduler(config, redisClient, metricsRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +88,6 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
-	metricsRepo := repository.NewMetricsPrometheusRepository(config.Metrics.Prometheus.Enabled)
 
 	gateway.config = config
 	gateway.ContainerRepo = containerRepo
@@ -117,6 +119,8 @@ func (g *Gateway) initGrpc() error {
 	serverOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(authInterceptor.Unary()),
 		grpc.StreamInterceptor(authInterceptor.Stream()),
+		grpc.MaxRecvMsgSize(g.config.GatewayService.MaxRecvMsgSize * 1024 * 1024),
+		grpc.MaxSendMsgSize(g.config.GatewayService.MaxSendMsgSize * 1024 * 1024),
 	}
 
 	g.grpcServer = grpc.NewServer(
@@ -170,7 +174,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterVolumeServiceServer(g.grpcServer, vs)
 
 	// Register scheduler
-	s, err := scheduler.NewSchedulerService(g.config, g.redisClient)
+	s, err := scheduler.NewSchedulerService(g.Scheduler)
 	if err != nil {
 		return err
 	}
@@ -189,7 +193,7 @@ func (g *Gateway) registerServices() error {
 
 // Gateway entry point
 func (g *Gateway) Start() error {
-	listener, err := net.Listen("tcp", GatewayConfig.GrpcServerAddress)
+	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", g.config.GatewayService.GRPCPort))
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
@@ -217,7 +221,7 @@ func (g *Gateway) Start() error {
 	}()
 
 	go func() {
-		if err := g.httpServer.Start(GatewayConfig.HttpServerAddress); err != nil && err != http.ErrServerClosed {
+		if err := g.httpServer.Start(fmt.Sprintf("0.0.0.0:%d", g.config.GatewayService.HTTPPort)); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start http server: %v", err)
 		}
 	}()
@@ -228,8 +232,8 @@ func (g *Gateway) Start() error {
 		}
 	}()
 
-	log.Println("Gateway http server running @", GatewayConfig.HttpServerAddress)
-	log.Println("Gateway grpc server running @", GatewayConfig.GrpcServerAddress)
+	log.Println("Gateway http server running @", g.config.GatewayService.HTTPPort)
+	log.Println("Gateway grpc server running @", g.config.GatewayService.GRPCPort)
 
 	terminationSignal := make(chan os.Signal, 1)
 	defer close(terminationSignal)

@@ -1,8 +1,8 @@
 from unittest import TestCase
 from unittest.mock import MagicMock
 
-from beam.abstractions.volume import Volume
-from beam.clients.volume import GetOrCreateVolumeResponse
+from beta9.abstractions.volume import Volume
+from beta9.clients.volume import GetOrCreateVolumeResponse
 
 from .utils import mock_coroutine_with_result
 

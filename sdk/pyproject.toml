@@ -1,11 +1,11 @@
 [tool.poetry]
-name = "beam-sdk"
-version = "0.16.0-rc1"
+name = "beta9"
+version = "0.1.0"
 description = ""
 authors = ["beam.cloud <support@beam.cloud>"]
 packages = [
-    { include = "beam", from = "src" },
-    { include = "beam/**/*.py", from = "src" },
+    { include = "beta9", from = "src" },
+    { include = "beta9/**/*.py", from = "src" },
 ]
 
 [tool.poetry.dependencies]
@@ -37,7 +37,7 @@ ruff = "^0.1.11"
 pydantic = "^2.5.3"
 
 [tool.poetry.scripts]
-beam = "beam.cli.main:cli"
+beta9 = "beta9.cli.main:cli"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -49,8 +49,8 @@ pythonpath = ["src"]
 [tool.ruff]
 line-length = 100
 ignore-init-module-imports = true
-exclude = ["src/beam/clients"]
+exclude = ["src/beta9/clients"]
 src = ["src", "test", "bin"]
 
 [tool.ruff.per-file-ignores]
-"src/beam/__init__.py" = ["F403"]
+"src/beta9/__init__.py" = ["F403"]

@@ -2,15 +2,13 @@ package scheduler
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"sort"
-	"strings"
 	"time"
 
-	"github.com/beam-cloud/beam/internal/common"
-	repo "github.com/beam-cloud/beam/internal/repository"
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/common"
+	repo "github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 const (
@@ -22,21 +20,22 @@ type Scheduler struct {
 	workerPoolManager *WorkerPoolManager
 	requestBacklog    *RequestBacklog
 	containerRepo     repo.ContainerRepository
-	metricsRepo       repo.MetricsRepository
+	schedulerMetrics  SchedulerMetrics
 	eventBus          *common.EventBus
 }
 
-func NewScheduler(config types.AppConfig, redisClient *common.RedisClient) (*Scheduler, error) {
+func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.PrometheusRepository) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
+	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 
 	workerPoolManager := NewWorkerPoolManager(workerPoolRepo)
 	for name, pool := range config.Worker.Pools {
 		controller, _ := NewKubernetesWorkerPoolController(config, name, workerRepo)
-		workerPoolManager.SetPool(name, &pool, controller)
+		workerPoolManager.SetPool(name, pool, controller)
 	}
 
 	return &Scheduler{
@@ -45,6 +44,7 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient) (*Sch
 		workerPoolManager: workerPoolManager,
 		requestBacklog:    requestBacklog,
 		containerRepo:     containerRepo,
+		schedulerMetrics:  schedulerMetrics,
 	}, nil
 }
 
@@ -64,7 +64,8 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	// s.metricsRepo.ContainerRequested(request.ContainerId)
+	go s.schedulerMetrics.ContainerRequested()
+	// TODO: Handle event for ContainerRequested
 
 	err = s.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
 		Status:      types.ContainerStatusPending,
@@ -101,28 +102,23 @@ func (s *Scheduler) Stop(containerId string) error {
 }
 
 func (s *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolController, error) {
-	poolName := "beam-cpu"
+	var ok bool
+	var workerPool *WorkerPool
 
-	if request.Gpu != "" {
-		switch types.GPUType(request.Gpu) {
-		case types.GPU_T4, types.GPU_A10G:
-			poolName = fmt.Sprintf("beam-%s", strings.ToLower(request.Gpu))
-		case types.GPU_L4, types.GPU_A100_40, types.GPU_A100_80:
-			poolName = fmt.Sprintf("beam-%s-gcp", strings.ToLower(request.Gpu))
-		default:
-			return nil, errors.New("unsupported gpu")
-		}
+	if request.Gpu == "" {
+		workerPool, ok = s.workerPoolManager.GetPool("default")
+	} else {
+		workerPool, ok = s.workerPoolManager.GetPoolByGPU(request.Gpu)
 	}
 
-	workerPool, ok := s.workerPoolManager.GetPool(poolName)
 	if !ok {
-		return nil, fmt.Errorf("no controller found for worker pool name: %s", poolName)
+		return nil, errors.New("no controller found for request")
 	}
 
 	return workerPool.Controller, nil
 }
 
-func (s *Scheduler) processRequests() {
+func (s *Scheduler) StartProcessingRequests() {
 	for {
 		if s.requestBacklog.Len() == 0 {
 			time.Sleep(RequestProcessingInterval)
@@ -174,7 +170,8 @@ func (s *Scheduler) processRequests() {
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	// s.metricsRepo.ContainerScheduled(request.ContainerId)
+	go s.schedulerMetrics.ContainerScheduled()
+	// TODO: Handle event for ContainerScheduled
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 

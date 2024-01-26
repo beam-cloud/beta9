@@ -1,24 +1,24 @@
 package scheduler
 
 import (
-	"github.com/beam-cloud/beam/internal/types"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 const (
-	BeamWorkerLabelKey      string = "run.beam.cloud/role"
-	BeamWorkerLabelValue    string = "worker"
-	BeamWorkerJobPrefix     string = "worker"
-	tmpVolumeName           string = "beam-tmp"
-	logVolumeName           string = "beam-logs"
-	imagesVolumeName        string = "beam-images"
-	configVolumeName        string = "beam-config"
-	configSecretName        string = "beam"
+	Beta9WorkerLabelKey     string = "run.beam.cloud/role"
+	Beta9WorkerLabelValue   string = "worker"
+	Beta9WorkerJobPrefix    string = "worker"
+	PrometheusScrapeKey     string = "prometheus.io/scrape"
+	tmpVolumeName           string = "beta9-tmp"
+	logVolumeName           string = "beta9-logs"
+	imagesVolumeName        string = "beta9-images"
+	configVolumeName        string = "beta9-config"
+	configSecretName        string = "beta9"
 	configMountPath         string = "/etc/config"
 	defaultClusterDomain    string = "cluster.local"
 	defaultContainerName    string = "worker"
 	defaultWorkerEntrypoint string = "/usr/local/bin/worker"
 	defaultWorkerLogPath    string = "/var/log/worker"
-	defaultProvisionerLabel string = "karpenter.sh/provisioner-name"
 )
 
 type WorkerPoolController interface {
@@ -28,10 +28,7 @@ type WorkerPoolController interface {
 	FreeCapacity() (*WorkerPoolCapacity, error)
 }
 
-// TODO: Some of these variables are tied to the worker pool jobs and should really live on the CR
-// Once things are stable we can move those over.
 type WorkerPoolConfig struct {
-	DataVolumeName             string
 	DefaultWorkerCpuRequest    int64
 	DefaultWorkerMemoryRequest int64
 }
