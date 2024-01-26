@@ -2,7 +2,7 @@ from unittest import TestCase
 from unittest.mock import MagicMock, AsyncMock
 
 from beta9 import Image
-from beta9.clients.container import ContainerServiceStub, CommandExecutionRequest, CommandExecutionResponse
+from beta9.clients.container import CommandExecutionResponse
 from beta9.abstractions.container import Container
 
 class AsyncIterator:
