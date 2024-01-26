@@ -1,5 +1,5 @@
+import asyncio
 from typing import Any, List, Optional, Union
-
 
 from beta9 import terminal
 from beta9.abstractions.base.runner import (
@@ -31,7 +31,6 @@ class Container(RunnerAbstraction):
     def run(self, command: List[str]) -> int: 
         """Run a command in a container"""
         if not self.prepare_runtime(
-            func=None,
             stub_type=CONTAINER_STUB_TYPE,
         ):
             return 1
@@ -39,6 +38,14 @@ class Container(RunnerAbstraction):
         with terminal.progress("Working..."):
             return self.run_sync(self._run_remote(command))
     
+    async def run_async(self, command: List[str]) -> Any:
+        # FIXME: prepare_runtime_async is in rough shape and could use some love
+        result: bool = await self.prepare_runtime_async(stub_type=CONTAINER_STUB_TYPE)
+        if not result:
+            return 1
+
+        return asyncio.create_task(self._run_remote(command))
+
     async def _run_remote(self, command: List[str]) -> Any:
         terminal.header("Running command")
 
