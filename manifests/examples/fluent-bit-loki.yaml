@@ -44,7 +44,7 @@ spec:
         [OUTPUT]
             Name      loki
             Match     worker-logs
-            Host      loki.logging.
+            Host      loki.logging.svc.cluster.local
             Tenant_Id beta9
             Labels    job=fluent-bit
 
