@@ -26,6 +26,7 @@ const (
 type ContainerServicer interface {
 	pb.ContainerServiceServer
 	ExecuteCommand(in *pb.CommandExecutionRequest, stream pb.ContainerService_ExecuteCommandServer) error
+	StopContainer(ctx context.Context, in *pb.StopContainerRunRequest) (*pb.StopContainerRunResponse, error)
 }
 
 type ContainerService struct {
@@ -153,7 +154,19 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 	return cs.handleStreams(ctx, stream, authInfo.Workspace.Name, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
 }
 
-func (fs *ContainerService) handleStreams(ctx context.Context,
+func (cs *ContainerService) StopContainer(ctx context.Context, in *pb.StopContainerRunRequest) (*pb.StopContainerRunResponse, error) {
+	msg := "successfully stopped container"
+	err := cs.scheduler.Stop(in.ContainerId)
+	if err != nil {
+		msg = err.Error()
+	}
+	return &pb.StopContainerRunResponse{
+		Success: err == nil,
+		Message: msg,
+	}, err
+}
+
+func (cs *ContainerService) handleStreams(ctx context.Context,
 	stream pb.ContainerService_ExecuteCommandServer,
 	workspaceName, taskId, containerId string,
 	outputChan chan common.OutputMsg, keyEventChan chan common.KeyEvent) error {
@@ -174,13 +187,12 @@ _stream:
 				break _stream
 			}
 		case <-keyEventChan:
-			exitCode, err := fs.containerRepo.GetContainerExitCode(containerId)
+			exitCode, err := cs.containerRepo.GetContainerExitCode(containerId)
 			if err != nil {
 				exitCode = -1
 			}
 
-			// FIXME: result is not used
-			if err := stream.Send(&pb.CommandExecutionResponse{TaskId: taskId, Done: true, Result: []byte{}, ExitCode: int32(exitCode)}); err != nil {
+			if err := stream.Send(&pb.CommandExecutionResponse{TaskId: taskId, Done: true, ExitCode: int32(exitCode)}); err != nil {
 				break
 			}
 		case <-ctx.Done():

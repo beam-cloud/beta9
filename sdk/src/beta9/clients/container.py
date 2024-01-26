@@ -9,6 +9,17 @@ import grpclib
 
 
 @dataclass
+class StopContainerRunRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+
+
+@dataclass
+class StopContainerRunResponse(betterproto.Message):
+    success: bool = betterproto.bool_field(1)
+    message: str = betterproto.string_field(2)
+
+
+@dataclass
 class CommandExecutionRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     command: bytes = betterproto.bytes_field(2)
@@ -20,7 +31,6 @@ class CommandExecutionResponse(betterproto.Message):
     output: str = betterproto.string_field(2)
     done: bool = betterproto.bool_field(3)
     exit_code: int = betterproto.int32_field(4)
-    result: bytes = betterproto.bytes_field(5)
 
 
 class ContainerServiceStub(betterproto.ServiceStub):
@@ -37,3 +47,15 @@ class ContainerServiceStub(betterproto.ServiceStub):
             CommandExecutionResponse,
         ):
             yield response
+
+    async def stop_container(
+        self, *, container_id: str = ""
+    ) -> StopContainerRunResponse:
+        request = StopContainerRunRequest()
+        request.container_id = container_id
+
+        return await self._unary_unary(
+            "/container.ContainerService/StopContainer",
+            request,
+            StopContainerRunResponse,
+        )
