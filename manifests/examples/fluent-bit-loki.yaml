@@ -6,6 +6,7 @@ metadata:
 apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:
+  name: fluent-bit
   namespace: fluent-bit
 spec:
   chart: fluent-bit
@@ -15,15 +16,11 @@ spec:
     config:
       service: |
         [SERVICE]
-            Daemon Off
-            Flush {{ .Values.flush }}
-            Log_Level {{ .Values.logLevel }}
-            Parsers_File /fluent-bit/etc/parsers.conf
-            Parsers_File /fluent-bit/etc/conf/custom_parsers.conf
-            HTTP_Server On
-            HTTP_Listen 0.0.0.0
-            HTTP_Port {{ .Values.metricsPort }}
-            Health_Check On
+            Flush        1
+            Log_Level    info
+            HTTP_Server  On
+            HTTP_Listen  0.0.0.0
+            HTTP_Port    2020
 
       customParsers: |
         [PARSER]
@@ -45,13 +42,11 @@ spec:
 
       outputs: |
         [OUTPUT]
-            name s3
-            bucket ${S3_BUCKET_NAME}
-            match worker-logs
-            use_put_object On
-            total_file_size 1M
-            upload_timeout 1m
-        
+            Name      loki
+            Match     worker-logs
+            Host      loki.logging.
+            Tenant_Id beta9
+            Labels    job=fluent-bit
 
     volumeMounts:
       - name: config
@@ -71,3 +66,26 @@ spec:
       - name: varlibdockercontainers
         mountPath: /var/lib/docker/containers
         readOnly: true
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: loki
+  namespace: logging
+spec:
+  chart: loki
+  repo: https://grafana.github.io/helm-charts
+  version: 5.41.8
+  valuesContent: |
+    loki:
+      commonConfig:
+        replication_factor: 1
+      storage:
+        type: 'filesystem'
+    singleBinary:
+      replicas: 1

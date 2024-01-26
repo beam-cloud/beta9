@@ -3,6 +3,16 @@ kind: Namespace
 metadata:
   name: fluent-bit
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fluent-bit
+type: Opaque
+data:
+  S3_BUCKET_NAME: s3-secrets
+  AWS_ACCESS_KEY_ID: id
+  AWS_SECRET_ACCESS_KEY: secret
+---
 apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:
@@ -12,18 +22,18 @@ spec:
   repo: https://fluent.github.io/helm-charts
   version: 0.42.0
   valuesContent: |
+    envFrom:
+    - secretRef:
+      - name: fluent-bit
+
     config:
       service: |
         [SERVICE]
-            Daemon Off
-            Flush {{ .Values.flush }}
-            Log_Level {{ .Values.logLevel }}
-            Parsers_File /fluent-bit/etc/parsers.conf
-            Parsers_File /fluent-bit/etc/conf/custom_parsers.conf
-            HTTP_Server On
-            HTTP_Listen 0.0.0.0
-            HTTP_Port {{ .Values.metricsPort }}
-            Health_Check On
+            Flush        1
+            Log_Level    info
+            HTTP_Server  On
+            HTTP_Listen  0.0.0.0
+            HTTP_Port    2020
 
       customParsers: |
         [PARSER]
@@ -45,11 +55,13 @@ spec:
 
       outputs: |
         [OUTPUT]
-            Name loki
-            Match worker-logs
-            Host ${LOKI_HOST}
-            Tenant_Id ${LOKI_TENANT_ID}
-            labels job=fluent-bit
+            Name            s3
+            Bucket          ${S3_BUCKET_NAME}
+            Match           worker-logs
+            Use_Put_Object  On
+            Total_File_Size 1M
+            Upload_Timeout  1m
+        
 
     volumeMounts:
       - name: config
