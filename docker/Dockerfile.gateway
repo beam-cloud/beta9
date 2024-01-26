@@ -28,6 +28,6 @@ WORKDIR /workspace
 
 RUN apt autoclean
 
-COPY --from=build /usr/local/bin/gateway /usr/local/bin/
+COPY --from=build /workspace/bin/gateway /usr/local/bin/
 
 CMD ["tail", "-f", "/dev/null"]
