@@ -7,7 +7,7 @@ package container;
 service ContainerService {
   rpc ExecuteCommand(CommandExecutionRequest)
       returns (stream CommandExecutionResponse) {}
-  rpc StopContainer(StopContainerRunRequest)
+  rpc StopContainerRun(StopContainerRunRequest)
       returns (StopContainerRunResponse) {}
 }
 

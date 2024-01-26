@@ -540,6 +540,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 
 	// wait for buffer to clear before container is removed
+	// FIXME: atm on stop this will cause the container to hang as nobody is consuming anymore
+	// could keep track of consumers or something and check if anybody is consuming here
 	for !containerInstance.LogBuffer.IsEmpty() {
 		log.Printf("<%s> - waiting for log buffer to clear", containerId)
 		time.Sleep(100 * time.Millisecond)

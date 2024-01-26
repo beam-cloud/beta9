@@ -48,14 +48,14 @@ class ContainerServiceStub(betterproto.ServiceStub):
         ):
             yield response
 
-    async def stop_container(
+    async def stop_container_run(
         self, *, container_id: str = ""
     ) -> StopContainerRunResponse:
         request = StopContainerRunRequest()
         request.container_id = container_id
 
         return await self._unary_unary(
-            "/container.ContainerService/StopContainer",
+            "/container.ContainerService/StopContainerRun",
             request,
             StopContainerRunResponse,
         )

@@ -23,10 +23,16 @@ class ContainerHandle:
         self.task = task
         self.container = container
 
-    def stop(self) -> bool:
-        if self.container._stop():
+    async def stop(self) -> bool:
+        while not self.container._running():
+            await asyncio.sleep(0.5)
+
+        stopped_container = await self.container._stop()
+        if stopped_container and self.task:
             self.task.cancel()
+            terminal.header("Container command execution stopped 🛑")
             return True
+
         return False
 
 class Container(RunnerAbstraction):
@@ -66,7 +72,7 @@ class Container(RunnerAbstraction):
     ) -> "Container":
         super().__init__(cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes)
 
-        self.container_id = ""
+        self.task_id = ""
         self.container_stub = ContainerServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
 
@@ -90,11 +96,14 @@ class Container(RunnerAbstraction):
         task = asyncio.create_task(self._run_remote(command))
         return ContainerHandle(task, self)
 
-    def _stop(self) -> bool:
-        if self.container_id == "":
+    def _running(self) -> bool:
+        return self.task_id != ""
+
+    async def _stop(self) -> bool:
+        if self.task_id == "":
             terminal.warn("Failed to stop container command execution: container_id not found")
             return False
-        stop_result: StopContainerRunResponse = self.run_sync(self.container_stub.stop_container(container_id=self.container_id))
+        stop_result: StopContainerRunResponse = await self.container_stub.stop_container_run(container_id=f"container-{self.task_id}")
         if not stop_result.success:
             terminal.warn(f"Failed to stop container command execution: {stop_result.message}")
         return stop_result.success
@@ -109,7 +118,7 @@ class Container(RunnerAbstraction):
             command=' '.join(command).encode()
         ):
             if r.task_id != "":
-                self.container_id = r.task_id
+                self.task_id = r.task_id
             # checking response to see if its output or done/error
             if r.output != "":
                 terminal.detail(r.output)

@@ -35,7 +35,7 @@ class TestContainer(TestCase):
         c.prepare_runtime = MagicMock(return_value=True)
         c.syncer = MagicMock()
 
-        mock_stub.execute_command = MagicMock(return_value=AsyncIterator([CommandExecutionResponse(done=True, exit_code=0, result="")]))
+        mock_stub.execute_command = MagicMock(return_value=AsyncIterator([CommandExecutionResponse(done=True, exit_code=0)]))
 
         ec = c.run(["ls"])
         mock_stub.execute_command.assert_called_once_with(stub_id=c.stub_id, command="ls".encode())
@@ -48,7 +48,7 @@ class TestContainer(TestCase):
         c.prepare_runtime = AsyncMock(return_value=True)
         c.syncer = AsyncMock()
 
-        mock_stub.execute_command = AsyncMock(return_value=AsyncIterator([CommandExecutionResponse(done=True, exit_code=0, result="")]))
+        mock_stub.execute_command = AsyncMock(return_value=AsyncIterator([CommandExecutionResponse(done=True, exit_code=0)]))
         ec = await c.run_async(["ls"])
         mock_stub.execute_command.assert_called_once_with(stub_id=c.stub_id, command="ls".encode())
         self.assertEqual(ec, 0)

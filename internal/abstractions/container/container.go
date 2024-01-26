@@ -26,7 +26,7 @@ const (
 type ContainerServicer interface {
 	pb.ContainerServiceServer
 	ExecuteCommand(in *pb.CommandExecutionRequest, stream pb.ContainerService_ExecuteCommandServer) error
-	StopContainer(ctx context.Context, in *pb.StopContainerRunRequest) (*pb.StopContainerRunResponse, error)
+	StopContainerRun(ctx context.Context, in *pb.StopContainerRunRequest) (*pb.StopContainerRunResponse, error)
 }
 
 type ContainerService struct {
@@ -154,7 +154,7 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 	return cs.handleStreams(ctx, stream, authInfo.Workspace.Name, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
 }
 
-func (cs *ContainerService) StopContainer(ctx context.Context, in *pb.StopContainerRunRequest) (*pb.StopContainerRunResponse, error) {
+func (cs *ContainerService) StopContainerRun(ctx context.Context, in *pb.StopContainerRunRequest) (*pb.StopContainerRunResponse, error) {
 	msg := "successfully stopped container"
 	err := cs.scheduler.Stop(in.ContainerId)
 	if err != nil {
