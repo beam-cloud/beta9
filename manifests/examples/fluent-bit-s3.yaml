@@ -7,8 +7,9 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: fluent-bit
+  namespace: fluent-bit
 type: Opaque
-data:
+stringData:
   S3_BUCKET_NAME: s3-secrets
   AWS_ACCESS_KEY_ID: id
   AWS_SECRET_ACCESS_KEY: secret

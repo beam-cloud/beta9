@@ -6,9 +6,10 @@ metadata:
 apiVersion: v1
 kind: Secret
 metadata:
+  namespace: fluent-bit
   name: fluent-bit
 type: Opaque
-data:
+stringData:
   ELASTICSEARCH_HOST: host
   ELASTICSEARCH_PORT: 9090
   ELASTICSEARCH_USER: user
