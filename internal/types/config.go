@@ -10,6 +10,7 @@ type AppConfig struct {
 	Metrics        MetricsConfig        `key:"metrics"`
 	Storage        StorageConfig        `key:"storage"`
 	Worker         WorkerConfig         `key:"worker"`
+	FluentBit      FluentBitConfig      `key:"fluentBit"`
 }
 
 type DatabaseConfig struct {
@@ -152,4 +153,13 @@ type MetricsConfig struct {
 type PrometheusConfig struct {
 	ScrapeWorkers bool `key:"scrapeWorkers"`
 	Port          int  `key:"port"`
+}
+
+type FluentBitConfig struct {
+	Events FluentBitEventConfig `key:"events"`
+}
+
+type FluentBitEventConfig struct {
+	Host string `key:"host"`
+	Port int    `key:"port"`
 }
