@@ -1,4 +1,4 @@
-name: Build and Push Worker
+name: Build and release Worker
 
 on:
   release:
