@@ -108,7 +108,7 @@ func (s *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolCo
 	if request.Gpu == "" {
 		workerPool, ok = s.workerPoolManager.GetPool("default")
 	} else {
-		workerPool, ok = s.workerPoolManager.GetPoolByGPU(request.Gpu)
+		workerPool, ok = s.workerPoolManager.GetPoolByGPU(request)
 	}
 
 	if !ok {

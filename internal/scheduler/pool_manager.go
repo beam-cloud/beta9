@@ -50,12 +50,27 @@ func (m *WorkerPoolManager) GetPool(name string) (*WorkerPool, bool) {
 	return pool, true
 }
 
-func (m *WorkerPoolManager) GetPoolByGPU(gpuType string) (*WorkerPool, bool) {
+func (m *WorkerPoolManager) GetPoolByGPU(request *types.ContainerRequest) (*WorkerPool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	// TODO: since we could have multiple pools per gpu, we need other variables
+	// to allow us to choose between the different pools
+
+	// Some ideas:
+	//  - machine hourly cost
+	//  - machine availability - pool controllers are GPU-specific,
+	//  so if we know which provider a pool belongs to, we could try and figure out if we are going to have to wait for a machine
+
+	/*
+		Let's talk through the pool selection algorithm.
+		First, we
+	*/
+
 	for _, pool := range m.pools {
-		if pool.Config.GPUType == gpuType {
+		// pool.Controller.HourlyPrice()
+		// pool.Controller.EstimatedWait()
+		if pool.Config.GPUType == request.Gpu {
 			return pool, true
 		}
 	}
