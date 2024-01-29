@@ -29,6 +29,8 @@ Beta9 is an open-source platform for running remote containers directly from Pyt
 
 We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale.
 
+![demo gif](sdk/docs/demo.gif)
+
 ## Features
 
 - Scale out workloads to hundreds of machines (with GPU support!)
