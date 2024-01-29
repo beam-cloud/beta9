@@ -15,7 +15,6 @@ const (
 	configVolumeName        string = "beta9-config"
 	configSecretName        string = "beta9"
 	configMountPath         string = "/etc/config"
-	defaultClusterDomain    string = "cluster.local"
 	defaultContainerName    string = "worker"
 	defaultWorkerEntrypoint string = "/usr/local/bin/worker"
 	defaultWorkerLogPath    string = "/var/log/worker"
@@ -26,7 +25,6 @@ type WorkerPoolController interface {
 	AddWorkerWithId(workerId string, cpu int64, memory int64, gpuType string) (*types.Worker, error)
 	Name() string
 	FreeCapacity() (*WorkerPoolCapacity, error)
-	// Provision
 	// EstimatedWait()
 	// HourlyPrice
 }

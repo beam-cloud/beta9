@@ -52,7 +52,6 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	log.Printf("Received RUN request: %+v\n", request)
 
 	request.Timestamp = time.Now()
-	request.OnScheduleChan = make(chan bool, 1)
 
 	containerState, err := s.containerRepo.GetContainerState(request.ContainerId)
 	if err == nil {
@@ -65,6 +64,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	}
 
 	go s.schedulerMetrics.ContainerRequested()
+
 	// TODO: Handle event for ContainerRequested
 
 	err = s.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{

@@ -125,9 +125,17 @@ type WorkerConfig struct {
 	DefaultWorkerMemoryRequest int64 `key:"defaultWorkerMemoryRequest"`
 }
 
+type PoolMode string
+
+var (
+	PoolModeLocal  PoolMode = "local"
+	PoolModeRemote PoolMode = "remote"
+)
+
 type WorkerPoolConfig struct {
 	GPUType    string                            `key:"gpuType"`
 	Runtime    string                            `key:"runtime"`
+	Mode       PoolMode                          `key:"mode"`
 	JobSpec    WorkerPoolJobSpecConfig           `key:"jobSpec"`
 	PoolSizing WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing"`
 }

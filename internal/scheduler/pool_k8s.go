@@ -369,10 +369,6 @@ func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string,
 			Value: wpc.config.Worker.Namespace,
 		},
 		{
-			Name:  "CLUSTER_DOMAIN",
-			Value: defaultClusterDomain,
-		},
-		{
 			Name:  "BETA9_GATEWAY_HOST",
 			Value: wpc.config.GatewayService.Host,
 		},

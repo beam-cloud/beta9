@@ -64,27 +64,17 @@ type ContainerRequest struct {
 	Timestamp       time.Time `json:"timestamp"`
 	ScheduleTimeout float64   `json:"schedule_timeout"`
 	Mounts          []Mount   `json:"mounts"`
-	OnScheduleChan  chan bool `json:"-"`
 }
 
 const ContainerExitCodeTtlS int = 300
 
-// Container Stats
 const (
-	ContainerDurationStatsKey              string        = "beta9.worker.usage.container.duration"
-	ContainerLifecycleStatsKey             string        = "beta9.worker.usage.container.lifecycle"
 	ContainerDurationEmissionInterval      time.Duration = 30 * time.Second
 	ContainerResourceUsageEmissionInterval time.Duration = 3 * time.Second
-
-	// Container Statuses
-	ContainerStatusRequested string = "REQUESTED"
-	ContainerStatusScheduled string = "SCHEDULED"
-	ContainerStatusStarted   string = "STARTED"
-	ContainerStatusStopped   string = "STOPPED"
 )
 const ContainerStateTtlSWhilePending int = 600
 const ContainerStateTtlS int = 60
-const IdentityQuotaTtlS int = 600
+const WorkspaceQuotaTtlS int = 600
 
 type ErrContainerStateNotFound struct {
 	ContainerId string

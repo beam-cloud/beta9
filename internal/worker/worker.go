@@ -111,7 +111,7 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("orker"))
+	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
 	if err != nil {
 		return nil, err
 	}

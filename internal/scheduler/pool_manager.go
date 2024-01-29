@@ -62,11 +62,6 @@ func (m *WorkerPoolManager) GetPoolByGPU(request *types.ContainerRequest) (*Work
 	//  - machine availability - pool controllers are GPU-specific,
 	//  so if we know which provider a pool belongs to, we could try and figure out if we are going to have to wait for a machine
 
-	/*
-		Let's talk through the pool selection algorithm.
-		First, we
-	*/
-
 	for _, pool := range m.pools {
 		// pool.Controller.HourlyPrice()
 		// pool.Controller.EstimatedWait()
