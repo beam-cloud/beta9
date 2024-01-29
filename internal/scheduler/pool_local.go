@@ -43,11 +43,7 @@ func NewLocalKubernetesWorkerPoolController(config types.AppConfig, workerPoolNa
 		return nil, err
 	}
 
-	workerPool, ok := config.Worker.Pools[workerPoolName]
-	if !ok {
-		return nil, fmt.Errorf("worker pool %s not found", workerPoolName)
-	}
-
+	workerPool, _ := config.Worker.Pools[workerPoolName]
 	wpc := &LocalKubernetesWorkerPoolController{
 		name:       workerPoolName,
 		config:     config,

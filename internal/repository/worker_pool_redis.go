@@ -92,3 +92,7 @@ func (r *WorkerPoolRedisRepository) RemovePool(name string) error {
 
 	return r.rdb.Del(context.TODO(), common.RedisKeys.WorkerPoolState(name)).Err()
 }
+
+func (r *WorkerPoolRedisRepository) GetMachines(name string) error {
+	return nil
+}

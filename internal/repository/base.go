@@ -70,4 +70,5 @@ type WorkerPoolRepository interface {
 	GetPools() ([]types.WorkerPoolConfig, error)
 	SetPool(name string, pool types.WorkerPoolConfig) error
 	RemovePool(name string) error
+	GetMachines(name string) error
 }

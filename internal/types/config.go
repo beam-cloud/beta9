@@ -128,8 +128,9 @@ type WorkerConfig struct {
 type PoolMode string
 
 var (
-	PoolModeLocal  PoolMode = "local"
-	PoolModeRemote PoolMode = "remote"
+	PoolModeLocal PoolMode = "local"
+	PoolModeMetal PoolMode = "metal"
+	PoolModeAgent PoolMode = "agent"
 )
 
 type WorkerPoolConfig struct {

@@ -47,7 +47,7 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metri
 		}
 
 		if err != nil {
-			log.Printf("unable to load controller: %+v\n", err)
+			log.Printf("unable to load controller<%s>: %+v\n", name, err)
 			continue
 		}
 
