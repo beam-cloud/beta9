@@ -34,7 +34,7 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metri
 
 	workerPoolManager := NewWorkerPoolManager(workerPoolRepo)
 	for name, pool := range config.Worker.Pools {
-		controller, _ := NewKubernetesWorkerPoolController(config, name, workerRepo)
+		controller, _ := NewLocalKubernetesWorkerPoolController(config, name, workerRepo)
 		workerPoolManager.SetPool(name, pool, controller)
 	}
 

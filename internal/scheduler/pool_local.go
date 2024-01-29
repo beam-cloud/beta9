@@ -22,7 +22,9 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-type KubernetesWorkerPoolController struct {
+// A "local" k8s worker pool controller means
+// the pool is local to the control plane / in-cluser
+type LocalKubernetesWorkerPoolController struct {
 	name       string
 	config     types.AppConfig
 	kubeClient *kubernetes.Clientset
@@ -30,7 +32,7 @@ type KubernetesWorkerPoolController struct {
 	workerRepo repository.WorkerRepository
 }
 
-func NewKubernetesWorkerPoolController(config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository) (WorkerPoolController, error) {
+func NewLocalKubernetesWorkerPoolController(config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository) (WorkerPoolController, error) {
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -46,7 +48,7 @@ func NewKubernetesWorkerPoolController(config types.AppConfig, workerPoolName st
 		return nil, fmt.Errorf("worker pool %s not found", workerPoolName)
 	}
 
-	wpc := &KubernetesWorkerPoolController{
+	wpc := &LocalKubernetesWorkerPoolController{
 		name:       workerPoolName,
 		config:     config,
 		kubeClient: kubeClient,
@@ -65,11 +67,11 @@ func NewKubernetesWorkerPoolController(config types.AppConfig, workerPoolName st
 	return wpc, nil
 }
 
-func (wpc *KubernetesWorkerPoolController) Name() string {
+func (wpc *LocalKubernetesWorkerPoolController) Name() string {
 	return wpc.name
 }
 
-func (wpc *KubernetesWorkerPoolController) poolId() string {
+func (wpc *LocalKubernetesWorkerPoolController) poolId() string {
 	hasher := sha256.New()
 	hasher.Write([]byte(wpc.name))
 	hash := hasher.Sum(nil)
@@ -78,7 +80,7 @@ func (wpc *KubernetesWorkerPoolController) poolId() string {
 	return poolId
 }
 
-func (wpc *KubernetesWorkerPoolController) monitorPoolSize(workerPool *types.WorkerPoolConfig) error {
+func (wpc *LocalKubernetesWorkerPoolController) monitorPoolSize(workerPool *types.WorkerPoolConfig) error {
 	config, err := ParsePoolSizingConfig(workerPool.PoolSizing)
 	if err != nil {
 		return err
@@ -93,7 +95,7 @@ func (wpc *KubernetesWorkerPoolController) monitorPoolSize(workerPool *types.Wor
 	return nil
 }
 
-func (wpc *KubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
+func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
 	workers, err := wpc.workerRepo.GetAllWorkersInPool(wpc.poolId())
 	if err != nil {
 		return nil, err
@@ -117,16 +119,16 @@ func (wpc *KubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, 
 	return capacity, nil
 }
 
-func (wpc *KubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error) {
+func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error) {
 	workerId := wpc.generateWorkerId()
 	return wpc.addWorkerWithId(workerId, cpu, memory, gpuType)
 }
 
-func (wpc *KubernetesWorkerPoolController) AddWorkerWithId(workerId string, cpu int64, memory int64, gpuType string) (*types.Worker, error) {
+func (wpc *LocalKubernetesWorkerPoolController) AddWorkerWithId(workerId string, cpu int64, memory int64, gpuType string) (*types.Worker, error) {
 	return wpc.addWorkerWithId(workerId, cpu, memory, gpuType)
 }
 
-func (wpc *KubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu int64, memory int64, gpuType string) (*types.Worker, error) {
+func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu int64, memory int64, gpuType string) (*types.Worker, error) {
 	// Create a new worker job
 	job, worker := wpc.createWorkerJob(workerId, cpu, memory, gpuType)
 
@@ -146,7 +148,7 @@ func (wpc *KubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu 
 	return worker, nil
 }
 
-func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string) (*batchv1.Job, *types.Worker) {
+func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
 		"app":               Beta9WorkerLabelValue,
@@ -263,12 +265,12 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 	}
 }
 
-func (wpc *KubernetesWorkerPoolController) createJobInCluster(job *batchv1.Job) error {
+func (wpc *LocalKubernetesWorkerPoolController) createJobInCluster(job *batchv1.Job) error {
 	_, err := wpc.kubeClient.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(context.Background(), job, metav1.CreateOptions{})
 	return err
 }
 
-func (wpc *KubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
+func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	sharedMemoryLimit := resource.MustParse(fmt.Sprintf("%dMi", workerMemory/2))
 
@@ -314,7 +316,7 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) 
 	)
 }
 
-func (wpc *KubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMount {
+func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMount {
 	return []corev1.VolumeMount{
 		{
 			Name:      tmpVolumeName,
@@ -338,7 +340,7 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1.Volu
 	}
 }
 
-func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string) []corev1.EnvVar {
+func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string) []corev1.EnvVar {
 	return []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
@@ -383,7 +385,7 @@ var AddWorkerTimeout = 10 * time.Minute
 
 // deleteStalePendingWorkerJobs ensures that jobs are deleted if they don't
 // start a pod after a certain amount of time.
-func (wpc *KubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
+func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 	ctx := context.Background()
 	maxAge := AddWorkerTimeout
 	namespace := wpc.config.Worker.Namespace
@@ -433,6 +435,6 @@ func (wpc *KubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 	}
 }
 
-func (wpc *KubernetesWorkerPoolController) generateWorkerId() string {
+func (wpc *LocalKubernetesWorkerPoolController) generateWorkerId() string {
 	return uuid.New().String()[:8]
 }
