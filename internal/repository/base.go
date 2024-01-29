@@ -71,21 +71,3 @@ type WorkerPoolRepository interface {
 	SetPool(name string, pool types.WorkerPoolConfig) error
 	RemovePool(name string) error
 }
-
-type MetricsStatsdRepository interface {
-	ContainerStarted(containerId string, workerId string)
-	ContainerStopped(containerId string, workerId string)
-	ContainerRequested(containerId string)
-	ContainerScheduled(containerId string)
-	ContainerDuration(containerId string, workerId string, timestampNs int64, duration time.Duration)
-	Beta9DeploymentRequestDuration(bucketName string, duration time.Duration)
-	Beta9DeploymentRequestStatus(bucketName string, status int)
-	Beta9DeploymentRequestCount(bucketName string)
-	WorkerStarted(workerId string)
-	WorkerStopped(workerId string)
-	WorkerDuration(workerId string, timestampNs int64, duration time.Duration)
-}
-
-type MetricsStreamRepository interface {
-	ContainerResourceUsage(usage types.ContainerResourceUsage) error
-}

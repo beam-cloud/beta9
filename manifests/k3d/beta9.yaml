@@ -49,16 +49,21 @@ spec:
   template:
     metadata:
       labels:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
         app: gateway
     spec:
       containers:
       - name: gateway
         image: registry.localhost:5000/beta9-gateway:latest
         command:
-        - /workspace/bin/gateway
+        - /usr/local/bin/gateway
         ports:
         - name: grpc
           containerPort: 1993
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
           protocol: TCP
         securityContext:
           privileged: true
@@ -108,6 +113,9 @@ kind: Service
 metadata:
   name: gateway
   namespace: beta9
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
 spec:
   selector:
     app: gateway
@@ -119,6 +127,10 @@ spec:
   - name: http
     port: 1994
     targetPort: 1994
+    protocol: TCP
+  - name: prometheus
+    port: 9090
+    targetPort: 9090
     protocol: TCP
 ---
 apiVersion: traefik.containo.us/v1alpha1
