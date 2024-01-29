@@ -2,7 +2,6 @@ package repository
 
 import (
 	"encoding/json"
-	"log"
 	"net"
 	"strconv"
 	"time"
@@ -12,57 +11,69 @@ import (
 )
 
 type TCPEventClientRepo struct {
-	address string
+	conn net.Conn
 }
 
 func NewTCPEventClientRepo(config *types.AppConfig) EventRepository {
+	address := config.FluentBit.Events.Host + ":" + strconv.Itoa(config.FluentBit.Events.Port)
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		// It could likely be that the events endpoint is not turned on which is not an error
+		return nil
+	}
+
 	return &TCPEventClientRepo{
-		address: config.FluentBit.Events.Host + ":" + strconv.Itoa(config.FluentBit.Events.Port),
+		conn: conn,
 	}
 }
 
-func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion string, data []byte) types.Event {
+func (t *TCPEventClientRepo) Close() {
+	t.conn.Close()
+}
+
+func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion string, data []byte) (types.Event, error) {
+	objectId, err := common.GenerateObjectId()
+	if err != nil {
+		return types.Event{}, err
+	}
+
 	return types.Event{
-		Id:            common.GenerateObjectId(),
+		Id:            objectId,
 		Name:          eventName,
 		Created:       time.Now().Unix(),
 		SchemaVersion: schemaVersion,
 		Data:          data,
-	}
+	}, nil
 }
 
 func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, data interface{}) error {
-	conn, err := net.Dial("tcp", t.address)
-	if err != nil {
-		log.Println(err)
-		return err
+	if t.conn == nil {
+		return nil
 	}
-	defer conn.Close()
 
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
-		log.Println(err)
 		return err
 	}
 
-	eventBytes, err := json.Marshal(
-		t.createEventObject(eventName, schemaVersion, dataBytes),
-	)
+	event, err := t.createEventObject(eventName, schemaVersion, dataBytes)
 	if err != nil {
-		log.Println(err)
 		return err
 	}
 
-	_, err = conn.Write(eventBytes)
+	eventBytes, err := json.Marshal(event)
 	if err != nil {
-		log.Println(err)
+		return err
+	}
+
+	_, err = t.conn.Write(eventBytes)
+	if err != nil {
 		return err
 	}
 
 	buffer := make([]byte, 1024)
-	_, err = conn.Read(buffer)
+	_, err = t.conn.Read(buffer)
 	if err != nil {
-		log.Println(err)
 		return err
 	}
 
