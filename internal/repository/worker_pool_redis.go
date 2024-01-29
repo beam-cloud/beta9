@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"strings"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -94,5 +95,11 @@ func (r *WorkerPoolRedisRepository) RemovePool(name string) error {
 }
 
 func (r *WorkerPoolRedisRepository) GetMachines(name string) error {
+	pool, err := r.GetPool(name)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("getting machines for pool: %+v\n", pool)
 	return nil
 }

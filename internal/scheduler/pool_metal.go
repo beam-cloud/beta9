@@ -1,6 +1,8 @@
 package scheduler
 
 import (
+	"log"
+
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 	"k8s.io/client-go/kubernetes"
@@ -8,14 +10,15 @@ import (
 )
 
 type MetalWorkerPoolController struct {
-	name       string
-	config     types.AppConfig
-	kubeClient *kubernetes.Clientset
-	workerPool types.WorkerPoolConfig
-	workerRepo repository.WorkerRepository
+	name           string
+	config         types.AppConfig
+	kubeClient     *kubernetes.Clientset
+	workerPool     types.WorkerPoolConfig
+	workerRepo     repository.WorkerRepository
+	workerPoolRepo repository.WorkerPoolRepository
 }
 
-func NewMetalWorkerPoolController(config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository) (WorkerPoolController, error) {
+func NewMetalWorkerPoolController(config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, workerPoolRepo repository.WorkerPoolRepository) (WorkerPoolController, error) {
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -27,12 +30,14 @@ func NewMetalWorkerPoolController(config types.AppConfig, workerPoolName string,
 	}
 
 	workerPool, _ := config.Worker.Pools[workerPoolName]
+
 	wpc := &MetalWorkerPoolController{
-		name:       workerPoolName,
-		config:     config,
-		kubeClient: kubeClient,
-		workerPool: workerPool,
-		workerRepo: workerRepo,
+		name:           workerPoolName,
+		config:         config,
+		kubeClient:     kubeClient,
+		workerPool:     workerPool,
+		workerRepo:     workerRepo,
+		workerPoolRepo: workerPoolRepo,
 	}
 
 	return wpc, nil
@@ -40,11 +45,22 @@ func NewMetalWorkerPoolController(config types.AppConfig, workerPoolName string,
 
 func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
-	return &types.Worker{Id: workerId}, nil
-}
 
-func (wpc *MetalWorkerPoolController) AddWorkerWithId(workerId string, cpu int64, memory int64, gpuType string) (*types.Worker, error) {
-	return &types.Worker{Id: workerId}, nil
+	// Check current machines for capacity
+	err := wpc.workerPoolRepo.GetMachines(wpc.name)
+	if err != nil {
+		return nil, err
+	}
+
+	worker := &types.Worker{Id: workerId, Cpu: cpu, Memory: memory, Gpu: gpuType}
+	worker.PoolId = PoolId(wpc.name)
+
+	// Add the worker state
+	if err := wpc.workerRepo.AddWorker(worker); err != nil {
+		log.Printf("Unable to create worker: %+v\n", err)
+		return nil, err
+	}
+	return worker, nil
 }
 
 func (wpc *MetalWorkerPoolController) Name() string {

@@ -108,10 +108,6 @@ func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int6
 	return wpc.addWorkerWithId(workerId, cpu, memory, gpuType)
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) AddWorkerWithId(workerId string, cpu int64, memory int64, gpuType string) (*types.Worker, error) {
-	return wpc.addWorkerWithId(workerId, cpu, memory, gpuType)
-}
-
 func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu int64, memory int64, gpuType string) (*types.Worker, error) {
 	// Create a new worker job
 	job, worker := wpc.createWorkerJob(workerId, cpu, memory, gpuType)
