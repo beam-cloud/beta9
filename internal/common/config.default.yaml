@@ -56,6 +56,7 @@ imageService:
 worker:
   pools:
     default:
+      mode: local
       jobSpec:
         nodeSelector: {}
       poolSizing:

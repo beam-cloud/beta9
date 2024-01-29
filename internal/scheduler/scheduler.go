@@ -32,9 +32,25 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metri
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 
+	// Load worker pools
 	workerPoolManager := NewWorkerPoolManager(workerPoolRepo)
 	for name, pool := range config.Worker.Pools {
-		controller, _ := NewLocalKubernetesWorkerPoolController(config, name, workerRepo)
+		var controller WorkerPoolController = nil
+		var err error = nil
+
+		switch pool.Mode {
+		case types.PoolModeLocal:
+			controller, err = NewLocalKubernetesWorkerPoolController(config, name, workerRepo)
+		default:
+			log.Printf("no valid controller found for pool<%s> with mode: %s\n", name, pool.Mode)
+			continue
+		}
+
+		if err != nil {
+			log.Printf("unable to load controller: %+v\n", err)
+			continue
+		}
+
 		workerPoolManager.SetPool(name, pool, controller)
 	}
 
