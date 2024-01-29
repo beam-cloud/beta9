@@ -11,7 +11,7 @@ spec:
   valuesContent: |-
     extraEnvVars:
     - name: SERVICES
-      value: "kinesis,s3"
+      value: "s3"
     persistence:
       enabled: true
       storageClass: local-path
