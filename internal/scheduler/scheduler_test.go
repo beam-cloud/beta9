@@ -8,6 +8,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/repository"
 	repo "github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
@@ -39,6 +40,9 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	poolJson := []byte(`{"worker":{"pools":{"beta9-cpu":{},"beta9-a10g":{"gpuType": "A10G"},"beta9-t4":{"gpuType": "T4"}}}}}`)
 	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
+	metricsRepo := repository.NewMetricsPrometheusRepository(config.Metrics.Prometheus)
+	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
+	eventRepo := repo.NewTCPEventClientRepo(&config)
 
 	workerPoolManager := NewWorkerPoolManager(repo.NewWorkerPoolRedisRepository(rdb))
 	for name, pool := range config.Worker.Pools {
@@ -55,6 +59,8 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		workerPoolManager: workerPoolManager,
 		requestBacklog:    requestBacklog,
 		containerRepo:     containerRepo,
+		schedulerMetrics:  schedulerMetrics,
+		eventRepo:         eventRepo,
 	}, nil
 }
 
