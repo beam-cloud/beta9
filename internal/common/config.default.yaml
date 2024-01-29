@@ -68,6 +68,7 @@ worker:
         minFreeMemory: 1Gi
     t4-ec2:
       mode: metal
+      provider: ec2
       gpuType: T4
       jobSpec:
         nodeSelector: {}
@@ -103,6 +104,11 @@ worker:
   resourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
+providers:
+  ec2:
+    access_key: test1
+    secret_key: test2
+    region: us-east-1
 metrics:
   prometheus:
     scrapeWorkers: true

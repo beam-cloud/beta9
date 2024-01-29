@@ -10,6 +10,7 @@ type AppConfig struct {
 	Metrics        MetricsConfig        `key:"metrics"`
 	Storage        StorageConfig        `key:"storage"`
 	Worker         WorkerConfig         `key:"worker"`
+	Providers      ProviderConfig       `key:"providers"`
 }
 
 type DatabaseConfig struct {
@@ -137,6 +138,7 @@ type WorkerPoolConfig struct {
 	GPUType    string                            `key:"gpuType"`
 	Runtime    string                            `key:"runtime"`
 	Mode       PoolMode                          `key:"mode"`
+	Provider   *MachineProvider                  `key:"provider"`
 	JobSpec    WorkerPoolJobSpecConfig           `key:"jobSpec"`
 	PoolSizing WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing"`
 }
@@ -152,6 +154,24 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 	MinFreeCPU           string `key:"minFreeCPU"`
 	MinFreeMemory        string `key:"minFreeMemory"`
 	MinFreeGPU           string `key:"minFreeGPU"`
+}
+
+type MachineProvider string
+
+var (
+	ProviderEC2        MachineProvider = "ec2"
+	ProviderVastAI     MachineProvider = "vastai"
+	ProviderLambdaLabs MachineProvider = "lambda"
+)
+
+type ProviderConfig struct {
+	EC2Config EC2ProviderConfig `key:"ec2"`
+}
+
+type EC2ProviderConfig struct {
+	AWSAccessKeyID     string `key:"access_key"`
+	AWSSecretAccessKey string `key:"secret_key"`
+	AWSRegion          string `key:"region"`
 }
 
 type MetricsConfig struct {

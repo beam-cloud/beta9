@@ -1,8 +1,10 @@
 package scheduler
 
 import (
+	"errors"
 	"log"
 
+	"github.com/beam-cloud/beta9/internal/providers"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 	"k8s.io/client-go/kubernetes"
@@ -18,7 +20,25 @@ type MetalWorkerPoolController struct {
 	workerPoolRepo repository.WorkerPoolRepository
 }
 
-func NewMetalWorkerPoolController(config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, workerPoolRepo repository.WorkerPoolRepository) (WorkerPoolController, error) {
+func NewMetalWorkerPoolController(
+	config types.AppConfig,
+	workerPoolName string,
+	workerRepo repository.WorkerRepository,
+	workerPoolRepo repository.WorkerPoolRepository,
+	providerName *types.MachineProvider) (WorkerPoolController, error) {
+	var provider providers.Provider = nil
+	var err error = nil
+
+	switch *providerName {
+	case types.ProviderEC2:
+		provider, err = providers.NewEC2Provider(config)
+	default:
+		return nil, errors.New("invalid provider name")
+	}
+
+	log.Println("provider: ", provider)
+
+	// TODO: make this machine specific
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -47,10 +67,10 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	workerId := GenerateWorkerId()
 
 	// Check current machines for capacity
-	err := wpc.workerPoolRepo.GetMachines(wpc.name)
-	if err != nil {
-		return nil, err
-	}
+	// err := wpc.workerPoolRepo.GetMachines(wpc.name)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	worker := &types.Worker{Id: workerId, Cpu: cpu, Memory: memory, Gpu: gpuType}
 	worker.PoolId = PoolId(wpc.name)
