@@ -1,12 +1,8 @@
 package scheduler
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
-	"github.com/google/uuid"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -43,7 +39,7 @@ func NewMetalWorkerPoolController(config types.AppConfig, workerPoolName string,
 }
 
 func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error) {
-	workerId := wpc.generateWorkerId()
+	workerId := GenerateWorkerId()
 	return &types.Worker{Id: workerId}, nil
 }
 
@@ -56,7 +52,7 @@ func (wpc *MetalWorkerPoolController) Name() string {
 }
 
 func (wpc *MetalWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
-	workers, err := wpc.workerRepo.GetAllWorkersInPool(wpc.poolId())
+	workers, err := wpc.workerRepo.GetAllWorkersInPool(PoolId(wpc.name))
 	if err != nil {
 		return nil, err
 	}
@@ -77,17 +73,4 @@ func (wpc *MetalWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error
 	}
 
 	return capacity, nil
-}
-
-func (wpc *MetalWorkerPoolController) poolId() string {
-	hasher := sha256.New()
-	hasher.Write([]byte(wpc.name))
-	hash := hasher.Sum(nil)
-	poolId := hex.EncodeToString(hash[:8])
-
-	return poolId
-}
-
-func (wpc *MetalWorkerPoolController) generateWorkerId() string {
-	return uuid.New().String()[:8]
 }

@@ -1,7 +1,11 @@
 package scheduler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+
 	"github.com/beam-cloud/beta9/internal/types"
+	"github.com/google/uuid"
 )
 
 const (
@@ -38,4 +42,16 @@ type WorkerPoolCapacity struct {
 	FreeCpu    int64
 	FreeMemory int64
 	FreeGpu    uint
+}
+
+func PoolId(name string) string {
+	hasher := sha256.New()
+	hasher.Write([]byte(name))
+	hash := hasher.Sum(nil)
+	poolId := hex.EncodeToString(hash[:8])
+	return poolId
+}
+
+func GenerateWorkerId() string {
+	return uuid.New().String()[:8]
 }

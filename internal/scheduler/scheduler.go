@@ -41,6 +41,8 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metri
 		switch pool.Mode {
 		case types.PoolModeLocal:
 			controller, err = NewLocalKubernetesWorkerPoolController(config, name, workerRepo)
+		case types.PoolModeMetal:
+			controller, err = NewMetalWorkerPoolController(config, name, workerRepo)
 		default:
 			log.Printf("no valid controller found for pool<%s> with mode: %s\n", name, pool.Mode)
 			continue

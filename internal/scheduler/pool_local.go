@@ -2,8 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"strconv"
@@ -12,7 +10,6 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
-	"github.com/google/uuid"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -67,15 +64,6 @@ func (wpc *LocalKubernetesWorkerPoolController) Name() string {
 	return wpc.name
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) poolId() string {
-	hasher := sha256.New()
-	hasher.Write([]byte(wpc.name))
-	hash := hasher.Sum(nil)
-	poolId := hex.EncodeToString(hash[:8])
-
-	return poolId
-}
-
 func (wpc *LocalKubernetesWorkerPoolController) monitorPoolSize(workerPool *types.WorkerPoolConfig) error {
 	config, err := ParsePoolSizingConfig(workerPool.PoolSizing)
 	if err != nil {
@@ -92,7 +80,7 @@ func (wpc *LocalKubernetesWorkerPoolController) monitorPoolSize(workerPool *type
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
-	workers, err := wpc.workerRepo.GetAllWorkersInPool(wpc.poolId())
+	workers, err := wpc.workerRepo.GetAllWorkersInPool(PoolId(wpc.name))
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +104,7 @@ func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapac
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error) {
-	workerId := wpc.generateWorkerId()
+	workerId := GenerateWorkerId()
 	return wpc.addWorkerWithId(workerId, cpu, memory, gpuType)
 }
 
@@ -133,7 +121,7 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 		return nil, err
 	}
 
-	worker.PoolId = wpc.poolId()
+	worker.PoolId = PoolId(wpc.name)
 
 	// Add the worker state
 	if err := wpc.workerRepo.AddWorker(worker); err != nil {
@@ -429,8 +417,4 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 			}
 		}
 	}
-}
-
-func (wpc *LocalKubernetesWorkerPoolController) generateWorkerId() string {
-	return uuid.New().String()[:8]
 }
