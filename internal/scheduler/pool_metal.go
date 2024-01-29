@@ -14,6 +14,7 @@ import (
 type MetalWorkerPoolController struct {
 	name           string
 	config         types.AppConfig
+	provider       providers.Provider
 	kubeClient     *kubernetes.Clientset
 	workerPool     types.WorkerPoolConfig
 	workerRepo     repository.WorkerRepository
@@ -35,8 +36,9 @@ func NewMetalWorkerPoolController(
 	default:
 		return nil, errors.New("invalid provider name")
 	}
-
-	log.Println("provider: ", provider)
+	if err != nil {
+		return nil, err
+	}
 
 	// TODO: make this machine specific
 	kubeConfig, err := rest.InClusterConfig()
@@ -58,6 +60,7 @@ func NewMetalWorkerPoolController(
 		workerPool:     workerPool,
 		workerRepo:     workerRepo,
 		workerPoolRepo: workerPoolRepo,
+		provider:       provider,
 	}
 
 	return wpc, nil
@@ -67,10 +70,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	workerId := GenerateWorkerId()
 
 	// Check current machines for capacity
-	// err := wpc.workerPoolRepo.GetMachines(wpc.name)
-	// if err != nil {
-	// 	return nil, err
-	// }
+	wpc.provider.ListMachines()
 
 	worker := &types.Worker{Id: workerId, Cpu: cpu, Memory: memory, Gpu: gpuType}
 	worker.PoolId = PoolId(wpc.name)
