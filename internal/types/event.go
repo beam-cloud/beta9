@@ -24,21 +24,23 @@ var (
 	EventWorkerStopped = "worker.stopped"
 )
 
-var EventContainerStatusSchemaVersion = "01-26-2024"
+// Schema versions should be in ISO 8601 format
+
+var EventContainerStatusSchemaVersion = "2024-01-24"
 
 type EventContainerStatusSchema struct {
 	ContainerID string `json:"container_id"`
 	WorkerID    string `json:"worker_id"`
 }
 
-var EventContainerStatusRequestedSchemaVersion = "01-26-2024"
+var EventContainerStatusRequestedSchemaVersion = "2024-01-24"
 
 type EventContainerStatusRequestedSchema struct {
 	ContainerID string           `json:"container_id"`
 	Request     ContainerRequest `json:"request"`
 }
 
-var EventWorkerStatusSchemaVersion = "01-26-2024"
+var EventWorkerStatusSchemaVersion = "2024-01-24"
 
 type EventWorkerStatusSchema struct {
 	WorkerID string `json:"worker_id"`

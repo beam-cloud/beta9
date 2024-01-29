@@ -27,10 +27,6 @@ func NewTCPEventClientRepo(config *types.AppConfig) EventRepository {
 	}
 }
 
-func (t *TCPEventClientRepo) Close() {
-	t.conn.Close()
-}
-
 func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion string, data []byte) (types.Event, error) {
 	objectId, err := common.GenerateObjectId()
 	if err != nil {
