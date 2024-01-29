@@ -42,7 +42,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	config := configManager.GetConfig()
 	metricsRepo := repository.NewMetricsPrometheusRepository(config.Metrics.Prometheus)
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
-	eventRepo := repo.NewTCPEventClientRepo(&config)
+	eventRepo := repo.NewTCPEventClientRepo(config.FluentBit)
 
 	workerPoolManager := NewWorkerPoolManager(repo.NewWorkerPoolRedisRepository(rdb))
 	for name, pool := range config.Worker.Pools {

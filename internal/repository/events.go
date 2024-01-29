@@ -14,8 +14,8 @@ type TCPEventClientRepo struct {
 	conn net.Conn
 }
 
-func NewTCPEventClientRepo(config *types.AppConfig) EventRepository {
-	address := config.FluentBit.Events.Host + ":" + strconv.Itoa(config.FluentBit.Events.Port)
+func NewTCPEventClientRepo(config types.FluentBitConfig) EventRepository {
+	address := config.Events.Host + ":" + strconv.Itoa(config.Events.Port)
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
 		// It could likely be that the events endpoint is not turned on which is not an error
