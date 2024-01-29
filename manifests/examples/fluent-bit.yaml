@@ -68,6 +68,23 @@ spec:
         [OUTPUT]
             Name  stdout
             Match *
+     
+        [OUTPUT]
+            Name                es
+            Match               worker-logs
+            Host                ${ELASTICSEARCH_HOST}
+            Port                ${ELASTICSEARCH_PORT}
+            HTTP_User           ${ELASTICSEARCH_USER}
+            HTTP_Passwd         ${ELASTICSEARCH_PASSWORD}
+            Logstash_Format     On
+            Logstash_Prefix     beta9-worker-logs
+            Retry_Limit         False
+            Time_Key_Nanos      On
+            Suppress_Type_Name  On
+            Buffer_Size         False
+            Trace_Error         On
+            Replace_Dots        On
+            tls                 On
         
         [OUTPUT]
             Name      loki
@@ -76,52 +93,29 @@ spec:
             Tenant_Id beta9
             Labels    job=fluent-bit
         
-        # [OUTPUT]
-        #     Name            s3
-        #     Bucket          ${S3_BUCKET_NAME}
-        #     Match           worker-logs
-        #     Use_Put_Object  On
-        #     Total_File_Size 1M
-        #     Upload_Timeout  1m
-
-        # [OUTPUT]
-        #     Name                es
-        #     Match               worker-logs
-        #     Host                ${ELASTICSEARCH_HOST}
-        #     Port                ${ELASTICSEARCH_PORT}
-        #     HTTP_User           ${ELASTICSEARCH_USER}
-        #     HTTP_Passwd         ${ELASTICSEARCH_PASSWORD}
-        #     Logstash_Format     On
-        #     Logstash_Prefix     test-logs-for-k3d-beam
-        #     Retry_Limit         False
-        #     Time_Key_Nanos      On
-        #     Suppress_Type_Name  On
-        #     Buffer_Size         False
-        #     Trace_Error         On
-        #     Replace_Dots        On
-        #     tls                 On
+        [OUTPUT]
+            Name            s3
+            Bucket          ${S3_BUCKET_NAME}
+            Match           worker-logs
+            Use_Put_Object  On
+            Total_File_Size 1M
+            Upload_Timeout  1m
 
     volumeMounts:
-    - name: config
-      mountPath: /fluent-bit/etc/conf
+      - name: config
+        mountPath: /fluent-bit/etc/conf
 
     daemonSetVolumes:
-    - name: varlog
-      hostPath:
-        path: /var/log
-    - name: varlibdockercontainers
-      hostPath:
-        path: /var/lib/docker/containers
+      - name: varlog
+        hostPath:
+          path: /var/log
+      - name: varlibdockercontainers
+        hostPath:
+          path: /var/lib/docker/containers
 
     daemonSetVolumeMounts:
-    - name: varlog
-      mountPath: /var/log
-    - name: varlibdockercontainers
-      mountPath: /var/lib/docker/containers
-      readOnly: true
-    
-    extraPorts:
-    - port: 8888
-      containerPort: 8888
-      protocol: TCP
-      name: tcp
+      - name: varlog
+        mountPath: /var/log
+      - name: varlibdockercontainers
+        mountPath: /var/lib/docker/containers
+        readOnly: true
