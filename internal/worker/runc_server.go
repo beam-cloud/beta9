@@ -127,7 +127,6 @@ func (s *RunCServer) RunCStatus(ctx context.Context, in *pb.RunCStatusRequest) (
 func (s *RunCServer) RunCStreamLogs(req *pb.RunCStreamLogsRequest, stream pb.RunCService_RunCStreamLogsServer) error {
 	instance, exists := s.containerInstances.Get(req.ContainerId)
 	if !exists {
-		log.Println("container not found")
 		return errors.New("container not found")
 	}
 
