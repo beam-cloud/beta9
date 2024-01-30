@@ -2,7 +2,7 @@ package repository
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net"
 	"strconv"
 	"time"
@@ -19,7 +19,7 @@ func NewTCPEventClientRepo(config types.FluentBitConfig) (EventRepository, error
 	address := config.Events.Host + ":" + strconv.Itoa(config.Events.Port)
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
-		return nil, errors.New("failed to connect to fluent-bit server %s: %s" + address + err.Error())
+		return nil, fmt.Errorf("failed to connect to fluent-bit server %s: %s" + address + err.Error())
 	}
 
 	return &TCPEventClientRepo{
