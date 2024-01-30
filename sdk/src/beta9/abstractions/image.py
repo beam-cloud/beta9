@@ -1,4 +1,4 @@
-from typing import Awaitable, List, NamedTuple, Optional, Tuple, Union
+from typing import List, NamedTuple, Optional, Tuple, Union
 
 from beta9 import terminal
 from beta9.abstractions.base import BaseAbstraction
@@ -104,50 +104,3 @@ class Image(BaseAbstraction):
 
         terminal.header("Build complete 🎉")
         return ImageBuildResult(success=True, image_id=last_response.image_id)
-
-
-    # FIXME: consolidate code between this and synchronous version
-    async def build_async(self) -> Awaitable[ImageBuildResult]:
-        terminal.header("Building image")
-
-        exists, exists_response = await self.exists_async()
-        if exists:
-            terminal.header("Using cached image")
-            return ImageBuildResult(success=True, image_id=exists_response.image_id)
-
-        async def _build_async() -> BuildImageResponse:
-            last_response = BuildImageResponse()
-
-            async for r in self.stub.build_image(
-                python_packages=self.python_packages,
-                python_version=self.python_version,
-                commands=self.commands,
-                existing_image_uri=self.base_image,
-            ):
-                terminal.detail(r.msg)
-
-                if r.done:
-                    last_response = r
-                    break
-
-            return last_response
-
-        with terminal.progress("Working..."):
-            last_response: BuildImageResponse = await _build_async()
-
-        if not last_response.success:
-            terminal.error("Build failed ❌")
-            return ImageBuildResult(success=False)
-
-        terminal.header("Build complete 🎉")
-        return ImageBuildResult(success=True, image_id=last_response.image_id)
-
-    async def exists_async(self) -> Tuple[bool, ImageBuildResult]:
-        r: VerifyImageBuildResponse = await self.stub.verify_image_build(
-                python_packages=self.python_packages,
-                python_version=self.python_version,
-                commands=self.commands,
-                force_rebuild=False,
-                existing_image_uri=self.base_image,
-            )
-        return (r.exists, ImageBuildResult(success=r.exists, image_id=r.image_id))
