@@ -9,17 +9,6 @@ import grpclib
 
 
 @dataclass
-class StopContainerRunRequest(betterproto.Message):
-    container_id: str = betterproto.string_field(1)
-
-
-@dataclass
-class StopContainerRunResponse(betterproto.Message):
-    success: bool = betterproto.bool_field(1)
-    message: str = betterproto.string_field(2)
-
-
-@dataclass
 class CommandExecutionRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     command: bytes = betterproto.bytes_field(2)

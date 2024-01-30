@@ -9,15 +9,6 @@ service ContainerService {
       returns (stream CommandExecutionResponse) {}
 }
 
-message StopContainerRunRequest {
-  string container_id = 1;
-}
-
-message StopContainerRunResponse {
-  bool success = 1;
-  string message = 2;
-}
-
 message CommandExecutionRequest {
   string stub_id = 1; 
   bytes command = 2; 
