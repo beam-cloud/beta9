@@ -10,7 +10,6 @@ from beta9.abstractions.volume import Volume
 from beta9.clients.container import (
     CommandExecutionResponse,
     ContainerServiceStub,
-    StopContainerRunResponse,
 )
 from beta9.sync import FileSyncer
 
@@ -32,14 +31,14 @@ class Container(RunnerAbstraction):
             The container image used for the task execution. Default is [Image](#image).
 
     Example usage:
-        ```python
-        >>> from beta9.abstractions.image import Image
-        >>> from beta9.abstractions.volume import Volume
-        >>> image = Image(name="python", tag="3.8")
-        >>> container = Container(cpu=2, memory=512, image=image))
-        >>> exit_code = container.run(["python", "-c", "\"print('Hello, World!')\""])
-        >>> print(exit_code)
-        0
+        ```
+        from beta9.abstractions.image import Image
+        from beta9.abstractions.volume import Volume
+
+        image = Image(name="python", tag="3.8")
+        container = Container(cpu=2, memory=512, image=image))
+        exit_code = container.run(["python", "-c", "\"print('Hello, World!')\""])
+        print(exit_code)
         ```
     """
 
@@ -66,20 +65,6 @@ class Container(RunnerAbstraction):
 
         with terminal.progress("Working..."):
             return self.run_sync(self._run_remote(command))
-
-    async def stop(self) -> bool:
-        if self.task_id == "":
-            terminal.warn("Failed to stop container command execution: container_id not found")
-            return False
-
-        stop_result: StopContainerRunResponse = await self.container_stub.stop_container_run(
-            container_id=f"container-{self.task_id}"
-        )
-
-        if not stop_result.success:
-            terminal.warn(f"Failed to stop container command execution: {stop_result.message}")
-
-        return stop_result.success
 
     async def _run_remote(self, command: List[str]) -> int:
         terminal.header("Running command")

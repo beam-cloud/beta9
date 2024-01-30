@@ -47,15 +47,3 @@ class ContainerServiceStub(betterproto.ServiceStub):
             CommandExecutionResponse,
         ):
             yield response
-
-    async def stop_container_run(
-        self, *, container_id: str = ""
-    ) -> StopContainerRunResponse:
-        request = StopContainerRunRequest()
-        request.container_id = container_id
-
-        return await self._unary_unary(
-            "/container.ContainerService/StopContainerRun",
-            request,
-            StopContainerRunResponse,
-        )

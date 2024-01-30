@@ -462,11 +462,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 	// Handle stdout/stderr from spawned container
 	go s.containerLogger.CaptureLogs(request.ContainerId, outputChan)
-	// try to send task id back asap
-	outputChan <- common.OutputMsg{
-		Msg:  "Running container request",
-		Done: false,
-	}
 
 	go func() {
 		time.Sleep(time.Second)
@@ -530,10 +525,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		Started:      pidChan,
 	})
 
+	// Send last log message since the container has exited
+	outputChan <- common.OutputMsg{
+		Msg:     "",
+		Done:    true,
+		Success: err == nil,
+	}
+
 	// wait for buffer to clear before container is removed
 	retries := 0
 	for !containerInstance.LogBuffer.IsEmpty() && retries < 3 {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 		retries++
 	}
 
