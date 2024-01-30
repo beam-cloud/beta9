@@ -2,6 +2,7 @@ package repository
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"strconv"
 	"time"
@@ -14,17 +15,16 @@ type TCPEventClientRepo struct {
 	conn net.Conn
 }
 
-func NewTCPEventClientRepo(config types.FluentBitConfig) EventRepository {
+func NewTCPEventClientRepo(config types.FluentBitConfig) (EventRepository, error) {
 	address := config.Events.Host + ":" + strconv.Itoa(config.Events.Port)
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
-		// It could likely be that the events endpoint is not turned on which is not an error
-		return nil
+		return nil, errors.New("failed to connect to fluent-bit server %s: %s" + address + err.Error())
 	}
 
 	return &TCPEventClientRepo{
 		conn: conn,
-	}
+	}, nil
 }
 
 func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion string, data []byte) (types.Event, error) {
