@@ -117,5 +117,5 @@ metrics:
 tailscale:
   controlUrl: https://beam-headscale-test.fly.dev
   authKey: 6bd89ee45b044e56345f50540f10ecf1f4a29adcca7d1900
-  required: false
+  enabled: true
   debug: false

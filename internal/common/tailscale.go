@@ -58,7 +58,7 @@ func (t *Tailscale) Start(ctx context.Context) (*ipnstate.Status, error) {
 		return nil, err
 	}
 
-	log.Println("Connected to tailnet.")
+	log.Println("Connected to tailnet")
 	return status, nil
 }
 
