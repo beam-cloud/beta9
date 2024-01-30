@@ -19,12 +19,12 @@ func NewTCPEventClientRepo(config types.FluentBitConfig) (EventRepository, error
 	address := config.Events.Host + ":" + strconv.Itoa(config.Events.Port)
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to fluent-bit server %s: %s" + address + err.Error())
+		err = fmt.Errorf("failed to connect to fluent-bit server %s: %v", address, err.Error())
 	}
 
 	return &TCPEventClientRepo{
 		conn: conn,
-	}, nil
+	}, err
 }
 
 func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion string, data []byte) (types.Event, error) {
