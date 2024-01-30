@@ -1,6 +1,5 @@
 from typing import Any, List, Optional, Union
 
-
 from beta9 import terminal
 from beta9.abstractions.base.runner import (
     CONTAINER_STUB_TYPE,
@@ -11,10 +10,12 @@ from beta9.abstractions.volume import Volume
 from beta9.clients.container import CommandExecutionResponse, ContainerServiceStub
 from beta9.sync import FileSyncer
 
+
 class Container(RunnerAbstraction):
     """
     Container
     """
+
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
@@ -28,7 +29,7 @@ class Container(RunnerAbstraction):
         self.container_stub = ContainerServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
 
-    def run(self, command: List[str]) -> int: 
+    def run(self, command: List[str]) -> int:
         """Run a command in a container"""
         if not self.prepare_runtime(
             func=None,
@@ -38,15 +39,14 @@ class Container(RunnerAbstraction):
 
         with terminal.progress("Working..."):
             return self.run_sync(self._run_remote(command))
-    
+
     async def _run_remote(self, command: List[str]) -> Any:
         terminal.header("Running command")
 
         last_response: Union[None, CommandExecutionResponse] = None
 
         async for r in self.container_stub.execute_command(
-            stub_id=self.stub_id,
-            command=' '.join(command).encode()
+            stub_id=self.stub_id, command=" ".join(command).encode()
         ):
             # checking response to see if its output or done/error
             if r.output != "":

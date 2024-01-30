@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	defaultWorkingDirectory string = "/workspace"
+	defaultWorkingDirectory string = "/mnt/code"
 	defaultWorkerServerPort int    = 1000
 )
 
@@ -127,12 +127,16 @@ func (s *RunCServer) RunCStatus(ctx context.Context, in *pb.RunCStatusRequest) (
 func (s *RunCServer) RunCStreamLogs(req *pb.RunCStreamLogsRequest, stream pb.RunCService_RunCStreamLogsServer) error {
 	instance, exists := s.containerInstances.Get(req.ContainerId)
 	if !exists {
+		log.Println("container not found")
 		return errors.New("container not found")
 	}
+
+	log.Println("looking for logs")
 
 	buffer := make([]byte, 4096)
 	for {
 		n, err := instance.LogBuffer.Read(buffer)
+		log.Println(err)
 		if err == io.EOF {
 			break
 		}

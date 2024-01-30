@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 
 	pb "github.com/beam-cloud/beta9/proto"
@@ -113,6 +114,7 @@ func (c *RunCClient) StreamLogs(ctx context.Context, containerId string, outputC
 
 		default:
 			logEntry, err := stream.Recv()
+			log.Println("e n t r y", logEntry, err)
 			if err == io.EOF {
 				return nil
 			}

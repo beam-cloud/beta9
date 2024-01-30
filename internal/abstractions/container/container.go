@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/auth"
@@ -17,6 +16,7 @@ import (
 )
 
 const (
+	containerContainerPrefix          string        = "container-"
 	defaultContainerCpu               int64         = 100
 	defaultContainerMemory            int64         = 128
 	containerCommandExpirationTimeout time.Duration = 600 * time.Second
@@ -83,7 +83,7 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 	}
 
 	taskId := task.ExternalId
-	containerId := fmt.Sprintf("%s%s", "container-", taskId)
+	containerId := fmt.Sprintf("%s%s", containerContainerPrefix, taskId)
 	task.ContainerId = containerId
 
 	// what does this do?
@@ -94,7 +94,7 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 		return err
 	}
 
-	// Don't allow negative compute requests
+	// Don't allow negative and 0-valued compute requests
 	if stubConfig.Runtime.Cpu <= 0 {
 		stubConfig.Runtime.Cpu = defaultContainerCpu
 	}
@@ -103,22 +103,11 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 		stubConfig.Runtime.Memory = defaultContainerMemory
 	}
 
-	mounts := []types.Mount{
-		{
-			LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, stub.Object.ExternalId),
-			MountPath: types.WorkerUserCodeVolume,
-			ReadOnly:  true,
-		},
-	}
-
-	for _, v := range stubConfig.Volumes {
-		mounts = append(mounts, types.Mount{
-			LocalPath: path.Join(types.DefaultVolumesPath, authInfo.Workspace.Name, v.Id),
-			LinkPath:  path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, stub.Object.ExternalId, v.MountPath),
-			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
-			ReadOnly:  false,
-		})
-	}
+	mounts := common.ConfigureContainerRequestMounts(
+		stub.Object.ExternalId,
+		authInfo.Workspace.Name,
+		stubConfig,
+	)
 
 	err = cs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,

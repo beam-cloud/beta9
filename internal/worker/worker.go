@@ -80,7 +80,7 @@ var (
 	baseConfigPath             string  = "/tmp"
 	imagePath                  string  = "/images"
 	containerLogsPath          string  = "/var/log/worker"
-	defaultContainerDirectory  string  = "/workspace"
+	defaultContainerDirectory  string  = "/mnt/code"
 	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
 )
 
@@ -112,7 +112,7 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("orker"))
+	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("worker"))
 	if err != nil {
 		return nil, err
 	}
@@ -525,16 +525,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		Started:      pidChan,
 	})
 
-	// Send last log message since the container has exited
-	outputChan <- common.OutputMsg{
-		Msg:     "",
-		Done:    true,
-		Success: err == nil,
-	}
-
 	// wait for buffer to clear before container is removed
-	for !containerInstance.LogBuffer.IsEmpty() {
+	retries := 0
+	for !containerInstance.LogBuffer.IsEmpty() && retries < 3 {
 		time.Sleep(100 * time.Millisecond)
+		retries++
 	}
 
 	if err != nil {

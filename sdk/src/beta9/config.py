@@ -140,8 +140,7 @@ def configure_gateway_credentials(
 
 
 def get_gateway_channel() -> Channel:
-    if os.getenv("CI"):
-        # Ignore auth for CI
+    if os.getenv("BETA9_SKIP_AUTH"):
         return Channel(host="localhost", port=50051, ssl=False)
 
     config: GatewayConfig = get_gateway_config()

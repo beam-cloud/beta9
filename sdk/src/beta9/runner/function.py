@@ -63,14 +63,11 @@ def main(channel: Channel):
         payload: dict = _load_args(get_args_resp.args)
         args = payload.get("args") or []
         kwargs = payload.get("kwargs") or {}
-
-        os.chdir(USER_CODE_VOLUME)
         result = handler(*args, **kwargs)
     except BaseException as exc:
         result = error = exc
         task_status = TaskStatus.Error
     finally:
-        os.chdir(current_wkdir)
         result = cloudpickle.dumps(result)
         set_result_resp: FunctionSetResultResponse = run_sync(
             function_stub.function_set_result(task_id=task_id, result=result),

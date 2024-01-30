@@ -52,7 +52,7 @@ jobs:
 
       - name: Run tests
         env: 
-          CI: true
+          BETA9_SKIP_AUTH: true
         run: make tests
 
   lint_and_test_go_pkg:
