@@ -131,12 +131,9 @@ func (s *RunCServer) RunCStreamLogs(req *pb.RunCStreamLogsRequest, stream pb.Run
 		return errors.New("container not found")
 	}
 
-	log.Println("looking for logs")
-
 	buffer := make([]byte, 4096)
 	for {
 		n, err := instance.LogBuffer.Read(buffer)
-		log.Println(err)
 		if err == io.EOF {
 			break
 		}
