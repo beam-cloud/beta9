@@ -116,6 +116,6 @@ metrics:
     port: 9090
 tailscale:
   controlUrl: https://beam-headscale-test.fly.dev
-  authKey: 6764f571bc2ffd88fc0586819dc76c1ff708467fd95956e2
+  authKey: 6bd89ee45b044e56345f50540f10ecf1f4a29adcca7d1900
   required: false
   debug: false

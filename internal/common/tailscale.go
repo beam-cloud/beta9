@@ -48,6 +48,8 @@ func NewTailscale(cfg TailscaleConfig) *Tailscale {
 
 // Start connects the server to the tailnet
 func (t *Tailscale) Start(ctx context.Context) (*ipnstate.Status, error) {
+	log.Println("Connecting to tailnet @", t.server.ControlURL)
+
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -56,6 +58,7 @@ func (t *Tailscale) Start(ctx context.Context) (*ipnstate.Status, error) {
 		return nil, err
 	}
 
+	log.Println("Connected to tailnet.")
 	return status, nil
 }
 
