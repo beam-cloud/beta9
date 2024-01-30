@@ -5,7 +5,7 @@ import os
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Generator, NamedTuple, Optional
+from typing import Awaitable, Generator, NamedTuple, Optional
 
 from beta9 import terminal
 from beta9.clients.gateway import (
@@ -128,6 +128,53 @@ class FileSyncer:
                         overwrite=False,
                     )
                 )
+        elif head_response.exists and head_response.ok:
+            terminal.header("Files synced")
+            return FileSyncResult(success=True, object_id=head_response.object_id)
+
+        os.remove(temp_zip_name)
+
+        if put_response is None or not put_response.ok:
+            terminal.error("File sync failed ☠️")
+
+        terminal.header("Files synced")
+        return FileSyncResult(success=True, object_id=put_response.object_id)  # pyright: ignore[reportOptionalMemberAccess]
+
+    # FIXME: consolidate code between this and synchronous version
+    async def sync_async(self) -> Awaitable[FileSyncResult]:
+        terminal.header("Syncing files")
+
+        self._init_ignore_file()
+        self.ignore_patterns = self._read_ignore_file()
+        temp_zip_name = f"/tmp/{uuid.uuid4()}"
+
+        with zipfile.ZipFile(temp_zip_name, "w") as zipf:
+            for file in self._collect_files():
+                zipf.write(file, os.path.relpath(file, self.root_dir))
+                terminal.detail(f"Added {file}")
+
+        hash = None
+        size = 0
+        object_content = None
+
+        with open(temp_zip_name, "rb") as f:
+            object_content = f.read()
+            size = len(object_content)
+            hash = hashlib.sha256(object_content).hexdigest()
+
+        head_response: HeadObjectResponse = await self.gateway_stub.head_object(hash=hash)
+
+        put_response: Optional[PutObjectResponse] = None
+        if not head_response.exists:
+            metadata = ObjectMetadata(name=hash, size=size)
+
+            with terminal.progress("Uploading"):
+                put_response = await self.gateway_stub.put_object(
+                        object_content=object_content,
+                        object_metadata=metadata,
+                        hash=hash,
+                        overwrite=False,
+                    )
         elif head_response.exists and head_response.ok:
             terminal.header("Files synced")
             return FileSyncResult(success=True, object_id=head_response.object_id)

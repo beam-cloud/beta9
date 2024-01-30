@@ -7,6 +7,17 @@ package container;
 service ContainerService {
   rpc ExecuteCommand(CommandExecutionRequest)
       returns (stream CommandExecutionResponse) {}
+  rpc StopContainerRun(StopContainerRunRequest)
+      returns (StopContainerRunResponse) {}
+}
+
+message StopContainerRunRequest {
+  string container_id = 1;
+}
+
+message StopContainerRunResponse {
+  bool success = 1;
+  string message = 2;
 }
 
 message CommandExecutionRequest {
@@ -19,6 +30,5 @@ message CommandExecutionResponse {
   string output = 2; 
   bool done = 3; 
   int32 exit_code = 4;   
-  bytes result = 5; 
 }
 

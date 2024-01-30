@@ -462,6 +462,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 	// Handle stdout/stderr from spawned container
 	go s.containerLogger.CaptureLogs(request.ContainerId, outputChan)
+	// try to send task id back asap
+	outputChan <- common.OutputMsg{
+		Msg:  "Running container request",
+		Done: false,
+	}
 
 	go func() {
 		time.Sleep(time.Second)

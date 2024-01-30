@@ -6,7 +6,7 @@ from beta9.abstractions.base import BaseAbstraction
 from beta9.abstractions.image import Image, ImageBuildResult
 from beta9.abstractions.volume import Volume
 from beta9.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
-from beta9.sync import FileSyncer
+from beta9.sync import FileSyncResult, FileSyncer
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -111,7 +111,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.handler = f"{module_name}:{function_name}"
 
     def prepare_runtime(
-        self, *, func: Optional[Callable], stub_type: str, force_create_stub: bool = False
+        self, *, func: Optional[Callable] = None, stub_type: str, force_create_stub: bool = False
     ) -> bool:
         if func is not None:
             self._load_handler(func)
@@ -166,6 +166,71 @@ class RunnerAbstraction(BaseAbstraction):
                     force_create=force_create_stub,
                 )
             )
+
+            if stub_response.ok:
+                self.stub_created = True
+                self.stub_id = stub_response.stub_id
+            else:
+                return False
+
+        self.runtime_ready = True
+        return True
+
+
+
+    # FIXME: consolidate code between this and synchronous version
+    async def prepare_runtime_async(
+        self, *, stub_type: str, force_create_stub: bool = False
+    ) -> bool:
+
+        stub_name = f"{stub_type}/{self.handler}" if self.handler else f"{stub_type}"
+        if self.runtime_ready:
+            return True
+
+        self.cpu = self._parse_cpu_to_millicores(self.cpu)
+
+        if not self.image_available:
+            image_build_result: ImageBuildResult = await self.image.build_async()
+
+            if image_build_result and image_build_result.success:
+                self.image_available = True
+                self.image_id = image_build_result.image_id
+            else:
+                return False
+
+        if not self.files_synced:
+            sync_result: FileSyncResult = await self.syncer.sync_async()
+
+            if sync_result.success:
+                self.files_synced = True
+                self.object_id = sync_result.object_id
+            else:
+                return False
+
+        for v in self.volumes:
+            if not v.ready and not v.get_or_create_async():
+                return False
+
+        if not self.stub_created:
+            stub_response: GetOrCreateStubResponse = await self.gateway_stub.get_or_create_stub(
+                    object_id=self.object_id,
+                    image_id=self.image_id,
+                    stub_type=stub_type,
+                    name=stub_name,
+                    python_version=self.image.python_version,
+                    cpu=self.cpu,
+                    memory=self.memory,
+                    gpu=self.gpu,
+                    handler=self.handler,
+                    retries=self.retries,
+                    timeout=self.timeout,
+                    keep_warm_seconds=self.keep_warm_seconds,
+                    concurrency=self.concurrency,
+                    max_containers=self.max_containers,
+                    max_pending_tasks=self.max_pending_tasks,
+                    volumes=[v.export() for v in self.volumes],
+                    force_create=force_create_stub,
+                )
 
             if stub_response.ok:
                 self.stub_created = True
