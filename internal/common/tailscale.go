@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"tailscale.com/ipn/ipnstate"
@@ -14,16 +15,23 @@ type TailscaleConfig struct {
 	AuthKey    string // Auth key for Tailscale
 	ControlURL string // Control server URL
 	Ephemeral  bool   // Whether the node is ephemeral
+	Debug      bool
 }
 
-// Tailscale encapsulates functionality to interact with Tailscale using tsnet
 type Tailscale struct {
 	server *tsnet.Server
+	debug  bool
+}
+
+func (t *Tailscale) log(format string, v ...interface{}) {
+	if t.debug {
+		log.Printf(format, v...)
+	}
 }
 
 // NewTailscale creates a new Tailscale instance using tsnet
 func NewTailscale(cfg TailscaleConfig) *Tailscale {
-	return &Tailscale{
+	ts := &Tailscale{
 		server: &tsnet.Server{
 			Dir:        cfg.Dir,
 			Hostname:   cfg.Hostname,
@@ -31,7 +39,11 @@ func NewTailscale(cfg TailscaleConfig) *Tailscale {
 			ControlURL: cfg.ControlURL,
 			Ephemeral:  cfg.Ephemeral,
 		},
+		debug: cfg.Debug,
 	}
+
+	ts.server.Logf = ts.log
+	return ts
 }
 
 // Start connects the server to the tailnet
@@ -44,19 +56,7 @@ func (t *Tailscale) Start(ctx context.Context) (*ipnstate.Status, error) {
 		return nil, err
 	}
 
-	for {
-		select {
-		case <-timeoutCtx.Done():
-			return nil, timeoutCtx.Err()
-		default:
-			if status.BackendState == "Running" {
-				// Successfully connected, return status
-				return status, nil
-			}
-
-			time.Sleep(1 * time.Second)
-		}
-	}
+	return status, nil
 }
 
 // Stops the Tailscale server

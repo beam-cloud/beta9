@@ -60,9 +60,13 @@ func NewGateway() (*Gateway, error) {
 	tailscale := common.NewTailscale(common.TailscaleConfig{
 		ControlURL: config.Tailscale.ControlURL,
 		AuthKey:    config.Tailscale.AuthKey,
+		Debug:      config.Tailscale.Debug,
 	})
+
 	_, err = tailscale.Start(context.TODO())
-	if err != nil {
+	if err != nil && !config.Tailscale.Required {
+		log.Println("[WARNING] Unable to connect to tailnet, remote workers may not connect.")
+	} else if err != nil && config.Tailscale.Required {
 		return nil, err
 	}
 
