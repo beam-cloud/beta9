@@ -60,12 +60,6 @@ func (t *TCPEventClientRepo) KeepConnectionAlive() {
 	}
 }
 
-func (t *TCPEventClientRepo) Close() {
-	if t.conn != nil {
-		t.conn.Close()
-	}
-}
-
 func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion string, data []byte) (types.Event, error) {
 	objectId, err := common.GenerateObjectId()
 	if err != nil {
