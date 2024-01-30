@@ -106,11 +106,14 @@ worker:
   defaultWorkerMemoryRequest: 1024
 providers:
   ec2:
-    access_key: test1
-    secret_key: test2
+    accessKey: test1
+    secretkey: test2
     region: us-east-1
     ami: ami-052c704a7f82c38b1
 metrics:
   prometheus:
     scrapeWorkers: true
     port: 9090
+tailscale:
+  controlUrl: https://beam-headscale-test.fly.dev
+  authKey: 6764f571bc2ffd88fc0586819dc76c1ff708467fd95956e2

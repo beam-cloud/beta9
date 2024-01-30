@@ -11,6 +11,7 @@ type AppConfig struct {
 	Storage        StorageConfig        `key:"storage"`
 	Worker         WorkerConfig         `key:"worker"`
 	Providers      ProviderConfig       `key:"providers"`
+	Tailscale      TailscaleConfig      `key:"tailscale"`
 }
 
 type DatabaseConfig struct {
@@ -129,9 +130,9 @@ type WorkerConfig struct {
 type PoolMode string
 
 var (
-	PoolModeLocal PoolMode = "local"
-	PoolModeMetal PoolMode = "metal"
-	PoolModeAgent PoolMode = "agent"
+	PoolModeLocal  PoolMode = "local"
+	PoolModeMetal  PoolMode = "metal"
+	PoolModeRemote PoolMode = "remote"
 )
 
 type WorkerPoolConfig struct {
@@ -169,8 +170,8 @@ type ProviderConfig struct {
 }
 
 type EC2ProviderConfig struct {
-	AWSAccessKeyID     string `key:"access_key"`
-	AWSSecretAccessKey string `key:"secret_key"`
+	AWSAccessKeyID     string `key:"accessKey"`
+	AWSSecretAccessKey string `key:"secretKey"`
 	AWSRegion          string `key:"region"`
 	AMI                string `key:"ami"`
 }
@@ -182,4 +183,9 @@ type MetricsConfig struct {
 type PrometheusConfig struct {
 	ScrapeWorkers bool `key:"scrapeWorkers"`
 	Port          int  `key:"port"`
+}
+
+type TailscaleConfig struct {
+	ControlURL string `key:"controlUrl"`
+	AuthKey    string `key:"authKey"`
 }

@@ -33,7 +33,6 @@ var (
 // 		AgentVersion:                      agentVersion,
 // 		AgentIsLocal:                      secrets.Get("BEAM_AGENT_IS_LOCAL") == "true",
 // 		WorkerNamespace:                   secrets.Get("BEAM_AGENT_WORKER_NAMESPACE"),
-// 		WorkerImagePullSecrets:            strings.Split(secrets.Get("BEAM_AGENT_WORKER_IMAGE_PULL_SECRETS"), ","),
 // 		WorkerEventSubscriptionRetryDelay: time.Second * 10,
 // 	}
 

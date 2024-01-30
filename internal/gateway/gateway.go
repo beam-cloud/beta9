@@ -46,6 +46,7 @@ type Gateway struct {
 	Scheduler      *scheduler.Scheduler
 	ctx            context.Context
 	cancelFunc     context.CancelFunc
+	tailscale      *common.Tailscale
 	baseRouteGroup *echo.Group
 }
 
@@ -55,6 +56,15 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 	config := configManager.GetConfig()
+
+	tailscale := common.NewTailscale(common.TailscaleConfig{
+		ControlURL: config.Tailscale.ControlURL,
+		AuthKey:    config.Tailscale.AuthKey,
+	})
+	_, err = tailscale.Start(context.TODO())
+	if err != nil {
+		return nil, err
+	}
 
 	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Gateway"))
 	if err != nil {
@@ -90,6 +100,7 @@ func NewGateway() (*Gateway, error) {
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 
 	gateway.config = config
+	gateway.tailscale = tailscale
 	gateway.ContainerRepo = containerRepo
 	gateway.BackendRepo = backendRepo
 	gateway.metricsRepo = metricsRepo
