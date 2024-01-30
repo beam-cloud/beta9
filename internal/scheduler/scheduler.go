@@ -33,10 +33,7 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metri
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 
-	eventRepo, err := repo.NewTCPEventClientRepo(config.FluentBit)
-	if err != nil {
-		log.Println(err)
-	}
+	eventRepo := repo.NewTCPEventClientRepo(config.FluentBit)
 
 	workerPoolManager := NewWorkerPoolManager(workerPoolRepo)
 	for name, pool := range config.Worker.Pools {

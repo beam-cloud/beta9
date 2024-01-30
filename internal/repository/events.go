@@ -2,9 +2,11 @@ package repository
 
 import (
 	"encoding/json"
-	"fmt"
+	"io"
+	"log"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -12,19 +14,56 @@ import (
 )
 
 type TCPEventClientRepo struct {
-	conn net.Conn
+	conn    net.Conn
+	address string
+	mu      sync.Mutex
 }
 
-func NewTCPEventClientRepo(config types.FluentBitConfig) (EventRepository, error) {
+func NewTCPEventClientRepo(config types.FluentBitConfig) EventRepository {
 	address := config.Events.Host + ":" + strconv.Itoa(config.Events.Port)
+
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
-		err = fmt.Errorf("failed to connect to fluent-bit server %s: %v", address, err.Error())
+		log.Printf("failed to connect to fluent-bit server %s: %v\n", address, err.Error())
+	} else {
+		conn.SetDeadline(time.Time{}) // Prevent timing out
 	}
 
-	return &TCPEventClientRepo{
-		conn: conn,
-	}, err
+	client := &TCPEventClientRepo{
+		conn:    conn,
+		address: address,
+	}
+
+	go client.KeepConnectionAlive()
+
+	return client
+}
+
+func (t *TCPEventClientRepo) KeepConnectionAlive() {
+	ticker := time.NewTicker(30 * time.Second) // Set to retry connection every 30 seconds if connection is lost
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if t.conn != nil {
+			continue
+		}
+
+		conn, err := net.Dial("tcp", t.address)
+		if err != nil {
+			log.Printf("failed to connect to event server %s: %v\n", t.address, err.Error())
+		} else {
+			conn.SetDeadline(time.Time{}) // Prevent timing out
+			t.mu.Lock()
+			t.conn = conn
+			t.mu.Unlock()
+		}
+	}
+}
+
+func (t *TCPEventClientRepo) Close() {
+	if t.conn != nil {
+		t.conn.Close()
+	}
 }
 
 func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion string, data []byte) (types.Event, error) {
@@ -63,12 +102,30 @@ func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, d
 	}
 
 	_, err = t.conn.Write(eventBytes)
+	if err == io.EOF {
+		// Connection closed
+		t.mu.Lock()
+		t.conn.Close()
+		t.conn = nil
+		t.mu.Unlock()
+		return nil
+	}
+
 	if err != nil {
 		return err
 	}
 
 	buffer := make([]byte, 1024)
 	_, err = t.conn.Read(buffer)
+	if err == io.EOF {
+		// Connection closed
+		t.mu.Lock()
+		t.conn.Close()
+		t.conn = nil
+		t.mu.Unlock()
+		return nil
+	}
+
 	if err != nil {
 		return err
 	}
