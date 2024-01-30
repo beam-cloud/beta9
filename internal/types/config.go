@@ -172,6 +172,7 @@ type EC2ProviderConfig struct {
 	AWSAccessKeyID     string `key:"access_key"`
 	AWSSecretAccessKey string `key:"secret_key"`
 	AWSRegion          string `key:"region"`
+	AMI                string `key:"ami"`
 }
 
 type MetricsConfig struct {

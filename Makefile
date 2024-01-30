@@ -30,6 +30,10 @@ worker:
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	bin/delete_workers.sh
 
+agent:
+	docker build . --target build -f ./docker/Dockerfile.agent -t localhost:5001/beta9-agent:$(tag)
+	docker push localhost:5001/beta9-agent:$(tag)
+
 runner:
 	for target in py311 py310 py39 py38; do \
 		docker build . --target $$target --platform=linux/amd64 -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:$$target-$(runnerTag); \

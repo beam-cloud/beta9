@@ -1,7 +1,9 @@
 package providers
 
+import "context"
+
 type Provider interface {
 	ListMachines() error
-	TerminateMachine(id string) error
-	ProvisionMachine() error
+	TerminateMachine(ctx context.Context, id string) error
+	ProvisionMachine(ctx context.Context) error
 }

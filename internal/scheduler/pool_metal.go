@@ -52,7 +52,6 @@ func NewMetalWorkerPoolController(
 	}
 
 	workerPool, _ := config.Worker.Pools[workerPoolName]
-
 	wpc := &MetalWorkerPoolController{
 		name:           workerPoolName,
 		config:         config,

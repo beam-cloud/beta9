@@ -1,0 +1,27 @@
+FROM golang:1.21 as base
+
+# Target used in development environments
+FROM base as build
+
+WORKDIR /workspace
+
+RUN go install github.com/cosmtrek/air@latest
+
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
+
+COPY . .
+
+RUN go build -o /usr/local/bin/agent /workspace/cmd/agent/main.go
+
+
+# Target used in production-like environments
+FROM base AS release
+
+WORKDIR /workspace
+
+RUN apt autoclean
+
+COPY --from=build /usr/local/bin/agent /usr/local/bin/
+
+CMD ["tail", "-f", "/dev/null"]
