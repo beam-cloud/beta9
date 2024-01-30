@@ -58,8 +58,17 @@ spec:
             Mem_Buf_Limit     100MB
             Skip_Long_Lines   Off
             Refresh_Interval  5
-
-      outputs: |        
+        
+        [INPUT]
+            Name  tcp
+            Tag   events
+            Port  8888
+    
+      outputs: |                
+        [OUTPUT]
+            Name  stdout
+            Match *
+     
         [OUTPUT]
             Name                es
             Match               worker-logs
@@ -68,7 +77,7 @@ spec:
             HTTP_User           ${ELASTICSEARCH_USER}
             HTTP_Passwd         ${ELASTICSEARCH_PASSWORD}
             Logstash_Format     On
-            Logstash_Prefix     test-logs-for-k3d-beam
+            Logstash_Prefix     beta9-worker-logs
             Retry_Limit         False
             Time_Key_Nanos      On
             Suppress_Type_Name  On
@@ -76,10 +85,6 @@ spec:
             Trace_Error         On
             Replace_Dots        On
             tls                 On
-        
-        [OUTPUT]
-            Name  stdout
-            Match worker-logs
         
         [OUTPUT]
             Name      loki

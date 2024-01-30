@@ -94,3 +94,9 @@ metrics:
   prometheus:
     scrapeWorkers: true
     port: 9090
+
+fluentBit:
+  events:
+    host: fluent-bit.fluent-bit.svc.cluster.local
+    port: 8888
+  
