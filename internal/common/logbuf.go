@@ -59,12 +59,6 @@ func (lb *LogBuffer) Read(p []byte) (n int, err error) {
 	return n, nil
 }
 
-func (lb *LogBuffer) IsEmpty() bool {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-	return len(lb.logs) == 0
-}
-
 func (lb *LogBuffer) Close() {
 	close(lb.writeChan)
 }

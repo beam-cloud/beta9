@@ -123,6 +123,7 @@ type WorkerConfig struct {
 	ResourcesEnforced          bool  `key:"resourcesEnforced"`
 	DefaultWorkerCPURequest    int64 `key:"defaultWorkerCPURequest"`
 	DefaultWorkerMemoryRequest int64 `key:"defaultWorkerMemoryRequest"`
+	TerminationGracePeriod     int64 `key:"terminationGracePeriod"`
 }
 
 type WorkerPoolConfig struct {

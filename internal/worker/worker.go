@@ -396,6 +396,11 @@ func (s *Worker) terminateContainer(containerId string, request *types.Container
 	}
 
 	defer s.containerWg.Done()
+
+	// Allow for some time to pass before clearing the container. This way we can handle some last
+	// minute logs or events or if the user wants to inspect the container before it's cleared.
+	time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
+
 	s.clearContainer(containerId, request)
 }
 
@@ -530,13 +535,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		Msg:     "",
 		Done:    true,
 		Success: err == nil,
-	}
-
-	// wait for buffer to clear before container is removed
-	retries := 0
-	for !containerInstance.LogBuffer.IsEmpty() && retries < 3 {
-		time.Sleep(300 * time.Millisecond)
-		retries++
 	}
 
 	if err != nil {
