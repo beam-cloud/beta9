@@ -119,3 +119,9 @@ spec:
       - name: varlibdockercontainers
         mountPath: /var/lib/docker/containers
         readOnly: true
+
+    extraPorts:
+    - port: 8888
+      containerPort: 8888
+      protocol: TCP
+      name: tcp
