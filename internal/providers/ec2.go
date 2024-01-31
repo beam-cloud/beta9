@@ -20,7 +20,10 @@ type EC2Provider struct {
 	config types.EC2ProviderConfig
 }
 
-const instanceNamePrefix = "beta9"
+const (
+	instanceNamePrefix           string  = "beta9"
+	instanceComputeBufferPercent float64 = 10.0
+)
 
 func NewEC2Provider(appConfig types.AppConfig) (*EC2Provider, error) {
 	credentials := credentials.NewStaticCredentialsProvider(appConfig.Providers.EC2Config.AWSAccessKeyID, appConfig.Providers.EC2Config.AWSSecretAccessKey, "")
@@ -40,8 +43,62 @@ func NewEC2Provider(appConfig types.AppConfig) (*EC2Provider, error) {
 	}, nil
 }
 
-func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, machineId string) error {
-	instanceType := "g4dn.xlarge" // TODO: map compute request to instance type
+type InstanceSpec struct {
+	Cpu    int64
+	Memory int64
+	Gpu    string
+}
+
+func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64, requiredGpu string) (string, error) {
+	availableInstances := []struct {
+		Type string
+		Spec InstanceSpec
+	}{
+		{"g4dn.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "T4"}},
+		{"g4dn.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "T4"}},
+		{"g4dn.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "T4"}},
+		{"g4dn.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "T4"}},
+		{"g4dn.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "T4"}},
+
+		{"g5.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "A10G"}},
+		{"g5.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "A10G"}},
+		{"g5.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "A10G"}},
+		{"g5.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "A10G"}},
+		{"g5.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "A10G"}},
+	}
+
+	// Apply compute buffer
+	bufferedCpu := int64(float64(requiredCpu) * (1 + instanceComputeBufferPercent/100))
+	bufferedMemory := int64(float64(requiredMemory) * (1 + instanceComputeBufferPercent/100))
+
+	meetsRequirements := func(spec InstanceSpec) bool {
+		return spec.Cpu >= bufferedCpu && spec.Memory >= bufferedMemory && spec.Gpu == requiredGpu
+	}
+
+	// Find the smallest instance that meets or exceeds the requirements
+	var selectedInstance string
+	for _, instance := range availableInstances {
+		if meetsRequirements(instance.Spec) {
+			selectedInstance = instance.Type
+			break
+		}
+	}
+
+	if selectedInstance == "" {
+		return "", fmt.Errorf("no suitable instance type found for CPU=%d, Memory=%d, GPU=%s", requiredCpu, requiredMemory, requiredGpu)
+	}
+
+	return selectedInstance, nil
+}
+
+func (p *EC2Provider) ProvisionMachine(ctx context.Context, compute ComputeRequest, poolName string, machineId string) error {
+	// NOTE: CPU cores -> millicores, memory -> megabytes
+	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Cpu, compute.Gpu)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Selected instance type <%s> for compute request: %+v\n", instanceType, compute)
 
 	encodedUserData := base64.StdEncoding.EncodeToString([]byte(userData))
 	input := &ec2.RunInstancesInput{
@@ -107,13 +164,10 @@ func (p *EC2Provider) ListMachines() error {
 var userData string = `
 #!/bin/bash
 
-INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
-REGION=$(curl http://169.254.169.254/latest/meta-data/placement/region)
-PROVIDER_ID="aws:///$REGION/$INSTANCE_ID"
 INSTALL_K3S_VERSION="v1.28.5+k3s1"
 
-# Install K3s with the Elastic IP in the certificate SAN
-curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$INSTALL_K3S_VERSION INSTALL_K3S_EXEC=" --disable traefik --kubelet-arg=provider-id=$PROVIDER_ID" sh -    
+# Install K3s
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$INSTALL_K3S_VERSION INSTALL_K3S_EXEC=" --disable traefik" sh -    
 
 # Wait for K3s to start, create the kubeconfig file, and the node token
 while [ ! -f /etc/rancher/k3s/k3s.yaml ] || [ ! -f /var/lib/rancher/k3s/server/node-token ]
@@ -122,4 +176,6 @@ do
 done
 
 KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+kubectl apply -f https://raw.githubusercontent.com/beam-cloud/beta9/ll/remote-machines/manifests/k3s/agent.yaml
+
 `

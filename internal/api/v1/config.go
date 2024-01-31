@@ -5,21 +5,23 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/labstack/echo/v4"
 )
 
-type DeployGroup struct {
+type ConfigGroup struct {
 	backendRepo repository.BackendRepository
 	routerGroup *echo.Group
+	config      types.AppConfig
 }
 
-func NewDeployGroup(g *echo.Group, backendRepo repository.BackendRepository) *DeployGroup {
-	group := &DeployGroup{routerGroup: g, backendRepo: backendRepo}
-	g.GET("/", group.ListDeploys)
+func NewConfigGroup(g *echo.Group, backendRepo repository.BackendRepository, config types.AppConfig) *ConfigGroup {
+	group := &ConfigGroup{routerGroup: g, backendRepo: backendRepo, config: config}
+	g.GET("/", group.GetConfig)
 	return group
 }
 
-func (g *DeployGroup) ListDeploys(ctx echo.Context) error {
+func (g *ConfigGroup) GetConfig(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{

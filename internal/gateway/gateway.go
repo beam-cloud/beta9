@@ -125,7 +125,7 @@ func (g *Gateway) initHttp() error {
 	g.baseRouteGroup = g.httpServer.Group(apiv1.HttpServerBaseRoute)
 
 	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.redisClient)
-	apiv1.NewDeployGroup(g.baseRouteGroup.Group("/deploy", authMiddleware), g.BackendRepo)
+	apiv1.NewConfigGroup(g.baseRouteGroup.Group("/config", authMiddleware), g.BackendRepo, g.config)
 	return nil
 }
 

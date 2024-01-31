@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent
+  template:
+    metadata:
+      labels:
+        app: agent
+    spec:
+      containers:
+      - name: agent
+        image: public.ecr.aws/n4e0e1y0/beta9-agent:0.1.0
+        command: ["/usr/local/bin/agent"]
+        ports:
+        - containerPort: 1994
+        - containerPort: 1993
+        securityContext:
+          privileged: true
+        env:
+        - name: CONFIG_PATH
+          value: "/etc/config/config.yml"
+        volumeMounts:
+        - name: config-volume
+          mountPath: "/etc/config"
+      volumes:
+      - name: config-volume
+        secret:
+          secretName: app-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent
+spec:
+  ports:
+  - name: http
+    port: 1994
+    targetPort: 1994
+  - name: grpc
+    port: 1993
+    targetPort: 1993
+  selector:
+    app: agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: job-creator
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "list", "delete"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: job-creator-binding
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: job-creator
+  apiGroup: rbac.authorization.k8s.io

@@ -71,7 +71,11 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 
 	// Check current machines for capacity
 	// wpc.provider.ListMachines()
-	err := wpc.provider.ProvisionMachine(context.TODO(), wpc.name, "test-machine")
+	err := wpc.provider.ProvisionMachine(context.TODO(), providers.ComputeRequest{
+		Cpu:    cpu,
+		Memory: memory,
+		Gpu:    gpuType,
+	}, wpc.name, "test-machine")
 	if err != nil {
 		return nil, err
 	}
