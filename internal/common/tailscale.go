@@ -23,7 +23,7 @@ type Tailscale struct {
 	debug  bool
 }
 
-func (t *Tailscale) log(format string, v ...interface{}) {
+func (t *Tailscale) logF(format string, v ...interface{}) {
 	if t.debug {
 		log.Printf(format, v...)
 	}
@@ -42,7 +42,7 @@ func NewTailscale(cfg TailscaleConfig) *Tailscale {
 		debug: cfg.Debug,
 	}
 
-	ts.server.Logf = ts.log
+	ts.server.Logf = ts.logF
 	return ts
 }
 

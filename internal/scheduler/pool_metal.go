@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
 	"log"
 
@@ -69,7 +70,11 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	workerId := GenerateWorkerId()
 
 	// Check current machines for capacity
-	wpc.provider.ListMachines()
+	// wpc.provider.ListMachines()
+	err := wpc.provider.ProvisionMachine(context.TODO(), wpc.name, "test-machine")
+	if err != nil {
+		return nil, err
+	}
 
 	worker := &types.Worker{Id: workerId, Cpu: cpu, Memory: memory, Gpu: gpuType}
 	worker.PoolId = PoolId(wpc.name)
