@@ -3,6 +3,7 @@ package types
 import "time"
 
 type AppConfig struct {
+	ClusterName    string               `key:"clusterName"`
 	DebugMode      bool                 `key:"debugMode"`
 	Database       DatabaseConfig       `key:"database"`
 	GatewayService GatewayServiceConfig `key:"gateway"`

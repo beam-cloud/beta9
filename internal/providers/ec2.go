@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -16,12 +17,12 @@ import (
 )
 
 type EC2Provider struct {
-	client *ec2.Client
-	config types.EC2ProviderConfig
+	client         *ec2.Client
+	clusterName    string
+	providerConfig types.EC2ProviderConfig
 }
 
 const (
-	instanceNamePrefix           string  = "beta9"
 	instanceComputeBufferPercent float64 = 10.0
 )
 
@@ -38,8 +39,9 @@ func NewEC2Provider(appConfig types.AppConfig) (*EC2Provider, error) {
 	}
 
 	return &EC2Provider{
-		client: ec2.NewFromConfig(cfg),
-		config: appConfig.Providers.EC2Config,
+		client:         ec2.NewFromConfig(cfg),
+		clusterName:    appConfig.ClusterName,
+		providerConfig: appConfig.Providers.EC2Config,
 	}, nil
 }
 
@@ -50,6 +52,9 @@ type InstanceSpec struct {
 }
 
 func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64, requiredGpu string) (string, error) {
+	// TODO: make instance selection more dynamic / don't rely on hardcoded values
+	// We can load desired instances from the worker pool config, and then use the DescribeInstances
+	// api to return valid instance types
 	availableInstances := []struct {
 		Type string
 		Spec InstanceSpec
@@ -91,55 +96,65 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 	return selectedInstance, nil
 }
 
-func (p *EC2Provider) ProvisionMachine(ctx context.Context, compute ComputeRequest, poolName string, machineId string) error {
+func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, compute ComputeRequest) (string, error) {
 	// NOTE: CPU cores -> millicores, memory -> megabytes
 	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Cpu, compute.Gpu)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	log.Printf("Selected instance type <%s> for compute request: %+v\n", instanceType, compute)
+	roleArn := "arn:aws:iam::187248174200:instance-profile/beta-dev-k3s-instance-profile"
 
+	log.Printf("Selected instance type <%s> for compute request: %+v\n", instanceType, compute)
 	encodedUserData := base64.StdEncoding.EncodeToString([]byte(userData))
 	input := &ec2.RunInstancesInput{
-		ImageId:      aws.String(p.config.AMI),
-		InstanceType: awsTypes.InstanceType(instanceType),
-		MinCount:     aws.Int32(1),
-		MaxCount:     aws.Int32(1),
-		UserData:     aws.String(encodedUserData),
-		SubnetId:     p.config.SubnetId,
+		ImageId:            aws.String(p.providerConfig.AMI),
+		InstanceType:       awsTypes.InstanceType(instanceType),
+		MinCount:           aws.Int32(1),
+		MaxCount:           aws.Int32(1),
+		UserData:           aws.String(encodedUserData),
+		SubnetId:           p.providerConfig.SubnetId,
+		IamInstanceProfile: &awsTypes.IamInstanceProfileSpecification{Arn: &roleArn},
 	}
 
 	result, err := p.client.RunInstances(ctx, input)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if len(result.Instances) == 0 {
-		return errors.New("instance not created")
+		return "", errors.New("instance not created")
 	}
 
-	instanceID := *result.Instances[0].InstanceId
-	instanceName := fmt.Sprintf("%s-%s-%s", instanceNamePrefix, poolName, machineId)
+	instanceId := *result.Instances[0].InstanceId
+	instanceName := fmt.Sprintf("%s-%s-%s", p.clusterName, poolName, MachineId(instanceId))
 
 	_, err = p.client.CreateTags(ctx, &ec2.CreateTagsInput{
-		Resources: []string{instanceID},
+		Resources: []string{instanceId},
 		Tags: []awsTypes.Tag{
 			{
 				Key:   aws.String("Name"),
 				Value: aws.String(instanceName),
 			},
+			{
+				Key:   aws.String("ClusterName"),
+				Value: aws.String(p.clusterName),
+			},
+			{
+				Key:   aws.String("PoolName"),
+				Value: aws.String(poolName),
+			},
 		},
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to tag the instance: %w", err)
+		return "", fmt.Errorf("failed to tag the instance: %w", err)
 	}
 
-	return nil
+	return instanceName, nil
 }
 
-func (p *EC2Provider) TerminateMachine(ctx context.Context, id string) error {
+func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, id string) error {
 	if id == "" {
 		return errors.New("invalid instance ID")
 	}
@@ -157,8 +172,63 @@ func (p *EC2Provider) TerminateMachine(ctx context.Context, id string) error {
 	return nil
 }
 
-func (p *EC2Provider) ListMachines() error {
-	return nil
+func (p *EC2Provider) ListMachines(ctx context.Context, poolName string) ([]string, error) {
+	input := &ec2.DescribeInstancesInput{
+		Filters: []awsTypes.Filter{
+			{
+				Name:   aws.String("tag:ClusterName"),
+				Values: []string{p.clusterName},
+			},
+			{
+				Name:   aws.String("tag:PoolName"),
+				Values: []string{poolName},
+			},
+			{
+				Name:   aws.String("instance-state-name"),
+				Values: []string{"running"},
+			},
+		},
+	}
+
+	var machines []string
+	paginator := ec2.NewDescribeInstancesPaginator(p.client, input)
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			log.Printf("Error fetching instances page: %v", err)
+			return nil, err
+		}
+
+		for _, reservation := range page.Reservations {
+			for _, instance := range reservation.Instances {
+				machines = append(machines, *instance.InstanceId)
+			}
+		}
+	}
+
+	return machines, nil
+}
+
+func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			machines, err := p.ListMachines(ctx, poolName)
+			if err != nil {
+				log.Printf("Error listing machines: %v\n", err)
+				continue
+			}
+
+			for _, machine := range machines {
+				log.Printf("Machine: %+v\n", machine)
+			}
+		}
+	}
 }
 
 var userData string = `

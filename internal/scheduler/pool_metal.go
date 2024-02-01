@@ -63,6 +63,8 @@ func NewMetalWorkerPoolController(
 		provider:       provider,
 	}
 
+	go provider.Reconcile(context.Background(), wpc.name)
+
 	return wpc, nil
 }
 
@@ -71,14 +73,16 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 
 	// Check current machines for capacity
 	// wpc.provider.ListMachines()
-	err := wpc.provider.ProvisionMachine(context.TODO(), providers.ComputeRequest{
+	machineId, err := wpc.provider.ProvisionMachine(context.TODO(), wpc.name, providers.ComputeRequest{
 		Cpu:    cpu,
 		Memory: memory,
 		Gpu:    gpuType,
-	}, wpc.name, "test-machine")
+	})
 	if err != nil {
 		return nil, err
 	}
+
+	log.Println("create machine with name: ", machineId)
 
 	worker := &types.Worker{Id: workerId, Cpu: cpu, Memory: memory, Gpu: gpuType}
 	worker.PoolId = PoolId(wpc.name)
