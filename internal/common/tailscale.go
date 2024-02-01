@@ -2,10 +2,12 @@ package common
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"net"
 	"time"
 
-	"tailscale.com/ipn/ipnstate"
+	"github.com/beam-cloud/beta9/internal/types"
 	"tailscale.com/tsnet"
 )
 
@@ -47,19 +49,25 @@ func NewTailscale(cfg TailscaleConfig) *Tailscale {
 }
 
 // Start connects the server to the tailnet
-func (t *Tailscale) Start(ctx context.Context) (*ipnstate.Status, error) {
+func (t *Tailscale) Start(ctx context.Context, service types.InternalService) (net.Listener, error) {
 	log.Println("Connecting to tailnet @", t.server.ControlURL)
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	status, err := t.server.Up(timeoutCtx)
+	addr := fmt.Sprintf(":%d", service.LocalPort)
+	listener, err := t.server.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Println("Connected to tailnet")
-	return status, nil
+	_, err = t.server.Up(timeoutCtx)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("Connected to tailnet - listening on %s\n", addr)
+	return listener, nil
 }
 
 // Stops the Tailscale server

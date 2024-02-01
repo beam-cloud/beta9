@@ -12,7 +12,7 @@ RUN go mod download && go mod verify
 
 COPY . .
 
-RUN go build -o /usr/local/bin/agent /workspace/cmd/agent/main.go
+RUN go build -o /usr/local/bin/proxy /workspace/cmd/proxy/main.go
 
 
 # Target used in production-like environments
@@ -23,6 +23,6 @@ WORKDIR /workspace
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt autoclean
 
-COPY --from=build /usr/local/bin/agent /usr/local/bin/
+COPY --from=build /usr/local/bin/proxy /usr/local/bin/
 
 CMD ["tail", "-f", "/dev/null"]

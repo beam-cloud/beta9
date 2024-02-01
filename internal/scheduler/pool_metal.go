@@ -89,8 +89,9 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	if err != nil {
 		return nil, err
 	}
+	log.Println("Create new machine with id: ", machineId)
 
-	log.Println("create machine with name: ", machineId)
+	// Provision the worker job?
 
 	worker := &types.Worker{Id: workerId, Cpu: cpu, Memory: memory, Gpu: gpuType}
 	worker.PoolId = PoolId(wpc.name)

@@ -82,6 +82,43 @@ spec:
         persistentVolumeClaim:
           claimName: images
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy
+  namespace: beta9
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: proxy
+  template:
+    metadata:
+      labels:
+        app: proxy
+    spec:
+      containers:
+      - name: proxy
+        image: registry.localhost:5000/beta9-proxy:latest
+        command:
+        - /usr/local/bin/proxy
+        ports:
+        - name: redis
+          containerPort: 6000
+          protocol: TCP
+        - name: juice-redis
+          containerPort: 6001
+          protocol: TCP
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -131,6 +168,27 @@ spec:
   - name: prometheus
     port: 9090
     targetPort: 9090
+    protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxy
+  namespace: beta9
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+spec:
+  selector:
+    app: proxy
+  ports:
+  - name: redis
+    port: 6000
+    targetPort: 6000
+    protocol: TCP
+  - name: juicefs-redis
+    port: 6001
+    targetPort: 6001
     protocol: TCP
 ---
 apiVersion: traefik.containo.us/v1alpha1

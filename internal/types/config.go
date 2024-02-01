@@ -13,6 +13,7 @@ type AppConfig struct {
 	Worker         WorkerConfig         `key:"worker"`
 	Providers      ProviderConfig       `key:"providers"`
 	Tailscale      TailscaleConfig      `key:"tailscale"`
+	Proxy          ProxyConfig          `key:"proxy"`
 }
 
 type DatabaseConfig struct {
@@ -192,4 +193,14 @@ type TailscaleConfig struct {
 	AuthKey    string `key:"authKey"`
 	Enabled    bool   `key:"enabled"`
 	Debug      bool   `key:"debug"`
+}
+
+type ProxyConfig struct {
+	Services []InternalService `key:"services"`
+}
+
+type InternalService struct {
+	Name        string `key:"name"`
+	LocalPort   int    `key:"localPort"`
+	Destination string `key:"destination"`
 }
