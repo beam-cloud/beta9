@@ -34,7 +34,7 @@ func NewEC2Provider(appConfig types.AppConfig) (*EC2Provider, error) {
 		config.WithCredentialsProvider(credentials),
 	)
 	if err != nil {
-		log.Printf("Error loading AWS configuration: %v", err)
+		log.Printf("Unable to load AWS config: %v", err)
 		return nil, err
 	}
 
@@ -103,6 +103,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 		return "", err
 	}
 
+	// TODO: remove once we sort out connection issues
 	roleArn := "arn:aws:iam::187248174200:instance-profile/beta-dev-k3s-instance-profile"
 
 	log.Printf("Selected instance type <%s> for compute request: %+v\n", instanceType, compute)
@@ -137,11 +138,11 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 				Value: aws.String(instanceName),
 			},
 			{
-				Key:   aws.String("ClusterName"),
+				Key:   aws.String("Beta9ClusterName"),
 				Value: aws.String(p.clusterName),
 			},
 			{
-				Key:   aws.String("PoolName"),
+				Key:   aws.String("Beta9PoolName"),
 				Value: aws.String(poolName),
 			},
 		},
@@ -176,11 +177,11 @@ func (p *EC2Provider) ListMachines(ctx context.Context, poolName string) ([]stri
 	input := &ec2.DescribeInstancesInput{
 		Filters: []awsTypes.Filter{
 			{
-				Name:   aws.String("tag:ClusterName"),
+				Name:   aws.String("tag:Beta9ClusterName"),
 				Values: []string{p.clusterName},
 			},
 			{
-				Name:   aws.String("tag:PoolName"),
+				Name:   aws.String("tag:Beta9PoolName"),
 				Values: []string{poolName},
 			},
 			{

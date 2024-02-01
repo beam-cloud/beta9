@@ -45,9 +45,9 @@ var (
 )
 
 var (
-	providerPrefix   string = "provider"
-	providerCapacity string = "provider:capacity:%s:%s:%s"
-	providerHost     string = "provider:host:%s:%s:%s"
+	providerPrefix      string = "provider"
+	providerMachine     string = "provider:machine:%s:%s:%s"
+	providerMachineLock string = "provider:machine:%s:%s:%s:lock"
 )
 
 var RedisKeys = &redisKeys{}
@@ -164,11 +164,10 @@ func (rk *redisKeys) ProviderPrefix() string {
 	return providerPrefix
 }
 
-func (rk *redisKeys) ProviderMachineCapacity(workspaceId, providerName, machineId string) string {
-	return fmt.Sprintf(providerCapacity, workspaceId, providerName, machineId)
+func (rk *redisKeys) ProviderMachine(providerName, poolName, machineId string) string {
+	return fmt.Sprintf(providerMachine, providerName, poolName, machineId)
 }
 
-func (rk *redisKeys) ProviderMachineHost(workspaceId, providerName, machineId string) string {
-	return fmt.Sprintf(providerHost, workspaceId, providerName, machineId)
-
+func (rk *redisKeys) ProviderMachineLock(providerName, poolName, machineId string) string {
+	return fmt.Sprintf(providerMachine, providerName, poolName, machineId)
 }

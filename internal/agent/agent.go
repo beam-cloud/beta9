@@ -17,7 +17,6 @@ type Agent struct {
 }
 
 func NewAgent() (*Agent, error) {
-
 	return &Agent{}, nil
 }
 

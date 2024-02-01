@@ -54,3 +54,18 @@ func PoolId(name string) string {
 func GenerateWorkerId() string {
 	return uuid.New().String()[:8]
 }
+
+func MonitorPoolSize(wpc WorkerPoolController, workerPool *types.WorkerPoolConfig) error {
+	config, err := ParsePoolSizingConfig(workerPool.PoolSizing)
+	if err != nil {
+		return err
+	}
+
+	poolSizer, err := NewWorkerPoolSizer(wpc, config)
+	if err != nil {
+		return err
+	}
+
+	go poolSizer.Start()
+	return nil
+}

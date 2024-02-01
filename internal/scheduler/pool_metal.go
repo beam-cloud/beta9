@@ -20,6 +20,7 @@ type MetalWorkerPoolController struct {
 	workerPool     types.WorkerPoolConfig
 	workerRepo     repository.WorkerRepository
 	workerPoolRepo repository.WorkerPoolRepository
+	providerRepo   repository.ProviderRepository
 }
 
 func NewMetalWorkerPoolController(
@@ -27,6 +28,7 @@ func NewMetalWorkerPoolController(
 	workerPoolName string,
 	workerRepo repository.WorkerRepository,
 	workerPoolRepo repository.WorkerPoolRepository,
+	providerRepo repository.ProviderRepository,
 	providerName *types.MachineProvider) (WorkerPoolController, error) {
 	var provider providers.Provider = nil
 	var err error = nil
@@ -60,9 +62,17 @@ func NewMetalWorkerPoolController(
 		workerPool:     workerPool,
 		workerRepo:     workerRepo,
 		workerPoolRepo: workerPoolRepo,
+		providerRepo:   providerRepo,
 		provider:       provider,
 	}
 
+	// Start monitoring worker pool size
+	err = MonitorPoolSize(wpc, &workerPool)
+	if err != nil {
+		log.Printf("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
+	}
+
+	// Reconcile nodes with state
 	go provider.Reconcile(context.Background(), wpc.name)
 
 	return wpc, nil
@@ -71,8 +81,6 @@ func NewMetalWorkerPoolController(
 func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
-	// Check current machines for capacity
-	// wpc.provider.ListMachines()
 	machineId, err := wpc.provider.ProvisionMachine(context.TODO(), wpc.name, providers.ComputeRequest{
 		Cpu:    cpu,
 		Memory: memory,
@@ -92,6 +100,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 		log.Printf("Unable to create worker: %+v\n", err)
 		return nil, err
 	}
+
 	return worker, nil
 }
 
