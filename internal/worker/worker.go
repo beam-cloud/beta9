@@ -111,6 +111,7 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
+	// TODO: if remote worker, use proxied URLs
 	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
 	if err != nil {
 		return nil, err

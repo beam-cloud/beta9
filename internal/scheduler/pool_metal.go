@@ -44,9 +44,10 @@ func NewMetalWorkerPoolController(
 	}
 
 	// TODO: make this machine specific
-	kubeConfig, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, err
+	kubeConfig := &rest.Config{
+		Host:            "https://machine-id.beta9.headscale.internal:6443",
+		BearerToken:     "token",
+		TLSClientConfig: rest.TLSClientConfig{Insecure: true},
 	}
 
 	kubeClient, err := kubernetes.NewForConfig(kubeConfig)

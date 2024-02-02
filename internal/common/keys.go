@@ -50,6 +50,10 @@ var (
 	providerMachineLock string = "provider:machine:%s:%s:%s:lock"
 )
 
+var (
+	tailscalePrefix string = "tailscale"
+)
+
 var RedisKeys = &redisKeys{}
 
 type redisKeys struct{}
@@ -158,6 +162,15 @@ func (rk *redisKeys) WorkerPoolLock(poolId string) string {
 func (rk *redisKeys) WorkerPoolState(poolId string) string {
 	return fmt.Sprintf(workerPoolState, poolId)
 }
+
+// Tailscale keys
+func (rk *redisKeys) TailscalePrefix() string {
+	return tailscalePrefix
+}
+
+// func (rk *redisKeys) ProviderMachine(providerName, poolName, machineId string) string {
+// 	return fmt.Sprintf(providerMachine, providerName, poolName, machineId)
+// }
 
 // Provider keys
 func (rk *redisKeys) ProviderPrefix() string {

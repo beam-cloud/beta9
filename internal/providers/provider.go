@@ -2,8 +2,8 @@ package providers
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+
+	"github.com/google/uuid"
 )
 
 type ComputeRequest struct {
@@ -19,10 +19,6 @@ type Provider interface {
 	Reconcile(ctx context.Context, poolName string)
 }
 
-func MachineId(id string) string {
-	hasher := sha256.New()
-	hasher.Write([]byte(id))
-	hash := hasher.Sum(nil)
-	machineId := hex.EncodeToString(hash[:8])
-	return machineId
+func MachineId() string {
+	return uuid.New().String()[:8]
 }

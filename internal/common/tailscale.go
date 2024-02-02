@@ -48,8 +48,8 @@ func NewTailscale(cfg TailscaleConfig) *Tailscale {
 	return ts
 }
 
-// Start connects the server to the tailnet
-func (t *Tailscale) Start(ctx context.Context, service types.InternalService) (net.Listener, error) {
+// Serve connects to a tailnet and serves a local service
+func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (net.Listener, error) {
 	log.Println("Connecting to tailnet @", t.server.ControlURL)
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -68,6 +68,21 @@ func (t *Tailscale) Start(ctx context.Context, service types.InternalService) (n
 
 	log.Printf("Connected to tailnet - listening on %s\n", addr)
 	return listener, nil
+}
+
+func (t *Tailscale) Join(ctx context.Context) error {
+	log.Println("Connecting to tailnet @", t.server.ControlURL)
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	_, err := t.server.Up(timeoutCtx)
+	if err != nil {
+		return err
+	}
+
+	log.Println("Connected to tailnet.")
+	return nil
 }
 
 // Stops the Tailscale server

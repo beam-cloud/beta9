@@ -57,9 +57,10 @@ func (p *Proxy) Start() error {
 			AuthKey:    p.config.Tailscale.AuthKey,
 			Debug:      p.config.Tailscale.Debug,
 			Dir:        fmt.Sprintf("/tmp/%s", service.Name),
+			Ephemeral:  true,
 		})
 
-		listener, err := tailscale.Start(context.TODO(), service)
+		listener, err := tailscale.Serve(context.TODO(), service)
 		if err != nil {
 			return err
 		}

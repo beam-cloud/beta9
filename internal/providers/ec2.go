@@ -1,11 +1,13 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
+	"text/template"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -19,11 +21,13 @@ import (
 type EC2Provider struct {
 	client         *ec2.Client
 	clusterName    string
+	appConfig      types.AppConfig
 	providerConfig types.EC2ProviderConfig
 }
 
 const (
 	instanceComputeBufferPercent float64 = 10.0
+	k3sVersion                   string  = "v1.28.5+k3s1"
 )
 
 func NewEC2Provider(appConfig types.AppConfig) (*EC2Provider, error) {
@@ -41,6 +45,7 @@ func NewEC2Provider(appConfig types.AppConfig) (*EC2Provider, error) {
 	return &EC2Provider{
 		client:         ec2.NewFromConfig(cfg),
 		clusterName:    appConfig.ClusterName,
+		appConfig:      appConfig,
 		providerConfig: appConfig.Providers.EC2Config,
 	}, nil
 }
@@ -106,8 +111,21 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 	// TODO: remove once we sort out connection issues
 	roleArn := "arn:aws:iam::187248174200:instance-profile/beta-dev-k3s-instance-profile"
 
+	machineId := MachineId()
+	populatedUserData, err := populateUserData(userDataConfig{
+		AuthKey:           p.appConfig.Tailscale.AuthKey,
+		ControlURL:        p.appConfig.Tailscale.ControlURL,
+		Beta9Token:        "ncKDgybIXKFgy6ff7xvcqvY4piE8-wixTmsHOCPpNqMsZKcgf1FuuEB_mZrJlKIopHfIRf-qRcnBnypnxaCWcQ==",
+		K3sVersion:        k3sVersion,
+		DisableComponents: []string{"traefik"},
+		MachineId:         machineId,
+	})
+	if err != nil {
+		return "", err
+	}
+
 	log.Printf("Selected instance type <%s> for compute request: %+v\n", instanceType, compute)
-	encodedUserData := base64.StdEncoding.EncodeToString([]byte(userData))
+	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
 	input := &ec2.RunInstancesInput{
 		ImageId:            aws.String(p.providerConfig.AMI),
 		InstanceType:       awsTypes.InstanceType(instanceType),
@@ -128,7 +146,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 	}
 
 	instanceId := *result.Instances[0].InstanceId
-	instanceName := fmt.Sprintf("%s-%s-%s", p.clusterName, poolName, MachineId(instanceId))
+	instanceName := fmt.Sprintf("%s-%s-%s", p.clusterName, poolName, machineId)
 
 	_, err = p.client.CreateTags(ctx, &ec2.CreateTagsInput{
 		Resources: []string{instanceId},
@@ -232,21 +250,79 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 	}
 }
 
-var userData string = `
+type userDataConfig struct {
+	AuthKey           string
+	ControlURL        string
+	Beta9Token        string
+	K3sVersion        string
+	DisableComponents []string
+	MachineId         string
+}
+
+func populateUserData(config userDataConfig) (string, error) {
+	t, err := template.New("userdata").Parse(userDataTemplate)
+	if err != nil {
+		return "", fmt.Errorf("error parsing user data template: %w", err)
+	}
+
+	var populatedTemplate bytes.Buffer
+	if err := t.Execute(&populatedTemplate, config); err != nil {
+		return "", fmt.Errorf("error executing user data template: %w", err)
+	}
+
+	return populatedTemplate.String(), nil
+}
+
+const userDataTemplate = `
 #!/bin/bash
 
-INSTALL_K3S_VERSION="v1.28.5+k3s1"
+INSTALL_K3S_VERSION="{{.K3sVersion}}"
+MACHINE_ID="{{.MachineId}}"
+BETA9_TOKEN="{{.Beta9Token}}"
 
 # Install K3s
-curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$INSTALL_K3S_VERSION INSTALL_K3S_EXEC=" --disable traefik" sh -    
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$INSTALL_K3S_VERSION INSTALL_K3S_EXEC="{{range .DisableComponents}} --disable {{.}}{{end}}" sh -    
 
-# Wait for K3s to start, create the kubeconfig file, and the node token
-while [ ! -f /etc/rancher/k3s/k3s.yaml ] || [ ! -f /var/lib/rancher/k3s/server/node-token ]
-do
+# Wait for K3s to be up and running
+while [ ! -f /etc/rancher/k3s/k3s.yaml ] || [ ! -f /var/lib/rancher/k3s/server/node-token ]; do
   sleep 1
 done
 
-KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-kubectl apply -f https://raw.githubusercontent.com/beam-cloud/beta9/ll/remote-machines/manifests/k3s/agent.yaml
+# Create beta9 service account
+kubectl create serviceaccount beta9
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: beta9-token
+  annotations:
+    kubernetes.io/service-account.name: beta9
+type: kubernetes.io/service-account-token
+EOF
+kubectl annotate secret beta9-token kubernetes.io/service-account.name=beta9
+kubectl patch serviceaccount beta9 -p '{"secrets":[{"name":"beta9-token"}]}'
+kubectl create clusterrolebinding beta9-admin-binding --clusterrole=cluster-admin --serviceaccount=default:beta9
 
+curl -fsSL https://tailscale.com/install.sh | sh
+wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq &&\
+    chmod +x /usr/bin/yq
+
+tailscale up --authkey {{.AuthKey}} --login-server {{.ControlURL}} --accept-routes --hostname {{.MachineId}}
+
+TOKEN=$(kubectl get secret beta9-token -o jsonpath='{.data.token}' | base64 --decode)
+
+# Register the node
+HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $BETA9_TOKEN" \
+              -d '{"token":"'$TOKEN'", "machine_id":"{{.MachineId}}"}' \
+              http://gateway-http-skcdu8tq.beta9.headscale.internal:1994/api/v1/machine/register)
+
+if [ $HTTP_STATUS -eq 200 ]; then
+    CONFIG_YAML=$(jq '.config' response.json | yq e -P -)
+    kubectl create secret generic beta9-config --from-literal=config.yaml="$CONFIG_YAML"
+else
+    echo "Failed to register machine, status: $HTTP_STATUS"
+    exit 1
+fi
 `

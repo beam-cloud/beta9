@@ -9,7 +9,7 @@ import (
 func main() {
 	p, err := proxy.NewProxy()
 	if err != nil {
-		log.Fatalf("failed to initialize proxy: %v", err)
+		log.Fatalf("Failed to initialize proxy: %v", err)
 	}
 
 	p.Start()

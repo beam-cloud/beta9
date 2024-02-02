@@ -191,6 +191,7 @@ type PrometheusConfig struct {
 type TailscaleConfig struct {
 	ControlURL string `key:"controlUrl"`
 	AuthKey    string `key:"authKey"`
+	HostName   string `key:"hostName"`
 	Enabled    bool   `key:"enabled"`
 	Debug      bool   `key:"debug"`
 }
