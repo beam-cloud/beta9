@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -15,11 +14,12 @@ type TCPEventClientRepo struct {
 	conn net.Conn
 }
 
-func NewTCPEventClientRepo(config types.FluentBitConfig) (EventRepository, error) {
-	address := config.Events.Host + ":" + strconv.Itoa(config.Events.Port)
-	conn, err := net.Dial("tcp", address)
+func NewTCPEventClientRepo(config types.FluentBitEventConfig) (EventRepository, error) {
+	address := fmt.Sprintf("%s:%d", config.Host, config.Port)
+
+	conn, err := net.DialTimeout("tcp", address, 2*time.Second)
 	if err != nil {
-		err = fmt.Errorf("failed to connect to fluent-bit server %s: %v", address, err.Error())
+		err = fmt.Errorf("failed to connect to fluent-bit events server %s: %v", address, err)
 	}
 
 	return &TCPEventClientRepo{

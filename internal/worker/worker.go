@@ -120,7 +120,7 @@ func NewWorker() (*Worker, error) {
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 
-	eventRepo, err := repo.NewTCPEventClientRepo(config.FluentBit)
+	eventRepo, err := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 	if err != nil {
 		log.Println(err)
 	}
@@ -146,7 +146,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config.Metrics.Prometheus)
+	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config.Monitoring.Prometheus)
 
 	return &Worker{
 		ctx:                  ctx,

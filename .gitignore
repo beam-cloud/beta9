@@ -17,3 +17,4 @@ terraform.tfvars
 sdk/src/build
 sdk/src/beta9.egg-info
 event.json
+*.tgz
