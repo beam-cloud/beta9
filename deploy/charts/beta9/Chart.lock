@@ -1,0 +1,30 @@
+dependencies:
+- name: app-template
+  repository: https://bjw-s.github.io/helm-charts
+  version: 2.5.0
+- name: redis
+  repository: https://charts.bitnami.com/bitnami
+  version: 18.9.1
+- name: redis
+  repository: https://charts.bitnami.com/bitnami
+  version: 18.9.1
+- name: postgresql
+  repository: https://charts.bitnami.com/bitnami
+  version: 13.4.3
+- name: grafana
+  repository: https://grafana.github.io/helm-charts
+  version: 7.3.0
+- name: victoria-metrics-single
+  repository: https://victoriametrics.github.io/helm-charts
+  version: 0.9.15
+- name: victoria-metrics-agent
+  repository: https://victoriametrics.github.io/helm-charts
+  version: 0.9.17
+- name: victoria-logs-single
+  repository: https://victoriametrics.github.io/helm-charts
+  version: 0.3.4
+- name: fluent-bit
+  repository: https://fluent.github.io/helm-charts
+  version: 0.43.0
+digest: sha256:0e5e80f8e2b42647ba1f6b3a5378db251a13c60077a54929b1a54c6b0b96eb7f
+generated: "2024-02-02T15:14:30.268379-05:00"
