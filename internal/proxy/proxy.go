@@ -40,23 +40,31 @@ func (p *Proxy) Start() error {
 	terminationSignal := make(chan os.Signal, 1)
 	signal.Notify(terminationSignal, os.Interrupt, syscall.SIGTERM)
 
-	if p.config.Tailscale.Enabled {
-		for _, service := range p.services {
-			tailscale := common.NewTailscale(common.TailscaleConfig{
-				Hostname:   service.Name,
-				ControlURL: p.config.Tailscale.ControlURL,
-				AuthKey:    p.config.Tailscale.AuthKey,
-				Debug:      p.config.Tailscale.Debug,
-				Dir:        fmt.Sprintf("/tmp/%s", service.Name),
-			})
-
-			listener, err := tailscale.Start(context.TODO(), service)
+	for _, service := range p.services {
+		// Just bind service proxy to a local port if tailscale is disabled
+		if !p.config.Tailscale.Enabled {
+			listener, err := net.Listen("tcp", fmt.Sprintf(":%d", service.LocalPort))
 			if err != nil {
 				return err
 			}
-
 			p.startServiceProxy(service, listener)
 		}
+
+		// If tailscale is enabled, bind services as tailscale nodes
+		tailscale := common.NewTailscale(common.TailscaleConfig{
+			Hostname:   service.Name,
+			ControlURL: p.config.Tailscale.ControlURL,
+			AuthKey:    p.config.Tailscale.AuthKey,
+			Debug:      p.config.Tailscale.Debug,
+			Dir:        fmt.Sprintf("/tmp/%s", service.Name),
+		})
+
+		listener, err := tailscale.Start(context.TODO(), service)
+		if err != nil {
+			return err
+		}
+
+		p.startServiceProxy(service, listener)
 	}
 
 	<-terminationSignal
