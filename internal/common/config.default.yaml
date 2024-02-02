@@ -99,4 +99,6 @@ fluentBit:
   events:
     host: fluent-bit.fluent-bit.svc.cluster.local
     port: 8888
+    bufferSize: 100 # Stores events in case of failure to send or network error
+    maxEventRetries: 3
   

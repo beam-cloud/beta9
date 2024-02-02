@@ -160,6 +160,8 @@ type FluentBitConfig struct {
 }
 
 type FluentBitEventConfig struct {
-	Host string `key:"host"`
-	Port int    `key:"port"`
+	Host            string `key:"host"`
+	Port            int    `key:"port"`
+	BufferSize      int    `key:"bufferSize"`
+	MaxEventRetries int    `key:"maxEventRetries"`
 }
