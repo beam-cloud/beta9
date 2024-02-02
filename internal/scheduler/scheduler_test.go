@@ -39,10 +39,10 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	poolJson := []byte(`{"worker":{"pools":{"beta9-cpu":{},"beta9-a10g":{"gpuType": "A10G"},"beta9-t4":{"gpuType": "T4"}}}}}`)
 	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
-	metricsRepo := repo.NewMetricsPrometheusRepository(config.Metrics.Prometheus)
+	metricsRepo := repo.NewMetricsPrometheusRepository(config.Monitoring.Prometheus)
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 
-	eventRepo, err := repo.NewTCPEventClientRepo(config.Metrics.FluentBit.Events)
+	eventRepo, err := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 	if err != nil {
 		log.Println(err)
 	}

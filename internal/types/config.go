@@ -7,7 +7,7 @@ type AppConfig struct {
 	Database       DatabaseConfig       `key:"database"`
 	GatewayService GatewayServiceConfig `key:"gateway"`
 	ImageService   ImageServiceConfig   `key:"imageservice"`
-	Metrics        MetricsConfig        `key:"metrics"`
+	Monitoring     MonitoringConfig     `key:"monitoring"`
 	Storage        StorageConfig        `key:"storage"`
 	Worker         WorkerConfig         `key:"worker"`
 }
@@ -146,7 +146,7 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 	MinFreeGPU           string `key:"minFreeGPU"`
 }
 
-type MetricsConfig struct {
+type MonitoringConfig struct {
 	Prometheus PrometheusConfig `key:"prometheus"`
 	FluentBit  FluentBitConfig  `key:"fluentbit"`
 }

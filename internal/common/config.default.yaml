@@ -91,7 +91,7 @@ worker:
   resourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
-metrics:
+monitoring:
   prometheus:
     scrapeWorkers: true
     port: 9090

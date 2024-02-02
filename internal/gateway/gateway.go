@@ -63,7 +63,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	metricsRepo := repository.NewMetricsPrometheusRepository(config.Metrics.Prometheus)
+	metricsRepo := repository.NewMetricsPrometheusRepository(config.Monitoring.Prometheus)
 
 	scheduler, err := scheduler.NewScheduler(config, redisClient, metricsRepo)
 	if err != nil {
@@ -246,7 +246,7 @@ func (g *Gateway) Start() error {
 
 	log.Println("Gateway http server running @", g.config.GatewayService.HTTPPort)
 	log.Println("Gateway grpc server running @", g.config.GatewayService.GRPCPort)
-	log.Println("Gateway metrics server running @", g.config.Metrics.Prometheus.Port)
+	log.Println("Gateway metrics server running @", g.config.Monitoring.Prometheus.Port)
 
 	terminationSignal := make(chan os.Signal, 1)
 	defer close(terminationSignal)
