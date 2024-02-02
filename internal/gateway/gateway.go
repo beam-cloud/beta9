@@ -10,12 +10,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/beam-cloud/beta9/internal/abstractions/endpoint"
 	"github.com/beam-cloud/beta9/internal/abstractions/function"
 	"github.com/beam-cloud/beta9/internal/abstractions/image"
 	dmap "github.com/beam-cloud/beta9/internal/abstractions/map"
 	simplequeue "github.com/beam-cloud/beta9/internal/abstractions/queue"
 	"github.com/beam-cloud/beta9/internal/abstractions/taskqueue"
-	"github.com/beam-cloud/beta9/internal/abstractions/webserver"
 	gatewayservices "github.com/beam-cloud/beta9/internal/gateway/services"
 
 	volume "github.com/beam-cloud/beta9/internal/abstractions/volume"
@@ -167,12 +167,12 @@ func (g *Gateway) registerServices() error {
 	}
 	pb.RegisterTaskQueueServiceServer(g.grpcServer, tq)
 
-	// Register webserver service
-	ws, err := webserver.NewWebserverService(g.ctx, g.redisClient, g.Scheduler, g.baseRouteGroup)
+	// Register endpoint service
+	ws, err := endpoint.NewEndpointService(g.ctx, g.redisClient, g.Scheduler, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}
-	pb.RegisterWebserverServiceServer(g.grpcServer, ws)
+	pb.RegisterEndpointServiceServer(g.grpcServer, ws)
 
 	// Register volume service
 	vs, err := volume.NewGlobalVolumeService(g.BackendRepo)

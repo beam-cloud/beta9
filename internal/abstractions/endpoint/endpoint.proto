@@ -2,13 +2,13 @@ syntax = "proto3";
 
 option go_package = "github.com/beam-cloud/beta9/proto";
 
-package webserver;
+package endpoint;
 
-service WebserverService {
-  rpc WebserverRequest(WebserverRequestRequest) returns (WebserverRequestResponse);
+service EndpointService {
+  rpc EndpointRequest(EndpointRequestRequest) returns (EndpointRequestResponse);
 }
 
-message WebserverRequestRequest {
+message EndpointRequestRequest {
   string stub_id = 1;
   string method = 2;
   string path = 3;
@@ -16,7 +16,7 @@ message WebserverRequestRequest {
   bytes payload = 5;
 }
 
-message WebserverRequestResponse {
+message EndpointRequestResponse {
   bool ok = 1;
   bytes response = 2;
 }

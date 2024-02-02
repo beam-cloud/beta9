@@ -1,4 +1,4 @@
-package webserver
+package endpoint
 
 import (
 	"context"
@@ -16,14 +16,14 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type webserverState struct {
+type endpointState struct {
 	RunningContainers  int
 	PendingContainers  int
 	StoppingContainers int
 	FailedContainers   int
 }
 
-type webserverInstance struct {
+type endpointInstance struct {
 	ctx                context.Context
 	cancelFunc         context.CancelFunc
 	name               string
@@ -43,7 +43,7 @@ type webserverInstance struct {
 	buffer             *RingBuffer
 }
 
-func (i *webserverInstance) monitor() error {
+func (i *endpointInstance) monitor() error {
 	go i.autoscaler.start(i.ctx) // Start the autoscaler
 
 	for {
@@ -75,8 +75,8 @@ func (i *webserverInstance) monitor() error {
 	}
 }
 
-func (i *webserverInstance) state() (*webserverState, error) {
-	patternPrefix := fmt.Sprintf("%s-%s-*", webserverContainerPrefix, i.stub.ExternalId)
+func (i *endpointInstance) state() (*endpointState, error) {
+	patternPrefix := fmt.Sprintf("%s-%s-*", endpointContainerPrefix, i.stub.ExternalId)
 	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
 	if err != nil {
 		return nil, err
@@ -87,7 +87,7 @@ func (i *webserverInstance) state() (*webserverState, error) {
 		return nil, err
 	}
 
-	state := webserverState{}
+	state := endpointState{}
 	for _, container := range containers {
 		switch container.Status {
 		case types.ContainerStatusRunning:
@@ -103,7 +103,7 @@ func (i *webserverInstance) state() (*webserverState, error) {
 	return &state, nil
 }
 
-func (i *webserverInstance) handleScalingEvent(desiredContainers int) error {
+func (i *endpointInstance) handleScalingEvent(desiredContainers int) error {
 	err := i.lock.Acquire(i.ctx, "TODO:KEY", common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
@@ -136,7 +136,7 @@ func (i *webserverInstance) handleScalingEvent(desiredContainers int) error {
 	return err
 }
 
-func (i *webserverInstance) startContainers(containersToRun int) error {
+func (i *endpointInstance) startContainers(containersToRun int) error {
 	for c := 0; c < containersToRun; c++ {
 		runRequest := &types.ContainerRequest{
 			ContainerId: i.genContainerId(),
@@ -172,7 +172,7 @@ func (i *webserverInstance) startContainers(containersToRun int) error {
 	return nil
 }
 
-func (i *webserverInstance) stopContainers(containersToStop int) error {
+func (i *endpointInstance) stopContainers(containersToStop int) error {
 	src := rand.NewSource(time.Now().UnixNano())
 	rnd := rand.New(src)
 
@@ -199,8 +199,8 @@ func (i *webserverInstance) stopContainers(containersToStop int) error {
 	return nil
 }
 
-func (i *webserverInstance) stoppableContainers() ([]string, error) {
-	patternPrefix := fmt.Sprintf("%s%s-*", webserverContainerPrefix, i.stub.ExternalId)
+func (i *endpointInstance) stoppableContainers() ([]string, error) {
+	patternPrefix := fmt.Sprintf("%s%s-*", endpointContainerPrefix, i.stub.ExternalId)
 	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
 	if err != nil {
 		return nil, err
@@ -249,6 +249,6 @@ func (i *webserverInstance) stoppableContainers() ([]string, error) {
 	return keys, nil
 }
 
-func (i *webserverInstance) genContainerId() string {
-	return fmt.Sprintf("%s%s-%s", webserverContainerPrefix, i.stub.ExternalId, uuid.New().String()[:8])
+func (i *endpointInstance) genContainerId() string {
+	return fmt.Sprintf("%s%s-%s", endpointContainerPrefix, i.stub.ExternalId, uuid.New().String()[:8])
 }

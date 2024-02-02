@@ -26,5 +26,5 @@ protoc -I ../internal/abstractions/volume/ --python_betterproto_out=../sdk/src/b
 protoc -I ../internal/abstractions/taskqueue/ --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ../internal/abstractions/taskqueue/taskqueue.proto
 protoc -I ../internal/abstractions/taskqueue/ --python_betterproto_out=../sdk/src/beta9/clients/  ../internal/abstractions/taskqueue/taskqueue.proto
 
-protoc -I ../internal/abstractions/webserver/ --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ../internal/abstractions/webserver/webserver.proto
-protoc -I ../internal/abstractions/webserver/ --python_betterproto_out=../sdk/src/beta9/clients/  ../internal/abstractions/webserver/webserver.proto
+protoc -I ../internal/abstractions/endpoint/ --go_out=. --go_opt=paths=source_relative --go-grpc_out=./ --go-grpc_opt=paths=source_relative ../internal/abstractions/endpoint/endpoint.proto
+protoc -I ../internal/abstractions/endpoint/ --python_betterproto_out=../sdk/src/beta9/clients/  ../internal/abstractions/endpoint/endpoint.proto

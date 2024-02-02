@@ -8,24 +8,39 @@ import grpclib
 
 
 @dataclass
-class WebEndpointServeRequest(betterproto.Message):
+class EndpointRequestRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
+    method: str = betterproto.string_field(2)
+    path: str = betterproto.string_field(3)
+    headers: bytes = betterproto.bytes_field(4)
+    payload: bytes = betterproto.bytes_field(5)
 
 
 @dataclass
-class WebEndpointServeResponse(betterproto.Message):
-    pass
+class EndpointRequestResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    response: bytes = betterproto.bytes_field(2)
 
 
-class WebEndpointServiceStub(betterproto.ServiceStub):
-    async def web_endpoint_serve(
-        self, *, stub_id: str = ""
-    ) -> WebEndpointServeResponse:
-        request = WebEndpointServeRequest()
+class EndpointServiceStub(betterproto.ServiceStub):
+    async def endpoint_request(
+        self,
+        *,
+        stub_id: str = "",
+        method: str = "",
+        path: str = "",
+        headers: bytes = b"",
+        payload: bytes = b"",
+    ) -> EndpointRequestResponse:
+        request = EndpointRequestRequest()
         request.stub_id = stub_id
+        request.method = method
+        request.path = path
+        request.headers = headers
+        request.payload = payload
 
         return await self._unary_unary(
-            "/endpoint.WebEndpointService/WebEndpointServe",
+            "/endpoint.EndpointService/EndpointRequest",
             request,
-            WebEndpointServeResponse,
+            EndpointRequestResponse,
         )

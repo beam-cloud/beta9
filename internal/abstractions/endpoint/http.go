@@ -1,4 +1,4 @@
-package webserver
+package endpoint
 
 import (
 	"log"
@@ -7,13 +7,13 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-type webserverGroup struct {
+type endpointGroup struct {
 	routerGroup *echo.Group
-	ws          *RingBufferWebserverService
+	ws          *RingBufferEndpointService
 }
 
-func registerWebServerRoutes(g *echo.Group, ws *RingBufferWebserverService) *webserverGroup {
-	group := &webserverGroup{routerGroup: g, ws: ws}
+func registerWebServerRoutes(g *echo.Group, ws *RingBufferEndpointService) *endpointGroup {
+	group := &endpointGroup{routerGroup: g, ws: ws}
 
 	g.GET("/id/:stubId/", group.webServerRequest)
 	// g.POST("/:deploymentName/v:version", group.webServerPut)
@@ -21,7 +21,7 @@ func registerWebServerRoutes(g *echo.Group, ws *RingBufferWebserverService) *web
 	return group
 }
 
-func (g *webserverGroup) webServerRequest(ctx echo.Context) error {
+func (g *endpointGroup) webServerRequest(ctx echo.Context) error {
 	stubId := ctx.Param("stubId")
 
 	var payload interface{}

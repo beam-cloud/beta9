@@ -1,4 +1,4 @@
-package webserver
+package endpoint
 
 import (
 	"io"
@@ -11,19 +11,19 @@ import (
 	"github.com/beam-cloud/beta9/internal/repository"
 )
 
-type RingBufferWebserverClient struct {
+type RingBufferEndpointClient struct {
 	buffer        *RingBuffer
 	containerRepo repository.ContainerRepository
 }
 
-func NewRingBufferWebserverClient(size int, containerRepo repository.ContainerRepository) *RingBufferWebserverClient {
-	return &RingBufferWebserverClient{
+func NewRingBufferEndpointClient(size int, containerRepo repository.ContainerRepository) *RingBufferEndpointClient {
+	return &RingBufferEndpointClient{
 		buffer:        NewRingBuffer(size),
 		containerRepo: containerRepo,
 	}
 }
 
-func (c *RingBufferWebserverClient) ForwardRequest(req RequestData) ([]byte, error) {
+func (c *RingBufferEndpointClient) ForwardRequest(req RequestData) ([]byte, error) {
 	reader, writer := io.Pipe()
 	req.ResponseWriter = writer
 	c.buffer.Push(req)
@@ -50,7 +50,7 @@ func (c *RingBufferWebserverClient) ForwardRequest(req RequestData) ([]byte, err
 	return buf, nil
 }
 
-func (c *RingBufferWebserverClient) HandleRequests() {
+func (c *RingBufferEndpointClient) HandleRequests() {
 	for {
 		req, ok := c.buffer.Pop()
 
@@ -62,8 +62,8 @@ func (c *RingBufferWebserverClient) HandleRequests() {
 	}
 }
 
-func (c *RingBufferWebserverClient) searchForContainers(stubId string) (string, error) {
-	containerNamePrefix := common.RedisKeys.ContainerName(webserverContainerPrefix, stubId, "*")
+func (c *RingBufferEndpointClient) searchForContainers(stubId string) (string, error) {
+	containerNamePrefix := common.RedisKeys.ContainerName(endpointContainerPrefix, stubId, "*")
 
 	containerStates, err := c.containerRepo.GetActiveContainersByPrefix(containerNamePrefix)
 	if err != nil {
@@ -85,7 +85,7 @@ func (c *RingBufferWebserverClient) searchForContainers(stubId string) (string, 
 	return containerHost, nil
 }
 
-func (c *RingBufferWebserverClient) handleRequest(req RequestData) {
+func (c *RingBufferEndpointClient) handleRequest(req RequestData) {
 	defer req.ResponseWriter.Close()
 
 	containerHost, err := c.searchForContainers(req.stubId)

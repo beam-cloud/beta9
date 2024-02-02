@@ -1,4 +1,4 @@
-package webserver
+package endpoint
 
 import (
 	"context"
@@ -13,7 +13,7 @@ const (
 )
 
 type autoscaler struct {
-	instance         *webserverInstance
+	instance         *endpointInstance
 	autoscalingMode  int
 	samples          *autoscalingWindows
 	mostRecentSample *autoscalerSample
@@ -44,7 +44,7 @@ const (
 )
 
 // Create a new autoscaler
-func newAutoscaler(i *webserverInstance) *autoscaler {
+func newAutoscaler(i *endpointInstance) *autoscaler {
 	var autoscalingMode = autoScalingModeQueueDepth
 
 	return &autoscaler{

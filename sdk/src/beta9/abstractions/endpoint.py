@@ -1,15 +1,14 @@
 import json
 import os
-from typing import Any, Callable, Union, Dict, List
+from typing import Any, Callable, Dict, List, Union
 
 from beta9 import terminal
-from beta9.abstractions.base.runner import RunnerAbstraction
-from beta9.abstractions.base.runner import WEBSERVER_STUB_TYPE
+from beta9.abstractions.base.runner import WEBSERVER_STUB_TYPE, RunnerAbstraction
 from beta9.abstractions.image import Image
-from beta9.clients.webserver import WebserverRequestRequest, WebserverServiceStub
+from beta9.clients.endpoint import EndpointRequestRequest, EndpointServiceStub
 
 
-class Webserver(RunnerAbstraction):
+class Endpoint(RunnerAbstraction):
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
@@ -36,16 +35,16 @@ class Webserver(RunnerAbstraction):
             max_pending_tasks=max_pending_tasks,
         )
 
-        self.webserver_stub = WebserverServiceStub(self.channel)
+        self.endpoint_stub = EndpointServiceStub(self.channel)
 
     def __call__(self, func):
         return _CallableWrapper(func, self)
 
 
 class _CallableWrapper:
-    def __init__(self, func: Callable, parent: Webserver):
+    def __init__(self, func: Callable, parent: Endpoint):
         self.func: Callable = func
-        self.parent: Webserver = parent
+        self.parent: Endpoint = parent
 
     def __call__(self, *args, **kwargs) -> Any:
         container_id = os.getenv("CONTAINER_ID")
@@ -57,7 +56,9 @@ class _CallableWrapper:
             + " To enqueue items use .put(*args, **kwargs)"
         )
 
-    def request(self, method: str = "GET", path="/", headers: Dict[str, List[str]] = {}, payload: dict = {}) -> Any:
+    def request(
+        self, method: str = "GET", path="/", headers: Dict[str, List[str]] = {}, payload: dict = {}
+    ) -> Any:
         if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=WEBSERVER_STUB_TYPE,
@@ -67,15 +68,15 @@ class _CallableWrapper:
         headers_bytes = json.dumps(headers).encode("utf-8")
         payload_bytes = json.dumps(payload).encode("utf-8")
 
-        r: WebserverRequestRequest = self.parent.run_sync(
-            self.parent.webserver_stub.webserver_request(
+        r: EndpointRequestRequest = self.parent.run_sync(
+            self.parent.endpoint_stub.endpoint_request(
                 stub_id=self.parent.stub_id,
                 method=method,
                 headers=headers_bytes,
                 payload=payload_bytes,
             )
         )
-        
+
         print(r)
 
         if not r.ok:

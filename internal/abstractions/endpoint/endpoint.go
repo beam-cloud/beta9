@@ -1,4 +1,4 @@
-package webserver
+package endpoint
 
 import (
 	"bytes"
@@ -18,35 +18,35 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-type WebserverService interface {
-	pb.WebserverServiceServer
-	WebserverRequest(ctx context.Context, in *pb.WebserverRequestRequest) (*pb.WebserverRequestResponse, error)
+type EndpointService interface {
+	pb.EndpointServiceServer
+	EndpointRequest(ctx context.Context, in *pb.EndpointRequestRequest) (*pb.EndpointRequestResponse, error)
 }
 
-type RingBufferWebserverService struct {
-	pb.UnimplementedWebserverServiceServer
-	ctx                context.Context
-	rdb                *common.RedisClient
-	scheduler          *scheduler.Scheduler
-	backendRepo        repository.BackendRepository
-	containerRepo      repository.ContainerRepository
-	webserverInstances *common.SafeMap[*webserverInstance]
-	client             *RingBufferWebserverClient
+type RingBufferEndpointService struct {
+	pb.UnimplementedEndpointServiceServer
+	ctx               context.Context
+	rdb               *common.RedisClient
+	scheduler         *scheduler.Scheduler
+	backendRepo       repository.BackendRepository
+	containerRepo     repository.ContainerRepository
+	endpointInstances *common.SafeMap[*endpointInstance]
+	client            *RingBufferEndpointClient
 }
 
 var (
-	webserverContainerPrefix string = "webserver"
-	webserverRoutePrefix     string = "/webserver"
+	endpointContainerPrefix string = "endpoint"
+	endpointRoutePrefix     string = "/endpoint"
 )
 
 var RingBufferSize int = 10000000
 
-func NewWebserverService(
+func NewEndpointService(
 	ctx context.Context,
 	rdb *common.RedisClient,
 	scheduler *scheduler.Scheduler,
 	baseRouteGroup *echo.Group,
-) (WebserverService, error) {
+) (EndpointService, error) {
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
 		return nil, err
@@ -60,28 +60,28 @@ func NewWebserverService(
 
 	containerRepo := repository.NewContainerRedisRepository(rdb)
 
-	ws := &RingBufferWebserverService{
-		ctx:                ctx,
-		rdb:                rdb,
-		scheduler:          scheduler,
-		backendRepo:        backendRepo,
-		containerRepo:      containerRepo,
-		webserverInstances: common.NewSafeMap[*webserverInstance](),
-		client:             NewRingBufferWebserverClient(RingBufferSize, containerRepo),
+	ws := &RingBufferEndpointService{
+		ctx:               ctx,
+		rdb:               rdb,
+		scheduler:         scheduler,
+		backendRepo:       backendRepo,
+		containerRepo:     containerRepo,
+		endpointInstances: common.NewSafeMap[*endpointInstance](),
+		client:            NewRingBufferEndpointClient(RingBufferSize, containerRepo),
 	}
 
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(backendRepo)
-	registerWebServerRoutes(baseRouteGroup.Group(webserverRoutePrefix, authMiddleware), ws)
+	registerWebServerRoutes(baseRouteGroup.Group(endpointRoutePrefix, authMiddleware), ws)
 
 	return ws, nil
 }
 
-func (ws *RingBufferWebserverService) WebserverRequest(ctx context.Context, in *pb.WebserverRequestRequest) (*pb.WebserverRequestResponse, error) {
+func (ws *RingBufferEndpointService) EndpointRequest(ctx context.Context, in *pb.EndpointRequestRequest) (*pb.EndpointRequestResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	log.Println(authInfo)
 
-	// Forward request to webserver
+	// Forward request to endpoint
 	payloadReader := bytes.NewReader(in.Payload)
 	bodyReader := ioutil.NopCloser(payloadReader)
 
@@ -90,7 +90,7 @@ func (ws *RingBufferWebserverService) WebserverRequest(ctx context.Context, in *
 	if in.Headers != nil {
 		err := json.Unmarshal(in.Headers, &headers)
 		if err != nil {
-			return &pb.WebserverRequestResponse{
+			return &pb.EndpointRequestResponse{
 				Response: []byte{},
 				Ok:       false,
 			}, err
@@ -107,26 +107,26 @@ func (ws *RingBufferWebserverService) WebserverRequest(ctx context.Context, in *
 
 	response, err := ws.forwardRequest(ctx, in.StubId, requestData)
 
-	return &pb.WebserverRequestResponse{
+	return &pb.EndpointRequestResponse{
 		Ok:       err == nil,
 		Response: response,
 	}, nil
 }
 
-func (ws *RingBufferWebserverService) forwardRequest(ctx context.Context, stubId string, requestData RequestData) ([]byte, error) {
-	// Forward request to webserver
-	webserver, exists := ws.webserverInstances.Get(stubId)
+func (ws *RingBufferEndpointService) forwardRequest(ctx context.Context, stubId string, requestData RequestData) ([]byte, error) {
+	// Forward request to endpoint
+	endpoint, exists := ws.endpointInstances.Get(stubId)
 
 	if !exists {
-		err := ws.createWebserverInstance(stubId)
+		err := ws.createEndpointInstance(stubId)
 		if err != nil {
 			return []byte{}, err
 		}
 
-		webserver, _ = ws.webserverInstances.Get(stubId)
+		endpoint, _ = ws.endpointInstances.Get(stubId)
 	}
 
-	requestData.stubId = webserver.stub.ExternalId
+	requestData.stubId = endpoint.stub.ExternalId
 
 	resp, err := ws.client.ForwardRequest(requestData)
 	if err != nil {
@@ -136,10 +136,10 @@ func (ws *RingBufferWebserverService) forwardRequest(ctx context.Context, stubId
 	return resp, nil
 }
 
-func (ws *RingBufferWebserverService) createWebserverInstance(stubId string) error {
-	_, exists := ws.webserverInstances.Get(stubId)
+func (ws *RingBufferEndpointService) createEndpointInstance(stubId string) error {
+	_, exists := ws.endpointInstances.Get(stubId)
 	if exists {
-		return errors.New("webserver already in memory")
+		return errors.New("endpoint already in memory")
 	}
 
 	stub, err := ws.backendRepo.GetStubByExternalId(ws.ctx, stubId)
@@ -160,7 +160,7 @@ func (ws *RingBufferWebserverService) createWebserverInstance(stubId string) err
 
 	ctx, cancelFunc := context.WithCancel(ws.ctx)
 	lock := common.NewRedisLock(ws.rdb)
-	webserver := &webserverInstance{
+	endpoint := &endpointInstance{
 		ctx:                ctx,
 		cancelFunc:         cancelFunc,
 		lock:               lock,
@@ -179,17 +179,17 @@ func (ws *RingBufferWebserverService) createWebserverInstance(stubId string) err
 		// client:             ws.queueClient,
 	}
 
-	autoscaler := newAutoscaler(webserver)
-	webserver.autoscaler = autoscaler
+	autoscaler := newAutoscaler(endpoint)
+	endpoint.autoscaler = autoscaler
 
-	ws.webserverInstances.Set(stubId, webserver)
-	go webserver.monitor()
+	ws.endpointInstances.Set(stubId, endpoint)
+	go endpoint.monitor()
 
 	// Clean up the queue instance once it's done
-	go func(q *webserverInstance) {
+	go func(q *endpointInstance) {
 		<-q.ctx.Done()
-		ws.webserverInstances.Delete(stubId)
-	}(webserver)
+		ws.endpointInstances.Delete(stubId)
+	}(endpoint)
 
 	return nil
 }
