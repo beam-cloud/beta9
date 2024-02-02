@@ -10,7 +10,6 @@ type AppConfig struct {
 	Metrics        MetricsConfig        `key:"metrics"`
 	Storage        StorageConfig        `key:"storage"`
 	Worker         WorkerConfig         `key:"worker"`
-	FluentBit      FluentBitConfig      `key:"fluentBit"`
 }
 
 type DatabaseConfig struct {
@@ -56,11 +55,11 @@ type PostgresConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host           string `key:"host"`
-	HTTPPort       int    `key:"httpPort"`
-	GRPCPort       int    `key:"grpcPort"`
-	MaxRecvMsgSize int    `key:"max_recv_msg_size_in_mb"`
-	MaxSendMsgSize int    `key:"max_send_msg_size_in_mb"`
+	Host               string `key:"host"`
+	HTTPPort           int    `key:"httpPort"`
+	GRPCPort           int    `key:"grpcPort"`
+	GRPCMaxRecvMsgSize int    `key:"grpcMaxRecvMsgSizeInMB"`
+	GRPCMaxSendMsgSize int    `key:"grpcMaxSendMsgSizeInMB"`
 }
 
 type ImageServiceConfig struct {
@@ -121,9 +120,10 @@ type WorkerConfig struct {
 	Namespace          string                      `key:"namespace"`
 	ServiceAccountName string                      `key:"serviceAccountName"`
 
-	ResourcesEnforced          bool  `key:"resourcesEnforced"`
-	DefaultWorkerCPURequest    int64 `key:"defaultWorkerCPURequest"`
-	DefaultWorkerMemoryRequest int64 `key:"defaultWorkerMemoryRequest"`
+	ImagePVCName               string `key:"imagePVCName"`
+	ResourcesEnforced          bool   `key:"resourcesEnforced"`
+	DefaultWorkerCPURequest    int64  `key:"defaultWorkerCPURequest"`
+	DefaultWorkerMemoryRequest int64  `key:"defaultWorkerMemoryRequest"`
 }
 
 type WorkerPoolConfig struct {
@@ -148,6 +148,7 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 
 type MetricsConfig struct {
 	Prometheus PrometheusConfig `key:"prometheus"`
+	FluentBit  FluentBitConfig  `key:"fluentbit"`
 }
 
 type PrometheusConfig struct {

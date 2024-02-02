@@ -33,7 +33,7 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metri
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 
-	eventRepo, err := repo.NewTCPEventClientRepo(config.FluentBit)
+	eventRepo, err := repo.NewTCPEventClientRepo(config.Metrics.FluentBit.Events)
 	if err != nil {
 		log.Println(err)
 	}

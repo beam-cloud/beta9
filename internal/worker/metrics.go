@@ -33,7 +33,7 @@ func NewWorkerMetrics(
 	)
 
 	go func() {
-		if err := metricsRepo.Init(); err != nil {
+		if err := metricsRepo.ListenAndServe(); err != nil {
 			log.Fatalf("Failed to start metrics server: %v", err)
 		}
 	}()
