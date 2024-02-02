@@ -15,6 +15,7 @@ import (
 	dmap "github.com/beam-cloud/beta9/internal/abstractions/map"
 	simplequeue "github.com/beam-cloud/beta9/internal/abstractions/queue"
 	"github.com/beam-cloud/beta9/internal/abstractions/taskqueue"
+	"github.com/beam-cloud/beta9/internal/abstractions/webserver"
 	gatewayservices "github.com/beam-cloud/beta9/internal/gateway/services"
 
 	volume "github.com/beam-cloud/beta9/internal/abstractions/volume"
@@ -160,11 +161,18 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterFunctionServiceServer(g.grpcServer, fs)
 
 	// Register task queue service
-	tq, err := taskqueue.NewRedisTaskQueue(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo, g.baseRouteGroup)
+	tq, err := taskqueue.NewRedisTaskQueueService(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}
 	pb.RegisterTaskQueueServiceServer(g.grpcServer, tq)
+
+	// Register webserver service
+	ws, err := webserver.NewWebserverService(g.ctx, g.redisClient, g.Scheduler, g.baseRouteGroup)
+	if err != nil {
+		return err
+	}
+	pb.RegisterWebserverServiceServer(g.grpcServer, ws)
 
 	// Register volume service
 	vs, err := volume.NewGlobalVolumeService(g.BackendRepo)

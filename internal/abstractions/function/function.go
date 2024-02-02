@@ -186,10 +186,13 @@ func (fs *RunCFunctionService) createTask(ctx context.Context, authInfo *auth.Au
 	return task, nil
 }
 
-func (fs *RunCFunctionService) handleStreams(ctx context.Context,
+func (fs *RunCFunctionService) handleStreams(
+	ctx context.Context,
 	stream pb.FunctionService_FunctionInvokeServer,
 	workspaceName, taskId, containerId string,
-	outputChan chan common.OutputMsg, keyEventChan chan common.KeyEvent) error {
+	outputChan chan common.OutputMsg,
+	keyEventChan chan common.KeyEvent,
+) error {
 
 	var lastMessage common.OutputMsg
 

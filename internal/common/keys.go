@@ -45,6 +45,10 @@ var (
 	contextActiveContainersLock string = "context:container:active:lock:%s"  // contextId
 )
 
+var (
+	containerName string = "%s-%s-%s" // prefix, stub-id, containerId
+)
+
 var RedisKeys = &redisKeys{}
 
 type redisKeys struct{}
@@ -155,4 +159,8 @@ func (rk *redisKeys) ContextActiveContainer(contextId string, containerId string
 
 func (rk *redisKeys) ContextActiveContainerLock(contextId string) string {
 	return fmt.Sprintf(contextActiveContainersLock, contextId)
+}
+
+func (rk *redisKeys) ContainerName(prefix string, stubId string, containerId string) string {
+	return fmt.Sprintf(containerName, prefix, stubId, containerId)
 }

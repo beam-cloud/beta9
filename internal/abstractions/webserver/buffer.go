@@ -1,16 +1,21 @@
-package endpoint
+package webserver
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"sync"
 )
 
 type RequestData struct {
-	Method string
-	URL    string
-	Header http.Header
-	Body   io.ReadCloser
+	ctx    context.Context
+	stubId string
+
+	Method         string
+	URL            string
+	Headers        http.Header
+	Body           io.ReadCloser
+	ResponseWriter *io.PipeWriter
 }
 
 type RingBuffer struct {
@@ -60,15 +65,6 @@ func (rb *RingBuffer) Pop() (RequestData, bool) {
 	return request, true
 }
 
-func echoHandler(rb *RingBuffer) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		requestData := RequestData{
-			Method: r.Method,
-			URL:    r.URL.String(),
-			Header: r.Header,
-			Body:   r.Body,
-		}
-
-		rb.Push(requestData)
-	}
+func (rb *RingBuffer) Len() int {
+	return rb.count
 }

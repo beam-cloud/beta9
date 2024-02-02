@@ -172,6 +172,7 @@ const (
 	StubTypeFunctionDeployment  string = "function/deployment"
 	StubTypeTaskQueue           string = "taskqueue"
 	StubTypeTaskQueueDeployment string = "taskqueue/deployment"
+	StubTypeWebserver           string = "webserver"
 )
 
 type Stub struct {

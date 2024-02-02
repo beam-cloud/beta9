@@ -10,6 +10,7 @@ from beta9.sync import FileSyncer
 
 FUNCTION_STUB_TYPE = "function"
 TASKQUEUE_STUB_TYPE = "taskqueue"
+WEBSERVER_STUB_TYPE = "webserver"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
 
