@@ -1,5 +1,6 @@
 gateway:
   # TODO: Figure out helm vs kustomize
+  # TODO: Fix issue where sdk is unable to finish calling functions
   enabled: false
   service:
     main:
