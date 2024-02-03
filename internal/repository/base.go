@@ -75,6 +75,7 @@ type WorkerPoolRepository interface {
 type ProviderRepository interface {
 	ListMachines(providerName string) error
 	GetMachine(providerName, machineId string) error
+	RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error
 }
 
 type TailscaleRepository interface {

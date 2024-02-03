@@ -3,18 +3,13 @@ package providers
 import (
 	"context"
 
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 )
 
-type ComputeRequest struct {
-	Cpu    int64
-	Memory int64
-	Gpu    string
-}
-
 type Provider interface {
 	ListMachines(ctx context.Context, poolName string) ([]string, error)
-	ProvisionMachine(ctx context.Context, poolName string, compute ComputeRequest) (string, error)
+	ProvisionMachine(ctx context.Context, poolName string, compute types.ProviderComputeRequest) (string, error)
 	TerminateMachine(ctx context.Context, poolName, machineId string) error
 	Reconcile(ctx context.Context, poolName string)
 }

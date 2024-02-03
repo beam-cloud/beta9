@@ -1,7 +1,7 @@
 package apiv1
 
 import (
-	"log"
+	"fmt"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/internal/auth"
@@ -11,20 +11,22 @@ import (
 )
 
 type MachineGroup struct {
-	backendRepo repository.BackendRepository
-	routerGroup *echo.Group
-	config      types.AppConfig
+	providerRepo repository.ProviderRepository
+	routerGroup  *echo.Group
+	config       types.AppConfig
 }
 
-func NewMachineGroup(g *echo.Group, backendRepo repository.BackendRepository, config types.AppConfig) *MachineGroup {
-	group := &MachineGroup{routerGroup: g, backendRepo: backendRepo, config: config}
+func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, config types.AppConfig) *MachineGroup {
+	group := &MachineGroup{routerGroup: g, providerRepo: providerRepo, config: config}
 	g.POST("/register", group.RegisterMachine)
 	return group
 }
 
 type RegisterMachineRequest struct {
-	Token     string `json:"token"`
-	MachineID string `json:"machine_id"`
+	Token        string `json:"token"`
+	MachineID    string `json:"machine_id"`
+	ProviderName string `json:"provider_name"`
+	PoolName     string `json:"pool_name"`
 }
 
 func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
@@ -35,7 +37,12 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid payload")
 	}
 
-	log.Println("k8s service token:", request.Token)
+	hostName := fmt.Sprintf("%s.%s.%s", request.MachineID, g.config.Tailscale.User, g.config.Tailscale.HostName)
+	g.providerRepo.RegisterMachine(request.ProviderName, request.PoolName, request.MachineID, &types.ProviderMachineState{
+		MachineId: request.MachineID,
+		Token:     request.Token,
+		HostName:  hostName,
+	})
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"config": g.config,

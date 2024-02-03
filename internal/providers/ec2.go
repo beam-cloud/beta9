@@ -104,7 +104,7 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 	return selectedInstance, nil
 }
 
-func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, compute ComputeRequest) (string, error) {
+func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, compute types.ProviderComputeRequest) (string, error) {
 	// NOTE: CPU cores -> millicores, memory -> megabytes
 	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Cpu, compute.Gpu)
 	if err != nil {
@@ -128,6 +128,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 		K3sVersion:        k3sVersion,
 		DisableComponents: []string{"traefik"},
 		MachineId:         machineId,
+		PoolName:          poolName,
 	})
 	if err != nil {
 		return "", err
@@ -267,6 +268,7 @@ type userDataConfig struct {
 	K3sVersion        string
 	DisableComponents []string
 	MachineId         string
+	PoolName          string
 }
 
 func populateUserData(config userDataConfig) (string, error) {
@@ -325,7 +327,7 @@ TOKEN=$(kubectl get secret beta9-token -o jsonpath='{.data.token}' | base64 --de
 HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer $BETA9_TOKEN" \
-              -d '{"token":"'$TOKEN'", "machine_id":"{{.MachineId}}"}' \
+              -d '{"token":"'$TOKEN'", "machine_id":"{{.MachineId}}", "provider_name":"ec2", "pool_name": "{{.PoolName}}"}' \
               http://{{.GatewayHost}}/api/v1/machine/register)
 
 if [ $HTTP_STATUS -eq 200 ]; then

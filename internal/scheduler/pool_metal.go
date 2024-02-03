@@ -83,7 +83,7 @@ func NewMetalWorkerPoolController(
 func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
-	machineId, err := wpc.provider.ProvisionMachine(context.TODO(), wpc.name, providers.ComputeRequest{
+	machineId, err := wpc.provider.ProvisionMachine(context.TODO(), wpc.name, types.ProviderComputeRequest{
 		Cpu:    cpu,
 		Memory: memory,
 		Gpu:    gpuType,
@@ -93,7 +93,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	}
 	log.Println("Create new machine with id: ", machineId)
 
-	// Provision the worker job?
+	// TODO: Provision the worker job
 
 	worker := &types.Worker{Id: workerId, Cpu: cpu, Memory: memory, Gpu: gpuType}
 	worker.PoolId = PoolId(wpc.name)
