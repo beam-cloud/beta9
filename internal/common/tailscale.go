@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/types"
@@ -21,8 +22,10 @@ type TailscaleConfig struct {
 }
 
 type Tailscale struct {
-	server *tsnet.Server
-	debug  bool
+	server      *tsnet.Server
+	debug       bool
+	initialized bool
+	mu          sync.Mutex
 }
 
 func (t *Tailscale) logF(format string, v ...interface{}) {
@@ -41,7 +44,9 @@ func NewTailscale(cfg TailscaleConfig) *Tailscale {
 			ControlURL: cfg.ControlURL,
 			Ephemeral:  cfg.Ephemeral,
 		},
-		debug: cfg.Debug,
+		debug:       cfg.Debug,
+		initialized: false,
+		mu:          sync.Mutex{},
 	}
 
 	ts.server.Logf = ts.logF
@@ -73,6 +78,17 @@ func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (n
 func (t *Tailscale) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+
+	// Connect to tailnet, if we aren't already initialized
+	t.mu.Lock()
+	if !t.initialized {
+		_, err := t.server.Up(timeoutCtx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	t.initialized = true
+	t.mu.Unlock()
 
 	conn, err := t.server.Dial(timeoutCtx, "tcp", addr)
 	if err != nil {
