@@ -10,10 +10,13 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
+	"github.com/google/uuid"
 )
 
 type Proxy struct {
@@ -21,6 +24,7 @@ type Proxy struct {
 	workerPoolManager *scheduler.WorkerPoolManager
 	tailscale         *common.Tailscale
 	services          []types.InternalService
+	tailscaleRepo     repository.TailscaleRepository
 }
 
 func NewProxy() (*Proxy, error) {
@@ -30,9 +34,16 @@ func NewProxy() (*Proxy, error) {
 	}
 	config := configManager.GetConfig()
 
+	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Gateway"))
+	if err != nil {
+		return nil, err
+	}
+
+	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
 	return &Proxy{
-		config:   config,
-		services: config.Proxy.Services,
+		config:        config,
+		services:      config.Proxy.Services,
+		tailscaleRepo: tailscaleRepo,
 	}, nil
 }
 
@@ -41,18 +52,20 @@ func (p *Proxy) Start() error {
 	signal.Notify(terminationSignal, os.Interrupt, syscall.SIGTERM)
 
 	for _, service := range p.services {
+		serviceId := uuid.New().String()[:8]
+
 		// Just bind service proxy to a local port if tailscale is disabled
 		if !p.config.Tailscale.Enabled {
 			listener, err := net.Listen("tcp", fmt.Sprintf(":%d", service.LocalPort))
 			if err != nil {
 				return err
 			}
-			p.startServiceProxy(service, listener)
+			p.startServiceProxy(service, listener, serviceId)
 		}
 
 		// If tailscale is enabled, bind services as tailscale nodes
 		tailscale := common.NewTailscale(common.TailscaleConfig{
-			Hostname:   service.Name,
+			Hostname:   fmt.Sprintf("%s-%s", service.Name, serviceId),
 			ControlURL: p.config.Tailscale.ControlURL,
 			AuthKey:    p.config.Tailscale.AuthKey,
 			Debug:      p.config.Tailscale.Debug,
@@ -65,7 +78,7 @@ func (p *Proxy) Start() error {
 			return err
 		}
 
-		p.startServiceProxy(service, listener)
+		p.startServiceProxy(service, listener, serviceId)
 	}
 
 	<-terminationSignal
@@ -73,8 +86,22 @@ func (p *Proxy) Start() error {
 	return nil
 }
 
-func (p *Proxy) startServiceProxy(service types.InternalService, listener net.Listener) {
+func (p *Proxy) startServiceProxy(service types.InternalService, listener net.Listener, serviceId string) {
 	log.Printf("Svc<%s> listening on port: %d", service.Name, service.LocalPort)
+
+	if p.config.Tailscale.Enabled {
+		go func() {
+			for {
+				hostName := fmt.Sprintf("%s-%s.%s.%s:%d", service.Name, serviceId, p.config.Tailscale.User, p.config.Tailscale.HostName, service.LocalPort)
+				err := p.tailscaleRepo.SetHostname(service.Name, serviceId, hostName)
+				if err != nil {
+					log.Printf("Unable to set tailscale hostname: %+v\n", err)
+				}
+
+				time.Sleep(time.Second * 15)
+			}
+		}()
+	}
 
 	go func() {
 		for {

@@ -56,20 +56,6 @@ func NewGateway() (*Gateway, error) {
 	}
 	config := configManager.GetConfig()
 
-	if config.Tailscale.Enabled {
-		tailscale := common.NewTailscale(common.TailscaleConfig{
-			ControlURL: config.Tailscale.ControlURL,
-			AuthKey:    config.Tailscale.AuthKey,
-			Debug:      config.Tailscale.Debug,
-			Ephemeral:  true,
-		})
-
-		err := tailscale.Join(context.TODO())
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Gateway"))
 	if err != nil {
 		return nil, err

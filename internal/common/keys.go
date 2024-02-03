@@ -51,7 +51,8 @@ var (
 )
 
 var (
-	tailscalePrefix string = "tailscale"
+	tailscalePrefix          string = "tailscale"
+	tailscaleServiceHostname string = "tailscale:%s:%s"
 )
 
 var RedisKeys = &redisKeys{}
@@ -168,9 +169,9 @@ func (rk *redisKeys) TailscalePrefix() string {
 	return tailscalePrefix
 }
 
-// func (rk *redisKeys) ProviderMachine(providerName, poolName, machineId string) string {
-// 	return fmt.Sprintf(providerMachine, providerName, poolName, machineId)
-// }
+func (rk *redisKeys) TailscaleServiceHostname(serviceName, hostName string) string {
+	return fmt.Sprintf(tailscaleServiceHostname, serviceName, hostName)
+}
 
 // Provider keys
 func (rk *redisKeys) ProviderPrefix() string {

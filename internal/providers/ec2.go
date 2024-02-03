@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsTypes "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 )
 
@@ -23,6 +24,7 @@ type EC2Provider struct {
 	clusterName    string
 	appConfig      types.AppConfig
 	providerConfig types.EC2ProviderConfig
+	tailscaleRepo  repository.TailscaleRepository
 }
 
 const (
@@ -30,7 +32,7 @@ const (
 	k3sVersion                   string  = "v1.28.5+k3s1"
 )
 
-func NewEC2Provider(appConfig types.AppConfig) (*EC2Provider, error) {
+func NewEC2Provider(appConfig types.AppConfig, tailscaleRepo repository.TailscaleRepository) (*EC2Provider, error) {
 	credentials := credentials.NewStaticCredentialsProvider(appConfig.Providers.EC2Config.AWSAccessKeyID, appConfig.Providers.EC2Config.AWSSecretAccessKey, "")
 
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
@@ -47,6 +49,7 @@ func NewEC2Provider(appConfig types.AppConfig) (*EC2Provider, error) {
 		clusterName:    appConfig.ClusterName,
 		appConfig:      appConfig,
 		providerConfig: appConfig.Providers.EC2Config,
+		tailscaleRepo:  tailscaleRepo,
 	}, nil
 }
 
@@ -108,6 +111,11 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 		return "", err
 	}
 
+	gatewayHost, err := p.tailscaleRepo.GetHostnameForService("gateway-http")
+	if err != nil {
+		return "", err
+	}
+
 	// TODO: remove once we sort out connection issues
 	roleArn := "arn:aws:iam::187248174200:instance-profile/beta-dev-k3s-instance-profile"
 
@@ -115,7 +123,8 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 	populatedUserData, err := populateUserData(userDataConfig{
 		AuthKey:           p.appConfig.Tailscale.AuthKey,
 		ControlURL:        p.appConfig.Tailscale.ControlURL,
-		Beta9Token:        "ncKDgybIXKFgy6ff7xvcqvY4piE8-wixTmsHOCPpNqMsZKcgf1FuuEB_mZrJlKIopHfIRf-qRcnBnypnxaCWcQ==",
+		GatewayHost:       gatewayHost,
+		Beta9Token:        "AYnhx9tTvla5KdLEPWApabnsG5nPUX8KeNzLK2z2CGtxsTrzid8c5l0lE6P-cx-o4-2kx8scBkpT0gt-p1EufA==",
 		K3sVersion:        k3sVersion,
 		DisableComponents: []string{"traefik"},
 		MachineId:         machineId,
@@ -253,6 +262,7 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 type userDataConfig struct {
 	AuthKey           string
 	ControlURL        string
+	GatewayHost       string
 	Beta9Token        string
 	K3sVersion        string
 	DisableComponents []string
@@ -316,7 +326,7 @@ HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer $BETA9_TOKEN" \
               -d '{"token":"'$TOKEN'", "machine_id":"{{.MachineId}}"}' \
-              http://gateway-http-skcdu8tq.beta9.headscale.internal:1994/api/v1/machine/register)
+              http://{{.GatewayHost}}/api/v1/machine/register)
 
 if [ $HTTP_STATUS -eq 200 ]; then
     CONFIG_YAML=$(jq '.config' response.json | yq e -P -)

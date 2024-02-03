@@ -70,19 +70,16 @@ func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (n
 	return listener, nil
 }
 
-func (t *Tailscale) Join(ctx context.Context) error {
-	log.Println("Connecting to tailnet @", t.server.ControlURL)
-
+func (t *Tailscale) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	_, err := t.server.Up(timeoutCtx)
+	conn, err := t.server.Dial(timeoutCtx, "tcp", addr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	log.Println("Connected to tailnet.")
-	return nil
+	return conn, nil
 }
 
 // Stops the Tailscale server

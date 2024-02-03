@@ -29,13 +29,14 @@ func NewMetalWorkerPoolController(
 	workerRepo repository.WorkerRepository,
 	workerPoolRepo repository.WorkerPoolRepository,
 	providerRepo repository.ProviderRepository,
+	tailscaleRepo repository.TailscaleRepository,
 	providerName *types.MachineProvider) (WorkerPoolController, error) {
 	var provider providers.Provider = nil
 	var err error = nil
 
 	switch *providerName {
 	case types.ProviderEC2:
-		provider, err = providers.NewEC2Provider(config)
+		provider, err = providers.NewEC2Provider(config, tailscaleRepo)
 	default:
 		return nil, errors.New("invalid provider name")
 	}

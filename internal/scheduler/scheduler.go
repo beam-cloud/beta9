@@ -31,6 +31,8 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metri
 	providerRepo := repo.NewProviderRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
+	tailscaleRepo := repo.NewTailscaleRedisRepository(redisClient, config)
+
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 
 	// Load worker pools
@@ -43,7 +45,7 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metri
 		case types.PoolModeLocal:
 			controller, err = NewLocalKubernetesWorkerPoolController(config, name, workerRepo)
 		case types.PoolModeMetal:
-			controller, err = NewMetalWorkerPoolController(config, name, workerRepo, workerPoolRepo, providerRepo, pool.Provider)
+			controller, err = NewMetalWorkerPoolController(config, name, workerRepo, workerPoolRepo, providerRepo, tailscaleRepo, pool.Provider)
 		default:
 			log.Printf("no valid controller found for pool<%s> with mode: %s\n", name, pool.Mode)
 			continue
@@ -83,7 +85,6 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	}
 
 	go s.schedulerMetrics.ContainerRequested()
-
 	// TODO: Handle event for ContainerRequested
 
 	err = s.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{

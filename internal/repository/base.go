@@ -76,3 +76,8 @@ type ProviderRepository interface {
 	ListMachines(providerName string) error
 	GetMachine(providerName, machineId string) error
 }
+
+type TailscaleRepository interface {
+	GetHostnameForService(serviceName string) (string, error)
+	SetHostname(serviceName, serviceId, hostName string) error
+}
