@@ -1,3 +1,4 @@
+clusterName: beta9
 debugMode: false
 database:
   postgres:
@@ -70,11 +71,9 @@ worker:
       mode: metal
       provider: ec2
       gpuType: T4
-      jobSpec:
-        nodeSelector: {}
       poolSizing:
         defaultWorkerCpu: 1000m
-        defaultWorkerGpuType: ""
+        defaultWorkerGpuType: T4
         defaultWorkerMemory: 1Gi
         minFreeCpu:
         minFreeGpu:
@@ -106,16 +105,34 @@ worker:
   defaultWorkerMemoryRequest: 1024
 providers:
   ec2:
-    accessKey: test1
-    secretkey: test2
+    accessKey:
+    secretkey: 
     region: us-east-1
+    # If you want workers nodes to land in your default vpc, you can omit subnetId
+    subnetId:
     ami: ami-052c704a7f82c38b1
 metrics:
   prometheus:
     scrapeWorkers: true
     port: 9090
 tailscale:
-  controlUrl: https://beam-headscale-test.fly.dev
-  authKey: 6bd89ee45b044e56345f50540f10ecf1f4a29adcca7d1900
-  enabled: true
+  controlUrl:
+  user: beta9
+  authKey: 
+  enabled: false
   debug: false
+  hostName: headscale.internal
+proxy:
+  services:
+    - name: redis
+      localPort: 6379
+      destination: redis-master.beta9:6379
+    - name: juicefs-redis
+      localPort: 6380
+      destination: juicefs-redis-master.beta9:6379
+    - name: gateway-http
+      localPort: 1994
+      destination: gateway.beta9:1994
+    - name: gateway-grpc
+      localPort: 1993
+      destination: gateway.beta9:1993

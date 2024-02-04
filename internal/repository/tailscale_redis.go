@@ -21,7 +21,7 @@ type TailscaleRedisRepository struct {
 }
 
 func NewTailscaleRedisRepository(r *common.RedisClient, config types.AppConfig) TailscaleRepository {
-	tailscale := common.NewTailscale(common.TailscaleConfig{
+	tailscale := common.GetOrCreateTailscale(common.TailscaleConfig{
 		ControlURL: config.Tailscale.ControlURL,
 		AuthKey:    config.Tailscale.AuthKey,
 		Debug:      config.Tailscale.Debug,

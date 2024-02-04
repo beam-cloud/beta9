@@ -42,6 +42,7 @@ type Gateway struct {
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
+	TailscaleRepo  repository.TailscaleRepository
 	metricsRepo    repository.PrometheusRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
@@ -90,11 +91,13 @@ func NewGateway() (*Gateway, error) {
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
+	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
 
 	gateway.config = config
 	gateway.ContainerRepo = containerRepo
 	gateway.ProviderRepo = providerRepo
 	gateway.BackendRepo = backendRepo
+	gateway.TailscaleRepo = tailscaleRepo
 	gateway.metricsRepo = metricsRepo
 
 	return gateway, nil
@@ -112,7 +115,7 @@ func (g *Gateway) initHttp() error {
 	g.baseRouteGroup = g.httpServer.Group(apiv1.HttpServerBaseRoute)
 
 	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.redisClient)
-	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.config)
+	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.TailscaleRepo, g.config)
 	return nil
 }
 

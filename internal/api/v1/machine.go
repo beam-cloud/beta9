@@ -6,18 +6,25 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/storage"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/labstack/echo/v4"
 )
 
 type MachineGroup struct {
-	providerRepo repository.ProviderRepository
-	routerGroup  *echo.Group
-	config       types.AppConfig
+	providerRepo  repository.ProviderRepository
+	tailscaleRepo repository.TailscaleRepository
+	routerGroup   *echo.Group
+	config        types.AppConfig
 }
 
-func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, config types.AppConfig) *MachineGroup {
-	group := &MachineGroup{routerGroup: g, providerRepo: providerRepo, config: config}
+func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, tailscaleRepo repository.TailscaleRepository, config types.AppConfig) *MachineGroup {
+	group := &MachineGroup{routerGroup: g,
+		providerRepo:  providerRepo,
+		tailscaleRepo: tailscaleRepo,
+		config:        config,
+	}
+
 	g.POST("/register", group.RegisterMachine)
 	return group
 }
@@ -37,8 +44,32 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid payload")
 	}
 
+	// Overwrite certain config fields with tailscale hostnames
+	remoteConfig := g.config
+
+	redisHostname, err := g.tailscaleRepo.GetHostnameForService("redis")
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service")
+	}
+
+	if g.config.Storage.Mode == storage.StorageModeJuiceFS {
+		juiceFsRedisHostname, err := g.tailscaleRepo.GetHostnameForService("juicefs-redis")
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service")
+		}
+		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("redis://%s/0", juiceFsRedisHostname)
+	}
+
+	gatewayGrpcHostname, err := g.tailscaleRepo.GetHostnameForService("gateway-grpc")
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service")
+	}
+
+	remoteConfig.Database.Redis.Addrs[0] = redisHostname
+	remoteConfig.GatewayService.Host = gatewayGrpcHostname
+
 	hostName := fmt.Sprintf("%s.%s.%s", request.MachineID, g.config.Tailscale.User, g.config.Tailscale.HostName)
-	err := g.providerRepo.RegisterMachine(request.ProviderName, request.PoolName, request.MachineID, &types.ProviderMachineState{
+	err = g.providerRepo.RegisterMachine(request.ProviderName, request.PoolName, request.MachineID, &types.ProviderMachineState{
 		MachineId: request.MachineID,
 		Token:     request.Token,
 		HostName:  hostName,
@@ -48,6 +79,6 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"config": g.config,
+		"config": remoteConfig,
 	})
 }

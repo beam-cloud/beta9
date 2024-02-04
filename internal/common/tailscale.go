@@ -12,6 +12,28 @@ import (
 	"tailscale.com/tsnet"
 )
 
+var (
+	serverRegistry = make(map[string]*Tailscale)
+	registryLock   = sync.Mutex{}
+)
+
+// GetOrCreateTailscale checks the registry for an existing server by name.
+// If it exists, it returns that; otherwise, it creates and registers a new one.
+func GetOrCreateTailscale(cfg TailscaleConfig) *Tailscale {
+	registryLock.Lock()
+	defer registryLock.Unlock()
+
+	// Check if the server already exists
+	if ts, exists := serverRegistry[cfg.Hostname]; exists {
+		return ts
+	}
+
+	// Create a new Tailscale server since it doesn't exist
+	ts := newTailscale(cfg)
+	serverRegistry[cfg.Hostname] = ts
+	return ts
+}
+
 type TailscaleConfig struct {
 	Dir        string // Directory for state storage
 	Hostname   string // Hostname for the Tailscale node
@@ -35,7 +57,7 @@ func (t *Tailscale) logF(format string, v ...interface{}) {
 }
 
 // NewTailscale creates a new Tailscale instance using tsnet
-func NewTailscale(cfg TailscaleConfig) *Tailscale {
+func newTailscale(cfg TailscaleConfig) *Tailscale {
 	ts := &Tailscale{
 		server: &tsnet.Server{
 			Dir:        cfg.Dir,

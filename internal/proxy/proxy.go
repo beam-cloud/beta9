@@ -64,7 +64,7 @@ func (p *Proxy) Start() error {
 		}
 
 		// If tailscale is enabled, bind services as tailscale nodes
-		tailscale := common.NewTailscale(common.TailscaleConfig{
+		tailscale := common.GetOrCreateTailscale(common.TailscaleConfig{
 			Hostname:   fmt.Sprintf("%s-%s", service.Name, serviceId),
 			ControlURL: p.config.Tailscale.ControlURL,
 			AuthKey:    p.config.Tailscale.AuthKey,
