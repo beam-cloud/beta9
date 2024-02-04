@@ -260,15 +260,15 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			machines, err := p.ListMachines(ctx, poolName)
+			_, err := p.ListMachines(ctx, poolName)
 			if err != nil {
 				log.Printf("Error listing machines: %v\n", err)
 				continue
 			}
 
-			for _, machine := range machines {
-				log.Printf("Machine: %+v\n", machine)
-			}
+			// for _, machine := range machines {
+			// 	log.Printf("Machine: %+v\n", machine)
+			// }
 		}
 	}
 }
@@ -330,8 +330,6 @@ kubectl create clusterrolebinding beta9-admin-binding --clusterrole=cluster-admi
 kubectl create namespace beta9
 
 curl -fsSL https://tailscale.com/install.sh | sh
-wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq &&\
-    chmod +x /usr/bin/yq
 
 tailscale up --authkey {{.AuthKey}} --login-server {{.ControlURL}} --accept-routes --hostname {{.MachineId}}
 
@@ -345,8 +343,8 @@ HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
               http://{{.GatewayHost}}/api/v1/machine/register)
 
 if [ $HTTP_STATUS -eq 200 ]; then
-    CONFIG_YAML=$(jq '.config' response.json | yq e -P -)
-    kubectl create secret generic beta9-config --from-literal=config.yaml="$CONFIG_YAML"
+    CONFIG_JSON=$(jq '.config' response.json)
+    kubectl create secret generic beta9-config --from-literal=config.json="$CONFIG_JSON"
 else
     echo "Failed to register machine, status: $HTTP_STATUS"
     exit 1

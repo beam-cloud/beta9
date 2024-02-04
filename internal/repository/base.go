@@ -74,7 +74,6 @@ type WorkerPoolRepository interface {
 }
 
 type ProviderRepository interface {
-	ListMachines(providerName string) error
 	GetMachine(providerName, machineId string) error
 	RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error
 	WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error)

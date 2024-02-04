@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -21,10 +20,6 @@ func NewProviderRedisRepository(rdb *common.RedisClient) ProviderRepository {
 	lock := common.NewRedisLock(rdb)
 	lockOptions := common.RedisLockOptions{TtlS: 10, Retries: 0}
 	return &ProviderRedisRepository{rdb: rdb, lock: lock, lockOptions: lockOptions}
-}
-
-func (r *ProviderRedisRepository) ListMachines(providerName string) error {
-	return nil
 }
 
 func (r *ProviderRedisRepository) GetMachine(providerName, machineId string) error {
@@ -71,7 +66,6 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 				return nil, fmt.Errorf("error parsing machine state for %s: %w", machineId, err)
 			}
 
-			log.Printf("Machine %s registered with state: %+v", machineId, state)
 			return state, nil
 		}
 	}

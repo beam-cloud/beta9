@@ -92,12 +92,12 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 		return nil, err
 	}
 
-	log.Printf("Waiting for machine registration<%s>...\n", machineId)
+	log.Printf("Waiting for machine registration <machineId: %s>\n", machineId)
 	state, err := wpc.providerRepo.WaitForMachineRegistration(string(*wpc.providerName), wpc.name, machineId)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Machine registered<%s>, hostname: %s\n", machineId, state.HostName)
+	log.Printf("Machine registered <machineId: %s>, hostname: %s\n", machineId, state.HostName)
 
 	client, err := wpc.getProxiedClient(state.HostName, state.Token)
 	if err != nil {
@@ -233,14 +233,6 @@ func (wpc *MetalWorkerPoolController) getWorkerEnvironment(workerId string, cpu 
 		{
 			Name:  "GPU_TYPE",
 			Value: gpuType,
-		},
-		{
-			Name: "POD_IP",
-			ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{
-					FieldPath: "status.podIP",
-				},
-			},
 		},
 		{
 			Name:  "POD_NAMESPACE",
