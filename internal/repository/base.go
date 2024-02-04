@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/types"
+	"tailscale.com/tsnet"
 )
 
 type SchedulerRepository interface{}
@@ -76,9 +77,11 @@ type ProviderRepository interface {
 	ListMachines(providerName string) error
 	GetMachine(providerName, machineId string) error
 	RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error
+	WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
 }
 
 type TailscaleRepository interface {
 	GetHostnameForService(serviceName string) (string, error)
 	SetHostname(serviceName, serviceId, hostName string) error
+	GetTailscaleServer() *tsnet.Server
 }

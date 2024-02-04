@@ -18,8 +18,8 @@ type Worker struct {
 	Cpu             int64        `json:"cpu" redis:"cpu"`
 	Memory          int64        `json:"memory" redis:"memory"`
 	Gpu             string       `json:"gpu" redis:"gpu"`
-	Agent           string       `json:"agent" redis:"agent"`
 	PoolId          string       `json:"pool_id" redis:"pool_id"`
+	MachineId       string       `json:"machine_id" redis:"machine_id"`
 	ResourceVersion int64        `json:"resource_version" redis:"resource_version"`
 }
 

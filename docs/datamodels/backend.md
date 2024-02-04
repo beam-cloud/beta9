@@ -2,7 +2,7 @@
 
 erDiagram
 
-    CONTEXT {
+    WORKSPACE {
         varchar name
         uint id PK
         varchar external_id
@@ -17,7 +17,7 @@ erDiagram
         datetime created_at
         datetime updated_at
         bool active
-        uint context_id FK
+        uint workspace_id FK
     }
 
     VOLUME {
@@ -25,7 +25,7 @@ erDiagram
         varchar external_id
         varchar name
         datetime created_at
-        uint context_id FK
+        uint workspace_id FK
     }
 
     DEPLOYMENT {
@@ -36,7 +36,7 @@ erDiagram
         datetime created_at
         datetime updated_at
         uint stub_id FK
-        uint context_id FK
+        uint workspace_id FK
     }
 
     TASK {
@@ -46,7 +46,7 @@ erDiagram
         datetime started_at
         bool ended_at
         uint stub_id FK
-        uint context_id FK
+        uint workspace_id FK
     }
 
     STUB {
@@ -56,7 +56,7 @@ erDiagram
         enum type
         JSON config
         uint object_id FK
-        uint context_id FK
+        uint workspace_id FK
         datetime created_at
         datetime updated_at
     }
@@ -67,14 +67,14 @@ erDiagram
         varchar hash
         int64 size
         datetime created_at
-        uint context_id FK
+        uint workspace_id FK
     }
 
-    CONTEXT ||--o{ TOKEN : " "
-    CONTEXT ||--o{ VOLUME : " "
-    CONTEXT ||--o{ DEPLOYMENT : " "
-    CONTEXT ||--o{ TASK : " "
-    CONTEXT ||--o{ OBJECT : " "
+    WORKSPACE ||--o{ TOKEN : " "
+    WORKSPACE ||--o{ VOLUME : " "
+    WORKSPACE ||--o{ DEPLOYMENT : " "
+    WORKSPACE ||--o{ TASK : " "
+    WORKSPACE ||--o{ OBJECT : " "
     OBJECT ||--|| STUB : " "
     TASK ||--|| STUB : " "
     DEPLOYMENT ||--|| STUB : " "

@@ -200,7 +200,6 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 		Cpu:    1000,
 		Memory: 1000,
 		Gpu:    "",
-		Agent:  "gcp-uc1",
 	}
 
 	// Create a new worker
@@ -214,7 +213,6 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 	assert.Equal(t, newWorker.Memory, worker.Memory)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 	assert.Equal(t, newWorker.Status, worker.Status)
-	assert.Equal(t, newWorker.Agent, worker.Agent)
 	assert.Equal(t, int64(0), newWorker.ResourceVersion)
 
 	// Remove some capacity from the worker
@@ -234,7 +232,6 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 	assert.Equal(t, worker.Memory-firstRequest.Memory, updatedWorker.Memory)
 	assert.Equal(t, firstRequest.Gpu, updatedWorker.Gpu)
 	assert.Equal(t, worker.Status, updatedWorker.Status)
-	assert.Equal(t, worker.Agent, worker.Agent)
 	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
 
 	// Remove some more capacity
@@ -286,7 +283,6 @@ func TestGetAllWorkers(t *testing.T) {
 			Cpu:    1000,
 			Memory: 1000,
 			Gpu:    "A10G",
-			Agent:  fmt.Sprintf("agent%d", i),
 		})
 		assert.Nil(t, err)
 	}
@@ -320,9 +316,6 @@ func TestGetAllWorkers(t *testing.T) {
 		case types.WorkerStatusPending:
 			pendingCount++
 		}
-		if worker.Agent != "" {
-			agentCount++
-		}
 	}
 	assert.Equal(t, nWorkers, agentCount)
 	assert.Equal(t, nWorkers, availableCount)
@@ -353,7 +346,6 @@ func TestWorkerWithAgent(t *testing.T) {
 			Cpu:    200,
 			Memory: 400,
 			Gpu:    "A10G",
-			Agent:  fmt.Sprintf("aws-ue1-%d", i),
 		})
 		assert.Nil(t, err)
 	}
@@ -370,14 +362,6 @@ func TestWorkerWithAgent(t *testing.T) {
 	workers, err := repo.GetAllWorkers()
 	assert.Nil(t, err)
 	for _, worker := range workers {
-		if worker.Agent != "" {
-			assert.Equal(t, fmt.Sprintf("aws-ue1-%d", agentCount), worker.Agent)
-			assert.Equal(t, int64(200), worker.Cpu)
-			assert.Equal(t, int64(400), worker.Memory)
-			agentCount++
-			continue
-		}
-
 		assert.Equal(t, int64(100), worker.Cpu)
 		assert.Equal(t, int64(100), worker.Memory)
 	}

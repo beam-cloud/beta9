@@ -38,11 +38,14 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	}
 
 	hostName := fmt.Sprintf("%s.%s.%s", request.MachineID, g.config.Tailscale.User, g.config.Tailscale.HostName)
-	g.providerRepo.RegisterMachine(request.ProviderName, request.PoolName, request.MachineID, &types.ProviderMachineState{
+	err := g.providerRepo.RegisterMachine(request.ProviderName, request.PoolName, request.MachineID, &types.ProviderMachineState{
 		MachineId: request.MachineID,
 		Token:     request.Token,
 		HostName:  hostName,
 	})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to register machine")
+	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"config": g.config,

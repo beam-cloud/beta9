@@ -162,19 +162,21 @@ func (s *Scheduler) StartProcessingRequests() {
 				continue
 			}
 
-			newWorker, err := controller.AddWorker(request.Cpu, request.Memory, request.Gpu)
-			if err != nil {
-				log.Printf("Unable to add job for worker: %+v\n", err)
-				s.addRequestToBacklog(request)
-				continue
-			}
+			go func() {
+				newWorker, err := controller.AddWorker(request.Cpu, request.Memory, request.Gpu)
+				if err != nil {
+					log.Printf("Unable to add job for worker: %+v\n", err)
+					s.addRequestToBacklog(request)
+					return
+				}
 
-			log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
-			err = s.scheduleRequest(newWorker, request)
-			if err != nil {
-				log.Printf("Unable to schedule request for container %s: %v\n", request.ContainerId, err)
-				s.addRequestToBacklog(request)
-			}
+				log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
+				err = s.scheduleRequest(newWorker, request)
+				if err != nil {
+					log.Printf("Unable to schedule request for container %s: %v\n", request.ContainerId, err)
+					s.addRequestToBacklog(request)
+				}
+			}()
 
 			continue
 		}

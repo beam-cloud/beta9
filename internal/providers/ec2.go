@@ -78,6 +78,13 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 		{"g5.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "A10G"}},
 		{"g5.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "A10G"}},
 		{"g5.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "A10G"}},
+
+		{"m6i.large", InstanceSpec{2 * 1000, 8 * 1024, ""}},
+		{"m6i.xlarge", InstanceSpec{4 * 1000, 16 * 1024, ""}},
+		{"m6i.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, ""}},
+		{"m6i.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, ""}},
+		{"m6i.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, ""}},
+		{"m6i.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, ""}},
 	}
 
 	// Apply compute buffer
@@ -121,9 +128,11 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 
 	machineId := MachineId()
 	populatedUserData, err := populateUserData(userDataConfig{
-		AuthKey:           p.appConfig.Tailscale.AuthKey,
-		ControlURL:        p.appConfig.Tailscale.ControlURL,
-		GatewayHost:       gatewayHost,
+		AuthKey:     p.appConfig.Tailscale.AuthKey,
+		ControlURL:  p.appConfig.Tailscale.ControlURL,
+		GatewayHost: gatewayHost,
+
+		// TODO: replace with single-use token
 		Beta9Token:        "AYnhx9tTvla5KdLEPWApabnsG5nPUX8KeNzLK2z2CGtxsTrzid8c5l0lE6P-cx-o4-2kx8scBkpT0gt-p1EufA==",
 		K3sVersion:        k3sVersion,
 		DisableComponents: []string{"traefik"},
@@ -173,6 +182,10 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 				Key:   aws.String("Beta9PoolName"),
 				Value: aws.String(poolName),
 			},
+			{
+				Key:   aws.String("Beta9MachineId"),
+				Value: aws.String(machineId),
+			},
 		},
 	})
 
@@ -180,7 +193,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 		return "", fmt.Errorf("failed to tag the instance: %w", err)
 	}
 
-	return instanceName, nil
+	return machineId, nil
 }
 
 func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, id string) error {
@@ -285,7 +298,7 @@ func populateUserData(config userDataConfig) (string, error) {
 	return populatedTemplate.String(), nil
 }
 
-const userDataTemplate = `
+const userDataTemplate string = `
 #!/bin/bash
 
 INSTALL_K3S_VERSION="{{.K3sVersion}}"
@@ -314,6 +327,7 @@ EOF
 kubectl annotate secret beta9-token kubernetes.io/service-account.name=beta9
 kubectl patch serviceaccount beta9 -p '{"secrets":[{"name":"beta9-token"}]}'
 kubectl create clusterrolebinding beta9-admin-binding --clusterrole=cluster-admin --serviceaccount=default:beta9
+kubectl create namespace beta9
 
 curl -fsSL https://tailscale.com/install.sh | sh
 wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq &&\

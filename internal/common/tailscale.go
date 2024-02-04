@@ -79,7 +79,7 @@ func (t *Tailscale) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	// Connect to tailnet, if we aren't already initialized
+	// Connect to tailnet, if we aren't already
 	t.mu.Lock()
 	if !t.initialized {
 		_, err := t.server.Up(timeoutCtx)
@@ -96,6 +96,10 @@ func (t *Tailscale) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	}
 
 	return conn, nil
+}
+
+func (t *Tailscale) GetServer() *tsnet.Server {
+	return t.server
 }
 
 // Stops the Tailscale server

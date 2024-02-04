@@ -8,6 +8,7 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/types"
+	"tailscale.com/tsnet"
 )
 
 const (
@@ -36,7 +37,7 @@ func (ts *TailscaleRedisRepository) GetHostnameForService(serviceName string) (s
 	}
 
 	if len(keys) == 0 {
-		return "", fmt.Errorf("not hostnames found for service<%s>", serviceName)
+		return "", fmt.Errorf("no hostname found for service<%s>", serviceName)
 	}
 
 	for len(keys) > 0 {
@@ -67,4 +68,8 @@ func (ts *TailscaleRedisRepository) SetHostname(serviceName, serviceId string, h
 		hostName,
 		tailscaleHostNameExpiration,
 	).Err()
+}
+
+func (ts *TailscaleRedisRepository) GetTailscaleServer() *tsnet.Server {
+	return ts.tailscale.GetServer()
 }

@@ -22,6 +22,7 @@ const (
 	defaultContainerName    string = "worker"
 	defaultWorkerEntrypoint string = "/usr/local/bin/worker"
 	defaultWorkerLogPath    string = "/var/log/worker"
+	defaultImagesPath       string = "/images"
 )
 
 type WorkerPoolController interface {
