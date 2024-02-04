@@ -67,17 +67,6 @@ worker:
         minFreeCpu: 1000m
         minFreeGpu: 0
         minFreeMemory: 1Gi
-    t4-ec2:
-      mode: metal
-      provider: ec2
-      gpuType: T4
-      poolSizing:
-        defaultWorkerCpu: 1000m
-        defaultWorkerGpuType: T4
-        defaultWorkerMemory: 1Gi
-        minFreeCpu:
-        minFreeGpu:
-        minFreeMemory:
     # example gpu worker pool
     # nvidia:
     #   gpuType: A40
@@ -118,7 +107,7 @@ metrics:
 tailscale:
   controlUrl:
   user: beta9
-  authKey: 
+  authKey:
   enabled: false
   debug: false
   hostName: headscale.internal
