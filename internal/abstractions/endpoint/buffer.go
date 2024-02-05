@@ -12,7 +12,6 @@ type RequestData struct {
 	stubId string
 
 	Method         string
-	URL            string
 	Headers        http.Header
 	Body           io.ReadCloser
 	ResponseWriter *io.PipeWriter

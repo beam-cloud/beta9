@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"time"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
@@ -100,7 +101,6 @@ func (ws *RingBufferEndpointService) EndpointRequest(ctx context.Context, in *pb
 	requestData := RequestData{
 		ctx:     ctx,
 		Method:  in.Method,
-		URL:     in.Path,
 		Headers: headers,
 		Body:    bodyReader,
 	}
@@ -128,9 +128,21 @@ func (ws *RingBufferEndpointService) forwardRequest(ctx context.Context, stubId 
 
 	requestData.stubId = endpoint.stub.ExternalId
 
+	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
+	err := json.Unmarshal([]byte(endpoint.stub.Config), &stubConfig)
+	if err != nil {
+		return nil, err
+	}
+
 	resp, err := ws.client.ForwardRequest(requestData)
 	if err != nil {
 		return resp, err
+	}
+
+	// Set a keep warm lock for the container
+	err = ws.rdb.SetEx(context.TODO(), Keys.endpointKeepWarmLock(endpoint.workspace.Name, endpoint.stub.ExternalId, requestData.stubId), 1, time.Duration(stubConfig.KeepWarmSeconds)*time.Second).Err()
+	if err != nil {
+		return []byte{}, nil
 	}
 
 	return resp, nil
@@ -192,4 +204,21 @@ func (ws *RingBufferEndpointService) createEndpointInstance(stubId string) error
 	}(endpoint)
 
 	return nil
+}
+
+var Keys = &keys{}
+
+type keys struct{}
+
+var (
+	endpointKeepWarmLock string = "endpoint:%s:%s:keep_warm_lock:%s"
+	endpointInstanceLock string = "endpoint:%s:%s:instance_lock"
+)
+
+func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(endpointKeepWarmLock, workspaceName, stubId, containerId)
+}
+
+func (k *keys) endpointInstanceLock(workspaceName, stubId string) string {
+	return fmt.Sprintf(endpointInstanceLock, workspaceName, stubId)
 }

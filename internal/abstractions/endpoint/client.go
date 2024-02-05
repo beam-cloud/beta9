@@ -95,7 +95,7 @@ func (c *RingBufferEndpointClient) handleRequest(req RequestData) {
 	}
 
 	// Make http request to container
-	resp, err := http.NewRequest(req.Method, containerHost+req.URL, req.Body)
+	resp, err := http.NewRequest(req.Method, containerHost, req.Body)
 	if err != nil {
 		log.Println("Error making request to container", err) // TODO: remove
 		return

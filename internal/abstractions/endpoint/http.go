@@ -36,7 +36,6 @@ func (g *endpointGroup) webServerRequest(ctx echo.Context) error {
 		ctx:     ctx.Request().Context(),
 		stubId:  stubId,
 		Method:  ctx.Request().Method,
-		URL:     ctx.Request().URL.Path,
 		Headers: ctx.Request().Header,
 		Body:    ctx.Request().Body,
 	}
