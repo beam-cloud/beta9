@@ -43,16 +43,6 @@ class Volume(BaseAbstraction):
 
         return False
 
-    async def get_or_create_async(self) -> bool:
-        resp = await self.stub.get_or_create_volume(name=self.name)
-
-        if resp.ok:
-            self.ready = True
-            self.volume_id = resp.volume_id
-            return True
-
-        return False
-
     def export(self):
         return VolumeConfig(
             id=self.volume_id,

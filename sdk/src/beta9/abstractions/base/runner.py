@@ -111,12 +111,20 @@ class RunnerAbstraction(BaseAbstraction):
         self.handler = f"{module_name}:{function_name}"
 
     def prepare_runtime(
-        self, *, func: Optional[Callable] = None, stub_type: str, force_create_stub: bool = False
+        self,
+        *,
+        func: Optional[Callable] = None,
+        stub_type: str,
+        force_create_stub: bool = False,
+        name: Optional[str] = None,
     ) -> bool:
         if func is not None:
             self._load_handler(func)
 
         stub_name = f"{stub_type}/{self.handler}" if self.handler else stub_type
+
+        if name:
+            stub_name = f"{stub_name}/{name}"
 
         if self.runtime_ready:
             return True
