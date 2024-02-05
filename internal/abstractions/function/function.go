@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/beam-cloud/beta9/internal/abstractions"
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/repository"
@@ -137,7 +138,7 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
-	mounts := common.ConfigureContainerRequestMounts(
+	mounts := abstractions.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
 		authInfo.Workspace.Name,
 		stubConfig,

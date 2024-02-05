@@ -29,6 +29,10 @@ class Container(RunnerAbstraction):
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
+        volumes (Optional[List[Volume]]):
+            A list of volumes to be mounted to the container. Default is None.
+        name (Optional[str]):
+            A name for the container. Default is None.
 
     Example usage:
         ```
@@ -49,6 +53,7 @@ class Container(RunnerAbstraction):
         gpu: str = "",
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
+        name: Optional[str] = None,
     ) -> "Container":
         super().__init__(cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes)
 
@@ -75,7 +80,7 @@ class Container(RunnerAbstraction):
         ):
             if r.task_id != "":
                 self.task_id = r.task_id
-            # checking response to see if its output or done/error
+
             if r.output != "":
                 terminal.detail(r.output)
 

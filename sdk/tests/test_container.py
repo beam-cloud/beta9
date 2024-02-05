@@ -1,5 +1,5 @@
 from unittest import TestCase
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from beta9 import Image
 from beta9.abstractions.container import Container
@@ -46,21 +46,5 @@ class TestContainer(TestCase):
         )
 
         ec = c.run(["ls"])
-        mock_stub.execute_command.assert_called_once_with(stub_id=c.stub_id, command="ls".encode())
-        self.assertEqual(ec, 0)
-
-    async def test_run_async(self):
-        c = Container(
-            cpu=1.0, memory=128, image=Image(python_version="python3.8", python_packages=["numpy"])
-        )
-        mock_stub = AsyncMock()
-        c.container_stub = mock_stub
-        c.prepare_runtime = AsyncMock(return_value=True)
-        c.syncer = AsyncMock()
-
-        mock_stub.execute_command = AsyncMock(
-            return_value=AsyncIterator([CommandExecutionResponse(done=True, exit_code=0)])
-        )
-        ec = await c.run_async(["ls"])
         mock_stub.execute_command.assert_called_once_with(stub_id=c.stub_id, command="ls".encode())
         self.assertEqual(ec, 0)

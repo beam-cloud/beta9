@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/beam-cloud/beta9/internal/abstractions"
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/repository"
@@ -86,7 +87,6 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 	containerId := fmt.Sprintf("%s%s", containerContainerPrefix, taskId)
 	task.ContainerId = containerId
 
-	// what does this do?
 	go cs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
 
 	_, err = cs.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
@@ -103,7 +103,7 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 		stubConfig.Runtime.Memory = defaultContainerMemory
 	}
 
-	mounts := common.ConfigureContainerRequestMounts(
+	mounts := abstractions.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
 		authInfo.Workspace.Name,
 		stubConfig,
