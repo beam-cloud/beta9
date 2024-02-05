@@ -1,7 +1,7 @@
 debugMode: false
 database:
   postgres:
-    host: postgres-postgresql.beta9
+    host: postgresql.beta9
     port: 5432
     username: root
     password: password
@@ -28,8 +28,8 @@ gateway:
   host: gateway.beta9
   httpPort: 1994
   grpcPort: 1993
-  max_recv_msg_size_in_mb: 1024
-  max_send_msg_size_in_mb: 1024
+  grpcMaxRecvMsgSizeInMB: 1024
+  grpcMaxSendMsgSizeInMB: 1024
 imageService:
   cacheURL:
   registryStore: local
@@ -87,11 +87,17 @@ worker:
   namespace: beta9
   serviceAccountName: default
   # non-standard k8s job spec
+  imagePVCName: gateway-images
   resourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
   terminationGracePeriod: 30
 metrics:
+monitoring:
   prometheus:
     scrapeWorkers: true
     port: 9090
+  fluentbit:
+    events:
+      host: fluent-bit.beta9
+      port: 5170

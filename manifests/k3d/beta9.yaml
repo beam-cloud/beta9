@@ -77,15 +77,26 @@ spec:
           limits:
             cpu: 1000m
             memory: 2Gi
+        livenessProbe: &probe
+          httpGet:
+            path: /api/v1/health
+            port: 1994
+          periodSeconds: 3
+          failureThreshold: 3
+        readinessProbe: *probe
+        startupProbe:
+          <<: *probe
+          failureThreshold: 10
+          initialDelaySeconds: 10
       volumes:
       - name: images
         persistentVolumeClaim:
-          claimName: images
+          claimName: gateway-images
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: images
+  name: gateway-images
   namespace: beta9
 spec:
   accessModes:
@@ -93,19 +104,6 @@ spec:
   resources:
     requests:
       storage: 100Gi
-  storageClassName: local-path
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: worker-data
-  namespace: beta9
-spec:
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 50Gi
   storageClassName: local-path
 ---
 apiVersion: v1
@@ -159,6 +157,8 @@ spec:
   createNamespace: false
   version: 18.6.1
   valuesContent: |-
+    nameOverride: redis
+    fullnameOverride: redis
     architecture: standalone
     auth:
       enabled: false
@@ -180,6 +180,8 @@ spec:
   createNamespace: false
   version: 13.2.25
   valuesContent: |-
+    nameOverride: postgresql
+    fullnameOverride: postgresql
     global:
       postgresql:
         auth:

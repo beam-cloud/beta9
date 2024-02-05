@@ -71,3 +71,12 @@ type WorkerPoolRepository interface {
 	SetPool(name string, pool types.WorkerPoolConfig) error
 	RemovePool(name string) error
 }
+
+type EventRepository interface {
+	PushContainerRequestedEvent(request *types.ContainerRequest)
+	PushContainerScheduledEvent(containerID string, workerID string)
+	PushContainerStartedEvent(containerID string, workerID string)
+	PushContainerStoppedEvent(containerID string, workerID string)
+	PushWorkerStartedEvent(workerID string)
+	PushWorkerStoppedEvent(workerID string)
+}

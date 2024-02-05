@@ -151,7 +151,8 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 	labels := map[string]string{
 		"app":               Beta9WorkerLabelValue,
 		Beta9WorkerLabelKey: Beta9WorkerLabelValue,
-		PrometheusScrapeKey: strconv.FormatBool(wpc.config.Metrics.Prometheus.ScrapeWorkers),
+		PrometheusPortKey:   fmt.Sprintf("%d", wpc.config.Monitoring.Prometheus.Port),
+		PrometheusScrapeKey: strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
 	}
 
 	workerCpu := cpu
@@ -206,7 +207,7 @@ func (wpc *KubernetesWorkerPoolController) createWorkerJob(workerId string, cpu 
 			Ports: []corev1.ContainerPort{
 				{
 					Name:          "metrics",
-					ContainerPort: int32(wpc.config.Metrics.Prometheus.Port),
+					ContainerPort: int32(wpc.config.Monitoring.Prometheus.Port),
 				},
 			},
 			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpu),
@@ -307,7 +308,7 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) 
 			Name: imagesVolumeName,
 			VolumeSource: corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: "images",
+					ClaimName: wpc.config.Worker.ImagePVCName,
 				},
 			},
 		},
@@ -429,7 +430,7 @@ func (wpc *KubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 					if err != nil {
 						log.Printf("Failed to delete pending job <%s>: %v\n", job.Name, err)
 					} else {
-						log.Printf("Deleted job <%s> due to exceeding age limit of <%v>", job.Name, maxAge)
+						log.Printf("Deleted job <%s> due to exceeding age limit of <%v>\n", job.Name, maxAge)
 					}
 				}
 			}

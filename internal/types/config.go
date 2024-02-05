@@ -7,7 +7,7 @@ type AppConfig struct {
 	Database       DatabaseConfig       `key:"database"`
 	GatewayService GatewayServiceConfig `key:"gateway"`
 	ImageService   ImageServiceConfig   `key:"imageservice"`
-	Metrics        MetricsConfig        `key:"metrics"`
+	Monitoring     MonitoringConfig     `key:"monitoring"`
 	Storage        StorageConfig        `key:"storage"`
 	Worker         WorkerConfig         `key:"worker"`
 }
@@ -55,11 +55,11 @@ type PostgresConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host           string `key:"host"`
-	HTTPPort       int    `key:"httpPort"`
-	GRPCPort       int    `key:"grpcPort"`
-	MaxRecvMsgSize int    `key:"max_recv_msg_size_in_mb"`
-	MaxSendMsgSize int    `key:"max_send_msg_size_in_mb"`
+	Host               string `key:"host"`
+	HTTPPort           int    `key:"httpPort"`
+	GRPCPort           int    `key:"grpcPort"`
+	GRPCMaxRecvMsgSize int    `key:"grpcMaxRecvMsgSizeInMB"`
+	GRPCMaxSendMsgSize int    `key:"grpcMaxSendMsgSizeInMB"`
 }
 
 type ImageServiceConfig struct {
@@ -120,10 +120,11 @@ type WorkerConfig struct {
 	Namespace          string                      `key:"namespace"`
 	ServiceAccountName string                      `key:"serviceAccountName"`
 
-	ResourcesEnforced          bool  `key:"resourcesEnforced"`
-	DefaultWorkerCPURequest    int64 `key:"defaultWorkerCPURequest"`
-	DefaultWorkerMemoryRequest int64 `key:"defaultWorkerMemoryRequest"`
-	TerminationGracePeriod     int64 `key:"terminationGracePeriod"`
+	ResourcesEnforced          bool   `key:"resourcesEnforced"`
+	DefaultWorkerCPURequest    int64  `key:"defaultWorkerCPURequest"`
+	DefaultWorkerMemoryRequest int64  `key:"defaultWorkerMemoryRequest"`
+	TerminationGracePeriod     int64  `key:"terminationGracePeriod"`
+	ImagePVCName               string `key:"imagePVCName"`
 }
 
 type WorkerPoolConfig struct {
@@ -146,11 +147,21 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 	MinFreeGPU           string `key:"minFreeGPU"`
 }
 
-type MetricsConfig struct {
+type MonitoringConfig struct {
 	Prometheus PrometheusConfig `key:"prometheus"`
+	FluentBit  FluentBitConfig  `key:"fluentbit"`
 }
 
 type PrometheusConfig struct {
 	ScrapeWorkers bool `key:"scrapeWorkers"`
 	Port          int  `key:"port"`
+}
+
+type FluentBitConfig struct {
+	Events FluentBitEventConfig `key:"events"`
+}
+
+type FluentBitEventConfig struct {
+	Host string `key:"host"`
+	Port int    `key:"port"`
 }

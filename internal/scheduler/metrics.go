@@ -27,13 +27,13 @@ func NewSchedulerMetrics(metricsRepo repository.PrometheusRepository) SchedulerM
 	}
 }
 
-func (sm *SchedulerMetrics) ContainerScheduled() {
+func (sm *SchedulerMetrics) CounterIncContainerScheduled() {
 	if handler := sm.metricsRepo.GetCounterHandler(types.MetricsSchedulerContainerScheduled); handler != nil {
 		handler.Inc()
 	}
 }
 
-func (sm *SchedulerMetrics) ContainerRequested() {
+func (sm *SchedulerMetrics) CounterIncContainerRequested() {
 	if handler := sm.metricsRepo.GetCounterHandler(types.MetricsSchedulerContainerRequested); handler != nil {
 		handler.Inc()
 	}
