@@ -6,8 +6,7 @@ runnerTag := latest
 setup:
 	bash bin/setup.sh
 	make k3d-up runner worker gateway
-	kubectl delete pod -l app=gateway
-	helm install beta9 deploy/charts/beta9 --values deploy/charts/beta9/values.local.yaml  # only installs metrics stack for now
+	helm install beta9 deploy/charts/beta9 --values deploy/charts/beta9/values.local.yaml
 
 setup-sdk:
 	curl -sSL https://install.python-poetry.org | python3 -

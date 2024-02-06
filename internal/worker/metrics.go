@@ -5,7 +5,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/beam-cloud/beta9/internal/repository"
 	repo "github.com/beam-cloud/beta9/internal/repository"
 	types "github.com/beam-cloud/beta9/internal/types"
 	"github.com/prometheus/client_golang/prometheus"
@@ -24,7 +23,7 @@ func NewWorkerMetrics(
 	workerRepo repo.WorkerRepository,
 	config types.PrometheusConfig,
 ) *WorkerMetrics {
-	metricsRepo := repository.NewMetricsPrometheusRepository(config)
+	metricsRepo := repo.NewMetricsPrometheusRepository(config)
 	metricsRepo.RegisterCounterVec(
 		prometheus.CounterOpts{
 			Name: types.MetricsWorkerContainerDurationSeconds,
