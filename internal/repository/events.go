@@ -1,10 +1,11 @@
 package repository
 
 import (
+	"bytes"
 	"encoding/json"
-	"fmt"
+	"log"
 	"net"
-	"strconv"
+	"net/http"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -12,19 +13,27 @@ import (
 )
 
 type TCPEventClientRepo struct {
-	conn net.Conn
+	config types.FluentBitEventConfig
+	http   *http.Client
 }
 
-func NewTCPEventClientRepo(config types.FluentBitConfig) (EventRepository, error) {
-	address := config.Events.Host + ":" + strconv.Itoa(config.Events.Port)
-	conn, err := net.Dial("tcp", address)
-	if err != nil {
-		err = fmt.Errorf("failed to connect to fluent-bit server %s: %v", address, err.Error())
+func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			MaxConnsPerHost: config.MaxConns,
+			MaxIdleConns:    config.MaxIdleConns,
+			IdleConnTimeout: config.IdleConnTimeout,
+			DialContext: (&net.Dialer{
+				Timeout:   config.DialTimeout,
+				KeepAlive: config.KeepAlive,
+			}).DialContext,
+		},
 	}
 
 	return &TCPEventClientRepo{
-		conn: conn,
-	}, err
+		config: config,
+		http:   httpClient,
+	}
 }
 
 func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion string, data []byte) (types.Event, error) {
@@ -42,38 +51,37 @@ func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion s
 	}, nil
 }
 
-func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, data interface{}) error {
-	if t.conn == nil {
-		return nil
-	}
-
+func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, data interface{}) {
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
-		return err
+		log.Println("failed to marshal event:", err)
+		return
 	}
 
 	event, err := t.createEventObject(eventName, schemaVersion, dataBytes)
 	if err != nil {
-		return err
+		log.Println("failed to create event object:", err)
+		return
 	}
 
 	eventBytes, err := json.Marshal(event)
 	if err != nil {
-		return err
+		log.Println("failed to marshal event object:", err)
+		return
 	}
 
-	_, err = t.conn.Write(eventBytes)
+	resp, err := http.Post(t.config.Endpoint, "application/json", bytes.NewBuffer(eventBytes))
 	if err != nil {
-		return err
+		log.Println("failed to send payload to event server:", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusCreated {
+		return
 	}
 
-	buffer := make([]byte, 1024)
-	_, err = t.conn.Read(buffer)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	log.Println("unexpected status code from event server:", resp.StatusCode)
 }
 
 func (t *TCPEventClientRepo) PushContainerRequestedEvent(request *types.ContainerRequest) {

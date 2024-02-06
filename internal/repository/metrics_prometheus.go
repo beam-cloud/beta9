@@ -3,6 +3,7 @@ package repository
 import (
 	"fmt"
 	"log"
+	"net/http"
 
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/labstack/echo/v4"
@@ -11,6 +12,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 type PrometheusRepository struct {
@@ -47,24 +50,28 @@ func NewMetricsPrometheusRepository(promConfig types.PrometheusConfig) Prometheu
 	}
 }
 
-func (r *PrometheusRepository) Init() error {
-	prometheusServer := echo.New()
-	prometheusServer.HideBanner = true
-	prometheusServer.HidePort = true
-	prometheusServer.Use(middleware.Recover())
-	prometheusServer.GET("/metrics", echo.WrapHandler(promhttp.HandlerFor(r.collectorRegistrar, promhttp.HandlerOpts{
+func (r *PrometheusRepository) ListenAndServe() error {
+	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
+	e.Use(middleware.Recover())
+	e.GET("/metrics", echo.WrapHandler(promhttp.HandlerFor(r.collectorRegistrar, promhttp.HandlerOpts{
 		EnableOpenMetrics: true,
 	})))
 
-	log.Printf("Starting Prometheus metrics server at :%d\n", r.port)
+	// Accept both HTTP/2 and HTTP/1
+	httpServer := &http.Server{
+		Addr:    fmt.Sprintf(":%v", r.port),
+		Handler: h2c.NewHandler(e, &http2.Server{}),
+	}
 
-	return prometheusServer.Start(fmt.Sprintf("0.0.0.0:%d", r.port))
+	return httpServer.ListenAndServe()
 }
 
 // RegisterCounter registers a new counter metric
 func (pr *PrometheusRepository) RegisterCounter(opts prometheus.CounterOpts) {
 	metricName := opts.Name
-	if _, exist := pr.counters[metricName]; exist == true {
+	if _, exist := pr.counters[metricName]; exist {
 		log.Printf("metric with name %s already exists", metricName)
 		return
 	}
@@ -77,7 +84,7 @@ func (pr *PrometheusRepository) RegisterCounter(opts prometheus.CounterOpts) {
 // RegisterCounterVec registers a new counter vector metric
 func (pr *PrometheusRepository) RegisterCounterVec(opts prometheus.CounterOpts, labels []string) {
 	metricName := opts.Name
-	if _, exist := pr.counterVecs[metricName]; exist == true {
+	if _, exist := pr.counterVecs[metricName]; exist {
 		log.Printf("metric with name %s already exists", metricName)
 		return
 	}

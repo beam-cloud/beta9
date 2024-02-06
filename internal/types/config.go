@@ -7,10 +7,9 @@ type AppConfig struct {
 	Database       DatabaseConfig       `key:"database"`
 	GatewayService GatewayServiceConfig `key:"gateway"`
 	ImageService   ImageServiceConfig   `key:"imageservice"`
-	Metrics        MetricsConfig        `key:"metrics"`
+	Monitoring     MonitoringConfig     `key:"monitoring"`
 	Storage        StorageConfig        `key:"storage"`
 	Worker         WorkerConfig         `key:"worker"`
-	FluentBit      FluentBitConfig      `key:"fluentBit"`
 }
 
 type DatabaseConfig struct {
@@ -56,11 +55,11 @@ type PostgresConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host           string `key:"host"`
-	HTTPPort       int    `key:"httpPort"`
-	GRPCPort       int    `key:"grpcPort"`
-	MaxRecvMsgSize int    `key:"max_recv_msg_size_in_mb"`
-	MaxSendMsgSize int    `key:"max_send_msg_size_in_mb"`
+	Host               string `key:"host"`
+	HTTPPort           int    `key:"httpPort"`
+	GRPCPort           int    `key:"grpcPort"`
+	GRPCMaxRecvMsgSize int    `key:"grpcMaxRecvMsgSizeInMB"`
+	GRPCMaxSendMsgSize int    `key:"grpcMaxSendMsgSizeInMB"`
 }
 
 type ImageServiceConfig struct {
@@ -121,9 +120,10 @@ type WorkerConfig struct {
 	Namespace          string                      `key:"namespace"`
 	ServiceAccountName string                      `key:"serviceAccountName"`
 
-	ResourcesEnforced          bool  `key:"resourcesEnforced"`
-	DefaultWorkerCPURequest    int64 `key:"defaultWorkerCPURequest"`
-	DefaultWorkerMemoryRequest int64 `key:"defaultWorkerMemoryRequest"`
+	ImagePVCName               string `key:"imagePVCName"`
+	ResourcesEnforced          bool   `key:"resourcesEnforced"`
+	DefaultWorkerCPURequest    int64  `key:"defaultWorkerCPURequest"`
+	DefaultWorkerMemoryRequest int64  `key:"defaultWorkerMemoryRequest"`
 }
 
 type WorkerPoolConfig struct {
@@ -146,8 +146,9 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 	MinFreeGPU           string `key:"minFreeGPU"`
 }
 
-type MetricsConfig struct {
+type MonitoringConfig struct {
 	Prometheus PrometheusConfig `key:"prometheus"`
+	FluentBit  FluentBitConfig  `key:"fluentbit"`
 }
 
 type PrometheusConfig struct {
@@ -160,6 +161,10 @@ type FluentBitConfig struct {
 }
 
 type FluentBitEventConfig struct {
-	Host string `key:"host"`
-	Port int    `key:"port"`
+	Endpoint        string        `key:"endpoint"`
+	MaxConns        int           `key:"maxConns"`
+	MaxIdleConns    int           `key:"maxIdleConns"`
+	IdleConnTimeout time.Duration `key:"idleConnTimeout"`
+	DialTimeout     time.Duration `key:"dialTimeout"`
+	KeepAlive       time.Duration `key:"keepAlive"`
 }

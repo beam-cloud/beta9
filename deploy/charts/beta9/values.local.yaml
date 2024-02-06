@@ -1,0 +1,41 @@
+metrics:
+  enabled: true
+
+manifests:
+  resources:
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: fluent-bit
+    type: Opaque
+    stringData:
+      AWS_S3_BUCKET_NAME: logs
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack.beta9:4566
+      VICTORIA_LOGS_HOST: victoria-logs-single.beta9
+      VICTORIA_LOGS_PORT: "9428"
+  - apiVersion: helm.cattle.io/v1
+    kind: HelmChart
+    metadata:
+      name: localstack
+    spec:
+      repo: https://localstack.github.io/helm-charts
+      chart: localstack
+      createNamespace: false
+      version: 0.6.5
+      valuesContent: |-
+        extraEnvVars:
+        - name: SERVICES
+          value: s3
+        enableStartupScripts: true
+        startupScriptContent: |
+          #!/bin/bash
+          awslocal s3 mb s3://juicefs
+          awslocal s3 mb s3://logs
+        persistence:
+          enabled: true
+          storageClass: local-path
+          accessModes:
+          - ReadWriteOnce
+          size: 50Gi
