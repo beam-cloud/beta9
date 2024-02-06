@@ -178,8 +178,8 @@ fluent-bit:
   extraPorts:
   # -- The events server
   - name: tcp
-    port: 5170
-    containerPort: 5170
+    port: 9880
+    containerPort: 9880
     protocol: TCP
   config:
     service: |
@@ -206,10 +206,10 @@ fluent-bit:
           Skip_Long_Lines  Off
           Refresh_Interval 5
       [INPUT]
-          Name   tcp
+          Name   http
           Tag    events
           Listen 0.0.0.0
-          Port   5170
+          Port   9880
     outputs: |
       [OUTPUT]
           Name  stdout
