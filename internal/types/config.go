@@ -161,6 +161,10 @@ type FluentBitConfig struct {
 }
 
 type FluentBitEventConfig struct {
-	Host string `key:"host"`
-	Port int    `key:"port"`
+	Endpoint        string        `key:"endpoint"`
+	MaxConns        int           `key:"maxConns"`
+	MaxIdleConns    int           `key:"maxIdleConns"`
+	IdleConnTimeout time.Duration `key:"idleConnTimeout"`
+	DialTimeout     time.Duration `key:"dialTimeout"`
+	KeepAlive       time.Duration `key:"keepAlive"`
 }

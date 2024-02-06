@@ -21,10 +21,12 @@ k3d_up() {
         docker build . -f ./docker/Dockerfile.k3d -t localhost:5001/rancher/k3s:latest
       else
         extra_args=""
+        touch manifests/k3d/nvidia-device-plugin.yaml.skip
       fi
       ;;
     Darwin*)
       extra_args=""
+      touch manifests/k3d/nvidia-device-plugin.yaml.skip
       ;;
     *)
       echo "Unsupported OS: $os_type"
@@ -33,6 +35,7 @@ k3d_up() {
   esac
 
   k3d cluster create --config hack/k3d.yaml $extra_args
+  kubectl create namespace beta9
   kubectl config set contexts.k3d-beta9.namespace beta9
   okteto context use k3d-beta9 --namespace beta9
 }
