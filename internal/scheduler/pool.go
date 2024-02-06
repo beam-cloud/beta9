@@ -17,7 +17,7 @@ const (
 	logVolumeName           string = "beta9-logs"
 	imagesVolumeName        string = "beta9-images"
 	configVolumeName        string = "beta9-config"
-	configSecretName        string = "beta9"
+	configSecretName        string = "beta9-config"
 	configMountPath         string = "/etc/config"
 	defaultContainerName    string = "worker"
 	defaultWorkerEntrypoint string = "/usr/local/bin/worker"

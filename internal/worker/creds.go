@@ -4,9 +4,10 @@ import (
 	"context"
 	b64 "encoding/base64"
 	"fmt"
-	"log"
 
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	ecr "github.com/aws/aws-sdk-go-v2/service/ecr"
 )
 
@@ -19,7 +20,9 @@ type CredentialProvider interface {
 // AWS auth provider
 type AWSCredentialProvider struct {
 	CredentialProvider
-	Region string
+	Region    string
+	AccessKey string
+	SecretKey string
 }
 
 func (p *AWSCredentialProvider) GetUsername() string {
@@ -27,10 +30,19 @@ func (p *AWSCredentialProvider) GetUsername() string {
 }
 
 func (p *AWSCredentialProvider) GetAuthorizationToken() (string, error) {
-	cfg, err := awsconfig.LoadDefaultConfig(context.TODO(), awsconfig.WithRegion(p.Region))
-	if err != nil {
-		log.Fatalf("unable to load SDK config, %v", err)
-		return "", nil
+	var cfg aws.Config
+	var err error
+
+	// Use static credentials if they are available
+	if p.AccessKey != "" && p.SecretKey != "" {
+		cfg, err = config.LoadDefaultConfig(context.TODO(),
+			config.WithRegion(p.Region),
+			config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(p.AccessKey, p.SecretKey, "")),
+		)
+	} else {
+		cfg, err = config.LoadDefaultConfig(context.TODO(),
+			config.WithRegion(p.Region),
+		)
 	}
 
 	svc := ecr.NewFromConfig(cfg)

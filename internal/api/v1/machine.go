@@ -45,24 +45,26 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	}
 
 	// Overwrite certain config fields with tailscale hostnames
+	// TODO: figure out a more elegant to override these fields without hardcoding service names
+	// possibly, use proxy config values
 	remoteConfig := g.config
 
 	redisHostname, err := g.tailscaleRepo.GetHostnameForService("redis")
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service: redis")
 	}
 
 	if g.config.Storage.Mode == storage.StorageModeJuiceFS {
 		juiceFsRedisHostname, err := g.tailscaleRepo.GetHostnameForService("juicefs-redis")
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service")
+			return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service: juicefs-redis")
 		}
 		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("redis://%s/0", juiceFsRedisHostname)
 	}
 
 	gatewayGrpcHostname, err := g.tailscaleRepo.GetHostnameForService("gateway-grpc")
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service: gateway-grpc")
 	}
 
 	remoteConfig.Database.Redis.Addrs[0] = redisHostname

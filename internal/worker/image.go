@@ -56,7 +56,9 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 	switch config.RegistryCredentialProviderName {
 	case "aws":
 		provider = &AWSCredentialProvider{
-			Region: config.Registries.S3.Region,
+			Region:    config.Registries.S3.Region,
+			AccessKey: config.Registries.S3.AccessKeyID,
+			SecretKey: config.Registries.S3.SecretAccessKey,
 		}
 	case "docker":
 		provider = &DockerCredentialProvider{
@@ -85,7 +87,7 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		return nil, err
 	}
 
-	creds, err := provider.GetAuthString()
+	_, err = provider.GetAuthString()
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +100,7 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		PullCommand:    imagePullCommand,
 		CommandTimeout: -1,
 		Debug:          false,
-		Creds:          creds,
+		Creds:          "",
 		workerId:       workerId,
 		workerRepo:     workerRepo,
 	}, nil
@@ -107,10 +109,13 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 func (c *ImageClient) PullLazy(imageId string) error {
 	localCachePath := fmt.Sprintf("%s/%s.cache", imagePath, imageId)
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", imagePath, imageId, c.registry.ImageFileExtension)
-
 	var err error = nil
+
 	if _, err := os.Stat(remoteArchivePath); err != nil {
-		return err
+		err = c.registry.Pull(context.TODO(), remoteArchivePath, imageId)
+		if err != nil {
+			return err
+		}
 	}
 
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
@@ -198,7 +203,7 @@ func (i *ImageClient) args(creds *string) (out []string) {
 		out = append(out, "--src-creds", *creds)
 	} else if creds != nil && *creds == "" {
 		out = append(out, "--src-no-creds")
-	} else {
+	} else if i.Creds != "" {
 		out = append(out, "--src-creds", i.Creds)
 	}
 

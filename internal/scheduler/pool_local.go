@@ -343,6 +343,20 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Name:  "BETA9_GATEWAY_PORT",
 			Value: fmt.Sprint(wpc.config.GatewayService.GRPCPort),
 		},
+
+		// TODO: remove these creds
+		{
+			Name:  "AWS_REGION",
+			Value: wpc.config.ImageService.Registries.S3.Region,
+		},
+		{
+			Name:  "AWS_ACCESS_KEY_ID",
+			Value: wpc.config.ImageService.Registries.S3.AccessKeyID,
+		},
+		{
+			Name:  "AWS_SECRET_ACCESS_KEY",
+			Value: wpc.config.ImageService.Registries.S3.SecretAccessKey,
+		},
 	}
 }
 

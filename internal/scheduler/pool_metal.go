@@ -107,7 +107,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	// TODO: fix client to check for connectivity at the hostname before creating a job
 
 	// Create a new worker job
-	job, worker := wpc.createWorkerJob(workerId, cpu, memory, gpuType)
+	job, worker := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType)
 	worker.PoolId = PoolId(wpc.name)
 	worker.MachineId = machineId
 
@@ -128,7 +128,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	return worker, nil
 }
 
-func (wpc *MetalWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string) (*batchv1.Job, *types.Worker) {
+func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
 		"app":               Beta9WorkerLabelValue,
@@ -162,8 +162,16 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId string, cpu int64
 					ContainerPort: int32(wpc.config.Metrics.Prometheus.Port),
 				},
 			},
-			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpu),
+			Env:          wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpu),
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					"nvidia.com/gpu": resource.MustParse("1"),
+				},
+				Limits: corev1.ResourceList{
+					"nvidia.com/gpu": resource.MustParse("1"),
+				},
+			},
 		},
 	}
 
@@ -216,7 +224,7 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId string, cpu int64
 	}
 }
 
-func (wpc *MetalWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string) []corev1.EnvVar {
+func (wpc *MetalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string) []corev1.EnvVar {
 	return []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
@@ -246,6 +254,27 @@ func (wpc *MetalWorkerPoolController) getWorkerEnvironment(workerId string, cpu 
 			Name:  "BETA9_GATEWAY_PORT",
 			Value: fmt.Sprint(wpc.config.GatewayService.GRPCPort),
 		},
+		{
+			Name:  "POD_HOSTNAME",
+			Value: fmt.Sprintf("%s.%s.%s", machineId, wpc.config.Tailscale.User, wpc.config.Tailscale.HostName),
+		},
+		{
+			Name:  "CONFIG_PATH",
+			Value: "/etc/config/config.json",
+		},
+		// TODO: remove these creds
+		{
+			Name:  "AWS_REGION",
+			Value: wpc.config.ImageService.Registries.S3.Region,
+		},
+		{
+			Name:  "AWS_ACCESS_KEY_ID",
+			Value: wpc.config.ImageService.Registries.S3.AccessKeyID,
+		},
+		{
+			Name:  "AWS_SECRET_ACCESS_KEY",
+			Value: wpc.config.ImageService.Registries.S3.SecretAccessKey,
+		},
 	}
 }
 
@@ -261,6 +290,14 @@ func (wpc *MetalWorkerPoolController) getWorkerVolumes(workerMemory int64) []cor
 				HostPath: &corev1.HostPathVolumeSource{
 					Path: defaultWorkerLogPath,
 					Type: &hostPathType,
+				},
+			},
+		},
+		{
+			Name: configVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: configSecretName,
 				},
 			},
 		},
@@ -304,6 +341,11 @@ func (wpc *MetalWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMou
 			Name:      imagesVolumeName,
 			MountPath: "/images",
 			ReadOnly:  false,
+		},
+		{
+			Name:      configVolumeName,
+			MountPath: "/etc/config",
+			ReadOnly:  true,
 		},
 		{
 			Name:      logVolumeName,

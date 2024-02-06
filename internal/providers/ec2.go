@@ -133,7 +133,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 		GatewayHost: gatewayHost,
 
 		// TODO: replace with single-use token
-		Beta9Token:        "AYnhx9tTvla5KdLEPWApabnsG5nPUX8KeNzLK2z2CGtxsTrzid8c5l0lE6P-cx-o4-2kx8scBkpT0gt-p1EufA==",
+		Beta9Token:        "Bx8jqWPrCOS3BAx3VYA4hDBqjxPJkavagIFTm0mbJBgskMxKid_ZpU-DWjWXDHuQla3XQxlkKwkG1Iygs4klQA==",
 		K3sVersion:        k3sVersion,
 		DisableComponents: []string{"traefik"},
 		MachineId:         machineId,
@@ -305,13 +305,25 @@ INSTALL_K3S_VERSION="{{.K3sVersion}}"
 MACHINE_ID="{{.MachineId}}"
 BETA9_TOKEN="{{.Beta9Token}}"
 
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID) \
+   && curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.repo | sudo tee /etc/yum.repos.d/nvidia-docker.repo
+
+# Configure nvidia container runtime
+yum-config-manager --disable amzn2-nvidia-470-branch amzn2-core
+yum remove -y libnvidia-container
+yum install -y nvidia-container-toolkit nvidia-container-runtime
+yum-config-manager --enable amzn2-nvidia-470-branch amzn2-core
+
 # Install K3s
-curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$INSTALL_K3S_VERSION INSTALL_K3S_EXEC="{{range .DisableComponents}} --disable {{.}}{{end}}" sh -    
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$INSTALL_K3S_VERSION INSTALL_K3S_EXEC="{{range .DisableComponents}} --disable {{.}}{{end}}" sh -
 
 # Wait for K3s to be up and running
 while [ ! -f /etc/rancher/k3s/k3s.yaml ] || [ ! -f /var/lib/rancher/k3s/server/node-token ]; do
   sleep 1
 done
+
+# TODO: remove this chmod
+chmod 777 /etc/rancher/k3s/k3s.yaml
 
 # Create beta9 service account
 kubectl create serviceaccount beta9
@@ -324,6 +336,51 @@ metadata:
     kubernetes.io/service-account.name: beta9
 type: kubernetes.io/service-account-token
 EOF
+
+cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-daemonset
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: nvidia-device-plugin-ds
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        name: nvidia-device-plugin-ds
+      annotations:
+        scheduler.alpha.kubernetes.io/critical-pod: ""
+    spec:
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      priorityClassName: system-node-critical
+      runtimeClassName: nvidia
+      containers:
+      - image: nvcr.io/nvidia/k8s-device-plugin:v0.14.3
+        name: nvidia-device-plugin-ctr
+        env:
+        - name: FAIL_ON_INIT_ERROR
+          value: "false"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: device-plugin
+          mountPath: /var/lib/kubelet/device-plugins
+      volumes:
+      - name: device-plugin
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+EOF
+
 kubectl annotate secret beta9-token kubernetes.io/service-account.name=beta9
 kubectl patch serviceaccount beta9 -p '{"secrets":[{"name":"beta9-token"}]}'
 kubectl create clusterrolebinding beta9-admin-binding --clusterrole=cluster-admin --serviceaccount=default:beta9
@@ -344,7 +401,7 @@ HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
 
 if [ $HTTP_STATUS -eq 200 ]; then
     CONFIG_JSON=$(jq '.config' response.json)
-    kubectl create secret generic beta9-config --from-literal=config.json="$CONFIG_JSON"
+    kubectl create secret -n beta9 generic beta9-config --from-literal=config.json="$CONFIG_JSON"
 else
     echo "Failed to register machine, status: $HTTP_STATUS"
     exit 1
