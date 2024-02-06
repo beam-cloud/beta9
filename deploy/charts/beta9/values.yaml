@@ -19,21 +19,20 @@ gateway:
             repository: registry.localhost:5000/beta9-gateway
             tag: latest
           probes:
-            liveness: &liveness
+            readiness: &readiness
               enabled: true
               custom: true
-              spec: &livenessSpec
-                periodSeconds: 3
+              spec: &readinessSpec
+                periodSeconds: 5
                 failureThreshold: 3
                 httpGet:
                   path: /api/v1/health
                   port: 1994
-            readiness: *liveness
             startup:
-              <<: *liveness
+              <<: *readiness
               spec:
-                <<: *livenessSpec
-                failureThreshold: 10
+                <<: *readinessSpec
+                failureThreshold: 60
           securityContext:
             privileged: true
   persistence:
@@ -45,6 +44,7 @@ gateway:
       accessMode: ReadWriteOnce
   service:
     main:
+      type: LoadBalancer
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"

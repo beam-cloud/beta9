@@ -24,6 +24,7 @@ k3d_up() {
       fi
       ;;
     Darwin*)
+      touch manifests/k3d/nvidia-device-plugin.yaml.skip
       extra_args=""
       ;;
     *)
@@ -33,6 +34,7 @@ k3d_up() {
   esac
 
   k3d cluster create --config hack/k3d.yaml $extra_args
+  kubectl create namespace beta9
   kubectl config set contexts.k3d-beta9.namespace beta9
   okteto context use k3d-beta9 --namespace beta9
 }

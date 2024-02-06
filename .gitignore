@@ -18,3 +18,5 @@ sdk/src/build
 sdk/src/beta9.egg-info
 event.json
 *.tgz
+test
+**/nvidia-device-plugin.yaml.skip
