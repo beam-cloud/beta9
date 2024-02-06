@@ -1,0 +1,81 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: beta9
+  name: gateway
+  namespace: beta9
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: gateway
+      app.kubernetes.io/name: beta9
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: gateway
+        app.kubernetes.io/name: beta9
+    spec:
+      automountServiceAccountToken: true
+      containers:
+      - command:
+        - /usr/local/bin/gateway
+        env:
+        - name: CONFIG_PATH
+          value: /etc/beta9/.config.yaml
+        image: registry.localhost:5000/beta9-gateway:latest
+        livenessProbe:
+          failureThreshold: 3
+          initialDelaySeconds: 0
+          periodSeconds: 10
+          tcpSocket:
+            port: 1994
+          timeoutSeconds: 1
+        name: main
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /api/v1/health
+            port: 1994
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: 4000m
+            memory: 4Gi
+        securityContext:
+          privileged: true
+        startupProbe:
+          failureThreshold: 60
+          httpGet:
+            path: /api/v1/health
+            port: 1994
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 1
+        volumeMounts:
+        - mountPath: /etc/beta9
+          name: config
+        - mountPath: /images
+          name: images
+      dnsPolicy: ClusterFirst
+      enableServiceLinks: true
+      hostIPC: false
+      hostNetwork: false
+      hostPID: false
+      serviceAccountName: gateway
+      volumes:
+      - name: config
+        secret:
+          secretName: beta9-config
+      - name: images
+        persistentVolumeClaim:
+          claimName: gateway-images

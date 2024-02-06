@@ -1,0 +1,105 @@
+debugMode: false
+database:
+  postgres:
+    host: postgresql.beta9
+    port: 5432
+    username: root
+    password: password
+    name: main
+    timezone: UTC
+  redis:
+    mode: single
+    addrs:
+    - redis-master.beta9:6379
+    password:
+    enableTLS: false
+    dialTimeout: 3s
+storage:
+  mode: juicefs
+  fsName: beta9-fs
+  fsPath: /data
+  objectPath: /data/objects
+  juicefs:
+    redisURI: redis://juicefs-redis-master.beta9:6379/0
+    awsS3Bucket: http://localstack.beta9:4566/juicefs
+    awsAccessKeyID: test
+    awsSecretAccessKey: test
+gateway:
+  host: gateway.beta9
+  httpPort: 1994
+  grpcPort: 1993
+  grpcMaxRecvMsgSizeInMB: 1024
+  grpcMaxSendMsgSizeInMB: 1024
+imageService:
+  cacheURL:
+  registryStore: local
+  registryCredentialProvider: docker
+  registries:
+    docker:
+      username: beamcloud
+      password:
+    s3:
+      bucket: beta9-images
+      region: us-east-1
+      accessKeyID: test
+      secretAccessKey: test
+  runner:
+    baseImageTag: latest
+    baseImageName: beta9-runner
+    baseImageRegistry: registry.localhost:5000
+    tags:
+      python3.8: py38-latest
+      python3.9: py39-latest
+      python3.10: py310-latest
+      python3.11: py311-latest
+      python3.12: py312-latest
+worker:
+  pools:
+    default:
+      jobSpec:
+        nodeSelector: {}
+      poolSizing:
+        defaultWorkerCpu: 1000m
+        defaultWorkerGpuType: ""
+        defaultWorkerMemory: 1Gi
+        minFreeCpu: 1000m
+        minFreeGpu: 0
+        minFreeMemory: 1Gi
+    # example gpu worker pool
+    # nvidia:
+    #   gpuType: A40
+    #   runtime: nvidia
+    #   jobSpec:
+    #     nodeSelector: {}
+    #   poolSizing:
+    #     defaultWorkerCpu: 1000m
+    #     defaultWorkerGpuType: ""
+    #     defaultWorkerMemory: 1Gi
+    #     minFreeCpu:
+    #     minFreeGpu:
+    #     minFreeMemory:
+  # global pool attributes
+  hostNetwork: false
+  imageTag: latest
+  imageName: beta9-worker
+  imageRegistry: registry.localhost:5000
+  imagePullSecrets: []
+  namespace: beta9
+  serviceAccountName: default
+  # non-standard k8s job spec
+  imagePVCName: gateway-images
+  resourcesEnforced: false
+  defaultWorkerCPURequest: 2000
+  defaultWorkerMemoryRequest: 1024
+monitoring:
+  prometheus:
+    scrapeWorkers: true
+    port: 9090
+  fluentbit:
+    events:
+      endpoint: http://fluent-bit.monitoring:9880
+      maxConns: 0
+      maxIdleConns: 30
+      idleConnTimeout: 10s
+      dialTimeout: 2s
+      keepAlive: 30s

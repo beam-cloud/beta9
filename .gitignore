@@ -20,3 +20,4 @@ event.json
 *.tgz
 test
 **/nvidia-device-plugin.yaml.skip
+manifests/**/charts/**

@@ -1,0 +1,90 @@
+---
+apiVersion: builtin
+kind: HelmChartInflationGenerator
+metadata:
+  name: fluent-bit
+name: fluent-bit
+releaseName: fluent-bit
+repo: https://fluent.github.io/helm-charts
+version: 0.43.0
+namespace: monitoring
+includeCRDs: true
+skipTests: true
+valuesInline:
+  nameOverride: fluent-bit
+  fullnameOverride: fluent-bit
+  image:
+    repository: docker.io/fluent/fluent-bit
+  envFrom:
+  - secretRef:
+      name: fluent-bit
+  extraPorts:
+  - name: tcp
+    port: 9880
+    containerPort: 9880
+    protocol: TCP
+  config:
+    service: |
+      [SERVICE]
+          Flush        1
+          Log_Level    info
+          HTTP_Server  On
+          HTTP_Listen  0.0.0.0
+          HTTP_Port    2020
+    customParsers: |
+      [PARSER]
+          Name        json-parser
+          Format      json
+          Time_Key    time
+          Time_Format %Y-%m-%dT%H:%M:%SZ
+          Time_Keep   On
+    inputs: |
+      [INPUT]
+          Name             tail
+          Tag              worker-logs
+          Path             /var/log/worker/*.log
+          Parser           json-parser
+          Mem_Buf_Limit    100MB
+          Skip_Long_Lines  Off
+          Refresh_Interval 5
+      [INPUT]
+          Name   http
+          Tag    events
+          Listen 0.0.0.0
+          Port   9880
+    outputs: |
+      [OUTPUT]
+          Name  stdout
+          Match *
+      [OUTPUT]
+          Name             http
+          Match            *
+          host             ${VICTORIA_LOGS_HOST}
+          port             ${VICTORIA_LOGS_PORT}
+          uri              /insert/jsonline?_stream_fields=stream&_msg_field=log&_time_field=date
+          format           json_lines
+          json_date_format iso8601
+      [OUTPUT]
+          Name            s3
+          Match           worker-logs
+          bucket          ${AWS_S3_BUCKET_NAME}
+          endpoint        ${AWS_ENDPOINT_URL}
+          use_put_object  On
+          total_file_size 1M
+          upload_timeout  1m
+  volumeMounts:
+  - name: config
+    mountPath: /fluent-bit/etc/conf
+  daemonSetVolumes:
+  - name: varlog
+    hostPath:
+      path: /var/log
+  - name: varlibdockercontainers
+    hostPath:
+      path: /var/lib/docker/containers
+  daemonSetVolumeMounts:
+  - name: varlog
+    mountPath: /var/log
+  - name: varlibdockercontainers
+    mountPath: /var/lib/docker/containers
+    readOnly: true
