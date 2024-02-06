@@ -683,7 +683,6 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 
 func (s *Worker) startup() error {
 	log.Printf("Worker starting up.")
-	defer s.eventRepo.PushWorkerStartedEvent(s.workerId)
 
 	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
 	if err != nil {
@@ -702,6 +701,8 @@ func (s *Worker) startup() error {
 	if err != nil {
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
+
+	go s.eventRepo.PushWorkerStartedEvent(s.workerId)
 
 	return nil
 }
