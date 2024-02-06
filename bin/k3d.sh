@@ -21,11 +21,12 @@ k3d_up() {
         docker build . -f ./docker/Dockerfile.k3d -t localhost:5001/rancher/k3s:latest
       else
         extra_args=""
+        touch manifests/k3d/nvidia-device-plugin.yaml.skip
       fi
       ;;
     Darwin*)
-      touch manifests/k3d/nvidia-device-plugin.yaml.skip
       extra_args=""
+      touch manifests/k3d/nvidia-device-plugin.yaml.skip
       ;;
     *)
       echo "Unsupported OS: $os_type"
