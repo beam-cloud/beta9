@@ -97,6 +97,7 @@ func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (n
 	return listener, nil
 }
 
+// Dial returns a TCP connection to a tailscale service
 func (t *Tailscale) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
