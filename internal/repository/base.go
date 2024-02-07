@@ -74,9 +74,11 @@ type WorkerPoolRepository interface {
 }
 
 type ProviderRepository interface {
-	GetMachine(providerName, machineId string) error
+	GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
 	RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error
 	WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
+	SetMachineLock(providerName, poolName, machineId string) error
+	RemoveMachineLock(providerName, poolName, machineId string) error
 }
 
 type TailscaleRepository interface {

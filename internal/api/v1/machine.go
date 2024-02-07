@@ -3,6 +3,7 @@ package apiv1
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/repository"
@@ -32,6 +33,7 @@ func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, 
 type RegisterMachineRequest struct {
 	Token        string `json:"token"`
 	MachineID    string `json:"machine_id"`
+	WorkerId     string `json:"worker_id"`
 	ProviderName string `json:"provider_name"`
 	PoolName     string `json:"pool_name"`
 }
@@ -68,11 +70,12 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	}
 
 	remoteConfig.Database.Redis.Addrs[0] = redisHostname
-	remoteConfig.GatewayService.Host = gatewayGrpcHostname
+	remoteConfig.GatewayService.Host = strings.Split(gatewayGrpcHostname, ":")[0]
 
 	hostName := fmt.Sprintf("%s.%s.%s", request.MachineID, g.config.Tailscale.User, g.config.Tailscale.HostName)
 	err = g.providerRepo.RegisterMachine(request.ProviderName, request.PoolName, request.MachineID, &types.ProviderMachineState{
 		MachineId: request.MachineID,
+		WorkerId:  request.WorkerId,
 		Token:     request.Token,
 		HostName:  hostName,
 	})

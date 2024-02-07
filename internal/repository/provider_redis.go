@@ -22,8 +22,28 @@ func NewProviderRedisRepository(rdb *common.RedisClient) ProviderRepository {
 	return &ProviderRedisRepository{rdb: rdb, lock: lock, lockOptions: lockOptions}
 }
 
-func (r *ProviderRedisRepository) GetMachine(providerName, machineId string) error {
-	return nil
+func (r *ProviderRedisRepository) GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error) {
+	ctx := context.TODO() // or pass context as an argument to GetMachine
+
+	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
+	res, err := r.rdb.HGetAll(ctx, stateKey).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, fmt.Errorf("no machine state found for %s", machineId)
+		}
+		return nil, fmt.Errorf("failed to get machine state for %s: %w", machineId, err)
+	}
+
+	if len(res) == 0 {
+		return nil, fmt.Errorf("machine state for %s is invalid or empty", machineId)
+	}
+
+	state := &types.ProviderMachineState{}
+	if err := common.ToStruct(res, state); err != nil {
+		return nil, fmt.Errorf("error parsing machine state for %s: %w", machineId, err)
+	}
+
+	return state, nil
 }
 
 func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error) {
@@ -73,9 +93,17 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 
 func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error {
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
-	err := r.rdb.HSet(context.TODO(), stateKey, "machine_id", machineId, "token", info.Token, "hostname", info.HostName).Err()
+	err := r.rdb.HSet(context.TODO(), stateKey, "machine_id", machineId, "worker_id", info.WorkerId, "token", info.Token, "hostname", info.HostName).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
 	}
 	return nil
+}
+
+func (r *ProviderRedisRepository) SetMachineLock(providerName, poolName, machineId string) error {
+	return r.rdb.Set(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), true, 5*time.Minute).Err()
+}
+
+func (r *ProviderRedisRepository) RemoveMachineLock(providerName, poolName, machineId string) error {
+	return r.rdb.Del(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId)).Err()
 }

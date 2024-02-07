@@ -24,15 +24,18 @@ type EC2Provider struct {
 	clusterName    string
 	appConfig      types.AppConfig
 	providerConfig types.EC2ProviderConfig
+	providerRepo   repository.ProviderRepository
 	tailscaleRepo  repository.TailscaleRepository
+	workerRepo     repository.WorkerRepository
 }
 
 const (
-	instanceComputeBufferPercent float64 = 10.0
-	k3sVersion                   string  = "v1.28.5+k3s1"
+	instanceComputeBufferPercent float64       = 10.0
+	k3sVersion                   string        = "v1.28.5+k3s1"
+	ec2ReconcileInterval         time.Duration = 5 * time.Second
 )
 
-func NewEC2Provider(appConfig types.AppConfig, tailscaleRepo repository.TailscaleRepository) (*EC2Provider, error) {
+func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderRepository, tailscaleRepo repository.TailscaleRepository, workerRepo repository.WorkerRepository) (*EC2Provider, error) {
 	credentials := credentials.NewStaticCredentialsProvider(appConfig.Providers.EC2Config.AWSAccessKeyID, appConfig.Providers.EC2Config.AWSSecretAccessKey, "")
 
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
@@ -49,7 +52,9 @@ func NewEC2Provider(appConfig types.AppConfig, tailscaleRepo repository.Tailscal
 		clusterName:    appConfig.ClusterName,
 		appConfig:      appConfig,
 		providerConfig: appConfig.Providers.EC2Config,
+		providerRepo:   providerRepo,
 		tailscaleRepo:  tailscaleRepo,
+		workerRepo:     workerRepo,
 	}, nil
 }
 
@@ -111,7 +116,7 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 	return selectedInstance, nil
 }
 
-func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, compute types.ProviderComputeRequest) (string, error) {
+func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId string, compute types.ProviderComputeRequest) (string, error) {
 	// NOTE: CPU cores -> millicores, memory -> megabytes
 	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Cpu, compute.Gpu)
 	if err != nil {
@@ -137,6 +142,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 		K3sVersion:        k3sVersion,
 		DisableComponents: []string{"traefik"},
 		MachineId:         machineId,
+		WorkerId:          workerId,
 		PoolName:          poolName,
 	})
 	if err != nil {
@@ -186,6 +192,10 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 				Key:   aws.String("Beta9MachineId"),
 				Value: aws.String(machineId),
 			},
+			{
+				Key:   aws.String("Beta9WorkerId"),
+				Value: aws.String(workerId),
+			},
 		},
 	})
 
@@ -196,25 +206,25 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName string, com
 	return machineId, nil
 }
 
-func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, id string) error {
-	if id == "" {
+func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, instanceId string) error {
+	if instanceId == "" {
 		return errors.New("invalid instance ID")
 	}
 
 	input := &ec2.TerminateInstancesInput{
-		InstanceIds: []string{id},
+		InstanceIds: []string{instanceId},
 	}
 
 	_, err := p.client.TerminateInstances(ctx, input)
 	if err != nil {
-		log.Printf("Error terminating EC2 instance %s: %v", id, err)
+		log.Printf("Error terminating EC2 instance<%s>: %v", instanceId, err)
 		return err
 	}
 
 	return nil
 }
 
-func (p *EC2Provider) ListMachines(ctx context.Context, poolName string) ([]string, error) {
+func (p *EC2Provider) ListMachines(ctx context.Context, poolName string) (map[string]string, error) {
 	input := &ec2.DescribeInstancesInput{
 		Filters: []awsTypes.Filter{
 			{
@@ -232,18 +242,24 @@ func (p *EC2Provider) ListMachines(ctx context.Context, poolName string) ([]stri
 		},
 	}
 
-	var machines []string
+	machines := make(map[string]string) // Map instance ID to Beta9MachineId
 	paginator := ec2.NewDescribeInstancesPaginator(p.client, input)
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			log.Printf("Error fetching instances page: %v", err)
 			return nil, err
 		}
 
 		for _, reservation := range page.Reservations {
 			for _, instance := range reservation.Instances {
-				machines = append(machines, *instance.InstanceId)
+				var machineId string
+				for _, tag := range instance.Tags {
+					if *tag.Key == "Beta9MachineId" {
+						machineId = *tag.Value
+						break
+					}
+				}
+				machines[machineId] = *instance.InstanceId
 			}
 		}
 	}
@@ -252,7 +268,7 @@ func (p *EC2Provider) ListMachines(ctx context.Context, poolName string) ([]stri
 }
 
 func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(ec2ReconcileInterval)
 	defer ticker.Stop()
 
 	for {
@@ -260,15 +276,41 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_, err := p.ListMachines(ctx, poolName)
+			machines, err := p.ListMachines(ctx, poolName)
 			if err != nil {
-				log.Printf("Error listing machines: %v\n", err)
+				log.Println("Error listing machines: ", err)
 				continue
 			}
 
-			// for _, machine := range machines {
-			// 	log.Printf("Machine: %+v\n", machine)
-			// }
+			for machineId, instanceId := range machines {
+				func() {
+					err := p.providerRepo.SetMachineLock(string(types.ProviderEC2), poolName, machineId)
+					if err != nil {
+						return
+					}
+					defer p.providerRepo.RemoveMachineLock(string(types.ProviderEC2), poolName, machineId)
+
+					machine, err := p.providerRepo.GetMachine(string(types.ProviderEC2), poolName, machineId)
+					if err != nil {
+						return
+					}
+
+					// See if there is a worker associated with this machine
+					_, err = p.workerRepo.GetWorkerById(machine.WorkerId)
+					if err != nil {
+						_, ok := err.(*types.ErrWorkerNotFound)
+
+						if ok {
+							err := p.TerminateMachine(ctx, poolName, instanceId)
+							if err != nil {
+								log.Println("Unable to terminate machine: ", err)
+							}
+						}
+
+						return
+					}
+				}()
+			}
 		}
 	}
 }
@@ -281,6 +323,7 @@ type userDataConfig struct {
 	K3sVersion        string
 	DisableComponents []string
 	MachineId         string
+	WorkerId          string
 	PoolName          string
 }
 
@@ -303,7 +346,17 @@ const userDataTemplate string = `
 
 INSTALL_K3S_VERSION="{{.K3sVersion}}"
 MACHINE_ID="{{.MachineId}}"
+WORKER_ID="{{.WorkerId}}"
 BETA9_TOKEN="{{.Beta9Token}}"
+POOL_NAME="{{.PoolName}}"
+TAILSCALE_CONTROL_URL="{{.ControlURL}}"
+TAILSCALE_AUTH_KEY="{{.AuthKey}}"
+GATEWAY_HOST="{{.GatewayHost}}"
+
+K3S_DISABLE_COMPONENTS=""
+{{range .DisableComponents}}
+K3S_DISABLE_COMPONENTS="${K3S_DISABLE_COMPONENTS} --disable {{.}}"
+{{end}}
 
 distribution=$(. /etc/os-release;echo $ID$VERSION_ID) \
    && curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.repo | sudo tee /etc/yum.repos.d/nvidia-docker.repo
@@ -315,15 +368,12 @@ yum install -y nvidia-container-toolkit nvidia-container-runtime
 yum-config-manager --enable amzn2-nvidia-470-branch amzn2-core
 
 # Install K3s
-curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$INSTALL_K3S_VERSION INSTALL_K3S_EXEC="{{range .DisableComponents}} --disable {{.}}{{end}}" sh -
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$INSTALL_K3S_VERSION INSTALL_K3S_EXEC="$K3S_DISABLE_COMPONENTS" sh -
 
 # Wait for K3s to be up and running
 while [ ! -f /etc/rancher/k3s/k3s.yaml ] || [ ! -f /var/lib/rancher/k3s/server/node-token ]; do
   sleep 1
 done
-
-# TODO: remove this chmod
-chmod 777 /etc/rancher/k3s/k3s.yaml
 
 # Create beta9 service account
 kubectl create serviceaccount beta9
@@ -388,7 +438,13 @@ kubectl create namespace beta9
 
 curl -fsSL https://tailscale.com/install.sh | sh
 
-tailscale up --authkey {{.AuthKey}} --login-server {{.ControlURL}} --accept-routes --hostname {{.MachineId}}
+tailscale up --authkey "$TAILSCALE_AUTH_KEY" --login-server "$TAILSCALE_CONTROL_URL" --accept-routes --hostname "$MACHINE_ID"
+
+# Wait for Tailscale to establish a connection
+until tailscale status --json | jq -e '.Peer[] | select(.TailscaleIPs != null) | any' >/dev/null 2>&1; do
+  echo "Waiting for Tailscale to establish a connection..."
+  sleep 1
+done
 
 TOKEN=$(kubectl get secret beta9-token -o jsonpath='{.data.token}' | base64 --decode)
 
@@ -396,8 +452,14 @@ TOKEN=$(kubectl get secret beta9-token -o jsonpath='{.data.token}' | base64 --de
 HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer $BETA9_TOKEN" \
-              -d '{"token":"'$TOKEN'", "machine_id":"{{.MachineId}}", "provider_name":"ec2", "pool_name": "{{.PoolName}}"}' \
-              http://{{.GatewayHost}}/api/v1/machine/register)
+              --data "$(jq -n \
+                        --arg token "$TOKEN" \
+                        --arg machineId "$MACHINE_ID" \
+						--arg workerId "$WORKER_ID" \
+                        --arg providerName "ec2" \
+                        --arg poolName "$POOL_NAME" \
+                        '{token: $token, machine_id: $machineId, worker_id: $workerId, provider_name: $providerName, pool_name: $poolName}')" \
+              "http://$GATEWAY_HOST/api/v1/machine/register")
 
 if [ $HTTP_STATUS -eq 200 ]; then
     CONFIG_JSON=$(jq '.config' response.json)

@@ -47,7 +47,7 @@ func NewMetalWorkerPoolController(
 
 	switch *providerName {
 	case types.ProviderEC2:
-		provider, err = providers.NewEC2Provider(config, tailscaleRepo)
+		provider, err = providers.NewEC2Provider(config, providerRepo, tailscaleRepo, workerRepo)
 	default:
 		return nil, errors.New("invalid provider name")
 	}
@@ -83,7 +83,7 @@ func NewMetalWorkerPoolController(
 func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
-	machineId, err := wpc.provider.ProvisionMachine(context.TODO(), wpc.name, types.ProviderComputeRequest{
+	machineId, err := wpc.provider.ProvisionMachine(context.TODO(), wpc.name, workerId, types.ProviderComputeRequest{
 		Cpu:    cpu,
 		Memory: memory,
 		Gpu:    gpuType,
@@ -91,6 +91,12 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	if err != nil {
 		return nil, err
 	}
+
+	err = wpc.providerRepo.SetMachineLock(string(*wpc.providerName), wpc.name, machineId)
+	if err != nil {
+		return nil, err
+	}
+	defer wpc.providerRepo.RemoveMachineLock(string(*wpc.providerName), wpc.name, machineId)
 
 	log.Printf("Waiting for machine registration <machineId: %s>\n", machineId)
 	state, err := wpc.providerRepo.WaitForMachineRegistration(string(*wpc.providerName), wpc.name, machineId)
@@ -103,8 +109,6 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	if err != nil {
 		return nil, err
 	}
-
-	// TODO: fix client to check for connectivity at the hostname before creating a job
 
 	// Create a new worker job
 	job, worker := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType)
