@@ -303,8 +303,11 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 						if ok {
 							err := p.TerminateMachine(ctx, poolName, instanceId)
 							if err != nil {
-								log.Println("Unable to terminate machine: ", err)
+								log.Printf("Unable to terminate machine <%s>: %+v\n", machineId, err)
+								return
 							}
+
+							log.Printf("Terminated machine <%s> due to inactivity\n", machineId)
 						}
 
 						return
