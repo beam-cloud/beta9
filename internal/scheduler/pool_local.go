@@ -22,6 +22,7 @@ import (
 // A "local" k8s worker pool controller means
 // the pool is local to the control plane / in-cluser
 type LocalKubernetesWorkerPoolController struct {
+	ctx        context.Context
 	name       string
 	config     types.AppConfig
 	kubeClient *kubernetes.Clientset
@@ -29,7 +30,7 @@ type LocalKubernetesWorkerPoolController struct {
 	workerRepo repository.WorkerRepository
 }
 
-func NewLocalKubernetesWorkerPoolController(config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository) (WorkerPoolController, error) {
+func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository) (WorkerPoolController, error) {
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -42,6 +43,7 @@ func NewLocalKubernetesWorkerPoolController(config types.AppConfig, workerPoolNa
 
 	workerPool, _ := config.Worker.Pools[workerPoolName]
 	wpc := &LocalKubernetesWorkerPoolController{
+		ctx:        ctx,
 		name:       workerPoolName,
 		config:     config,
 		kubeClient: kubeClient,

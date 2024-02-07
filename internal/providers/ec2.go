@@ -116,9 +116,8 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 	return selectedInstance, nil
 }
 
-func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId string, compute types.ProviderComputeRequest) (string, error) {
-	// NOTE: CPU cores -> millicores, memory -> megabytes
-	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Cpu, compute.Gpu)
+func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, token string, compute types.ProviderComputeRequest) (string, error) {
+	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Memory, compute.Gpu) // NOTE: CPU cores -> millicores, memory -> megabytes
 	if err != nil {
 		return "", err
 	}
@@ -128,17 +127,12 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId s
 		return "", err
 	}
 
-	// TODO: remove once we sort out connection issues
-	roleArn := "arn:aws:iam::187248174200:instance-profile/beta-dev-k3s-instance-profile"
-
 	machineId := MachineId()
 	populatedUserData, err := populateUserData(userDataConfig{
-		AuthKey:     p.appConfig.Tailscale.AuthKey,
-		ControlURL:  p.appConfig.Tailscale.ControlURL,
-		GatewayHost: gatewayHost,
-
-		// TODO: replace with single-use token
-		Beta9Token:        "Bx8jqWPrCOS3BAx3VYA4hDBqjxPJkavagIFTm0mbJBgskMxKid_ZpU-DWjWXDHuQla3XQxlkKwkG1Iygs4klQA==",
+		AuthKey:           p.appConfig.Tailscale.AuthKey,
+		ControlURL:        p.appConfig.Tailscale.ControlURL,
+		GatewayHost:       gatewayHost,
+		Beta9Token:        token,
 		K3sVersion:        k3sVersion,
 		DisableComponents: []string{"traefik"},
 		MachineId:         machineId,
@@ -152,13 +146,12 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId s
 	log.Printf("Selected instance type <%s> for compute request: %+v\n", instanceType, compute)
 	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
 	input := &ec2.RunInstancesInput{
-		ImageId:            aws.String(p.providerConfig.AMI),
-		InstanceType:       awsTypes.InstanceType(instanceType),
-		MinCount:           aws.Int32(1),
-		MaxCount:           aws.Int32(1),
-		UserData:           aws.String(encodedUserData),
-		SubnetId:           p.providerConfig.SubnetId,
-		IamInstanceProfile: &awsTypes.IamInstanceProfileSpecification{Arn: &roleArn},
+		ImageId:      aws.String(p.providerConfig.AMI),
+		InstanceType: awsTypes.InstanceType(instanceType),
+		MinCount:     aws.Int32(1),
+		MaxCount:     aws.Int32(1),
+		UserData:     aws.String(encodedUserData),
+		SubnetId:     p.providerConfig.SubnetId,
 	}
 
 	result, err := p.client.RunInstances(ctx, input)
@@ -217,7 +210,6 @@ func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, instanceId
 
 	_, err := p.client.TerminateInstances(ctx, input)
 	if err != nil {
-		log.Printf("Error terminating EC2 instance<%s>: %v", instanceId, err)
 		return err
 	}
 
@@ -292,6 +284,7 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 
 					machine, err := p.providerRepo.GetMachine(string(types.ProviderEC2), poolName, machineId)
 					if err != nil {
+						p.removeMachine(ctx, poolName, machineId, instanceId)
 						return
 					}
 
@@ -301,13 +294,8 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 						_, ok := err.(*types.ErrWorkerNotFound)
 
 						if ok {
-							err := p.TerminateMachine(ctx, poolName, instanceId)
-							if err != nil {
-								log.Printf("Unable to terminate machine <machineId: %s>: %+v\n", machineId, err)
-								return
-							}
-
-							log.Printf("Terminated machine <machineId: %s> due to inactivity\n", machineId)
+							p.removeMachine(ctx, poolName, machineId, instanceId)
+							return
 						}
 
 						return
@@ -316,6 +304,17 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 			}
 		}
 	}
+}
+
+func (p *EC2Provider) removeMachine(ctx context.Context, poolName, machineId, instanceId string) {
+	err := p.TerminateMachine(ctx, poolName, instanceId)
+	if err != nil {
+		log.Printf("Unable to terminate machine <machineId: %s>: %+v\n", machineId, err)
+		return
+	}
+
+	log.Printf("Terminated machine <machineId: %s> due to inactivity\n", machineId)
+	return
 }
 
 type userDataConfig struct {

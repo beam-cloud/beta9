@@ -64,8 +64,14 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	metricsRepo := repository.NewMetricsPrometheusRepository(config.Metrics.Prometheus)
+	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
+	if err != nil {
+		return nil, err
+	}
 
-	scheduler, err := scheduler.NewScheduler(config, redisClient, metricsRepo)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, metricsRepo, backendRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -75,18 +81,12 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	gateway := &Gateway{
 		redisClient: redisClient,
 		ctx:         ctx,
 		cancelFunc:  cancel,
 		Storage:     storage,
 		Scheduler:   scheduler,
-	}
-
-	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
-	if err != nil {
-		return nil, err
 	}
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)

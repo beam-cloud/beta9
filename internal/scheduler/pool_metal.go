@@ -23,9 +23,11 @@ import (
 )
 
 type MetalWorkerPoolController struct {
+	ctx            context.Context
 	name           string
 	config         types.AppConfig
 	provider       providers.Provider
+	backendRepo    repository.BackendRepository
 	workerPool     types.WorkerPoolConfig
 	workerRepo     repository.WorkerRepository
 	workerPoolRepo repository.WorkerPoolRepository
@@ -35,8 +37,10 @@ type MetalWorkerPoolController struct {
 }
 
 func NewMetalWorkerPoolController(
+	ctx context.Context,
 	config types.AppConfig,
 	workerPoolName string,
+	backendRepo repository.BackendRepository,
 	workerRepo repository.WorkerRepository,
 	workerPoolRepo repository.WorkerPoolRepository,
 	providerRepo repository.ProviderRepository,
@@ -57,9 +61,11 @@ func NewMetalWorkerPoolController(
 
 	workerPool, _ := config.Worker.Pools[workerPoolName]
 	wpc := &MetalWorkerPoolController{
+		ctx:            ctx,
 		name:           workerPoolName,
 		config:         config,
 		workerPool:     workerPool,
+		backendRepo:    backendRepo,
 		workerRepo:     workerRepo,
 		workerPoolRepo: workerPoolRepo,
 		providerName:   providerName,
@@ -83,7 +89,12 @@ func NewMetalWorkerPoolController(
 func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
-	machineId, err := wpc.provider.ProvisionMachine(context.TODO(), wpc.name, workerId, types.ProviderComputeRequest{
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, false)
+	if err != nil {
+		return nil, err
+	}
+
+	machineId, err := wpc.provider.ProvisionMachine(wpc.ctx, wpc.name, workerId, token.Key, types.ProviderComputeRequest{
 		Cpu:    cpu,
 		Memory: memory,
 		Gpu:    gpuType,
@@ -101,8 +112,8 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	log.Printf("Waiting for machine registration <machineId: %s>\n", machineId)
 	state, err := wpc.providerRepo.WaitForMachineRegistration(string(*wpc.providerName), wpc.name, machineId)
 	if err != nil {
-		log.Printf("Machine not registered within timeout, terminating <machineId: %s>: %s", machineId, err)
-		return nil, wpc.provider.TerminateMachine(context.TODO(), wpc.name, machineId)
+		log.Printf("Machine not registered within timeout <machineId: %s>: %s", machineId, err)
+		return nil, err
 	}
 
 	log.Printf("Machine registered <machineId: %s>, hostname: %s\n", machineId, state.HostName)
@@ -117,7 +128,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	worker.MachineId = machineId
 
 	// Create the job in the cluster
-	_, err = client.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(context.Background(), job, metav1.CreateOptions{})
+	_, err = client.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(wpc.ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		return nil, err
 	}

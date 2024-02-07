@@ -1,12 +1,14 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
 	"log"
 	"sort"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/repository"
 	repo "github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 )
@@ -16,6 +18,8 @@ const (
 )
 
 type Scheduler struct {
+	ctx               context.Context
+	backendRepo       repo.BackendRepository
 	workerRepo        repo.WorkerRepository
 	workerPoolManager *WorkerPoolManager
 	requestBacklog    *RequestBacklog
@@ -24,7 +28,7 @@ type Scheduler struct {
 	eventBus          *common.EventBus
 }
 
-func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.PrometheusRepository) (*Scheduler, error) {
+func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.PrometheusRepository, backendRepo repository.BackendRepository) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
@@ -43,9 +47,9 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metri
 
 		switch pool.Mode {
 		case types.PoolModeLocal:
-			controller, err = NewLocalKubernetesWorkerPoolController(config, name, workerRepo)
+			controller, err = NewLocalKubernetesWorkerPoolController(ctx, config, name, workerRepo)
 		case types.PoolModeMetal:
-			controller, err = NewMetalWorkerPoolController(config, name, workerRepo, workerPoolRepo, providerRepo, tailscaleRepo, pool.Provider)
+			controller, err = NewMetalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, workerPoolRepo, providerRepo, tailscaleRepo, pool.Provider)
 		default:
 			log.Printf("no valid controller found for pool<%s> with mode: %s\n", name, pool.Mode)
 			continue
@@ -60,7 +64,9 @@ func NewScheduler(config types.AppConfig, redisClient *common.RedisClient, metri
 	}
 
 	return &Scheduler{
+		ctx:               ctx,
 		eventBus:          eventBus,
+		backendRepo:       backendRepo,
 		workerRepo:        workerRepo,
 		workerPoolManager: workerPoolManager,
 		requestBacklog:    requestBacklog,

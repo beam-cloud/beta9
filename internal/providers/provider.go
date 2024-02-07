@@ -9,7 +9,7 @@ import (
 
 type Provider interface {
 	ListMachines(ctx context.Context, poolName string) (map[string]string, error)
-	ProvisionMachine(ctx context.Context, poolName, workerId string, compute types.ProviderComputeRequest) (string, error)
+	ProvisionMachine(ctx context.Context, poolName, workerId, token string, compute types.ProviderComputeRequest) (string, error)
 	TerminateMachine(ctx context.Context, poolName, machineId string) error
 	Reconcile(ctx context.Context, poolName string)
 }
