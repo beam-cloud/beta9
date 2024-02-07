@@ -58,6 +58,16 @@ worker:
     default:
       jobSpec:
         nodeSelector: {}
+        env:
+        - name: CONFIG_PATH
+          value: /etc/beta9/.config.yaml
+        volumes:
+        - name: config
+          secret:
+            secretName: beta9-config
+        volumeMounts:
+        - mountPath: /etc/beta9
+          name: config
       poolSizing:
         defaultWorkerCpu: 1000m
         defaultWorkerGpuType: ""
