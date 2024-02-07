@@ -101,7 +101,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	log.Printf("Waiting for machine registration <machineId: %s>\n", machineId)
 	state, err := wpc.providerRepo.WaitForMachineRegistration(string(*wpc.providerName), wpc.name, machineId)
 	if err != nil {
-		log.Println("Machine not registered, terminating machine: ", err)
+		log.Printf("Machine not registered within timeout, terminating <machineId: %s>: %s", machineId, err)
 		return nil, wpc.provider.TerminateMachine(context.TODO(), wpc.name, machineId)
 	}
 

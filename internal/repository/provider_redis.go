@@ -101,9 +101,14 @@ func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machin
 }
 
 func (r *ProviderRedisRepository) SetMachineLock(providerName, poolName, machineId string) error {
-	return r.rdb.Set(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), true, 5*time.Minute).Err()
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), common.RedisLockOptions{TtlS: 300, Retries: 0})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *ProviderRedisRepository) RemoveMachineLock(providerName, poolName, machineId string) error {
-	return r.rdb.Del(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId)).Err()
+	return r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
 }
