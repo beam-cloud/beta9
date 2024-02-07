@@ -101,10 +101,11 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	log.Printf("Waiting for machine registration <machineId: %s>\n", machineId)
 	state, err := wpc.providerRepo.WaitForMachineRegistration(string(*wpc.providerName), wpc.name, machineId)
 	if err != nil {
-		return nil, err
+		log.Println("Machine not registered, terminating machine: ", err)
+		return nil, wpc.provider.TerminateMachine(context.TODO(), wpc.name, machineId)
 	}
-	log.Printf("Machine registered <machineId: %s>, hostname: %s\n", machineId, state.HostName)
 
+	log.Printf("Machine registered <machineId: %s>, hostname: %s\n", machineId, state.HostName)
 	client, err := wpc.getProxiedClient(state.HostName, state.Token)
 	if err != nil {
 		return nil, err
@@ -126,8 +127,6 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 		log.Printf("Unable to create worker: %+v\n", err)
 		return nil, err
 	}
-
-	// TODO: if anything at all fails after machine creation, terminate machine immediately (deprovision)
 
 	return worker, nil
 }
