@@ -1,4 +1,3 @@
-import asyncio
 import os
 import signal
 
@@ -15,8 +14,7 @@ class EndpointManager:
         self.exit_code: int = 0
         self.app = FastAPI()
         self.handler = load_handler().func  # The function exists under the decorator
-        self.context = {"loader": "something"}
-        self.request_mutex = asyncio.Lock()
+        self.context = {"loader": "something"}  # TODO: implement context loader
         signal.signal(signal.SIGTERM, self.shutdown)
 
         # Attach context
@@ -47,5 +45,4 @@ if __name__ == "__main__":
         workers=int(os.getenv("WORKERS", 1)),
     )
     server = Server(config)
-    print(f"Starting server on {config.host}:{config.port}")
     server.run()

@@ -1,15 +1,12 @@
-import json
 import os
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Callable, Union
 
 from beta9 import terminal
 from beta9.abstractions.base.runner import (
     ENDPOINT_DEPLOYMENT_STUB_TYPE,
-    WEBSERVER_STUB_TYPE,
     RunnerAbstraction,
 )
 from beta9.abstractions.image import Image
-from beta9.clients.endpoint import EndpointRequestRequest, EndpointServiceStub
 from beta9.clients.gateway import DeployStubResponse
 from beta9.config import GatewayConfig, get_gateway_config
 
@@ -41,8 +38,6 @@ class Endpoint(RunnerAbstraction):
             max_pending_tasks=max_pending_tasks,
         )
 
-        self.endpoint_stub = EndpointServiceStub(self.channel)
-
     def __call__(self, func):
         return _CallableWrapper(func, self)
 
@@ -61,33 +56,6 @@ class _CallableWrapper:
             "Direct calls to TaskQueues are not yet supported."
             + " To enqueue items use .put(*args, **kwargs)"
         )
-
-    def request(
-        self, method: str = "GET", path="/", headers: Dict[str, List[str]] = {}, payload: dict = {}
-    ) -> Any:
-        if not self.parent.prepare_runtime(
-            func=self.func,
-            stub_type=WEBSERVER_STUB_TYPE,
-        ):
-            return False
-
-        headers_bytes = json.dumps(headers).encode("utf-8")
-        payload_bytes = json.dumps(payload).encode("utf-8")
-
-        r: EndpointRequestRequest = self.parent.run_sync(
-            self.parent.endpoint_stub.endpoint_request(
-                stub_id=self.parent.stub_id,
-                method=method,
-                headers=headers_bytes,
-                payload=payload_bytes,
-            )
-        )
-
-        print(r)
-
-        if not r.ok:
-            terminal.error("Failed to enqueue task")
-            return False
 
     def deploy(self, name: str) -> bool:
         if not self.parent.prepare_runtime(
