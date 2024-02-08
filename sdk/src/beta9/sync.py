@@ -112,8 +112,6 @@ class FileSyncer:
             size = len(object_content)
             hash = hashlib.sha256(object_content).hexdigest()
 
-        print(f"Hash: {hash}")
-
         head_response: HeadObjectResponse = self.loop.run_until_complete(
             self.gateway_stub.head_object(hash=hash)
         )
