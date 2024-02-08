@@ -1,0 +1,9 @@
+---
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+generators:
+- victoria-metrics.yaml
+- grafana.yaml
+- fluent-bit.yaml
+- secret-generator.yaml

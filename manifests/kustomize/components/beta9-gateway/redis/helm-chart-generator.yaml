@@ -1,0 +1,24 @@
+---
+apiVersion: builtin
+kind: HelmChartInflationGenerator
+metadata:
+  name: &name redis
+releaseName: *name
+name: redis
+repo: https://charts.bitnami.com/bitnami
+version: 18.9.1
+namespace: beta9
+includeCRDs: true
+skipTests: true
+valuesInline:
+  nameOverride: *name
+  fullnameOverride: *name
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    configuration: |
+      activedefrag yes
+      notify-keyspace-events AKE
+    persistence:
+      size: 1Gi
