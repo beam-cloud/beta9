@@ -173,6 +173,7 @@ const (
 	StubTypeTaskQueue           string = "taskqueue"
 	StubTypeTaskQueueDeployment string = "taskqueue/deployment"
 	StubTypeEndpoint            string = "endpoint"
+	StubTypeEndpointDeployment  string = "endpoint/deployment"
 )
 
 type Stub struct {

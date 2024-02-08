@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"time"
@@ -32,7 +33,6 @@ type RingBufferEndpointService struct {
 	backendRepo       repository.BackendRepository
 	containerRepo     repository.ContainerRepository
 	endpointInstances *common.SafeMap[*endpointInstance]
-	client            *RingBufferEndpointClient
 }
 
 var (
@@ -41,8 +41,9 @@ var (
 )
 
 var RingBufferSize int = 10000000
+var RequestTimeout = 120 * time.Second
 
-func NewEndpointService(
+func NewRingBufferEndpointService(
 	ctx context.Context,
 	rdb *common.RedisClient,
 	scheduler *scheduler.Scheduler,
@@ -61,24 +62,23 @@ func NewEndpointService(
 
 	containerRepo := repository.NewContainerRedisRepository(rdb)
 
-	ws := &RingBufferEndpointService{
+	es := &RingBufferEndpointService{
 		ctx:               ctx,
 		rdb:               rdb,
 		scheduler:         scheduler,
 		backendRepo:       backendRepo,
 		containerRepo:     containerRepo,
 		endpointInstances: common.NewSafeMap[*endpointInstance](),
-		client:            NewRingBufferEndpointClient(RingBufferSize, containerRepo),
 	}
 
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(backendRepo)
-	registerWebServerRoutes(baseRouteGroup.Group(endpointRoutePrefix, authMiddleware), ws)
+	registerEndpointRoutes(baseRouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
 
-	return ws, nil
+	return es, nil
 }
 
-func (ws *RingBufferEndpointService) EndpointRequest(ctx context.Context, in *pb.EndpointRequestRequest) (*pb.EndpointRequestResponse, error) {
+func (es *RingBufferEndpointService) EndpointRequest(ctx context.Context, in *pb.EndpointRequestRequest) (*pb.EndpointRequestResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	log.Println(authInfo)
 
@@ -98,14 +98,7 @@ func (ws *RingBufferEndpointService) EndpointRequest(ctx context.Context, in *pb
 		}
 	}
 
-	requestData := RequestData{
-		ctx:     ctx,
-		Method:  in.Method,
-		Headers: headers,
-		Body:    bodyReader,
-	}
-
-	response, err := ws.forwardRequest(ctx, in.StubId, requestData)
+	response, err := es.forwardRequest(ctx, in.StubId, in.Method, headers, bodyReader)
 
 	return &pb.EndpointRequestResponse{
 		Ok:       err == nil,
@@ -113,48 +106,56 @@ func (ws *RingBufferEndpointService) EndpointRequest(ctx context.Context, in *pb
 	}, nil
 }
 
-func (ws *RingBufferEndpointService) forwardRequest(ctx context.Context, stubId string, requestData RequestData) ([]byte, error) {
+func (es *RingBufferEndpointService) forwardRequest(
+	ctx context.Context,
+	stubId string,
+	method string,
+	headers map[string][]string,
+	bodyReader io.ReadCloser,
+) ([]byte, error) {
 	// Forward request to endpoint
-	endpoint, exists := ws.endpointInstances.Get(stubId)
+	instances, exists := es.endpointInstances.Get(stubId)
 
 	if !exists {
-		err := ws.createEndpointInstance(stubId)
+		err := es.createEndpointInstance(stubId)
 		if err != nil {
 			return []byte{}, err
 		}
 
-		endpoint, _ = ws.endpointInstances.Get(stubId)
+		instances, _ = es.endpointInstances.Get(stubId)
 	}
 
-	requestData.stubId = endpoint.stub.ExternalId
+	requestCtx, cancel := context.WithTimeout(ctx, RequestTimeout)
+	defer cancel()
+
+	requestData := RequestData{
+		ctx:     requestCtx,
+		Method:  method,
+		Headers: headers,
+		Body:    bodyReader,
+	}
 
 	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
-	err := json.Unmarshal([]byte(endpoint.stub.Config), &stubConfig)
+	err := json.Unmarshal([]byte(instances.stub.Config), &stubConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := ws.client.ForwardRequest(requestData)
+	resp, err := instances.buffer.ForwardRequest(requestData)
 	if err != nil {
 		return resp, err
-	}
-
-	// Set a keep warm lock for the container
-	err = ws.rdb.SetEx(context.TODO(), Keys.endpointKeepWarmLock(endpoint.workspace.Name, endpoint.stub.ExternalId, requestData.stubId), 1, time.Duration(stubConfig.KeepWarmSeconds)*time.Second).Err()
-	if err != nil {
-		return []byte{}, nil
 	}
 
 	return resp, nil
 }
 
-func (ws *RingBufferEndpointService) createEndpointInstance(stubId string) error {
-	_, exists := ws.endpointInstances.Get(stubId)
+func (es *RingBufferEndpointService) createEndpointInstance(stubId string) error {
+	_, exists := es.endpointInstances.Get(stubId)
 	if exists {
 		return errors.New("endpoint already in memory")
 	}
 
-	stub, err := ws.backendRepo.GetStubByExternalId(ws.ctx, stubId)
+	stub, err := es.backendRepo.GetStubByExternalId(es.ctx, stubId)
 	if err != nil {
 		return errors.New("invalid stub id")
 	}
@@ -165,14 +166,15 @@ func (ws *RingBufferEndpointService) createEndpointInstance(stubId string) error
 		return err
 	}
 
-	token, err := ws.backendRepo.RetrieveActiveToken(ws.ctx, stub.Workspace.Id)
+	token, err := es.backendRepo.RetrieveActiveToken(es.ctx, stub.Workspace.Id)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancelFunc := context.WithCancel(ws.ctx)
-	lock := common.NewRedisLock(ws.rdb)
-	endpoint := &endpointInstance{
+	ctx, cancelFunc := context.WithCancel(es.ctx)
+	lock := common.NewRedisLock(es.rdb)
+
+	instance := &endpointInstance{
 		ctx:                ctx,
 		cancelFunc:         cancelFunc,
 		lock:               lock,
@@ -182,26 +184,27 @@ func (ws *RingBufferEndpointService) createEndpointInstance(stubId string) error
 		object:             &stub.Object,
 		token:              token,
 		stubConfig:         stubConfig,
-		scheduler:          ws.scheduler,
-		containerRepo:      ws.containerRepo,
+		scheduler:          es.scheduler,
+		containerRepo:      es.containerRepo,
 		containerEventChan: make(chan types.ContainerEvent, 1),
-		containers:         make(map[string]bool),
+		containers:         make(map[string]*ContainerDetails),
 		scaleEventChan:     make(chan int, 1),
-		rdb:                ws.rdb,
-		// client:             ws.queueClient,
+		rdb:                es.rdb,
 	}
 
-	autoscaler := newAutoscaler(endpoint)
-	endpoint.autoscaler = autoscaler
+	instance.buffer = NewRequestBuffer(es.rdb, &stub.Workspace, stubId, RingBufferSize, &instance.containers, es.containerRepo)
+	autoscaler := newAutoscaler(instance)
+	instance.autoscaler = autoscaler
 
-	ws.endpointInstances.Set(stubId, endpoint)
-	go endpoint.monitor()
+	es.endpointInstances.Set(stubId, instance)
+	go instance.monitor()
+	go instance.buffer.ProcessRequests()
 
 	// Clean up the queue instance once it's done
 	go func(q *endpointInstance) {
 		<-q.ctx.Done()
-		ws.endpointInstances.Delete(stubId)
-	}(endpoint)
+		es.endpointInstances.Delete(stubId)
+	}(instance)
 
 	return nil
 }
@@ -211,8 +214,9 @@ var Keys = &keys{}
 type keys struct{}
 
 var (
-	endpointKeepWarmLock string = "endpoint:%s:%s:keep_warm_lock:%s"
-	endpointInstanceLock string = "endpoint:%s:%s:instance_lock"
+	endpointKeepWarmLock               string = "endpoint:%s:%s:keep_warm_lock:%s"
+	endpointInstanceLock               string = "endpoint:%s:%s:instance_lock"
+	endpointBufferRequestsInflightLock string = "endpoint:%s:%s:requests_inflight_lock:%s"
 )
 
 func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) string {
@@ -221,4 +225,8 @@ func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) s
 
 func (k *keys) endpointInstanceLock(workspaceName, stubId string) string {
 	return fmt.Sprintf(endpointInstanceLock, workspaceName, stubId)
+}
+
+func (k *keys) endpointBufferRequestsInflightLock(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(endpointBufferRequestsInflightLock, workspaceName, stubId, containerId)
 }

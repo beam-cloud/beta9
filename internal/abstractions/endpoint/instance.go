@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"path"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -23,6 +24,15 @@ type endpointState struct {
 	FailedContainers   int
 }
 
+type ContainerDetails struct {
+	id    string
+	mutex *sync.Mutex
+	ready bool
+
+	Address            string
+	ActiveRequestCount int
+}
+
 type endpointInstance struct {
 	ctx                context.Context
 	cancelFunc         context.CancelFunc
@@ -35,12 +45,12 @@ type endpointInstance struct {
 	lock               *common.RedisLock
 	scheduler          *scheduler.Scheduler
 	containerEventChan chan types.ContainerEvent
-	containers         map[string]bool
+	containers         map[string]*ContainerDetails
 	scaleEventChan     chan int
 	rdb                *common.RedisClient
 	containerRepo      repository.ContainerRepository
 	autoscaler         *autoscaler
-	buffer             *RingBuffer
+	buffer             *RequestBuffer
 }
 
 func (i *endpointInstance) monitor() error {
@@ -58,7 +68,11 @@ func (i *endpointInstance) monitor() error {
 			_, exists := i.containers[containerEvent.ContainerId]
 			switch {
 			case !exists && containerEvent.Change == 1: // Container created and doesn't exist in map
-				i.containers[containerEvent.ContainerId] = true
+				i.containers[containerEvent.ContainerId] = &ContainerDetails{
+					id:    containerEvent.ContainerId,
+					mutex: &sync.Mutex{},
+					ready: false,
+				}
 			case exists && containerEvent.Change == -1: // Container removed and exists in map
 				delete(i.containers, containerEvent.ContainerId)
 			}
@@ -200,7 +214,7 @@ func (i *endpointInstance) stopContainers(containersToStop int) error {
 }
 
 func (i *endpointInstance) stoppableContainers() ([]string, error) {
-	patternPrefix := fmt.Sprintf("%s%s-*", endpointContainerPrefix, i.stub.ExternalId)
+	patternPrefix := fmt.Sprintf("%s-%s-*", endpointContainerPrefix, "*")
 	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
 	if err != nil {
 		return nil, err
@@ -232,5 +246,5 @@ func (i *endpointInstance) stoppableContainers() ([]string, error) {
 }
 
 func (i *endpointInstance) genContainerId() string {
-	return fmt.Sprintf("%s%s-%s", endpointContainerPrefix, i.stub.ExternalId, uuid.New().String()[:8])
+	return fmt.Sprintf("%s-%s-%s", endpointContainerPrefix, i.stub.ExternalId, uuid.New().String()[:8])
 }

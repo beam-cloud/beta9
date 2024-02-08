@@ -12,6 +12,7 @@ FUNCTION_STUB_TYPE = "function"
 TASKQUEUE_STUB_TYPE = "taskqueue"
 WEBSERVER_STUB_TYPE = "endpoint"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
+ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
 
 
@@ -136,6 +137,7 @@ class RunnerAbstraction(BaseAbstraction):
             if sync_result.success:
                 self.files_synced = True
                 self.object_id = sync_result.object_id
+                print(f"Object ID: {self.object_id}")
             else:
                 return False
 

@@ -28,6 +28,7 @@ click = "^8.1.7"
 betterproto = {version = "^1.2.5", extras = ["compiler"]}
 protobuf = "^4.25.1"
 fastapi = "^0.109.0"
+uvicorn = "^0.27.0.post1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.4"

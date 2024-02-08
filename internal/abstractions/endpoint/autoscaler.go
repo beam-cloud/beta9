@@ -8,10 +8,6 @@ import (
 	rolling "github.com/asecurityteam/rolling"
 )
 
-const (
-	autoScalingModeQueueDepth int = -1
-)
-
 type autoscaler struct {
 	instance         *endpointInstance
 	autoscalingMode  int
@@ -20,16 +16,13 @@ type autoscaler struct {
 }
 
 type autoscalingWindows struct {
-	QueueLength       *rolling.PointPolicy
-	RunningTasks      *rolling.PointPolicy
+	TotalRequests     *rolling.PointPolicy
 	CurrentContainers *rolling.PointPolicy
 }
 
 type autoscalerSample struct {
-	QueueLength       int64
-	RunningTasks      int64
-	CurrentContainers int
-	TaskDuration      float64
+	TotalRequests     int64
+	CurrentContainers int64
 }
 
 type autoscaleResult struct {
@@ -45,16 +38,16 @@ const (
 
 // Create a new autoscaler
 func newAutoscaler(i *endpointInstance) *autoscaler {
-	var autoscalingMode = autoScalingModeQueueDepth
+	var autoscalingMode = -1
 
 	return &autoscaler{
-		instance:        i,
-		autoscalingMode: autoscalingMode,
+		instance:         i,
+		autoscalingMode:  autoscalingMode,
+		mostRecentSample: nil,
 		samples: &autoscalingWindows{
-			QueueLength:       rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
+			TotalRequests:     rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
 			CurrentContainers: rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
 		},
-		mostRecentSample: nil,
 	}
 }
 
@@ -62,7 +55,7 @@ func newAutoscaler(i *endpointInstance) *autoscaler {
 func (as *autoscaler) sample() (*autoscalerSample, error) {
 	instance := as.instance
 
-	queueLength := instance.buffer.Len()
+	totalRequests := instance.buffer.Length()
 
 	currentContainers := 0
 	state, err := instance.state()
@@ -73,67 +66,24 @@ func (as *autoscaler) sample() (*autoscalerSample, error) {
 	currentContainers = state.PendingContainers + state.RunningContainers
 
 	sample := &autoscalerSample{
-		QueueLength:       int64(queueLength),
-		CurrentContainers: currentContainers,
+		TotalRequests:     int64(totalRequests),
+		CurrentContainers: int64(currentContainers),
 	}
+
 	// Cache most recent autoscaler sample so RequestBucket can access without hitting redis
 	as.mostRecentSample = sample
 
 	return sample, nil
 }
 
-// Start the autoscaler
-func (as *autoscaler) start(ctx context.Context) {
-	if as.autoscalingMode == -1 {
-		return
-	}
-
-	// Fill windows with -1 so we can avoid using those values in the scaling logic
-	for i := 0; i < windowSize; i += 1 {
-		as.samples.QueueLength.Append(-1)
-		as.samples.CurrentContainers.Append(-1)
-	}
-
-	ticker := time.NewTicker(sampleRate)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			sample, err := as.sample()
-			if err != nil {
-				continue
-			}
-
-			// Append samples to moving windows
-			as.samples.QueueLength.Append(float64(sample.QueueLength))
-			as.samples.CurrentContainers.Append(float64(sample.CurrentContainers))
-
-			var scaleResult *autoscaleResult = nil
-			switch as.autoscalingMode {
-			case autoScalingModeQueueDepth:
-				scaleResult = as.scaleByQueueDepth(sample)
-			default:
-			}
-
-			if scaleResult != nil && scaleResult.ResultValid {
-				as.instance.scaleEventChan <- scaleResult.DesiredContainers // Send autoscaling result to request bucket
-			}
-		}
-	}
-}
-
-// Scale based on the number of items in the queue
-func (as *autoscaler) scaleByQueueDepth(sample *autoscalerSample) *autoscaleResult {
+func (as *autoscaler) scaleByTotalRequests(sample *autoscalerSample) *autoscaleResult {
 	desiredContainers := 0
 
-	if sample.QueueLength == 0 {
+	if sample.TotalRequests == 0 {
 		desiredContainers = 0
 	} else {
-		desiredContainers = int(sample.QueueLength / int64(as.instance.stubConfig.Concurrency))
-		if sample.QueueLength%int64(as.instance.stubConfig.Concurrency) > 0 {
+		desiredContainers = int(sample.TotalRequests / int64(as.instance.stubConfig.Concurrency))
+		if sample.TotalRequests%int64(as.instance.stubConfig.Concurrency) > 0 {
 			desiredContainers += 1
 		}
 
@@ -145,5 +95,47 @@ func (as *autoscaler) scaleByQueueDepth(sample *autoscalerSample) *autoscaleResu
 	return &autoscaleResult{
 		DesiredContainers: desiredContainers,
 		ResultValid:       true,
+	}
+}
+
+// Start the autoscaler
+func (as *autoscaler) start(ctx context.Context) {
+	if as.autoscalingMode == -1 {
+		// Create at least 1
+		as.instance.scaleEventChan <- 1
+	}
+
+	ticker := time.NewTicker(sampleRate)
+	defer ticker.Stop()
+
+	// TODO: For the time being, we want to aggresively try to scale down
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// TODO: Update scaling
+			// log.Println("INSANCE")
+			if as.instance.buffer.Length() == 0 {
+				as.instance.scaleEventChan <- 0
+			}
+
+			// sample, err := as.sample()
+			// if err != nil {
+			// 	continue
+			// }
+
+			// // Append samples to moving windows
+			// as.samples.TotalRequests.Append(float64(sample.TotalRequests))
+			// as.samples.CurrentContainers.Append(float64(sample.CurrentContainers))
+
+			// var scaleResult *autoscaleResult = nil
+			// scaleResult = as.scaleByTotalRequests(sample)
+
+			// if scaleResult != nil && scaleResult.ResultValid {
+			// 	as.instance.scaleEventChan <- scaleResult.DesiredContainers // Send autoscaling result to request bucket
+			// }
+		}
 	}
 }

@@ -3,9 +3,15 @@ import os
 from typing import Any, Callable, Dict, List, Union
 
 from beta9 import terminal
-from beta9.abstractions.base.runner import WEBSERVER_STUB_TYPE, RunnerAbstraction
+from beta9.abstractions.base.runner import (
+    ENDPOINT_DEPLOYMENT_STUB_TYPE,
+    WEBSERVER_STUB_TYPE,
+    RunnerAbstraction,
+)
 from beta9.abstractions.image import Image
 from beta9.clients.endpoint import EndpointRequestRequest, EndpointServiceStub
+from beta9.clients.gateway import DeployStubResponse
+from beta9.config import GatewayConfig, get_gateway_config
 
 
 class Endpoint(RunnerAbstraction):
@@ -83,27 +89,24 @@ class _CallableWrapper:
             terminal.error("Failed to enqueue task")
             return False
 
-    # def local(self, *args, **kwargs) -> Any:
-    #     return self.func(*args, **kwargs)
+    def deploy(self, name: str) -> bool:
+        if not self.parent.prepare_runtime(
+            func=self.func, stub_type=ENDPOINT_DEPLOYMENT_STUB_TYPE, force_create_stub=True
+        ):
+            return False
 
-    # def deploy(self, name: str) -> bool:
-    #     if not self.parent.prepare_runtime(
-    #         func=self.func, stub_type=TASKQUEUE_DEPLOYMENT_STUB_TYPE, force_create_stub=True
-    #     ):
-    #         return False
+        terminal.header("Deploying endpoint")
+        deploy_response: DeployStubResponse = self.parent.run_sync(
+            self.parent.gateway_stub.deploy_stub(stub_id=self.parent.stub_id, name=name)
+        )
 
-    #     terminal.header("Deploying task queue")
-    #     deploy_response: DeployStubResponse = self.parent.run_sync(
-    #         self.parent.gateway_stub.deploy_stub(stub_id=self.parent.stub_id, name=name)
-    #     )
+        if deploy_response.ok:
+            gateway_config: GatewayConfig = get_gateway_config()
+            gateway_url = f"{gateway_config.gateway_host}:{gateway_config.gateway_port}"
 
-    #     if deploy_response.ok:
-    #         gateway_config: GatewayConfig = get_gateway_config()
-    #         gateway_url = f"{gateway_config.gateway_host}:{gateway_config.gateway_port}"
+            terminal.header("Deployed 🎉")
+            terminal.detail(
+                f"Call your deployment at: {gateway_url}/api/v1/endpoint/{name}/v{deploy_response.version}"
+            )
 
-    #         terminal.header("Deployed 🎉")
-    #         terminal.detail(
-    #             f"Call your deployment at: {gateway_url}/api/v1/taskqueue/{name}/v{deploy_response.version}"
-    #         )
-
-    #     return deploy_response.ok
+        return deploy_response.ok

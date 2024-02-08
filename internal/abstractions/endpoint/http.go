@@ -1,28 +1,52 @@
 package endpoint
 
 import (
-	"log"
 	"net/http"
+	"strconv"
 
+	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/labstack/echo/v4"
 )
 
 type endpointGroup struct {
 	routerGroup *echo.Group
-	ws          *RingBufferEndpointService
+	es          *RingBufferEndpointService
 }
 
-func registerWebServerRoutes(g *echo.Group, ws *RingBufferEndpointService) *endpointGroup {
-	group := &endpointGroup{routerGroup: g, ws: ws}
+func registerEndpointRoutes(g *echo.Group, es *RingBufferEndpointService) *endpointGroup {
+	group := &endpointGroup{routerGroup: g, es: es}
 
-	g.GET("/id/:stubId/", group.webServerRequest)
-	// g.POST("/:deploymentName/v:version", group.webServerPut)
+	g.GET("/id/:stubId/", group.endpointRequest)
+	g.POST("/:deploymentName/v:version", group.endpointRequest)
 
 	return group
 }
 
-func (g *endpointGroup) webServerRequest(ctx echo.Context) error {
+func (g *endpointGroup) endpointRequest(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	stubId := ctx.Param("stubId")
+	deploymentName := ctx.Param("deploymentName")
+	version := ctx.Param("version")
+
+	if deploymentName != "" && version != "" {
+		version, err := strconv.Atoi(version)
+		if err != nil {
+			return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error": "invalid deployment version",
+			})
+		}
+
+		deployment, err := g.es.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), types.StubTypeEndpointDeployment)
+		if err != nil {
+			return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error": "invalid deployment",
+			})
+		}
+
+		stubId = deployment.Stub.ExternalId
+	}
 
 	var payload interface{}
 
@@ -32,17 +56,7 @@ func (g *endpointGroup) webServerRequest(ctx echo.Context) error {
 		})
 	}
 
-	requestData := RequestData{
-		ctx:     ctx.Request().Context(),
-		stubId:  stubId,
-		Method:  ctx.Request().Method,
-		Headers: ctx.Request().Header,
-		Body:    ctx.Request().Body,
-	}
-
-	log.Println(requestData)
-
-	resp, err := g.ws.forwardRequest(ctx.Request().Context(), stubId, requestData)
+	resp, err := g.es.forwardRequest(ctx.Request().Context(), stubId, ctx.Request().Method, ctx.Request().Header, ctx.Request().Body)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": err.Error(),

@@ -169,6 +169,10 @@ func (cr *ContainerRedisRepository) SetContainerAddress(containerId string, addr
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerHost(containerId), addr, 0).Err()
 }
 
+func (cr *ContainerRedisRepository) GetContainerAddress(containerId string) (string, error) {
+	return cr.rdb.Get(context.TODO(), common.RedisKeys.SchedulerContainerHost(containerId)).Result()
+}
+
 func (cr *ContainerRedisRepository) SetContainerWorkerHostname(containerId string, addr string) error {
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerContainerHost(containerId), addr, 0).Err()
 }
