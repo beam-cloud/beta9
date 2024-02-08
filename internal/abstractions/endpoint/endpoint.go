@@ -1,14 +1,10 @@
 package endpoint
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/ioutil"
-	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/auth"
@@ -78,75 +74,29 @@ func NewRingBufferEndpointService(
 	return es, nil
 }
 
-func (es *RingBufferEndpointService) EndpointRequest(ctx context.Context, in *pb.EndpointRequestRequest) (*pb.EndpointRequestResponse, error) {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	log.Println(authInfo)
-
-	// Forward request to endpoint
-	payloadReader := bytes.NewReader(in.Payload)
-	bodyReader := ioutil.NopCloser(payloadReader)
-
-	var headers map[string][]string
-
-	if in.Headers != nil {
-		err := json.Unmarshal(in.Headers, &headers)
-		if err != nil {
-			return &pb.EndpointRequestResponse{
-				Response: []byte{},
-				Ok:       false,
-			}, err
-		}
-	}
-
-	response, err := es.forwardRequest(ctx, in.StubId, in.Method, headers, bodyReader)
-
-	return &pb.EndpointRequestResponse{
-		Ok:       err == nil,
-		Response: response,
-	}, nil
-}
-
 func (es *RingBufferEndpointService) forwardRequest(
-	ctx context.Context,
+	ctx echo.Context,
 	stubId string,
-	method string,
-	headers map[string][]string,
-	bodyReader io.ReadCloser,
-) ([]byte, error) {
+) error {
 	// Forward request to endpoint
 	instances, exists := es.endpointInstances.Get(stubId)
 
 	if !exists {
 		err := es.createEndpointInstance(stubId)
 		if err != nil {
-			return []byte{}, err
+			return err
 		}
 
 		instances, _ = es.endpointInstances.Get(stubId)
 	}
 
-	requestCtx, cancel := context.WithTimeout(ctx, RequestTimeout)
-	defer cancel()
-
-	requestData := RequestData{
-		ctx:     requestCtx,
-		Method:  method,
-		Headers: headers,
-		Body:    bodyReader,
-	}
-
 	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
 	err := json.Unmarshal([]byte(instances.stub.Config), &stubConfig)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	resp, err := instances.buffer.ForwardRequest(requestData)
-	if err != nil {
-		return resp, err
-	}
-
-	return resp, nil
+	return instances.buffer.ForwardRequest(ctx)
 }
 
 func (es *RingBufferEndpointService) createEndpointInstance(stubId string) error {
@@ -192,13 +142,12 @@ func (es *RingBufferEndpointService) createEndpointInstance(stubId string) error
 		rdb:                es.rdb,
 	}
 
-	instance.buffer = NewRequestBuffer(es.rdb, &stub.Workspace, stubId, RingBufferSize, &instance.containers, es.containerRepo)
+	instance.buffer = NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, RingBufferSize, &instance.containers, es.containerRepo)
 	autoscaler := newAutoscaler(instance)
 	instance.autoscaler = autoscaler
 
 	es.endpointInstances.Set(stubId, instance)
 	go instance.monitor()
-	go instance.buffer.ProcessRequests()
 
 	// Clean up the queue instance once it's done
 	go func(q *endpointInstance) {

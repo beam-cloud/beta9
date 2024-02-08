@@ -56,12 +56,5 @@ func (g *endpointGroup) endpointRequest(ctx echo.Context) error {
 		})
 	}
 
-	resp, err := g.es.forwardRequest(ctx.Request().Context(), stubId, ctx.Request().Method, ctx.Request().Header, ctx.Request().Body)
-	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": err.Error(),
-		})
-	}
-
-	return ctx.Blob(http.StatusOK, "application/json", resp)
+	return g.es.forwardRequest(ctx, stubId)
 }

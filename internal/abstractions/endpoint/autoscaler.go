@@ -100,11 +100,6 @@ func (as *autoscaler) scaleByTotalRequests(sample *autoscalerSample) *autoscaleR
 
 // Start the autoscaler
 func (as *autoscaler) start(ctx context.Context) {
-	if as.autoscalingMode == -1 {
-		// Create at least 1
-		as.instance.scaleEventChan <- 1
-	}
-
 	ticker := time.NewTicker(sampleRate)
 	defer ticker.Stop()
 
@@ -115,9 +110,9 @@ func (as *autoscaler) start(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// TODO: Update scaling
-			// log.Println("INSANCE")
-			if as.instance.buffer.Length() == 0 {
+			if as.instance.buffer.Length() > 0 {
+				as.instance.scaleEventChan <- 1
+			} else {
 				as.instance.scaleEventChan <- 0
 			}
 
