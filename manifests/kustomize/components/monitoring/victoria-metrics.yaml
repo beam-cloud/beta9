@@ -1,0 +1,63 @@
+---
+apiVersion: builtin
+kind: HelmChartInflationGenerator
+metadata:
+  name: victoria-metrics-single
+name: victoria-metrics-single
+releaseName: victoria-metrics-single
+repo: https://victoriametrics.github.io/helm-charts
+version: 0.9.15
+namespace: monitoring
+includeCRDs: true
+valuesInline:
+  server:
+    fullnameOverride: victoria-metrics-single
+---
+apiVersion: builtin
+kind: HelmChartInflationGenerator
+metadata:
+  name: victoria-metrics-agent
+name: victoria-metrics-agent
+releaseName: victoria-metrics-agent
+repo: https://victoriametrics.github.io/helm-charts
+version: 0.9.17
+namespace: monitoring
+includeCRDs: true
+valuesInline:
+  nameOverride: victoria-metrics-agent
+  fullnameOverride: victoria-metrics-agent
+  remoteWriteUrls:
+  - http://victoria-metrics-single:8428/api/v1/write
+  extraScrapeConfigs:
+  - job_name: beta9-pods
+    metrics_path: /metrics
+    scheme: http
+    honor_labels: true
+    scrape_timeout: 10s
+    scrape_interval: 15s
+    kubernetes_sd_configs:
+    - role: pod
+      namespaces:
+        names:
+        - beta9
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_label_prometheus_io_scrape]
+      action: keep
+      regex: true
+    - source_labels: [__meta_kubernetes_pod_container_port_number]
+      action: keep
+      regex: 9090
+---
+apiVersion: builtin
+kind: HelmChartInflationGenerator
+metadata:
+  name: victoria-logs-single
+name: victoria-logs-single
+releaseName: victoria-logs-single
+repo: https://victoriametrics.github.io/helm-charts
+version: 0.3.4
+namespace: monitoring
+includeCRDs: true
+valuesInline:
+  server:
+    fullnameOverride: victoria-logs-single
