@@ -17,7 +17,7 @@ gateway:
           - /usr/local/bin/gateway
           image:
             repository: registry.localhost:5000/beta9-gateway
-            tag: latest
+            tag: 0.1.0
           probes:
             readiness: &readiness
               enabled: true
