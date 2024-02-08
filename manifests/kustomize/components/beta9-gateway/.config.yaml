@@ -1,0 +1,18 @@
+worker:
+  pools:
+    default:
+      jobSpec:
+        env:
+        - name: CONFIG_PATH
+          value: /etc/beta9/.config.yaml
+        volumes:
+        - name: config
+          secret:
+            secretName: beta9-config
+        volumeMounts:
+        - mountPath: /etc/beta9
+          name: config
+monitoring:
+  fluentbit:
+    events:
+      endpoint: http://fluent-bit.monitoring:9880
