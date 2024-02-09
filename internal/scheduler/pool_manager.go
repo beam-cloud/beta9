@@ -50,12 +50,12 @@ func (m *WorkerPoolManager) GetPool(name string) (*WorkerPool, bool) {
 	return pool, true
 }
 
-func (m *WorkerPoolManager) GetPoolByGPU(request *types.ContainerRequest) (*WorkerPool, bool) {
+func (m *WorkerPoolManager) GetPoolByGPU(gpuType string) (*WorkerPool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	for _, pool := range m.pools {
-		if pool.Config.GPUType == request.Gpu {
+		if pool.Config.GPUType == gpuType {
 			return pool, true
 		}
 	}

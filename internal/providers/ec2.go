@@ -123,6 +123,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, 
 		return "", err
 	}
 
+	// TODO: come up with a way to not hardcode the service name (possibly look up in config)
 	gatewayHost, err := p.tailscale.GetHostnameForService("gateway-http")
 	if err != nil {
 		return "", err

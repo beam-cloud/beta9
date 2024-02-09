@@ -112,7 +112,6 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	log.Printf("Waiting for machine registration <machineId: %s>\n", machineId)
 	state, err := wpc.providerRepo.WaitForMachineRegistration(string(*wpc.providerName), wpc.name, machineId)
 	if err != nil {
-		log.Printf("Machine not registered within timeout <machineId: %s>: %s", machineId, err)
 		return nil, err
 	}
 
@@ -160,6 +159,16 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 		wpc.config.Worker.ImageTag,
 	)
 
+	resources := corev1.ResourceRequirements{}
+	if workerGpu != "" {
+		resources.Requests = corev1.ResourceList{
+			"nvidia.com/gpu": resource.MustParse("1"),
+		}
+		resources.Limits = corev1.ResourceList{
+			"nvidia.com/gpu": resource.MustParse("1"),
+		}
+	}
+
 	containers := []corev1.Container{
 		{
 			Name:  defaultContainerName,
@@ -178,14 +187,7 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 			},
 			Env:          wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpu),
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					"nvidia.com/gpu": resource.MustParse("1"),
-				},
-				Limits: corev1.ResourceList{
-					"nvidia.com/gpu": resource.MustParse("1"),
-				},
-			},
+			Resources:    resources,
 		},
 	}
 

@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN <<EOT
 apt-get update
 apt-get install -y software-properties-common curl git gcc python3-dev
-add-apt-repository ppa:deadsnakes/ppa -y
+add-apt-repository ppa:deadsnakes/ppa
 apt-get update
 EOT
 

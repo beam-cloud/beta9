@@ -138,7 +138,7 @@ func (s *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolCo
 	if request.Gpu == "" {
 		workerPool, ok = s.workerPoolManager.GetPool("default")
 	} else {
-		workerPool, ok = s.workerPoolManager.GetPoolByGPU(request)
+		workerPool, ok = s.workerPoolManager.GetPoolByGPU(request.Gpu)
 	}
 
 	if !ok {
@@ -237,6 +237,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 		return s.requestBacklog.Push(request)
 	}
 
+	// TODO: add some sort of signaling mechanism to alert the caller if the request failed to be pushed to the requestBacklog
 	go func() {
 		if request.RetryCount < maxScheduleRetryCount && time.Since(request.Timestamp) < maxScheduleRetryDuration {
 			delay := calculateBackoffDelay(request.RetryCount)
