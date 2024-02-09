@@ -218,7 +218,12 @@ func (rb *RequestBuffer) postProcessRequest(req request, containerId string) {
 		return
 	}
 
-	err := rb.rdb.SetEx(context.TODO(), Keys.endpointKeepWarmLock(rb.workspace.Name, rb.stubId, containerId), 1, time.Duration(rb.stubConfig.KeepWarmSeconds)).Err()
+	err := rb.rdb.SetEx(
+		context.TODO(),
+		Keys.endpointKeepWarmLock(rb.workspace.Name, rb.stubId, containerId),
+		1,
+		time.Duration(rb.stubConfig.KeepWarmSeconds)*time.Second,
+	).Err()
 	if err != nil {
 		log.Println("Error setting keep warm lock", err)
 		return
