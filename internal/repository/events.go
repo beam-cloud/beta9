@@ -34,7 +34,7 @@ func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
 
 	endpointAvailable := eventEndpointAvailable(context.TODO(), config.Endpoint, time.Duration(config.DialTimeout))
 	if !endpointAvailable {
-		log.Println("[WARNING] fluentbit host does not appear to be up, events will be dropped.")
+		log.Println("[WARNING] fluentbit host does not appear to be up, events will be dropped")
 	}
 
 	return &TCPEventClientRepo{
