@@ -232,6 +232,11 @@ const maxScheduleRetryCount = 3
 const maxScheduleRetryDuration = 10 * time.Minute
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
+	if request.RetryCount == 0 {
+		request.RetryCount++
+		return s.requestBacklog.Push(request)
+	}
+
 	go func() {
 		if request.RetryCount < maxScheduleRetryCount && time.Since(request.Timestamp) < maxScheduleRetryDuration {
 			delay := calculateBackoffDelay(request.RetryCount)
