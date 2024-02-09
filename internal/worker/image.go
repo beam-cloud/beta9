@@ -17,6 +17,7 @@ import (
 	types "github.com/beam-cloud/beta9/internal/types"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
+	"github.com/beam-cloud/clip/pkg/storage"
 	"github.com/moby/sys/mountinfo"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
@@ -56,9 +57,9 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 	switch config.RegistryCredentialProviderName {
 	case "aws":
 		provider = &AWSCredentialProvider{
-			Region:    config.Registries.S3.Region,
-			AccessKey: config.Registries.S3.AccessKeyID,
-			SecretKey: config.Registries.S3.SecretAccessKey,
+			Region:    config.Registries.S3.AWSRegion,
+			AccessKey: config.Registries.S3.AWSAccessKey,
+			SecretKey: config.Registries.S3.AWSSecretKey,
 		}
 	case "docker":
 		provider = &DockerCredentialProvider{
@@ -87,6 +88,10 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		return nil, err
 	}
 
+	// TODO: refactor credentials logic for base image registries
+	// Right now, the aws credential provider is not actually being used
+	// because the base image is stored in a public registry
+	// We will probably need to adjust the config to make more sense here
 	_, err = provider.GetAuthString()
 	if err != nil {
 		return nil, err
@@ -125,6 +130,12 @@ func (c *ImageClient) PullLazy(imageId string) error {
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
 		ContentCacheAvailable: c.cacheClient != nil,
+		Credentials: storage.ClipStorageCredentials{
+			S3: &storage.S3ClipStorageCredentials{
+				AccessKey: c.config.Registries.S3.AWSAccessKey,
+				SecretKey: c.config.Registries.S3.AWSSecretKey,
+			},
+		},
 	}
 
 	// Check if mount point is already in use
@@ -277,8 +288,8 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
 		}, &clipCommon.S3StorageInfo{
-			Bucket: i.config.Registries.S3.Bucket,
-			Region: i.config.Registries.S3.Region,
+			Bucket: i.config.Registries.S3.AWSS3Bucket,
+			Region: i.config.Registries.S3.AWSRegion,
 			Key:    fmt.Sprintf("%s.clip", imageId),
 		})
 	case "local":

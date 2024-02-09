@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 
+	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 )
@@ -67,4 +68,28 @@ func MonitorPoolSize(wpc WorkerPoolController, workerPool *types.WorkerPoolConfi
 
 	go poolSizer.Start()
 	return nil
+}
+
+func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolController) (*WorkerPoolCapacity, error) {
+	workers, err := workerRepo.GetAllWorkersInPool(PoolId(wpc.Name()))
+	if err != nil {
+		return nil, err
+	}
+
+	capacity := &WorkerPoolCapacity{
+		FreeCpu:    0,
+		FreeMemory: 0,
+		FreeGpu:    0,
+	}
+
+	for _, worker := range workers {
+		capacity.FreeCpu += worker.Cpu
+		capacity.FreeMemory += worker.Memory
+
+		if worker.Gpu != "" && (worker.Cpu > 0 && worker.Memory > 0) {
+			capacity.FreeGpu += 1
+		}
+	}
+
+	return capacity, nil
 }

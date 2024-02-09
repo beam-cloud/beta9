@@ -81,7 +81,7 @@ type ObjectStore interface {
 }
 
 func NewS3Store(config types.S3ImageRegistryConfig) (*S3Store, error) {
-	cfg, err := getAWSConfig(config.AccessKeyID, config.SecretAccessKey, config.Region)
+	cfg, err := getAWSConfig(config.AWSAccessKey, config.AWSSecretKey, config.AWSRegion)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 
 	uploader := manager.NewUploader(s.client)
 	_, err = uploader.Upload(context.TODO(), &s3.PutObjectInput{
-		Bucket: aws.String(s.config.Bucket),
+		Bucket: aws.String(s.config.AWSS3Bucket),
 		Key:    aws.String(key),
 		Body:   f,
 	})
@@ -142,7 +142,7 @@ func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 
 	downloader := manager.NewDownloader(s.client)
 	_, err = downloader.Download(ctx, f, &s3.GetObjectInput{
-		Bucket: aws.String(s.config.Bucket),
+		Bucket: aws.String(s.config.AWSS3Bucket),
 		Key:    aws.String(key),
 	}, func(d *manager.Downloader) {
 		d.PartSize = 100 * 1024 * 1024 // 100MiB per part
@@ -177,7 +177,7 @@ func (s *S3Store) Size(ctx context.Context, key string) (int64, error) {
 // headObject returns the metadata of an object
 func (s *S3Store) headObject(ctx context.Context, key string) (*s3.HeadObjectOutput, error) {
 	return s.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(s.config.Bucket),
+		Bucket: aws.String(s.config.AWSS3Bucket),
 		Key:    aws.String(key),
 	})
 }

@@ -37,7 +37,7 @@ const (
 )
 
 func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*EC2Provider, error) {
-	credentials := credentials.NewStaticCredentialsProvider(appConfig.Providers.EC2Config.AWSAccessKeyID, appConfig.Providers.EC2Config.AWSSecretAccessKey, "")
+	credentials := credentials.NewStaticCredentialsProvider(appConfig.Providers.EC2Config.AWSAccessKey, appConfig.Providers.EC2Config.AWSSecretKey, "")
 
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithRegion(appConfig.Providers.EC2Config.AWSRegion),
@@ -144,19 +144,15 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, 
 		return "", err
 	}
 
-	// TODO: remove once we sort out connection issues
-	roleArn := "arn:aws:iam::187248174200:instance-profile/beta-dev-k3s-instance-profile"
-
 	log.Printf("Selected instance type <%s> for compute request: %+v\n", instanceType, compute)
 	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
 	input := &ec2.RunInstancesInput{
-		ImageId:            aws.String(p.providerConfig.AMI),
-		InstanceType:       awsTypes.InstanceType(instanceType),
-		MinCount:           aws.Int32(1),
-		MaxCount:           aws.Int32(1),
-		UserData:           aws.String(encodedUserData),
-		SubnetId:           p.providerConfig.SubnetId,
-		IamInstanceProfile: &awsTypes.IamInstanceProfileSpecification{Arn: &roleArn},
+		ImageId:      aws.String(p.providerConfig.AMI),
+		InstanceType: awsTypes.InstanceType(instanceType),
+		MinCount:     aws.Int32(1),
+		MaxCount:     aws.Int32(1),
+		UserData:     aws.String(encodedUserData),
+		SubnetId:     p.providerConfig.SubnetId,
 	}
 
 	result, err := p.client.RunInstances(ctx, input)

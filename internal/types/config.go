@@ -86,10 +86,10 @@ type DockerImageRegistryConfig struct {
 }
 
 type S3ImageRegistryConfig struct {
-	AccessKeyID     string `key:"accessKeyID" json:"access_key_id"`
-	SecretAccessKey string `key:"secretAccessKey" json:"secret_access_key"`
-	Bucket          string `key:"bucket" json:"bucket"`
-	Region          string `key:"region" json:"region"`
+	AWSS3Bucket  string `key:"awsS3Bucket" json:"aws_s3_bucket"`
+	AWSAccessKey string `key:"awsAccessKey" json:"aws_access_key"`
+	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`
+	AWSRegion    string `key:"awsRegion" json:"aws_region"`
 }
 
 type RunnerConfig struct {
@@ -108,10 +108,10 @@ type StorageConfig struct {
 }
 
 type JuiceFSConfig struct {
-	RedisURI           string `key:"redisURI" json:"redis_uri"`
-	AWSS3Bucket        string `key:"awsS3Bucket" json:"aws_s3_bucket"`
-	AWSAccessKeyID     string `key:"awsAccessKeyID" json:"aws_access_key_id"`
-	AWSSecretAccessKey string `key:"awsSecretAccessKey" json:"aws_secret_access_key"`
+	RedisURI     string `key:"redisURI" json:"redis_uri"`
+	AWSS3Bucket  string `key:"awsS3Bucket" json:"aws_s3_bucket"`
+	AWSAccessKey string `key:"awsAccessKey" json:"aws_access_key"`
+	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`
 }
 
 type WorkerConfig struct {
@@ -171,11 +171,11 @@ type ProviderConfig struct {
 }
 
 type EC2ProviderConfig struct {
-	AWSAccessKeyID     string  `key:"accessKey" json:"aws_access_key_id"`
-	AWSSecretAccessKey string  `key:"secretKey" json:"aws_secret_access_key"`
-	AWSRegion          string  `key:"region" json:"aws_region"`
-	AMI                string  `key:"ami" json:"ami"`
-	SubnetId           *string `key:"subnetId" json:"subnet_id"`
+	AWSAccessKey string  `key:"awsAccessKey" json:"aws_access_key"`
+	AWSSecretKey string  `key:"awsSecretKey" json:"aws_secret_key"`
+	AWSRegion    string  `key:"awsRegion" json:"aws_region"`
+	AMI          string  `key:"ami" json:"ami"`
+	SubnetId     *string `key:"subnetId" json:"subnet_id"`
 }
 
 type MetricsConfig struct {

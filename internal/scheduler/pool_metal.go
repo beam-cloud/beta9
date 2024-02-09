@@ -276,19 +276,6 @@ func (wpc *MetalWorkerPoolController) getWorkerEnvironment(workerId, machineId s
 			Name:  "CONFIG_PATH",
 			Value: "/etc/config/config.json",
 		},
-		// TODO: remove these creds
-		{
-			Name:  "AWS_REGION",
-			Value: wpc.config.ImageService.Registries.S3.Region,
-		},
-		{
-			Name:  "AWS_ACCESS_KEY_ID",
-			Value: wpc.config.ImageService.Registries.S3.AccessKeyID,
-		},
-		{
-			Name:  "AWS_SECRET_ACCESS_KEY",
-			Value: wpc.config.ImageService.Registries.S3.SecretAccessKey,
-		},
 	}
 }
 
@@ -402,25 +389,5 @@ func (wpc *MetalWorkerPoolController) Name() string {
 }
 
 func (wpc *MetalWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
-	workers, err := wpc.workerRepo.GetAllWorkersInPool(PoolId(wpc.name))
-	if err != nil {
-		return nil, err
-	}
-
-	capacity := &WorkerPoolCapacity{
-		FreeCpu:    0,
-		FreeMemory: 0,
-		FreeGpu:    0,
-	}
-
-	for _, worker := range workers {
-		capacity.FreeCpu += worker.Cpu
-		capacity.FreeMemory += worker.Memory
-
-		if worker.Gpu != "" && (worker.Cpu > 0 && worker.Memory > 0) {
-			capacity.FreeGpu += 1
-		}
-	}
-
-	return capacity, nil
+	return freePoolCapacity(wpc.workerRepo, wpc)
 }
