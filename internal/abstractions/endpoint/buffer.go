@@ -82,7 +82,6 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context) error {
 	for {
 		select {
 		case <-rb.ctx.Done():
-			return nil
 		case <-done:
 			return nil
 		case <-timeoutTicker.C:

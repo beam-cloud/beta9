@@ -214,7 +214,6 @@ func (i *endpointInstance) stoppableContainers() ([]string, error) {
 		}
 
 		// Skip containers with keep warm locks
-		log.Println(Keys.endpointKeepWarmLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId))
 		keepWarmVal, err := i.rdb.Get(context.TODO(), Keys.endpointKeepWarmLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId)).Int()
 		if err != nil && err != redis.Nil {
 			log.Printf("<endpoint %s> error getting keep warm lock for container: %v\n", i.name, err)
