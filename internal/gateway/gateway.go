@@ -17,6 +17,8 @@ import (
 	"github.com/beam-cloud/beta9/internal/abstractions/taskqueue"
 	gatewayservices "github.com/beam-cloud/beta9/internal/gateway/services"
 	"github.com/beam-cloud/beta9/internal/network"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 
 	volume "github.com/beam-cloud/beta9/internal/abstractions/volume"
 
@@ -37,7 +39,7 @@ import (
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
 	config         types.AppConfig
-	httpServer     *echo.Echo
+	httpServer     *http.Server
 	grpcServer     *grpc.Server
 	redisClient    *common.RedisClient
 	ContainerRepo  repository.ContainerRepository
@@ -64,7 +66,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	metricsRepo := repository.NewMetricsPrometheusRepository(config.Metrics.Prometheus)
+	metricsRepo := repository.NewMetricsPrometheusRepository(config.Monitoring.Prometheus)
 	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
 	if err != nil {
 		return nil, err
@@ -111,15 +113,25 @@ func NewGateway() (*Gateway, error) {
 }
 
 func (g *Gateway) initHttp() error {
-	g.httpServer = echo.New()
-	g.httpServer.HideBanner = true
-	g.httpServer.HidePort = true
+	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
 
-	g.httpServer.Use(middleware.Logger())
-	g.httpServer.Use(middleware.Recover())
+	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
+		Skipper: func(c echo.Context) bool {
+			return c.Request().URL.Path == "/api/v1/health"
+		},
+	}))
+	e.Use(middleware.Recover())
+
+	// Accept both HTTP/2 and HTTP/1
+	g.httpServer = &http.Server{
+		Addr:    fmt.Sprintf(":%v", g.config.GatewayService.HTTPPort),
+		Handler: h2c.NewHandler(e, &http2.Server{}),
+	}
 
 	authMiddleware := auth.AuthMiddleware(g.BackendRepo)
-	g.baseRouteGroup = g.httpServer.Group(apiv1.HttpServerBaseRoute)
+	g.baseRouteGroup = e.Group(apiv1.HttpServerBaseRoute)
 
 	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.redisClient)
 	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.config)
@@ -247,19 +259,20 @@ func (g *Gateway) Start() error {
 	}()
 
 	go func() {
-		if err := g.httpServer.Start(fmt.Sprintf("0.0.0.0:%d", g.config.GatewayService.HTTPPort)); err != nil && err != http.ErrServerClosed {
+		if err := g.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start http server: %v", err)
 		}
 	}()
 
 	go func() {
-		if err := g.metricsRepo.Init(); err != nil {
+		if err := g.metricsRepo.ListenAndServe(); err != nil {
 			log.Fatalf("Failed to start metrics server: %v", err)
 		}
 	}()
 
 	log.Println("Gateway http server running @", g.config.GatewayService.HTTPPort)
 	log.Println("Gateway grpc server running @", g.config.GatewayService.GRPCPort)
+	log.Println("Gateway metrics server running @", g.config.Monitoring.Prometheus.Port)
 
 	terminationSignal := make(chan os.Signal, 1)
 	defer close(terminationSignal)

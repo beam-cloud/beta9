@@ -39,6 +39,9 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	poolJson := []byte(`{"worker":{"pools":{"beta9-cpu":{},"beta9-a10g":{"gpuType": "A10G"},"beta9-t4":{"gpuType": "T4"}}}}}`)
 	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
+	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
+	metricsRepo := repo.NewMetricsPrometheusRepository(config.Monitoring.Prometheus)
+	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 
 	workerPoolManager := NewWorkerPoolManager(repo.NewWorkerPoolRedisRepository(rdb))
 	for name, pool := range config.Worker.Pools {
@@ -55,6 +58,8 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		workerPoolManager: workerPoolManager,
 		requestBacklog:    requestBacklog,
 		containerRepo:     containerRepo,
+		schedulerMetrics:  schedulerMetrics,
+		eventRepo:         eventRepo,
 	}, nil
 }
 

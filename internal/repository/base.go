@@ -84,3 +84,12 @@ type TailscaleRepository interface {
 	GetHostnamesForService(serviceName string) ([]string, error)
 	SetHostname(serviceName, serviceId, hostName string) error
 }
+
+type EventRepository interface {
+	PushContainerRequestedEvent(request *types.ContainerRequest)
+	PushContainerScheduledEvent(containerID string, workerID string)
+	PushContainerStartedEvent(containerID string, workerID string)
+	PushContainerStoppedEvent(containerID string, workerID string)
+	PushWorkerStartedEvent(workerID string)
+	PushWorkerStoppedEvent(workerID string)
+}

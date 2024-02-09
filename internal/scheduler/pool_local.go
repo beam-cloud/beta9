@@ -100,7 +100,8 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 	labels := map[string]string{
 		"app":               Beta9WorkerLabelValue,
 		Beta9WorkerLabelKey: Beta9WorkerLabelValue,
-		PrometheusScrapeKey: strconv.FormatBool(wpc.config.Metrics.Prometheus.ScrapeWorkers),
+		PrometheusPortKey:   fmt.Sprintf("%d", wpc.config.Monitoring.Prometheus.Port),
+		PrometheusScrapeKey: strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
 	}
 
 	workerCpu := cpu
@@ -155,7 +156,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 			Ports: []corev1.ContainerPort{
 				{
 					Name:          "metrics",
-					ContainerPort: int32(wpc.config.Metrics.Prometheus.Port),
+					ContainerPort: int32(wpc.config.Monitoring.Prometheus.Port),
 				},
 			},
 			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpu),
@@ -251,12 +252,22 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 		},
 	}
 
+	if len(wpc.workerPool.JobSpec.Volumes) > 0 {
+		for _, volume := range wpc.workerPool.JobSpec.Volumes {
+			vol := corev1.Volume{Name: volume.Name}
+			if volume.Secret.SecretName != "" {
+				vol.Secret = &corev1.SecretVolumeSource{SecretName: volume.Secret.SecretName}
+			}
+			volumes = append(volumes, vol)
+		}
+	}
+
 	return append(volumes,
 		corev1.Volume{
 			Name: imagesVolumeName,
 			VolumeSource: corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: "images",
+					ClaimName: wpc.config.Worker.ImagePVCName,
 				},
 			},
 		},
@@ -264,7 +275,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMount {
-	return []corev1.VolumeMount{
+	volumeMounts := []corev1.VolumeMount{
 		{
 			Name:      tmpVolumeName,
 			MountPath: "/tmp",
@@ -285,10 +296,16 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 			Name:      "dshm",
 		},
 	}
+
+	if len(wpc.workerPool.JobSpec.VolumeMounts) > 0 {
+		volumeMounts = append(volumeMounts, wpc.workerPool.JobSpec.VolumeMounts...)
+	}
+
+	return volumeMounts
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string) []corev1.EnvVar {
-	return []corev1.EnvVar{
+	envVars := []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
 			Value: workerId,
@@ -326,6 +343,12 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Value: fmt.Sprint(wpc.config.GatewayService.GRPCPort),
 		},
 	}
+
+	if len(wpc.workerPool.JobSpec.Env) > 0 {
+		envVars = append(envVars, wpc.workerPool.JobSpec.Env...)
+	}
+
+	return envVars
 }
 
 var AddWorkerTimeout = 10 * time.Minute
@@ -374,7 +397,7 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 					if err != nil {
 						log.Printf("Failed to delete pending job <%s>: %v\n", job.Name, err)
 					} else {
-						log.Printf("Deleted job <%s> due to exceeding age limit of <%v>", job.Name, maxAge)
+						log.Printf("Deleted job <%s> due to exceeding age limit of <%v>\n", job.Name, maxAge)
 					}
 				}
 			}

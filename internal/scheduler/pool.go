@@ -13,6 +13,7 @@ const (
 	Beta9WorkerLabelKey     string = "run.beam.cloud/role"
 	Beta9WorkerLabelValue   string = "worker"
 	Beta9WorkerJobPrefix    string = "worker"
+	PrometheusPortKey       string = "prometheus.io/port"
 	PrometheusScrapeKey     string = "prometheus.io/scrape"
 	tmpVolumeName           string = "beta9-tmp"
 	logVolumeName           string = "beta9-logs"

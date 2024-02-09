@@ -26,6 +26,7 @@ type Scheduler struct {
 	workerPoolManager *WorkerPoolManager
 	requestBacklog    *RequestBacklog
 	containerRepo     repo.ContainerRepository
+	eventRepo         repo.EventRepository
 	schedulerMetrics  SchedulerMetrics
 	eventBus          *common.EventBus
 }
@@ -39,6 +40,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
+	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
 	// Load worker pools
 	workerPoolManager := NewWorkerPoolManager(workerPoolRepo)
@@ -73,6 +75,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		requestBacklog:    requestBacklog,
 		containerRepo:     containerRepo,
 		schedulerMetrics:  schedulerMetrics,
+		eventRepo:         eventRepo,
 	}, nil
 }
 
@@ -91,8 +94,8 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	go s.schedulerMetrics.ContainerRequested()
-	// TODO: Handle event for ContainerRequested
+	go s.schedulerMetrics.CounterIncContainerRequested()
+	go s.eventRepo.PushContainerRequestedEvent(request)
 
 	err = s.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
 		Status:      types.ContainerStatusPending,
@@ -199,8 +202,9 @@ func (s *Scheduler) StartProcessingRequests() {
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	go s.schedulerMetrics.ContainerScheduled()
-	// TODO: Handle event for ContainerScheduled
+	go s.schedulerMetrics.CounterIncContainerScheduled()
+	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id)
+
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 

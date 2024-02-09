@@ -50,6 +50,7 @@ type Worker struct {
 	completedRequests    chan *types.ContainerRequest
 	stopContainerChan    chan string
 	workerRepo           repo.WorkerRepository
+	eventRepo            repo.EventRepository
 	storage              storage.Storage
 	ctx                  context.Context
 	cancel               func()
@@ -118,6 +119,7 @@ func NewWorker() (*Worker, error) {
 
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
+	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
 	imageClient, err := NewImageClient(config.ImageService, workerId, workerRepo)
 	if err != nil {
@@ -140,7 +142,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config.Metrics.Prometheus)
+	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config.Monitoring.Prometheus)
 
 	return &Worker{
 		ctx:                  ctx,
@@ -168,6 +170,7 @@ func NewWorker() (*Worker, error) {
 		},
 		workerMetrics:     workerMetrics,
 		workerRepo:        workerRepo,
+		eventRepo:         eventRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
 		stopContainerChan: make(chan string, 1000),
 		storage:           storage,
@@ -513,8 +516,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(request, done)
-	// TODO: Handle event for ContainerStarted
-	// TODO: Handle deferred event for ContainerStopped
+	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId)
+	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId) }()
 
 	pidChan := make(chan int, 1)
 
@@ -682,7 +685,6 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 
 func (s *Worker) startup() error {
 	log.Printf("Worker starting up.")
-	// TODO: Handle event for WorkerSarted
 
 	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
 	if err != nil {
@@ -702,12 +704,14 @@ func (s *Worker) startup() error {
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
 
+	go s.eventRepo.PushWorkerStartedEvent(s.workerId)
+
 	return nil
 }
 
 func (s *Worker) shutdown() error {
 	log.Printf("Worker spinning down.")
-	// TODO: Handle event for WorkerStopped
+	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
 	worker, err := s.workerRepo.GetWorkerById(s.workerId)
 	if err != nil {

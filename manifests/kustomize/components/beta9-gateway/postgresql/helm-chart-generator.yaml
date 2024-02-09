@@ -1,0 +1,30 @@
+---
+apiVersion: builtin
+kind: HelmChartInflationGenerator
+metadata:
+  name: &name postgresql
+releaseName: *name
+name: postgresql
+repo: https://charts.bitnami.com/bitnami
+version: 13.4.3
+namespace: beta9
+includeCRDs: true
+skipTests: true
+valuesInline:
+  nameOverride: *name
+  fullnameOverride: *name
+  global:
+    postgresql:
+      auth:
+        username: root
+        password: password
+        database: main
+  primary:
+    extendedConfiguration: |
+      max_connections=400
+      shared_buffers='400MB'
+  volumePermissions:
+    enabled: true
+  persistence:
+    enabled: true
+    size: 1Gi

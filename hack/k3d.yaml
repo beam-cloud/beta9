@@ -7,12 +7,18 @@ image: docker.io/rancher/k3s:v1.28.5-k3s1
 servers: 1
 
 ports:
-- port: 1993:80
+- port: 1993:1993
+  nodeFilters:
+  - loadbalancer
+- port: 1994:1994
+  nodeFilters:
+  - loadbalancer
+- port: 9000:9000
   nodeFilters:
   - loadbalancer
 
 volumes:
-- volume: $PWD/manifests:k3s-manifests-custom
+- volume: $PWD/manifests/k3d:k3s-manifests-custom
   nodeFilters:
   - server:0
 - volume: $PWD/.k3d/storage:k3s-storage

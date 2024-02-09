@@ -1,6 +1,10 @@
 package types
 
-import "time"
+import (
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+)
 
 type AppConfig struct {
 	ClusterName    string               `key:"clusterName" json:"cluster_name"`
@@ -8,12 +12,12 @@ type AppConfig struct {
 	Database       DatabaseConfig       `key:"database" json:"database"`
 	GatewayService GatewayServiceConfig `key:"gateway" json:"gateway_service"`
 	ImageService   ImageServiceConfig   `key:"imageservice" json:"image_service"`
-	Metrics        MetricsConfig        `key:"metrics" json:"metrics"`
 	Storage        StorageConfig        `key:"storage" json:"storage"`
 	Worker         WorkerConfig         `key:"worker" json:"worker"`
 	Providers      ProviderConfig       `key:"providers" json:"providers"`
 	Tailscale      TailscaleConfig      `key:"tailscale" json:"tailscale"`
 	Proxy          ProxyConfig          `key:"proxy" json:"proxy"`
+	Monitoring     MonitoringConfig     `key:"monitoring" json:"monitoring"`
 }
 
 type DatabaseConfig struct {
@@ -126,6 +130,7 @@ type WorkerConfig struct {
 	ResourcesEnforced          bool                        `key:"resourcesEnforced" json:"resources_enforced"`
 	DefaultWorkerCPURequest    int64                       `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
 	DefaultWorkerMemoryRequest int64                       `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
+	ImagePVCName               string                      `key:"imagePVCName"  json:"image_pvc_name"`
 }
 
 type PoolMode string
@@ -147,6 +152,17 @@ type WorkerPoolConfig struct {
 
 type WorkerPoolJobSpecConfig struct {
 	NodeSelector map[string]string `key:"nodeSelector" json:"node_selector"`
+	Env          []corev1.EnvVar   `key:"env" json:"env"`
+
+	// Mimics corev1.Volume since that type doesn't currently serialize correctly
+	Volumes []struct {
+		Name   string `key:"name" json:"name"`
+		Secret struct {
+			SecretName string `key:"secretName" json:"secret_name"`
+		} `key:"secret" json:"secret"`
+	} `key:"volumes" json:"volumes"`
+
+	VolumeMounts []corev1.VolumeMount `key:"volumeMounts" json:"volume_mounts"`
 }
 
 type WorkerPoolJobSpecPoolSizingConfig struct {
@@ -178,8 +194,9 @@ type EC2ProviderConfig struct {
 	SubnetId     *string `key:"subnetId" json:"subnet_id"`
 }
 
-type MetricsConfig struct {
+type MonitoringConfig struct {
 	Prometheus PrometheusConfig `key:"prometheus" json:"prometheus"`
+	FluentBit  FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
 }
 
 type PrometheusConfig struct {
@@ -204,4 +221,17 @@ type InternalService struct {
 	Name        string `key:"name" json:"name"`
 	LocalPort   int    `key:"localPort" json:"local_port"`
 	Destination string `key:"destination" json:"destination"`
+}
+
+type FluentBitConfig struct {
+	Events FluentBitEventConfig `key:"events"`
+}
+
+type FluentBitEventConfig struct {
+	Endpoint        string        `key:"endpoint"`
+	MaxConns        int           `key:"maxConns"`
+	MaxIdleConns    int           `key:"maxIdleConns"`
+	IdleConnTimeout time.Duration `key:"idleConnTimeout"`
+	DialTimeout     time.Duration `key:"dialTimeout"`
+	KeepAlive       time.Duration `key:"keepAlive"`
 }

@@ -54,7 +54,7 @@ func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], image
 func (s *RunCServer) Start() error {
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", defaultWorkerServerPort))
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		log.Fatalf("failed to listen: %v\n", err)
 	}
 
 	grpcServer := grpc.NewServer()
