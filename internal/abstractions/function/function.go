@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"path"
 	"time"
 
@@ -104,14 +103,10 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return err
 	}
 
-	log.Println("connected to host: ", conn)
-
 	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
 	if err != nil {
 		return err
 	}
-
-	// log.Println("created client")
 
 	go client.StreamLogs(ctx, task.ContainerId, outputChan)
 	return fs.handleStreams(ctx, stream, authInfo.Workspace.Name, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
