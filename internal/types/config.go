@@ -1,6 +1,10 @@
 package types
 
-import "time"
+import (
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+)
 
 type AppConfig struct {
 	DebugMode      bool                 `key:"debugMode"`
@@ -136,6 +140,17 @@ type WorkerPoolConfig struct {
 
 type WorkerPoolJobSpecConfig struct {
 	NodeSelector map[string]string `key:"nodeSelector"`
+	Env          []corev1.EnvVar   `key:"env"`
+
+	// Mimics corev1.Volume since that type doesn't currently serialize correctly
+	Volumes []struct {
+		Name   string `key:"name"`
+		Secret struct {
+			SecretName string `key:"secretName"`
+		} `key:"secret"`
+	} `key:"volumes"`
+
+	VolumeMounts []corev1.VolumeMount `key:"volumeMounts"`
 }
 
 type WorkerPoolJobSpecPoolSizingConfig struct {
@@ -162,6 +177,10 @@ type FluentBitConfig struct {
 }
 
 type FluentBitEventConfig struct {
-	Host string `key:"host"`
-	Port int    `key:"port"`
+	Endpoint        string        `key:"endpoint"`
+	MaxConns        int           `key:"maxConns"`
+	MaxIdleConns    int           `key:"maxIdleConns"`
+	IdleConnTimeout time.Duration `key:"idleConnTimeout"`
+	DialTimeout     time.Duration `key:"dialTimeout"`
+	KeepAlive       time.Duration `key:"keepAlive"`
 }

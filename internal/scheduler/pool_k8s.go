@@ -303,6 +303,16 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) 
 		},
 	}
 
+	if len(wpc.workerPool.JobSpec.Volumes) > 0 {
+		for _, volume := range wpc.workerPool.JobSpec.Volumes {
+			vol := corev1.Volume{Name: volume.Name}
+			if volume.Secret.SecretName != "" {
+				vol.Secret = &corev1.SecretVolumeSource{SecretName: volume.Secret.SecretName}
+			}
+			volumes = append(volumes, vol)
+		}
+	}
+
 	return append(volumes,
 		corev1.Volume{
 			Name: imagesVolumeName,
@@ -316,7 +326,7 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) 
 }
 
 func (wpc *KubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMount {
-	return []corev1.VolumeMount{
+	volumeMounts := []corev1.VolumeMount{
 		{
 			Name:      tmpVolumeName,
 			MountPath: "/tmp",
@@ -337,10 +347,16 @@ func (wpc *KubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1.Volu
 			Name:      "dshm",
 		},
 	}
+
+	if len(wpc.workerPool.JobSpec.VolumeMounts) > 0 {
+		volumeMounts = append(volumeMounts, wpc.workerPool.JobSpec.VolumeMounts...)
+	}
+
+	return volumeMounts
 }
 
 func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string) []corev1.EnvVar {
-	return []corev1.EnvVar{
+	envVars := []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
 			Value: workerId,
@@ -382,6 +398,12 @@ func (wpc *KubernetesWorkerPoolController) getWorkerEnvironment(workerId string,
 			Value: fmt.Sprint(wpc.config.GatewayService.GRPCPort),
 		},
 	}
+
+	if len(wpc.workerPool.JobSpec.Env) > 0 {
+		envVars = append(envVars, wpc.workerPool.JobSpec.Env...)
+	}
+
+	return envVars
 }
 
 var AddWorkerTimeout = 10 * time.Minute

@@ -1,0 +1,25 @@
+---
+apiVersion: builtin
+kind: HelmChartInflationGenerator
+metadata:
+  name: grafana
+name: grafana
+releaseName: grafana
+repo: https://grafana.github.io/helm-charts
+version: 7.3.0
+namespace: monitoring
+includeCRDs: true
+valuesInline:
+  nameOverride: grafana
+  fullnameOverride: grafana
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+      - name: Victoria Metrics
+        type: prometheus
+        url: http://victoria-metrics-single:8428
+        access: proxy
+        isDefault: true
+  testFramework:
+    enabled: false

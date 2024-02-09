@@ -120,11 +120,7 @@ func NewWorker() (*Worker, error) {
 
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
-
-	eventRepo, err := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
-	if err != nil {
-		log.Println(err)
-	}
+	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
 	imageClient, err := NewImageClient(config.ImageService, workerId, workerRepo)
 	if err != nil {
@@ -525,7 +521,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(request, done)
 	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId)
-	defer s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId)
+	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId) }()
 
 	pidChan := make(chan int, 1)
 
@@ -693,7 +689,6 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 
 func (s *Worker) startup() error {
 	log.Printf("Worker starting up.")
-	go s.eventRepo.PushWorkerStartedEvent(s.workerId)
 
 	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
 	if err != nil {
@@ -713,12 +708,14 @@ func (s *Worker) startup() error {
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
 
+	go s.eventRepo.PushWorkerStartedEvent(s.workerId)
+
 	return nil
 }
 
 func (s *Worker) shutdown() error {
 	log.Printf("Worker spinning down.")
-	go s.eventRepo.PushWorkerStoppedEvent(s.workerId)
+	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
 	worker, err := s.workerRepo.GetWorkerById(s.workerId)
 	if err != nil {

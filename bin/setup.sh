@@ -2,7 +2,7 @@
 
 # ----------------------------------------------
 # This script is used to setup the environment for Kubernetes development.
-# It installs kubectl, stern, okteto, and k3d on the machine.
+# It installs kubectl, stern, helm, okteto, and k3d on the machine.
 # It determines the operating system and architecture of the machine to download the appropriate binaries.
 # ----------------------------------------------
 
@@ -18,6 +18,7 @@ fi
 
 k8s_version=$(curl -sSfL https://dl.k8s.io/release/stable.txt)
 stern_version="1.28.0"
+helm_verision="3.14.0"
 
 echo "Installing kubectl"
 curl -sSfL "https://dl.k8s.io/release/${k8s_version}/bin/${os}/${arch}/kubectl" > /usr/local/bin/kubectl
@@ -26,6 +27,9 @@ chmod +x /usr/local/bin/kubectl
 echo "Installing stern"
 curl -sSfL "https://github.com/stern/stern/releases/download/v${stern_version}/stern_${stern_version}_${os}_${arch}.tar.gz" | tar -xz -C /usr/local/bin stern
 chmod +x /usr/local/bin/stern
+
+echo "Installing helm"
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | DESIRED_VERSION=v$helm_verision bash
 
 echo "Installing okteto"
 curl -sSfL https://get.okteto.com | sh

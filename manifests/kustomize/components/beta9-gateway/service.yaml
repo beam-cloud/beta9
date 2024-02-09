@@ -1,0 +1,31 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/port: '9090'
+    prometheus.io/scrape: 'true'
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: beta9
+    app.kubernetes.io/service: gateway
+  name: gateway
+  namespace: beta9
+spec:
+  ports:
+  - name: grpc
+    port: 1993
+    protocol: TCP
+    targetPort: 1993
+  - name: http
+    port: 1994
+    protocol: TCP
+    targetPort: 1994
+  - name: metrics
+    port: 9090
+    protocol: TCP
+    targetPort: 9090
+  selector:
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/name: beta9
+  type: LoadBalancer
