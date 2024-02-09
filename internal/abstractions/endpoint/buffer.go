@@ -3,6 +3,7 @@ package endpoint
 import (
 	"context"
 	"io/ioutil"
+	"log"
 	"math/rand"
 	"net/http"
 	"sync/atomic"
@@ -15,9 +16,14 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-type Request struct {
+type request struct {
 	ctx  echo.Context
 	done chan bool
+}
+
+type container struct {
+	id      string
+	address string
 }
 
 type RequestBuffer struct {
@@ -27,9 +33,9 @@ type RequestBuffer struct {
 	stubId              string
 	workspace           *types.Workspace
 	rdb                 *common.RedisClient
-	buffer              *abCommon.RingBuffer[Request]
 	containerRepo       repository.ContainerRepository
-	availableContainers []string
+	buffer              *abCommon.RingBuffer[request]
+	availableContainers []container
 
 	length atomic.Int32
 }
@@ -40,7 +46,6 @@ func NewRequestBuffer(
 	workspace *types.Workspace,
 	stubId string,
 	size int,
-	containers *map[string]*ContainerDetails,
 	containerRepo repository.ContainerRepository,
 ) *RequestBuffer {
 	b := &RequestBuffer{
@@ -48,7 +53,7 @@ func NewRequestBuffer(
 		rdb:           rdb,
 		workspace:     workspace,
 		stubId:        stubId,
-		buffer:        abCommon.NewRingBuffer[Request](size),
+		buffer:        abCommon.NewRingBuffer[request](size),
 		containerRepo: containerRepo,
 		httpClient:    &http.Client{},
 		length:        atomic.Int32{},
@@ -61,7 +66,7 @@ func NewRequestBuffer(
 
 func (rb *RequestBuffer) ForwardRequest(ctx echo.Context) error {
 	done := make(chan bool)
-	rb.buffer.Push(Request{
+	rb.buffer.Push(request{
 		ctx:  ctx,
 		done: done,
 	})
@@ -137,11 +142,12 @@ func (rb *RequestBuffer) discoverContainers() {
 		default:
 			containerNamePrefix := common.RedisKeys.ContainerName(endpointContainerPrefix, rb.stubId, "*")
 			containerStates, err := rb.containerRepo.GetActiveContainersByPrefix(containerNamePrefix)
+			log.Println("containerStates", containerStates)
 			if err != nil {
-
+				continue
 			}
 
-			availableContainers := []string{}
+			availableContainers := []container{}
 
 			for _, containerState := range containerStates {
 				if containerState.Status == types.ContainerStatusRunning {
@@ -151,7 +157,10 @@ func (rb *RequestBuffer) discoverContainers() {
 					}
 
 					if rb.checkAddressIsReady(containerAddress) {
-						availableContainers = append(availableContainers, containerAddress)
+						availableContainers = append(availableContainers, container{
+							id:      containerState.ContainerId,
+							address: containerAddress,
+						})
 					}
 				}
 			}
@@ -163,7 +172,7 @@ func (rb *RequestBuffer) discoverContainers() {
 	}
 }
 
-func (rb *RequestBuffer) handleHttpRequest(req Request) {
+func (rb *RequestBuffer) handleHttpRequest(req request) {
 	if len(rb.availableContainers) == 0 {
 		rb.buffer.Push(req)
 		return
@@ -171,10 +180,10 @@ func (rb *RequestBuffer) handleHttpRequest(req Request) {
 
 	// select a random container to forward the request to
 	randIndex := rand.Intn(len(rb.availableContainers))
-	containerAddress := rb.availableContainers[randIndex]
+	c := rb.availableContainers[randIndex]
 
 	request := req.ctx.Request()
-	containerUrl := "http://" + containerAddress
+	containerUrl := "http://" + c.address
 
 	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, request.Body)
 	if err != nil {
@@ -193,9 +202,7 @@ func (rb *RequestBuffer) handleHttpRequest(req Request) {
 	}
 
 	defer resp.Body.Close()
-	defer func() {
-		req.done <- true
-	}()
+	defer rb.postProcessRequest(req, c.id)
 
 	// Read the response body
 	bytes, err := ioutil.ReadAll(resp.Body)
@@ -208,4 +215,15 @@ func (rb *RequestBuffer) handleHttpRequest(req Request) {
 
 	req.ctx.Response().Writer.WriteHeader(resp.StatusCode)
 	req.ctx.Response().Writer.Write(bytes)
+}
+
+func (rb *RequestBuffer) postProcessRequest(req request, containerId string) {
+	defer func() { req.done <- true }()
+
+	// Set keep warm lock
+	err := rb.rdb.SetEx(context.TODO(), Keys.endpointKeepWarmLock(rb.workspace.Name, rb.stubId, containerId), 1, 30*time.Second).Err() // TODO: make this configurable
+	if err != nil {
+		log.Println("Error setting keep warm lock", err) // TODO: remove
+		return
+	}
 }

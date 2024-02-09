@@ -6,7 +6,6 @@ import (
 	"log"
 	"math/rand"
 	"path"
-	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -24,15 +23,6 @@ type endpointState struct {
 	FailedContainers   int
 }
 
-type ContainerDetails struct {
-	id    string
-	mutex *sync.Mutex
-	ready bool
-
-	Address            string
-	ActiveRequestCount int
-}
-
 type endpointInstance struct {
 	ctx                context.Context
 	cancelFunc         context.CancelFunc
@@ -45,7 +35,7 @@ type endpointInstance struct {
 	lock               *common.RedisLock
 	scheduler          *scheduler.Scheduler
 	containerEventChan chan types.ContainerEvent
-	containers         map[string]*ContainerDetails
+	containers         map[string]bool
 	scaleEventChan     chan int
 	rdb                *common.RedisClient
 	containerRepo      repository.ContainerRepository
@@ -68,11 +58,7 @@ func (i *endpointInstance) monitor() error {
 			_, exists := i.containers[containerEvent.ContainerId]
 			switch {
 			case !exists && containerEvent.Change == 1: // Container created and doesn't exist in map
-				i.containers[containerEvent.ContainerId] = &ContainerDetails{
-					id:    containerEvent.ContainerId,
-					mutex: &sync.Mutex{},
-					ready: false,
-				}
+				i.containers[containerEvent.ContainerId] = true
 			case exists && containerEvent.Change == -1: // Container removed and exists in map
 				delete(i.containers, containerEvent.ContainerId)
 			}
@@ -214,7 +200,7 @@ func (i *endpointInstance) stopContainers(containersToStop int) error {
 }
 
 func (i *endpointInstance) stoppableContainers() ([]string, error) {
-	patternPrefix := fmt.Sprintf("%s-%s-*", endpointContainerPrefix, "*")
+	patternPrefix := fmt.Sprintf("%s-%s-*", endpointContainerPrefix, i.stub.ExternalId)
 	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
 	if err != nil {
 		return nil, err
@@ -228,6 +214,7 @@ func (i *endpointInstance) stoppableContainers() ([]string, error) {
 		}
 
 		// Skip containers with keep warm locks
+		log.Println(Keys.endpointKeepWarmLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId))
 		keepWarmVal, err := i.rdb.Get(context.TODO(), Keys.endpointKeepWarmLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId)).Int()
 		if err != nil && err != redis.Nil {
 			log.Printf("<endpoint %s> error getting keep warm lock for container: %v\n", i.name, err)

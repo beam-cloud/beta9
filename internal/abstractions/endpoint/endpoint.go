@@ -12,13 +12,13 @@ import (
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
-	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
+
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 type EndpointService interface {
 	pb.EndpointServiceServer
-	EndpointRequest(ctx context.Context, in *pb.EndpointRequestRequest) (*pb.EndpointRequestResponse, error)
 }
 
 type RingBufferEndpointService struct {
@@ -137,12 +137,12 @@ func (es *RingBufferEndpointService) createEndpointInstance(stubId string) error
 		scheduler:          es.scheduler,
 		containerRepo:      es.containerRepo,
 		containerEventChan: make(chan types.ContainerEvent, 1),
-		containers:         make(map[string]*ContainerDetails),
+		containers:         make(map[string]bool),
 		scaleEventChan:     make(chan int, 1),
 		rdb:                es.rdb,
 	}
 
-	instance.buffer = NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, RingBufferSize, &instance.containers, es.containerRepo)
+	instance.buffer = NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, RingBufferSize, es.containerRepo)
 	autoscaler := newAutoscaler(instance)
 	instance.autoscaler = autoscaler
 
@@ -163,9 +163,8 @@ var Keys = &keys{}
 type keys struct{}
 
 var (
-	endpointKeepWarmLock               string = "endpoint:%s:%s:keep_warm_lock:%s"
-	endpointInstanceLock               string = "endpoint:%s:%s:instance_lock"
-	endpointBufferRequestsInflightLock string = "endpoint:%s:%s:requests_inflight_lock:%s"
+	endpointKeepWarmLock string = "endpoint:%s:%s:keep_warm_lock:%s"
+	endpointInstanceLock string = "endpoint:%s:%s:instance_lock"
 )
 
 func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) string {
@@ -174,8 +173,4 @@ func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) s
 
 func (k *keys) endpointInstanceLock(workspaceName, stubId string) string {
 	return fmt.Sprintf(endpointInstanceLock, workspaceName, stubId)
-}
-
-func (k *keys) endpointBufferRequestsInflightLock(workspaceName, stubId, containerId string) string {
-	return fmt.Sprintf(endpointBufferRequestsInflightLock, workspaceName, stubId, containerId)
 }
