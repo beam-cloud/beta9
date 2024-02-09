@@ -20,7 +20,7 @@ import (
 )
 
 // A "local" k8s worker pool controller means
-// the pool is local to the control plane / in-cluser
+// the pool is local to the control plane / in-cluster
 type LocalKubernetesWorkerPoolController struct {
 	ctx        context.Context
 	name       string
