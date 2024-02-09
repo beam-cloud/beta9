@@ -89,6 +89,7 @@ RUN apt-get update && \
     apt-get update
 
 RUN curl -sSL https://d.juicefs.com/install | sh -
+RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends criu nvidia-container-toolkit-base nvidia-container-toolkit
 
 RUN apt-get remove -y curl gpg && \

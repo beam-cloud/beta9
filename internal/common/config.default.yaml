@@ -1,3 +1,4 @@
+clusterName: beta9
 debugMode: false
 database:
   postgres:
@@ -56,6 +57,7 @@ imageService:
 worker:
   pools:
     default:
+      mode: local
       jobSpec:
         nodeSelector: {}
       poolSizing:
@@ -91,6 +93,35 @@ worker:
   resourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
+providers:
+  ec2:
+    accessKey:
+    secretkey: 
+    region: us-east-1
+    # If you want workers nodes to land in your default vpc, you can omit subnetId
+    subnetId:
+    ami: ami-052c704a7f82c38b1
+tailscale:
+  controlUrl:
+  user: beta9
+  authKey:
+  enabled: false
+  debug: false
+  hostName: headscale.internal
+proxy:
+  services:
+    - name: redis
+      localPort: 6379
+      destination: redis-master.beta9:6379
+    - name: juicefs-redis
+      localPort: 6380
+      destination: juicefs-redis-master.beta9:6379
+    - name: gateway-http
+      localPort: 1994
+      destination: gateway.beta9:1994
+    - name: gateway-grpc
+      localPort: 1993
+      destination: gateway.beta9:1993
 monitoring:
   prometheus:
     scrapeWorkers: true

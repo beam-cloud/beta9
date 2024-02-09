@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -29,9 +30,11 @@ const (
 )
 
 type Builder struct {
+	config        types.AppConfig
 	scheduler     *scheduler.Scheduler
 	registry      *common.ImageRegistry
 	containerRepo repository.ContainerRepository
+	tailscale     *network.Tailscale
 }
 
 type BuildOpts struct {
@@ -46,9 +49,11 @@ type BuildOpts struct {
 	ForceRebuild       bool
 }
 
-func NewBuilder(registry *common.ImageRegistry, scheduler *scheduler.Scheduler, containerRepo repository.ContainerRepository) (*Builder, error) {
+func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository) (*Builder, error) {
 	return &Builder{
+		config:        config,
 		scheduler:     scheduler,
+		tailscale:     tailscale,
 		registry:      registry,
 		containerRepo: containerRepo,
 	}, nil
@@ -137,8 +142,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
+	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
+	if err != nil {
+		return err
+	}
+
 	// TODO: replace placeholder service token
-	client, err := common.NewRunCClient(hostname, "")
+	client, err := common.NewRunCClient(hostname, "", conn)
 	if err != nil {
 		return err
 	}

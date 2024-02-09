@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-FROM ubuntu:20.04 as ubuntu
+FROM ubuntu:20.04 as base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -13,7 +13,7 @@ EOT
 
 # Python 3.12
 # ========================
-FROM ubuntu as py312
+FROM base as py312
 
 WORKDIR /workspace
 
@@ -50,7 +50,7 @@ VOLUME ["/volumes", "/snapshot"]
 
 # Python 3.11
 # ========================
-FROM ubuntu as py311
+FROM base as py311
 
 WORKDIR /workspace
 
@@ -87,7 +87,7 @@ VOLUME ["/volumes", "/snapshot"]
 
 # Python 3.10
 # ========================
-FROM ubuntu as py310
+FROM base as py310
 
 WORKDIR /workspace
 
@@ -124,7 +124,7 @@ VOLUME ["/volumes", "/snapshot"]
 
 # Python 3.9
 # ========================
-FROM ubuntu as py39
+FROM base as py39
 
 WORKDIR /workspace
 
@@ -161,7 +161,7 @@ VOLUME ["/volumes", "/snapshot"]
 
 # Python 3.8
 # ========================
-FROM ubuntu as py38
+FROM base as py38
 
 WORKDIR /workspace
 

@@ -1,12 +1,19 @@
 package providers
 
 import (
-	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"context"
+
+	"github.com/beam-cloud/beta9/internal/types"
+	"github.com/google/uuid"
 )
 
 type Provider interface {
-	ListMachines() ([]types.Instance, error)
-	StartMachine(id string) error
-	StopMachine(id string) error
-	// ProvisionMachine(config MachineConfig) (*types.Instance, error)
+	ListMachines(ctx context.Context, poolName string) (map[string]string, error)
+	ProvisionMachine(ctx context.Context, poolName, workerId, token string, compute types.ProviderComputeRequest) (string, error)
+	TerminateMachine(ctx context.Context, poolName, machineId string) error
+	Reconcile(ctx context.Context, poolName string)
+}
+
+func MachineId() string {
+	return uuid.New().String()[:8]
 }

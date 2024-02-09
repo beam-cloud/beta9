@@ -93,6 +93,36 @@ spec:
         persistentVolumeClaim:
           claimName: gateway-images
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy
+  namespace: beta9
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: proxy
+  template:
+    metadata:
+      labels:
+        app: proxy
+    spec:
+      containers:
+      - name: proxy
+        image: registry.localhost:5000/beta9-proxy:latest
+        command:
+        - /usr/local/bin/proxy
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -118,13 +148,13 @@ spec:
   selector:
     app: gateway
   ports:
-  - name: grpc
-    port: 1993
-    targetPort: 1993
-    protocol: TCP
   - name: http
     port: 1994
     targetPort: 1994
+    protocol: TCP
+  - name: grpc
+    port: 1993
+    targetPort: 1993
     protocol: TCP
   - name: prometheus
     port: 9090
