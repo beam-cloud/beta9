@@ -17,6 +17,7 @@ erDiagram
         datetime created_at
         datetime updated_at
         bool active
+        bool resuable
         uint workspace_id FK
     }
 
