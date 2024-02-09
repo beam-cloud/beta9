@@ -153,22 +153,20 @@ func (r *RedisClient) Publish(ctx context.Context, channel string, message inter
 	return r.UniversalClient.Publish(ctx, channel, message)
 }
 
-func (r *RedisClient) PSubscribe(ctx context.Context, channels ...string) (<-chan *redis.Message, <-chan error) {
+func (r *RedisClient) PSubscribe(ctx context.Context, channels ...string) (<-chan *redis.Message, <-chan error, func()) {
 	outCh := make(chan *redis.Message)
 	errCh := make(chan error)
+	onSubscribe := make(chan bool, 1)
 
 	go func() {
-		defer close(outCh)
-		defer close(errCh)
-
 		switch client := r.UniversalClient.(type) {
 		case *redis.Client:
-			r.handleChannelSubs(ctx, client.PSubscribe, outCh, errCh, channels...)
+			r.handleChannelSubs(ctx, client.PSubscribe, onSubscribe, outCh, errCh, channels...)
 
 		case *redis.ClusterClient:
 			// Shared pattern subscribe doesn't exist yet, use ForEachMaster here
 			err := client.ForEachMaster(ctx, func(ctx context.Context, rdb *redis.Client) error {
-				r.handleChannelSubs(ctx, rdb.PSubscribe, outCh, errCh, channels...)
+				r.handleChannelSubs(ctx, rdb.PSubscribe, onSubscribe, outCh, errCh, channels...)
 				return nil
 			})
 
@@ -178,12 +176,20 @@ func (r *RedisClient) PSubscribe(ctx context.Context, channels ...string) (<-cha
 		}
 	}()
 
-	return outCh, errCh
+	<-onSubscribe
+
+	close := func() {
+		defer close(outCh)
+		defer close(errCh)
+	}
+
+	return outCh, errCh, close
 }
 
 func (r *RedisClient) Subscribe(ctx context.Context, channels ...string) (<-chan *redis.Message, <-chan error) {
 	outCh := make(chan *redis.Message)
 	errCh := make(chan error)
+	onSubscribe := make(chan bool, 1)
 
 	go func() {
 		defer close(outCh)
@@ -191,12 +197,14 @@ func (r *RedisClient) Subscribe(ctx context.Context, channels ...string) (<-chan
 
 		switch client := r.UniversalClient.(type) {
 		case *redis.Client:
-			r.handleChannelSubs(ctx, client.Subscribe, outCh, errCh, channels...)
+			r.handleChannelSubs(ctx, client.Subscribe, onSubscribe, outCh, errCh, channels...)
 
 		case *redis.ClusterClient:
-			r.handleChannelSubs(ctx, client.SSubscribe, outCh, errCh, channels...)
+			r.handleChannelSubs(ctx, client.SSubscribe, onSubscribe, outCh, errCh, channels...)
 		}
 	}()
+
+	<-onSubscribe
 
 	return outCh, errCh
 }
@@ -204,6 +212,7 @@ func (r *RedisClient) Subscribe(ctx context.Context, channels ...string) (<-chan
 func (r *RedisClient) handleChannelSubs(
 	ctx context.Context,
 	subFn func(ctx context.Context, channels ...string) *redis.PubSub,
+	onSubscribe chan bool,
 	outCh chan *redis.Message,
 	errCh chan error,
 	channels ...string,
@@ -216,6 +225,8 @@ func (r *RedisClient) handleChannelSubs(
 		redis.WithChannelHealthCheckInterval(3*time.Second),
 	)
 
+	onSubscribe <- true
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -225,9 +236,11 @@ func (r *RedisClient) handleChannelSubs(
 				errCh <- ErrChannelClosed
 				return
 			}
+
 			outCh <- message
 		}
 	}
+
 }
 
 type RedisLockOptions struct {

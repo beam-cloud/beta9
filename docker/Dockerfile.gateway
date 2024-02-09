@@ -4,6 +4,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends fuse3 && \
     curl -sSL https://d.juicefs.com/install | sh -
 
+RUN curl -fsSL https://tailscale.com/install.sh | sh
+
 # Target used in development environments
 FROM base as build
 

@@ -22,6 +22,7 @@ type Token struct {
 	ExternalId  string     `db:"external_id"`
 	Key         string     `db:"key"`
 	Active      bool       `db:"active"`
+	Reusable    bool       `db:"reusable"`
 	WorkspaceId uint       `db:"workspace_id"` // Foreign key to Workspace
 	Workspace   *Workspace `db:"workspace"`    // Pointer to associated Workspace
 	CreatedAt   time.Time  `db:"created_at"`

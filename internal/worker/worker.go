@@ -23,15 +23,15 @@ import (
 )
 
 const (
-	RequestProcessingInterval     time.Duration = 100 * time.Millisecond
-	ContainerStatusUpdateInterval time.Duration = 30 * time.Second
+	requestProcessingInterval     time.Duration = 100 * time.Millisecond
+	containerStatusUpdateInterval time.Duration = 30 * time.Second
 )
 
 type Worker struct {
 	cpuLimit             int64
 	memoryLimit          int64
 	gpuType              string
-	podIPAddr            string
+	podAddr              string
 	podHostName          string
 	userImagePath        string
 	runcHandle           runc.Runc
@@ -91,7 +91,7 @@ func NewWorker() (*Worker, error) {
 	workerId := os.Getenv("WORKER_ID")
 	podHostName := os.Getenv("HOSTNAME")
 
-	podIPAddr, err := GetPodIP()
+	podAddr, err := GetPodAddr()
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +112,7 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("orker"))
+	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func NewWorker() (*Worker, error) {
 		runcServer:           runcServer,
 		containerCudaManager: NewContainerCudaManager(),
 		redisClient:          redisClient,
-		podIPAddr:            podIPAddr,
+		podAddr:              podAddr,
 		imageClient:          imageClient,
 		podHostName:          podHostName,
 		eventBus:             nil,
@@ -221,7 +221,7 @@ func (s *Worker) Run() error {
 			break
 		}
 
-		time.Sleep(RequestProcessingInterval)
+		time.Sleep(requestProcessingInterval)
 	}
 
 	log.Println("Shutting down...")
@@ -241,7 +241,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerID := request.ContainerId
 	bundlePath := filepath.Join(s.userImagePath, request.ImageId)
 
-	hostname := fmt.Sprintf("%s:%d", s.podIPAddr, defaultWorkerServerPort)
+	hostname := fmt.Sprintf("%s:%d", s.podAddr, defaultWorkerServerPort)
 	err := s.containerRepo.SetContainerWorkerHostname(request.ContainerId, hostname)
 	if err != nil {
 		return err
@@ -286,7 +286,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the trigger type,
 	// Gateway will need to directly interact with this pod/container.
-	containerAddr := fmt.Sprintf("%s:%d", s.podIPAddr, bindPort)
+	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, bindPort)
 	err = s.containerRepo.SetContainerAddress(request.ContainerId, containerAddr)
 	if err != nil {
 		return err
@@ -305,7 +305,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 	for {
-		time.Sleep(ContainerStatusUpdateInterval)
+		time.Sleep(containerStatusUpdateInterval)
 
 		s.containerLock.Lock()
 		_, exists := s.containerInstances.Get(request.ContainerId)
@@ -322,6 +322,8 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				s.stopContainerChan <- request.ContainerId
 				return nil
 			}
+
+			continue
 		}
 
 		err := s.containerRepo.UpdateContainerStatus(request.ContainerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
@@ -547,7 +549,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
 	env := []string{
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
-		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podIPAddr, options.BindPort)),
+		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", s.config.GatewayService.Host),
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.GRPCPort),

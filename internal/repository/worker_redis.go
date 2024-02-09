@@ -146,7 +146,16 @@ func (r *WorkerRedisRepository) GetWorkerById(workerId string) (*types.Worker, e
 	}
 	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
 
+	// Check if the worker key exists
 	key := common.RedisKeys.SchedulerWorkerState(workerId)
+	exists, err := r.rdb.Exists(context.TODO(), key).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	if exists == 0 {
+		return nil, &types.ErrWorkerNotFound{WorkerId: workerId}
+	}
 
 	return r.getWorkerFromKey(key)
 }

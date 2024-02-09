@@ -12,7 +12,7 @@ import (
 func main() {
 	gw, err := gateway.NewGateway()
 	if err != nil {
-		log.Fatalf("err creating gateway svc: %+v\n", err)
+		log.Fatalf("Error creating gateway service: %+v\n", err)
 	}
 
 	stop := make(chan os.Signal, 1)
@@ -22,5 +22,5 @@ func main() {
 
 	<-stop
 
-	log.Println("gateway stopped")
+	log.Println("Gateway stopped")
 }

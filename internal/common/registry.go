@@ -13,7 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	awstypes "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/beam-cloud/beta9/internal/types"
 )
 
@@ -82,13 +81,14 @@ type ObjectStore interface {
 }
 
 func NewS3Store(config types.S3ImageRegistryConfig) (*S3Store, error) {
-	cfg, err := getAWSConfig(config.AccessKeyID, config.SecretAccessKey, config.Region)
+	cfg, err := getAWSConfig(config.AWSAccessKey, config.AWSSecretKey, config.AWSRegion)
 	if err != nil {
 		return nil, err
 	}
 
 	return &S3Store{
 		client: s3.NewFromConfig(cfg),
+		config: config,
 	}, nil
 }
 
@@ -112,20 +112,18 @@ type S3Store struct {
 }
 
 func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
-	file, err := os.Open(localPath)
+	f, err := os.Open(localPath)
 	if err != nil {
 		log.Printf("error opening file<%s>: %v", localPath, err)
 		return err
 	}
-	defer file.Close()
+	defer f.Close()
 
-	var sse awstypes.ServerSideEncryption = "aws:kms"
 	uploader := manager.NewUploader(s.client)
-	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
-		Bucket:               aws.String(s.config.Bucket),
-		Key:                  aws.String(key),
-		Body:                 file,
-		ServerSideEncryption: sse,
+	_, err = uploader.Upload(context.TODO(), &s3.PutObjectInput{
+		Bucket: aws.String(s.config.AWSS3Bucket),
+		Key:    aws.String(key),
+		Body:   f,
 	})
 	if err != nil {
 		log.Printf("error uploading image to registry: %v", err)
@@ -144,7 +142,7 @@ func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 
 	downloader := manager.NewDownloader(s.client)
 	_, err = downloader.Download(ctx, f, &s3.GetObjectInput{
-		Bucket: aws.String(s.config.Bucket),
+		Bucket: aws.String(s.config.AWSS3Bucket),
 		Key:    aws.String(key),
 	}, func(d *manager.Downloader) {
 		d.PartSize = 100 * 1024 * 1024 // 100MiB per part
@@ -173,13 +171,13 @@ func (s *S3Store) Size(ctx context.Context, key string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return res.ContentLength, nil
+	return *res.ContentLength, nil
 }
 
 // headObject returns the metadata of an object
 func (s *S3Store) headObject(ctx context.Context, key string) (*s3.HeadObjectOutput, error) {
 	return s.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(s.config.Bucket),
+		Bucket: aws.String(s.config.AWSS3Bucket),
 		Key:    aws.String(key),
 	})
 }

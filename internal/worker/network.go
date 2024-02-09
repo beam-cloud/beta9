@@ -22,9 +22,14 @@ func GetRandomFreePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-// GetPodIP gets the IP from the POD_IP env var.
+// GetPodAddr gets the IP from the POD_IP env var.
 // Returns an error if it fails to retrieve an IP.
-func GetPodIP() (string, error) {
+func GetPodAddr() (string, error) {
+	addr, exists := os.LookupEnv("POD_HOSTNAME")
+	if exists {
+		return addr, nil
+	}
+
 	return getIPFromEnv("POD_IP")
 }
 

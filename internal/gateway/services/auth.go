@@ -36,7 +36,7 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	}
 
 	// Now that we have a workspace, create a new token
-	token, err := gws.backendRepo.CreateToken(ctx, workspace.Id)
+	token, err := gws.backendRepo.CreateToken(ctx, workspace.Id, true)
 	if err != nil {
 		return &pb.AuthorizeResponse{
 			Ok:       false,
