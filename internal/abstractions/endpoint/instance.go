@@ -151,7 +151,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			Memory:     i.stubConfig.Runtime.Memory,
 			Gpu:        string(i.stubConfig.Runtime.Gpu),
 			ImageId:    i.stubConfig.Runtime.ImageId,
-			EntryPoint: []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.endpoint"}, // TODO: Configurable
+			EntryPoint: []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.endpoint"},
 			Mounts: []types.Mount{
 				{
 					LocalPath: path.Join(types.DefaultExtractedObjectPath, i.workspace.Name, i.object.ExternalId),

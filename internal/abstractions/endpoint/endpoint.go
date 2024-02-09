@@ -90,12 +90,6 @@ func (es *RingBufferEndpointService) forwardRequest(
 		instances, _ = es.endpointInstances.Get(stubId)
 	}
 
-	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
-	err := json.Unmarshal([]byte(instances.stub.Config), &stubConfig)
-	if err != nil {
-		return err
-	}
-
 	return instances.buffer.ForwardRequest(ctx)
 }
 
@@ -142,7 +136,7 @@ func (es *RingBufferEndpointService) createEndpointInstance(stubId string) error
 		rdb:                es.rdb,
 	}
 
-	instance.buffer = NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, RingBufferSize, es.containerRepo)
+	instance.buffer = NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, RingBufferSize, es.containerRepo, stubConfig)
 	autoscaler := newAutoscaler(instance)
 	instance.autoscaler = autoscaler
 

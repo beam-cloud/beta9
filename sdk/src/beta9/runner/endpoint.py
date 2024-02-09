@@ -1,3 +1,4 @@
+import logging
 import os
 import signal
 
@@ -5,6 +6,17 @@ from fastapi import FastAPI, Request, Response
 from uvicorn import Config, Server
 
 from beta9.runner.common import load_handler
+
+logger = logging.getLogger("uvicorn")
+
+
+# Define the filter
+class EndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.args and len(record.args) >= 3 and record.args[2] != "/health"
+
+
+logger.addFilter(EndpointFilter())
 
 
 class EndpointManager:

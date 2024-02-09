@@ -31,6 +31,7 @@ type RequestBuffer struct {
 	httpClient *http.Client
 
 	stubId              string
+	stubConfig          *types.StubConfigV1
 	workspace           *types.Workspace
 	rdb                 *common.RedisClient
 	containerRepo       repository.ContainerRepository
@@ -47,12 +48,14 @@ func NewRequestBuffer(
 	stubId string,
 	size int,
 	containerRepo repository.ContainerRepository,
+	stubConfig *types.StubConfigV1,
 ) *RequestBuffer {
 	b := &RequestBuffer{
 		ctx:           ctx,
 		rdb:           rdb,
 		workspace:     workspace,
 		stubId:        stubId,
+		stubConfig:    stubConfig,
 		buffer:        abCommon.NewRingBuffer[request](size),
 		containerRepo: containerRepo,
 		httpClient:    &http.Client{},
@@ -76,18 +79,10 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context) error {
 		rb.length.Add(-1)
 	}()
 
-	timeoutTicker := time.NewTicker(2 * time.Minute) // TODO: make this configurable
-	defer timeoutTicker.Stop()
-
 	for {
 		select {
 		case <-rb.ctx.Done():
 		case <-done:
-			return nil
-		case <-timeoutTicker.C:
-			ctx.JSON(http.StatusRequestTimeout, map[string]interface{}{
-				"error": "Request timed out",
-			})
 			return nil
 		}
 	}
@@ -141,7 +136,6 @@ func (rb *RequestBuffer) discoverContainers() {
 		default:
 			containerNamePrefix := common.RedisKeys.ContainerName(endpointContainerPrefix, rb.stubId, "*")
 			containerStates, err := rb.containerRepo.GetActiveContainersByPrefix(containerNamePrefix)
-			log.Println("containerStates", containerStates)
 			if err != nil {
 				continue
 			}
@@ -166,7 +160,7 @@ func (rb *RequestBuffer) discoverContainers() {
 
 			rb.availableContainers = availableContainers
 
-			time.Sleep(5 * time.Second) // TODO: make this configurable
+			time.Sleep(1 * time.Second) // TODO: make this configurable
 		}
 	}
 }
@@ -187,7 +181,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, request.Body)
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "Internal server error", // TODO: improve error message
+			"error": "Internal server error",
 		})
 		return
 	}
@@ -195,7 +189,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	resp, err := rb.httpClient.Do(httpReq)
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "Internal server error", // TODO: improve error message
+			"error": "Internal server error",
 		})
 		return
 	}
@@ -207,7 +201,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	bytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "Internal server error", // TODO: improve error message
+			"error": "Internal server error",
 		})
 		return
 	}
@@ -220,9 +214,13 @@ func (rb *RequestBuffer) postProcessRequest(req request, containerId string) {
 	defer func() { req.done <- true }()
 
 	// Set keep warm lock
-	err := rb.rdb.SetEx(context.TODO(), Keys.endpointKeepWarmLock(rb.workspace.Name, rb.stubId, containerId), 1, 30*time.Second).Err() // TODO: make this configurable
+	if rb.stubConfig.KeepWarmSeconds == 0 {
+		return
+	}
+
+	err := rb.rdb.SetEx(context.TODO(), Keys.endpointKeepWarmLock(rb.workspace.Name, rb.stubId, containerId), 1, time.Duration(rb.stubConfig.KeepWarmSeconds)).Err()
 	if err != nil {
-		log.Println("Error setting keep warm lock", err) // TODO: remove
+		log.Println("Error setting keep warm lock", err)
 		return
 	}
 }
