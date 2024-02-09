@@ -125,6 +125,8 @@ func (t *Tailscale) Dial(ctx context.Context, network, addr string) (net.Conn, e
 	return conn, nil
 }
 
+// GetHostnameForService retrieves a random, available hostname for a particular service
+// These are served from the "proxy" service, which binds tsnet services to local ports
 func (t *Tailscale) GetHostnameForService(serviceName string) (string, error) {
 	hostnames, err := t.tailscaleRepo.GetHostnamesForService(serviceName)
 	if err != nil {
