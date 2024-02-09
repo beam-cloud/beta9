@@ -23,7 +23,7 @@ func NewProviderRedisRepository(rdb *common.RedisClient) ProviderRepository {
 }
 
 func (r *ProviderRedisRepository) GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error) {
-	ctx := context.TODO() // or pass context as an argument to GetMachine
+	ctx := context.TODO() // TODO: pass context as an argument to GetMachine
 
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
 	res, err := r.rdb.HGetAll(ctx, stateKey).Result()

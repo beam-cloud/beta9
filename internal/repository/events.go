@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -45,6 +46,7 @@ func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
 }
 
 func eventEndpointAvailable(ctx context.Context, addr string, timeout time.Duration) bool {
+	addr = strings.NewReplacer("http://", "", "https://", "").Replace(addr)
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return false
