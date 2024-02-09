@@ -5,9 +5,9 @@ runnerTag := latest
 
 setup:
 	bash bin/setup.sh
-	make k3d-up runner worker gateway
-	helm install beta9 deploy/charts/beta9 --values deploy/charts/beta9/values.local.yaml
-	# kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | k apply -f-
+	make k3d-up runner worker gateway proxy
+	# helm install beta9 deploy/charts/beta9 --values deploy/charts/beta9/values.local.yaml
+	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | k apply -f-
 
 setup-sdk:
 	curl -sSL https://install.python-poetry.org | python3 -
