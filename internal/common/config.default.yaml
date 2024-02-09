@@ -101,10 +101,6 @@ providers:
     # If you want workers nodes to land in your default vpc, you can omit subnetId
     subnetId:
     ami: ami-052c704a7f82c38b1
-metrics:
-  prometheus:
-    scrapeWorkers: true
-    port: 9090
 tailscale:
   controlUrl:
   user: beta9
