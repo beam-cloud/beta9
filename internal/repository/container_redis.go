@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -23,7 +22,7 @@ func NewContainerRedisRepository(r *common.RedisClient) ContainerRepository {
 }
 
 func (cr *ContainerRedisRepository) GetContainerState(containerId string) (*types.ContainerState, error) {
-	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 2})
 	if err != nil {
 		return nil, err
 	}
@@ -70,14 +69,8 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, info *
 }
 
 func (cr *ContainerRedisRepository) SetContainerExitCode(containerId string, exitCode int) error {
-	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 1})
-	if err != nil {
-		return err
-	}
-	defer cr.lock.Release(common.RedisKeys.SchedulerContainerLock(containerId))
-
 	exitCodeKey := common.RedisKeys.SchedulerContainerExitCode(containerId)
-	err = cr.rdb.SetEx(context.TODO(), exitCodeKey, exitCode, time.Duration(types.ContainerExitCodeTtlS)*time.Second).Err()
+	err := cr.rdb.SetEx(context.TODO(), exitCodeKey, exitCode, time.Duration(types.ContainerExitCodeTtlS)*time.Second).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set exit code <%v> for container <%v>: %w", exitCodeKey, containerId, err)
 	}
@@ -177,15 +170,6 @@ func (cr *ContainerRedisRepository) SetContainerWorkerHostname(containerId strin
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerContainerHost(containerId), addr, 0).Err()
 }
 
-func canConnectToHost(host string, timeout time.Duration) bool {
-	conn, err := net.DialTimeout("tcp", host, timeout)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
-}
-
 func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -202,7 +186,7 @@ func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId strin
 			return "", errors.New("timeout reached while trying to get worker hostname")
 		case <-ticker.C:
 			hostname, err = cr.rdb.Get(ctx, common.RedisKeys.SchedulerWorkerContainerHost(containerId)).Result()
-			if err == nil && canConnectToHost(hostname, 1*time.Second) {
+			if err == nil {
 				return hostname, nil
 			}
 		}

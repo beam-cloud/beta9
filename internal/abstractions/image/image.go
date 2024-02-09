@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -22,28 +23,33 @@ type RuncImageService struct {
 	pb.UnimplementedImageServiceServer
 	builder   *Builder
 	scheduler *scheduler.Scheduler
-	config    types.ImageServiceConfig
+	config    types.AppConfig
+}
+
+type ImageServiceOpts struct {
+	Config        types.AppConfig
+	ContainerRepo repository.ContainerRepository
+	Scheduler     *scheduler.Scheduler
+	Tailscale     *network.Tailscale
 }
 
 func NewRuncImageService(
 	ctx context.Context,
-	config types.ImageServiceConfig,
-	scheduler *scheduler.Scheduler,
-	containerRepo repository.ContainerRepository,
+	opts ImageServiceOpts,
 ) (ImageService, error) {
-	registry, err := common.NewImageRegistry(config)
+	registry, err := common.NewImageRegistry(opts.Config.ImageService)
 	if err != nil {
 		return nil, err
 	}
 
-	builder, err := NewBuilder(registry, scheduler, containerRepo)
+	builder, err := NewBuilder(opts.Config, registry, opts.Scheduler, opts.Tailscale, opts.ContainerRepo)
 	if err != nil {
 		return nil, err
 	}
 
 	return &RuncImageService{
 		builder: builder,
-		config:  config,
+		config:  opts.Config,
 	}, nil
 }
 
@@ -51,9 +57,9 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 	var valid bool = true
 
 	imageId, err := is.builder.GetImageId(&BuildOpts{
-		BaseImageTag:      is.config.Runner.Tags[in.PythonVersion],
-		BaseImageName:     is.config.Runner.BaseImageName,
-		BaseImageRegistry: is.config.Runner.BaseImageRegistry,
+		BaseImageTag:      is.config.ImageService.Runner.Tags[in.PythonVersion],
+		BaseImageName:     is.config.ImageService.Runner.BaseImageName,
+		BaseImageRegistry: is.config.ImageService.Runner.BaseImageRegistry,
 		PythonVersion:     in.PythonVersion,
 		PythonPackages:    in.PythonPackages,
 		Commands:          in.Commands,
@@ -74,9 +80,9 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	log.Printf("incoming image build request: %+v", in)
 
 	buildOptions := &BuildOpts{
-		BaseImageTag:      is.config.Runner.Tags[in.PythonVersion],
-		BaseImageName:     is.config.Runner.BaseImageName,
-		BaseImageRegistry: is.config.Runner.BaseImageRegistry,
+		BaseImageTag:      is.config.ImageService.Runner.Tags[in.PythonVersion],
+		BaseImageName:     is.config.ImageService.Runner.BaseImageName,
+		BaseImageRegistry: is.config.ImageService.Runner.BaseImageRegistry,
 		PythonVersion:     in.PythonVersion,
 		PythonPackages:    in.PythonPackages,
 		Commands:          in.Commands,

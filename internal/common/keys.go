@@ -20,7 +20,6 @@ var (
 
 var (
 	gatewayPrefix                      string = "gateway"
-	gatewayBucketLock                  string = "gateway:bucket_lock:%s"
 	gatewayDefaultDeployment           string = "gateway:default_deployment:%s"
 	gatewayDeploymentMinContainerCount string = "gateway:min_containers:%s"
 	gatewayAuthKey                     string = "gateway:auth:%s:%s"
@@ -39,10 +38,21 @@ var (
 )
 
 var (
-	contextPrefix               string = "context"
-	contextConcurrencyQuota     string = "context:concurrency_quota:%s"
-	contextActiveContainer      string = "context:container:active:%s:%s:%s" // contextId, containerId, gpuType
-	contextActiveContainersLock string = "context:container:active:lock:%s"  // contextId
+	workspacePrefix               string = "workspace"
+	workspaceConcurrencyQuota     string = "workspace:concurrency_quota:%s"
+	workspaceActiveContainer      string = "workspace:container:active:%s:%s:%s"
+	workspaceActiveContainersLock string = "workspace:container:active:lock:%s"
+)
+
+var (
+	providerPrefix       string = "provider"
+	providerMachineState string = "provider:machine:%s:%s:%s"
+	providerMachineLock  string = "provider:machine:%s:%s:%s:lock"
+)
+
+var (
+	tailscalePrefix          string = "tailscale"
+	tailscaleServiceHostname string = "tailscale:%s:%s"
 )
 
 var (
@@ -103,10 +113,6 @@ func (rk *redisKeys) GatewayPrefix() string {
 	return gatewayPrefix
 }
 
-func (rk *redisKeys) GatewayBucketLock(bucketName string) string {
-	return fmt.Sprintf(gatewayBucketLock, bucketName)
-}
-
 func (rk *redisKeys) GatewayDefaultDeployment(appId string) string {
 	return fmt.Sprintf(gatewayDefaultDeployment, appId)
 }
@@ -136,6 +142,23 @@ func (rk *redisKeys) WorkerImageLock(workerId string, imageId string) string {
 	return fmt.Sprintf(workerImageLock, workerId, imageId)
 }
 
+// Workspace keys
+func (rk *redisKeys) WorkspacePrefix() string {
+	return workspacePrefix
+}
+
+func (rk *redisKeys) WorkspaceConcurrencyQuota(workspaceId string) string {
+	return fmt.Sprintf(workspaceConcurrencyQuota, workspaceId)
+}
+
+func (rk *redisKeys) WorkspaceActiveContainer(workspaceId string, containerId string, gpuType string) string {
+	return fmt.Sprintf(workspaceActiveContainer, workspaceId, containerId, gpuType)
+}
+
+func (rk *redisKeys) WorkspaceActiveContainerLock(workspaceId string) string {
+	return fmt.Sprintf(workspaceActiveContainersLock, workspaceId)
+}
+
 // WorkerPool keys
 func (rk *redisKeys) WorkerPoolLock(poolId string) string {
 	return fmt.Sprintf(workerPoolLock, poolId)
@@ -145,20 +168,26 @@ func (rk *redisKeys) WorkerPoolState(poolId string) string {
 	return fmt.Sprintf(workerPoolState, poolId)
 }
 
-func (rk *redisKeys) ContextPrefix() string {
-	return contextPrefix
+// Tailscale keys
+func (rk *redisKeys) TailscalePrefix() string {
+	return tailscalePrefix
 }
 
-func (rk *redisKeys) ContextConcurrencyQuota(contextId string) string {
-	return fmt.Sprintf(contextConcurrencyQuota, contextId)
+func (rk *redisKeys) TailscaleServiceHostname(serviceName, hostName string) string {
+	return fmt.Sprintf(tailscaleServiceHostname, serviceName, hostName)
 }
 
-func (rk *redisKeys) ContextActiveContainer(contextId string, containerId string, gpuType string) string {
-	return fmt.Sprintf(contextActiveContainer, contextId, containerId, gpuType)
+// Provider keys
+func (rk *redisKeys) ProviderPrefix() string {
+	return providerPrefix
 }
 
-func (rk *redisKeys) ContextActiveContainerLock(contextId string) string {
-	return fmt.Sprintf(contextActiveContainersLock, contextId)
+func (rk *redisKeys) ProviderMachineState(providerName, poolName, machineId string) string {
+	return fmt.Sprintf(providerMachineState, providerName, poolName, machineId)
+}
+
+func (rk *redisKeys) ProviderMachineLock(providerName, poolName, machineId string) string {
+	return fmt.Sprintf(providerMachineLock, providerName, poolName, machineId)
 }
 
 func (rk *redisKeys) ContainerName(prefix string, stubId string, containerId string) string {

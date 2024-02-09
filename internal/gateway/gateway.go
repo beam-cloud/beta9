@@ -17,6 +17,7 @@ import (
 	simplequeue "github.com/beam-cloud/beta9/internal/abstractions/queue"
 	"github.com/beam-cloud/beta9/internal/abstractions/taskqueue"
 	gatewayservices "github.com/beam-cloud/beta9/internal/gateway/services"
+	"github.com/beam-cloud/beta9/internal/network"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
@@ -44,6 +45,8 @@ type Gateway struct {
 	redisClient    *common.RedisClient
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
+	ProviderRepo   repository.ProviderRepository
+	Tailscale      *network.Tailscale
 	metricsRepo    repository.PrometheusRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
@@ -65,8 +68,7 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	metricsRepo := repository.NewMetricsPrometheusRepository(config.Monitoring.Prometheus)
-
-	scheduler, err := scheduler.NewScheduler(config, redisClient, metricsRepo)
+	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
 	if err != nil {
 		return nil, err
 	}
@@ -82,19 +84,30 @@ func NewGateway() (*Gateway, error) {
 		ctx:         ctx,
 		cancelFunc:  cancel,
 		Storage:     storage,
-		Scheduler:   scheduler,
 	}
 
-	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
+	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
+	tailscale := network.GetOrCreateTailscale(network.TailscaleConfig{
+		ControlURL: config.Tailscale.ControlURL,
+		AuthKey:    config.Tailscale.AuthKey,
+		Debug:      config.Tailscale.Debug,
+		Ephemeral:  true,
+	}, tailscaleRepo)
+
+	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, metricsRepo, backendRepo, tailscale)
 	if err != nil {
 		return nil, err
 	}
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
+	providerRepo := repository.NewProviderRedisRepository(redisClient)
 
 	gateway.config = config
+	gateway.Scheduler = scheduler
 	gateway.ContainerRepo = containerRepo
+	gateway.ProviderRepo = providerRepo
 	gateway.BackendRepo = backendRepo
+	gateway.Tailscale = tailscale
 	gateway.metricsRepo = metricsRepo
 
 	return gateway, nil
@@ -122,7 +135,7 @@ func (g *Gateway) initHttp() error {
 	g.baseRouteGroup = e.Group(apiv1.HttpServerBaseRoute)
 
 	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.redisClient)
-	apiv1.NewDeployGroup(g.baseRouteGroup.Group("/deploy", authMiddleware), g.BackendRepo)
+	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.config)
 	return nil
 }
 
@@ -132,8 +145,8 @@ func (g *Gateway) initGrpc() error {
 	serverOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(authInterceptor.Unary()),
 		grpc.StreamInterceptor(authInterceptor.Stream()),
-		grpc.MaxRecvMsgSize(g.config.GatewayService.GRPCMaxRecvMsgSize * 1024 * 1024),
-		grpc.MaxSendMsgSize(g.config.GatewayService.GRPCMaxSendMsgSize * 1024 * 1024),
+		grpc.MaxRecvMsgSize(g.config.GatewayService.MaxRecvMsgSize * 1024 * 1024),
+		grpc.MaxSendMsgSize(g.config.GatewayService.MaxSendMsgSize * 1024 * 1024),
 	}
 
 	g.grpcServer = grpc.NewServer(
@@ -159,14 +172,27 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterSimpleQueueServiceServer(g.grpcServer, rq)
 
 	// Register image service
-	is, err := image.NewRuncImageService(g.ctx, g.config.ImageService, g.Scheduler, g.ContainerRepo)
+	is, err := image.NewRuncImageService(g.ctx, image.ImageServiceOpts{
+		Config:        g.config,
+		ContainerRepo: g.ContainerRepo,
+		Scheduler:     g.Scheduler,
+		Tailscale:     g.Tailscale,
+	})
 	if err != nil {
 		return err
 	}
 	pb.RegisterImageServiceServer(g.grpcServer, is)
 
 	// Register function service
-	fs, err := function.NewRuncFunctionService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler, g.baseRouteGroup)
+	fs, err := function.NewRuncFunctionService(g.ctx, function.FunctionServiceOpts{
+		Config:         g.config,
+		RedisClient:    g.redisClient,
+		BackendRepo:    g.BackendRepo,
+		ContainerRepo:  g.ContainerRepo,
+		Scheduler:      g.Scheduler,
+		Tailscale:      g.Tailscale,
+		BaseRouteGroup: g.baseRouteGroup,
+	})
 	if err != nil {
 		return err
 	}

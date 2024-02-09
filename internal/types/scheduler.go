@@ -18,8 +18,8 @@ type Worker struct {
 	Cpu             int64        `json:"cpu" redis:"cpu"`
 	Memory          int64        `json:"memory" redis:"memory"`
 	Gpu             string       `json:"gpu" redis:"gpu"`
-	Agent           string       `json:"agent" redis:"agent"`
 	PoolId          string       `json:"pool_id" redis:"pool_id"`
+	MachineId       string       `json:"machine_id" redis:"machine_id"`
 	ResourceVersion int64        `json:"resource_version" redis:"resource_version"`
 }
 
@@ -53,38 +53,28 @@ type ContainerState struct {
 }
 
 type ContainerRequest struct {
-	ContainerId     string    `json:"container_id"`
-	EntryPoint      []string  `json:"entry_point"`
-	Env             []string  `json:"env"`
-	Cpu             int64     `json:"cpu"`
-	Memory          int64     `json:"memory"`
-	Gpu             string    `json:"gpu"`
-	SourceImage     *string   `json:"source_image"`
-	ImageId         string    `json:"image_id"`
-	Timestamp       time.Time `json:"timestamp"`
-	ScheduleTimeout float64   `json:"schedule_timeout"`
-	Mounts          []Mount   `json:"mounts"`
-	OnScheduleChan  chan bool `json:"-"`
+	ContainerId string    `json:"container_id"`
+	EntryPoint  []string  `json:"entry_point"`
+	Env         []string  `json:"env"`
+	Cpu         int64     `json:"cpu"`
+	Memory      int64     `json:"memory"`
+	Gpu         string    `json:"gpu"`
+	SourceImage *string   `json:"source_image"`
+	ImageId     string    `json:"image_id"`
+	Timestamp   time.Time `json:"timestamp"`
+	Mounts      []Mount   `json:"mounts"`
+	RetryCount  int       `json:"retry_count"`
 }
 
 const ContainerExitCodeTtlS int = 300
 
-// Container Stats
 const (
-	ContainerDurationStatsKey              string        = "beta9.worker.usage.container.duration"
-	ContainerLifecycleStatsKey             string        = "beta9.worker.usage.container.lifecycle"
 	ContainerDurationEmissionInterval      time.Duration = 30 * time.Second
 	ContainerResourceUsageEmissionInterval time.Duration = 3 * time.Second
-
-	// Container Statuses
-	ContainerStatusRequested string = "REQUESTED"
-	ContainerStatusScheduled string = "SCHEDULED"
-	ContainerStatusStarted   string = "STARTED"
-	ContainerStatusStopped   string = "STOPPED"
 )
 const ContainerStateTtlSWhilePending int = 600
 const ContainerStateTtlS int = 60
-const IdentityQuotaTtlS int = 600
+const WorkspaceQuotaTtlS int = 600
 
 type ErrContainerStateNotFound struct {
 	ContainerId string

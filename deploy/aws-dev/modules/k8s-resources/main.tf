@@ -18,8 +18,9 @@ provider "helm" {
 
 # SSL Certificate for the service exposed
 resource "aws_acm_certificate" "ssl_cert" {
-  domain_name       = var.domain
-  validation_method = "DNS"
+  domain_name               = var.domain
+  validation_method         = "DNS"
+  subject_alternative_names = ["*.${var.domain}"]
 
   lifecycle {
     create_before_destroy = true
@@ -39,7 +40,7 @@ resource "aws_route53_record" "cert_validation" {
       name   = dvo.resource_record_name
       record = dvo.resource_record_value
       type   = dvo.resource_record_type
-    }
+    } if dvo.domain_name == var.domain
   }
 
   zone_id = var.domain_hosted_zone_id

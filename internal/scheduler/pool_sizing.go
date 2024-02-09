@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 const poolMonitoringInterval = 1 * time.Second
 
 type WorkerPoolSizer struct {
+	ctx        context.Context
 	controller WorkerPoolController
 	config     *types.WorkerPoolSizingConfig
 }

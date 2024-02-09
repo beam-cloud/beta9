@@ -48,7 +48,7 @@ type BackendRepository interface {
 	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error)
 	GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error)
 	GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error)
-	CreateToken(ctx context.Context, workspaceId uint) (types.Token, error)
+	CreateToken(ctx context.Context, workspaceId uint, reusable bool) (types.Token, error)
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error)
 	RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error)
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
@@ -71,6 +71,19 @@ type WorkerPoolRepository interface {
 	GetPools() ([]types.WorkerPoolConfig, error)
 	SetPool(name string, pool types.WorkerPoolConfig) error
 	RemovePool(name string) error
+}
+
+type ProviderRepository interface {
+	GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
+	RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error
+	WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
+	SetMachineLock(providerName, poolName, machineId string) error
+	RemoveMachineLock(providerName, poolName, machineId string) error
+}
+
+type TailscaleRepository interface {
+	GetHostnamesForService(serviceName string) ([]string, error)
+	SetHostname(serviceName, serviceId, hostName string) error
 }
 
 type EventRepository interface {

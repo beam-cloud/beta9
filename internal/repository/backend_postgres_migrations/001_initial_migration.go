@@ -33,6 +33,7 @@ func upCreateTables(tx *sql.Tx) error {
             external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
             key VARCHAR(255) NOT NULL,
             active BOOLEAN NOT NULL,
+            reusable BOOLEAN DEFAULT true NOT NULL,
             workspace_id INT REFERENCES workspace(id),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
