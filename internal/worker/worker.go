@@ -23,8 +23,8 @@ import (
 )
 
 const (
-	RequestProcessingInterval     time.Duration = 100 * time.Millisecond
-	ContainerStatusUpdateInterval time.Duration = 30 * time.Second
+	requestProcessingInterval     time.Duration = 100 * time.Millisecond
+	containerStatusUpdateInterval time.Duration = 30 * time.Second
 )
 
 type Worker struct {
@@ -218,7 +218,7 @@ func (s *Worker) Run() error {
 			break
 		}
 
-		time.Sleep(RequestProcessingInterval)
+		time.Sleep(requestProcessingInterval)
 	}
 
 	log.Println("Shutting down...")
@@ -302,7 +302,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 	for {
-		time.Sleep(ContainerStatusUpdateInterval)
+		time.Sleep(containerStatusUpdateInterval)
 
 		s.containerLock.Lock()
 		_, exists := s.containerInstances.Get(request.ContainerId)
@@ -319,6 +319,8 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				s.stopContainerChan <- request.ContainerId
 				return nil
 			}
+
+			continue
 		}
 
 		err := s.containerRepo.UpdateContainerStatus(request.ContainerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)

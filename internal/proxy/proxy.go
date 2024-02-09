@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -22,7 +23,7 @@ import (
 type Proxy struct {
 	config            types.AppConfig
 	workerPoolManager *scheduler.WorkerPoolManager
-	tailscale         *common.Tailscale
+	tailscale         *network.Tailscale
 	services          []types.InternalService
 	tailscaleRepo     repository.TailscaleRepository
 }
@@ -40,9 +41,19 @@ func NewProxy() (*Proxy, error) {
 	}
 
 	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
+	tailscale := network.GetOrCreateTailscale(network.TailscaleConfig{
+		ControlURL: config.Tailscale.ControlURL,
+		AuthKey:    config.Tailscale.AuthKey,
+		Debug:      config.Tailscale.Debug,
+		Ephemeral:  true,
+	},
+		tailscaleRepo,
+	)
+
 	return &Proxy{
 		config:        config,
 		services:      config.Proxy.Services,
+		tailscale:     tailscale,
 		tailscaleRepo: tailscaleRepo,
 	}, nil
 }
@@ -64,14 +75,14 @@ func (p *Proxy) Start() error {
 		}
 
 		// If tailscale is enabled, bind services as tailscale nodes
-		tailscale := common.GetOrCreateTailscale(common.TailscaleConfig{
+		tailscale := network.GetOrCreateTailscale(network.TailscaleConfig{
 			Hostname:   fmt.Sprintf("%s-%s", service.Name, serviceId),
 			ControlURL: p.config.Tailscale.ControlURL,
 			AuthKey:    p.config.Tailscale.AuthKey,
 			Debug:      p.config.Tailscale.Debug,
 			Dir:        fmt.Sprintf("/tmp/%s", service.Name),
 			Ephemeral:  true,
-		})
+		}, p.tailscaleRepo)
 
 		listener, err := tailscale.Serve(context.TODO(), service)
 		if err != nil {

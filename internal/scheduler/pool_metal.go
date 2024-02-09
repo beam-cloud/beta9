@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/providers"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -19,7 +20,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
-	"tailscale.com/tsnet"
 )
 
 type MetalWorkerPoolController struct {
@@ -27,11 +27,11 @@ type MetalWorkerPoolController struct {
 	name           string
 	config         types.AppConfig
 	provider       providers.Provider
+	tailscale      *network.Tailscale
 	backendRepo    repository.BackendRepository
 	workerPool     types.WorkerPoolConfig
 	workerRepo     repository.WorkerRepository
 	workerPoolRepo repository.WorkerPoolRepository
-	tailscaleRepo  repository.TailscaleRepository
 	providerName   *types.MachineProvider
 	providerRepo   repository.ProviderRepository
 }
@@ -44,14 +44,14 @@ func NewMetalWorkerPoolController(
 	workerRepo repository.WorkerRepository,
 	workerPoolRepo repository.WorkerPoolRepository,
 	providerRepo repository.ProviderRepository,
-	tailscaleRepo repository.TailscaleRepository,
+	tailscale *network.Tailscale,
 	providerName *types.MachineProvider) (WorkerPoolController, error) {
 	var provider providers.Provider = nil
 	var err error = nil
 
 	switch *providerName {
 	case types.ProviderEC2:
-		provider, err = providers.NewEC2Provider(config, providerRepo, tailscaleRepo, workerRepo)
+		provider, err = providers.NewEC2Provider(config, providerRepo, workerRepo, tailscale)
 	default:
 		return nil, errors.New("invalid provider name")
 	}
@@ -70,7 +70,7 @@ func NewMetalWorkerPoolController(
 		workerPoolRepo: workerPoolRepo,
 		providerName:   providerName,
 		providerRepo:   providerRepo,
-		tailscaleRepo:  tailscaleRepo,
+		tailscale:      tailscale,
 		provider:       provider,
 	}
 
@@ -374,11 +374,9 @@ func (wpc *MetalWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMou
 }
 
 func (wpc *MetalWorkerPoolController) getProxiedClient(hostname, token string) (*kubernetes.Clientset, error) {
-	var s *tsnet.Server = wpc.tailscaleRepo.GetTailscaleServer()
-
 	// Create a custom transport to skip tls & use tsnet for dialing
 	transport := &http.Transport{
-		DialContext:     s.Dial,
+		DialContext:     wpc.tailscale.Dial,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 

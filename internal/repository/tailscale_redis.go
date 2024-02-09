@@ -3,12 +3,10 @@ package repository
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/types"
-	"tailscale.com/tsnet"
 )
 
 const (
@@ -16,50 +14,35 @@ const (
 )
 
 type TailscaleRedisRepository struct {
-	rdb       *common.RedisClient
-	tailscale *common.Tailscale
+	rdb *common.RedisClient
 }
 
 func NewTailscaleRedisRepository(r *common.RedisClient, config types.AppConfig) TailscaleRepository {
-	tailscale := common.GetOrCreateTailscale(common.TailscaleConfig{
-		ControlURL: config.Tailscale.ControlURL,
-		AuthKey:    config.Tailscale.AuthKey,
-		Debug:      config.Tailscale.Debug,
-		Ephemeral:  true,
-	})
-	return &TailscaleRedisRepository{rdb: r, tailscale: tailscale}
+	return &TailscaleRedisRepository{rdb: r}
 }
 
-func (ts *TailscaleRedisRepository) GetHostnameForService(serviceName string) (string, error) {
+func (ts *TailscaleRedisRepository) GetHostnamesForService(serviceName string) ([]string, error) {
+	hostnames := []string{}
+
 	keys, err := ts.rdb.Keys(context.TODO(), common.RedisKeys.TailscaleServiceHostname(serviceName, "*"))
 	if err != nil {
-		return "", err
+		return hostnames, err
 	}
 
 	if len(keys) == 0 {
-		return "", fmt.Errorf("no hostname found for service<%s>", serviceName)
+		return hostnames, fmt.Errorf("no hostname found for service<%s>", serviceName)
 	}
 
-	for len(keys) > 0 {
-		index := rand.Intn(len(keys))
-		key := keys[index]
-
+	for _, key := range keys {
 		hostname, err := ts.rdb.Get(context.TODO(), key).Result()
 		if err != nil {
-			keys = append(keys[:index], keys[index+1:]...)
 			continue
 		}
 
-		conn, err := ts.tailscale.Dial(context.TODO(), hostname)
-		if err == nil {
-			conn.Close()
-			return hostname, nil
-		}
-
-		keys = append(keys[:index], keys[index+1:]...)
+		hostnames = append(hostnames, hostname)
 	}
 
-	return "", fmt.Errorf("unable to find a valid hostname for service<%s>", serviceName)
+	return hostnames, nil
 }
 
 func (ts *TailscaleRedisRepository) SetHostname(serviceName, serviceId string, hostName string) error {
@@ -68,8 +51,4 @@ func (ts *TailscaleRedisRepository) SetHostname(serviceName, serviceId string, h
 		hostName,
 		tailscaleHostNameExpiration,
 	).Err()
-}
-
-func (ts *TailscaleRedisRepository) GetTailscaleServer() *tsnet.Server {
-	return ts.tailscale.GetServer()
 }

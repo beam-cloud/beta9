@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 
 	pb "github.com/beam-cloud/beta9/proto"
@@ -19,12 +20,14 @@ type RunCClient struct {
 	ServiceToken string
 	conn         *grpc.ClientConn
 	client       pb.RunCServiceClient
+	existingConn net.Conn
 }
 
-func NewRunCClient(serviceUrl, serviceToken string) (*RunCClient, error) {
+func NewRunCClient(serviceUrl, serviceToken string, existingConn net.Conn) (*RunCClient, error) {
 	client := &RunCClient{
 		ServiceUrl:   serviceUrl,
 		ServiceToken: serviceToken,
+		existingConn: existingConn,
 	}
 
 	err := client.connect()
@@ -45,6 +48,13 @@ func (c *RunCClient) connect() error {
 	}
 
 	var dialOpts = []grpc.DialOption{grpcOption}
+
+	// Use existingConn if provided
+	if c.existingConn != nil {
+		dialOpts = append(dialOpts, grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			return c.existingConn, nil
+		}))
+	}
 
 	maxMessageSize := 1 << 30 // 1Gi
 	if c.ServiceToken != "" {

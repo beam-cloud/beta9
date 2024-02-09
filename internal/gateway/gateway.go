@@ -16,6 +16,7 @@ import (
 	simplequeue "github.com/beam-cloud/beta9/internal/abstractions/queue"
 	"github.com/beam-cloud/beta9/internal/abstractions/taskqueue"
 	gatewayservices "github.com/beam-cloud/beta9/internal/gateway/services"
+	"github.com/beam-cloud/beta9/internal/network"
 
 	volume "github.com/beam-cloud/beta9/internal/abstractions/volume"
 
@@ -42,7 +43,7 @@ type Gateway struct {
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
-	TailscaleRepo  repository.TailscaleRepository
+	Tailscale      *network.Tailscale
 	metricsRepo    repository.PrometheusRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
@@ -69,35 +70,41 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, metricsRepo, backendRepo)
-	if err != nil {
-		return nil, err
-	}
-
 	storage, err := storage.NewStorage(config.Storage)
 	if err != nil {
 		return nil, err
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	gateway := &Gateway{
 		redisClient: redisClient,
 		ctx:         ctx,
 		cancelFunc:  cancel,
 		Storage:     storage,
-		Scheduler:   scheduler,
+	}
+
+	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
+	tailscale := network.GetOrCreateTailscale(network.TailscaleConfig{
+		ControlURL: config.Tailscale.ControlURL,
+		AuthKey:    config.Tailscale.AuthKey,
+		Debug:      config.Tailscale.Debug,
+		Ephemeral:  true,
+	}, tailscaleRepo)
+
+	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, metricsRepo, backendRepo, tailscale)
+	if err != nil {
+		return nil, err
 	}
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
-	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
 
 	gateway.config = config
+	gateway.Scheduler = scheduler
 	gateway.ContainerRepo = containerRepo
 	gateway.ProviderRepo = providerRepo
 	gateway.BackendRepo = backendRepo
-	gateway.TailscaleRepo = tailscaleRepo
+	gateway.Tailscale = tailscale
 	gateway.metricsRepo = metricsRepo
 
 	return gateway, nil
@@ -115,7 +122,7 @@ func (g *Gateway) initHttp() error {
 	g.baseRouteGroup = g.httpServer.Group(apiv1.HttpServerBaseRoute)
 
 	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.redisClient)
-	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.TailscaleRepo, g.config)
+	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.config)
 	return nil
 }
 
@@ -152,14 +159,27 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterSimpleQueueServiceServer(g.grpcServer, rq)
 
 	// Register image service
-	is, err := image.NewRuncImageService(g.ctx, g.config.ImageService, g.Scheduler, g.ContainerRepo)
+	is, err := image.NewRuncImageService(g.ctx, image.ImageServiceOpts{
+		Config:        g.config,
+		ContainerRepo: g.ContainerRepo,
+		Scheduler:     g.Scheduler,
+		Tailscale:     g.Tailscale,
+	})
 	if err != nil {
 		return err
 	}
 	pb.RegisterImageServiceServer(g.grpcServer, is)
 
 	// Register function service
-	fs, err := function.NewRuncFunctionService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler, g.baseRouteGroup)
+	fs, err := function.NewRuncFunctionService(g.ctx, function.FunctionServiceOpts{
+		Config:         g.config,
+		RedisClient:    g.redisClient,
+		BackendRepo:    g.BackendRepo,
+		ContainerRepo:  g.ContainerRepo,
+		Scheduler:      g.Scheduler,
+		Tailscale:      g.Tailscale,
+		BaseRouteGroup: g.baseRouteGroup,
+	})
 	if err != nil {
 		return err
 	}

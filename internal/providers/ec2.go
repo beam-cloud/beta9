@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsTypes "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 )
@@ -25,7 +26,7 @@ type EC2Provider struct {
 	appConfig      types.AppConfig
 	providerConfig types.EC2ProviderConfig
 	providerRepo   repository.ProviderRepository
-	tailscaleRepo  repository.TailscaleRepository
+	tailscale      *network.Tailscale
 	workerRepo     repository.WorkerRepository
 }
 
@@ -35,7 +36,7 @@ const (
 	ec2ReconcileInterval         time.Duration = 5 * time.Second
 )
 
-func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderRepository, tailscaleRepo repository.TailscaleRepository, workerRepo repository.WorkerRepository) (*EC2Provider, error) {
+func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*EC2Provider, error) {
 	credentials := credentials.NewStaticCredentialsProvider(appConfig.Providers.EC2Config.AWSAccessKeyID, appConfig.Providers.EC2Config.AWSSecretAccessKey, "")
 
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
@@ -53,7 +54,7 @@ func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderR
 		appConfig:      appConfig,
 		providerConfig: appConfig.Providers.EC2Config,
 		providerRepo:   providerRepo,
-		tailscaleRepo:  tailscaleRepo,
+		tailscale:      tailscale,
 		workerRepo:     workerRepo,
 	}, nil
 }
@@ -122,7 +123,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, 
 		return "", err
 	}
 
-	gatewayHost, err := p.tailscaleRepo.GetHostnameForService("gateway-http")
+	gatewayHost, err := p.tailscale.GetHostnameForService("gateway-http")
 	if err != nil {
 		return "", err
 	}
@@ -143,15 +144,19 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, 
 		return "", err
 	}
 
+	// TODO: remove once we sort out connection issues
+	roleArn := "arn:aws:iam::187248174200:instance-profile/beta-dev-k3s-instance-profile"
+
 	log.Printf("Selected instance type <%s> for compute request: %+v\n", instanceType, compute)
 	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
 	input := &ec2.RunInstancesInput{
-		ImageId:      aws.String(p.providerConfig.AMI),
-		InstanceType: awsTypes.InstanceType(instanceType),
-		MinCount:     aws.Int32(1),
-		MaxCount:     aws.Int32(1),
-		UserData:     aws.String(encodedUserData),
-		SubnetId:     p.providerConfig.SubnetId,
+		ImageId:            aws.String(p.providerConfig.AMI),
+		InstanceType:       awsTypes.InstanceType(instanceType),
+		MinCount:           aws.Int32(1),
+		MaxCount:           aws.Int32(1),
+		UserData:           aws.String(encodedUserData),
+		SubnetId:           p.providerConfig.SubnetId,
+		IamInstanceProfile: &awsTypes.IamInstanceProfileSpecification{Arn: &roleArn},
 	}
 
 	result, err := p.client.RunInstances(ctx, input)
@@ -251,6 +256,7 @@ func (p *EC2Provider) ListMachines(ctx context.Context, poolName string) (map[st
 						break
 					}
 				}
+
 				machines[machineId] = *instance.InstanceId
 			}
 		}

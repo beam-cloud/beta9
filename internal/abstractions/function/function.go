@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"path"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -38,34 +40,44 @@ type RunCFunctionService struct {
 	backendRepo     repository.BackendRepository
 	containerRepo   repository.ContainerRepository
 	scheduler       *scheduler.Scheduler
+	tailscale       *network.Tailscale
+	config          types.AppConfig
 	keyEventManager *common.KeyEventManager
 	rdb             *common.RedisClient
 	routeGroup      *echo.Group
 }
 
+type FunctionServiceOpts struct {
+	Config         types.AppConfig
+	RedisClient    *common.RedisClient
+	BackendRepo    repository.BackendRepository
+	ContainerRepo  repository.ContainerRepository
+	Scheduler      *scheduler.Scheduler
+	Tailscale      *network.Tailscale
+	BaseRouteGroup *echo.Group
+}
+
 func NewRuncFunctionService(ctx context.Context,
-	rdb *common.RedisClient,
-	backendRepo repository.BackendRepository,
-	containerRepo repository.ContainerRepository,
-	scheduler *scheduler.Scheduler,
-	baseRouteGroup *echo.Group,
+	opts FunctionServiceOpts,
 ) (FunctionService, error) {
-	keyEventManager, err := common.NewKeyEventManager(rdb)
+	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
 	if err != nil {
 		return nil, err
 	}
 
 	fs := &RunCFunctionService{
-		backendRepo:     backendRepo,
-		containerRepo:   containerRepo,
-		scheduler:       scheduler,
-		rdb:             rdb,
+		config:          opts.Config,
+		backendRepo:     opts.BackendRepo,
+		containerRepo:   opts.ContainerRepo,
+		scheduler:       opts.Scheduler,
+		tailscale:       opts.Tailscale,
+		rdb:             opts.RedisClient,
 		keyEventManager: keyEventManager,
 	}
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(backendRepo)
-	registerFunctionRoutes(baseRouteGroup.Group(functionRoutePrefix, authMiddleware), fs)
+	authMiddleware := auth.AuthMiddleware(fs.backendRepo)
+	registerFunctionRoutes(opts.BaseRouteGroup.Group(functionRoutePrefix, authMiddleware), fs)
 
 	return fs, nil
 }
@@ -74,8 +86,8 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 
 	ctx := stream.Context()
-	outputChan := make(chan common.OutputMsg)
-	keyEventChan := make(chan common.KeyEvent)
+	outputChan := make(chan common.OutputMsg, 1000)
+	keyEventChan := make(chan common.KeyEvent, 1000)
 
 	task, err := fs.invoke(ctx, authInfo, in.StubId, in.Args, keyEventChan)
 	if err != nil {
@@ -87,10 +99,19 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return err
 	}
 
-	client, err := common.NewRunCClient(hostname, authInfo.Token.Key)
+	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, fs.tailscale, fs.config.Tailscale)
 	if err != nil {
 		return err
 	}
+
+	log.Println("connected to host: ", conn)
+
+	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
+	if err != nil {
+		return err
+	}
+
+	// log.Println("created client")
 
 	go client.StreamLogs(ctx, task.ContainerId, outputChan)
 	return fs.handleStreams(ctx, stream, authInfo.Workspace.Name, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
@@ -117,7 +138,10 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 	containerId := fs.genContainerId(taskId)
 	task.ContainerId = containerId
 
-	go fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
+	err = fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
+	if err != nil {
+		return nil, err
+	}
 
 	_, err = fs.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
 	if err != nil {
@@ -206,7 +230,7 @@ _stream:
 				lastMessage = o
 				break _stream
 			}
-		case <-keyEventChan:
+		case _ = <-keyEventChan:
 			exitCode, err := fs.containerRepo.GetContainerExitCode(containerId)
 			if err != nil {
 				exitCode = -1
@@ -214,10 +238,10 @@ _stream:
 
 			result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(workspaceName, taskId)).Bytes()
 			if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: int32(exitCode)}); err != nil {
-				break
+				break _stream
 			}
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil
 		}
 	}
 

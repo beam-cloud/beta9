@@ -4,17 +4,19 @@ import (
 	"context"
 	"errors"
 	"log"
+	"math"
 	"sort"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	repo "github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 )
 
 const (
-	RequestProcessingInterval time.Duration = 100 * time.Millisecond
+	requestProcessingInterval time.Duration = 100 * time.Millisecond
 )
 
 type Scheduler struct {
@@ -28,14 +30,13 @@ type Scheduler struct {
 	eventBus          *common.EventBus
 }
 
-func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.PrometheusRepository, backendRepo repository.BackendRepository) (*Scheduler, error) {
+func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.PrometheusRepository, backendRepo repository.BackendRepository, tailscale *network.Tailscale) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 	providerRepo := repo.NewProviderRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
-	tailscaleRepo := repo.NewTailscaleRedisRepository(redisClient, config)
 
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 
@@ -49,14 +50,14 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		case types.PoolModeLocal:
 			controller, err = NewLocalKubernetesWorkerPoolController(ctx, config, name, workerRepo)
 		case types.PoolModeMetal:
-			controller, err = NewMetalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, workerPoolRepo, providerRepo, tailscaleRepo, pool.Provider)
+			controller, err = NewMetalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, workerPoolRepo, providerRepo, tailscale, pool.Provider)
 		default:
-			log.Printf("no valid controller found for pool<%s> with mode: %s\n", name, pool.Mode)
+			log.Printf("no valid controller found for pool <%s> with mode: %s\n", name, pool.Mode)
 			continue
 		}
 
 		if err != nil {
-			log.Printf("unable to load controller<%s>: %+v\n", name, err)
+			log.Printf("unable to load controller <%s>: %+v\n", name, err)
 			continue
 		}
 
@@ -147,13 +148,13 @@ func (s *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolCo
 func (s *Scheduler) StartProcessingRequests() {
 	for {
 		if s.requestBacklog.Len() == 0 {
-			time.Sleep(RequestProcessingInterval)
+			time.Sleep(requestProcessingInterval)
 			continue
 		}
 
 		request, err := s.requestBacklog.Pop()
 		if err != nil {
-			time.Sleep(RequestProcessingInterval)
+			time.Sleep(requestProcessingInterval)
 			continue
 		}
 
@@ -171,7 +172,7 @@ func (s *Scheduler) StartProcessingRequests() {
 			go func() {
 				newWorker, err := controller.AddWorker(request.Cpu, request.Memory, request.Gpu)
 				if err != nil {
-					log.Printf("Unable to add job for worker: %+v\n", err)
+					log.Printf("Unable to add worker job for container <%s>: %+v\n", request.ContainerId, err)
 					s.addRequestToBacklog(request)
 					return
 				}
@@ -179,7 +180,7 @@ func (s *Scheduler) StartProcessingRequests() {
 				log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
 				err = s.scheduleRequest(newWorker, request)
 				if err != nil {
-					log.Printf("Unable to schedule request for container %s: %v\n", request.ContainerId, err)
+					log.Printf("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
 					s.addRequestToBacklog(request)
 				}
 			}()
@@ -223,6 +224,35 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	return nil, &types.ErrNoSuitableWorkerFound{}
 }
 
+const maxScheduleRetryCount = 3
+const maxScheduleRetryDuration = 10 * time.Minute
+
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
-	return s.requestBacklog.Push(request)
+	go func() {
+		if request.RetryCount < maxScheduleRetryCount && time.Since(request.Timestamp) < maxScheduleRetryDuration {
+			delay := calculateBackoffDelay(request.RetryCount)
+			time.Sleep(delay)
+			request.RetryCount++
+			s.requestBacklog.Push(request)
+			return
+		}
+
+		log.Printf("Giving up on request <%s> after %d attempts or due to max retry duration exceeded\n", request.ContainerId, request.RetryCount)
+	}()
+
+	return nil
+}
+
+func calculateBackoffDelay(retryCount int) time.Duration {
+	if retryCount == 0 {
+		return 0
+	}
+
+	baseDelay := 5 * time.Second
+	maxDelay := 30 * time.Second
+	delay := time.Duration(math.Pow(2, float64(retryCount))) * baseDelay
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	return delay
 }

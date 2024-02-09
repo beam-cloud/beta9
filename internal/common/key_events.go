@@ -61,9 +61,11 @@ func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix 
 		}
 	}
 
+	pattern := fmt.Sprintf("%s%s*", keyspacePrefix, patternPrefix)
+	messages, errs, close := kem.rdb.PSubscribe(ctx, pattern)
+
 	go func() {
-		pattern := fmt.Sprintf("%s%s*", keyspacePrefix, patternPrefix)
-		messages, errs := kem.rdb.PSubscribe(ctx, pattern)
+		defer close()
 
 	retry:
 		for {

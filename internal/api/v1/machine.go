@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/storage"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -13,17 +14,17 @@ import (
 )
 
 type MachineGroup struct {
-	providerRepo  repository.ProviderRepository
-	tailscaleRepo repository.TailscaleRepository
-	routerGroup   *echo.Group
-	config        types.AppConfig
+	providerRepo repository.ProviderRepository
+	tailscale    *network.Tailscale
+	routerGroup  *echo.Group
+	config       types.AppConfig
 }
 
-func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, tailscaleRepo repository.TailscaleRepository, config types.AppConfig) *MachineGroup {
+func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, tailscale *network.Tailscale, config types.AppConfig) *MachineGroup {
 	group := &MachineGroup{routerGroup: g,
-		providerRepo:  providerRepo,
-		tailscaleRepo: tailscaleRepo,
-		config:        config,
+		providerRepo: providerRepo,
+		tailscale:    tailscale,
+		config:       config,
 	}
 
 	g.POST("/register", group.RegisterMachine)
@@ -51,20 +52,20 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	// possibly, use proxy config values
 	remoteConfig := g.config
 
-	redisHostname, err := g.tailscaleRepo.GetHostnameForService("redis")
+	redisHostname, err := g.tailscale.GetHostnameForService("redis")
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service: redis")
 	}
 
 	if g.config.Storage.Mode == storage.StorageModeJuiceFS {
-		juiceFsRedisHostname, err := g.tailscaleRepo.GetHostnameForService("juicefs-redis")
+		juiceFsRedisHostname, err := g.tailscale.GetHostnameForService("juicefs-redis")
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service: juicefs-redis")
 		}
 		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("redis://%s/0", juiceFsRedisHostname)
 	}
 
-	gatewayGrpcHostname, err := g.tailscaleRepo.GetHostnameForService("gateway-grpc")
+	gatewayGrpcHostname, err := g.tailscale.GetHostnameForService("gateway-grpc")
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service: gateway-grpc")
 	}

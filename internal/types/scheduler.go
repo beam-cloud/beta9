@@ -53,17 +53,17 @@ type ContainerState struct {
 }
 
 type ContainerRequest struct {
-	ContainerId     string    `json:"container_id"`
-	EntryPoint      []string  `json:"entry_point"`
-	Env             []string  `json:"env"`
-	Cpu             int64     `json:"cpu"`
-	Memory          int64     `json:"memory"`
-	Gpu             string    `json:"gpu"`
-	SourceImage     *string   `json:"source_image"`
-	ImageId         string    `json:"image_id"`
-	Timestamp       time.Time `json:"timestamp"`
-	ScheduleTimeout float64   `json:"schedule_timeout"`
-	Mounts          []Mount   `json:"mounts"`
+	ContainerId string    `json:"container_id"`
+	EntryPoint  []string  `json:"entry_point"`
+	Env         []string  `json:"env"`
+	Cpu         int64     `json:"cpu"`
+	Memory      int64     `json:"memory"`
+	Gpu         string    `json:"gpu"`
+	SourceImage *string   `json:"source_image"`
+	ImageId     string    `json:"image_id"`
+	Timestamp   time.Time `json:"timestamp"`
+	Mounts      []Mount   `json:"mounts"`
+	RetryCount  int       `json:"retry_count"`
 }
 
 const ContainerExitCodeTtlS int = 300

@@ -29,8 +29,6 @@ type WorkerPoolController interface {
 	AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error)
 	Name() string
 	FreeCapacity() (*WorkerPoolCapacity, error)
-	// EstimatedWait()
-	// HourlyPrice
 }
 
 type WorkerPoolConfig struct {
