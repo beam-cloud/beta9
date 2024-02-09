@@ -147,7 +147,7 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 	labels := map[string]string{
 		"app":               Beta9WorkerLabelValue,
 		Beta9WorkerLabelKey: Beta9WorkerLabelValue,
-		PrometheusScrapeKey: strconv.FormatBool(wpc.config.Metrics.Prometheus.ScrapeWorkers),
+		PrometheusScrapeKey: strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
 	}
 
 	workerCpu := cpu
@@ -173,7 +173,7 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 			Ports: []corev1.ContainerPort{
 				{
 					Name:          "metrics",
-					ContainerPort: int32(wpc.config.Metrics.Prometheus.Port),
+					ContainerPort: int32(wpc.config.Monitoring.Prometheus.Port),
 				},
 			},
 			Env:          wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpu),
