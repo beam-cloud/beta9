@@ -184,7 +184,6 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	assert.Equal(t, int64(2), updatedWorker.ResourceVersion)
 	assert.Nil(t, err)
 
-	// GPU requests should set CPU and memory to zero since we aren't sharing GPU workers
 	assert.Equal(t, int64(400), updatedWorker.Cpu)
 	assert.Equal(t, int64(900), updatedWorker.Memory)
 	assert.Equal(t, request.Gpu, updatedWorker.Gpu)
