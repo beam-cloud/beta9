@@ -127,11 +127,12 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	assert.Nil(t, err)
 
 	newWorker := &types.Worker{
-		Id:     "worker1",
-		Status: types.WorkerStatusPending,
-		Cpu:    0,
-		Memory: 0,
-		Gpu:    "A10G",
+		Id:       "worker1",
+		Status:   types.WorkerStatusPending,
+		Cpu:      0,
+		Memory:   0,
+		Gpu:      "A10G",
+		GpuCount: 0,
 	}
 
 	// Create a new worker
@@ -153,6 +154,7 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 		Cpu:         500,
 		Memory:      1000,
 		Gpu:         "A10G",
+		GpuCount:    1,
 	}
 	err = repo.UpdateWorkerCapacity(worker, request, types.AddCapacity)
 	assert.Nil(t, err)
@@ -172,6 +174,7 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 		Cpu:         100,
 		Memory:      100,
 		Gpu:         "A10G",
+		GpuCount:    1,
 	}
 	err = repo.UpdateWorkerCapacity(updatedWorker, request, types.RemoveCapacity)
 	assert.Nil(t, err)
@@ -182,8 +185,8 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	assert.Nil(t, err)
 
 	// GPU requests should set CPU and memory to zero since we aren't sharing GPU workers
-	assert.Equal(t, int64(0), updatedWorker.Cpu)
-	assert.Equal(t, int64(0), updatedWorker.Memory)
+	assert.Equal(t, int64(400), updatedWorker.Cpu)
+	assert.Equal(t, int64(900), updatedWorker.Memory)
 	assert.Equal(t, request.Gpu, updatedWorker.Gpu)
 }
 
@@ -278,11 +281,12 @@ func TestGetAllWorkers(t *testing.T) {
 	nWorkers := 100
 	for i := 0; i < nWorkers; i++ {
 		err := repo.AddWorker(&types.Worker{
-			Id:     fmt.Sprintf("worker-available-%d", i),
-			Status: types.WorkerStatusAvailable,
-			Cpu:    1000,
-			Memory: 1000,
-			Gpu:    "A10G",
+			Id:       fmt.Sprintf("worker-available-%d", i),
+			Status:   types.WorkerStatusAvailable,
+			Cpu:      1000,
+			Memory:   1000,
+			Gpu:      "A10G",
+			GpuCount: 1,
 		})
 		assert.Nil(t, err)
 	}
@@ -290,11 +294,12 @@ func TestGetAllWorkers(t *testing.T) {
 	// Create a bunch of pending workers
 	for i := 0; i < nWorkers; i++ {
 		err := repo.AddWorker(&types.Worker{
-			Id:     fmt.Sprintf("worker-pending-%d", i),
-			Status: types.WorkerStatusPending,
-			Cpu:    1000,
-			Memory: 1000,
-			Gpu:    "A10G",
+			Id:       fmt.Sprintf("worker-pending-%d", i),
+			Status:   types.WorkerStatusPending,
+			Cpu:      1000,
+			Memory:   1000,
+			Gpu:      "A10G",
+			GpuCount: 1,
 		})
 		assert.Nil(t, err)
 	}
