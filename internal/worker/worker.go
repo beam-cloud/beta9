@@ -672,14 +672,6 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 		return err
 	}
 
-	// NOTE: because we only handle one GPU request at a time per worker
-	// We need to reset this back to the original worker pool limits
-	// TODO: Manage number of GPUs explicitly instead of this
-	if s.gpuType != "" {
-		request.Cpu = s.cpuLimit
-		request.Memory = s.memoryLimit
-	}
-
 	return s.workerRepo.UpdateWorkerCapacity(worker, request, types.AddCapacity)
 }
 

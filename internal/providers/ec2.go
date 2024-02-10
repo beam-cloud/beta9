@@ -60,9 +60,10 @@ func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderR
 }
 
 type InstanceSpec struct {
-	Cpu    int64
-	Memory int64
-	Gpu    string
+	Cpu      int64
+	Memory   int64
+	Gpu      string
+	GpuCount uint32
 }
 
 func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64, requiredGpu string) (string, error) {
@@ -73,24 +74,26 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 		Type string
 		Spec InstanceSpec
 	}{
-		{"g4dn.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "T4"}},
-		{"g4dn.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "T4"}},
-		{"g4dn.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "T4"}},
-		{"g4dn.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "T4"}},
-		{"g4dn.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "T4"}},
+		{"g4dn.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "T4", 1}},
+		{"g4dn.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "T4", 1}},
+		{"g4dn.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "T4", 1}},
+		{"g4dn.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "T4", 1}},
+		{"g4dn.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "T4", 1}},
+		{"g4dn.12xlarge", InstanceSpec{48 * 1000, 192 * 1024, "T4", 4}},
+		{"g4dn.metal", InstanceSpec{96 * 1000, 384 * 1024, "T4", 8}},
 
-		{"g5.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "A10G"}},
-		{"g5.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "A10G"}},
-		{"g5.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "A10G"}},
-		{"g5.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "A10G"}},
-		{"g5.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "A10G"}},
+		{"g5.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "A10G", 1}},
+		{"g5.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "A10G", 1}},
+		{"g5.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "A10G", 1}},
+		{"g5.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "A10G", 1}},
+		{"g5.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "A10G", 1}},
 
-		{"m6i.large", InstanceSpec{2 * 1000, 8 * 1024, ""}},
-		{"m6i.xlarge", InstanceSpec{4 * 1000, 16 * 1024, ""}},
-		{"m6i.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, ""}},
-		{"m6i.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, ""}},
-		{"m6i.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, ""}},
-		{"m6i.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, ""}},
+		{"m6i.large", InstanceSpec{2 * 1000, 8 * 1024, "", 0}},
+		{"m6i.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "", 0}},
+		{"m6i.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "", 0}},
+		{"m6i.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "", 0}},
+		{"m6i.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "", 0}},
+		{"m6i.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "", 0}},
 	}
 
 	// Apply compute buffer

@@ -86,7 +86,7 @@ func NewMetalWorkerPoolController(
 	return wpc, nil
 }
 
-func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error) {
+func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
 	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, false)
@@ -95,9 +95,10 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	}
 
 	machineId, err := wpc.provider.ProvisionMachine(wpc.ctx, wpc.name, workerId, token.Key, types.ProviderComputeRequest{
-		Cpu:    cpu,
-		Memory: memory,
-		Gpu:    gpuType,
+		Cpu:      cpu,
+		Memory:   memory,
+		Gpu:      gpuType,
+		GpuCount: gpuCount,
 	})
 	if err != nil {
 		return nil, err
@@ -122,7 +123,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	}
 
 	// Create a new worker job
-	job, worker := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType)
+	job, worker := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType, gpuCount)
 	worker.PoolId = PoolId(wpc.name)
 	worker.MachineId = machineId
 
@@ -141,7 +142,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	return worker, nil
 }
 
-func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string) (*batchv1.Job, *types.Worker) {
+func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
 		"app":               Beta9WorkerLabelValue,
@@ -152,6 +153,7 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 	workerCpu := cpu
 	workerMemory := memory
 	workerGpu := gpuType
+	workerGpuCount := gpuCount
 
 	workerImage := fmt.Sprintf("%s/%s:%s",
 		wpc.config.Worker.ImageRegistry,
@@ -162,10 +164,10 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 	resources := corev1.ResourceRequirements{}
 	if workerGpu != "" {
 		resources.Requests = corev1.ResourceList{
-			"nvidia.com/gpu": resource.MustParse("1"),
+			"nvidia.com/gpu": *resource.NewQuantity(int64(gpuCount), resource.DecimalSI),
 		}
 		resources.Limits = corev1.ResourceList{
-			"nvidia.com/gpu": resource.MustParse("1"),
+			"nvidia.com/gpu": *resource.NewQuantity(int64(gpuCount), resource.DecimalSI),
 		}
 	}
 
@@ -232,11 +234,12 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 	}
 
 	return job, &types.Worker{
-		Id:     workerId,
-		Cpu:    workerCpu,
-		Memory: workerMemory,
-		Gpu:    workerGpu,
-		Status: types.WorkerStatusPending,
+		Id:       workerId,
+		Cpu:      workerCpu,
+		Memory:   workerMemory,
+		Gpu:      workerGpu,
+		GpuCount: workerGpuCount,
+		Status:   types.WorkerStatusPending,
 	}
 }
 
