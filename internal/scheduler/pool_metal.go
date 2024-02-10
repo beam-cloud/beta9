@@ -59,7 +59,7 @@ func NewMetalWorkerPoolController(
 		return nil, err
 	}
 
-	workerPool, _ := config.Worker.Pools[workerPoolName]
+	workerPool := config.Worker.Pools[workerPoolName]
 	wpc := &MetalWorkerPoolController{
 		ctx:            ctx,
 		name:           workerPoolName,

@@ -10,21 +10,23 @@ import (
 )
 
 const (
-	Beta9WorkerLabelKey     string = "run.beam.cloud/role"
-	Beta9WorkerLabelValue   string = "worker"
-	Beta9WorkerJobPrefix    string = "worker"
-	PrometheusPortKey       string = "prometheus.io/port"
-	PrometheusScrapeKey     string = "prometheus.io/scrape"
-	tmpVolumeName           string = "beta9-tmp"
-	logVolumeName           string = "beta9-logs"
-	imagesVolumeName        string = "beta9-images"
-	configVolumeName        string = "beta9-config"
-	configSecretName        string = "beta9-config"
-	configMountPath         string = "/etc/config"
-	defaultContainerName    string = "worker"
-	defaultWorkerEntrypoint string = "/usr/local/bin/worker"
-	defaultWorkerLogPath    string = "/var/log/worker"
-	defaultImagesPath       string = "/images"
+	Beta9WorkerLabelKey       string = "run.beam.cloud/role"
+	Beta9WorkerLabelValue     string = "worker"
+	Beta9WorkerJobPrefix      string = "worker"
+	Beta9WorkerLabelIDKey     string = "run.beam.cloud/worker-id"
+	Beta9WorkerLabelPoolIDKey string = "run.beam.cloud/worker-pool-id"
+	PrometheusPortKey         string = "prometheus.io/port"
+	PrometheusScrapeKey       string = "prometheus.io/scrape"
+	tmpVolumeName             string = "beta9-tmp"
+	logVolumeName             string = "beta9-logs"
+	imagesVolumeName          string = "beta9-images"
+	configVolumeName          string = "beta9-config"
+	configSecretName          string = "beta9-config"
+	configMountPath           string = "/etc/config"
+	defaultContainerName      string = "worker"
+	defaultWorkerEntrypoint   string = "/usr/local/bin/worker"
+	defaultWorkerLogPath      string = "/var/log/worker"
+	defaultImagesPath         string = "/images"
 )
 
 type WorkerPoolController interface {
