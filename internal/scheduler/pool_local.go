@@ -41,7 +41,7 @@ func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.Ap
 		return nil, err
 	}
 
-	workerPool, _ := config.Worker.Pools[workerPoolName]
+	workerPool := config.Worker.Pools[workerPoolName]
 	wpc := &LocalKubernetesWorkerPoolController{
 		ctx:        ctx,
 		name:       workerPoolName,
@@ -101,7 +101,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		"app":                     Beta9WorkerLabelValue,
 		Beta9WorkerLabelKey:       Beta9WorkerLabelValue,
 		Beta9WorkerLabelIDKey:     workerId,
-		Beta9WorkerLabelPoolIDKey: wpc.poolId(),
+		Beta9WorkerLabelPoolIDKey: PoolId(wpc.name),
 		PrometheusPortKey:         fmt.Sprintf("%d", wpc.config.Monitoring.Prometheus.Port),
 		PrometheusScrapeKey:       strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
 	}
@@ -366,7 +366,7 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 	for range ticker.C {
 		jobSelector := strings.Join([]string{
 			fmt.Sprintf("%s=%s", Beta9WorkerLabelKey, Beta9WorkerLabelValue),
-			fmt.Sprintf("%s=%s", Beta9WorkerLabelPoolIDKey, wpc.poolId()),
+			fmt.Sprintf("%s=%s", Beta9WorkerLabelPoolIDKey, PoolId(wpc.name)),
 		}, ",")
 
 		jobs, err := wpc.kubeClient.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{LabelSelector: jobSelector})

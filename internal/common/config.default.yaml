@@ -23,14 +23,14 @@ storage:
   juicefs:
     redisURI: redis://juicefs-redis-master.beta9:6379/0
     awsS3Bucket: http://localstack.beta9:4566/juicefs
-    awsAccessKeyID: test
-    awsSecretAccessKey: test
+    awsAccessKey: test
+    awsSecretKey: test
 gateway:
   host: gateway.beta9
   httpPort: 1994
   grpcPort: 1993
-  grpcMaxRecvMsgSizeInMB: 1024
-  grpcMaxSendMsgSizeInMB: 1024
+  maxRecvMsgSize: 1024
+  maxSendMsgSize: 1024
 imageService:
   cacheURL:
   registryStore: local
@@ -40,10 +40,10 @@ imageService:
       username: beamcloud
       password:
     s3:
-      bucket: beta9-images
-      region: us-east-1
-      accessKeyID: test
-      secretAccessKey: test
+      awsS3Bucket: beta9-images
+      awsRegion: us-east-1
+      awsAccessKey: test
+      awsSecretKey: test
   runner:
     baseImageTag: latest
     baseImageName: beta9-runner
