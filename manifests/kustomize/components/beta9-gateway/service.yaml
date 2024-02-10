@@ -7,7 +7,7 @@ metadata:
     prometheus.io/scrape: 'true'
   labels:
     app.kubernetes.io/service: gateway
-  name: gateway
+  name: beta9-gateway
   namespace: beta9
 spec:
   ports:
