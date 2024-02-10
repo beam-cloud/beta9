@@ -26,7 +26,7 @@ storage:
     awsAccessKey: test
     awsSecretKey: test
 gateway:
-  host: gateway.beta9
+  host: beta9-gateway.beta9
   httpPort: 1994
   grpcPort: 1993
   maxRecvMsgSize: 1024
@@ -119,10 +119,10 @@ proxy:
     destination: juicefs-redis-master.beta9:6379
   - name: gateway-http
     localPort: 1994
-    destination: gateway.beta9:1994
+    destination: beta9-gateway.beta9:1994
   - name: gateway-grpc
     localPort: 1993
-    destination: gateway.beta9:1993
+    destination: beta9-gateway.beta9:1993
 monitoring:
   prometheus:
     scrapeWorkers: true
