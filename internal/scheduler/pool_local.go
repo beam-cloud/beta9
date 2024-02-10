@@ -106,7 +106,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 
 	workerCpu := cpu
 	workerMemory := memory
-	workerGpu := gpuType
+	workerGpuType := gpuType
 	workerGpuCount := gpuCount
 
 	resourceRequests := corev1.ResourceList{}
@@ -160,7 +160,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 					ContainerPort: int32(wpc.config.Monitoring.Prometheus.Port),
 				},
 			},
-			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpu),
+			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpuType, workerGpuCount),
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
 		},
 	}
@@ -209,7 +209,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		Id:       workerId,
 		Cpu:      workerCpu,
 		Memory:   workerMemory,
-		Gpu:      workerGpu,
+		Gpu:      workerGpuType,
 		GpuCount: workerGpuCount,
 		Status:   types.WorkerStatusPending,
 	}
@@ -306,7 +306,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 	return volumeMounts
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string) []corev1.EnvVar {
+func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
@@ -323,6 +323,10 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		{
 			Name:  "GPU_TYPE",
 			Value: gpuType,
+		},
+		{
+			Name:  "GPU_COUNT",
+			Value: strconv.FormatInt(int64(gpuCount), 10),
 		},
 		{
 			Name: "POD_IP",

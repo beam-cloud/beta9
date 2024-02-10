@@ -31,6 +31,7 @@ type Worker struct {
 	cpuLimit             int64
 	memoryLimit          int64
 	gpuType              string
+	gpuCount             uint32
 	podAddr              string
 	podHostName          string
 	userImagePath        string
@@ -96,6 +97,11 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	gpuCount, err := strconv.ParseInt(os.Getenv("GPU_COUNT"), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+
 	cpuLimit, err := strconv.ParseInt(os.Getenv("CPU_LIMIT"), 10, 64)
 	if err != nil {
 		return nil, err
@@ -154,7 +160,7 @@ func NewWorker() (*Worker, error) {
 		gpuType:              gpuType,
 		runcHandle:           runc.Runc{},
 		runcServer:           runcServer,
-		containerCudaManager: NewContainerCudaManager(),
+		containerCudaManager: NewContainerCudaManager(uint32(gpuCount)),
 		redisClient:          redisClient,
 		podAddr:              podAddr,
 		imageClient:          imageClient,
@@ -409,6 +415,10 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	s.containerInstances.Delete(containerId)
 
+	if request.Gpu != "" {
+		s.containerCudaManager.UnassignGpuDevices(containerId)
+	}
+
 	err := s.containerRepo.DeleteContainerState(request)
 	if err != nil {
 		log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
@@ -611,6 +621,16 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			// If the container image does not have cuda libraries installed, mount cuda libs from the host
 			spec.Mounts = s.containerCudaManager.InjectCudaMounts(spec.Mounts)
 		}
+
+		// Assign n-number of GPUs to a container
+		assignedGpus, err := s.containerCudaManager.AssignGpuDevices(request.ContainerId, request.GpuCount)
+		if err != nil {
+			return nil, err
+		}
+		env = append(env, fmt.Sprintf("NVIDIA_VISIBLE_DEVICES=%s", assignedGpus.String()))
+
+		spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, assignedGpus.devices...)
+
 	} else {
 		spec.Hooks.Prestart = nil
 	}
