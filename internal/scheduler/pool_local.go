@@ -41,7 +41,7 @@ func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.Ap
 		return nil, err
 	}
 
-	workerPool, _ := config.Worker.Pools[workerPoolName]
+	workerPool := config.Worker.Pools[workerPoolName]
 	wpc := &LocalKubernetesWorkerPoolController{
 		ctx:        ctx,
 		name:       workerPoolName,
@@ -98,10 +98,12 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
-		"app":               Beta9WorkerLabelValue,
-		Beta9WorkerLabelKey: Beta9WorkerLabelValue,
-		PrometheusPortKey:   fmt.Sprintf("%d", wpc.config.Monitoring.Prometheus.Port),
-		PrometheusScrapeKey: strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
+		"app":                     Beta9WorkerLabelValue,
+		Beta9WorkerLabelKey:       Beta9WorkerLabelValue,
+		Beta9WorkerLabelIDKey:     workerId,
+		Beta9WorkerLabelPoolIDKey: PoolId(wpc.name),
+		PrometheusPortKey:         fmt.Sprintf("%d", wpc.config.Monitoring.Prometheus.Port),
+		PrometheusScrapeKey:       strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
 	}
 
 	workerCpu := cpu
@@ -351,20 +353,22 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 	return envVars
 }
 
-var AddWorkerTimeout = 10 * time.Minute
-
 // deleteStalePendingWorkerJobs ensures that jobs are deleted if they don't
 // start a pod after a certain amount of time.
 func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 	ctx := context.Background()
-	maxAge := AddWorkerTimeout
+	maxAge := wpc.config.Worker.AddWorkerTimeout
 	namespace := wpc.config.Worker.Namespace
 
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		jobSelector := fmt.Sprintf("%s=%s", Beta9WorkerLabelKey, Beta9WorkerLabelValue)
+		jobSelector := strings.Join([]string{
+			fmt.Sprintf("%s=%s", Beta9WorkerLabelKey, Beta9WorkerLabelValue),
+			fmt.Sprintf("%s=%s", Beta9WorkerLabelPoolIDKey, PoolId(wpc.name)),
+		}, ",")
+
 		jobs, err := wpc.kubeClient.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{LabelSelector: jobSelector})
 		if err != nil {
 			log.Printf("Failed to list jobs for controller <%s>: %v\n", wpc.name, err)
@@ -372,12 +376,8 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 		}
 
 		for _, job := range jobs.Items {
-			// Skip job if it doesn't belong to the controller
-			if !strings.Contains(job.Name, wpc.name) {
-				continue
-			}
-
 			podSelector := fmt.Sprintf("job-name=%s", job.Name)
+
 			pods, err := wpc.kubeClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: podSelector})
 			if err != nil {
 				log.Printf("Failed to list pods for job <%v>: %v\n", job.Name, err)
@@ -392,13 +392,21 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 
 				duration := time.Since(pod.CreationTimestamp.Time)
 				if duration >= maxAge {
-					p := metav1.DeletePropagationBackground
-					err := wpc.kubeClient.BatchV1().Jobs(namespace).Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &p})
-					if err != nil {
-						log.Printf("Failed to delete pending job <%s>: %v\n", job.Name, err)
-					} else {
-						log.Printf("Deleted job <%s> due to exceeding age limit of <%v>\n", job.Name, maxAge)
+					// Remove worker from repository
+					if workerId, ok := pod.Labels[Beta9WorkerLabelIDKey]; ok {
+						if err := wpc.workerRepo.RemoveWorker(&types.Worker{Id: workerId}); err != nil {
+							log.Printf("Failed to delete pending worker <%s> from repo: %v \n", workerId, err)
+						}
 					}
+
+					// Remove worker job from kubernetes
+					if err := wpc.kubeClient.BatchV1().Jobs(namespace).Delete(ctx, job.Name, metav1.DeleteOptions{
+						PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
+					}); err != nil {
+						log.Printf("Failed to delete pending worker job <%s>: %v\n", job.Name, err)
+					}
+
+					log.Printf("Deleted worker <%s> due to exceeding age limit of <%v>\n", job.Name, maxAge)
 				}
 			}
 		}

@@ -2,6 +2,14 @@
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
+labels:
+- pairs:
+    app.kubernetes.io/name: beta9
+  includeSelectors: true
+  includeTemplates: true
+- pairs:
+    app.kubernetes.io/managed-by: kustomize
+
 resources:
 - cluster-role-binding.yaml
 - cluster-role.yaml
@@ -13,8 +21,3 @@ resources:
 
 generators:
 - secret-generator.yaml
-
-components:
-- ./juicefs
-- ./redis
-- ./postgresql

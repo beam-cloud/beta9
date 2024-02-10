@@ -1,25 +1,82 @@
-{{/*
-Expand the name of the chart.
-*/}}
-{{- define "manifests.name" -}}
-{{- default .Chart.Name "beta9" | trunc 63 | trimSuffix "-" }}
-{{- end }}
+{{- define "beta9.init" -}}
+  {{/* Hack to disable main controller */}}
+  {{- $_ := include "beta9.disable-main-controller" . | fromYaml | merge .Values -}}
 
-{{/*
-Create chart name and version as used by the chart label.
-*/}}
-{{- define "manifests.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
+  {{/* Make sure all variables are set properly */}}
+  {{- include "bjw-s.common.loader.init" . }}
+
+  {{/* Enforce default values */}}
+  {{- $_ := include "beta9" . | fromYaml | merge .Values -}}
 {{- end -}}
 
-{{/*
-Adds labels to resources.
-*/}}
-{{- define "manifests.resource" -}}
+
+{{/* Disable main controller */}}
+{{- define "beta9.disable-main-controller" -}}
+controllers:
+  main:
+    enabled: false
+service:
+  main:
+    enabled: false
+ingress:
+  main:
+    enabled: false
+route:
+  main:
+    enabled: false
+serviceMonitor:
+  main:
+    enabled: false
+networkpolicies:
+  main:
+    enabled: false
+{{- end -}}
+
+
+{{/* Define hard coded defaults */}}
+{{- define "beta9" -}}
+controllers:
+  gateway:
+    type: deployment
+    containers:
+      main:
+        command:
+        - /usr/local/bin/gateway
+        image:
+          repository: {{ .Values.images.gateway.repository }}
+          tag: "{{ .Values.images.gateway.tag | default .Chart.AppVersion }}"
+          pullPolicy: {{ .Values.images.gateway.pullPolicy | default "IfNotPresent" }}
+        probes:
+          readiness: &readiness
+            enabled: true
+            custom: true
+            spec: &readinessSpec
+              periodSeconds: 5
+              failureThreshold: 3
+              httpGet:
+                path: /api/v1/health
+                port: 1994
+          startup:
+            <<: *readiness
+            spec:
+              <<: *readinessSpec
+              failureThreshold: 30
+        securityContext:
+          privileged: true
+service:
+  gateway:
+    controller: gateway
+ingress:
+  gateway:
+    controller: gateway
+serviceAccount:
+  create: true
+{{- end -}}
+
+
+{{/*Adds labels to custom manifests.*/}}
+{{- define "manifests.metadata" -}}
 metadata:
   labels:
-    helm.sh/chart: {{ template "manifests.chart" . }}
-    app.kubernetes.io/name: {{ template "manifests.name" }}
-    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-    app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- end }}
+    {{ include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
+{{- end -}}

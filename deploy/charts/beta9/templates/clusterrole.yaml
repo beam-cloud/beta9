@@ -1,14 +1,11 @@
-{{ if .Values.gateway.enabled }}
+{{- if .Values.serviceAccount.create -}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ .Values.gateway.serviceAccount.name }}-role
+  name: {{ .Values.serviceAccount.name }}-role
   labels:
-    helm.sh/chart: {{ template "manifests.chart" . }}
-    app.kubernetes.io/name: {{ template "manifests.name" . }}
-    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
 rules:
 - apiGroups: ["*"]
   resources: ["*"]
@@ -17,19 +14,16 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ .Values.gateway.serviceAccount.name }}-role-binding
+  name: {{ .Values.serviceAccount.name }}-role-binding
   labels:
-    helm.sh/chart: {{ template "manifests.chart" . }}
-    app.kubernetes.io/name: {{ template "manifests.name" . }}
-    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ .Values.gateway.serviceAccount.name }}-role
+  name: {{ .Values.serviceAccount.name }}-role
 subjects:
 - kind: ServiceAccount
-  name: {{ .Values.gateway.serviceAccount.name }}
+  name: {{ .Values.serviceAccount.name }}
   namespace: {{ .Release.Namespace }}
 ---
-{{ end }}
+{{- end -}}
