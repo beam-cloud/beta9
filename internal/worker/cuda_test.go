@@ -26,7 +26,6 @@ func TestInjectCudaEnvVarsNoCudaInImage(t *testing.T) {
 		"NVARCH=",
 		"NV_CUDA_COMPAT_PACKAGE=",
 		"NV_CUDA_CUDART_VERSION=",
-		"NVIDIA_VISIBLE_DEVICES=",
 		"CUDA_VERSION=",
 		"GPU_TYPE=",
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.3/bin:$PATH",
