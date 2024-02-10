@@ -6,8 +6,6 @@ metadata:
     prometheus.io/port: '9090'
     prometheus.io/scrape: 'true'
   labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: beta9
     app.kubernetes.io/service: gateway
   name: gateway
   namespace: beta9

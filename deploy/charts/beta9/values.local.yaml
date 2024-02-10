@@ -1,3 +1,9 @@
+images:
+  gateway:
+    repository: registry.localhost:5000/beta9-gateway
+    tag: latest
+    pullPolicy: Always
+
 metrics:
   enabled: true
 

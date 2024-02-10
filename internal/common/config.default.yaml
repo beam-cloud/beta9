@@ -89,14 +89,15 @@ worker:
   namespace: beta9
   serviceAccountName: default
   # non-standard k8s job spec
-  imagePVCName: gateway-images
+  imagePVCName: beta9-images
   resourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
+  addWorkerTimeout: 10m
 providers:
   ec2:
     accessKey:
-    secretkey: 
+    secretkey:
     region: us-east-1
     # If you want workers nodes to land in your default vpc, you can omit subnetId
     subnetId:
@@ -110,18 +111,18 @@ tailscale:
   hostName: headscale.internal
 proxy:
   services:
-    - name: redis
-      localPort: 6379
-      destination: redis-master.beta9:6379
-    - name: juicefs-redis
-      localPort: 6380
-      destination: juicefs-redis-master.beta9:6379
-    - name: gateway-http
-      localPort: 1994
-      destination: gateway.beta9:1994
-    - name: gateway-grpc
-      localPort: 1993
-      destination: gateway.beta9:1993
+  - name: redis
+    localPort: 6379
+    destination: redis-master.beta9:6379
+  - name: juicefs-redis
+    localPort: 6380
+    destination: juicefs-redis-master.beta9:6379
+  - name: gateway-http
+    localPort: 1994
+    destination: gateway.beta9:1994
+  - name: gateway-grpc
+    localPort: 1993
+    destination: gateway.beta9:1993
 monitoring:
   prometheus:
     scrapeWorkers: true

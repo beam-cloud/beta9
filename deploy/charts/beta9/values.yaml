@@ -1,73 +1,71 @@
 # -- See the common values.yaml for all the options you can set.
-# https://github.com/bjw-s/helm-charts/blob/main/charts/library/common/values.yaml
-gateway:
-  enabled: true
-  global:
-    nameOverride: beta9-gateway
-    fullnameOverride: gateway
-  controllers:
-    main:
-      enabled: true
-      type: deployment
-      replicas: 1
-      strategy: Recreate
-      containers:
-        main:
-          command:
-          - /usr/local/bin/gateway
-          image:
-            repository: registry.localhost:5000/beta9-gateway
-            tag: 0.1.0
-          probes:
-            readiness: &readiness
-              enabled: true
-              custom: true
-              spec: &readinessSpec
-                periodSeconds: 5
-                failureThreshold: 3
-                httpGet:
-                  path: /api/v1/health
-                  port: 1994
-            startup:
-              <<: *readiness
-              spec:
-                <<: *readinessSpec
-                failureThreshold: 60
-          securityContext:
-            privileged: true
-  persistence:
-    images:
-      enabled: true
-      type: persistentVolumeClaim
-      size: 50Gi
-      storageClass: local-path
-      accessMode: ReadWriteOnce
-  service:
-    main:
-      type: LoadBalancer
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "9090"
-      ports:
-        grpc:
-          port: 1993
-          targetPort: 1993
-          protocol: TCP
-        http:
-          primary: true
-          port: 1994
-          targetPort: 1994
-          protocol: TCP
-        metrics:
-          port: 9090
-          targetPort: 9090
-          protocol: TCP
-  ingress:
-    main:
-      enabled: false
-  serviceAccount:
-    name: gateway
-    create: true
+# https://github.com/bjw-s/helm-charts/blob/common-2.5.0/charts/library/common/values.yaml
+global:
+  labels: {}
+  annotations: {}
+  nameOverride: beta9
+
+images:
+  gateway:
+    repository: public.ecr.aws/n4e0e1y0/beta9-gateway
+    tag: # Defaults to chart's app version
+    pullPolicy: # Defaults to IfNotPresent
+
+controllers:
+  gateway:
+    annotations: {}
+    labels: {}
+    replicas: 1
+    strategy: Recreate # Can be Recreate or RollingUpdate
+    rollingUpdate:
+      unavailable:
+      surge:
+
+persistence:
+  images:
+    enabled: true
+    type: persistentVolumeClaim
+    size: 50Gi
+    storageClass: local-path
+    accessMode: ReadWriteOnce
+
+service:
+  gateway:
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9090"
+    labels: {}
+    ports:
+      grpc:
+        port: 1993
+        targetPort: 1993
+        protocol: TCP
+      http:
+        primary: true
+        port: 1994
+        targetPort: 1994
+        protocol: TCP
+      metrics:
+        port: 9090
+        targetPort: 9090
+        protocol: TCP
+    type: LoadBalancer
+
+ingress:
+  gateway:
+    enabled: false
+    annotations: {}
+    labels: {}
+
+serviceAccount:
+  name: beta9
+  annotations: {}
+  labels: {}
+
+# -- In-memory cache for container images.
+# https://github.com/beam-cloud/blobcache/deploy/charts/blobcache/values.yaml
+blobcache:
+  enabled: false
 
 # -- Needed by Gateway
 redis:

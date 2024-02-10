@@ -4,9 +4,7 @@ kind: Deployment
 metadata:
   labels:
     app.kubernetes.io/component: gateway
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: beta9
-  name: gateway
+  name: beta9-gateway
   namespace: beta9
 spec:
   replicas: 1
@@ -31,22 +29,15 @@ spec:
         - name: CONFIG_PATH
           value: /etc/beta9/.config.yaml
         image: registry.localhost:5000/beta9-gateway:latest
-        livenessProbe:
-          failureThreshold: 3
-          initialDelaySeconds: 0
-          periodSeconds: 10
-          tcpSocket:
-            port: 1994
-          timeoutSeconds: 1
         name: main
         readinessProbe:
           failureThreshold: 3
           httpGet:
             path: /api/v1/health
             port: 1994
-          initialDelaySeconds: 0
+          initialDelaySeconds: 5
           periodSeconds: 5
-          timeoutSeconds: 1
+          timeoutSeconds: 2
         resources:
           limits:
             cpu: 4000m
@@ -54,13 +45,13 @@ spec:
         securityContext:
           privileged: true
         startupProbe:
-          failureThreshold: 60
+          failureThreshold: 30
           httpGet:
             path: /api/v1/health
             port: 1994
-          initialDelaySeconds: 0
+          initialDelaySeconds: 5
           periodSeconds: 5
-          timeoutSeconds: 1
+          timeoutSeconds: 2
         volumeMounts:
         - mountPath: /etc/beta9
           name: config
@@ -78,4 +69,4 @@ spec:
           secretName: beta9-config
       - name: images
         persistentVolumeClaim:
-          claimName: gateway-images
+          claimName: beta9-images
