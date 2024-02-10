@@ -166,12 +166,13 @@ type WorkerPoolJobSpecConfig struct {
 }
 
 type WorkerPoolJobSpecPoolSizingConfig struct {
-	DefaultWorkerCPU     string `key:"defaultWorkerCPU" json:"default_worker_cpu"`
-	DefaultWorkerMemory  string `key:"defaultWorkerMemory" json:"default_worker_memory"`
-	DefaultWorkerGPUType string `key:"defaultWorkerGPUType" json:"default_worker_gpu_type"`
-	MinFreeCPU           string `key:"minFreeCPU" json:"min_free_cpu"`
-	MinFreeMemory        string `key:"minFreeMemory" json:"min_free_memory"`
-	MinFreeGPU           string `key:"minFreeGPU" json:"min_free_gpu"`
+	DefaultWorkerCPU      string `key:"defaultWorkerCPU" json:"default_worker_cpu"`
+	DefaultWorkerMemory   string `key:"defaultWorkerMemory" json:"default_worker_memory"`
+	DefaultWorkerGPUType  string `key:"defaultWorkerGPUType" json:"default_worker_gpu_type"`
+	DefaultWorkerGpuCount string `key:"defaultWorkerGpuCount" json:"default_worker_gpu_count"`
+	MinFreeCPU            string `key:"minFreeCPU" json:"min_free_cpu"`
+	MinFreeMemory         string `key:"minFreeMemory" json:"min_free_memory"`
+	MinFreeGPU            string `key:"minFreeGPU" json:"min_free_gpu"`
 }
 
 type MachineProvider string

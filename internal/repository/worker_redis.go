@@ -240,6 +240,10 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 		updatedWorker.Cpu = updatedWorker.Cpu + request.Cpu
 		updatedWorker.Memory = updatedWorker.Memory + request.Memory
 
+		if request.Gpu != "" {
+			updatedWorker.GpuCount += request.GpuCount
+		}
+
 	case types.RemoveCapacity:
 		updatedWorker.Cpu = updatedWorker.Cpu - request.Cpu
 		updatedWorker.Memory = updatedWorker.Memory - request.Memory

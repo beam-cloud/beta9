@@ -66,7 +66,7 @@ type InstanceSpec struct {
 	GpuCount uint32
 }
 
-func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64, requiredGpu string) (string, error) {
+func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64, requiredGpuType string, requiredGpuCount uint32) (string, error) {
 	// TODO: make instance selection more dynamic / don't rely on hardcoded values
 	// We can load desired instances from the worker pool config, and then use the DescribeInstances
 	// api to return valid instance types
@@ -101,7 +101,7 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 	bufferedMemory := int64(float64(requiredMemory) * (1 + instanceComputeBufferPercent/100))
 
 	meetsRequirements := func(spec InstanceSpec) bool {
-		return spec.Cpu >= bufferedCpu && spec.Memory >= bufferedMemory && spec.Gpu == requiredGpu
+		return spec.Cpu >= bufferedCpu && spec.Memory >= bufferedMemory && spec.Gpu == requiredGpuType && spec.GpuCount >= requiredGpuCount
 	}
 
 	// Find the smallest instance that meets or exceeds the requirements
@@ -114,14 +114,14 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 	}
 
 	if selectedInstance == "" {
-		return "", fmt.Errorf("no suitable instance type found for CPU=%d, Memory=%d, GPU=%s", requiredCpu, requiredMemory, requiredGpu)
+		return "", fmt.Errorf("no suitable instance type found for CPU=%d, Memory=%d, GPU=%s", requiredCpu, requiredMemory, requiredGpuType)
 	}
 
 	return selectedInstance, nil
 }
 
 func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, token string, compute types.ProviderComputeRequest) (string, error) {
-	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Memory, compute.Gpu) // NOTE: CPU cores -> millicores, memory -> megabytes
+	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Memory, compute.Gpu, compute.GpuCount) // NOTE: CPU cores -> millicores, memory -> megabytes
 	if err != nil {
 		return "", err
 	}

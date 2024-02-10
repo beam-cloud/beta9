@@ -88,7 +88,7 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolCont
 		capacity.FreeMemory += worker.Memory
 
 		if worker.Gpu != "" && (worker.Cpu > 0 && worker.Memory > 0) {
-			capacity.FreeGpu += 1
+			capacity.FreeGpu += uint(worker.GpuCount)
 		}
 	}
 

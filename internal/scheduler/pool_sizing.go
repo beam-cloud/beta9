@@ -85,5 +85,9 @@ func ParsePoolSizingConfig(config types.WorkerPoolJobSpecPoolSizingConfig) (*typ
 		c.DefaultWorkerGpuType = defaultWorkerGpuType.String()
 	}
 
+	if defaultWorkerGpuCount, err := ParseGpuCount(config.DefaultWorkerGpuCount); err == nil {
+		c.DefaultWorkerGpuCount = uint32(defaultWorkerGpuCount)
+	}
+
 	return c, nil
 }
