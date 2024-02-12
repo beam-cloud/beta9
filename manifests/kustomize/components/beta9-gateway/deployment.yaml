@@ -22,6 +22,17 @@ spec:
         app.kubernetes.io/name: beta9
     spec:
       automountServiceAccountToken: true
+      initContainers:
+      - name: wait-on-backends
+        image: busybox
+        command:
+        - sh
+        - -c
+        - |
+          until nc -z postgresql.beta9 5432; do echo "Waiting on PostgreSQL..."; sleep 2; done;
+          until nc -z redis-master.beta9 6379; do echo "Waiting on Redis..."; sleep 2; done;
+          until nc -z juicefs-redis-master.beta9 6379; do echo "Waiting on Redis (JuiceFS)..."; sleep 2; done;
+          echo "All systems ready!"
       containers:
       - command:
         - /usr/local/bin/gateway
@@ -32,26 +43,18 @@ spec:
         name: main
         readinessProbe:
           failureThreshold: 3
-          httpGet:
-            path: /api/v1/health
-            port: 1994
           initialDelaySeconds: 5
           periodSeconds: 5
           timeoutSeconds: 2
+          httpGet:
+            path: /api/v1/health
+            port: 1994
         resources:
           limits:
             cpu: 4000m
             memory: 4Gi
         securityContext:
           privileged: true
-        startupProbe:
-          failureThreshold: 30
-          httpGet:
-            path: /api/v1/health
-            port: 1994
-          initialDelaySeconds: 5
-          periodSeconds: 5
-          timeoutSeconds: 2
         volumeMounts:
         - mountPath: /etc/beta9
           name: config
