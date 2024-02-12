@@ -47,20 +47,17 @@ controllers:
           tag: "{{ .Values.images.gateway.tag | default .Chart.AppVersion }}"
           pullPolicy: {{ .Values.images.gateway.pullPolicy | default "IfNotPresent" }}
         probes:
-          readiness: &readiness
+          readiness:
             enabled: true
             custom: true
-            spec: &readinessSpec
-              periodSeconds: 5
+            spec:
               failureThreshold: 3
+              initialDelaySeconds: 5
+              periodSeconds: 5
+              timeoutSeconds: 2
               httpGet:
                 path: /api/v1/health
                 port: 1994
-          startup:
-            <<: *readiness
-            spec:
-              <<: *readinessSpec
-              failureThreshold: 30
         securityContext:
           privileged: true
 service:
