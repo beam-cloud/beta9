@@ -5,8 +5,11 @@ import (
 	"log"
 	"os"
 	"strings"
+	"syscall"
 
+	common "github.com/beam-cloud/beta9/internal/common"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"gvisor.dev/gvisor/pkg/sync"
 )
 
 var (
@@ -16,10 +19,159 @@ var (
 )
 
 type ContainerCudaManager struct {
+	gpuAllocationMap *common.SafeMap[[]int]
+	gpuCount         uint32
+	mu               sync.Mutex
+	statFunc         func(path string, stat *syscall.Stat_t) (err error)
 }
 
-func NewContainerCudaManager() *ContainerCudaManager {
-	return &ContainerCudaManager{}
+func NewContainerCudaManager(gpuCount uint32) *ContainerCudaManager {
+	return &ContainerCudaManager{
+		gpuAllocationMap: common.NewSafeMap[[]int](),
+		gpuCount:         gpuCount,
+		mu:               sync.Mutex{},
+		statFunc:         syscall.Stat,
+	}
+}
+
+type AssignedGpuDevices struct {
+	devices []specs.LinuxDeviceCgroup
+	visible string // Visible devices (for NVIDIA_VISIBLE_DEVICES env var)
+}
+
+func (d *AssignedGpuDevices) String() string {
+	return d.visible
+}
+
+func (c *ContainerCudaManager) UnassignGpuDevices(containerId string) {
+	c.gpuAllocationMap.Delete(containerId)
+}
+
+func (c *ContainerCudaManager) AssignGpuDevices(containerId string, gpuCount uint32) (*AssignedGpuDevices, error) {
+	gpuIds, err := c.chooseDevices(containerId, gpuCount)
+	if err != nil {
+		return nil, err
+	}
+
+	// Device cgroup rules for the specific GPUs
+	var devices []specs.LinuxDeviceCgroup
+	var visibleGPUs []string // To collect the IDs for NVIDIA_VISIBLE_DEVICES
+
+	for _, gpuId := range gpuIds {
+		gpuDeviceNode := fmt.Sprintf("/dev/nvidia%d", gpuId)
+
+		majorNum, err := c.getDeviceMajorNumber(gpuDeviceNode)
+		if err != nil {
+			return nil, err
+		}
+
+		minorNum, err := c.getDeviceMinorNumber(gpuDeviceNode)
+		if err != nil {
+			return nil, err
+		}
+
+		// Add the specific GPU device node
+		devices = append(devices, specs.LinuxDeviceCgroup{
+			Allow:  true,
+			Type:   "c",
+			Major:  majorNum,
+			Minor:  minorNum,
+			Access: "rwm",
+		})
+
+		// Collect GPU IDs for NVIDIA_VISIBLE_DEVICES
+		visibleGPUs = append(visibleGPUs, fmt.Sprintf("%d", gpuId))
+	}
+
+	// Assuming control and UVM devices are shared across all GPUs and required
+	majorNum, err := c.getDeviceMajorNumber("/dev/nvidiactl")
+	if err != nil {
+		return nil, err
+	}
+
+	minorNum, err := c.getDeviceMinorNumber("/dev/nvidiactl")
+	if err != nil {
+		return nil, err
+	}
+	devices = append(devices, specs.LinuxDeviceCgroup{
+		Allow:  true,
+		Type:   "c",
+		Major:  majorNum,
+		Minor:  minorNum,
+		Access: "rwm",
+	})
+
+	// Join the GPU IDs with commas for the NVIDIA_VISIBLE_DEVICES variable
+	visible := strings.Join(visibleGPUs, ",")
+
+	return &AssignedGpuDevices{
+		visible: visible,
+		devices: devices,
+	}, nil
+}
+
+func (c *ContainerCudaManager) chooseDevices(containerId string, requestedGpuCount uint32) ([]int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	allocatedDevices := []int{}
+
+	currentAllocations := make(map[int]bool)
+	c.gpuAllocationMap.Range(func(_ string, value []int) bool {
+		for _, gpuId := range value {
+			currentAllocations[gpuId] = true
+		}
+		return true // Continue iteration
+	})
+
+	// Find available GPUs and allocate to the current container
+	for gpuId := 0; gpuId < int(c.gpuCount) && uint32(len(allocatedDevices)) < requestedGpuCount; gpuId++ {
+		if !currentAllocations[gpuId] {
+			allocatedDevices = append(allocatedDevices, gpuId)
+		}
+	}
+
+	// Check if we managed to allocate the requested number of GPUs
+	if len(allocatedDevices) < int(requestedGpuCount) {
+		return nil, fmt.Errorf("not enough GPUs available, requested: %d, available: %d", requestedGpuCount, int(c.gpuCount)-len(currentAllocations))
+	}
+
+	// Save the allocation in the SafeMap
+	c.gpuAllocationMap.Set(containerId, allocatedDevices)
+
+	return allocatedDevices, nil
+}
+
+// getDeviceMajorNumber returns the major device number for the given device node path
+func (c *ContainerCudaManager) getDeviceMajorNumber(devicePath string) (*int64, error) {
+	stat := syscall.Stat_t{}
+	if err := c.statFunc(devicePath, &stat); err != nil {
+		return nil, err
+	}
+
+	major := int64(major(uint64(stat.Rdev))) // Extract major number
+	return &major, nil
+}
+
+// getDeviceMinorNumber returns the minor device number for the given device node path
+func (c *ContainerCudaManager) getDeviceMinorNumber(devicePath string) (*int64, error) {
+	stat := syscall.Stat_t{}
+	if err := c.statFunc(devicePath, &stat); err != nil {
+		return nil, err
+	}
+
+	minor := int64(minor(uint64(stat.Rdev))) // Extract minor number
+	return &minor, nil
+}
+
+// major extracts the major device number from the raw device number
+func major(dev uint64) uint64 {
+	return (dev >> 8) & 0xfff
+}
+
+// minor extracts the minor device number from the raw device number
+func minor(dev uint64) uint64 {
+	return (dev & 0xff) | ((dev >> 12) & 0xfff00)
 }
 
 func (c *ContainerCudaManager) InjectCudaEnvVars(env []string, options *ContainerOptions) ([]string, bool) {
@@ -30,7 +182,6 @@ func (c *ContainerCudaManager) InjectCudaEnvVars(env []string, options *Containe
 		"NVARCH",
 		"NV_CUDA_COMPAT_PACKAGE",
 		"NV_CUDA_CUDART_VERSION",
-		"NVIDIA_VISIBLE_DEVICES",
 		"CUDA_VERSION",
 		"GPU_TYPE",
 	}

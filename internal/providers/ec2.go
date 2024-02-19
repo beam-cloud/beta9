@@ -60,12 +60,13 @@ func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderR
 }
 
 type InstanceSpec struct {
-	Cpu    int64
-	Memory int64
-	Gpu    string
+	Cpu      int64
+	Memory   int64
+	Gpu      string
+	GpuCount uint32
 }
 
-func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64, requiredGpu string) (string, error) {
+func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64, requiredGpuType string, requiredGpuCount uint32) (string, error) {
 	// TODO: make instance selection more dynamic / don't rely on hardcoded values
 	// We can load desired instances from the worker pool config, and then use the DescribeInstances
 	// api to return valid instance types
@@ -73,24 +74,26 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 		Type string
 		Spec InstanceSpec
 	}{
-		{"g4dn.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "T4"}},
-		{"g4dn.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "T4"}},
-		{"g4dn.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "T4"}},
-		{"g4dn.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "T4"}},
-		{"g4dn.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "T4"}},
+		{"g4dn.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "T4", 1}},
+		{"g4dn.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "T4", 1}},
+		{"g4dn.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "T4", 1}},
+		{"g4dn.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "T4", 1}},
+		{"g4dn.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "T4", 1}},
+		{"g4dn.12xlarge", InstanceSpec{48 * 1000, 192 * 1024, "T4", 4}},
+		{"g4dn.metal", InstanceSpec{96 * 1000, 384 * 1024, "T4", 8}},
 
-		{"g5.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "A10G"}},
-		{"g5.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "A10G"}},
-		{"g5.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "A10G"}},
-		{"g5.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "A10G"}},
-		{"g5.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "A10G"}},
+		{"g5.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "A10G", 1}},
+		{"g5.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "A10G", 1}},
+		{"g5.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "A10G", 1}},
+		{"g5.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "A10G", 1}},
+		{"g5.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "A10G", 1}},
 
-		{"m6i.large", InstanceSpec{2 * 1000, 8 * 1024, ""}},
-		{"m6i.xlarge", InstanceSpec{4 * 1000, 16 * 1024, ""}},
-		{"m6i.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, ""}},
-		{"m6i.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, ""}},
-		{"m6i.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, ""}},
-		{"m6i.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, ""}},
+		{"m6i.large", InstanceSpec{2 * 1000, 8 * 1024, "", 0}},
+		{"m6i.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "", 0}},
+		{"m6i.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "", 0}},
+		{"m6i.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "", 0}},
+		{"m6i.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "", 0}},
+		{"m6i.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "", 0}},
 	}
 
 	// Apply compute buffer
@@ -98,7 +101,7 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 	bufferedMemory := int64(float64(requiredMemory) * (1 + instanceComputeBufferPercent/100))
 
 	meetsRequirements := func(spec InstanceSpec) bool {
-		return spec.Cpu >= bufferedCpu && spec.Memory >= bufferedMemory && spec.Gpu == requiredGpu
+		return spec.Cpu >= bufferedCpu && spec.Memory >= bufferedMemory && spec.Gpu == requiredGpuType && spec.GpuCount >= requiredGpuCount
 	}
 
 	// Find the smallest instance that meets or exceeds the requirements
@@ -111,14 +114,14 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 	}
 
 	if selectedInstance == "" {
-		return "", fmt.Errorf("no suitable instance type found for CPU=%d, Memory=%d, GPU=%s", requiredCpu, requiredMemory, requiredGpu)
+		return "", fmt.Errorf("no suitable instance type found for CPU=%d, Memory=%d, GPU=%s", requiredCpu, requiredMemory, requiredGpuType)
 	}
 
 	return selectedInstance, nil
 }
 
 func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, token string, compute types.ProviderComputeRequest) (string, error) {
-	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Memory, compute.Gpu) // NOTE: CPU cores -> millicores, memory -> megabytes
+	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Memory, compute.Gpu, compute.GpuCount) // NOTE: CPU cores -> millicores, memory -> megabytes
 	if err != nil {
 		return "", err
 	}

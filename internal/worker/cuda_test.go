@@ -1,16 +1,18 @@
 package worker
 
 import (
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 func TestInjectCudaEnvVarsNoCudaInImage(t *testing.T) {
-	manager := NewContainerCudaManager()
+	manager := NewContainerCudaManager(4)
 	initialEnv := []string{"INITIAL=1"}
 
 	// Set some environment variables to simulate NVIDIA settings
@@ -24,7 +26,6 @@ func TestInjectCudaEnvVarsNoCudaInImage(t *testing.T) {
 		"NVARCH=",
 		"NV_CUDA_COMPAT_PACKAGE=",
 		"NV_CUDA_CUDART_VERSION=",
-		"NVIDIA_VISIBLE_DEVICES=",
 		"CUDA_VERSION=",
 		"GPU_TYPE=",
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.3/bin:$PATH",
@@ -42,7 +43,7 @@ func TestInjectCudaEnvVarsNoCudaInImage(t *testing.T) {
 }
 
 func TestInjectCudaEnvVarsExistingCudaInImage(t *testing.T) {
-	manager := NewContainerCudaManager()
+	manager := NewContainerCudaManager(4)
 	initialEnv := []string{"INITIAL=1"}
 
 	// Set some environment variables to simulate NVIDIA settings
@@ -76,11 +77,97 @@ func TestInjectCudaEnvVarsExistingCudaInImage(t *testing.T) {
 }
 
 func TestInjectCudaMounts(t *testing.T) {
-	manager := NewContainerCudaManager()
+	manager := NewContainerCudaManager(4)
 	initialMounts := []specs.Mount{{Type: "bind", Source: "/src", Destination: "/dst"}}
 
 	resultMounts := manager.InjectCudaMounts(initialMounts)
 	if len(resultMounts) != len(initialMounts) {
 		t.Errorf("Expected %d mounts, got %d", len(initialMounts)+2, len(resultMounts))
+	}
+}
+
+func mockStat(path string, stat *syscall.Stat_t) error {
+	*stat = syscall.Stat_t{
+		Rdev: 123,
+	}
+	return nil
+}
+
+func TestAssignAndUnassignGpuDevices(t *testing.T) {
+	manager := NewContainerCudaManager(4) // Assume a machine with 4 GPUs
+	manager.statFunc = mockStat
+
+	// Assign 2 GPUs to a container
+	gpuCount := 2
+	assignedDevices, err := manager.AssignGpuDevices("container1", uint32(gpuCount))
+	if err != nil {
+		t.Fatalf("Failed to assign GPU devices: %v", err)
+	}
+
+	// Verify that 2 GPUs are assigned and the visible string is correct
+	if len(assignedDevices.devices) != gpuCount+1 {
+		t.Errorf("Expected 2 GPUs to be assigned, got %d", len(assignedDevices.devices))
+	}
+
+	if assignedDevices.visible != "0,1" && assignedDevices.visible != "1,0" { // Order might vary
+		t.Errorf("Expected visible GPUs to be '0,1' or '1,0', got '%s'", assignedDevices.visible)
+	}
+
+	// Unassign the GPUs from the container
+	manager.UnassignGpuDevices("container1")
+
+	// Try to assign 4 GPUs to another container, should succeed since the first 2 are unassigned
+	_, err = manager.AssignGpuDevices("container2", 4)
+	if err != nil {
+		t.Errorf("Failed to assign GPU devices to container2 after unassigning from container1: %v", err)
+	}
+}
+
+func TestAssignMoreGPUsThanAvailable(t *testing.T) {
+	manager := NewContainerCudaManager(4) // Assume a machine with 4 GPUs
+	manager.statFunc = mockStat
+
+	// Attempt to assign 5 GPUs to a container, which exceeds the available count
+	_, err := manager.AssignGpuDevices("container1", 5)
+	if err == nil {
+		t.Errorf("Expected an error when requesting more GPUs than available, but got none")
+	}
+}
+
+func TestAssignGPUsToMultipleContainers(t *testing.T) {
+	manager := NewContainerCudaManager(4) // Assume a machine with 4 GPUs
+	manager.statFunc = mockStat
+
+	// Assign 2 GPUs to the first container
+	_, err := manager.AssignGpuDevices("container1", 2)
+	if err != nil {
+		t.Fatalf("Failed to assign GPUs to container1: %v", err)
+	}
+
+	// Attempt to assign 2 more GPUs to a second container
+	_, err = manager.AssignGpuDevices("container2", 2)
+	if err != nil {
+		t.Errorf("Failed to assign GPUs to container2: %v", err)
+	}
+
+	// Attempt to assign 1 more GPU to a third container, should fail
+	_, err = manager.AssignGpuDevices("container3", 1)
+	if err == nil {
+		t.Errorf("Expected failure when assigning GPUs to container3, but got none")
+	}
+}
+
+func TestAssignGPUsStatFail(t *testing.T) {
+	manager := NewContainerCudaManager(4)
+
+	// Override syscall.Stat to simulate failure
+	manager.statFunc = func(path string, stat *syscall.Stat_t) error {
+		return fmt.Errorf("mock stat error")
+	}
+
+	// Attempt to assign GPUs should fail due to statFunc error
+	_, err := manager.AssignGpuDevices("container1", 2)
+	if err == nil {
+		t.Errorf("Expected error due to stat failure, but got none")
 	}
 }
