@@ -172,7 +172,7 @@ func (s *Scheduler) StartProcessingRequests() {
 			}
 
 			go func() {
-				newWorker, err := controller.AddWorker(request.Cpu, request.Memory, request.Gpu)
+				newWorker, err := controller.AddWorker(request.Cpu, request.Memory, request.Gpu, request.GpuCount)
 				if err != nil {
 					log.Printf("Unable to add worker job for container <%s>: %+v\n", request.ContainerId, err)
 					s.addRequestToBacklog(request)
@@ -219,7 +219,7 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	})
 
 	for _, worker := range workers {
-		if worker.Cpu >= int64(request.Cpu) && worker.Memory >= int64(request.Memory) && worker.Gpu == request.Gpu {
+		if worker.Cpu >= int64(request.Cpu) && worker.Memory >= int64(request.Memory) && worker.Gpu == request.Gpu && worker.GpuCount >= request.GpuCount {
 			return worker, nil
 		}
 	}
@@ -231,6 +231,10 @@ const maxScheduleRetryCount = 3
 const maxScheduleRetryDuration = 10 * time.Minute
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
+	if request.Gpu != "" && request.GpuCount <= 0 {
+		request.GpuCount = 1
+	}
+
 	if request.RetryCount == 0 {
 		request.RetryCount++
 		return s.requestBacklog.Push(request)

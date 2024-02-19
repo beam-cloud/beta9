@@ -73,3 +73,33 @@ spec:
       - name: images
         persistentVolumeClaim:
           claimName: beta9-images
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy
+  namespace: beta9
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: proxy
+  template:
+    metadata:
+      labels:
+        app: proxy
+    spec:
+      containers:
+      - name: proxy
+        image: registry.localhost:5000/beta9-proxy:latest
+        command:
+        - /usr/local/bin/proxy
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi

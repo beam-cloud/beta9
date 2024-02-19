@@ -18,6 +18,7 @@ type Worker struct {
 	Cpu             int64        `json:"cpu" redis:"cpu"`
 	Memory          int64        `json:"memory" redis:"memory"`
 	Gpu             string       `json:"gpu" redis:"gpu"`
+	GpuCount        uint32       `json:"gpu_count" redis:"gpu_count"`
 	PoolId          string       `json:"pool_id" redis:"pool_id"`
 	MachineId       string       `json:"machine_id" redis:"machine_id"`
 	ResourceVersion int64        `json:"resource_version" redis:"resource_version"`
@@ -59,6 +60,7 @@ type ContainerRequest struct {
 	Cpu         int64     `json:"cpu"`
 	Memory      int64     `json:"memory"`
 	Gpu         string    `json:"gpu"`
+	GpuCount    uint32    `json:"gpu_count"`
 	SourceImage *string   `json:"source_image"`
 	ImageId     string    `json:"image_id"`
 	Timestamp   time.Time `json:"timestamp"`
@@ -107,22 +109,24 @@ func (e *ErrWorkerNotFound) Error() string {
 }
 
 type WorkerPoolSizingConfig struct {
-	MinFreeCpu           int64
-	MinFreeMemory        int64
-	MinFreeGpu           uint
-	DefaultWorkerCpu     int64
-	DefaultWorkerMemory  int64
-	DefaultWorkerGpuType string
+	MinFreeCpu            int64
+	MinFreeMemory         int64
+	MinFreeGpu            uint
+	DefaultWorkerCpu      int64
+	DefaultWorkerMemory   int64
+	DefaultWorkerGpuType  string
+	DefaultWorkerGpuCount uint32
 }
 
 func NewWorkerPoolSizingConfig() *WorkerPoolSizingConfig {
 	return &WorkerPoolSizingConfig{
-		MinFreeCpu:           0,
-		MinFreeMemory:        0,
-		MinFreeGpu:           0,
-		DefaultWorkerCpu:     1000,
-		DefaultWorkerMemory:  1 * 1024, // 1Gi
-		DefaultWorkerGpuType: "",
+		MinFreeCpu:            0,
+		MinFreeMemory:         0,
+		MinFreeGpu:            0,
+		DefaultWorkerCpu:      1000,
+		DefaultWorkerMemory:   1 * 1024, // 1Gi
+		DefaultWorkerGpuType:  "",
+		DefaultWorkerGpuCount: 0,
 	}
 }
 

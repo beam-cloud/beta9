@@ -30,7 +30,7 @@ const (
 )
 
 type WorkerPoolController interface {
-	AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error)
+	AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error)
 	Name() string
 	FreeCapacity() (*WorkerPoolCapacity, error)
 }
@@ -90,7 +90,7 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolCont
 		capacity.FreeMemory += worker.Memory
 
 		if worker.Gpu != "" && (worker.Cpu > 0 && worker.Memory > 0) {
-			capacity.FreeGpu += 1
+			capacity.FreeGpu += uint(worker.GpuCount)
 		}
 	}
 

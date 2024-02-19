@@ -44,7 +44,7 @@ func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*
 
 	// Check if the free capacity is below the configured minimum and add a worker if needed
 	if freeCapacity.FreeCpu < s.config.MinFreeCpu || freeCapacity.FreeMemory < s.config.MinFreeMemory || (s.config.MinFreeGpu > 0 && freeCapacity.FreeGpu < s.config.MinFreeGpu) {
-		newWorker, err = s.controller.AddWorker(s.config.DefaultWorkerCpu, s.config.DefaultWorkerMemory, s.config.DefaultWorkerGpuType)
+		newWorker, err = s.controller.AddWorker(s.config.DefaultWorkerCpu, s.config.DefaultWorkerMemory, s.config.DefaultWorkerGpuType, s.config.DefaultWorkerGpuCount)
 		if err != nil {
 			log.Printf("<pool %s> Error adding new worker: %v\n", s.controller.Name(), err)
 			return nil, err
@@ -81,8 +81,12 @@ func ParsePoolSizingConfig(config types.WorkerPoolJobSpecPoolSizingConfig) (*typ
 		c.DefaultWorkerMemory = defaultWorkerMemory
 	}
 
-	if defaultWorkerGpuType, err := ParseGPUType(config.DefaultWorkerGPUType); err == nil {
+	if defaultWorkerGpuType, err := ParseGPUType(config.DefaultWorkerGpuType); err == nil {
 		c.DefaultWorkerGpuType = defaultWorkerGpuType.String()
+	}
+
+	if defaultWorkerGpuCount, err := ParseGpuCount(config.DefaultWorkerGpuCount); err == nil {
+		c.DefaultWorkerGpuCount = uint32(defaultWorkerGpuCount)
 	}
 
 	return c, nil
