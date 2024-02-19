@@ -66,8 +66,8 @@ type GatewayServiceConfig struct {
 	Host           string `key:"host" json:"host"`
 	HTTPPort       int    `key:"httpPort" json:"http_port"`
 	GRPCPort       int    `key:"grpcPort" json:"grpc_port"`
-	MaxRecvMsgSize int    `key:"max_recv_msg_size_in_mb" json:"max_recv_msg_size"`
-	MaxSendMsgSize int    `key:"max_send_msg_size_in_mb" json:"max_send_msg_size"`
+	MaxRecvMsgSize int    `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
+	MaxSendMsgSize int    `key:"maxSendMsgSize" json:"max_send_msg_size"`
 }
 
 type ImageServiceConfig struct {
@@ -130,7 +130,8 @@ type WorkerConfig struct {
 	ResourcesEnforced          bool                        `key:"resourcesEnforced" json:"resources_enforced"`
 	DefaultWorkerCPURequest    int64                       `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
 	DefaultWorkerMemoryRequest int64                       `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
-	ImagePVCName               string                      `key:"imagePVCName"  json:"image_pvc_name"`
+	ImagePVCName               string                      `key:"imagePVCName" json:"image_pvc_name"`
+	AddWorkerTimeout           time.Duration               `key:"addWorkerTimeout" json:"add_worker_timeout"`
 }
 
 type PoolMode string

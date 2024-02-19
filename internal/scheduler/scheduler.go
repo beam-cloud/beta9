@@ -10,7 +10,6 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
-	"github.com/beam-cloud/beta9/internal/repository"
 	repo "github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 )
@@ -31,7 +30,7 @@ type Scheduler struct {
 	eventBus          *common.EventBus
 }
 
-func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.PrometheusRepository, backendRepo repository.BackendRepository, tailscale *network.Tailscale) (*Scheduler, error) {
+func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.PrometheusRepository, backendRepo repo.BackendRepository, tailscale *network.Tailscale) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
