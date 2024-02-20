@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path"
 	"time"
 
+	"github.com/beam-cloud/beta9/internal/abstractions"
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
@@ -157,22 +157,11 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
-	mounts := []types.Mount{
-		{
-			LocalPath: path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, stub.Object.ExternalId),
-			MountPath: types.WorkerUserCodeVolume,
-			ReadOnly:  true,
-		},
-	}
-
-	for _, v := range stubConfig.Volumes {
-		mounts = append(mounts, types.Mount{
-			LocalPath: path.Join(types.DefaultVolumesPath, authInfo.Workspace.Name, v.Id),
-			LinkPath:  path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, stub.Object.ExternalId, v.MountPath),
-			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
-			ReadOnly:  false,
-		})
-	}
+	mounts := abstractions.ConfigureContainerRequestMounts(
+		stub.Object.ExternalId,
+		authInfo.Workspace.Name,
+		stubConfig,
+	)
 
 	err = fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,

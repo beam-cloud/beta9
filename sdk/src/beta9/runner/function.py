@@ -1,8 +1,9 @@
 import json
-import os
 import time
 
 import cloudpickle
+from grpclib.client import Channel
+
 from beta9.aio import run_sync
 from beta9.clients.function import (
     FunctionGetArgsResponse,
@@ -12,9 +13,8 @@ from beta9.clients.function import (
 from beta9.clients.gateway import EndTaskResponse, GatewayServiceStub, StartTaskResponse
 from beta9.config import with_runner_context
 from beta9.exceptions import InvalidFunctionArgumentsException, RunnerException
-from beta9.runner.common import USER_CODE_VOLUME, config, load_handler
+from beta9.runner.common import config, load_handler
 from beta9.type import TaskStatus
-from grpclib.client import Channel
 
 
 def _load_args(args: bytes) -> dict:
@@ -48,7 +48,6 @@ def main(channel: Channel):
         raise RunnerException("Unable to start task")
 
     task_status = TaskStatus.Complete
-    current_wkdir = os.getcwd()
     error = None
 
     # Invoke function
@@ -63,14 +62,11 @@ def main(channel: Channel):
         payload: dict = _load_args(get_args_resp.args)
         args = payload.get("args") or []
         kwargs = payload.get("kwargs") or {}
-
-        os.chdir(USER_CODE_VOLUME)
         result = handler(*args, **kwargs)
     except BaseException as exc:
         result = error = exc
         task_status = TaskStatus.Error
     finally:
-        os.chdir(current_wkdir)
         result = cloudpickle.dumps(result)
         set_result_resp: FunctionSetResultResponse = run_sync(
             function_stub.function_set_result(task_id=task_id, result=result),
