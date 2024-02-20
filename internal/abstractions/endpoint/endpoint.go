@@ -39,11 +39,16 @@ var (
 var RingBufferSize int = 10000000
 var RequestTimeout = 120 * time.Second
 
-func NewRingBufferEndpointService(
+type EndpointServiceOpts struct {
+	Config         types.AppConfig
+	RedisClient    *common.RedisClient
+	Scheduler      *scheduler.Scheduler
+	BaseRouteGroup *echo.Group
+}
+
+func NewEndpointService(
 	ctx context.Context,
-	rdb *common.RedisClient,
-	scheduler *scheduler.Scheduler,
-	baseRouteGroup *echo.Group,
+	opts EndpointServiceOpts,
 ) (EndpointService, error) {
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
@@ -56,12 +61,12 @@ func NewRingBufferEndpointService(
 		return nil, err
 	}
 
-	containerRepo := repository.NewContainerRedisRepository(rdb)
+	containerRepo := repository.NewContainerRedisRepository(opts.RedisClient)
 
 	es := &RingBufferEndpointService{
 		ctx:               ctx,
-		rdb:               rdb,
-		scheduler:         scheduler,
+		rdb:               opts.RedisClient,
+		scheduler:         opts.Scheduler,
 		backendRepo:       backendRepo,
 		containerRepo:     containerRepo,
 		endpointInstances: common.NewSafeMap[*endpointInstance](),
@@ -69,7 +74,7 @@ func NewRingBufferEndpointService(
 
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(backendRepo)
-	registerEndpointRoutes(baseRouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
+	registerEndpointRoutes(opts.BaseRouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
 
 	return es, nil
 }

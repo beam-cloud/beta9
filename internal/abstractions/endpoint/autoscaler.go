@@ -103,8 +103,6 @@ func (as *autoscaler) start(ctx context.Context) {
 	ticker := time.NewTicker(sampleRate)
 	defer ticker.Stop()
 
-	// TODO: For the time being, we want to aggresively try to scale down
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -115,22 +113,6 @@ func (as *autoscaler) start(ctx context.Context) {
 			} else {
 				as.instance.scaleEventChan <- 0
 			}
-
-			// sample, err := as.sample()
-			// if err != nil {
-			// 	continue
-			// }
-
-			// // Append samples to moving windows
-			// as.samples.TotalRequests.Append(float64(sample.TotalRequests))
-			// as.samples.CurrentContainers.Append(float64(sample.CurrentContainers))
-
-			// var scaleResult *autoscaleResult = nil
-			// scaleResult = as.scaleByTotalRequests(sample)
-
-			// if scaleResult != nil && scaleResult.ResultValid {
-			// 	as.instance.scaleEventChan <- scaleResult.DesiredContainers // Send autoscaling result to request bucket
-			// }
 		}
 	}
 }

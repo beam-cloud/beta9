@@ -206,7 +206,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterTaskQueueServiceServer(g.grpcServer, tq)
 
 	// Register endpoint service
-	ws, err := endpoint.NewRingBufferEndpointService(g.ctx, g.redisClient, g.Scheduler, g.baseRouteGroup)
+	ws, err := endpoint.NewEndpointService(g.ctx, g.redisClient, g.Scheduler, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}
