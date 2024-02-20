@@ -77,17 +77,17 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: proxy
+  name: beta9-proxy
   namespace: beta9
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: proxy
+      app: beta9-proxy
   template:
     metadata:
       labels:
-        app: proxy
+        app: beta9-proxy
     spec:
       containers:
       - name: proxy

@@ -91,7 +91,7 @@ spec:
       volumes:
       - name: images
         persistentVolumeClaim:
-          claimName: gateway-images
+          claimName: beta9-images
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -126,7 +126,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: gateway-images
+  name: beta9-images
   namespace: beta9
 spec:
   accessModes:
