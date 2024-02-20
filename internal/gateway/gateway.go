@@ -11,30 +11,30 @@ import (
 	"syscall"
 
 	"github.com/beam-cloud/beta9/internal/abstractions/endpoint"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	"google.golang.org/grpc"
+
+	"github.com/beam-cloud/beta9/internal/abstractions/container"
 	"github.com/beam-cloud/beta9/internal/abstractions/function"
 	"github.com/beam-cloud/beta9/internal/abstractions/image"
 	dmap "github.com/beam-cloud/beta9/internal/abstractions/map"
 	simplequeue "github.com/beam-cloud/beta9/internal/abstractions/queue"
 	"github.com/beam-cloud/beta9/internal/abstractions/taskqueue"
-	gatewayservices "github.com/beam-cloud/beta9/internal/gateway/services"
 	"github.com/beam-cloud/beta9/internal/network"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
 	volume "github.com/beam-cloud/beta9/internal/abstractions/volume"
-
 	apiv1 "github.com/beam-cloud/beta9/internal/api/v1"
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
-
+	gatewayservices "github.com/beam-cloud/beta9/internal/gateway/services"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/storage"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-	"google.golang.org/grpc"
 )
 
 type Gateway struct {
@@ -223,6 +223,23 @@ func (g *Gateway) registerServices() error {
 		return err
 	}
 	pb.RegisterVolumeServiceServer(g.grpcServer, vs)
+
+	// Register container service
+	cs, err := container.NewContainerService(
+		g.ctx,
+		container.ContainerServiceOpts{
+			Config:        g.config,
+			BackendRepo:   g.BackendRepo,
+			ContainerRepo: g.ContainerRepo,
+			Tailscale:     g.Tailscale,
+			Scheduler:     g.Scheduler,
+			RedisClient:   g.redisClient,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	pb.RegisterContainerServiceServer(g.grpcServer, cs)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService(g.Scheduler)

@@ -93,6 +93,8 @@ worker:
   resourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
+  terminationGracePeriod: 30
+metrics:
   addWorkerTimeout: 10m
 providers:
   ec2:

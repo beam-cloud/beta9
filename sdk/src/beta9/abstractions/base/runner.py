@@ -8,6 +8,7 @@ from beta9.abstractions.volume import Volume
 from beta9.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
 from beta9.sync import FileSyncer
 
+CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
 TASKQUEUE_STUB_TYPE = "taskqueue"
 WEBSERVER_STUB_TYPE = "endpoint"
@@ -98,7 +99,7 @@ class RunnerAbstraction(BaseAbstraction):
             raise TypeError("CPU must be a float or a string.")
 
     def _load_handler(self, func: Callable) -> None:
-        if self.handler:
+        if self.handler or func is None:
             return
 
         module = inspect.getmodule(func)  # Determine module / function name
@@ -112,11 +113,21 @@ class RunnerAbstraction(BaseAbstraction):
         self.handler = f"{module_name}:{function_name}"
 
     def prepare_runtime(
-        self, *, func: Callable, stub_type: str, force_create_stub: bool = False
+        self,
+        *,
+        func: Optional[Callable] = None,
+        stub_type: str,
+        force_create_stub: bool = False,
+        name: Optional[str] = None,
     ) -> bool:
-        self._load_handler(func)
+        if func is not None:
+            self._load_handler(func)
 
-        stub_name = f"{stub_type}/{self.handler}"
+        stub_name = f"{stub_type}/{self.handler}" if self.handler else stub_type
+
+        if name:
+            stub_name = f"{stub_name}/{name}"
+
         if self.runtime_ready:
             return True
 

@@ -132,6 +132,7 @@ type WorkerConfig struct {
 	DefaultWorkerMemoryRequest int64                       `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
 	ImagePVCName               string                      `key:"imagePVCName" json:"image_pvc_name"`
 	AddWorkerTimeout           time.Duration               `key:"addWorkerTimeout" json:"add_worker_timeout"`
+	TerminationGracePeriod     int64                       `key:"terminationGracePeriod"`
 }
 
 type PoolMode string

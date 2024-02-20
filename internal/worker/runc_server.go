@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	defaultWorkingDirectory string = "/workspace"
+	defaultWorkingDirectory string = "/mnt/code"
 	defaultWorkerServerPort int    = 1000
 )
 
