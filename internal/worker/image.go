@@ -287,6 +287,12 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 		err = clip.CreateAndUploadArchive(clip.CreateOptions{
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
+			Credentials: storage.ClipStorageCredentials{
+				S3: &storage.S3ClipStorageCredentials{
+					AccessKey: i.config.Registries.S3.AWSAccessKey,
+					SecretKey: i.config.Registries.S3.AWSSecretKey,
+				},
+			},
 		}, &clipCommon.S3StorageInfo{
 			Bucket: i.config.Registries.S3.AWSS3Bucket,
 			Region: i.config.Registries.S3.AWSRegion,
