@@ -7,7 +7,7 @@ from uvicorn import Config, Server
 
 from beta9.runner.common import load_handler
 
-logger = logging.getLogger("uvicorn")
+logger = logging.getLogger("uvicorn.access")
 
 
 # Define the filter
