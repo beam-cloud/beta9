@@ -1,3 +1,4 @@
+clusterName: beta9
 debugMode: false
 database:
   postgres:
@@ -22,14 +23,14 @@ storage:
   juicefs:
     redisURI: redis://juicefs-redis-master.beta9:6379/0
     awsS3Bucket: http://localstack.beta9:4566/juicefs
-    awsAccessKeyID: test
-    awsSecretAccessKey: test
+    awsAccessKey: test
+    awsSecretKey: test
 gateway:
-  host: gateway.beta9
+  host: beta9-gateway.beta9
   httpPort: 1994
   grpcPort: 1993
-  grpcMaxRecvMsgSizeInMB: 1024
-  grpcMaxSendMsgSizeInMB: 1024
+  maxRecvMsgSize: 1024
+  maxSendMsgSize: 1024
 imageService:
   cacheURL:
   registryStore: local
@@ -39,10 +40,10 @@ imageService:
       username: beamcloud
       password:
     s3:
-      bucket: beta9-images
-      region: us-east-1
-      accessKeyID: test
-      secretAccessKey: test
+      awsS3Bucket: beta9-images
+      awsRegion: us-east-1
+      awsAccessKey: test
+      awsSecretKey: test
   runner:
     baseImageTag: latest
     baseImageName: beta9-runner
@@ -56,6 +57,7 @@ imageService:
 worker:
   pools:
     default:
+      mode: local
       jobSpec:
         nodeSelector: {}
       poolSizing:
@@ -87,12 +89,42 @@ worker:
   namespace: beta9
   serviceAccountName: default
   # non-standard k8s job spec
-  imagePVCName: gateway-images
+  imagePVCName: beta9-images
   resourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
   terminationGracePeriod: 30
 metrics:
+  addWorkerTimeout: 10m
+providers:
+  ec2:
+    accessKey:
+    secretkey:
+    region: us-east-1
+    # If you want workers nodes to land in your default vpc, you can omit subnetId
+    subnetId:
+    ami: ami-052c704a7f82c38b1
+tailscale:
+  controlUrl:
+  user: beta9
+  authKey:
+  enabled: false
+  debug: false
+  hostName: headscale.internal
+proxy:
+  services:
+  - name: redis
+    localPort: 6379
+    destination: redis-master.beta9:6379
+  - name: juicefs-redis
+    localPort: 6380
+    destination: juicefs-redis-master.beta9:6379
+  - name: gateway-http
+    localPort: 1994
+    destination: beta9-gateway.beta9:1994
+  - name: gateway-grpc
+    localPort: 1993
+    destination: beta9-gateway.beta9:1993
 monitoring:
   prometheus:
     scrapeWorkers: true

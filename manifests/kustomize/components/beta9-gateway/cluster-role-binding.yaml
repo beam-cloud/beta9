@@ -2,9 +2,6 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: beta9
   name: gateway-role-binding
   namespace: beta9
 roleRef:

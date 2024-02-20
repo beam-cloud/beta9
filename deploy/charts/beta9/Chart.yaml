@@ -1,16 +1,19 @@
 apiVersion: v2
-name: beta9
+name: beta9-chart
 description: A Helm chart for Beta9
 type: application
 version: 0.1.0
 appVersion: 0.1.0
 home: https://beta9.dev
 dependencies:
-- alias: gateway
-  name: app-template
-  version: 2.5.0
+- name: common
   repository: https://bjw-s.github.io/helm-charts
-  condition: gateway.enabled
+  version: 2.5.0
+- alias: blobcache
+  name: beam-blobcache-chart
+  version: 0.1.0
+  repository: oci://public.ecr.aws/n4e0e1y0
+  condition: blobcache.enabled
 - name: redis
   version: 18.9.1
   repository: https://charts.bitnami.com/bitnami

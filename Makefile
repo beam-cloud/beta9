@@ -5,9 +5,9 @@ runnerTag := latest
 
 setup:
 	bash bin/setup.sh
-	make k3d-up runner worker gateway
-	helm install beta9 deploy/charts/beta9 --values deploy/charts/beta9/values.local.yaml
-	# kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | k apply -f-
+	make k3d-up runner worker gateway proxy
+	# helm install beta9 deploy/charts/beta9 --create-namespace --values deploy/charts/beta9/values.local.yaml
+	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | k apply -f-
 
 setup-sdk:
 	curl -sSL https://install.python-poetry.org | python3 -
@@ -30,6 +30,10 @@ worker:
 	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	bin/delete_workers.sh
+
+proxy:
+	docker build . --target build -f ./docker/Dockerfile.proxy -t localhost:5001/beta9-proxy:$(tag)
+	docker push localhost:5001/beta9-proxy:$(tag)
 
 runner:
 	for target in py311 py310 py39 py38; do \

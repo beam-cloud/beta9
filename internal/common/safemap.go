@@ -38,3 +38,15 @@ func (m *SafeMap[V]) Len() int {
 	defer m.mu.RUnlock()
 	return len(m._map)
 }
+
+// Range calls f sequentially for each key and value present in the map.
+// If f returns false, range stops the iteration.
+func (m *SafeMap[V]) Range(f func(key string, value V) bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for k, v := range m._map {
+		if !f(k, v) {
+			break
+		}
+	}
+}

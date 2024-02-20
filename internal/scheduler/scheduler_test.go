@@ -73,19 +73,15 @@ func (wpc *WorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
 }
 
-func (wpc *WorkerPoolControllerForTest) AddWorkerWithId(workerId string, cpu int64, memory int64, gpuType string) (*types.Worker, error) {
-	// TODO: implement and add test
-	return nil, nil
-}
-
-func (wpc *WorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error) {
+func (wpc *WorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := wpc.generateWorkerId()
 	worker := &types.Worker{
-		Id:     workerId,
-		Cpu:    cpu,
-		Memory: memory,
-		Gpu:    gpuType,
-		Status: types.WorkerStatusPending,
+		Id:       workerId,
+		Cpu:      cpu,
+		Memory:   memory,
+		Gpu:      gpuType,
+		GpuCount: gpuCount,
+		Status:   types.WorkerStatusPending,
 	}
 
 	// Add the worker state

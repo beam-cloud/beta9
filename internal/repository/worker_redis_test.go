@@ -127,11 +127,12 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	assert.Nil(t, err)
 
 	newWorker := &types.Worker{
-		Id:     "worker1",
-		Status: types.WorkerStatusPending,
-		Cpu:    0,
-		Memory: 0,
-		Gpu:    "A10G",
+		Id:       "worker1",
+		Status:   types.WorkerStatusPending,
+		Cpu:      0,
+		Memory:   0,
+		Gpu:      "A10G",
+		GpuCount: 0,
 	}
 
 	// Create a new worker
@@ -153,6 +154,7 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 		Cpu:         500,
 		Memory:      1000,
 		Gpu:         "A10G",
+		GpuCount:    1,
 	}
 	err = repo.UpdateWorkerCapacity(worker, request, types.AddCapacity)
 	assert.Nil(t, err)
@@ -172,6 +174,7 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 		Cpu:         100,
 		Memory:      100,
 		Gpu:         "A10G",
+		GpuCount:    1,
 	}
 	err = repo.UpdateWorkerCapacity(updatedWorker, request, types.RemoveCapacity)
 	assert.Nil(t, err)
@@ -181,9 +184,8 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	assert.Equal(t, int64(2), updatedWorker.ResourceVersion)
 	assert.Nil(t, err)
 
-	// GPU requests should set CPU and memory to zero since we aren't sharing GPU workers
-	assert.Equal(t, int64(0), updatedWorker.Cpu)
-	assert.Equal(t, int64(0), updatedWorker.Memory)
+	assert.Equal(t, int64(400), updatedWorker.Cpu)
+	assert.Equal(t, int64(900), updatedWorker.Memory)
 	assert.Equal(t, request.Gpu, updatedWorker.Gpu)
 }
 
@@ -200,7 +202,6 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 		Cpu:    1000,
 		Memory: 1000,
 		Gpu:    "",
-		Agent:  "gcp-uc1",
 	}
 
 	// Create a new worker
@@ -214,7 +215,6 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 	assert.Equal(t, newWorker.Memory, worker.Memory)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 	assert.Equal(t, newWorker.Status, worker.Status)
-	assert.Equal(t, newWorker.Agent, worker.Agent)
 	assert.Equal(t, int64(0), newWorker.ResourceVersion)
 
 	// Remove some capacity from the worker
@@ -234,7 +234,6 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 	assert.Equal(t, worker.Memory-firstRequest.Memory, updatedWorker.Memory)
 	assert.Equal(t, firstRequest.Gpu, updatedWorker.Gpu)
 	assert.Equal(t, worker.Status, updatedWorker.Status)
-	assert.Equal(t, worker.Agent, worker.Agent)
 	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
 
 	// Remove some more capacity
@@ -281,12 +280,12 @@ func TestGetAllWorkers(t *testing.T) {
 	nWorkers := 100
 	for i := 0; i < nWorkers; i++ {
 		err := repo.AddWorker(&types.Worker{
-			Id:     fmt.Sprintf("worker-available-%d", i),
-			Status: types.WorkerStatusAvailable,
-			Cpu:    1000,
-			Memory: 1000,
-			Gpu:    "A10G",
-			Agent:  fmt.Sprintf("agent%d", i),
+			Id:       fmt.Sprintf("worker-available-%d", i),
+			Status:   types.WorkerStatusAvailable,
+			Cpu:      1000,
+			Memory:   1000,
+			Gpu:      "A10G",
+			GpuCount: 1,
 		})
 		assert.Nil(t, err)
 	}
@@ -294,11 +293,12 @@ func TestGetAllWorkers(t *testing.T) {
 	// Create a bunch of pending workers
 	for i := 0; i < nWorkers; i++ {
 		err := repo.AddWorker(&types.Worker{
-			Id:     fmt.Sprintf("worker-pending-%d", i),
-			Status: types.WorkerStatusPending,
-			Cpu:    1000,
-			Memory: 1000,
-			Gpu:    "A10G",
+			Id:       fmt.Sprintf("worker-pending-%d", i),
+			Status:   types.WorkerStatusPending,
+			Cpu:      1000,
+			Memory:   1000,
+			Gpu:      "A10G",
+			GpuCount: 1,
 		})
 		assert.Nil(t, err)
 	}
@@ -310,7 +310,6 @@ func TestGetAllWorkers(t *testing.T) {
 	assert.Equal(t, nWorkers*2, len(workers))
 
 	// Ensure we got back the correct number of each status type
-	agentCount := 0
 	availableCount := 0
 	pendingCount := 0
 	for _, worker := range workers {
@@ -320,69 +319,9 @@ func TestGetAllWorkers(t *testing.T) {
 		case types.WorkerStatusPending:
 			pendingCount++
 		}
-		if worker.Agent != "" {
-			agentCount++
-		}
 	}
-	assert.Equal(t, nWorkers, agentCount)
 	assert.Equal(t, nWorkers, availableCount)
 	assert.Equal(t, nWorkers, pendingCount)
-}
-
-func TestWorkerWithAgent(t *testing.T) {
-	rdb, err := NewRedisClientForTest()
-	assert.NotNil(t, rdb)
-	assert.Nil(t, err)
-
-	repo := NewWorkerRedisRepositoryForTest(rdb)
-	nAgents := 5
-
-	err = repo.AddWorker(&types.Worker{
-		Id:     "worker-1",
-		Status: types.WorkerStatusAvailable,
-		Cpu:    100,
-		Memory: 100,
-		Gpu:    "A10G",
-	})
-	assert.Nil(t, err)
-
-	for i := 0; i < nAgents; i++ {
-		err := repo.AddWorker(&types.Worker{
-			Id:     fmt.Sprintf("worker-with-agent-%d", i),
-			Status: types.WorkerStatusAvailable,
-			Cpu:    200,
-			Memory: 400,
-			Gpu:    "A10G",
-			Agent:  fmt.Sprintf("aws-ue1-%d", i),
-		})
-		assert.Nil(t, err)
-	}
-
-	worker, err := repo.GetWorkerById("worker-1")
-	assert.Nil(t, err)
-	assert.Equal(t, "worker-1", worker.Id)
-
-	worker, err = repo.GetWorkerById("worker-with-agent-1")
-	assert.Nil(t, err)
-	assert.Equal(t, "worker-with-agent-1", worker.Id)
-
-	agentCount := 0
-	workers, err := repo.GetAllWorkers()
-	assert.Nil(t, err)
-	for _, worker := range workers {
-		if worker.Agent != "" {
-			assert.Equal(t, fmt.Sprintf("aws-ue1-%d", agentCount), worker.Agent)
-			assert.Equal(t, int64(200), worker.Cpu)
-			assert.Equal(t, int64(400), worker.Memory)
-			agentCount++
-			continue
-		}
-
-		assert.Equal(t, int64(100), worker.Cpu)
-		assert.Equal(t, int64(100), worker.Memory)
-	}
-
-	assert.Equal(t, nAgents, agentCount)
 }
 
 func BenchmarkGetAllWorkers(b *testing.B) {

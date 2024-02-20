@@ -2,10 +2,12 @@ package repository
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -13,8 +15,9 @@ import (
 )
 
 type TCPEventClientRepo struct {
-	config types.FluentBitEventConfig
-	http   *http.Client
+	config            types.FluentBitEventConfig
+	http              *http.Client
+	endpointAvailable bool
 }
 
 func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
@@ -30,10 +33,26 @@ func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
 		},
 	}
 
-	return &TCPEventClientRepo{
-		config: config,
-		http:   httpClient,
+	endpointAvailable := eventEndpointAvailable(context.TODO(), config.Endpoint, time.Duration(config.DialTimeout))
+	if !endpointAvailable {
+		log.Println("[WARNING] fluentbit host does not appear to be up, events will be dropped")
 	}
+
+	return &TCPEventClientRepo{
+		config:            config,
+		http:              httpClient,
+		endpointAvailable: endpointAvailable,
+	}
+}
+
+func eventEndpointAvailable(ctx context.Context, addr string, timeout time.Duration) bool {
+	addr = strings.NewReplacer("http://", "", "https://", "").Replace(addr)
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	return true
 }
 
 func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion string, data []byte) (types.Event, error) {
@@ -52,6 +71,10 @@ func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion s
 }
 
 func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, data interface{}) {
+	if !t.endpointAvailable {
+		return
+	}
+
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
 		log.Println("failed to marshal event:", err)

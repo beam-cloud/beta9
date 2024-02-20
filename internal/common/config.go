@@ -26,7 +26,8 @@ type ConfigLoaderFunc func(k *koanf.Koanf) error
 // manipulation of configuration data for various types. It includes a Koanf
 // instance ('kf') for managing configuration settings.
 type ConfigManager[T any] struct {
-	kf *koanf.Koanf
+	kf           *koanf.Koanf
+	configFormat ConfigFormat
 }
 
 // NewConfigManager creates a new instance of the ConfigManager[T] type for
@@ -35,9 +36,12 @@ type ConfigManager[T any] struct {
 // a user configuration if the 'CONFIG_PATH' environment variable is provided.
 // If debug mode is enabled, it prints the current configuration.
 func NewConfigManager[T any]() (*ConfigManager[T], error) {
+	configFormat := YAMLConfigFormat
+
 	// Initialize a ConfigManager[T] with the specified 'T' type.
 	cm := &ConfigManager[T]{
-		kf: koanf.New("."),
+		kf:           koanf.New("."),
+		configFormat: configFormat,
 	}
 
 	// Load default configuration
@@ -53,6 +57,8 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 		if err := cm.LoadConfig(ConfigFormat(ce), file.Provider(cp)); err != nil {
 			return nil, err
 		}
+
+		configFormat = ConfigFormat(ce)
 	}
 
 	// If debug mode is enabled, print the current configuration.
@@ -61,6 +67,7 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 		log.Println(cm.Print())
 	}
 
+	cm.configFormat = configFormat
 	return cm, nil
 }
 
@@ -74,7 +81,16 @@ func (cm *ConfigManager[T]) Print() string {
 // unmarshaling, it logs a fatal error and exits the application.
 func (cm *ConfigManager[T]) GetConfig() T {
 	var c T
-	err := cm.kf.UnmarshalWithConf("", &c, koanf.UnmarshalConf{Tag: "key", FlatPaths: false})
+
+	tag := "key"
+	switch cm.configFormat {
+	case YAMLConfigFormat:
+		tag = "key"
+	case JSONConfigFormat:
+		tag = "json"
+	}
+
+	err := cm.kf.UnmarshalWithConf("", &c, koanf.UnmarshalConf{Tag: tag, FlatPaths: false})
 	if err != nil {
 		log.Fatal("failed to unmarshal config")
 	}

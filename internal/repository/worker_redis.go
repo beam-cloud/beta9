@@ -146,7 +146,16 @@ func (r *WorkerRedisRepository) GetWorkerById(workerId string) (*types.Worker, e
 	}
 	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
 
+	// Check if the worker key exists
 	key := common.RedisKeys.SchedulerWorkerState(workerId)
+	exists, err := r.rdb.Exists(context.TODO(), key).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	if exists == 0 {
+		return nil, &types.ErrWorkerNotFound{WorkerId: workerId}
+	}
 
 	return r.getWorkerFromKey(key)
 }
@@ -231,19 +240,20 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 		updatedWorker.Cpu = updatedWorker.Cpu + request.Cpu
 		updatedWorker.Memory = updatedWorker.Memory + request.Memory
 
+		if request.Gpu != "" {
+			updatedWorker.GpuCount += request.GpuCount
+		}
+
 	case types.RemoveCapacity:
 		updatedWorker.Cpu = updatedWorker.Cpu - request.Cpu
 		updatedWorker.Memory = updatedWorker.Memory - request.Memory
 
-		if updatedWorker.Cpu < 0 || updatedWorker.Memory < 0 {
-			return errors.New("unable to schedule container, worker out of cpu or memory")
+		if request.Gpu != "" {
+			updatedWorker.GpuCount -= request.GpuCount
 		}
 
-		// NOTE: Because we cannot currently schedule more than one request w/ GPU per pod at this time
-		// set remaining CPU and memory to zero
-		if request.Gpu != "" {
-			updatedWorker.Cpu = 0
-			updatedWorker.Memory = 0
+		if updatedWorker.Cpu < 0 || updatedWorker.Memory < 0 || updatedWorker.GpuCount < 0 {
+			return errors.New("unable to schedule container, worker out of cpu, memory, or gpu")
 		}
 
 	default:
