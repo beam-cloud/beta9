@@ -13,4 +13,4 @@ dev:
     forward:
     - 1993:1993
     - 1994:1994
-    - 5432:postgres-postgresql:5432
+    - 5432:postgresql:5432
