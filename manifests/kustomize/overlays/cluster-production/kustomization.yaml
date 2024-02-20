@@ -4,6 +4,10 @@ kind: Kustomization
 resources:
 - ../../base
 components:
-- ../../components/monitoring
 - ../../components/nvidia-device-plugin
+- ../../components/monitoring
+# - ../../components/juicefs
+# - ../../components/redis
+# - ../../components/postgresql
+# - ../../components/localstack
 - ../../components/beta9-gateway

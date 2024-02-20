@@ -66,8 +66,8 @@ type GatewayServiceConfig struct {
 	Host           string `key:"host" json:"host"`
 	HTTPPort       int    `key:"httpPort" json:"http_port"`
 	GRPCPort       int    `key:"grpcPort" json:"grpc_port"`
-	MaxRecvMsgSize int    `key:"max_recv_msg_size_in_mb" json:"max_recv_msg_size"`
-	MaxSendMsgSize int    `key:"max_send_msg_size_in_mb" json:"max_send_msg_size"`
+	MaxRecvMsgSize int    `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
+	MaxSendMsgSize int    `key:"maxSendMsgSize" json:"max_send_msg_size"`
 }
 
 type ImageServiceConfig struct {
@@ -130,7 +130,8 @@ type WorkerConfig struct {
 	ResourcesEnforced          bool                        `key:"resourcesEnforced" json:"resources_enforced"`
 	DefaultWorkerCPURequest    int64                       `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
 	DefaultWorkerMemoryRequest int64                       `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
-	ImagePVCName               string                      `key:"imagePVCName"  json:"image_pvc_name"`
+	ImagePVCName               string                      `key:"imagePVCName" json:"image_pvc_name"`
+	AddWorkerTimeout           time.Duration               `key:"addWorkerTimeout" json:"add_worker_timeout"`
 }
 
 type PoolMode string
@@ -166,12 +167,13 @@ type WorkerPoolJobSpecConfig struct {
 }
 
 type WorkerPoolJobSpecPoolSizingConfig struct {
-	DefaultWorkerCPU     string `key:"defaultWorkerCPU" json:"default_worker_cpu"`
-	DefaultWorkerMemory  string `key:"defaultWorkerMemory" json:"default_worker_memory"`
-	DefaultWorkerGPUType string `key:"defaultWorkerGPUType" json:"default_worker_gpu_type"`
-	MinFreeCPU           string `key:"minFreeCPU" json:"min_free_cpu"`
-	MinFreeMemory        string `key:"minFreeMemory" json:"min_free_memory"`
-	MinFreeGPU           string `key:"minFreeGPU" json:"min_free_gpu"`
+	DefaultWorkerCPU      string `key:"defaultWorkerCPU" json:"default_worker_cpu"`
+	DefaultWorkerMemory   string `key:"defaultWorkerMemory" json:"default_worker_memory"`
+	DefaultWorkerGpuType  string `key:"defaultWorkerGPUType" json:"default_worker_gpu_type"`
+	DefaultWorkerGpuCount string `key:"defaultWorkerGpuCount" json:"default_worker_gpu_count"`
+	MinFreeCPU            string `key:"minFreeCPU" json:"min_free_cpu"`
+	MinFreeMemory         string `key:"minFreeMemory" json:"min_free_memory"`
+	MinFreeGPU            string `key:"minFreeGPU" json:"min_free_gpu"`
 }
 
 type MachineProvider string

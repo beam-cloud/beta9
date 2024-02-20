@@ -126,7 +126,7 @@ func TestParsePoolSizingConfig(t *testing.T) {
 				MinFreeGPU:           "bad value",
 				DefaultWorkerCPU:     "bad value",
 				DefaultWorkerMemory:  "bad value",
-				DefaultWorkerGPUType: "bad value",
+				DefaultWorkerGpuType: "bad value",
 			},
 			sizingConfigWant: &types.WorkerPoolSizingConfig{
 				MinFreeCpu:           0,
@@ -154,7 +154,7 @@ func TestParsePoolSizingConfig(t *testing.T) {
 		},
 		{
 			name:             "should parse defaultWorkerGpuType as T4",
-			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGPUType: "T4"},
+			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGpuType: "T4"},
 			sizingConfigWant: &types.WorkerPoolSizingConfig{
 				DefaultWorkerCpu:     1000,
 				DefaultWorkerMemory:  1024,
@@ -163,7 +163,7 @@ func TestParsePoolSizingConfig(t *testing.T) {
 		},
 		{
 			name:             "should parse defaultWorkerGpuType as A100-40",
-			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGPUType: "A100-40"},
+			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGpuType: "A100-40"},
 			sizingConfigWant: &types.WorkerPoolSizingConfig{
 				DefaultWorkerCpu:     1000,
 				DefaultWorkerMemory:  1024,
@@ -172,7 +172,7 @@ func TestParsePoolSizingConfig(t *testing.T) {
 		},
 		{
 			name:             "should return empty DefaultWorkerGpuType when using 3060 (str) as defaultWorkerGpuType",
-			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGPUType: "3060"},
+			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGpuType: "3060"},
 			sizingConfigWant: &types.WorkerPoolSizingConfig{
 				DefaultWorkerCpu:     1000,
 				DefaultWorkerMemory:  1024,
@@ -181,7 +181,7 @@ func TestParsePoolSizingConfig(t *testing.T) {
 		},
 		{
 			name:             "should set empty DefaultWorkerGpuType when using 4090 (int) as defaultWorkerGpuType",
-			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGPUType: "4090"},
+			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGpuType: "4090"},
 			sizingConfigWant: &types.WorkerPoolSizingConfig{
 				DefaultWorkerCpu:     1000,
 				DefaultWorkerMemory:  1024,

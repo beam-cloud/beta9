@@ -22,6 +22,19 @@ func ParseCPU(cpu interface{}) (int64, error) {
 	return cpuValue, nil
 }
 
+func ParseGpuCount(gpuCount interface{}) (int64, error) {
+	gpuCountValue, err := strconv.ParseInt(gpuCount.(string), 10, 64)
+	if err != nil {
+		return 0, err
+	}
+
+	if gpuCountValue < 0 {
+		return 0, errors.New("invalid gpu_count value")
+	}
+
+	return gpuCountValue, nil
+}
+
 func ParseMemory(memory interface{}) (int64, error) {
 	memStr := fmt.Sprintf("%v", memory)
 	unit := strings.TrimLeftFunc(memStr, func(r rune) bool { return r >= '0' && r <= '9' })

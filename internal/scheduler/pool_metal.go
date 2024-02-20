@@ -59,7 +59,7 @@ func NewMetalWorkerPoolController(
 		return nil, err
 	}
 
-	workerPool, _ := config.Worker.Pools[workerPoolName]
+	workerPool := config.Worker.Pools[workerPoolName]
 	wpc := &MetalWorkerPoolController{
 		ctx:            ctx,
 		name:           workerPoolName,
@@ -86,7 +86,7 @@ func NewMetalWorkerPoolController(
 	return wpc, nil
 }
 
-func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string) (*types.Worker, error) {
+func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
 	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, false)
@@ -95,9 +95,10 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	}
 
 	machineId, err := wpc.provider.ProvisionMachine(wpc.ctx, wpc.name, workerId, token.Key, types.ProviderComputeRequest{
-		Cpu:    cpu,
-		Memory: memory,
-		Gpu:    gpuType,
+		Cpu:      cpu,
+		Memory:   memory,
+		Gpu:      gpuType,
+		GpuCount: gpuCount,
 	})
 	if err != nil {
 		return nil, err
@@ -122,7 +123,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	}
 
 	// Create a new worker job
-	job, worker := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType)
+	job, worker := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType, gpuCount)
 	worker.PoolId = PoolId(wpc.name)
 	worker.MachineId = machineId
 
@@ -141,7 +142,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	return worker, nil
 }
 
-func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string) (*batchv1.Job, *types.Worker) {
+func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
 		"app":               Beta9WorkerLabelValue,
@@ -151,7 +152,8 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 
 	workerCpu := cpu
 	workerMemory := memory
-	workerGpu := gpuType
+	workerGpuType := gpuType
+	workerGpuCount := gpuCount
 
 	workerImage := fmt.Sprintf("%s/%s:%s",
 		wpc.config.Worker.ImageRegistry,
@@ -160,12 +162,12 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 	)
 
 	resources := corev1.ResourceRequirements{}
-	if workerGpu != "" {
+	if workerGpuType != "" {
 		resources.Requests = corev1.ResourceList{
-			"nvidia.com/gpu": resource.MustParse("1"),
+			"nvidia.com/gpu": *resource.NewQuantity(int64(gpuCount), resource.DecimalSI),
 		}
 		resources.Limits = corev1.ResourceList{
-			"nvidia.com/gpu": resource.MustParse("1"),
+			"nvidia.com/gpu": *resource.NewQuantity(int64(gpuCount), resource.DecimalSI),
 		}
 	}
 
@@ -185,7 +187,7 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 					ContainerPort: int32(wpc.config.Monitoring.Prometheus.Port),
 				},
 			},
-			Env:          wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpu),
+			Env:          wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpuType, workerGpuCount),
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
 			Resources:    resources,
 		},
@@ -232,15 +234,16 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 	}
 
 	return job, &types.Worker{
-		Id:     workerId,
-		Cpu:    workerCpu,
-		Memory: workerMemory,
-		Gpu:    workerGpu,
-		Status: types.WorkerStatusPending,
+		Id:       workerId,
+		Cpu:      workerCpu,
+		Memory:   workerMemory,
+		Gpu:      workerGpuType,
+		GpuCount: workerGpuCount,
+		Status:   types.WorkerStatusPending,
 	}
 }
 
-func (wpc *MetalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string) []corev1.EnvVar {
+func (wpc *MetalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) []corev1.EnvVar {
 	return []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
@@ -257,6 +260,10 @@ func (wpc *MetalWorkerPoolController) getWorkerEnvironment(workerId, machineId s
 		{
 			Name:  "GPU_TYPE",
 			Value: gpuType,
+		},
+		{
+			Name:  "GPU_COUNT",
+			Value: strconv.FormatInt(int64(gpuCount), 10),
 		},
 		{
 			Name:  "POD_NAMESPACE",

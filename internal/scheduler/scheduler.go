@@ -10,7 +10,6 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
-	"github.com/beam-cloud/beta9/internal/repository"
 	repo "github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 )
@@ -31,7 +30,7 @@ type Scheduler struct {
 	eventBus          *common.EventBus
 }
 
-func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.PrometheusRepository, backendRepo repository.BackendRepository, tailscale *network.Tailscale) (*Scheduler, error) {
+func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.PrometheusRepository, backendRepo repo.BackendRepository, tailscale *network.Tailscale) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
@@ -173,7 +172,7 @@ func (s *Scheduler) StartProcessingRequests() {
 			}
 
 			go func() {
-				newWorker, err := controller.AddWorker(request.Cpu, request.Memory, request.Gpu)
+				newWorker, err := controller.AddWorker(request.Cpu, request.Memory, request.Gpu, request.GpuCount)
 				if err != nil {
 					log.Printf("Unable to add worker job for container <%s>: %+v\n", request.ContainerId, err)
 					s.addRequestToBacklog(request)
@@ -220,7 +219,7 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	})
 
 	for _, worker := range workers {
-		if worker.Cpu >= int64(request.Cpu) && worker.Memory >= int64(request.Memory) && worker.Gpu == request.Gpu {
+		if worker.Cpu >= int64(request.Cpu) && worker.Memory >= int64(request.Memory) && worker.Gpu == request.Gpu && worker.GpuCount >= request.GpuCount {
 			return worker, nil
 		}
 	}
@@ -232,6 +231,10 @@ const maxScheduleRetryCount = 3
 const maxScheduleRetryDuration = 10 * time.Minute
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
+	if request.Gpu != "" && request.GpuCount <= 0 {
+		request.GpuCount = 1
+	}
+
 	if request.RetryCount == 0 {
 		request.RetryCount++
 		return s.requestBacklog.Push(request)

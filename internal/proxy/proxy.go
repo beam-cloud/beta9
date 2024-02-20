@@ -41,14 +41,18 @@ func NewProxy() (*Proxy, error) {
 	}
 
 	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
-	tailscale := network.GetOrCreateTailscale(network.TailscaleConfig{
-		ControlURL: config.Tailscale.ControlURL,
-		AuthKey:    config.Tailscale.AuthKey,
-		Debug:      config.Tailscale.Debug,
-		Ephemeral:  true,
-	},
-		tailscaleRepo,
-	)
+
+	var tailscale *network.Tailscale = nil
+	if config.Tailscale.Enabled {
+		tailscale = network.GetOrCreateTailscale(network.TailscaleConfig{
+			ControlURL: config.Tailscale.ControlURL,
+			AuthKey:    config.Tailscale.AuthKey,
+			Debug:      config.Tailscale.Debug,
+			Ephemeral:  true,
+		},
+			tailscaleRepo,
+		)
+	}
 
 	return &Proxy{
 		config:        config,
@@ -72,6 +76,7 @@ func (p *Proxy) Start() error {
 				return err
 			}
 			p.startServiceProxy(service, listener, serviceId)
+			continue
 		}
 
 		// If tailscale is enabled, bind services as tailscale nodes
