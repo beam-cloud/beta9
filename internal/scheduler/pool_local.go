@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -354,6 +355,15 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 
 	if len(wpc.workerPool.JobSpec.Env) > 0 {
 		envVars = append(envVars, wpc.workerPool.JobSpec.Env...)
+	}
+
+	// Serialize the AppConfig struct to JSON
+	configJson, err := json.MarshalIndent(wpc.config, "", "  ")
+	if err == nil {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "CONFIG_JSON",
+			Value: string(configJson),
+		})
 	}
 
 	return envVars
