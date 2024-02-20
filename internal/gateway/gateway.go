@@ -212,7 +212,17 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterVolumeServiceServer(g.grpcServer, vs)
 
 	// Register container service
-	cs, err := container.NewContainerService(g.ctx, g.redisClient, g.BackendRepo, g.ContainerRepo, g.Scheduler)
+	cs, err := container.NewContainerService(
+		g.ctx,
+		container.ContainerServiceOpts{
+			Config:        g.config,
+			BackendRepo:   g.BackendRepo,
+			ContainerRepo: g.ContainerRepo,
+			Tailscale:     g.Tailscale,
+			Scheduler:     g.Scheduler,
+			RedisClient:   g.redisClient,
+		},
+	)
 	if err != nil {
 		return err
 	}

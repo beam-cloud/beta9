@@ -10,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/internal/abstractions"
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -36,25 +37,36 @@ type ContainerService struct {
 	scheduler       *scheduler.Scheduler
 	keyEventManager *common.KeyEventManager
 	rdb             *common.RedisClient
+	tailscale       *network.Tailscale
+	config          types.AppConfig
 }
 
-func NewContainerService(ctx context.Context,
-	rdb *common.RedisClient,
-	backendRepo repository.BackendRepository,
-	containerRepo repository.ContainerRepository,
-	scheduler *scheduler.Scheduler,
+type ContainerServiceOpts struct {
+	Config        types.AppConfig
+	BackendRepo   repository.BackendRepository
+	ContainerRepo repository.ContainerRepository
+	Tailscale     *network.Tailscale
+	Scheduler     *scheduler.Scheduler
+	RedisClient   *common.RedisClient
+}
+
+func NewContainerService(
+	ctx context.Context,
+	opts ContainerServiceOpts,
 ) (ContainerServicer, error) {
-	keyEventManager, err := common.NewKeyEventManager(rdb)
+	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
 	if err != nil {
 		return nil, err
 	}
 
 	cs := &ContainerService{
-		backendRepo:     backendRepo,
-		containerRepo:   containerRepo,
-		scheduler:       scheduler,
-		rdb:             rdb,
+		backendRepo:     opts.BackendRepo,
+		containerRepo:   opts.ContainerRepo,
+		scheduler:       opts.Scheduler,
+		rdb:             opts.RedisClient,
 		keyEventManager: keyEventManager,
+		tailscale:       opts.Tailscale,
+		config:          opts.Config,
 	}
 
 	return cs, nil
@@ -133,7 +145,12 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 		return err
 	}
 
-	client, err := common.NewRunCClient(hostname, authInfo.Token.Key)
+	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, cs.tailscale, cs.config.Tailscale)
+	if err != nil {
+		return err
+	}
+
+	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
 	if err != nil {
 		return err
 	}
