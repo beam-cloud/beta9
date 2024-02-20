@@ -14,12 +14,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/beam-cloud/go-runc"
+	"github.com/opencontainers/runtime-spec/specs-go"
+
 	common "github.com/beam-cloud/beta9/internal/common"
 	repo "github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/storage"
 	types "github.com/beam-cloud/beta9/internal/types"
-	"github.com/beam-cloud/go-runc"
-	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 const (
@@ -81,7 +82,7 @@ var (
 	baseConfigPath             string  = "/tmp"
 	imagePath                  string  = "/images"
 	containerLogsPath          string  = "/var/log/worker"
-	defaultContainerDirectory  string  = "/workspace"
+	defaultContainerDirectory  string  = "/mnt/code"
 	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
 )
 
@@ -406,6 +407,11 @@ func (s *Worker) terminateContainer(containerId string, request *types.Container
 	}
 
 	defer s.containerWg.Done()
+
+	// Allow for some time to pass before clearing the container. This way we can handle some last
+	// minute logs or events or if the user wants to inspect the container before it's cleared.
+	time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
+
 	s.clearContainer(containerId, request)
 }
 
