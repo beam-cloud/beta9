@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,13 +31,14 @@ type RequestBuffer struct {
 	ctx        context.Context
 	httpClient *http.Client
 
-	stubId              string
-	stubConfig          *types.StubConfigV1
-	workspace           *types.Workspace
-	rdb                 *common.RedisClient
-	containerRepo       repository.ContainerRepository
-	buffer              *abCommon.RingBuffer[request]
-	availableContainers []container
+	stubId                  string
+	stubConfig              *types.StubConfigV1
+	workspace               *types.Workspace
+	rdb                     *common.RedisClient
+	containerRepo           repository.ContainerRepository
+	buffer                  *abCommon.RingBuffer[request]
+	availableContainers     []container
+	availableContainersLock sync.Mutex
 
 	length atomic.Int32
 }
@@ -51,15 +53,17 @@ func NewRequestBuffer(
 	stubConfig *types.StubConfigV1,
 ) *RequestBuffer {
 	b := &RequestBuffer{
-		ctx:           ctx,
-		rdb:           rdb,
-		workspace:     workspace,
-		stubId:        stubId,
-		stubConfig:    stubConfig,
-		buffer:        abCommon.NewRingBuffer[request](size),
-		containerRepo: containerRepo,
-		httpClient:    &http.Client{},
-		length:        atomic.Int32{},
+		ctx:                     ctx,
+		rdb:                     rdb,
+		workspace:               workspace,
+		stubId:                  stubId,
+		stubConfig:              stubConfig,
+		buffer:                  abCommon.NewRingBuffer[request](size),
+		availableContainers:     []container{},
+		availableContainersLock: sync.Mutex{},
+		containerRepo:           containerRepo,
+		httpClient:              &http.Client{},
+		length:                  atomic.Int32{},
 	}
 	go b.discoverContainers()
 	go b.ProcessRequests()
@@ -158,7 +162,9 @@ func (rb *RequestBuffer) discoverContainers() {
 				}
 			}
 
+			rb.availableContainersLock.Lock()
 			rb.availableContainers = availableContainers
+			rb.availableContainersLock.Unlock()
 
 			time.Sleep(1 * time.Second) // TODO: make this configurable
 		}
@@ -166,7 +172,9 @@ func (rb *RequestBuffer) discoverContainers() {
 }
 
 func (rb *RequestBuffer) handleHttpRequest(req request) {
+	rb.availableContainersLock.Lock()
 	if len(rb.availableContainers) == 0 {
+		rb.availableContainersLock.Unlock()
 		rb.buffer.Push(req)
 		return
 	}
@@ -174,6 +182,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	// select a random container to forward the request to
 	randIndex := rand.Intn(len(rb.availableContainers))
 	c := rb.availableContainers[randIndex]
+	rb.availableContainersLock.Unlock()
 
 	request := req.ctx.Request()
 	containerUrl := "http://" + c.address
@@ -183,6 +192,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
 		})
+		req.done <- true
 		return
 	}
 
@@ -191,6 +201,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
 		})
+		req.done <- true
 		return
 	}
 
