@@ -211,6 +211,7 @@ func (g *Gateway) registerServices() error {
 		RedisClient:    g.redisClient,
 		Scheduler:      g.Scheduler,
 		BaseRouteGroup: g.baseRouteGroup,
+		Tailscale:      g.Tailscale,
 	})
 	if err != nil {
 		return err

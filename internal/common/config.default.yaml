@@ -104,11 +104,18 @@ providers:
     # If you want workers nodes to land in your default vpc, you can omit subnetId
     subnetId:
     ami: ami-052c704a7f82c38b1
+# tailscale:
+#   controlUrl:
+#   user: beta9
+#   authKey:
+#   enabled: false
+#   debug: false
+#   hostName: headscale.internal
 tailscale:
-  controlUrl:
+  controlUrl: https://beam-headscale-test.fly.dev
   user: beta9
-  authKey:
-  enabled: false
+  authKey: 894fd48530fc507385369217997bf27a10ec852a0c5de903
+  enabled: true
   debug: false
   hostName: headscale.internal
 proxy:

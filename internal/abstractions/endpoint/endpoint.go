@@ -9,6 +9,7 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -29,6 +30,7 @@ type RingBufferEndpointService struct {
 	backendRepo       repository.BackendRepository
 	containerRepo     repository.ContainerRepository
 	endpointInstances *common.SafeMap[*endpointInstance]
+	tailscale         *network.Tailscale
 }
 
 var (
@@ -44,6 +46,7 @@ type EndpointServiceOpts struct {
 	RedisClient    *common.RedisClient
 	Scheduler      *scheduler.Scheduler
 	BaseRouteGroup *echo.Group
+	Tailscale      *network.Tailscale
 }
 
 func NewEndpointService(
@@ -70,6 +73,7 @@ func NewEndpointService(
 		backendRepo:       backendRepo,
 		containerRepo:     containerRepo,
 		endpointInstances: common.NewSafeMap[*endpointInstance](),
+		tailscale:         opts.Tailscale,
 	}
 
 	// Register HTTP routes
