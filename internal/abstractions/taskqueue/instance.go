@@ -185,7 +185,7 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 		idx := rnd.Intn(len(containerIds))
 		containerId := containerIds[idx]
 
-		err := i.scheduler.Stop(containerId)
+		err := i.scheduler.Stop(containerId, false)
 		if err != nil {
 			log.Printf("<taskqueue %s> unable to stop container: %v", i.name, err)
 			return err

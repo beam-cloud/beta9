@@ -107,7 +107,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	return s.addRequestToBacklog(request)
 }
 
-func (s *Scheduler) Stop(containerId string) error {
+func (s *Scheduler) Stop(containerId string, kill bool) error {
 	log.Printf("Received STOP request: %s\n", containerId)
 
 	err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
@@ -119,6 +119,7 @@ func (s *Scheduler) Stop(containerId string) error {
 		Type: common.EventTypeStopContainer,
 		Args: map[string]any{
 			"container_id": containerId,
+			"kill":         kill,
 		},
 		LockAndDelete: false,
 	})

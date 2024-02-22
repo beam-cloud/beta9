@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	containerContainerPrefix          string        = "container-"
+	containerContainerPrefix          string        = "container"
 	defaultContainerCpu               int64         = 100
 	defaultContainerMemory            int64         = 128
 	containerCommandExpirationTimeout time.Duration = 600 * time.Second
@@ -96,7 +96,7 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 	}
 
 	taskId := task.ExternalId
-	containerId := fmt.Sprintf("%s%s", containerContainerPrefix, taskId)
+	containerId := fmt.Sprintf("%s-%s", containerContainerPrefix, taskId)
 	task.ContainerId = containerId
 
 	go cs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)

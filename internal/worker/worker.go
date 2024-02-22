@@ -28,6 +28,11 @@ const (
 	containerStatusUpdateInterval time.Duration = 30 * time.Second
 )
 
+type stopContainerEvent struct {
+	ContainerId string
+	Kill        bool
+}
+
 type Worker struct {
 	cpuLimit             int64
 	memoryLimit          int64
@@ -50,7 +55,7 @@ type Worker struct {
 	containerLogger      *ContainerLogger
 	workerMetrics        *WorkerMetrics
 	completedRequests    chan *types.ContainerRequest
-	stopContainerChan    chan string
+	stopContainerChan    chan stopContainerEvent
 	workerRepo           repo.WorkerRepository
 	eventRepo            repo.EventRepository
 	storage              storage.Storage
@@ -179,7 +184,7 @@ func NewWorker() (*Worker, error) {
 		workerRepo:        workerRepo,
 		eventRepo:         eventRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
-		stopContainerChan: make(chan string, 1000),
+		stopContainerChan: make(chan stopContainerEvent, 1000),
 		storage:           storage,
 	}, nil
 }
@@ -326,7 +331,9 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 		if _, err := s.containerRepo.GetContainerState(request.ContainerId); err != nil {
 			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
 				log.Printf("<%s> - container state not found, stopping container\n", request.ContainerId)
-				s.stopContainerChan <- request.ContainerId
+				s.stopContainerChan <- stopContainerEvent{
+					ContainerId: request.ContainerId,
+				}
 				return nil
 			}
 
@@ -358,37 +365,49 @@ func (s *Worker) stopContainer(event *common.Event) bool {
 	defer s.containerLock.Unlock()
 
 	containerId := event.Args["container_id"].(string)
+	kill := false
+	if event.Args["kill"] != nil && event.Args["kill"].(bool) {
+		kill = true
+	}
 
 	var err error = nil
 	if _, containerExists := s.containerInstances.Get(containerId); containerExists {
 		log.Printf("<%s> - received stop container event.\n", containerId)
-		s.stopContainerChan <- containerId
+		s.stopContainerChan <- stopContainerEvent{
+			ContainerId: containerId,
+			Kill:        kill,
+		}
 	}
 
 	return err == nil
 }
 
 func (s *Worker) processStopContainerEvents() {
-	for containerId := range s.stopContainerChan {
-		log.Printf("<%s> - stopping container.\n", containerId)
+	for event := range s.stopContainerChan {
+		log.Printf("<%s> - stopping container.\n", event.ContainerId)
 
-		if _, containerExists := s.containerInstances.Get(containerId); !containerExists {
+		if _, containerExists := s.containerInstances.Get(event.ContainerId); !containerExists {
 			continue
 		}
 
-		err := s.runcHandle.Kill(s.ctx, containerId, int(syscall.SIGTERM), &runc.KillOpts{
+		stopSig := syscall.SIGTERM
+		if event.Kill {
+			stopSig = syscall.SIGKILL
+		}
+
+		err := s.runcHandle.Kill(s.ctx, event.ContainerId, int(stopSig), &runc.KillOpts{
 			All: true,
 		})
 
 		if err != nil {
-			log.Printf("<%s> - unable to stop container: %v\n", containerId, err)
+			log.Printf("<%s> - unable to stop container: %v\n", event.ContainerId, err)
 
-			s.stopContainerChan <- containerId
+			s.stopContainerChan <- event
 			time.Sleep(time.Second)
 			continue
 		}
 
-		log.Printf("<%s> - container stopped.\n", containerId)
+		log.Printf("<%s> - container stopped.\n", event.ContainerId)
 	}
 }
 

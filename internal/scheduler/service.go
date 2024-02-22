@@ -69,7 +69,7 @@ func (wbs *SchedulerService) RunContainer(ctx context.Context, in *pb.RunContain
 
 // Stop a container
 func (wbs *SchedulerService) StopContainer(ctx context.Context, in *pb.StopContainerRequest) (*pb.StopContainerResponse, error) {
-	err := wbs.Scheduler.Stop(in.ContainerId)
+	err := wbs.Scheduler.Stop(in.ContainerId, false)
 
 	if err != nil {
 		return &pb.StopContainerResponse{

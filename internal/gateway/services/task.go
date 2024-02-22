@@ -103,7 +103,7 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 }
 
 func (gws *GatewayService) StopTask(ctx context.Context, in *pb.StopTaskRequest) (*pb.StopTaskResponse, error) {
-	task, err := gws.backendRepo.GetTask(ctx, in.TaskId)
+	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
 	if err != nil {
 		return &pb.StopTaskResponse{
 			Ok:     false,
@@ -115,7 +115,13 @@ func (gws *GatewayService) StopTask(ctx context.Context, in *pb.StopTaskRequest)
 		return &pb.StopTaskResponse{Ok: true}, nil
 	}
 
-	if err := gws.scheduler.Stop(task.ContainerId); err != nil {
+	// Check if the stub_type is a container and send kill -9 signal to the container
+	kill := false
+	if task.Stub.Type == types.StubTypeContainer {
+		kill = true
+	}
+
+	if err := gws.scheduler.Stop(task.ContainerId, kill); err != nil {
 		return &pb.StopTaskResponse{
 			Ok:     false,
 			ErrMsg: "Failed to stop container",
@@ -124,7 +130,7 @@ func (gws *GatewayService) StopTask(ctx context.Context, in *pb.StopTaskRequest)
 
 	task.Status = types.TaskStatusCancelled
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
-	if _, err := gws.backendRepo.UpdateTask(ctx, in.TaskId, *task); err != nil {
+	if _, err := gws.backendRepo.UpdateTask(ctx, in.TaskId, *&task.Task); err != nil {
 		return &pb.StopTaskResponse{
 			Ok:     false,
 			ErrMsg: "Failed to update task in db",
