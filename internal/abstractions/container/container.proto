@@ -7,6 +7,8 @@ package container;
 service ContainerService {
   rpc ExecuteCommand(CommandExecutionRequest)
       returns (stream CommandExecutionResponse) {}
+  rpc UpdateTaskStatus(ContainerTaskStatusUpdateRequest)
+      returns (ContainerTaskStatusUpdateResponse) {}
 }
 
 message CommandExecutionRequest {
@@ -19,5 +21,14 @@ message CommandExecutionResponse {
   string output = 2; 
   bool done = 3; 
   int32 exit_code = 4;   
+}
+
+message ContainerTaskStatusUpdateRequest {
+  string task_id = 1; 
+  string status = 2; 
+}
+
+message ContainerTaskStatusUpdateResponse {
+  bool ok = 1; 
 }
 

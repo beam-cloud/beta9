@@ -2,6 +2,8 @@ package container
 
 import (
 	"context"
+	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +30,7 @@ const (
 type ContainerServicer interface {
 	pb.ContainerServiceServer
 	ExecuteCommand(in *pb.CommandExecutionRequest, stream pb.ContainerService_ExecuteCommandServer) error
+	UpdateTaskStatus(ctx context.Context, in *pb.ContainerTaskStatusUpdateRequest) (*pb.ContainerTaskStatusUpdateResponse, error)
 }
 
 type ContainerService struct {
@@ -126,14 +129,14 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 		Env: []string{
 			fmt.Sprintf("TASK_ID=%s", taskId),
 			fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
-			fmt.Sprintf("BEAM_TOKEN=%s", authInfo.Token.Key),
+			fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
 			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		},
 		Cpu:        stubConfig.Runtime.Cpu,
 		Memory:     stubConfig.Runtime.Memory,
 		Gpu:        string(stubConfig.Runtime.Gpu),
 		ImageId:    stubConfig.Runtime.ImageId,
-		EntryPoint: []string{"bash", "-c", string(in.Command)},
+		EntryPoint: []string{stubConfig.PythonVersion, "-m", "beta9.runner.container", base64.StdEncoding.EncodeToString([]byte(in.Command))},
 		Mounts:     mounts,
 	})
 	if err != nil {
@@ -198,4 +201,27 @@ _stream:
 	}
 
 	return nil
+}
+
+func (cs *ContainerService) UpdateTaskStatus(ctx context.Context, in *pb.ContainerTaskStatusUpdateRequest) (*pb.ContainerTaskStatusUpdateResponse, error) {
+	task, err := cs.backendRepo.GetTask(ctx, in.TaskId)
+	if err != nil {
+		return &pb.ContainerTaskStatusUpdateResponse{
+			Ok: false,
+		}, nil
+	}
+
+	task.Status = types.TaskStatus(in.Status)
+
+	if in.Status == string(types.TaskStatusTimeout) || in.Status == string(types.TaskStatusError) || in.Status == string(types.TaskStatusCancelled) || in.Status == string(types.TaskStatusComplete) {
+		task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	}
+
+	if _, err := cs.backendRepo.UpdateTask(ctx, in.TaskId, *task); err != nil {
+		return &pb.ContainerTaskStatusUpdateResponse{
+			Ok: false,
+		}, nil
+	}
+
+	return &pb.ContainerTaskStatusUpdateResponse{Ok: true}, nil
 }
