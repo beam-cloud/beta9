@@ -1,4 +1,4 @@
-package taskqueue
+package endpoint
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"path"
 	"time"
 
-	common "github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -16,14 +16,14 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type taskQueueState struct {
+type endpointState struct {
 	RunningContainers  int
 	PendingContainers  int
 	StoppingContainers int
 	FailedContainers   int
 }
 
-type taskQueueInstance struct {
+type endpointInstance struct {
 	ctx                context.Context
 	cancelFunc         context.CancelFunc
 	name               string
@@ -40,10 +40,10 @@ type taskQueueInstance struct {
 	rdb                *common.RedisClient
 	containerRepo      repository.ContainerRepository
 	autoscaler         *autoscaler
-	client             *taskQueueClient
+	buffer             *RequestBuffer
 }
 
-func (i *taskQueueInstance) monitor() error {
+func (i *endpointInstance) monitor() error {
 	go i.autoscaler.start(i.ctx) // Start the autoscaler
 
 	for {
@@ -64,7 +64,7 @@ func (i *taskQueueInstance) monitor() error {
 			}
 
 			if initialContainerCount != len(i.containers) {
-				log.Printf("<taskqueue %s> scaled from %d->%d", i.name, initialContainerCount, len(i.containers))
+				log.Printf("<endpoint %s> scaled from %d->%d", i.name, initialContainerCount, len(i.containers))
 			}
 
 		case desiredContainers := <-i.scaleEventChan:
@@ -75,8 +75,8 @@ func (i *taskQueueInstance) monitor() error {
 	}
 }
 
-func (i *taskQueueInstance) state() (*taskQueueState, error) {
-	patternPrefix := fmt.Sprintf("%s-%s-*", taskQueueContainerPrefix, i.stub.ExternalId)
+func (i *endpointInstance) state() (*endpointState, error) {
+	patternPrefix := fmt.Sprintf("%s-%s-*", endpointContainerPrefix, i.stub.ExternalId)
 	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
 	if err != nil {
 		return nil, err
@@ -87,7 +87,7 @@ func (i *taskQueueInstance) state() (*taskQueueState, error) {
 		return nil, err
 	}
 
-	state := taskQueueState{}
+	state := endpointState{}
 	for _, container := range containers {
 		switch container.Status {
 		case types.ContainerStatusRunning:
@@ -103,12 +103,12 @@ func (i *taskQueueInstance) state() (*taskQueueState, error) {
 	return &state, nil
 }
 
-func (i *taskQueueInstance) handleScalingEvent(desiredContainers int) error {
-	err := i.lock.Acquire(i.ctx, Keys.taskQueueInstanceLock(i.workspace.Name, i.stub.ExternalId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+func (i *endpointInstance) handleScalingEvent(desiredContainers int) error {
+	err := i.lock.Acquire(i.ctx, Keys.endpointInstanceLock(i.workspace.Name, i.stub.ExternalId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
 	}
-	defer i.lock.Release(Keys.taskQueueInstanceLock(i.workspace.Name, i.stub.ExternalId))
+	defer i.lock.Release(Keys.endpointInstanceLock(i.workspace.Name, i.stub.ExternalId))
 
 	state, err := i.state()
 	if err != nil {
@@ -116,7 +116,7 @@ func (i *taskQueueInstance) handleScalingEvent(desiredContainers int) error {
 	}
 
 	if state.FailedContainers >= types.FailedContainerThreshold {
-		log.Printf("<taskqueue %s> reached failed container threshold, scaling to zero.", i.name)
+		log.Printf("<endpoint %s> reached failed container threshold, scaling to zero.", i.name)
 		desiredContainers = 0
 	}
 
@@ -136,7 +136,7 @@ func (i *taskQueueInstance) handleScalingEvent(desiredContainers int) error {
 	return err
 }
 
-func (i *taskQueueInstance) startContainers(containersToRun int) error {
+func (i *endpointInstance) startContainers(containersToRun int) error {
 	for c := 0; c < containersToRun; c++ {
 		runRequest := &types.ContainerRequest{
 			ContainerId: i.genContainerId(),
@@ -151,7 +151,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			Memory:     i.stubConfig.Runtime.Memory,
 			Gpu:        string(i.stubConfig.Runtime.Gpu),
 			ImageId:    i.stubConfig.Runtime.ImageId,
-			EntryPoint: []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.taskqueue"}, // TODO: Configurable
+			EntryPoint: []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.endpoint"},
 			Mounts: []types.Mount{
 				{
 					LocalPath: path.Join(types.DefaultExtractedObjectPath, i.workspace.Name, i.object.ExternalId),
@@ -162,7 +162,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 
 		err := i.scheduler.Run(runRequest)
 		if err != nil {
-			log.Printf("<taskqueue %s> unable to run  container: %v", i.name, err)
+			log.Printf("<endpoint %s> unable to run  container: %v", i.name, err)
 			return err
 		}
 
@@ -172,7 +172,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 	return nil
 }
 
-func (i *taskQueueInstance) stopContainers(containersToStop int) error {
+func (i *endpointInstance) stopContainers(containersToStop int) error {
 	src := rand.NewSource(time.Now().UnixNano())
 	rnd := rand.New(src)
 
@@ -187,7 +187,7 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 
 		err := i.scheduler.Stop(containerId)
 		if err != nil {
-			log.Printf("<taskqueue %s> unable to stop container: %v", i.name, err)
+			log.Printf("<endpoint %s> unable to stop container: %v", i.name, err)
 			return err
 		}
 
@@ -199,8 +199,8 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 	return nil
 }
 
-func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
-	patternPrefix := fmt.Sprintf("%s-%s-*", taskQueueContainerPrefix, i.stub.ExternalId)
+func (i *endpointInstance) stoppableContainers() ([]string, error) {
+	patternPrefix := fmt.Sprintf("%s-%s-*", endpointContainerPrefix, i.stub.ExternalId)
 	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
 	if err != nil {
 		return nil, err
@@ -214,32 +214,14 @@ func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
 		}
 
 		// Skip containers with keep warm locks
-		keepWarmVal, err := i.rdb.Get(context.TODO(), Keys.taskQueueKeepWarmLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId)).Int()
+		keepWarmVal, err := i.rdb.Get(context.TODO(), Keys.endpointKeepWarmLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId)).Int()
 		if err != nil && err != redis.Nil {
-			log.Printf("<taskqueue %s> error getting keep warm lock for container: %v\n", i.name, err)
+			log.Printf("<endpoint %s> error getting keep warm lock for container: %v\n", i.name, err)
 			continue
 		}
 
 		keepWarm := keepWarmVal > 0
 		if keepWarm {
-			continue
-		}
-
-		// Check if a queue processing lock exists for the container and skip if it does
-		// This indicates the container is currently processing an item in the queue
-		_, err = i.rdb.Get(context.TODO(), Keys.taskQueueProcessingLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId)).Result()
-		if err == nil || err != redis.Nil {
-			continue
-		}
-
-		// If any tasks are currently running, skip this container
-		tasksRunning, err := i.rdb.Keys(context.TODO(), Keys.taskQueueTaskRunningLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId, "*"))
-		if err != nil && err != redis.Nil {
-			log.Printf("<taskqueue %s> error getting task running locks for container: %v\n", i.name, err)
-			continue
-		}
-
-		if len(tasksRunning) > 0 {
 			continue
 		}
 
@@ -249,6 +231,6 @@ func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
 	return keys, nil
 }
 
-func (i *taskQueueInstance) genContainerId() string {
-	return fmt.Sprintf("%s-%s-%s", taskQueueContainerPrefix, i.stub.ExternalId, uuid.New().String()[:8])
+func (i *endpointInstance) genContainerId() string {
+	return fmt.Sprintf("%s-%s-%s", endpointContainerPrefix, i.stub.ExternalId, uuid.New().String()[:8])
 }
