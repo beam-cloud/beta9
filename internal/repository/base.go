@@ -33,6 +33,7 @@ type ContainerRepository interface {
 	SetContainerExitCode(string, int) error
 	GetContainerExitCode(string) (int, error)
 	SetContainerAddress(containerId string, addr string) error
+	GetContainerAddress(containerId string) (string, error)
 	UpdateContainerStatus(string, types.ContainerStatus, time.Duration) error
 	DeleteContainerState(*types.ContainerRequest) error
 	SetContainerWorkerHostname(containerId string, addr string) error

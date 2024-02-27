@@ -55,6 +55,10 @@ var (
 	tailscaleServiceHostname string = "tailscale:%s:%s"
 )
 
+var (
+	containerName string = "%s-%s-%s" // prefix, stub-id, containerId
+)
+
 var RedisKeys = &redisKeys{}
 
 type redisKeys struct{}
@@ -184,4 +188,8 @@ func (rk *redisKeys) ProviderMachineState(providerName, poolName, machineId stri
 
 func (rk *redisKeys) ProviderMachineLock(providerName, poolName, machineId string) string {
 	return fmt.Sprintf(providerMachineLock, providerName, poolName, machineId)
+}
+
+func (rk *redisKeys) ContainerName(prefix string, stubId string, containerId string) string {
+	return fmt.Sprintf(containerName, prefix, stubId, containerId)
 }
