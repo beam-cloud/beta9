@@ -21,3 +21,12 @@ message CommandExecutionResponse {
   int32 exit_code = 4;   
 }
 
+message ContainerTaskStatusUpdateRequest {
+  string task_id = 1; 
+  string status = 2; 
+}
+
+message ContainerTaskStatusUpdateResponse {
+  bool ok = 1; 
+}
+

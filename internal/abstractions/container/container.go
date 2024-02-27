@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,12 +26,12 @@ const (
 	functionResultExpirationTimeout   time.Duration = 600 * time.Second
 )
 
-type ContainerServicer interface {
+type ContainerService interface {
 	pb.ContainerServiceServer
 	ExecuteCommand(in *pb.CommandExecutionRequest, stream pb.ContainerService_ExecuteCommandServer) error
 }
 
-type ContainerService struct {
+type CmdContainerService struct {
 	pb.ContainerServiceServer
 	backendRepo     repository.BackendRepository
 	containerRepo   repository.ContainerRepository
@@ -53,13 +54,13 @@ type ContainerServiceOpts struct {
 func NewContainerService(
 	ctx context.Context,
 	opts ContainerServiceOpts,
-) (ContainerServicer, error) {
+) (ContainerService, error) {
 	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
 	if err != nil {
 		return nil, err
 	}
 
-	cs := &ContainerService{
+	cs := &CmdContainerService{
 		backendRepo:     opts.BackendRepo,
 		containerRepo:   opts.ContainerRepo,
 		scheduler:       opts.Scheduler,
@@ -72,7 +73,7 @@ func NewContainerService(
 	return cs, nil
 }
 
-func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, stream pb.ContainerService_ExecuteCommandServer) error {
+func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, stream pb.ContainerService_ExecuteCommandServer) error {
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 
 	ctx := stream.Context()
@@ -126,14 +127,14 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 		Env: []string{
 			fmt.Sprintf("TASK_ID=%s", taskId),
 			fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
-			fmt.Sprintf("BEAM_TOKEN=%s", authInfo.Token.Key),
+			fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
 			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		},
 		Cpu:        stubConfig.Runtime.Cpu,
 		Memory:     stubConfig.Runtime.Memory,
 		Gpu:        string(stubConfig.Runtime.Gpu),
 		ImageId:    stubConfig.Runtime.ImageId,
-		EntryPoint: []string{"bash", "-c", string(in.Command)},
+		EntryPoint: []string{stubConfig.PythonVersion, "-m", "beta9.runner.container", base64.StdEncoding.EncodeToString(in.Command)},
 		Mounts:     mounts,
 	})
 	if err != nil {
@@ -159,7 +160,7 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 	return cs.handleStreams(ctx, stream, authInfo.Workspace.Name, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
 }
 
-func (cs *ContainerService) handleStreams(ctx context.Context,
+func (cs *CmdContainerService) handleStreams(ctx context.Context,
 	stream pb.ContainerService_ExecuteCommandServer,
 	workspaceName, taskId, containerId string,
 	outputChan chan common.OutputMsg, keyEventChan chan common.KeyEvent) error {
