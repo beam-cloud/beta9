@@ -26,18 +26,14 @@ class Config:
         stub_id = os.getenv("STUB_ID")
         concurrency = int(os.getenv("CONCURRENCY", 1))
         keep_warm_seconds = float(os.getenv("KEEP_WARM_SECONDS", 10))
+        handler = os.getenv("HANDLER")
+        task_id = os.getenv("TASK_ID")
 
         if concurrency <= 0:
             concurrency = 1
 
         if not container_id or not stub_id:
             raise RunnerException("Invalid runner environment")
-
-        handler = os.getenv("HANDLER")
-        if not handler:
-            raise RunnerException("Invalid handler")
-
-        task_id = os.getenv("TASK_ID")
 
         return cls(
             container_id=container_id,
