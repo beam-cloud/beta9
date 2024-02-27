@@ -2,7 +2,6 @@ package container
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -27,13 +26,12 @@ const (
 	functionResultExpirationTimeout   time.Duration = 600 * time.Second
 )
 
-type ContainerServicer interface {
+type ContainerService interface {
 	pb.ContainerServiceServer
 	ExecuteCommand(in *pb.CommandExecutionRequest, stream pb.ContainerService_ExecuteCommandServer) error
-	UpdateTaskStatus(ctx context.Context, in *pb.ContainerTaskStatusUpdateRequest) (*pb.ContainerTaskStatusUpdateResponse, error)
 }
 
-type ContainerService struct {
+type CmdContainerService struct {
 	pb.ContainerServiceServer
 	backendRepo     repository.BackendRepository
 	containerRepo   repository.ContainerRepository
@@ -56,13 +54,13 @@ type ContainerServiceOpts struct {
 func NewContainerService(
 	ctx context.Context,
 	opts ContainerServiceOpts,
-) (ContainerServicer, error) {
+) (ContainerService, error) {
 	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
 	if err != nil {
 		return nil, err
 	}
 
-	cs := &ContainerService{
+	cs := &CmdContainerService{
 		backendRepo:     opts.BackendRepo,
 		containerRepo:   opts.ContainerRepo,
 		scheduler:       opts.Scheduler,
@@ -75,7 +73,7 @@ func NewContainerService(
 	return cs, nil
 }
 
-func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, stream pb.ContainerService_ExecuteCommandServer) error {
+func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, stream pb.ContainerService_ExecuteCommandServer) error {
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 
 	ctx := stream.Context()
@@ -136,7 +134,7 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 		Memory:     stubConfig.Runtime.Memory,
 		Gpu:        string(stubConfig.Runtime.Gpu),
 		ImageId:    stubConfig.Runtime.ImageId,
-		EntryPoint: []string{stubConfig.PythonVersion, "-m", "beta9.runner.container", base64.StdEncoding.EncodeToString([]byte(in.Command))},
+		EntryPoint: []string{stubConfig.PythonVersion, "-m", "beta9.runner.container", base64.StdEncoding.EncodeToString(in.Command)},
 		Mounts:     mounts,
 	})
 	if err != nil {
@@ -162,7 +160,7 @@ func (cs *ContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, strea
 	return cs.handleStreams(ctx, stream, authInfo.Workspace.Name, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
 }
 
-func (cs *ContainerService) handleStreams(ctx context.Context,
+func (cs *CmdContainerService) handleStreams(ctx context.Context,
 	stream pb.ContainerService_ExecuteCommandServer,
 	workspaceName, taskId, containerId string,
 	outputChan chan common.OutputMsg, keyEventChan chan common.KeyEvent) error {
@@ -201,27 +199,4 @@ _stream:
 	}
 
 	return nil
-}
-
-func (cs *ContainerService) UpdateTaskStatus(ctx context.Context, in *pb.ContainerTaskStatusUpdateRequest) (*pb.ContainerTaskStatusUpdateResponse, error) {
-	task, err := cs.backendRepo.GetTask(ctx, in.TaskId)
-	if err != nil {
-		return &pb.ContainerTaskStatusUpdateResponse{
-			Ok: false,
-		}, nil
-	}
-
-	task.Status = types.TaskStatus(in.Status)
-
-	if in.Status == string(types.TaskStatusTimeout) || in.Status == string(types.TaskStatusError) || in.Status == string(types.TaskStatusCancelled) || in.Status == string(types.TaskStatusComplete) {
-		task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
-	}
-
-	if _, err := cs.backendRepo.UpdateTask(ctx, in.TaskId, *task); err != nil {
-		return &pb.ContainerTaskStatusUpdateResponse{
-			Ok: false,
-		}, nil
-	}
-
-	return &pb.ContainerTaskStatusUpdateResponse{Ok: true}, nil
 }

@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import os
 import signal
@@ -7,14 +6,16 @@ import sys
 
 from grpclib.client import Channel
 
-from beta9.clients.container import ContainerServiceStub
+from beta9.aio import run_sync
+from beta9.clients.gateway import GatewayServiceStub
 from beta9.config import with_runner_context
+from beta9.runner.common import config
 from beta9.type import TaskStatus
 
 
 class ContainerManager:
     def __init__(self, cmd: str) -> None:
-        self.processe = None
+        self.process = None
         self.pid: int = os.getpid()
         self.exit_code: int = 0
         self.task_id = os.getenv("TASK_ID")
@@ -24,25 +25,27 @@ class ContainerManager:
 
     @with_runner_context
     def start(self, channel: Channel):
-        loop = asyncio.get_event_loop()
-
         async def _run():
-            container_stub = ContainerServiceStub(channel)
-            await container_stub.update_task_status(
+            stub = GatewayServiceStub(channel)
+            await stub.start_task(
                 task_id=self.task_id,
-                status=TaskStatus.Running,
+                container_id=config.container_id,
             )
 
-            self.process = subprocess.Popen(cmd, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            self.process = subprocess.Popen(cmd, shell=True, stderr=sys.stderr, stdout=sys.stdout)
             self.process.wait()
 
             if not self.killed:
-                await container_stub.update_task_status(
+                await stub.end_task(
                     task_id=self.task_id,
-                    status=TaskStatus.Complete,
+                    container_id=config.container_id,
+                    task_status=TaskStatus.Complete,
                 )
 
-        loop.run_until_complete(_run())
+        run_sync(_run())
 
     def shutdown(self, *_, **__):
         if self.process:
@@ -51,6 +54,7 @@ class ContainerManager:
 
 
 if __name__ == "__main__":
-    cmd = base64.b64decode(sys.argv[1])
+    cmd = base64.b64decode(sys.argv[1]).decode("utf-8")
+    print(f"Running command: {cmd}")
     container = ContainerManager(cmd)
     container.start()
