@@ -18,7 +18,7 @@ func upCreateTables(tx *sql.Tx) error {
 
 	createStatements := []string{
 		`CREATE TYPE token_type AS ENUM ('admin', 'workspace', 'worker');`,
-		`CREATE TYPE stub_type AS ENUM ('taskqueue', 'function', 'taskqueue/deployment', 'function/deployment', 'container');`,
+		`CREATE TYPE stub_type AS ENUM ('taskqueue', 'function', 'taskqueue/deployment', 'function/deployment', 'endpoint', 'endpoint/deployment', 'container');`,
 		`CREATE TYPE task_status AS ENUM ('PENDING', 'RUNNING', 'CANCELLED', 'COMPLETE', 'ERROR', 'TIMEOUT', 'RETRY');`,
 
 		`CREATE TABLE IF NOT EXISTS workspace (

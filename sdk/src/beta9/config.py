@@ -21,12 +21,14 @@ DEFAULT_CONFIG_FILE_PATH = "~/.beta9/creds"
 DEFAULT_PROFILE_NAME = "default"
 DEFAULT_GATEWAY_HOST = "0.0.0.0"
 DEFAULT_GATEWAY_PORT = "1993"
+DEFAULT_HTTP_PORT = "1994"
 
 
 class GatewayConfig(NamedTuple):
     name: str = DEFAULT_PROFILE_NAME
     gateway_host: str = DEFAULT_GATEWAY_HOST
     gateway_port: str = DEFAULT_GATEWAY_PORT
+    http_port: str = DEFAULT_HTTP_PORT
     token: Optional[str] = None
 
 
@@ -72,9 +74,10 @@ def load_config_from_file() -> GatewayConfig:
 
     gateway_host = config.get(DEFAULT_PROFILE_NAME, "gateway_host", fallback=DEFAULT_GATEWAY_HOST)
     gateway_port = config.get(DEFAULT_PROFILE_NAME, "gateway_port", fallback=DEFAULT_GATEWAY_PORT)
+    http_port = config.get(DEFAULT_PROFILE_NAME, "http_port", fallback=DEFAULT_HTTP_PORT)
     token = config.get(DEFAULT_PROFILE_NAME, "token", fallback=None)
 
-    return GatewayConfig(DEFAULT_PROFILE_NAME, gateway_host, gateway_port, token)
+    return GatewayConfig(DEFAULT_PROFILE_NAME, gateway_host, gateway_port, http_port, token)
 
 
 def save_config_to_file(*, config: GatewayConfig, name: str) -> None:
@@ -95,6 +98,7 @@ def save_config_to_file(*, config: GatewayConfig, name: str) -> None:
 
     config_parser.set(name, "gateway_host", config.gateway_host)
     config_parser.set(name, "gateway_port", config.gateway_port)
+    config_parser.set(name, "http_port", config.http_port)
     config_parser.set(name, "token", config.token or "")
 
     with open(config_path, "w") as file:
@@ -104,10 +108,11 @@ def save_config_to_file(*, config: GatewayConfig, name: str) -> None:
 def get_gateway_config() -> GatewayConfig:
     gateway_host = os.getenv("BETA9_GATEWAY_HOST", None)
     gateway_port = os.getenv("BETA9_GATEWAY_PORT", None)
+    http_port = os.getenv("BETA9_HTTP_PORT", None)
     token = os.getenv("BETA9_TOKEN", None)
 
     if gateway_host and gateway_port and token:
-        return GatewayConfig(gateway_host=gateway_host, gateway_port=gateway_port, token=token)
+        return GatewayConfig(gateway_host=gateway_host, gateway_port=gateway_port, http_port=http_port, token=token)
 
     return load_config_from_file()
 
@@ -129,10 +134,11 @@ def configure_gateway_credentials(
     gateway_port = gateway_port or terminal.prompt(
         text="Gateway port", default=DEFAULT_GATEWAY_PORT
     )
+    http_port = terminal.prompt(text="HTTP port", default=DEFAULT_HTTP_PORT)
     token = token or terminal.prompt(text="Token", default=None)
 
     config = config._replace(
-        name=name, gateway_host=gateway_host, gateway_port=gateway_port, token=token
+        name=name, gateway_host=gateway_host, gateway_port=gateway_port, http_port=http_port, token=token
     )
     terminal.header("Configuring gateway")
 
@@ -151,6 +157,7 @@ def get_gateway_channel() -> Channel:
             config,
             name=config.name,
             gateway_host=config.gateway_host,
+            http_port=config.http_port,
             gateway_port=config.gateway_port,
         )
 

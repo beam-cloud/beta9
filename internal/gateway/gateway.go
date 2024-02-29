@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/beam-cloud/beta9/internal/abstractions/endpoint"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"google.golang.org/grpc"
@@ -199,11 +200,24 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterFunctionServiceServer(g.grpcServer, fs)
 
 	// Register task queue service
-	tq, err := taskqueue.NewRedisTaskQueue(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo, g.baseRouteGroup)
+	tq, err := taskqueue.NewRedisTaskQueueService(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}
 	pb.RegisterTaskQueueServiceServer(g.grpcServer, tq)
+
+	// Register endpoint service
+	ws, err := endpoint.NewEndpointService(g.ctx, endpoint.EndpointServiceOpts{
+		Config:         g.config,
+		RedisClient:    g.redisClient,
+		Scheduler:      g.Scheduler,
+		BaseRouteGroup: g.baseRouteGroup,
+		Tailscale:      g.Tailscale,
+	})
+	if err != nil {
+		return err
+	}
+	pb.RegisterEndpointServiceServer(g.grpcServer, ws)
 
 	// Register volume service
 	vs, err := volume.NewGlobalVolumeService(g.BackendRepo)

@@ -29,7 +29,7 @@ type TaskQueueService interface {
 }
 
 const (
-	taskQueueContainerPrefix string = "taskqueue-"
+	taskQueueContainerPrefix string = "taskqueue"
 	taskQueueRoutePrefix     string = "/taskqueue"
 )
 
@@ -46,7 +46,8 @@ type RedisTaskQueue struct {
 	queueClient     *taskQueueClient
 }
 
-func NewRedisTaskQueue(ctx context.Context,
+func NewRedisTaskQueueService(
+	ctx context.Context,
 	rdb *common.RedisClient,
 	scheduler *scheduler.Scheduler,
 	containerRepo repository.ContainerRepository,
@@ -564,7 +565,7 @@ func (tq *RedisTaskQueue) handleContainerEvents() {
 	for {
 		select {
 		case event := <-tq.keyEventChan:
-			containerId := fmt.Sprintf("%s%s", taskQueueContainerPrefix, event.Key)
+			containerId := fmt.Sprintf("%s-%s", taskQueueContainerPrefix, event.Key)
 
 			operation := event.Operation
 			containerIdParts := strings.Split(containerId, "-")
