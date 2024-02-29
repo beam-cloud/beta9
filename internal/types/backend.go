@@ -17,14 +17,21 @@ type Workspace struct {
 	UpdatedAt  time.Time `db:"updated_at"`
 }
 
+const (
+	TokenTypeClusterAdmin string = "admin"
+	TokenTypeWorkspace    string = "workspace"
+	TokenTypeWorker       string = "worker"
+)
+
 type Token struct {
 	Id          uint       `db:"id"`
 	ExternalId  string     `db:"external_id"`
 	Key         string     `db:"key"`
 	Active      bool       `db:"active"`
 	Reusable    bool       `db:"reusable"`
-	WorkspaceId uint       `db:"workspace_id"` // Foreign key to Workspace
+	WorkspaceId *uint      `db:"workspace_id"` // Foreign key to Workspace
 	Workspace   *Workspace `db:"workspace"`    // Pointer to associated Workspace
+	TokenType   string     `db:"token_type"`
 	CreatedAt   time.Time  `db:"created_at"`
 	UpdatedAt   time.Time  `db:"updated_at"`
 }
