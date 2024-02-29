@@ -114,7 +114,7 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 
 const tokenLength = 64
 
-func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId uint, reusable bool) (types.Token, error) {
+func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error) {
 	externalId, err := r.generateExternalId()
 	if err != nil {
 		return types.Token{}, err
@@ -128,13 +128,13 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId
 	key := base64.URLEncoding.EncodeToString(randomBytes)
 
 	query := `
-	INSERT INTO token (external_id, key, active, reusable, workspace_id)
-	VALUES ($1, $2, $3, $4, $5)
-	RETURNING id, external_id, key, created_at, updated_at, active, reusable, workspace_id;
+	INSERT INTO token (external_id, key, active, token_type, reusable, workspace_id)
+	VALUES ($1, $2, $3, $4, $5, $6)
+	RETURNING id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id;
 	`
 
 	var token types.Token
-	if err := r.client.GetContext(ctx, &token, query, externalId, key, true, reusable, workspaceId); err != nil {
+	if err := r.client.GetContext(ctx, &token, query, externalId, key, true, tokenType, reusable, workspaceId); err != nil {
 		return types.Token{}, err
 	}
 
@@ -143,7 +143,7 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId
 
 func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error) {
 	query := `
-	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.reusable, t.workspace_id,
+	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.token_type, t.reusable, t.workspace_id,
 	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.created_at "workspace.created_at", w.updated_at "workspace.updated_at"
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
@@ -177,7 +177,7 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 
 func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error) {
 	query := `
-	SELECT id, external_id, key, created_at, updated_at, active, reusable, workspace_id
+	SELECT id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id
 	FROM token
 	WHERE workspace_id = $1 AND active = TRUE
 	ORDER BY updated_at DESC

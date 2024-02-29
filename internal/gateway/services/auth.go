@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -36,7 +37,7 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	}
 
 	// Now that we have a workspace, create a new token
-	token, err := gws.backendRepo.CreateToken(ctx, workspace.Id, true)
+	token, err := gws.backendRepo.CreateToken(ctx, workspace.Id, types.TokenTypeClusterAdmin, true)
 	if err != nil {
 		return &pb.AuthorizeResponse{
 			Ok:       false,
