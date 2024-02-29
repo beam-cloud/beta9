@@ -17,6 +17,7 @@ func upCreateTables(tx *sql.Tx) error {
 	}
 
 	createStatements := []string{
+		`CREATE TYPE token_type AS ENUM ('admin', 'workspace', 'worker');`,
 		`CREATE TYPE stub_type AS ENUM ('taskqueue', 'function', 'taskqueue/deployment', 'function/deployment', 'endpoint', 'endpoint/deployment', 'container');`,
 		`CREATE TYPE task_status AS ENUM ('PENDING', 'RUNNING', 'CANCELLED', 'COMPLETE', 'ERROR', 'TIMEOUT', 'RETRY');`,
 
@@ -35,6 +36,7 @@ func upCreateTables(tx *sql.Tx) error {
             active BOOLEAN NOT NULL,
             reusable BOOLEAN DEFAULT true NOT NULL,
             workspace_id INT REFERENCES workspace(id),
+            token_type token_type NOT NULL,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );`,

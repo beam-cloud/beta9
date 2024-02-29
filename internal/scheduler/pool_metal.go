@@ -89,7 +89,7 @@ func NewMetalWorkerPoolController(
 func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
-	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, false)
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeWorker, false)
 	if err != nil {
 		return nil, err
 	}

@@ -48,7 +48,7 @@ type BackendRepository interface {
 	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error)
 	GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error)
 	GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error)
-	CreateToken(ctx context.Context, workspaceId uint, reusable bool) (types.Token, error)
+	CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error)
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error)
 	RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error)
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
