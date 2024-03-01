@@ -10,11 +10,11 @@ import (
 )
 
 type Workspace struct {
-	Id         uint      `db:"id"`
-	ExternalId string    `db:"external_id"`
-	Name       string    `db:"name"`
-	CreatedAt  time.Time `db:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at"`
+	Id         uint      `db:"id" json:"id"`
+	ExternalId string    `db:"external_id" json:"external_id"`
+	Name       string    `db:"name" json:"name"`
+	CreatedAt  time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
 }
 
 const (
@@ -45,31 +45,31 @@ type Volume struct {
 }
 
 type Deployment struct {
-	Id          uint      `db:"id"`
-	ExternalId  string    `db:"external_id"`
-	Name        string    `db:"name"`
-	Active      bool      `db:"active"`
-	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
-	StubId      uint      `db:"stub_id"`      // Foreign key to Stub
-	StubType    string    `db:"stub_type"`
-	Version     uint      `db:"version"`
-	CreatedAt   time.Time `db:"created_at"`
-	UpdatedAt   time.Time `db:"updated_at"`
+	Id          uint      `db:"id" json:"id"`
+	ExternalId  string    `db:"external_id" json:"external_id"`
+	Name        string    `db:"name" json:"name"`
+	Active      bool      `db:"active" json:"active"`
+	WorkspaceId uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
+	StubId      uint      `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
+	StubType    string    `db:"stub_type" json:"stub_type"`
+	Version     uint      `db:"version" json:"version"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
 
 type DeploymentWithRelated struct {
 	Deployment
-	Workspace Workspace `db:"workspace"`
-	Stub      Stub      `db:"stub"`
+	Workspace Workspace `db:"workspace" json:"workspace"`
+	Stub      Stub      `db:"stub" json:"stub"`
 }
 
 type Object struct {
-	Id          uint      `db:"id"`
-	ExternalId  string    `db:"external_id"`
-	Hash        string    `db:"hash"`
-	Size        int64     `db:"size"`
-	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
-	CreatedAt   time.Time `db:"created_at"`
+	Id          uint      `db:"id" json:"id"`
+	ExternalId  string    `db:"external_id" json:"external_id"`
+	Hash        string    `db:"hash" json:"hash"`
+	Size        int64     `db:"size" json:"size"`
+	WorkspaceId uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
 }
 
 type TaskStatus string
@@ -143,22 +143,22 @@ func (tm *TaskMessage) Decode(encodedData []byte) error {
 }
 
 type Task struct {
-	Id          uint         `db:"id"`
-	ExternalId  string       `db:"external_id"`
-	Status      TaskStatus   `db:"status"`
-	ContainerId string       `db:"container_id"`
-	StartedAt   sql.NullTime `db:"started_at"`
-	EndedAt     sql.NullTime `db:"ended_at"`
-	WorkspaceId uint         `db:"workspace_id"` // Foreign key to Workspace
-	StubId      uint         `db:"stub_id"`      // Foreign key to Stub
-	CreatedAt   time.Time    `db:"created_at"`
-	UpdatedAt   time.Time    `db:"updated_at"`
+	Id          uint         `db:"id" json:"id"`
+	ExternalId  string       `db:"external_id" json:"external_id"`
+	Status      TaskStatus   `db:"status" json:"status"`
+	ContainerId string       `db:"container_id" json:"container_id"`
+	StartedAt   sql.NullTime `db:"started_at" json:"started_at"`
+	EndedAt     sql.NullTime `db:"ended_at" json:"ended_at"`
+	WorkspaceId uint         `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
+	StubId      uint         `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
+	CreatedAt   time.Time    `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time    `db:"updated_at" json:"updated_at"`
 }
 
 type TaskWithRelated struct {
 	Task
-	Workspace Workspace `db:"workspace"`
-	Stub      Stub      `db:"stub"`
+	Workspace Workspace `db:"workspace" json:"workspace"`
+	Stub      Stub      `db:"stub" json:"stub"`
 }
 
 type StubConfigV1 struct {
