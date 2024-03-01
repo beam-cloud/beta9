@@ -367,37 +367,31 @@ func (r *PostgresBackendRepository) ListTasksWithRelated(
 	workspaceId uint,
 ) ([]types.TaskWithRelated, error) {
 	allArgs := []any{workspaceId}
-	whereParts := []string{"w.id = $1"}
+	whereParts := buildWhereParts(filters, &allArgs)
 
-	// Append additional filter conditions and their arguments
-	for _, filter := range filters {
-		for _, value := range filter.ClientValues {
-			allArgs = append(allArgs, value)
-			whereParts = append(whereParts, fmt.Sprintf("%s = $%d", filter.DatabaseField, len(allArgs)))
-		}
-	}
+	// Always include the workspace ID condition
+	whereParts = append(whereParts, fmt.Sprintf("w.id = $%d", len(allArgs)))
 
-	whereClause := strings.Join(whereParts, " AND ")
+	whereClause := buildWhereClause(whereParts)
 	limitClause := ""
 	if limit > 0 {
-		allArgs = append(allArgs, limit)
-		limitClause = fmt.Sprintf("LIMIT $%d", len(allArgs))
+		limitClause = buildLimitClause(&allArgs, limit)
 	}
 
 	query := fmt.Sprintf(`
-    SELECT
-        w.external_id AS "workspace.external_id",
-        w.name AS "workspace.name",
-        s.external_id AS "stub.external_id",
-        s.name AS "stub.name",
-        t.*
-    FROM task t
-    JOIN workspace w ON t.workspace_id = w.id
-    JOIN stub s ON t.stub_id = s.id
-    WHERE %s
-    ORDER BY t.id DESC
-    %s;
-    `, whereClause, limitClause)
+	SELECT
+		w.external_id AS "workspace.external_id",
+		w.name AS "workspace.name",
+		s.external_id AS "stub.external_id",
+		s.name AS "stub.name",
+		t.*
+	FROM task t
+	JOIN workspace w ON t.workspace_id = w.id
+	JOIN stub s ON t.stub_id = s.id
+	%s
+	ORDER BY t.id DESC
+	%s;
+	`, whereClause, limitClause)
 
 	var tasks []types.TaskWithRelated
 	err := r.client.SelectContext(ctx, &tasks, query, allArgs...)
