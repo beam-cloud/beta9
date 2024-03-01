@@ -185,22 +185,22 @@ const (
 )
 
 type Stub struct {
-	Id            uint      `db:"id"`
-	ExternalId    string    `db:"external_id"`
-	Name          string    `db:"name"`
-	Type          string    `db:"type"`
-	Config        string    `db:"config"`
-	ConfigVersion uint      `db:"config_version"`
-	ObjectId      uint      `db:"object_id"`    // Foreign key to Object
-	WorkspaceId   uint      `db:"workspace_id"` // Foreign key to Workspace
-	CreatedAt     time.Time `db:"created_at"`
-	UpdatedAt     time.Time `db:"updated_at"`
+	Id            uint      `db:"id" json:"id"`
+	ExternalId    string    `db:"external_id" json:"external_id"`
+	Name          string    `db:"name" json:"name"`
+	Type          string    `db:"type" json:"type"`
+	Config        string    `db:"config" json:"config"`
+	ConfigVersion uint      `db:"config_version" json:"config_version"`
+	ObjectId      uint      `db:"object_id" json:"object_id"`       // Foreign key to Object
+	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
+	CreatedAt     time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
 }
 
 type StubWithRelated struct {
 	Stub
-	Workspace Workspace `db:"workspace"`
-	Object    Object    `db:"object"`
+	Workspace Workspace `db:"workspace" json:"workspace"`
+	Object    Object    `db:"object" json:"object"`
 }
 
 type Image struct {
