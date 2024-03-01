@@ -110,6 +110,18 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 	return context, nil
 }
 
+func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error) {
+	var workspace types.Workspace
+
+	query := `SELECT id, name, created_at FROM workspace WHERE external_id = $1;`
+	err := r.client.GetContext(ctx, &workspace, query, externalId)
+	if err != nil {
+		return types.Workspace{}, err
+	}
+
+	return workspace, nil
+}
+
 // Token
 
 const tokenLength = 64
@@ -191,6 +203,38 @@ func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, wor
 	}
 
 	return &token, nil
+}
+
+func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error) {
+	query := `
+    SELECT id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id
+    FROM token
+    WHERE workspace_id = $1
+    ORDER BY created_at DESC;
+    `
+
+	var tokens []types.Token
+	err := r.client.SelectContext(ctx, &tokens, query, workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return tokens, nil
+}
+
+func (r *PostgresBackendRepository) RevokeTokenByExternalId(ctx context.Context, externalId string) error {
+	updateQuery := `
+    UPDATE token
+    SET active = FALSE
+    WHERE external_id = $1;
+    `
+
+	_, err := r.client.ExecContext(ctx, updateQuery, externalId)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Object
