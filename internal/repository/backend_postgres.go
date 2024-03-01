@@ -370,7 +370,7 @@ func (r *PostgresBackendRepository) ListTasksWithRelated(
 	whereParts := buildWhereParts(filters, &allArgs)
 
 	// Always include the workspace ID condition
-	whereParts = append(whereParts, fmt.Sprintf("w.id = $%d", len(allArgs)))
+	whereParts = append(whereParts, fmt.Sprintf("w.id = $%d", 1))
 
 	whereClause := buildWhereClause(whereParts)
 	limitClause := ""
