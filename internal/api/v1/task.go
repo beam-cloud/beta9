@@ -22,18 +22,18 @@ func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 		config:      config,
 	}
 
-	g.GET("/:workspaceId", group.ListWorkspaceTasks)
-	g.GET("/:workspaceId/", group.ListWorkspaceTasks)
+	g.GET("/:workspaceId", group.ListTasks)
+	g.GET("/:workspaceId/", group.ListTasks)
 
 	return group
 }
 
-type ListWorkspaceTasksRequest struct {
+type ListTasksRequest struct {
 	Filters map[string][]string `json:"filters"`
 	Limit   uint32              `json:"limit"`
 }
 
-func (g *TaskGroup) ListWorkspaceTasks(ctx echo.Context) error {
+func (g *TaskGroup) ListTasks(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
 		return echo.NewHTTPError(http.StatusUnauthorized)
@@ -45,7 +45,7 @@ func (g *TaskGroup) ListWorkspaceTasks(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
-	req := ListWorkspaceTasksRequest{Filters: make(map[string][]string), Limit: 1000}
+	req := ListTasksRequest{Filters: make(map[string][]string), Limit: 1000}
 	queryParams := ctx.QueryParams()
 	for key, values := range queryParams {
 		if key == "limit" {
