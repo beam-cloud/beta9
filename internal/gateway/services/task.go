@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -45,13 +46,14 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 }
 
 func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksRequest) (*pb.ListTasksResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
 	// Maps the client provided option/flag to the database field
 	fieldMapping := map[string]string{
-		"id":             "t.external_id",
-		"task-id":        "t.external_id",
-		"status":         "t.status",
-		"stub-name":      "s.name",
-		"workspace-name": "w.name",
+		"id":        "t.external_id",
+		"task-id":   "t.external_id",
+		"status":    "t.status",
+		"stub-name": "s.name",
 	}
 	filters := []types.FilterFieldMapping{}
 	for clientField, value := range in.Filters {
@@ -70,7 +72,7 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 		limit = in.Limit
 	}
 
-	tasks, err := gws.backendRepo.ListTasksWithRelated(ctx, filters, limit)
+	tasks, err := gws.backendRepo.ListTasksWithRelated(ctx, filters, limit, authInfo.Workspace.Id)
 	if err != nil {
 		return &pb.ListTasksResponse{
 			Ok:     false,

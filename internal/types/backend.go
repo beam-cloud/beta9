@@ -24,16 +24,16 @@ const (
 )
 
 type Token struct {
-	Id          uint       `db:"id"`
-	ExternalId  string     `db:"external_id"`
-	Key         string     `db:"key"`
-	Active      bool       `db:"active"`
-	Reusable    bool       `db:"reusable"`
-	WorkspaceId *uint      `db:"workspace_id"` // Foreign key to Workspace
-	Workspace   *Workspace `db:"workspace"`    // Pointer to associated Workspace
-	TokenType   string     `db:"token_type"`
-	CreatedAt   time.Time  `db:"created_at"`
-	UpdatedAt   time.Time  `db:"updated_at"`
+	Id          uint       `db:"id" json:"id"`
+	ExternalId  string     `db:"external_id" json:"external_id"`
+	Key         string     `db:"key" json:"key"`
+	Active      bool       `db:"active" json:"active"`
+	Reusable    bool       `db:"reusable" json:"reusable"`
+	WorkspaceId *uint      `db:"workspace_id" json:"workspace_id,omitempty"` // Foreign key to Workspace
+	Workspace   *Workspace `db:"workspace" json:"workspace,omitempty"`       // Pointer to associated Workspace
+	TokenType   string     `db:"token_type" json:"token_type"`
+	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 type Volume struct {

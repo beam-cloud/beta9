@@ -138,6 +138,7 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.config)
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.config)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.config)
+	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.BackendRepo, g.config)
 
 	return nil
 }

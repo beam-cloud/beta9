@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log"
 	"os"
 	"path"
 
@@ -42,6 +43,7 @@ func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectReques
 
 	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
 	if err == nil && !in.Overwrite {
+		log.Println("returning")
 		return &pb.PutObjectResponse{
 			Ok:       true,
 			ObjectId: existingObject.ExternalId,
@@ -53,6 +55,7 @@ func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectReques
 
 	newObject, err := gws.backendRepo.CreateObject(ctx, hashStr, int64(len(in.ObjectContent)), authInfo.Workspace.Id)
 	if err != nil {
+		log.Println("unable to create object: ", err)
 		return &pb.PutObjectResponse{
 			Ok:       false,
 			ErrorMsg: "Unable to create object",
@@ -62,6 +65,8 @@ func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectReques
 	filePath := path.Join(objectPath, newObject.ExternalId)
 	err = os.WriteFile(filePath, in.ObjectContent, 0644)
 	if err != nil {
+		log.Println("unable to create file: ", err)
+
 		return &pb.PutObjectResponse{
 			Ok:       false,
 			ErrorMsg: "Unable to write files",

@@ -112,7 +112,9 @@ def get_gateway_config() -> GatewayConfig:
     token = os.getenv("BETA9_TOKEN", None)
 
     if gateway_host and gateway_port and token:
-        return GatewayConfig(gateway_host=gateway_host, gateway_port=gateway_port, http_port=http_port, token=token)
+        return GatewayConfig(
+            gateway_host=gateway_host, gateway_port=gateway_port, http_port=http_port, token=token
+        )
 
     return load_config_from_file()
 
@@ -138,7 +140,11 @@ def configure_gateway_credentials(
     token = token or terminal.prompt(text="Token", default=None)
 
     config = config._replace(
-        name=name, gateway_host=gateway_host, gateway_port=gateway_port, http_port=http_port, token=token
+        name=name,
+        gateway_host=gateway_host,
+        gateway_port=gateway_port,
+        http_port=http_port,
+        token=token,
     )
     terminal.header("Configuring gateway")
 
@@ -157,7 +163,6 @@ def get_gateway_channel() -> Channel:
             config,
             name=config.name,
             gateway_host=config.gateway_host,
-            http_port=config.http_port,
             gateway_port=config.gateway_port,
         )
 
