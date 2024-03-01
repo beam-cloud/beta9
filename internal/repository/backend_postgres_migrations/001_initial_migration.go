@@ -52,11 +52,12 @@ func upCreateTables(tx *sql.Tx) error {
 
 		`CREATE TABLE IF NOT EXISTS object (
             id SERIAL PRIMARY KEY,
-            external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
-            hash VARCHAR(255) NOT NULL UNIQUE,
+            external_id UUID DEFAULT uuid_generate_v4() NOT NULL,
+            hash VARCHAR(255) NOT NULL,
             size BIGINT NOT NULL,
             workspace_id INT REFERENCES workspace(id),
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (hash, workspace_id)
         );`,
 
 		`CREATE TABLE IF NOT EXISTS stub (
