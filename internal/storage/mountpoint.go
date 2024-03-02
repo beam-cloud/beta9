@@ -3,6 +3,7 @@ package storage
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 
 	"github.com/beam-cloud/beta9/internal/types"
@@ -23,6 +24,7 @@ func (s *MountPointStorage) Mount(localPath string) error {
 	// NOTE: this is called to force unmount previous mounts
 	// It seems like mountpoint doesn't clean up gracefully by itself
 	s.Unmount(localPath)
+	os.MkdirAll(localPath, 0755)
 
 	s.mountCmd = exec.Command(
 		"mount-s3",
