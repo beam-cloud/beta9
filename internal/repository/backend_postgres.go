@@ -535,7 +535,7 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filter 
 		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
 	).From("deployment d").
 		Join("workspace w ON d.workspace_id = w.id").
-		Join("stub s ON d.stub_id = s.id")
+		Join("stub s ON d.stub_id = s.id").OrderBy("d.created_at DESC")
 
 	// Apply filters
 	qb = qb.Where(squirrel.Eq{"d.workspace_id": filter.WorkspaceID})
@@ -551,6 +551,8 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filter 
 	if filter.Limit > 0 {
 		qb = qb.Limit(uint64(filter.Limit))
 	}
+
+	qb = qb.OrderBy("created_at DESC")
 
 	sql, args, err := qb.ToSql()
 	if err != nil {
