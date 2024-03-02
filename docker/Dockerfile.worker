@@ -93,6 +93,13 @@ RUN curl -sSL https://d.juicefs.com/install | sh -
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends criu nvidia-container-toolkit-base nvidia-container-toolkit
 
+# Install mountpoint for s3
+RUN apt-get install -y fuse libfuse-dev cmake clang git pkg-config
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN git clone --recurse-submodules https://github.com/awslabs/mountpoint-s3.git
+RUN cd mountpoint-s3 && cargo build --release && cp target/release/mount-s3 /usr/bin/
+
 RUN apt-get remove -y curl gpg && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
     rm -rf /var/lib/apt/lists/* /var/log/*
