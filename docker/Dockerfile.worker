@@ -64,9 +64,15 @@ FROM golang AS worker
 
 WORKDIR /workspace
 
+# Install mountpoint for s3
+RUN apt-get install -y fuse libfuse-dev cmake clang git pkg-config
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN git clone --recurse-submodules https://github.com/awslabs/mountpoint-s3.git
+RUN cd mountpoint-s3 && cargo build --release && cp target/release/mount-s3 /usr/bin/
+
 COPY go.mod go.sum ./
 RUN go mod download
-
 COPY . .
 RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 
@@ -81,7 +87,7 @@ ENV DEBIAN_FRONTEND="noninteractive"
 WORKDIR /workspace
 
 RUN apt-get update && \
-    apt-get install -y curl gpg fuse3 && \
+    apt-get install -y curl gpg fuse libfuse-dev && \
     curl -fsSL https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04/Release.key | gpg --dearmor -o /usr/share/keyrings/criu.gpg && \
     echo 'deb [signed-by=/usr/share/keyrings/criu.gpg] https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04 /' > /etc/apt/sources.list.d/criu.list && \
     curl -fsSL https://nvidia.github.io/nvidia-container-runtime/gpgkey | apt-key add - && \
@@ -93,6 +99,7 @@ RUN curl -sSL https://d.juicefs.com/install | sh -
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends criu nvidia-container-toolkit-base nvidia-container-toolkit
 
+
 RUN apt-get remove -y curl gpg && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
     rm -rf /var/lib/apt/lists/* /var/log/*
@@ -102,6 +109,7 @@ COPY --from=skopeo /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=skopeo /workspace/default-policy.json /etc/containers/policy.json
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
+COPY --from=worker /usr/bin/mount-s3 /usr/bin/mount-s3
 COPY ./sdk/src/beta9 /workspace/sdk
 
 VOLUME "/usr/lib/x86_64-linux-gnu"
