@@ -552,8 +552,6 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filter 
 		qb = qb.Limit(uint64(filter.Limit))
 	}
 
-	qb = qb.OrderBy("created_at DESC")
-
 	sql, args, err := qb.ToSql()
 	if err != nil {
 		return nil, err
