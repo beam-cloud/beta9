@@ -155,13 +155,6 @@ type Task struct {
 	UpdatedAt   time.Time    `db:"updated_at" json:"updated_at"`
 }
 
-// TaskJSON wraps Task so we can customize JSON output
-type TaskJSON struct {
-	Task
-	StartedAt string `json:"started_at,omitempty"`
-	EndedAt   string `json:"ended_at,omitempty"`
-}
-
 type TaskWithRelated struct {
 	Task
 	Workspace Workspace `db:"workspace" json:"workspace"`
