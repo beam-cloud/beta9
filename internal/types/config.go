@@ -104,15 +104,22 @@ type RunnerConfig struct {
 }
 
 type StorageConfig struct {
-	Mode           string        `key:"mode" json:"mode"`
-	FilesystemName string        `key:"fsName" json:"filesystem_name"`
-	FilesystemPath string        `key:"fsPath" json:"filesystem_path"`
-	ObjectPath     string        `key:"objectPath" json:"object_path"`
-	JuiceFS        JuiceFSConfig `key:"juicefs" json:"juicefs"`
+	Mode           string           `key:"mode" json:"mode"`
+	FilesystemName string           `key:"fsName" json:"filesystem_name"`
+	FilesystemPath string           `key:"fsPath" json:"filesystem_path"`
+	ObjectPath     string           `key:"objectPath" json:"object_path"`
+	JuiceFS        JuiceFSConfig    `key:"juicefs" json:"juicefs"`
+	MountPoint     MountPointConfig `key:"mountpoint" json:"mountpoint"`
 }
 
 type JuiceFSConfig struct {
 	RedisURI     string `key:"redisURI" json:"redis_uri"`
+	AWSS3Bucket  string `key:"awsS3Bucket" json:"aws_s3_bucket"`
+	AWSAccessKey string `key:"awsAccessKey" json:"aws_access_key"`
+	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`
+}
+
+type MountPointConfig struct {
 	AWSS3Bucket  string `key:"awsS3Bucket" json:"aws_s3_bucket"`
 	AWSAccessKey string `key:"awsAccessKey" json:"aws_access_key"`
 	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`

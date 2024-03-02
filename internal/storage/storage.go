@@ -8,7 +8,8 @@ import (
 )
 
 const (
-	StorageModeJuiceFS string = "juicefs"
+	StorageModeJuiceFS    string = "juicefs"
+	StorageModeMountPoint string = "mountpoint"
 )
 
 type Storage interface {
@@ -31,6 +32,19 @@ func NewStorage(config types.StorageConfig) (Storage, error) {
 		err = s.Format(config.FilesystemName)
 		if err != nil {
 			log.Fatalf("Unable to format filesystem: %+v\n", err)
+		}
+
+		// Mount filesystem
+		err = s.Mount(config.FilesystemPath)
+		if err != nil {
+			log.Fatalf("Unable to mount filesystem: %+v\n", err)
+		}
+
+		return s, nil
+	case StorageModeMountPoint:
+		s, err := NewMountPointStorage(config.MountPoint)
+		if err != nil {
+			return nil, err
 		}
 
 		// Mount filesystem
