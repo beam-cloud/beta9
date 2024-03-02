@@ -10,6 +10,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/Masterminds/squirrel"
 	_ "github.com/beam-cloud/beta9/internal/repository/backend_postgres_migrations"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
@@ -525,6 +526,44 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	}
 
 	return &deploymentWithRelated, nil
+}
+
+func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filter types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+		"d.id, d.external_id, d.name, d.active, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at",
+		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
+		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
+	).From("deployment d").
+		Join("workspace w ON d.workspace_id = w.id").
+		Join("stub s ON d.stub_id = s.id")
+
+	// Apply filters
+	qb = qb.Where(squirrel.Eq{"d.workspace_id": filter.WorkspaceID})
+
+	if filter.StubType != "" {
+		qb = qb.Where(squirrel.Eq{"d.stub_type": filter.StubType})
+	}
+
+	if filter.Name != "" {
+		qb = qb.Where(squirrel.Eq{"d.name": filter.Name})
+	}
+
+	if filter.Limit > 0 {
+		qb = qb.Limit(uint64(filter.Limit))
+	}
+
+	sql, args, err := qb.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	var deployments []types.DeploymentWithRelated
+	err = c.client.SelectContext(ctx, &deployments, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return deployments, nil
 }
 
 func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error) {

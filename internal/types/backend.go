@@ -147,12 +147,19 @@ type Task struct {
 	ExternalId  string       `db:"external_id" json:"external_id"`
 	Status      TaskStatus   `db:"status" json:"status"`
 	ContainerId string       `db:"container_id" json:"container_id"`
-	StartedAt   sql.NullTime `db:"started_at" json:"started_at"`
-	EndedAt     sql.NullTime `db:"ended_at" json:"ended_at"`
+	StartedAt   sql.NullTime `db:"started_at" json:"-"`
+	EndedAt     sql.NullTime `db:"ended_at" json:"-"`
 	WorkspaceId uint         `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
 	StubId      uint         `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
 	CreatedAt   time.Time    `db:"created_at" json:"created_at"`
 	UpdatedAt   time.Time    `db:"updated_at" json:"updated_at"`
+}
+
+// TaskJSON wraps Task so we can customize JSON output
+type TaskJSON struct {
+	Task
+	StartedAt string `json:"started_at,omitempty"`
+	EndedAt   string `json:"ended_at,omitempty"`
 }
 
 type TaskWithRelated struct {

@@ -63,6 +63,7 @@ type BackendRepository interface {
 	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool) (types.Stub, error)
 	GetStubByExternalId(ctx context.Context, externalId string) (*types.StubWithRelated, error)
 	GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
+	ListDeployments(ctx context.Context, filter types.DeploymentFilter) ([]types.DeploymentWithRelated, error)
 	GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string) (*types.Deployment, error)
 	GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint, stubType string) (*types.DeploymentWithRelated, error)
 	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error)
