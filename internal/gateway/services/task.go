@@ -55,9 +55,11 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 		WorkspaceID: authInfo.Workspace.Id,
 	}
 
-	if in.Limit > 0 && in.Limit < taskFilter.Limit {
-		taskFilter.Limit = in.Limit
+	limit := uint32(1000)
+	if in.Limit > 0 && in.Limit < limit {
+		limit = in.Limit
 	}
+	taskFilter.Limit = limit
 
 	// Maps filter key to db field
 	for clientField, value := range in.Filters {
