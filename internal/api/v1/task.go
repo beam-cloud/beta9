@@ -27,6 +27,9 @@ func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 	g.GET("/:workspaceId", group.ListTasks)
 	g.GET("/:workspaceId/", group.ListTasks)
 
+	g.GET("/:workspaceId/:taskId", group.RetrieveTask)
+	g.GET("/:workspaceId/:taskId/", group.RetrieveTask)
+
 	return group
 }
 
@@ -53,5 +56,19 @@ func (g *TaskGroup) ListTasks(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
 	} else {
 		return ctx.JSON(http.StatusOK, tasks)
+	}
+}
+
+func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return echo.NewHTTPError(http.StatusUnauthorized)
+	}
+
+	taskId := ctx.Param("taskId")
+	if task, err := g.backendRepo.GetTask(ctx.Request().Context(), taskId); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve task")
+	} else {
+		return ctx.JSON(http.StatusOK, task)
 	}
 }

@@ -27,6 +27,9 @@ func NewDeploymentGroup(g *echo.Group, backendRepo repository.BackendRepository,
 	g.GET("/:workspaceId", group.ListDeployments)
 	g.GET("/:workspaceId/", group.ListDeployments)
 
+	g.GET("/:workspaceId/:deploymentId", group.RetrieveDeployment)
+	g.GET("/:workspaceId/:deploymentId/", group.RetrieveDeployment)
+
 	return group
 }
 
@@ -53,5 +56,25 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list deployments")
 	} else {
 		return ctx.JSON(http.StatusOK, deployments)
+	}
+}
+
+func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return echo.NewHTTPError(http.StatusUnauthorized)
+	}
+
+	workspaceId := ctx.Param("workspaceId")
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+	}
+
+	deploymentId := ctx.Param("deploymentId")
+	if deployment, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), workspace.Id, deploymentId); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve deployment")
+	} else {
+		return ctx.JSON(http.StatusOK, deployment)
 	}
 }
