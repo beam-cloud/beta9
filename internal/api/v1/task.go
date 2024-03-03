@@ -2,11 +2,11 @@ package apiv1
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
+	"github.com/gorilla/schema"
 	"github.com/labstack/echo/v4"
 )
 
@@ -14,23 +14,20 @@ type TaskGroup struct {
 	routerGroup *echo.Group
 	config      types.AppConfig
 	backendRepo repository.BackendRepository
+	decoder     *schema.Decoder
 }
 
 func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, config types.AppConfig) *TaskGroup {
 	group := &TaskGroup{routerGroup: g,
 		backendRepo: backendRepo,
 		config:      config,
+		decoder:     schema.NewDecoder(),
 	}
 
 	g.GET("/:workspaceId", group.ListTasks)
 	g.GET("/:workspaceId/", group.ListTasks)
 
 	return group
-}
-
-type ListTasksRequest struct {
-	Filters map[string][]string `json:"filters"`
-	Limit   uint32              `json:"limit"`
 }
 
 func (g *TaskGroup) ListTasks(ctx echo.Context) error {
@@ -45,37 +42,16 @@ func (g *TaskGroup) ListTasks(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
-	req := ListTasksRequest{Filters: make(map[string][]string), Limit: 1000}
-	queryParams := ctx.QueryParams()
-	for key, values := range queryParams {
-		if key == "limit" {
-			if limit, err := strconv.ParseUint(values[0], 10, 32); err == nil {
-				req.Limit = uint32(min(limit, uint64(req.Limit)))
-			}
-			continue
-		}
-		req.Filters[key] = values
+	var filters types.TaskFilter
+	if err := g.decoder.Decode(&filters, ctx.QueryParams()); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode query parameters")
 	}
 
-	// Convert client filters to backend filters
-	fieldMapping := map[string]string{"id": "t.external_id", "task-id": "t.external_id", "status": "t.status", "stub-name": "s.name"}
-	filters := make([]types.FilterFieldMapping, 0, len(req.Filters))
-	for clientField, values := range req.Filters {
-		if dbField, ok := fieldMapping[clientField]; ok {
-			filters = append(filters, types.FilterFieldMapping{ClientField: clientField, ClientValues: values, DatabaseField: dbField})
-		}
-	}
+	filters.WorkspaceID = workspace.Id
 
-	if tasks, err := g.backendRepo.ListTasksWithRelated(ctx.Request().Context(), filters, req.Limit, workspace.Id); err != nil {
+	if tasks, err := g.backendRepo.ListTasksWithRelated(ctx.Request().Context(), filters); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
 	} else {
 		return ctx.JSON(http.StatusOK, tasks)
 	}
-}
-
-func min(a, b uint64) uint64 {
-	if a < b {
-		return a
-	}
-	return b
 }

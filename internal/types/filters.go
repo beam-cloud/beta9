@@ -16,5 +16,6 @@ type TaskFilter struct {
 	BaseFilter
 	WorkspaceID uint   `schema:"workspace_id"`
 	StubType    string `schema:"stub_type"`
+	StubId      string `schema:"stub_id"`
 	Status      string `schema:"status"`
 }

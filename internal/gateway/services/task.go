@@ -3,11 +3,14 @@ package gatewayservices
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -48,42 +51,27 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksRequest) (*pb.ListTasksResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	// Maps the client provided option/flag to the database field
-	// fieldMapping := map[string]string{
-	// 	"id":        "t.external_id",
-	// 	"task-id":   "t.external_id",
-	// 	"status":    "t.status",
-	// 	"stub-name": "s.name",
-	// }
-	// filters := []types.FilterFieldMapping{}
-	// for clientField, value := range in.Filters {
-	// 	if dbField, ok := fieldMapping[clientField]; ok {
-	// 		filters = append(filters, types.FilterFieldMapping{
-	// 			ClientField:   clientField,
-	// 			ClientValues:  value.Values,
-	// 			DatabaseField: dbField,
-	// 		})
-	// 	}
-	// }
-
-	// Limits the number of tasks to query
-	limit := uint32(1000)
-	if in.Limit > 0 && in.Limit < limit {
-		limit = in.Limit
-	}
-
-	var filters types.TaskFilter = types.TaskFilter{
+	var taskFilter types.TaskFilter = types.TaskFilter{
 		WorkspaceID: authInfo.Workspace.Id,
 	}
 
-	filters.Limit = limit
+	if in.Limit > 0 && in.Limit < taskFilter.Limit {
+		taskFilter.Limit = in.Limit
+	}
 
-	tasks, err := gws.backendRepo.ListTasksWithRelated(ctx, filters)
+	// Maps filter key to db field
+	for clientField, value := range in.Filters {
+		switch clientField {
+		case "status":
+			taskFilter.Status = strings.Join(value.Values, ",")
+		case "stub-id":
+			taskFilter.StubId = value.Values[0]
+		}
+	}
+
+	tasks, err := gws.backendRepo.ListTasksWithRelated(ctx, taskFilter)
 	if err != nil {
-		return &pb.ListTasksResponse{
-			Ok:     false,
-			ErrMsg: "Failed to get tasks from db",
-		}, nil
+		return nil, status.Errorf(codes.Internal, "Failed to get tasks from db: %v", err)
 	}
 
 	response := &pb.ListTasksResponse{

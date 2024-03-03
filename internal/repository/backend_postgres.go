@@ -373,6 +373,10 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
 	}
 
+	if filters.StubId != "" {
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
+	}
+
 	if filters.StubType != "" {
 		qb = qb.Where(squirrel.Eq{"s.stub_type": filters.StubType})
 	}
