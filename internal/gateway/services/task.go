@@ -49,22 +49,22 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	// Maps the client provided option/flag to the database field
-	fieldMapping := map[string]string{
-		"id":        "t.external_id",
-		"task-id":   "t.external_id",
-		"status":    "t.status",
-		"stub-name": "s.name",
-	}
-	filters := []types.FilterFieldMapping{}
-	for clientField, value := range in.Filters {
-		if dbField, ok := fieldMapping[clientField]; ok {
-			filters = append(filters, types.FilterFieldMapping{
-				ClientField:   clientField,
-				ClientValues:  value.Values,
-				DatabaseField: dbField,
-			})
-		}
-	}
+	// fieldMapping := map[string]string{
+	// 	"id":        "t.external_id",
+	// 	"task-id":   "t.external_id",
+	// 	"status":    "t.status",
+	// 	"stub-name": "s.name",
+	// }
+	// filters := []types.FilterFieldMapping{}
+	// for clientField, value := range in.Filters {
+	// 	if dbField, ok := fieldMapping[clientField]; ok {
+	// 		filters = append(filters, types.FilterFieldMapping{
+	// 			ClientField:   clientField,
+	// 			ClientValues:  value.Values,
+	// 			DatabaseField: dbField,
+	// 		})
+	// 	}
+	// }
 
 	// Limits the number of tasks to query
 	limit := uint32(1000)
@@ -72,7 +72,13 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 		limit = in.Limit
 	}
 
-	tasks, err := gws.backendRepo.ListTasksWithRelated(ctx, filters, limit, authInfo.Workspace.Id)
+	var filters types.TaskFilter = types.TaskFilter{
+		WorkspaceID: authInfo.Workspace.Id,
+	}
+
+	filters.Limit = limit
+
+	tasks, err := gws.backendRepo.ListTasksWithRelated(ctx, filters)
 	if err != nil {
 		return &pb.ListTasksResponse{
 			Ok:     false,
