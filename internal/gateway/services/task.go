@@ -9,8 +9,6 @@ import (
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -73,7 +71,10 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 
 	tasks, err := gws.backendRepo.ListTasksWithRelated(ctx, taskFilter)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to get tasks from db: %v", err)
+		return &pb.ListTasksResponse{
+			Ok:     false,
+			ErrMsg: "Failed to retrieve tasks.",
+		}, nil
 	}
 
 	response := &pb.ListTasksResponse{
