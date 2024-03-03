@@ -42,14 +42,14 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
-	var filter types.DeploymentFilter
-	if err := g.decoder.Decode(&filter, ctx.QueryParams()); err != nil {
+	var filters types.DeploymentFilter
+	if err := g.decoder.Decode(&filters, ctx.QueryParams()); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode query parameters")
 	}
 
-	filter.WorkspaceID = workspace.Id
+	filters.WorkspaceID = workspace.Id
 
-	if deployments, err := g.backendRepo.ListDeployments(ctx.Request().Context(), filter); err != nil {
+	if deployments, err := g.backendRepo.ListDeployments(ctx.Request().Context(), filters); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list deployments")
 	} else {
 		return ctx.JSON(http.StatusOK, deployments)

@@ -528,7 +528,7 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	return &deploymentWithRelated, nil
 }
 
-func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filter types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"d.id, d.external_id, d.name, d.active, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at",
 		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
@@ -538,18 +538,22 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filter 
 		Join("stub s ON d.stub_id = s.id").OrderBy("d.created_at DESC")
 
 	// Apply filters
-	qb = qb.Where(squirrel.Eq{"d.workspace_id": filter.WorkspaceID})
+	qb = qb.Where(squirrel.Eq{"d.workspace_id": filters.WorkspaceID})
 
-	if filter.StubType != "" {
-		qb = qb.Where(squirrel.Eq{"d.stub_type": filter.StubType})
+	if filters.StubType != "" {
+		qb = qb.Where(squirrel.Eq{"d.stub_type": filters.StubType})
 	}
 
-	if filter.Name != "" {
-		qb = qb.Where(squirrel.Eq{"d.name": filter.Name})
+	if filters.Name != "" {
+		qb = qb.Where(squirrel.Eq{"d.name": filters.Name})
 	}
 
-	if filter.Limit > 0 {
-		qb = qb.Limit(uint64(filter.Limit))
+	if filters.Offset > 0 {
+		qb = qb.Offset(uint64(filters.Offset))
+	}
+
+	if filters.Limit > 0 {
+		qb = qb.Limit(uint64(filters.Limit))
 	}
 
 	sql, args, err := qb.ToSql()

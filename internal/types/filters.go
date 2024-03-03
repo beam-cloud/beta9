@@ -1,7 +1,8 @@
 package types
 
 type BaseFilter struct {
-	Limit uint32 `schema:"limit"`
+	Limit  uint32 `schema:"limit"`
+	Offset int    `schema:"offset"`
 }
 
 type DeploymentFilter struct {
