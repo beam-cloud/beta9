@@ -176,6 +176,7 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 		Gpu:        string(stubConfig.Runtime.Gpu),
 		GpuCount:   1,
 		ImageId:    stubConfig.Runtime.ImageId,
+		StubId:     stub.ExternalId,
 		EntryPoint: []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
 		Mounts:     mounts,
 	})
