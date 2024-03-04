@@ -10,6 +10,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/Masterminds/squirrel"
 	_ "github.com/beam-cloud/beta9/internal/repository/backend_postgres_migrations"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
@@ -360,41 +361,48 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 	return tasks, nil
 }
 
-func (r *PostgresBackendRepository) ListTasksWithRelated(
-	ctx context.Context,
-	filters []types.FilterFieldMapping,
-	limit uint32,
-	workspaceId uint,
-) ([]types.TaskWithRelated, error) {
-	allArgs := []any{workspaceId}
-	whereParts := buildWhereParts(filters, &allArgs)
+func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, filters types.TaskFilter) ([]types.TaskWithRelated, error) {
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\"",
+	).From("task t").
+		Join("workspace w ON t.workspace_id = w.id").
+		Join("stub s ON t.stub_id = s.id").OrderBy("t.id DESC")
 
-	// Always include the workspace ID condition
-	whereParts = append(whereParts, fmt.Sprintf("w.id = $%d", 1))
-
-	whereClause := buildWhereClause(whereParts)
-	limitClause := ""
-	if limit > 0 {
-		limitClause = buildLimitClause(&allArgs, limit)
+	// Apply filters
+	if filters.WorkspaceID > 0 {
+		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
 	}
 
-	query := fmt.Sprintf(`
-	SELECT
-		w.external_id AS "workspace.external_id",
-		w.name AS "workspace.name",
-		s.external_id AS "stub.external_id",
-		s.name AS "stub.name",
-		t.*
-	FROM task t
-	JOIN workspace w ON t.workspace_id = w.id
-	JOIN stub s ON t.stub_id = s.id
-	%s
-	ORDER BY t.id DESC
-	%s;
-	`, whereClause, limitClause)
+	if filters.StubId != "" {
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
+	}
+
+	if filters.StubType != "" {
+		qb = qb.Where(squirrel.Eq{"s.stub_type": filters.StubType})
+	}
+
+	if filters.Offset > 0 {
+		qb = qb.Offset(uint64(filters.Offset))
+	}
+
+	if filters.Status != "" {
+		statuses := strings.Split(filters.Status, ",")
+		if len(statuses) > 0 {
+			qb = qb.Where(squirrel.Eq{"t.status": statuses})
+		}
+	}
+
+	if filters.Limit > 0 {
+		qb = qb.Limit(uint64(filters.Limit))
+	}
+
+	sql, args, err := qb.ToSql()
+	if err != nil {
+		return nil, err
+	}
 
 	var tasks []types.TaskWithRelated
-	err := r.client.SelectContext(ctx, &tasks, query, allArgs...)
+	err = c.client.SelectContext(ctx, &tasks, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -527,6 +535,70 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	return &deploymentWithRelated, nil
 }
 
+func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Context, workspaceId uint, deploymentExternalId string) (*types.DeploymentWithRelated, error) {
+	var deploymentWithRelated types.DeploymentWithRelated
+
+	query := `
+        SELECT d.*, 
+               w.external_id AS "workspace.external_id", w.name AS "workspace.name", 
+               s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
+        FROM deployment d
+        JOIN workspace w ON d.workspace_id = w.id
+        JOIN stub s ON d.stub_id = s.id
+        WHERE d.workspace_id = $1 AND d.external_id = $2
+        LIMIT 1;
+    `
+
+	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, deploymentExternalId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &deploymentWithRelated, nil
+}
+
+func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+		"d.id, d.external_id, d.name, d.active, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at",
+		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
+		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
+	).From("deployment d").
+		Join("workspace w ON d.workspace_id = w.id").
+		Join("stub s ON d.stub_id = s.id").OrderBy("d.created_at DESC")
+
+	// Apply filters
+	qb = qb.Where(squirrel.Eq{"d.workspace_id": filters.WorkspaceID})
+
+	if filters.StubType != "" {
+		qb = qb.Where(squirrel.Eq{"d.stub_type": filters.StubType})
+	}
+
+	if filters.Name != "" {
+		qb = qb.Where(squirrel.Eq{"d.name": filters.Name})
+	}
+
+	if filters.Offset > 0 {
+		qb = qb.Offset(uint64(filters.Offset))
+	}
+
+	if filters.Limit > 0 {
+		qb = qb.Limit(uint64(filters.Limit))
+	}
+
+	sql, args, err := qb.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	var deployments []types.DeploymentWithRelated
+	err = c.client.SelectContext(ctx, &deployments, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return deployments, nil
+}
+
 func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error) {
 	var deployment types.Deployment
 
@@ -542,45 +614,4 @@ func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, worksp
 	}
 
 	return &deployment, nil
-}
-
-// Helpers
-
-// buildLimitClause generates a LIMIT clause for a SQL query.
-func buildLimitClause(allArgs *[]any, limit uint32) string {
-	*allArgs = append(*allArgs, limit)
-	return fmt.Sprintf("LIMIT $%d", len(*allArgs))
-}
-
-// buildWhereParts constructs the WHERE clause parts for a SQL query based on the provided filters.
-func buildWhereParts(filters []types.FilterFieldMapping, allArgs *[]any) []string {
-	whereParts := make([]string, 0, len(filters))
-	for _, filterInfo := range filters {
-		inClause, newArgs := buildInClause(len(*allArgs)+1, filterInfo.ClientValues)
-		*allArgs = append(*allArgs, newArgs...)
-		whereParts = append(whereParts, fmt.Sprintf("%s %s", filterInfo.DatabaseField, inClause))
-	}
-	return whereParts
-}
-
-// buildInClause generates an IN clause for a SQL query.
-// It constructs the IN clause using placeholders for the provided values and
-// prepares a slice of arguments for the clause.
-func buildInClause[T any](startIdx int, values []T) (string, []any) {
-	place := make([]string, len(values))
-	items := make([]any, len(values))
-	for i, item := range values {
-		place[i] = fmt.Sprintf("$%d", startIdx+i)
-		items[i] = item
-	}
-	return fmt.Sprintf("IN (%s)", strings.Join(place, ", ")), items
-}
-
-// buildWhereClause constructs the WHERE clause for a SQL query.
-// It joins the given whereParts using "AND" to form a complete WHERE clause.
-func buildWhereClause(whereParts []string) string {
-	if len(whereParts) > 0 {
-		return "WHERE " + strings.Join(whereParts, " AND ")
-	}
-	return ""
 }

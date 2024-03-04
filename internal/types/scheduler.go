@@ -71,7 +71,7 @@ type ContainerRequest struct {
 const ContainerExitCodeTtlS int = 300
 
 const (
-	ContainerDurationEmissionInterval      time.Duration = 30 * time.Second
+	ContainerDurationEmissionInterval      time.Duration = 5 * time.Second
 	ContainerResourceUsageEmissionInterval time.Duration = 3 * time.Second
 )
 const ContainerStateTtlSWhilePending int = 600
