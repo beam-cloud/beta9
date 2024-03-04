@@ -89,8 +89,6 @@ github.com/aws/smithy-go v1.19.0/go.mod h1:NukqUGpCZIILqqiV0NIjeFh24kd/FAa4beRb6
 github.com/aybabtme/rgbterm v0.0.0-20170906152045-cc83f3b3ce59/go.mod h1:q/89r3U2H7sSsE2t6Kca0lfwTK8JdoNGS/yzM/4iH5I=
 github.com/beam-cloud/blobcache v0.0.0-20240111193326-cae10a611c3f h1:Ks5JrphoAk1MlmEBypfpy+q3NgPU08+u/OAyHUmucUk=
 github.com/beam-cloud/blobcache v0.0.0-20240111193326-cae10a611c3f/go.mod h1:vCNTI/9D+f+BEH0mJIQOXHB5Y+jogYMCRrkgXjMcWbk=
-github.com/beam-cloud/clip v0.0.0-20240209144910-6b317b8e7b18 h1:QnLZFws+wtus5kuVrBEo/0yTK94FS/GlZJVZj4A+8Hk=
-github.com/beam-cloud/clip v0.0.0-20240209144910-6b317b8e7b18/go.mod h1:8jth5RLkwPUiLdqDNnajhMSqh/YIy37mhbvXhbqoTZc=
 github.com/beam-cloud/clip v0.0.0-20240220210835-036152bc50ee h1:nReRuDMxd8tfwll/91hYS2klNtauqvKSxZGhdUftdVA=
 github.com/beam-cloud/clip v0.0.0-20240220210835-036152bc50ee/go.mod h1:8jth5RLkwPUiLdqDNnajhMSqh/YIy37mhbvXhbqoTZc=
 github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170 h1:KYVz18kobBGU8URM9Srn++2tcL9e0PcwYyH0Z4GYicM=
@@ -279,8 +277,6 @@ github.com/google/uuid v1.5.0 h1:1p67kYwdtXjb0gL0BPiP1Av9wiZPo5A8z2cWkTZ+eyU=
 github.com/google/uuid v1.5.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/gorilla/csrf v1.7.1 h1:Ir3o2c1/Uzj6FBxMlAUB6SivgVMy1ONXwYgXn+/aHPE=
 github.com/gorilla/csrf v1.7.1/go.mod h1:+a/4tCmqhG6/w4oafeAZ9pEa3/NZOWYVbD9fV0FwIQA=
-github.com/gorilla/schema v1.2.1 h1:tjDxcmdb+siIqkTNoV+qRH2mjYdr2hHe5MKXbp61ziM=
-github.com/gorilla/schema v1.2.1/go.mod h1:Dg5SSm5PV60mhF2NFaTV1xuYYj8tV8NOPRo4FggUMnM=
 github.com/gorilla/securecookie v1.1.1 h1:miw7JPhV+b/lAHSXz4qd/nN9jRiAFV5FwjeKyCS8BvQ=
 github.com/gorilla/securecookie v1.1.1/go.mod h1:ra0sb63/xPlUeL+yeDciTfxMRAA+MP+HVt/4epWDjd4=
 github.com/gorilla/websocket v1.4.1/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=

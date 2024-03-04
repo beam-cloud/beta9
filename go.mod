@@ -3,6 +3,7 @@ module github.com/beam-cloud/beta9
 go 1.21
 
 require (
+	github.com/Masterminds/squirrel v1.5.4
 	github.com/alicebob/miniredis/v2 v2.30.5
 	github.com/asecurityteam/rolling v0.0.0-20230418204413-b4052899307d
 	github.com/aws/aws-sdk-go-v2 v1.24.1
@@ -43,6 +44,7 @@ require (
 	golang.org/x/net v0.19.0
 	google.golang.org/grpc v1.60.1
 	google.golang.org/protobuf v1.32.0
+	gvisor.dev/gvisor v0.0.0-20230928000133-4fe30062272c
 	k8s.io/api v0.29.0
 	k8s.io/apimachinery v0.29.0
 	k8s.io/client-go v0.29.0
@@ -53,7 +55,6 @@ require (
 require (
 	filippo.io/edwards25519 v1.0.0 // indirect
 	github.com/AdamKorcz/go-fuzz-headers v0.0.0-20210312213058-32f4d319f0d2 // indirect
-	github.com/Masterminds/squirrel v1.5.4 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alexbrainman/sspi v0.0.0-20231016080023-1a75b4708caa // indirect
 	github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a // indirect
@@ -110,7 +111,6 @@ require (
 	github.com/google/nftables v0.1.1-0.20230115205135-9aa6fdf5a28c // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/gorilla/csrf v1.7.1 // indirect
-	github.com/gorilla/schema v1.2.1 // indirect
 	github.com/gorilla/securecookie v1.1.1 // indirect
 	github.com/hanwen/go-fuse/v2 v2.3.0 // indirect
 	github.com/hdevalence/ed25519consensus v0.1.0 // indirect
@@ -202,7 +202,6 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	gvisor.dev/gvisor v0.0.0-20230928000133-4fe30062272c // indirect
 	inet.af/peercred v0.0.0-20210906144145-0893ea02156a // indirect
 	k8s.io/klog/v2 v2.110.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20231214164306-ab13479f8bf8 // indirect

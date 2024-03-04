@@ -6,7 +6,6 @@ import (
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
-	"github.com/gorilla/schema"
 	"github.com/labstack/echo/v4"
 )
 
@@ -14,14 +13,12 @@ type TaskGroup struct {
 	routerGroup *echo.Group
 	config      types.AppConfig
 	backendRepo repository.BackendRepository
-	decoder     *schema.Decoder
 }
 
 func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, config types.AppConfig) *TaskGroup {
 	group := &TaskGroup{routerGroup: g,
 		backendRepo: backendRepo,
 		config:      config,
-		decoder:     schema.NewDecoder(),
 	}
 
 	g.GET("/:workspaceId", group.ListTasks)
@@ -46,7 +43,7 @@ func (g *TaskGroup) ListTasks(ctx echo.Context) error {
 	}
 
 	var filters types.TaskFilter
-	if err := g.decoder.Decode(&filters, ctx.QueryParams()); err != nil {
+	if err := ctx.Bind(&filters); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode query parameters")
 	}
 

@@ -1,21 +1,21 @@
 package types
 
 type BaseFilter struct {
-	Limit  uint32 `schema:"limit"`
-	Offset int    `schema:"offset"`
+	Limit  uint32 `query:"limit"`
+	Offset int    `query:"offset"`
 }
 
 type DeploymentFilter struct {
 	BaseFilter
-	WorkspaceID uint   `schema:"workspace_id"`
-	StubType    string `schema:"stub_type"`
-	Name        string `schema:"name"`
+	WorkspaceID uint   `query:"workspace_id"`
+	StubType    string `query:"stub_type"`
+	Name        string `query:"name"`
 }
 
 type TaskFilter struct {
 	BaseFilter
-	WorkspaceID uint   `schema:"workspace_id"`
-	StubType    string `schema:"stub_type"`
-	StubId      string `schema:"stub_id"`
-	Status      string `schema:"status"`
+	WorkspaceID uint   `query:"workspace_id"`
+	StubType    string `query:"stub_type"`
+	StubId      string `query:"stub_id"`
+	Status      string `query:"status"`
 }
