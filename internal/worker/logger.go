@@ -68,6 +68,7 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 			f.WithFields(logrus.Fields{
 				"container_id": containerId,
 				"task_id":      msg.TaskID,
+				"stub_id":      instance.StubId,
 			}).Info(msg.Message)
 
 			if msg.TaskID != nil {
@@ -86,6 +87,7 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 		if !msgDecoded && o.Msg != "" {
 			f.WithFields(logrus.Fields{
 				"container_id": containerId,
+				"stub_id":      instance.StubId,
 			}).Info(o.Msg)
 
 			log.Printf("<%s> - %s\n", containerId, o.Msg)

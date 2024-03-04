@@ -134,6 +134,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		Memory:     stubConfig.Runtime.Memory,
 		Gpu:        string(stubConfig.Runtime.Gpu),
 		ImageId:    stubConfig.Runtime.ImageId,
+		StubId:     stub.ExternalId,
 		EntryPoint: []string{stubConfig.PythonVersion, "-m", "beta9.runner.container", base64.StdEncoding.EncodeToString(in.Command)},
 		Mounts:     mounts,
 	})

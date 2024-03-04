@@ -151,6 +151,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			Memory:     i.stubConfig.Runtime.Memory,
 			Gpu:        string(i.stubConfig.Runtime.Gpu),
 			ImageId:    i.stubConfig.Runtime.ImageId,
+			StubId:     i.stub.ExternalId,
 			EntryPoint: []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.taskqueue"}, // TODO: Configurable
 			Mounts: []types.Mount{
 				{
