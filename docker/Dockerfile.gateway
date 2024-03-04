@@ -6,6 +6,13 @@ RUN apt-get update && \
 
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 
+# Install mountpoint for s3
+RUN apt-get install -y fuse libfuse-dev cmake clang git pkg-config
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN git clone --recurse-submodules https://github.com/awslabs/mountpoint-s3.git
+RUN cd mountpoint-s3 && cargo build --release && cp target/release/mount-s3 /usr/bin/
+
 # Target used in development environments
 FROM base as build
 
