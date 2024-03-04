@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/auth"
@@ -48,35 +49,31 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksRequest) (*pb.ListTasksResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	// Maps the client provided option/flag to the database field
-	fieldMapping := map[string]string{
-		"id":        "t.external_id",
-		"task-id":   "t.external_id",
-		"status":    "t.status",
-		"stub-name": "s.name",
-	}
-	filters := []types.FilterFieldMapping{}
-	for clientField, value := range in.Filters {
-		if dbField, ok := fieldMapping[clientField]; ok {
-			filters = append(filters, types.FilterFieldMapping{
-				ClientField:   clientField,
-				ClientValues:  value.Values,
-				DatabaseField: dbField,
-			})
-		}
+	var taskFilter types.TaskFilter = types.TaskFilter{
+		WorkspaceID: authInfo.Workspace.Id,
 	}
 
-	// Limits the number of tasks to query
 	limit := uint32(1000)
 	if in.Limit > 0 && in.Limit < limit {
 		limit = in.Limit
 	}
+	taskFilter.Limit = limit
 
-	tasks, err := gws.backendRepo.ListTasksWithRelated(ctx, filters, limit, authInfo.Workspace.Id)
+	// Maps filter key to db field
+	for clientField, value := range in.Filters {
+		switch clientField {
+		case "status":
+			taskFilter.Status = strings.Join(value.Values, ",")
+		case "stub-id":
+			taskFilter.StubId = value.Values[0]
+		}
+	}
+
+	tasks, err := gws.backendRepo.ListTasksWithRelated(ctx, taskFilter)
 	if err != nil {
 		return &pb.ListTasksResponse{
 			Ok:     false,
-			ErrMsg: "Failed to get tasks from db",
+			ErrMsg: "Failed to retrieve tasks.",
 		}, nil
 	}
 
