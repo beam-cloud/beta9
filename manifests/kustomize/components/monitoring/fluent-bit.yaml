@@ -31,6 +31,7 @@ valuesInline:
           HTTP_Server  On
           HTTP_Listen  0.0.0.0
           HTTP_Port    2020
+          Parsers_File  custom_parsers.conf
     customParsers: |
       [PARSER]
           Name        json-parser
