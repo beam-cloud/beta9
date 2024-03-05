@@ -61,6 +61,7 @@ type Worker struct {
 
 type ContainerInstance struct {
 	Id           string
+	StubId       string
 	BundlePath   string
 	Overlay      *common.ContainerOverlay
 	Spec         *specs.Spec
@@ -465,6 +466,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
 		Id:         containerId,
+		StubId:     request.StubId,
 		BundlePath: bundlePath,
 		Overlay:    common.NewContainerOverlay(containerId, bundlePath, baseConfigPath, rootPath),
 		Spec:       spec,

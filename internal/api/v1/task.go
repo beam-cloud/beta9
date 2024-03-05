@@ -2,7 +2,6 @@ package apiv1
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/repository"
@@ -25,12 +24,10 @@ func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 	g.GET("/:workspaceId", group.ListTasks)
 	g.GET("/:workspaceId/", group.ListTasks)
 
-	return group
-}
+	g.GET("/:workspaceId/:taskId", group.RetrieveTask)
+	g.GET("/:workspaceId/:taskId/", group.RetrieveTask)
 
-type ListTasksRequest struct {
-	Filters map[string][]string `json:"filters"`
-	Limit   uint32              `json:"limit"`
+	return group
 }
 
 func (g *TaskGroup) ListTasks(ctx echo.Context) error {
@@ -45,37 +42,30 @@ func (g *TaskGroup) ListTasks(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
-	req := ListTasksRequest{Filters: make(map[string][]string), Limit: 1000}
-	queryParams := ctx.QueryParams()
-	for key, values := range queryParams {
-		if key == "limit" {
-			if limit, err := strconv.ParseUint(values[0], 10, 32); err == nil {
-				req.Limit = uint32(min(limit, uint64(req.Limit)))
-			}
-			continue
-		}
-		req.Filters[key] = values
+	var filters types.TaskFilter
+	if err := ctx.Bind(&filters); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode query parameters")
 	}
 
-	// Convert client filters to backend filters
-	fieldMapping := map[string]string{"id": "t.external_id", "task-id": "t.external_id", "status": "t.status", "stub-name": "s.name"}
-	filters := make([]types.FilterFieldMapping, 0, len(req.Filters))
-	for clientField, values := range req.Filters {
-		if dbField, ok := fieldMapping[clientField]; ok {
-			filters = append(filters, types.FilterFieldMapping{ClientField: clientField, ClientValues: values, DatabaseField: dbField})
-		}
-	}
+	filters.WorkspaceID = workspace.Id
 
-	if tasks, err := g.backendRepo.ListTasksWithRelated(ctx.Request().Context(), filters, req.Limit, workspace.Id); err != nil {
+	if tasks, err := g.backendRepo.ListTasksWithRelated(ctx.Request().Context(), filters); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
 	} else {
 		return ctx.JSON(http.StatusOK, tasks)
 	}
 }
 
-func min(a, b uint64) uint64 {
-	if a < b {
-		return a
+func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return echo.NewHTTPError(http.StatusUnauthorized)
 	}
-	return b
+
+	taskId := ctx.Param("taskId")
+	if task, err := g.backendRepo.GetTask(ctx.Request().Context(), taskId); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve task")
+	} else {
+		return ctx.JSON(http.StatusOK, task)
+	}
 }

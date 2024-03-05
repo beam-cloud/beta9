@@ -19,7 +19,6 @@ type Storage interface {
 }
 
 func NewStorage(config types.StorageConfig) (Storage, error) {
-
 	switch config.Mode {
 	case StorageModeJuiceFS:
 		s, err := NewJuiceFsStorage(config.JuiceFS)

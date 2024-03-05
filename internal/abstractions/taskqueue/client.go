@@ -34,7 +34,7 @@ func newRedisTaskQueueClient(rdb *common.RedisClient) *taskQueueClient {
 
 // Add a new task to the queue
 func (qc *taskQueueClient) Push(workspaceName, stubId, taskId string, args []interface{}, kwargs map[string]interface{}) error {
-	taskMessage := qc.getTaskMessage(stubId)
+	taskMessage := qc.getTaskMessage()
 	taskMessage.ID = taskId
 	taskMessage.Args = args
 	taskMessage.Kwargs = kwargs
@@ -109,7 +109,7 @@ func (qc *taskQueueClient) Pop(workspaceName, stubId, containerId string) ([]byt
 	return task, nil
 }
 
-func (qc *taskQueueClient) getTaskMessage(task string) *types.TaskMessage {
+func (qc *taskQueueClient) getTaskMessage() *types.TaskMessage {
 	msg := taskMessagePool.Get().(*types.TaskMessage)
 	msg.Args = make([]interface{}, 0)
 	msg.Kwargs = make(map[string]interface{})
