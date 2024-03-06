@@ -1,0 +1,39 @@
+name: Deploy Gateway
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: The environment to deploy the release to.
+        required: true
+        type: choice
+        default: staging
+        options:
+        - staging
+        - production
+      region:
+        description: The region to deploy the release to.
+        required: true
+        type: choice
+        default: us-east-1
+        options:
+        - us-east-1
+      version:
+        description: The version of the release to deploy.
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Get AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-region: ${{ inputs.region }}
+        role-to-assume: ${{ secrets.AWS_IAM_ROLE_US_EAST_1 }}
+
+    - name: Get AWS Caller Identity
+      run: |
+        aws sts get-caller-identity
