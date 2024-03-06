@@ -31,12 +31,25 @@ jobs:
     environment: ${{ inputs.environment }}
     runs-on: ubuntu-latest
     steps:
-    - name: Get AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-region: ${{ inputs.region }}
-        role-to-assume: ${{ secrets.AWS_IAM_ROLE_US_EAST_1 }}
+      - name: Add kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 1.29.0
 
-    - name: Get AWS Caller Identity
-      run: |
-        aws sts get-caller-identity
+      - name: Get AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ inputs.region }}
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_US_EAST_1 }}
+
+      - name: Get AWS Caller Identity
+        run: |
+          aws sts get-caller-identity
+
+      - name: Get kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ inputs.region }} --name ${{ vars.EKS_CLUSTER_NAME }}
+
+      - name: Get all pods
+        run: |
+          kubectl get pods -A
