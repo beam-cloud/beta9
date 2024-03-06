@@ -34,7 +34,7 @@ jobs:
       - name: Add kubectl
         uses: azure/setup-kubectl@v3
         with:
-          version: 1.29.0
+          version: v1.29.2
 
       - name: Get AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
