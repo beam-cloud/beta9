@@ -378,7 +378,8 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 	}
 
 	if filters.StubType != "" {
-		qb = qb.Where(squirrel.Eq{"s.stub_type": filters.StubType})
+		qb = qb.Where(squirrel.Eq{"s.type": filters.StubType})
+		log.Println("filtering by stub type: ", filters.StubType)
 	}
 
 	if filters.Offset > 0 {
@@ -404,6 +405,7 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 	var tasks []types.TaskWithRelated
 	err = c.client.SelectContext(ctx, &tasks, sql, args...)
 	if err != nil {
+		log.Println("err: ", err)
 		return nil, err
 	}
 
