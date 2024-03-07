@@ -378,7 +378,7 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 	}
 
 	if filters.StubType != "" {
-		qb = qb.Where(squirrel.Eq{"s.stub_type": filters.StubType})
+		qb = qb.Where(squirrel.Eq{"s.type": filters.StubType})
 	}
 
 	if filters.Offset > 0 {
