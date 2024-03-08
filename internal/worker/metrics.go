@@ -2,17 +2,15 @@ package worker
 
 import (
 	"context"
-	"log"
 	"time"
 
 	repo "github.com/beam-cloud/beta9/internal/repository"
 	types "github.com/beam-cloud/beta9/internal/types"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 type WorkerMetrics struct {
 	workerId    string
-	metricsRepo repo.PrometheusRepository
+	metricsRepo repo.MetricsRepository
 	workerRepo  repo.WorkerRepository
 	ctx         context.Context
 }
@@ -23,19 +21,14 @@ func NewWorkerMetrics(
 	workerRepo repo.WorkerRepository,
 	config types.PrometheusConfig,
 ) *WorkerMetrics {
-	metricsRepo := repo.NewMetricsPrometheusRepository(config)
-	metricsRepo.RegisterCounterVec(
-		prometheus.CounterOpts{
-			Name: types.MetricsWorkerContainerDurationSeconds,
-		},
-		[]string{"container_id", "worker_id"},
-	)
-
-	go func() {
-		if err := metricsRepo.ListenAndServe(); err != nil {
-			log.Fatalf("Failed to start metrics server: %v", err)
-		}
-	}()
+	metricsRepo := repo.MetricsRepository(config)
+	// metricsRepo.Init()
+	// metricsRepo.RegisterCounterVec(
+	// 	prometheus.CounterOpts{
+	// 		Name: types.MetricsWorkerContainerDurationSeconds,
+	// 	},
+	// 	[]string{"container_id", "worker_id"},
+	// )
 
 	workerMetrics := &WorkerMetrics{
 		ctx:         ctx,
@@ -48,9 +41,9 @@ func NewWorkerMetrics(
 }
 
 func (wm *WorkerMetrics) metricsContainerDuration(containerId string, workerId string, duration time.Duration) {
-	if handler := wm.metricsRepo.GetCounterVecHandler(types.MetricsWorkerContainerDurationSeconds); handler != nil {
-		handler.WithLabelValues(containerId, workerId).Add(duration.Seconds())
-	}
+	// if handler := wm.metricsRepo.GetCounterVecHandler(types.MetricsWorkerContainerDurationSeconds); handler != nil {
+	// 	handler.WithLabelValues(containerId, workerId).Add(duration.Seconds())
+	// }
 }
 
 // Periodically send metrics to track container duration

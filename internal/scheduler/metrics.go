@@ -2,25 +2,23 @@ package scheduler
 
 import (
 	"github.com/beam-cloud/beta9/internal/repository"
-	"github.com/beam-cloud/beta9/internal/types"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 type SchedulerMetrics struct {
-	metricsRepo repository.PrometheusRepository
+	metricsRepo repository.MetricsRepository
 }
 
-func NewSchedulerMetrics(metricsRepo repository.PrometheusRepository) SchedulerMetrics {
-	metricsRepo.RegisterCounter(
-		prometheus.CounterOpts{
-			Name: types.MetricsSchedulerContainerScheduled,
-		},
-	)
-	metricsRepo.RegisterCounter(
-		prometheus.CounterOpts{
-			Name: types.MetricsSchedulerContainerRequested,
-		},
-	)
+func NewSchedulerMetrics(metricsRepo repository.MetricsRepository) SchedulerMetrics {
+	// metricsRepo.RegisterCounter(
+	// 	prometheus.CounterOpts{
+	// 		Name: types.MetricsSchedulerContainerScheduled,
+	// 	},
+	// )
+	// metricsRepo.RegisterCounter(
+	// 	prometheus.CounterOpts{
+	// 		Name: types.MetricsSchedulerContainerRequested,
+	// 	},
+	// )
 
 	return SchedulerMetrics{
 		metricsRepo: metricsRepo,
@@ -28,13 +26,13 @@ func NewSchedulerMetrics(metricsRepo repository.PrometheusRepository) SchedulerM
 }
 
 func (sm *SchedulerMetrics) CounterIncContainerScheduled() {
-	if handler := sm.metricsRepo.GetCounterHandler(types.MetricsSchedulerContainerScheduled); handler != nil {
-		handler.Inc()
-	}
+	// if handler := sm.metricsRepo.GetCounterHandler(types.MetricsSchedulerContainerScheduled); handler != nil {
+	// 	handler.Inc()
+	// }
 }
 
 func (sm *SchedulerMetrics) CounterIncContainerRequested() {
-	if handler := sm.metricsRepo.GetCounterHandler(types.MetricsSchedulerContainerRequested); handler != nil {
-		handler.Inc()
-	}
+	// if handler := sm.metricsRepo.GetCounterHandler(types.MetricsSchedulerContainerRequested); handler != nil {
+	// 	handler.Inc()
+	// }
 }

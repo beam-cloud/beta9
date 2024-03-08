@@ -98,3 +98,6 @@ type EventRepository interface {
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
 }
+
+type MetricsRepository interface {
+}

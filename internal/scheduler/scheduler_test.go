@@ -40,7 +40,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
-	metricsRepo := repo.NewMetricsPrometheusRepository(config.Monitoring.Prometheus)
+	metricsRepo := repo.MetricsRepository(config.Monitoring)
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 
 	workerPoolManager := NewWorkerPoolManager(repo.NewWorkerPoolRedisRepository(rdb))
