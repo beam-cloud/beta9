@@ -9,6 +9,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/internal/common"
 	repo "github.com/beam-cloud/beta9/internal/repository"
+	metrics "github.com/beam-cloud/beta9/internal/repository/metrics"
+
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 	"github.com/knadh/koanf/providers/rawbytes"
@@ -40,7 +42,11 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
-	metricsRepo := repo.MetricsRepository(config.Monitoring)
+	metricsRepo, err := metrics.NewMetrics(config.Monitoring)
+	if err != nil {
+		return nil, err
+	}
+
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 
 	workerPoolManager := NewWorkerPoolManager(repo.NewWorkerPoolRedisRepository(rdb))
