@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"log"
 	"time"
 
 	repo "github.com/beam-cloud/beta9/internal/repository"
@@ -23,13 +22,17 @@ func NewWorkerMetrics(
 	workerId string,
 	workerRepo repo.WorkerRepository,
 	config types.MonitoringConfig,
-) *WorkerMetrics {
+) (*WorkerMetrics, error) {
 	metricsRepo, err := metrics.NewMetrics(config)
 	if err != nil {
-		log.Fatalf("Unable to create metrics collector: %w\n", err)
+		return nil, err
 	}
 
-	// metricsRepo.Init()
+	err = metricsRepo.Init()
+	if err != nil {
+		return nil, err
+	}
+
 	// metricsRepo.RegisterCounterVec(
 	// 	prometheus.CounterOpts{
 	// 		Name: types.MetricsWorkerContainerDurationSeconds,
@@ -37,14 +40,12 @@ func NewWorkerMetrics(
 	// 	[]string{"container_id", "worker_id"},
 	// )
 
-	workerMetrics := &WorkerMetrics{
+	return &WorkerMetrics{
 		ctx:         ctx,
 		workerId:    workerId,
 		metricsRepo: metricsRepo,
 		workerRepo:  workerRepo,
-	}
-
-	return workerMetrics
+	}, nil
 }
 
 func (wm *WorkerMetrics) metricsContainerDuration(containerId string, workerId string, duration time.Duration) {

@@ -150,7 +150,12 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config.Monitoring)
+
+	workerMetrics, err := NewWorkerMetrics(ctx, workerId, workerRepo, config.Monitoring)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 
 	return &Worker{
 		ctx:                  ctx,
