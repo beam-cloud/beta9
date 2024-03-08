@@ -204,9 +204,17 @@ type EC2ProviderConfig struct {
 	SubnetId     *string `key:"subnetId" json:"subnet_id"`
 }
 
+type MetricsCollector string
+
+var (
+	MetricsCollectorPrometheus MachineProvider = "prometheus"
+	MetricsCollectorOpenMeter  MachineProvider = "openmeter"
+)
+
 type MonitoringConfig struct {
-	Prometheus PrometheusConfig `key:"prometheus" json:"prometheus"`
-	FluentBit  FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
+	MetricsCollector string           `key:"metricsCollector" json:"metrics_collector"`
+	Prometheus       PrometheusConfig `key:"prometheus" json:"prometheus"`
+	FluentBit        FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
 }
 
 type PrometheusConfig struct {

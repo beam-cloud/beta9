@@ -94,7 +94,6 @@ worker:
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
   terminationGracePeriod: 30
-metrics:
   addWorkerTimeout: 10m
 providers:
   ec2:
@@ -126,6 +125,7 @@ proxy:
     localPort: 1993
     destination: beta9-gateway.beta9:1993
 monitoring:
+  metricsCollector: prometheus
   prometheus:
     scrapeWorkers: true
     port: 9090

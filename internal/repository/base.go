@@ -100,4 +100,5 @@ type EventRepository interface {
 }
 
 type MetricsRepository interface {
+	Init() error
 }

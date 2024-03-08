@@ -6,6 +6,17 @@ import (
 )
 
 func NewMetrics(config types.MonitoringConfig) (repository.MetricsRepository, error) {
-	metricsCollector := NewPrometheusMetricsCollector(config.Prometheus)
-	return metricsCollector, nil
+	var metricsRepo repository.MetricsRepository
+
+	switch config.MetricsCollector {
+	case string(types.MetricsCollectorPrometheus):
+		metricsRepo = NewPrometheusMetricsRepository(config.Prometheus)
+	}
+
+	err := metricsRepo.Init()
+	if err != nil {
+		return nil, err
+	}
+
+	return metricsRepo, nil
 }
