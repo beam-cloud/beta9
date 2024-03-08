@@ -224,6 +224,7 @@ type PrometheusConfig struct {
 }
 
 type OpenMeterConfig struct {
+	ApiKey string `key:"apiKey" json:"api_key"`
 }
 
 type TailscaleConfig struct {

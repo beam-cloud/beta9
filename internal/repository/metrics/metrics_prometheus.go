@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
 
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -20,17 +19,18 @@ import (
 )
 
 type PrometheusMetricsRepository struct {
-	once               sync.Once
 	collectorRegistrar *prometheus.Registry
 	port               int
-	counters           map[string]prometheus.Counter
-	counterVecs        map[string]*prometheus.CounterVec
-	gauges             map[string]prometheus.Gauge
-	gaugeVecs          map[string]*prometheus.GaugeVec
-	summaries          map[string]prometheus.Summary
-	summaryVecs        map[string]*prometheus.SummaryVec
-	histograms         map[string]prometheus.Histogram
-	histogramVecs      map[string]*prometheus.HistogramVec
+
+	// TODO: replace with safemaps
+	counters      map[string]prometheus.Counter
+	counterVecs   map[string]*prometheus.CounterVec
+	gauges        map[string]prometheus.Gauge
+	gaugeVecs     map[string]*prometheus.GaugeVec
+	summaries     map[string]prometheus.Summary
+	summaryVecs   map[string]*prometheus.SummaryVec
+	histograms    map[string]prometheus.Histogram
+	histogramVecs map[string]*prometheus.HistogramVec
 }
 
 func NewPrometheusMetricsRepository(promConfig types.PrometheusConfig) repository.MetricsRepository {
@@ -65,6 +65,29 @@ func (r *PrometheusMetricsRepository) Init() error {
 	return nil
 }
 
+func (pr *PrometheusMetricsRepository) AddToCounter(name string, metadata map[string]string, value float64) {
+	handler := pr.getCounterVec(
+		prometheus.CounterOpts{
+			Name: name,
+		},
+		maps.Keys(metadata), // Labels
+	)
+
+	values := maps.Values(metadata)
+	handler.WithLabelValues(values...).Add(value)
+}
+
+func (pr *PrometheusMetricsRepository) IncrementGauge(name string, metadata map[string]string) {
+	// handler := pr.getGaugeVec(
+	// 	prometheus.GaugeOpts{
+	// 		Name: name,
+	// 	},
+	// 	maps.Keys(metadata), // Labels
+	// )
+}
+
+// Internal methods
+
 func (r *PrometheusMetricsRepository) listenAndServe() error {
 	e := echo.New()
 	e.HideBanner = true
@@ -83,181 +106,116 @@ func (r *PrometheusMetricsRepository) listenAndServe() error {
 	return httpServer.ListenAndServe()
 }
 
-func (pr *PrometheusMetricsRepository) AddToCounter(name string, metadata map[string]string, value float64) {
-	pr.registerCounterVec(
-		prometheus.CounterOpts{
-			Name: name,
-		},
-		maps.Keys(metadata), // Labels
-	)
-
-	values := maps.Values(metadata)
-	if handler := pr.getCounterVecHandler(name); handler != nil {
-		handler.WithLabelValues(values...).Add(value)
-	}
-}
-
-func (pr *PrometheusMetricsRepository) IncrementGauge(name string, metadata []string) {
-
-}
-
-// Internal methods
-
-// RegisterCounter registers a new counter metric
-func (pr *PrometheusMetricsRepository) registerCounter(opts prometheus.CounterOpts) {
+// getCounter registers and returns a new counter metric handler
+//
+//lint:ignore U1000 This function is reserved for future use.
+func (pr *PrometheusMetricsRepository) getCounter(opts prometheus.CounterOpts) prometheus.Counter {
 	metricName := opts.Name
-	if _, exist := pr.counters[metricName]; exist {
+	if handler, exists := pr.counters[metricName]; exists {
 		log.Printf("metric with name %s already exists", metricName)
-		return
+		return handler
 	}
 
 	pr.counters[metricName] = promauto.With(pr.collectorRegistrar).NewCounter(
 		opts,
 	)
+
+	return pr.counters[metricName]
 }
 
-// RegisterCounterVec registers a new counter vector metric
-func (pr *PrometheusMetricsRepository) registerCounterVec(opts prometheus.CounterOpts, labels []string) {
+// getCounterVec registers and returns a new counter vector metric
+func (pr *PrometheusMetricsRepository) getCounterVec(opts prometheus.CounterOpts, labels []string) *prometheus.CounterVec {
 	metricName := opts.Name
-	if _, exist := pr.counterVecs[metricName]; exist {
-		log.Printf("metric with name %s already exists", metricName)
-		return
+	if handler, exists := pr.counterVecs[metricName]; exists {
+		return handler
 	}
 
 	pr.counterVecs[metricName] = promauto.With(pr.collectorRegistrar).NewCounterVec(
 		opts,
 		labels,
 	)
+
+	return pr.counterVecs[metricName]
 }
 
-// RegisterGauge registers a new gauge metric
-func (pr *PrometheusMetricsRepository) registerGauge(opts prometheus.GaugeOpts) {
+// getGauge registers and returns a new gauge metric handler
+//
+//lint:ignore U1000 This function is reserved for future use.
+func (pr *PrometheusMetricsRepository) getGauge(opts prometheus.GaugeOpts) prometheus.Gauge {
 	metricName := opts.Name
-	if _, exist := pr.gauges[metricName]; exist {
-		log.Fatalf("gauge with name %s already exists", metricName)
+	if handler, exists := pr.gauges[metricName]; exists {
+		log.Printf("gauge with name %s already exists", metricName)
+		return handler
 	}
 
 	pr.gauges[metricName] = promauto.With(pr.collectorRegistrar).NewGauge(opts)
+	return pr.gauges[metricName]
 }
 
-// RegisterGaugeVec registers a new gauge vector metric
-func (pr *PrometheusMetricsRepository) registerGaugeVec(opts prometheus.GaugeOpts, labels []string) {
+// getGaugeVec registers and returns a new gauge vector metric handler
+//
+//lint:ignore U1000 This function is reserved for future use.
+func (pr *PrometheusMetricsRepository) getGaugeVec(opts prometheus.GaugeOpts, labels []string) *prometheus.GaugeVec {
 	metricName := opts.Name
-	if _, exist := pr.gaugeVecs[metricName]; exist {
-		log.Fatalf("gauge vector with name %s already exists", metricName)
+	if handler, exists := pr.gaugeVecs[metricName]; exists {
+		log.Printf("gauge vector with name %s already exists", metricName)
+		return handler
 	}
 
 	pr.gaugeVecs[metricName] = promauto.With(pr.collectorRegistrar).NewGaugeVec(opts, labels)
+	return pr.gaugeVecs[metricName]
 }
 
-// RegisterSummary registers a new summary metric
-func (pr *PrometheusMetricsRepository) registerSummary(opts prometheus.SummaryOpts) {
+// getSummary registers and returns a new summary metric handler
+//
+//lint:ignore U1000 This function is reserved for future use.
+func (pr *PrometheusMetricsRepository) getSummary(opts prometheus.SummaryOpts) {
 	metricName := opts.Name
-	if _, exist := pr.summaries[metricName]; exist {
-		log.Fatalf("summary with name %s already exists", metricName)
+	if _, exists := pr.summaries[metricName]; exists {
+		log.Printf("summary with name %s already exists", metricName)
+		return
 	}
 
 	pr.summaries[metricName] = promauto.With(pr.collectorRegistrar).NewSummary(opts)
 }
 
-// RegisterSummaryVec registers a new summary vector metric
-func (pr *PrometheusMetricsRepository) registerSummaryVec(opts prometheus.SummaryOpts, labels []string) {
+// getSummaryVec registers and returns a new summary vector metric handler
+//
+//lint:ignore U1000 This function is reserved for future use.
+func (pr *PrometheusMetricsRepository) getSummaryVec(opts prometheus.SummaryOpts, labels []string) {
 	metricName := opts.Name
-	if _, exist := pr.summaryVecs[metricName]; exist {
-		log.Fatalf("summary vector with name %s already exists", metricName)
+	if _, exists := pr.summaryVecs[metricName]; exists {
+		log.Printf("summary vector with name %s already exists", metricName)
+		return
 	}
 
 	pr.summaryVecs[metricName] = promauto.With(pr.collectorRegistrar).NewSummaryVec(opts, labels)
 }
 
-// RegisterHistogram registers a new histogram metric
-func (pr *PrometheusMetricsRepository) registerHistogram(opts prometheus.HistogramOpts) {
+// getHistogram registers and returns a new histogram metric handler
+//
+//lint:ignore U1000 This function is reserved for future use.
+func (pr *PrometheusMetricsRepository) getHistogram(opts prometheus.HistogramOpts) prometheus.Histogram {
 	metricName := opts.Name
-	if _, exist := pr.histograms[metricName]; exist {
-		log.Fatalf("histogram with name %s already exists", metricName)
+	if handler, exists := pr.histograms[metricName]; exists {
+		log.Printf("histogram with name %s already exists", metricName)
+		return handler
 	}
 
 	pr.histograms[metricName] = promauto.With(pr.collectorRegistrar).NewHistogram(opts)
+	return pr.histograms[metricName]
 }
 
-// RegisterHistogramVec registers a new histogram vector metric
-func (pr *PrometheusMetricsRepository) registerHistogramVec(opts prometheus.HistogramOpts, labels []string) {
+// getHistogramVec registers and returns a new histogram vector metric handler
+//
+//lint:ignore U1000 This function is reserved for future use.
+func (pr *PrometheusMetricsRepository) getHistogramVec(opts prometheus.HistogramOpts, labels []string) *prometheus.HistogramVec {
 	metricName := opts.Name
-	if _, exist := pr.histogramVecs[metricName]; exist {
-		log.Fatalf("histogram vector with name %s already exists", metricName)
+	if handler, exists := pr.histogramVecs[metricName]; exists {
+		log.Printf("histogram vector with name %s already exists", metricName)
+		return handler
 	}
 
 	pr.histogramVecs[metricName] = promauto.With(pr.collectorRegistrar).NewHistogramVec(opts, labels)
-}
-
-// GetCounterHandler retrieves a counter by name
-func (pr *PrometheusMetricsRepository) getCounterHandler(metricName string) prometheus.Counter {
-	handler, exists := pr.counters[metricName]
-	if !exists {
-		return nil
-	}
-	return handler
-}
-
-// GetGaugeHandler retrieves a gauge by name
-func (pr *PrometheusMetricsRepository) getGaugeHandler(metricName string) prometheus.Gauge {
-	handler, exists := pr.gauges[metricName]
-	if !exists {
-		return nil
-	}
-	return handler
-}
-
-// GetCounterVecHandler retrieves a counter vector by name
-func (pr *PrometheusMetricsRepository) getCounterVecHandler(metricName string) *prometheus.CounterVec {
-	handler, exists := pr.counterVecs[metricName]
-	if !exists {
-		return nil
-	}
-	return handler
-}
-
-// GetGaugeVecHandler retrieves a gauge vector by name
-func (pr *PrometheusMetricsRepository) getGaugeVecHandler(metricName string) *prometheus.GaugeVec {
-	handler, exists := pr.gaugeVecs[metricName]
-	if !exists {
-		return nil
-	}
-	return handler
-}
-
-// GetSummaryHandler retrieves a summary by name
-func (pr *PrometheusMetricsRepository) getSummaryHandler(metricName string) prometheus.Summary {
-	handler, exists := pr.summaries[metricName]
-	if !exists {
-		return nil
-	}
-	return handler
-}
-
-// GetSummaryVecHandler retrieves a summary vector by name
-func (pr *PrometheusMetricsRepository) getSummaryVecHandler(metricName string) *prometheus.SummaryVec {
-	handler, exists := pr.summaryVecs[metricName]
-	if !exists {
-		return nil
-	}
-	return handler
-}
-
-// GetHistogramHandler retrieves a histogram by name
-func (pr *PrometheusMetricsRepository) getHistogramHandler(metricName string) prometheus.Histogram {
-	handler, exists := pr.histograms[metricName]
-	if !exists {
-		return nil
-	}
-	return handler
-}
-
-// GetHistogramVecHandler retrieves a histogram vector by name
-func (pr *PrometheusMetricsRepository) getHistogramVecHandler(metricName string) *prometheus.HistogramVec {
-	handler, exists := pr.histogramVecs[metricName]
-	if !exists {
-		return nil
-	}
-	return handler
+	return pr.histogramVecs[metricName]
 }
