@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/types"
 )
 
 type SchedulerMetrics struct {
@@ -9,30 +10,15 @@ type SchedulerMetrics struct {
 }
 
 func NewSchedulerMetrics(metricsRepo repository.MetricsRepository) SchedulerMetrics {
-	// metricsRepo.RegisterCounter(
-	// 	prometheus.CounterOpts{
-	// 		Name: types.MetricsSchedulerContainerScheduled,
-	// 	},
-	// )
-	// metricsRepo.RegisterCounter(
-	// 	prometheus.CounterOpts{
-	// 		Name: types.MetricsSchedulerContainerRequested,
-	// 	},
-	// )
-
 	return SchedulerMetrics{
 		metricsRepo: metricsRepo,
 	}
 }
 
 func (sm *SchedulerMetrics) CounterIncContainerScheduled() {
-	// if handler := sm.metricsRepo.GetCounterHandler(types.MetricsSchedulerContainerScheduled); handler != nil {
-	// 	handler.Inc()
-	// }
+	sm.metricsRepo.AddToCounter(types.MetricsSchedulerContainerScheduled, map[string]string{}, 1.0)
 }
 
 func (sm *SchedulerMetrics) CounterIncContainerRequested() {
-	// if handler := sm.metricsRepo.GetCounterHandler(types.MetricsSchedulerContainerRequested); handler != nil {
-	// 	handler.Inc()
-	// }
+	sm.metricsRepo.AddToCounter(types.MetricsSchedulerContainerRequested, map[string]string{}, 1.0)
 }
