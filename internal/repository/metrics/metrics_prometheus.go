@@ -70,7 +70,7 @@ func (pr *PrometheusMetricsRepository) AddToCounter(name string, metadata map[st
 		prometheus.CounterOpts{
 			Name: name,
 		},
-		maps.Keys(metadata), // Labels
+		maps.Keys(metadata),
 	)
 
 	values := maps.Values(metadata)
@@ -82,7 +82,7 @@ func (pr *PrometheusMetricsRepository) SetGauge(name string, metadata map[string
 		prometheus.GaugeOpts{
 			Name: name,
 		},
-		maps.Keys(metadata), // Labels
+		maps.Keys(metadata),
 	)
 
 	values := maps.Values(metadata)
@@ -156,8 +156,6 @@ func (pr *PrometheusMetricsRepository) getGauge(opts prometheus.GaugeOpts) prome
 }
 
 // getGaugeVec registers and returns a new gauge vector metric handler
-//
-//lint:ignore U1000 This function is reserved for future use.
 func (pr *PrometheusMetricsRepository) getGaugeVec(opts prometheus.GaugeOpts, labels []string) *prometheus.GaugeVec {
 	metricName := opts.Name
 	if handler, exists := pr.gaugeVecs[metricName]; exists {
