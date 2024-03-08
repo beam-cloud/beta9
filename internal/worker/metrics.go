@@ -28,11 +28,6 @@ func NewWorkerMetrics(
 		return nil, err
 	}
 
-	err = metricsRepo.Init()
-	if err != nil {
-		return nil, err
-	}
-
 	// metricsRepo.RegisterCounterVec(
 	// 	prometheus.CounterOpts{
 	// 		Name: types.MetricsWorkerContainerDurationSeconds,

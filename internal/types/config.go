@@ -214,12 +214,16 @@ var (
 type MonitoringConfig struct {
 	MetricsCollector string           `key:"metricsCollector" json:"metrics_collector"`
 	Prometheus       PrometheusConfig `key:"prometheus" json:"prometheus"`
+	OpenMeter        OpenMeterConfig  `key:"openmeter" json:"openmeter"`
 	FluentBit        FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
 }
 
 type PrometheusConfig struct {
 	ScrapeWorkers bool `key:"scrapeWorkers" json:"scrape_workers"`
 	Port          int  `key:"port" json:"port"`
+}
+
+type OpenMeterConfig struct {
 }
 
 type TailscaleConfig struct {

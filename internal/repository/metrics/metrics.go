@@ -11,6 +11,8 @@ func NewMetrics(config types.MonitoringConfig) (repository.MetricsRepository, er
 	switch config.MetricsCollector {
 	case string(types.MetricsCollectorPrometheus):
 		metricsRepo = NewPrometheusMetricsRepository(config.Prometheus)
+	case string(types.MetricsCollectorOpenMeter):
+		metricsRepo = NewOpenMeterMetricsRepository(config.OpenMeter)
 	}
 
 	err := metricsRepo.Init()
