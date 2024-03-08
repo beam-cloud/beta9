@@ -131,6 +131,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		Memory:      defaultBuildContainerMemory,
 		ImageId:     baseImageId,
 		SourceImage: &sourceImage,
+		WorkspaceId: "", // TODO: fill in workspace ID
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 	})
 	if err != nil {

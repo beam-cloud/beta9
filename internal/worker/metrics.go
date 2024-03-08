@@ -28,13 +28,6 @@ func NewWorkerMetrics(
 		return nil, err
 	}
 
-	// metricsRepo.RegisterCounterVec(
-	// 	prometheus.CounterOpts{
-	// 		Name: types.MetricsWorkerContainerDurationSeconds,
-	// 	},
-	// 	[]string{"container_id", "worker_id"},
-	// )
-
 	return &WorkerMetrics{
 		ctx:         ctx,
 		workerId:    workerId,
@@ -43,10 +36,17 @@ func NewWorkerMetrics(
 	}, nil
 }
 
-func (wm *WorkerMetrics) metricsContainerDuration(containerId string, workerId string, duration time.Duration) {
-	// if handler := wm.metricsRepo.GetCounterVecHandler(types.MetricsWorkerContainerDurationSeconds); handler != nil {
-	// 	handler.WithLabelValues(containerId, workerId).Add(duration.Seconds())
-	// }
+func (wm *WorkerMetrics) metricsContainerDuration(request *types.ContainerRequest, duration time.Duration) {
+	wm.metricsRepo.AddToCounter(types.MetricsWorkerContainerDurationSeconds, map[string]string{
+		"container_id": request.ContainerId,
+		"worker_id":    wm.workerId,
+		"stub_id":      request.StubId,
+		"workspace_id": request.WorkspaceId,
+		// "cpu_cores":    request.Cpu,
+		// "mem_gb":       request.Memory,
+		"gpu": request.Gpu,
+		// "gpu_count":    request.GpuCount,
+	}, duration.Seconds())
 }
 
 // Periodically send metrics to track container duration
@@ -58,11 +58,11 @@ func (wm *WorkerMetrics) EmitContainerUsage(request *types.ContainerRequest, don
 	for {
 		select {
 		case <-ticker.C:
-			go wm.metricsContainerDuration(request.ContainerId, wm.workerId, time.Since(cursorTime))
+			go wm.metricsContainerDuration(request, time.Since(cursorTime))
 			cursorTime = time.Now()
 		case <-done:
 			// Consolidate any remaining time
-			go wm.metricsContainerDuration(request.ContainerId, wm.workerId, time.Since(cursorTime))
+			go wm.metricsContainerDuration(request, time.Since(cursorTime))
 			return
 		}
 	}
