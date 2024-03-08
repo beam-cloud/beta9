@@ -150,7 +150,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config.Monitoring.Prometheus)
+	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config.Monitoring)
 
 	return &Worker{
 		ctx:                  ctx,

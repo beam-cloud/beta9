@@ -21,8 +21,8 @@ import (
 	dmap "github.com/beam-cloud/beta9/internal/abstractions/map"
 	simplequeue "github.com/beam-cloud/beta9/internal/abstractions/queue"
 	"github.com/beam-cloud/beta9/internal/abstractions/taskqueue"
-	metrics "github.com/beam-cloud/beta9/internal/metrics"
 	"github.com/beam-cloud/beta9/internal/network"
+	metrics "github.com/beam-cloud/beta9/internal/repository/metrics"
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"

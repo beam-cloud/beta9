@@ -2,9 +2,12 @@ package worker
 
 import (
 	"context"
+	"log"
 	"time"
 
 	repo "github.com/beam-cloud/beta9/internal/repository"
+	metrics "github.com/beam-cloud/beta9/internal/repository/metrics"
+
 	types "github.com/beam-cloud/beta9/internal/types"
 )
 
@@ -19,9 +22,13 @@ func NewWorkerMetrics(
 	ctx context.Context,
 	workerId string,
 	workerRepo repo.WorkerRepository,
-	config types.PrometheusConfig,
+	config types.MonitoringConfig,
 ) *WorkerMetrics {
-	metricsRepo := repo.MetricsRepository(config)
+	metricsRepo, err := metrics.NewMetrics(config)
+	if err != nil {
+		log.Fatalf("Unable to create metrics collector: %w\n", err)
+	}
+
 	// metricsRepo.Init()
 	// metricsRepo.RegisterCounterVec(
 	// 	prometheus.CounterOpts{
