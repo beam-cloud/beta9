@@ -16,7 +16,7 @@ func (o *OpenMeterMetricsRepository) Init() error {
 	return nil
 }
 
-func (o *OpenMeterMetricsRepository) IncrementGauge(name string, metadata map[string]string) {
+func (o *OpenMeterMetricsRepository) SetGauge(name string, metadata map[string]string, value float64) {
 
 }
 

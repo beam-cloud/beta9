@@ -77,13 +77,16 @@ func (pr *PrometheusMetricsRepository) AddToCounter(name string, metadata map[st
 	handler.WithLabelValues(values...).Add(value)
 }
 
-func (pr *PrometheusMetricsRepository) IncrementGauge(name string, metadata map[string]string) {
-	// handler := pr.getGaugeVec(
-	// 	prometheus.GaugeOpts{
-	// 		Name: name,
-	// 	},
-	// 	maps.Keys(metadata), // Labels
-	// )
+func (pr *PrometheusMetricsRepository) SetGauge(name string, metadata map[string]string, value float64) {
+	handler := pr.getGaugeVec(
+		prometheus.GaugeOpts{
+			Name: name,
+		},
+		maps.Keys(metadata), // Labels
+	)
+
+	values := maps.Values(metadata)
+	handler.WithLabelValues(values...).Set(value)
 }
 
 // Internal methods
