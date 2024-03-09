@@ -27,7 +27,7 @@ func NewOpenMeterMetricsRepository(omConfig types.OpenMeterConfig) repository.Me
 }
 
 func (o *OpenMeterMetricsRepository) Init(source string) error {
-	om, err := openmeter.NewAuthClientWithResponses("https://openmeter.cloud", o.config.ApiKey)
+	om, err := openmeter.NewAuthClientWithResponses(o.config.ServerUrl, o.config.ApiKey)
 	if err != nil {
 		return err
 	}
