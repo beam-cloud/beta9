@@ -9,7 +9,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/internal/common"
 	repo "github.com/beam-cloud/beta9/internal/repository"
-	metrics "github.com/beam-cloud/beta9/internal/repository/metrics"
+	"github.com/beam-cloud/beta9/internal/repository/metrics"
 
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
