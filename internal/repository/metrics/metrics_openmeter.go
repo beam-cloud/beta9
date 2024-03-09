@@ -45,15 +45,16 @@ func (o *OpenMeterMetricsRepository) IncrementCounter(name string, data map[stri
 	e := cloudevents.New()
 	t := time.Now()
 
+	subjectId := o.source
 	workspaceId, ok := data["workspace_id"].(string)
-	if !ok {
-		return fmt.Errorf("invalid workspace id")
+	if ok {
+		subjectId = workspaceId
 	}
 
 	e.SetID(uuid.New().String())
 	e.SetSource(o.source)
 	e.SetType(name)
-	e.SetSubject(workspaceId)
+	e.SetSubject(subjectId)
 	e.SetTime(t)
 	e.SetData("application/json", data)
 
