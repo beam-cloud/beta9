@@ -52,17 +52,17 @@ func (o *OpenMeterMetricsRepository) IncrementCounter(name string, data map[stri
 
 	e.SetID(uuid.New().String())
 	e.SetSource(o.source)
-	e.SetType("container-duration-counter")
+	e.SetType(name)
 	e.SetSubject(workspaceId)
 	e.SetTime(t)
 	e.SetData("application/json", data)
 
 	resp, err := o.client.IngestEventWithResponse(context.Background(), e)
 	if err != nil {
-		return fmt.Errorf("failed to report usage: %w", err)
+		return fmt.Errorf("failed to increment counter: %w", err)
 	}
 	if resp.StatusCode() > 399 {
-		return fmt.Errorf("failed to report usage: %w", err)
+		return fmt.Errorf("failed to increment counter: %w", err)
 	}
 
 	return nil

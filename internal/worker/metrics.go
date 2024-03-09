@@ -37,7 +37,7 @@ func NewWorkerMetrics(
 }
 
 func (wm *WorkerMetrics) metricsContainerDuration(request *types.ContainerRequest, duration time.Duration) {
-	wm.metricsRepo.IncrementCounter(types.MetricsWorkerContainerDurationSeconds, map[string]interface{}{
+	wm.metricsRepo.IncrementCounter(types.MetricsWorkerContainerDuration, map[string]interface{}{
 		"container_id": request.ContainerId,
 		"worker_id":    wm.workerId,
 		"stub_id":      request.StubId,
@@ -47,7 +47,7 @@ func (wm *WorkerMetrics) metricsContainerDuration(request *types.ContainerReques
 		"gpu":          request.Gpu,
 		"gpu_count":    request.GpuCount,
 		"duration_ms":  duration.Milliseconds(),
-	}, duration.Seconds())
+	}, float64(duration.Milliseconds()))
 }
 
 // Periodically send metrics to track container duration
