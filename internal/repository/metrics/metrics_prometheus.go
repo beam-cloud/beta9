@@ -64,7 +64,6 @@ func (r *PrometheusMetricsRepository) Init(source string) error {
 	}()
 
 	r.source = source
-	log.Println("Prometheus metrics server running @", r.port)
 	return nil
 }
 
@@ -161,7 +160,6 @@ func (pr *PrometheusMetricsRepository) getCounterVec(opts prometheus.CounterOpts
 func (pr *PrometheusMetricsRepository) getGauge(opts prometheus.GaugeOpts) prometheus.Gauge {
 	metricName := opts.Name
 	if handler, exists := pr.gauges[metricName]; exists {
-		log.Printf("gauge with name %s already exists", metricName)
 		return handler
 	}
 
@@ -173,7 +171,6 @@ func (pr *PrometheusMetricsRepository) getGauge(opts prometheus.GaugeOpts) prome
 func (pr *PrometheusMetricsRepository) getGaugeVec(opts prometheus.GaugeOpts, labels []string) *prometheus.GaugeVec {
 	metricName := opts.Name
 	if handler, exists := pr.gaugeVecs[metricName]; exists {
-		log.Printf("gauge vector with name %s already exists", metricName)
 		return handler
 	}
 
@@ -187,7 +184,6 @@ func (pr *PrometheusMetricsRepository) getGaugeVec(opts prometheus.GaugeOpts, la
 func (pr *PrometheusMetricsRepository) getSummary(opts prometheus.SummaryOpts) {
 	metricName := opts.Name
 	if _, exists := pr.summaries[metricName]; exists {
-		log.Printf("summary with name %s already exists", metricName)
 		return
 	}
 
@@ -200,7 +196,6 @@ func (pr *PrometheusMetricsRepository) getSummary(opts prometheus.SummaryOpts) {
 func (pr *PrometheusMetricsRepository) getSummaryVec(opts prometheus.SummaryOpts, labels []string) {
 	metricName := opts.Name
 	if _, exists := pr.summaryVecs[metricName]; exists {
-		log.Printf("summary vector with name %s already exists", metricName)
 		return
 	}
 
@@ -213,7 +208,6 @@ func (pr *PrometheusMetricsRepository) getSummaryVec(opts prometheus.SummaryOpts
 func (pr *PrometheusMetricsRepository) getHistogram(opts prometheus.HistogramOpts) prometheus.Histogram {
 	metricName := opts.Name
 	if handler, exists := pr.histograms[metricName]; exists {
-		log.Printf("histogram with name %s already exists", metricName)
 		return handler
 	}
 
@@ -227,7 +221,6 @@ func (pr *PrometheusMetricsRepository) getHistogram(opts prometheus.HistogramOpt
 func (pr *PrometheusMetricsRepository) getHistogramVec(opts prometheus.HistogramOpts, labels []string) *prometheus.HistogramVec {
 	metricName := opts.Name
 	if handler, exists := pr.histogramVecs[metricName]; exists {
-		log.Printf("histogram vector with name %s already exists", metricName)
 		return handler
 	}
 

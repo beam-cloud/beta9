@@ -442,9 +442,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec *specs.Spec, outputChan chan common.OutputMsg) {
 	s.workerRepo.AddContainerRequestToWorker(s.workerId, request.ContainerId, request)
-	defer func() {
-		s.workerRepo.RemoveContainerRequestFromWorker(s.workerId, request.ContainerId)
-	}()
+	defer s.workerRepo.RemoveContainerRequestFromWorker(s.workerId, request.ContainerId)
 
 	var containerErr error = nil
 
