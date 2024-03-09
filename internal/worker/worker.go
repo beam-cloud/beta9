@@ -442,19 +442,14 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec *specs.Spec, outputChan chan common.OutputMsg) {
 	s.workerRepo.AddContainerRequestToWorker(s.workerId, request.ContainerId, request)
-	defer s.workerRepo.RemoveContainerRequestFromWorker(s.workerId, request.ContainerId)
+	defer func() {
+		s.workerRepo.RemoveContainerRequestFromWorker(s.workerId, request.ContainerId)
+	}()
 
 	var containerErr error = nil
 
 	exitCode := -1
 	containerId := request.ContainerId
-
-	// Channel to signal when container has finished
-	done := make(chan bool)
-	defer func() {
-		done <- true
-		close(done)
-	}()
 
 	// Clear out all files in the container's directory
 	defer func() {
@@ -538,7 +533,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 
 	// Log metrics
-	go s.workerMetrics.EmitContainerUsage(request, done)
+	usageTrackingChan := make(chan bool)
+	go s.workerMetrics.EmitContainerUsage(request, usageTrackingChan)
 	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId) }()
 
@@ -551,6 +547,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		ConfigPath:   configPath,
 		Started:      pidChan,
 	})
+
+	usageTrackingChan <- true
 
 	// Send last log message since the container has exited
 	outputChan <- common.OutputMsg{
