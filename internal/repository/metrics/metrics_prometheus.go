@@ -21,6 +21,7 @@ import (
 type PrometheusMetricsRepository struct {
 	collectorRegistrar *prometheus.Registry
 	port               int
+	source             string
 
 	// TODO: replace with safemaps
 	counters      map[string]prometheus.Counter
@@ -43,6 +44,7 @@ func NewPrometheusMetricsRepository(promConfig types.PrometheusConfig) repositor
 	return &PrometheusMetricsRepository{
 		collectorRegistrar: collectorRegistrar,
 		port:               promConfig.Port,
+		source:             "",
 		counters:           map[string]prometheus.Counter{},
 		counterVecs:        map[string]*prometheus.CounterVec{},
 		gauges:             map[string]prometheus.Gauge{},
@@ -54,18 +56,19 @@ func NewPrometheusMetricsRepository(promConfig types.PrometheusConfig) repositor
 	}
 }
 
-func (r *PrometheusMetricsRepository) Init() error {
+func (r *PrometheusMetricsRepository) Init(source string) error {
 	go func() {
 		if err := r.listenAndServe(); err != nil {
 			log.Fatalf("Failed to start metrics server: %v", err)
 		}
 	}()
 
+	r.source = source
 	log.Println("Prometheus metrics server running @", r.port)
 	return nil
 }
 
-func (pr *PrometheusMetricsRepository) AddToCounter(name string, metadata map[string]string, value float64) {
+func (pr *PrometheusMetricsRepository) IncrementCounter(name string, metadata map[string]interface{}, value float64) error {
 	handler := pr.getCounterVec(
 		prometheus.CounterOpts{
 			Name: name,
@@ -73,8 +76,19 @@ func (pr *PrometheusMetricsRepository) AddToCounter(name string, metadata map[st
 		maps.Keys(metadata),
 	)
 
-	values := maps.Values(metadata)
+	values := make([]string, 0, len(metadata))
+	for _, val := range maps.Values(metadata) {
+		switch v := val.(type) {
+		case string:
+			values = append(values, v)
+		case int, float64, bool:
+			values = append(values, fmt.Sprintf("%v", v))
+		default:
+		}
+	}
+
 	handler.WithLabelValues(values...).Add(value)
+	return nil
 }
 
 func (pr *PrometheusMetricsRepository) SetGauge(name string, metadata map[string]string, value float64) {

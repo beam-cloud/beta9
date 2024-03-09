@@ -5,7 +5,7 @@ import (
 	"github.com/beam-cloud/beta9/internal/types"
 )
 
-func NewMetrics(config types.MonitoringConfig) (repository.MetricsRepository, error) {
+func NewMetrics(config types.MonitoringConfig, source string) (repository.MetricsRepository, error) {
 	var metricsRepo repository.MetricsRepository
 
 	switch config.MetricsCollector {
@@ -15,7 +15,7 @@ func NewMetrics(config types.MonitoringConfig) (repository.MetricsRepository, er
 		metricsRepo = NewOpenMeterMetricsRepository(config.OpenMeter)
 	}
 
-	err := metricsRepo.Init()
+	err := metricsRepo.Init(source)
 	if err != nil {
 		return nil, err
 	}

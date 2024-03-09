@@ -23,7 +23,7 @@ func NewWorkerMetrics(
 	workerRepo repo.WorkerRepository,
 	config types.MonitoringConfig,
 ) (*WorkerMetrics, error) {
-	metricsRepo, err := metrics.NewMetrics(config)
+	metricsRepo, err := metrics.NewMetrics(config, "worker")
 	if err != nil {
 		return nil, err
 	}
@@ -37,15 +37,16 @@ func NewWorkerMetrics(
 }
 
 func (wm *WorkerMetrics) metricsContainerDuration(request *types.ContainerRequest, duration time.Duration) {
-	wm.metricsRepo.AddToCounter(types.MetricsWorkerContainerDurationSeconds, map[string]string{
+	wm.metricsRepo.IncrementCounter(types.MetricsWorkerContainerDurationSeconds, map[string]interface{}{
 		"container_id": request.ContainerId,
 		"worker_id":    wm.workerId,
 		"stub_id":      request.StubId,
 		"workspace_id": request.WorkspaceId,
-		// "cpu_cores":    request.Cpu,
-		// "mem_gb":       request.Memory,
-		"gpu": request.Gpu,
-		// "gpu_count":    request.GpuCount,
+		"cpu_cores":    request.Cpu,
+		"mem_mb":       request.Memory,
+		"gpu":          request.Gpu,
+		"gpu_count":    request.GpuCount,
+		"duration_ms":  duration.Milliseconds(),
 	}, duration.Seconds())
 }
 

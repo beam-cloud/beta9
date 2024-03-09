@@ -16,9 +16,9 @@ func NewSchedulerMetrics(metricsRepo repository.MetricsRepository) SchedulerMetr
 }
 
 func (sm *SchedulerMetrics) CounterIncContainerScheduled() {
-	sm.metricsRepo.AddToCounter(types.MetricsSchedulerContainerScheduled, map[string]string{}, 1.0)
+	sm.metricsRepo.IncrementCounter(types.MetricsSchedulerContainerScheduled, map[string]interface{}{}, 1.0)
 }
 
 func (sm *SchedulerMetrics) CounterIncContainerRequested() {
-	sm.metricsRepo.AddToCounter(types.MetricsSchedulerContainerRequested, map[string]string{}, 1.0)
+	sm.metricsRepo.IncrementCounter(types.MetricsSchedulerContainerRequested, map[string]interface{}{}, 1.0)
 }

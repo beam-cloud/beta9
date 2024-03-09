@@ -42,7 +42,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
-	metricsRepo, err := metrics.NewMetrics(config.Monitoring)
+	metricsRepo, err := metrics.NewMetrics(config.Monitoring, "gateway")
 	if err != nil {
 		return nil, err
 	}
