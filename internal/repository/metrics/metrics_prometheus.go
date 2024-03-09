@@ -57,13 +57,14 @@ func NewPrometheusMetricsRepository(promConfig types.PrometheusConfig) repositor
 }
 
 func (r *PrometheusMetricsRepository) Init(source string) error {
+	r.source = source
+
 	go func() {
 		if err := r.listenAndServe(); err != nil {
 			log.Fatalf("Failed to start metrics server: %v", err)
 		}
 	}()
 
-	r.source = source
 	return nil
 }
 
