@@ -102,5 +102,5 @@ type EventRepository interface {
 type MetricsRepository interface {
 	Init(source string) error
 	IncrementCounter(name string, metadata map[string]interface{}, value float64) error
-	SetGauge(name string, metadata map[string]string, value float64)
+	SetGauge(name string, metadata map[string]interface{}, value float64) error
 }

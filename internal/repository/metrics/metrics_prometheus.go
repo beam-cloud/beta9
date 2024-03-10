@@ -91,7 +91,7 @@ func (pr *PrometheusMetricsRepository) IncrementCounter(name string, metadata ma
 	return nil
 }
 
-func (pr *PrometheusMetricsRepository) SetGauge(name string, metadata map[string]string, value float64) {
+func (pr *PrometheusMetricsRepository) SetGauge(name string, metadata map[string]interface{}, value float64) error {
 	handler := pr.getGaugeVec(
 		prometheus.GaugeOpts{
 			Name: name,
@@ -99,8 +99,19 @@ func (pr *PrometheusMetricsRepository) SetGauge(name string, metadata map[string
 		maps.Keys(metadata),
 	)
 
-	values := maps.Values(metadata)
+	values := make([]string, 0, len(metadata))
+	for _, val := range maps.Values(metadata) {
+		switch v := val.(type) {
+		case string:
+			values = append(values, v)
+		case int, float64, bool:
+			values = append(values, fmt.Sprintf("%v", v))
+		default:
+		}
+	}
+
 	handler.WithLabelValues(values...).Set(value)
+	return nil
 }
 
 // Internal methods
