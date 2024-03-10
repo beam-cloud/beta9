@@ -69,7 +69,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	metricsRepo, err := metrics.NewMetrics(config.Monitoring, "gateway")
+	metricsRepo, err := metrics.NewMetrics(config.Monitoring, string(metrics.MetricsSourceGateway))
 	if err != nil {
 		return nil, err
 	}

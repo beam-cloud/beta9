@@ -5,6 +5,13 @@ import (
 	"github.com/beam-cloud/beta9/internal/types"
 )
 
+type MetricsSource string
+
+var (
+	MetricsSourceGateway MetricsSource = "gateway"
+	MetricsSourceWorker  MetricsSource = "worker"
+)
+
 func NewMetrics(config types.MonitoringConfig, source string) (repository.MetricsRepository, error) {
 	var metricsRepo repository.MetricsRepository
 

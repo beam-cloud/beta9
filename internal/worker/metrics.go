@@ -23,7 +23,7 @@ func NewWorkerMetrics(
 	workerRepo repo.WorkerRepository,
 	config types.MonitoringConfig,
 ) (*WorkerMetrics, error) {
-	metricsRepo, err := metrics.NewMetrics(config, "worker")
+	metricsRepo, err := metrics.NewMetrics(config, string(metrics.MetricsSourceWorker))
 	if err != nil {
 		return nil, err
 	}
