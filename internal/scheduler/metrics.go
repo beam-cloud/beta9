@@ -15,14 +15,20 @@ func NewSchedulerMetrics(metricsRepo repository.MetricsRepository) SchedulerMetr
 	}
 }
 
-func (sm *SchedulerMetrics) CounterIncContainerScheduled() {
+func (sm *SchedulerMetrics) CounterIncContainerScheduled(request *types.ContainerRequest) {
 	sm.metricsRepo.IncrementCounter(types.MetricsSchedulerContainerScheduled, map[string]interface{}{
-		"value": 1,
+		"value":        1,
+		"workspace_id": request.WorkspaceId,
+		"stub_id":      request.StubId,
+		"gpu":          request.Gpu,
 	}, 1.0)
 }
 
-func (sm *SchedulerMetrics) CounterIncContainerRequested() {
+func (sm *SchedulerMetrics) CounterIncContainerRequested(request *types.ContainerRequest) {
 	sm.metricsRepo.IncrementCounter(types.MetricsSchedulerContainerRequested, map[string]interface{}{
-		"value": 1,
+		"value":        1,
+		"workspace_id": request.WorkspaceId,
+		"stub_id":      request.StubId,
+		"gpu":          request.Gpu,
 	}, 1.0)
 }

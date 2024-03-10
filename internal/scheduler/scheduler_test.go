@@ -194,9 +194,9 @@ func TestProcessRequests(t *testing.T) {
 }
 
 func TestGetController(t *testing.T) {
-	t.Run("returns correct controller", func(t *testing.T) {
-		wb, _ := NewSchedulerForTest()
+	wb, _ := NewSchedulerForTest()
 
+	t.Run("returns correct controller", func(t *testing.T) {
 		cpuRequest := &types.ContainerRequest{Gpu: ""}
 		defaultController, err := wb.getController(cpuRequest)
 		if err != nil || defaultController.Name() != "default" {
@@ -217,8 +217,6 @@ func TestGetController(t *testing.T) {
 	})
 
 	t.Run("returns error if no suitable controller found", func(t *testing.T) {
-		wb, _ := NewSchedulerForTest()
-
 		unknownRequest := &types.ContainerRequest{Gpu: "UNKNOWN_GPU"}
 		_, err := wb.getController(unknownRequest)
 		if err == nil {

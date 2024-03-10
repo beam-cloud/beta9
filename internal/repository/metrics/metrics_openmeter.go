@@ -46,7 +46,7 @@ func (o *OpenMeterMetricsRepository) IncrementCounter(name string, data map[stri
 }
 
 func (o *OpenMeterMetricsRepository) sendEvent(name string, data map[string]interface{}) error {
-	// NOTE: in openmeter, its really just counters with different aggregation functions so you don't really need
+	// NOTE: in openmeter, meters are really just counters with different aggregation functions so you don't need
 	// separate functions defined here (i.e. gauge, counter).
 	// Events are based directly on the data payload and "value" is unused.
 
