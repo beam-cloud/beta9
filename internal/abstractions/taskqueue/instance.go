@@ -153,7 +153,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			ImageId:     i.stubConfig.Runtime.ImageId,
 			StubId:      i.stub.ExternalId,
 			WorkspaceId: i.workspace.ExternalId,
-			EntryPoint:  []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.taskqueue"}, // TODO: Configurable
+			EntryPoint:  []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.taskqueue"},
 			Mounts: []types.Mount{
 				{
 					LocalPath: path.Join(types.DefaultExtractedObjectPath, i.workspace.Name, i.object.ExternalId),

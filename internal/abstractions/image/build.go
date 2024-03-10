@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
@@ -60,8 +61,7 @@ func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, schedule
 }
 
 var (
-	requirementsFilename      string        = "requirements.txt"
-	monitorImageCacheInterval time.Duration = time.Duration(10) * time.Second
+	requirementsFilename string = "requirements.txt"
 	//go:embed base_requirements.txt
 	basePythonRequirements string
 )
@@ -106,6 +106,8 @@ type BaseImage struct {
 
 // Build user image
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
 	if opts.ExistingImageUri != "" {
 		err := b.handleCustomBaseImage(ctx, opts, outputChan)
 		if err != nil {
@@ -131,7 +133,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		Memory:      defaultBuildContainerMemory,
 		ImageId:     baseImageId,
 		SourceImage: &sourceImage,
-		WorkspaceId: "", // TODO: fill in workspace ID
+		WorkspaceId: authInfo.Workspace.ExternalId,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 	})
 	if err != nil {
