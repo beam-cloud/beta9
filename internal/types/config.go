@@ -207,8 +207,8 @@ type EC2ProviderConfig struct {
 type MetricsCollector string
 
 var (
-	MetricsCollectorPrometheus MachineProvider = "prometheus"
-	MetricsCollectorOpenMeter  MachineProvider = "openmeter"
+	MetricsCollectorPrometheus MetricsCollector = "prometheus"
+	MetricsCollectorOpenMeter  MetricsCollector = "openmeter"
 )
 
 type MonitoringConfig struct {
