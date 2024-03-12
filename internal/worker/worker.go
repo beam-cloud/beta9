@@ -531,8 +531,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 
 	// Log metrics
-	usageTrackingChan := make(chan bool)
-	go s.workerMetrics.EmitContainerUsage(request, usageTrackingChan)
+	usageTrackingCompleteChan := make(chan bool)
+	go s.workerMetrics.EmitContainerUsage(request, usageTrackingCompleteChan)
 	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId) }()
 
@@ -546,7 +546,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		Started:      pidChan,
 	})
 
-	usageTrackingChan <- true
+	usageTrackingCompleteChan <- true
 
 	// Send last log message since the container has exited
 	outputChan <- common.OutputMsg{
