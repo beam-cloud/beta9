@@ -2,17 +2,17 @@ package worker
 
 import (
 	"context"
-	"log"
 	"time"
 
 	repo "github.com/beam-cloud/beta9/internal/repository"
+	metrics "github.com/beam-cloud/beta9/internal/repository/metrics"
+
 	types "github.com/beam-cloud/beta9/internal/types"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 type WorkerMetrics struct {
 	workerId    string
-	metricsRepo repo.PrometheusRepository
+	metricsRepo repo.MetricsRepository
 	workerRepo  repo.WorkerRepository
 	ctx         context.Context
 }
@@ -21,36 +21,33 @@ func NewWorkerMetrics(
 	ctx context.Context,
 	workerId string,
 	workerRepo repo.WorkerRepository,
-	config types.PrometheusConfig,
-) *WorkerMetrics {
-	metricsRepo := repo.NewMetricsPrometheusRepository(config)
-	metricsRepo.RegisterCounterVec(
-		prometheus.CounterOpts{
-			Name: types.MetricsWorkerContainerDurationSeconds,
-		},
-		[]string{"container_id", "worker_id"},
-	)
+	config types.MonitoringConfig,
+) (*WorkerMetrics, error) {
+	metricsRepo, err := metrics.NewMetrics(config, string(metrics.MetricsSourceWorker))
+	if err != nil {
+		return nil, err
+	}
 
-	go func() {
-		if err := metricsRepo.ListenAndServe(); err != nil {
-			log.Fatalf("Failed to start metrics server: %v", err)
-		}
-	}()
-
-	workerMetrics := &WorkerMetrics{
+	return &WorkerMetrics{
 		ctx:         ctx,
 		workerId:    workerId,
 		metricsRepo: metricsRepo,
 		workerRepo:  workerRepo,
-	}
-
-	return workerMetrics
+	}, nil
 }
 
-func (wm *WorkerMetrics) metricsContainerDuration(containerId string, workerId string, duration time.Duration) {
-	if handler := wm.metricsRepo.GetCounterVecHandler(types.MetricsWorkerContainerDurationSeconds); handler != nil {
-		handler.WithLabelValues(containerId, workerId).Add(duration.Seconds())
-	}
+func (wm *WorkerMetrics) metricsContainerDuration(request *types.ContainerRequest, duration time.Duration) {
+	wm.metricsRepo.IncrementCounter(types.MetricsWorkerContainerDuration, map[string]interface{}{
+		"container_id": request.ContainerId,
+		"worker_id":    wm.workerId,
+		"stub_id":      request.StubId,
+		"workspace_id": request.WorkspaceId,
+		"cpu_cores":    request.Cpu,
+		"mem_mb":       request.Memory,
+		"gpu":          request.Gpu,
+		"gpu_count":    request.GpuCount,
+		"duration_ms":  duration.Milliseconds(),
+	}, float64(duration.Milliseconds()))
 }
 
 // Periodically send metrics to track container duration
@@ -62,11 +59,11 @@ func (wm *WorkerMetrics) EmitContainerUsage(request *types.ContainerRequest, don
 	for {
 		select {
 		case <-ticker.C:
-			go wm.metricsContainerDuration(request.ContainerId, wm.workerId, time.Since(cursorTime))
+			go wm.metricsContainerDuration(request, time.Since(cursorTime))
 			cursorTime = time.Now()
 		case <-done:
 			// Consolidate any remaining time
-			go wm.metricsContainerDuration(request.ContainerId, wm.workerId, time.Since(cursorTime))
+			go wm.metricsContainerDuration(request, time.Since(cursorTime))
 			return
 		}
 	}

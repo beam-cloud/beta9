@@ -150,7 +150,12 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	workerMetrics := NewWorkerMetrics(ctx, workerId, workerRepo, config.Monitoring.Prometheus)
+
+	workerMetrics, err := NewWorkerMetrics(ctx, workerId, workerRepo, config.Monitoring)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 
 	return &Worker{
 		ctx:                  ctx,
@@ -444,13 +449,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	exitCode := -1
 	containerId := request.ContainerId
 
-	// Channel to signal when container has finished
-	done := make(chan bool)
-	defer func() {
-		done <- true
-		close(done)
-	}()
-
 	// Clear out all files in the container's directory
 	defer func() {
 		s.terminateContainer(containerId, request, &exitCode, &containerErr)
@@ -533,7 +531,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 
 	// Log metrics
-	go s.workerMetrics.EmitContainerUsage(request, done)
+	usageTrackingCompleteChan := make(chan bool)
+	go s.workerMetrics.EmitContainerUsage(request, usageTrackingCompleteChan)
 	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId) }()
 
@@ -546,6 +545,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		ConfigPath:   configPath,
 		Started:      pidChan,
 	})
+
+	usageTrackingCompleteChan <- true
 
 	// Send last log message since the container has exited
 	outputChan <- common.OutputMsg{

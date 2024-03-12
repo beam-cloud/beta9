@@ -64,6 +64,7 @@ type ContainerRequest struct {
 	SourceImage *string   `json:"source_image"`
 	ImageId     string    `json:"image_id"`
 	StubId      string    `json:"stub_id"`
+	WorkspaceId string    `json:"workspace_id"`
 	Timestamp   time.Time `json:"timestamp"`
 	Mounts      []Mount   `json:"mounts"`
 	RetryCount  int       `json:"retry_count"`

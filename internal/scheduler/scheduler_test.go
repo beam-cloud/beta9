@@ -9,6 +9,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/internal/common"
 	repo "github.com/beam-cloud/beta9/internal/repository"
+
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 	"github.com/knadh/koanf/providers/rawbytes"
@@ -40,8 +41,10 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
-	metricsRepo := repo.NewMetricsPrometheusRepository(config.Monitoring.Prometheus)
-	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
+
+	schedulerMetrics := SchedulerMetrics{
+		metricsRepo: nil,
+	}
 
 	workerPoolManager := NewWorkerPoolManager(repo.NewWorkerPoolRedisRepository(rdb))
 	for name, pool := range config.Worker.Pools {
@@ -188,9 +191,9 @@ func TestProcessRequests(t *testing.T) {
 }
 
 func TestGetController(t *testing.T) {
-	t.Run("returns correct controller", func(t *testing.T) {
-		wb, _ := NewSchedulerForTest()
+	wb, _ := NewSchedulerForTest()
 
+	t.Run("returns correct controller", func(t *testing.T) {
 		cpuRequest := &types.ContainerRequest{Gpu: ""}
 		defaultController, err := wb.getController(cpuRequest)
 		if err != nil || defaultController.Name() != "default" {
@@ -211,8 +214,6 @@ func TestGetController(t *testing.T) {
 	})
 
 	t.Run("returns error if no suitable controller found", func(t *testing.T) {
-		wb, _ := NewSchedulerForTest()
-
 		unknownRequest := &types.ContainerRequest{Gpu: "UNKNOWN_GPU"}
 		_, err := wb.getController(unknownRequest)
 		if err == nil {
