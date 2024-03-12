@@ -6,5 +6,5 @@ var (
 	MetricsSchedulerContainerRequested = "container_requested_count"
 
 	// Worker keys
-	MetricsWorkerContainerDurationSeconds = "container_duration_seconds"
+	MetricsWorkerContainerDuration = "container_duration_milliseconds"
 )

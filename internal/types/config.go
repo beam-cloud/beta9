@@ -204,14 +204,28 @@ type EC2ProviderConfig struct {
 	SubnetId     *string `key:"subnetId" json:"subnet_id"`
 }
 
+type MetricsCollector string
+
+var (
+	MetricsCollectorPrometheus MetricsCollector = "prometheus"
+	MetricsCollectorOpenMeter  MetricsCollector = "openmeter"
+)
+
 type MonitoringConfig struct {
-	Prometheus PrometheusConfig `key:"prometheus" json:"prometheus"`
-	FluentBit  FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
+	MetricsCollector string           `key:"metricsCollector" json:"metrics_collector"`
+	Prometheus       PrometheusConfig `key:"prometheus" json:"prometheus"`
+	OpenMeter        OpenMeterConfig  `key:"openmeter" json:"openmeter"`
+	FluentBit        FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
 }
 
 type PrometheusConfig struct {
 	ScrapeWorkers bool `key:"scrapeWorkers" json:"scrape_workers"`
 	Port          int  `key:"port" json:"port"`
+}
+
+type OpenMeterConfig struct {
+	ServerUrl string `key:"serverUrl" json:"server_url"`
+	ApiKey    string `key:"apiKey" json:"api_key"`
 }
 
 type TailscaleConfig struct {
