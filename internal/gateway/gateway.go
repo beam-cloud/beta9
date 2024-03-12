@@ -22,6 +22,8 @@ import (
 	simplequeue "github.com/beam-cloud/beta9/internal/abstractions/queue"
 	"github.com/beam-cloud/beta9/internal/abstractions/taskqueue"
 	"github.com/beam-cloud/beta9/internal/network"
+	metrics "github.com/beam-cloud/beta9/internal/repository/metrics"
+
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
@@ -47,7 +49,7 @@ type Gateway struct {
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
 	Tailscale      *network.Tailscale
-	metricsRepo    repository.PrometheusRepository
+	metricsRepo    repository.MetricsRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
 	ctx            context.Context
@@ -67,7 +69,11 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	metricsRepo := repository.NewMetricsPrometheusRepository(config.Monitoring.Prometheus)
+	metricsRepo, err := metrics.NewMetrics(config.Monitoring, string(metrics.MetricsSourceGateway))
+	if err != nil {
+		return nil, err
+	}
+
 	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
 	if err != nil {
 		return nil, err
@@ -300,15 +306,8 @@ func (g *Gateway) Start() error {
 		}
 	}()
 
-	go func() {
-		if err := g.metricsRepo.ListenAndServe(); err != nil {
-			log.Fatalf("Failed to start metrics server: %v", err)
-		}
-	}()
-
 	log.Println("Gateway http server running @", g.config.GatewayService.HTTPPort)
 	log.Println("Gateway grpc server running @", g.config.GatewayService.GRPCPort)
-	log.Println("Gateway metrics server running @", g.config.Monitoring.Prometheus.Port)
 
 	terminationSignal := make(chan os.Signal, 1)
 	defer close(terminationSignal)

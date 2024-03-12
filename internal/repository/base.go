@@ -98,3 +98,9 @@ type EventRepository interface {
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
 }
+
+type MetricsRepository interface {
+	Init(source string) error
+	IncrementCounter(name string, metadata map[string]interface{}, value float64) error
+	SetGauge(name string, metadata map[string]interface{}, value float64) error
+}

@@ -171,14 +171,15 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 			fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
 			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		},
-		Cpu:        stubConfig.Runtime.Cpu,
-		Memory:     stubConfig.Runtime.Memory,
-		Gpu:        string(stubConfig.Runtime.Gpu),
-		GpuCount:   1,
-		ImageId:    stubConfig.Runtime.ImageId,
-		StubId:     stub.ExternalId,
-		EntryPoint: []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
-		Mounts:     mounts,
+		Cpu:         stubConfig.Runtime.Cpu,
+		Memory:      stubConfig.Runtime.Memory,
+		Gpu:         string(stubConfig.Runtime.Gpu),
+		GpuCount:    1,
+		ImageId:     stubConfig.Runtime.ImageId,
+		StubId:      stub.ExternalId,
+		WorkspaceId: authInfo.Workspace.ExternalId,
+		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
+		Mounts:      mounts,
 	})
 	if err != nil {
 		return nil, err

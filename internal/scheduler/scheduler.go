@@ -30,7 +30,7 @@ type Scheduler struct {
 	eventBus          *common.EventBus
 }
 
-func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.PrometheusRepository, backendRepo repo.BackendRepository, tailscale *network.Tailscale) (*Scheduler, error) {
+func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.MetricsRepository, backendRepo repo.BackendRepository, tailscale *network.Tailscale) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
@@ -93,7 +93,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	go s.schedulerMetrics.CounterIncContainerRequested()
+	go s.schedulerMetrics.CounterIncContainerRequested(request)
 	go s.eventRepo.PushContainerRequestedEvent(request)
 
 	err = s.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
@@ -201,7 +201,7 @@ func (s *Scheduler) StartProcessingRequests() {
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	go s.schedulerMetrics.CounterIncContainerScheduled()
+	go s.schedulerMetrics.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id)
 
 	return s.workerRepo.ScheduleContainerRequest(worker, request)

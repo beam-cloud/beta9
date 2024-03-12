@@ -130,13 +130,14 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 			fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
 			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		},
-		Cpu:        stubConfig.Runtime.Cpu,
-		Memory:     stubConfig.Runtime.Memory,
-		Gpu:        string(stubConfig.Runtime.Gpu),
-		ImageId:    stubConfig.Runtime.ImageId,
-		StubId:     stub.ExternalId,
-		EntryPoint: []string{stubConfig.PythonVersion, "-m", "beta9.runner.container", base64.StdEncoding.EncodeToString(in.Command)},
-		Mounts:     mounts,
+		Cpu:         stubConfig.Runtime.Cpu,
+		Memory:      stubConfig.Runtime.Memory,
+		Gpu:         string(stubConfig.Runtime.Gpu),
+		ImageId:     stubConfig.Runtime.ImageId,
+		StubId:      stub.ExternalId,
+		WorkspaceId: authInfo.Workspace.ExternalId,
+		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.container", base64.StdEncoding.EncodeToString(in.Command)},
+		Mounts:      mounts,
 	})
 	if err != nil {
 		return err
