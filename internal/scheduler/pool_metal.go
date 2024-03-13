@@ -117,6 +117,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	}
 
 	log.Printf("Machine registered <machineId: %s>, hostname: %s\n", machineId, state.HostName)
+	log.Printf("State: %+v\n", state)
 	client, err := wpc.getProxiedClient(state.HostName, state.Token)
 	if err != nil {
 		return nil, err

@@ -92,7 +92,7 @@ func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId s
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
 	err := r.rdb.HSet(context.TODO(),
 		stateKey, "machine_id", machineId, "status",
-		types.MachineStatusPending, "cpu", info.Cpu, "memory", info.Memory,
+		string(types.MachineStatusPending), "cpu", info.Cpu, "memory", info.Memory,
 		"gpu", info.Gpu, "gpu_count", info.GpuCount).Err()
 
 	if err != nil {
@@ -103,7 +103,7 @@ func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId s
 
 func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error {
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
-	err := r.rdb.HSet(context.TODO(), stateKey, "machine_id", machineId, "token", info.Token, "hostname", info.HostName, "status", types.MachineStatusRegistered).Err()
+	err := r.rdb.HSet(context.TODO(), stateKey, "machine_id", machineId, "token", info.Token, "hostname", info.HostName, "status", string(types.MachineStatusRegistered)).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
 	}
