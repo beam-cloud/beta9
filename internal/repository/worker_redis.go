@@ -120,7 +120,7 @@ func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId string) error {
 	}
 	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
 
-	stateKey := common.RedisKeys.SchedulerContainerState(workerId)
+	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
 	worker, err := r.getWorkerFromKey(stateKey)
 	if err != nil {
 		return err

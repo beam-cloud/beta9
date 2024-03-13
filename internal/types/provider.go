@@ -27,6 +27,4 @@ What do we need to do:
 
 	- is there a simpler approach??
 
-
-
 */
