@@ -81,9 +81,8 @@ func (pr *PrometheusMetricsRepository) IncrementCounter(name string, metadata ma
 		switch v := val.(type) {
 		case string:
 			values = append(values, v)
-		case int, float64, bool:
-			values = append(values, fmt.Sprintf("%v", v))
 		default:
+			values = append(values, fmt.Sprintf("%v", v))
 		}
 	}
 

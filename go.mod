@@ -2,8 +2,6 @@ module github.com/beam-cloud/beta9
 
 go 1.22
 
-toolchain go1.22.1
-
 require (
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/alicebob/miniredis/v2 v2.30.5

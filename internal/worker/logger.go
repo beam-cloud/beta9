@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/sirupsen/logrus"
@@ -38,7 +39,9 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 	// Create a new file logger
 	f := logrus.New()
 	f.SetOutput(logFile)
-	f.SetFormatter(&logrus.JSONFormatter{})
+	f.SetFormatter(&logrus.JSONFormatter{
+		TimestampFormat: time.RFC3339Nano,
+	})
 
 	instance, exists := r.containerInstances.Get(containerId)
 	if !exists {

@@ -31,6 +31,60 @@ from grpclib.exceptions import StreamTerminatedError
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.01
 
+import io
+import sys
+from contextvars import ContextVar
+
+
+log_context = ContextVar("log_context", default={})
+
+class StdoutJsonInterceptor(io.TextIOBase):
+    def __init__(self, stream):
+        self.stream = stream
+
+    def write(self, buf):
+        try:
+            for line in buf.rstrip().splitlines():
+                ctx = log_context.get()
+                
+                log_record = {
+                    "message": line,
+                    **ctx
+                }
+                
+                self.stream.write(json.dumps(log_record) + "\n")
+                
+        except BaseException:
+            self.stream.write(buf)
+
+    def flush(self):
+        return self.stream.flush()
+
+    def close(self):
+        return self.stream.close()
+    
+    @staticmethod
+    def set_context(**kwargs):
+        log_context.set(kwargs)
+    
+    @staticmethod
+    def get_context():
+        return log_context.get()
+    
+    @staticmethod
+    def reset_context():
+        log_context.set({})
+        
+    @staticmethod
+    def add_context_var(key, value):
+        ctx = log_context.get()
+        ctx[key] = value
+        log_context.set(ctx)
+    
+
+sys.stdout = StdoutJsonInterceptor(sys.__stdout__)
+sys.stderr = StdoutJsonInterceptor(sys.__stderr__)
+
 
 class TaskQueueManager:
     def __init__(self) -> None:
@@ -93,7 +147,7 @@ class TaskQueueManager:
         self.task_worker_startup_events[worker_index].wait()
 
         while True:
-            if not self.task_processes[worker_index].is_alive():
+            if not self.task_processes[worker_index].is_alive():                
                 exit_code = self.task_processes[worker_index].exitcode
 
                 # Restart worker if the exit code indicates worker exit
@@ -223,7 +277,13 @@ class TaskQueueWorker:
             if not task:
                 time.sleep(TASK_POLLING_INTERVAL)
                 continue
-
+            
+            def _run_handler(id: str, args, kwargs):
+                def fn():
+                    StdoutJsonInterceptor.add_context_var("task_id", id)
+                    return handler(*args, **kwargs)
+                return fn
+            
             async def _run_task():
                 print(f"Running task <{task.id}>")
                 monitor_task = loop.create_task(
@@ -235,7 +295,7 @@ class TaskQueueWorker:
                 try:
                     args = task.args or []
                     kwargs = task.kwargs or {}
-                    result = await loop.run_in_executor(executor, lambda: handler(*args, **kwargs))
+                    result = await loop.run_in_executor(executor, _run_handler(task.id, args, kwargs))
                     result = cloudpickle.dumps(result)
                 except BaseException as exc:
                     print(traceback.format_exc())
