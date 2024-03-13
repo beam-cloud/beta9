@@ -120,7 +120,7 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 	return selectedInstance, nil
 }
 
-func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, token string, compute types.ProviderComputeRequest) (string, error) {
+func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token string, compute types.ProviderComputeRequest) (string, error) {
 	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Memory, compute.Gpu, compute.GpuCount) // NOTE: CPU cores -> millicores, memory -> megabytes
 	if err != nil {
 		return "", err
@@ -141,7 +141,6 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, 
 		K3sVersion:        k3sVersion,
 		DisableComponents: []string{"traefik"},
 		MachineId:         machineId,
-		WorkerId:          workerId,
 		PoolName:          poolName,
 	})
 	if err != nil {
@@ -189,10 +188,6 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, 
 			{
 				Key:   aws.String("Beta9MachineId"),
 				Value: aws.String(machineId),
-			},
-			{
-				Key:   aws.String("Beta9WorkerId"),
-				Value: aws.String(workerId),
 			},
 		},
 	})
@@ -288,24 +283,24 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 					}
 					defer p.providerRepo.RemoveMachineLock(string(types.ProviderEC2), poolName, machineId)
 
-					machine, err := p.providerRepo.GetMachine(string(types.ProviderEC2), poolName, machineId)
+					_, err = p.providerRepo.GetMachine(string(types.ProviderEC2), poolName, machineId)
 					if err != nil {
 						p.removeMachine(ctx, poolName, machineId, instanceId)
 						return
 					}
 
-					// See if there is a worker associated with this machine
-					_, err = p.workerRepo.GetWorkerById(machine.WorkerId)
-					if err != nil {
-						_, ok := err.(*types.ErrWorkerNotFound)
+					// // See if there is a worker associated with this machine
+					// _, err = p.workerRepo.GetWorkerById(machine.WorkerId)
+					// if err != nil {
+					// 	_, ok := err.(*types.ErrWorkerNotFound)
 
-						if ok {
-							p.removeMachine(ctx, poolName, machineId, instanceId)
-							return
-						}
+					// 	if ok {
+					// 		p.removeMachine(ctx, poolName, machineId, instanceId)
+					// 		return
+					// 	}
 
-						return
-					}
+					// 	return
+					// }
 				}()
 			}
 		}
@@ -320,7 +315,6 @@ func (p *EC2Provider) removeMachine(ctx context.Context, poolName, machineId, in
 	}
 
 	log.Printf("Terminated machine <machineId: %s> due to inactivity\n", machineId)
-	return
 }
 
 type userDataConfig struct {
@@ -331,7 +325,6 @@ type userDataConfig struct {
 	K3sVersion        string
 	DisableComponents []string
 	MachineId         string
-	WorkerId          string
 	PoolName          string
 }
 
@@ -354,7 +347,6 @@ const userDataTemplate string = `
 
 INSTALL_K3S_VERSION="{{.K3sVersion}}"
 MACHINE_ID="{{.MachineId}}"
-WORKER_ID="{{.WorkerId}}"
 BETA9_TOKEN="{{.Beta9Token}}"
 POOL_NAME="{{.PoolName}}"
 TAILSCALE_CONTROL_URL="{{.ControlURL}}"
@@ -463,10 +455,9 @@ HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
               --data "$(jq -n \
                         --arg token "$TOKEN" \
                         --arg machineId "$MACHINE_ID" \
-						--arg workerId "$WORKER_ID" \
                         --arg providerName "ec2" \
                         --arg poolName "$POOL_NAME" \
-                        '{token: $token, machine_id: $machineId, worker_id: $workerId, provider_name: $providerName, pool_name: $poolName}')" \
+                        '{token: $token, machine_id: $machineId, provider_name: $providerName, pool_name: $poolName}')" \
               "http://$GATEWAY_HOST/api/v1/machine/register")
 
 if [ $HTTP_STATUS -eq 200 ]; then

@@ -94,7 +94,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 		return nil, err
 	}
 
-	machineId, err := wpc.provider.ProvisionMachine(wpc.ctx, wpc.name, workerId, token.Key, types.ProviderComputeRequest{
+	machineId, err := wpc.provider.ProvisionMachine(wpc.ctx, wpc.name, token.Key, types.ProviderComputeRequest{
 		Cpu:      cpu,
 		Memory:   memory,
 		Gpu:      gpuType,
