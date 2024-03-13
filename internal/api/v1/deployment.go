@@ -58,7 +58,6 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 
 func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
-
 	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
 		return echo.NewHTTPError(http.StatusUnauthorized)
 	}
