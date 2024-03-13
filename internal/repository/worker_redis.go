@@ -65,7 +65,7 @@ func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
 	}
 	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))
 
-	stateKey := common.RedisKeys.SchedulerContainerState(worker.Id)
+	stateKey := common.RedisKeys.SchedulerWorkerState(worker.Id)
 	res, err := r.rdb.Exists(context.TODO(), stateKey).Result()
 	if err != nil {
 		return err

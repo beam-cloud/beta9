@@ -105,7 +105,7 @@ func (wpc *WorkerPoolControllerForTest) FreeCapacity() (*WorkerPoolCapacity, err
 	return &WorkerPoolCapacity{}, nil
 }
 
-func TestNewschedulerForTest(t *testing.T) {
+func TestNewSchedulerForTest(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
