@@ -66,14 +66,16 @@ type InstanceSpec struct {
 	GpuCount uint32
 }
 
-func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64, requiredGpuType string, requiredGpuCount uint32) (string, error) {
+type Instance struct {
+	Type string
+	Spec InstanceSpec
+}
+
+func (p *EC2Provider) selectInstance(requiredCpu int64, requiredMemory int64, requiredGpuType string, requiredGpuCount uint32) (*Instance, error) {
 	// TODO: make instance selection more dynamic / don't rely on hardcoded values
 	// We can load desired instances from the worker pool config, and then use the DescribeInstances
 	// api to return valid instance types
-	availableInstances := []struct {
-		Type string
-		Spec InstanceSpec
-	}{
+	availableInstances := []Instance{
 		{"g4dn.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "T4", 1}},
 		{"g4dn.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "T4", 1}},
 		{"g4dn.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "T4", 1}},
@@ -105,23 +107,23 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 	}
 
 	// Find the smallest instance that meets or exceeds the requirements
-	var selectedInstance string
+	var selectedInstance *Instance = nil
 	for _, instance := range availableInstances {
 		if meetsRequirements(instance.Spec) {
-			selectedInstance = instance.Type
+			selectedInstance = &instance
 			break
 		}
 	}
 
-	if selectedInstance == "" {
-		return "", fmt.Errorf("no suitable instance type found for CPU=%d, Memory=%d, GPU=%s", requiredCpu, requiredMemory, requiredGpuType)
+	if selectedInstance == nil {
+		return nil, fmt.Errorf("no suitable instance type found for CPU=%d, Memory=%d, GPU=%s", requiredCpu, requiredMemory, requiredGpuType)
 	}
 
 	return selectedInstance, nil
 }
 
 func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token string, compute types.ProviderComputeRequest) (string, error) {
-	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Memory, compute.Gpu, compute.GpuCount) // NOTE: CPU cores -> millicores, memory -> megabytes
+	instance, err := p.selectInstance(compute.Cpu, compute.Memory, compute.Gpu, compute.GpuCount) // NOTE: CPU cores -> millicores, memory -> megabytes
 	if err != nil {
 		return "", err
 	}
@@ -147,11 +149,11 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
-	log.Printf("Selected instance type <%s> for compute request: %+v\n", instanceType, compute)
+	log.Printf("Selected instance type <%s> for compute request: %+v\n", instance.Type, compute)
 	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String(p.providerConfig.AMI),
-		InstanceType: awsTypes.InstanceType(instanceType),
+		InstanceType: awsTypes.InstanceType(instance.Type),
 		MinCount:     aws.Int32(1),
 		MaxCount:     aws.Int32(1),
 		UserData:     aws.String(encodedUserData),
@@ -194,6 +196,16 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 
 	if err != nil {
 		return "", fmt.Errorf("failed to tag the instance: %w", err)
+	}
+
+	err = p.providerRepo.AddMachine(string(types.ProviderEC2), poolName, machineId, &types.ProviderMachineState{
+		Cpu:      instance.Spec.Cpu,
+		Memory:   instance.Spec.Memory,
+		Gpu:      instance.Spec.Gpu,
+		GpuCount: instance.Spec.GpuCount,
+	})
+	if err != nil {
+		return "", err
 	}
 
 	return machineId, nil

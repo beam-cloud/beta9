@@ -59,21 +59,13 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 		case <-ctx.Done():
 			return nil, fmt.Errorf("timeout waiting for machine registration for %s", machineId)
 		case <-ticker.C:
-			exists, err := r.rdb.Exists(ctx, stateKey).Result()
+			_, err := r.rdb.Exists(ctx, stateKey).Result()
 			if err != nil {
 				return nil, fmt.Errorf("error checking machine state existence for %s: %w", machineId, err)
 			}
 
-			if exists == 0 {
-				continue
-			}
-
 			res, err := r.rdb.HGetAll(ctx, stateKey).Result()
 			if err != nil {
-				if err == redis.Nil {
-					continue // Key does not exist yet, continue polling
-				}
-
 				return nil, fmt.Errorf("failed to get machine state for %s: %w", machineId, err)
 			}
 
@@ -86,14 +78,32 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 				return nil, fmt.Errorf("error parsing machine state for %s: %w", machineId, err)
 			}
 
+			if state.Status == types.MachineStatusPending {
+				// Still waiting for machine registration
+				continue
+			}
+
 			return state, nil
 		}
 	}
 }
 
+func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error {
+	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
+	err := r.rdb.HSet(context.TODO(),
+		stateKey, "machine_id", machineId, "status",
+		types.MachineStatusPending, "cpu", info.Cpu, "memory", info.Memory,
+		"gpu", info.Gpu, "gpu_count", info.GpuCount).Err()
+
+	if err != nil {
+		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
+	}
+	return nil
+}
+
 func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error {
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
-	err := r.rdb.HSet(context.TODO(), stateKey, "machine_id", machineId, "token", info.Token, "hostname", info.HostName).Err()
+	err := r.rdb.HSet(context.TODO(), stateKey, "machine_id", machineId, "token", info.Token, "hostname", info.HostName, "status", types.MachineStatusRegistered).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
 	}

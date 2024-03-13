@@ -80,6 +80,7 @@ type WorkerPoolRepository interface {
 
 type ProviderRepository interface {
 	GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
+	AddMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error
 	RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error
 	WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
 	SetMachineLock(providerName, poolName, machineId string) error
