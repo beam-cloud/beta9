@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -15,16 +16,17 @@ import (
 )
 
 type WorkerRedisRepository struct {
-	rdb  *common.RedisClient
-	lock *common.RedisLock
+	rdb    *common.RedisClient
+	lock   *common.RedisLock
+	config types.WorkerConfig
 }
 
-func NewWorkerRedisRepository(r *common.RedisClient) WorkerRepository {
+func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) WorkerRepository {
 	lock := common.NewRedisLock(r)
-	return &WorkerRedisRepository{rdb: r, lock: lock}
+	return &WorkerRedisRepository{rdb: r, lock: lock, config: config}
 }
 
-// Add or updates a worker
+// AddWorker adds or updates a worker
 func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 3})
 	if err != nil {
@@ -32,35 +34,25 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 	}
 	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))
 
-	key := common.RedisKeys.SchedulerWorkerState(worker.Id)
+	stateKey := common.RedisKeys.SchedulerWorkerState(worker.Id)
+	indexKey := common.RedisKeys.SchedulerWorkerIndex()
+
+	// Cache worker state key in index so we don't have to scan for it
+	err = r.rdb.SAdd(context.TODO(), indexKey, stateKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to add worker state key to index <%v>: %w", indexKey, err)
+	}
+
 	worker.ResourceVersion = 0
-	err = r.rdb.HSet(context.TODO(), key, common.ToSlice(worker)).Err()
+	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(worker)).Err()
 	if err != nil {
-		return fmt.Errorf("failed to add worker state <%s>: %v", key, err)
+		return fmt.Errorf("failed to add worker state <%s>: %v", stateKey, err)
 	}
 
-	return nil
-}
-
-func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId string) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	// Set TTL on state key
+	err = r.rdb.Expire(context.TODO(), stateKey, r.config.AddWorkerTimeout).Err()
 	if err != nil {
-		return err
-	}
-	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
-
-	key := common.RedisKeys.SchedulerWorkerState(workerId)
-	worker, err := r.getWorkerFromKey(key)
-	if err != nil {
-		return err
-	}
-
-	// Make worker available by setting status
-	worker.ResourceVersion++
-	worker.Status = types.WorkerStatusAvailable
-	err = r.rdb.HSet(context.TODO(), key, common.ToSlice(worker)).Err()
-	if err != nil {
-		return fmt.Errorf("failed to toggle worker state <%s>: %v", key, err)
+		return fmt.Errorf("failed to set worker state ttl <%v>: %w", stateKey, err)
 	}
 
 	return nil
@@ -73,9 +65,8 @@ func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
 	}
 	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))
 
-	key := common.RedisKeys.SchedulerWorkerState(worker.Id)
-
-	res, err := r.rdb.Exists(context.TODO(), key).Result()
+	stateKey := common.RedisKeys.SchedulerContainerState(worker.Id)
+	res, err := r.rdb.Exists(context.TODO(), stateKey).Result()
 	if err != nil {
 		return err
 	}
@@ -85,7 +76,14 @@ func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
 		return &types.ErrWorkerNotFound{WorkerId: worker.Id}
 	}
 
-	err = r.rdb.Del(context.TODO(), key).Err()
+	// Remove worker state from index
+	indexKey := common.RedisKeys.SchedulerWorkerIndex()
+	err = r.rdb.SRem(context.TODO(), indexKey, stateKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to remove worker state key from index <%v>: %w", indexKey, err)
+	}
+
+	err = r.rdb.Del(context.TODO(), stateKey).Err()
 	if err != nil {
 		return err
 	}
@@ -98,16 +96,63 @@ func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
 	return nil
 }
 
-// scanWorkers retrieves a list of worker objects from the Redis store that match a given pattern.
+func (r *WorkerRedisRepository) WorkerKeepAlive(workerId string) error {
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	if err != nil {
+		return err
+	}
+	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
+	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
+
+	// Set TTL on state key
+	err = r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.WorkerStateTtlS)*time.Second).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set worker state ttl <%v>: %w", stateKey, err)
+	}
+
+	return nil
+}
+
+func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId string) error {
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	if err != nil {
+		return err
+	}
+	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
+
+	stateKey := common.RedisKeys.SchedulerContainerState(workerId)
+	worker, err := r.getWorkerFromKey(stateKey)
+	if err != nil {
+		return err
+	}
+
+	// Make worker available by setting status
+	worker.ResourceVersion++
+	worker.Status = types.WorkerStatusAvailable
+	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(worker)).Err()
+	if err != nil {
+		return fmt.Errorf("failed to toggle worker state <%s>: %v", stateKey, err)
+	}
+
+	// Set TTL on state key
+	err = r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.WorkerStateTtlS)*time.Second).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set worker state ttl <%v>: %w", stateKey, err)
+	}
+
+	return nil
+}
+
+// getWorkers retrieves a list of worker objects from the Redis store that match a given pattern.
 // It uses the SCAN command to iterate over the keys in the Redis database, matching the pattern provided.
 // If useLock is set to true, a lock will be acquired for each worker and released after retrieval.
 // If you can afford to not have the most up-to-date worker information, you can set useLock to false.
-func (r *WorkerRedisRepository) scanWorkers(pattern string, useLock bool) ([]*types.Worker, error) {
+func (r *WorkerRedisRepository) getWorkers(useLock bool) ([]*types.Worker, error) {
 	workers := []*types.Worker{}
 
-	keys, err := r.rdb.Scan(context.TODO(), pattern)
+	keys, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.SchedulerWorkerIndex()).Result()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
 	}
 
 	for _, key := range keys {
@@ -178,9 +223,7 @@ func (r *WorkerRedisRepository) getWorkerFromKey(key string) (*types.Worker, err
 }
 
 func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
-	pattern := common.RedisKeys.SchedulerWorkerState("*")
-
-	workers, err := r.scanWorkers(pattern, true)
+	workers, err := r.getWorkers(true)
 	if err != nil {
 		return nil, err
 	}
@@ -189,9 +232,7 @@ func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
 }
 
 func (r *WorkerRedisRepository) GetAllWorkersInPool(poolId string) ([]*types.Worker, error) {
-	pattern := common.RedisKeys.SchedulerWorkerState("*")
-
-	workers, err := r.scanWorkers(pattern, false)
+	workers, err := r.getWorkers(false)
 	if err != nil {
 		return nil, err
 	}

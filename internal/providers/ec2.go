@@ -216,7 +216,7 @@ func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, instanceId
 	return nil
 }
 
-func (p *EC2Provider) ListMachines(ctx context.Context, poolName string) (map[string]string, error) {
+func (p *EC2Provider) listMachines(ctx context.Context, poolName string) (map[string]string, error) {
 	input := &ec2.DescribeInstancesInput{
 		Filters: []awsTypes.Filter{
 			{
@@ -269,7 +269,7 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			machines, err := p.ListMachines(ctx, poolName)
+			machines, err := p.listMachines(ctx, poolName)
 			if err != nil {
 				log.Println("Error listing machines: ", err)
 				continue

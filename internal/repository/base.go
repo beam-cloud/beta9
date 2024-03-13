@@ -17,6 +17,7 @@ type WorkerRepository interface {
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId string) error
 	RemoveWorker(w *types.Worker) error
+	WorkerKeepAlive(workerId string) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
 	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
 	GetNextContainerRequest(workerId string) (*types.ContainerRequest, error)

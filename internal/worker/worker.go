@@ -126,7 +126,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
-	workerRepo := repo.NewWorkerRedisRepository(redisClient)
+	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
 	imageClient, err := NewImageClient(config.ImageService, workerId, workerRepo)
@@ -704,6 +704,20 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 	return s.workerRepo.UpdateWorkerCapacity(worker, request, types.AddCapacity)
 }
 
+func (s *Worker) keepalive() {
+	ticker := time.NewTicker(types.WorkerKeepAliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.workerRepo.WorkerKeepAlive(s.workerId)
+		case <-s.ctx.Done():
+			return
+		}
+	}
+}
+
 func (s *Worker) startup() error {
 	log.Printf("Worker starting up.")
 
@@ -719,6 +733,7 @@ func (s *Worker) startup() error {
 
 	s.eventBus = eventBus
 	go s.eventBus.ReceiveEvents(s.ctx)
+	go s.keepalive()
 
 	err = os.MkdirAll(containerLogsPath, os.ModePerm)
 	if err != nil {
@@ -739,11 +754,12 @@ func (s *Worker) shutdown() error {
 		return err
 	}
 
+	s.cancel()
+
 	err = s.workerRepo.RemoveWorker(worker)
 	if err != nil {
 		return err
 	}
 
-	s.cancel()
 	return nil
 }

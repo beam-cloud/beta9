@@ -9,6 +9,7 @@ var (
 	schedulerContainerRequests   string = "scheduler:container_requests"
 	schedulerWorkerLock          string = "scheduler:worker:lock:%s"
 	schedulerWorkerRequests      string = "scheduler:worker:requests:%s"
+	schedulerWorkerIndex         string = "scheduler:worker:worker_index"
 	schedulerWorkerState         string = "scheduler:worker:state:%s"
 	schedulerContainerConfig     string = "scheduler:container:config:%s"
 	schedulerContainerState      string = "scheduler:container:state:%s"
@@ -67,6 +68,10 @@ type redisKeys struct{}
 // Scheduler scheduling keys
 func (rk *redisKeys) SchedulerPrefix() string {
 	return schedulerPrefix
+}
+
+func (rk *redisKeys) SchedulerWorkerIndex() string {
+	return schedulerWorkerIndex
 }
 
 func (rk *redisKeys) SchedulerContainerRequests() string {

@@ -32,7 +32,7 @@ type Scheduler struct {
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.MetricsRepository, backendRepo repo.BackendRepository, tailscale *network.Tailscale) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
-	workerRepo := repo.NewWorkerRedisRepository(redisClient)
+	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 	providerRepo := repo.NewProviderRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
