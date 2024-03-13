@@ -1,7 +1,6 @@
 package apiv1
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/internal/auth"
@@ -59,13 +58,10 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 
 func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
-	log.Println("RETRIEVE DEPLOYMENT", cc.AuthInfo.Token.TokenType)
 
 	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
 		return echo.NewHTTPError(http.StatusUnauthorized)
 	}
-
-	log.Println("RETRIEVE DEPLOYMENT", cc.AuthInfo.Token.TokenType)
 
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
@@ -74,13 +70,9 @@ func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 	}
 
 	deploymentId := ctx.Param("deploymentId")
-	log.Println("Retrieving deployment", deploymentId)
-
 	if deployment, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), workspace.Id, deploymentId); err != nil {
-		log.Println("Failed to retrieve deployment", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve deployment")
 	} else {
-		log.Println("Retrieved deployment", deployment)
 		return ctx.JSON(http.StatusOK, deployment)
 	}
 }

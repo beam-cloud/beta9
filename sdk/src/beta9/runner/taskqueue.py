@@ -27,60 +27,11 @@ from beta9.runner.common import config, load_handler
 from beta9.type import TaskExitCode, TaskStatus
 from grpclib.client import Channel
 from grpclib.exceptions import StreamTerminatedError
+from beta9.logging import StdoutJsonInterceptor
+
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.01
-
-import io
-import sys
-from contextvars import ContextVar
-
-
-log_context = ContextVar("log_context", default={})
-
-class StdoutJsonInterceptor(io.TextIOBase):
-    def __init__(self, stream):
-        self.stream = stream
-
-    def write(self, buf):
-        try:
-            for line in buf.rstrip().splitlines():
-                ctx = log_context.get()
-                
-                log_record = {
-                    "message": line,
-                    **ctx
-                }
-                
-                self.stream.write(json.dumps(log_record) + "\n")
-                
-        except BaseException:
-            self.stream.write(buf)
-
-    def flush(self):
-        return self.stream.flush()
-
-    def close(self):
-        return self.stream.close()
-    
-    @staticmethod
-    def set_context(**kwargs):
-        log_context.set(kwargs)
-    
-    @staticmethod
-    def get_context():
-        return log_context.get()
-    
-    @staticmethod
-    def reset_context():
-        log_context.set({})
-        
-    @staticmethod
-    def add_context_var(key, value):
-        ctx = log_context.get()
-        ctx[key] = value
-        log_context.set(ctx)
-    
 
 sys.stdout = StdoutJsonInterceptor(sys.__stdout__)
 sys.stderr = StdoutJsonInterceptor(sys.__stderr__)
@@ -147,7 +98,7 @@ class TaskQueueManager:
         self.task_worker_startup_events[worker_index].wait()
 
         while True:
-            if not self.task_processes[worker_index].is_alive():                
+            if not self.task_processes[worker_index].is_alive():
                 exit_code = self.task_processes[worker_index].exitcode
 
                 # Restart worker if the exit code indicates worker exit
