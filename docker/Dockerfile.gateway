@@ -1,4 +1,4 @@
-FROM golang:1.22 as base
+FROM golang:1.21 as base
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends fuse3 && \
@@ -19,7 +19,7 @@ FROM base as build
 WORKDIR /workspace
 
 RUN apt install -y libfuse3-dev && \
-    go install github.com/cosmtrek/air@latest
+    go install github.com/cosmtrek/air@v1.49.0
 
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify

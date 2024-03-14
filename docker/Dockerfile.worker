@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.6
 ARG BASE_STAGE=dev
 
-FROM golang:1.22-bullseye AS golang
+FROM golang:1.21 AS golang
 
 RUN apt-get update && apt-get install -y curl git
 
@@ -113,4 +113,3 @@ COPY --from=worker /usr/bin/mount-s3 /usr/bin/mount-s3
 COPY ./sdk/src/beta9 /workspace/sdk
 
 VOLUME "/usr/lib/x86_64-linux-gnu"
-VOLUME "/usr/lib/aarch64-linux-gnu"
