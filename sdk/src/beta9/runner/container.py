@@ -3,6 +3,7 @@ import os
 import signal
 import subprocess
 import sys
+import asyncio
 
 from grpclib.client import Channel
 
@@ -11,7 +12,10 @@ from beta9.clients.gateway import GatewayServiceStub
 from beta9.config import with_runner_context
 from beta9.runner.common import config
 from beta9.type import TaskStatus
+from beta9.logging import StdoutJsonInterceptor
 
+sys.stdout = StdoutJsonInterceptor(sys.__stdout__)
+sys.stderr = StdoutJsonInterceptor(sys.__stderr__)
 
 class ContainerManager:
     def __init__(self, cmd: str) -> None:
@@ -22,22 +26,26 @@ class ContainerManager:
         self.killed = False
 
         signal.signal(signal.SIGTERM, self.shutdown)
-
+    
     @with_runner_context
     def start(self, channel: Channel):
         async def _run():
+            StdoutJsonInterceptor.add_context_var("task_id", self.task_id)
+            
             stub = GatewayServiceStub(channel)
             await stub.start_task(
                 task_id=self.task_id,
                 container_id=config.container_id,
             )
-
-            sys.stdout.flush()
-            sys.stderr.flush()
-
-            self.process = subprocess.Popen(cmd, shell=True, stderr=sys.stderr, stdout=sys.stdout)
-            self.process.wait()
-
+                
+            self.process = subprocess.Popen(["/bin/bash", "-c", cmd], shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ)
+            
+            for line in iter(self.process.stdout.readline, b''): # This breaks when the subprocess ends
+                if line:
+                    sys.stdout.write(line.decode("utf-8"))
+            
+            self.process.wait() # This isn't needed because the for loop breaks when the subprocess ends, but it's here for clarity
+            
             if not self.killed:
                 await stub.end_task(
                     task_id=self.task_id,

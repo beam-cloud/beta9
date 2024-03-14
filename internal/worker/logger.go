@@ -74,16 +74,14 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 				"stub_id":      instance.StubId,
 			}).Info(msg.Message)
 
+			// Write logs to in-memory log buffer as well
+			instance.LogBuffer.Write([]byte(msg.Message))
+
 			if msg.TaskID != nil {
 				log.Printf("<%s>:<%s> - %s\n", containerId, *msg.TaskID, msg.Message)
 			} else if msg.Message != "" {
 				log.Printf("<%s> - %s\n", containerId, msg.Message)
 			}
-		}
-
-		if o.Msg != "" {
-			// Write logs to in-memory log buffer as well
-			instance.LogBuffer.Write([]byte(o.Msg))
 		}
 
 		// Fallback in case the message was not JSON
@@ -94,6 +92,9 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 			}).Info(o.Msg)
 
 			log.Printf("<%s> - %s\n", containerId, o.Msg)
+
+			// Write logs to in-memory log buffer as well
+			instance.LogBuffer.Write([]byte(o.Msg))
 		}
 
 		if o.Done {

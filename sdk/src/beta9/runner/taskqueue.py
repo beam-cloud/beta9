@@ -36,7 +36,6 @@ TASK_POLLING_INTERVAL = 0.01
 sys.stdout = StdoutJsonInterceptor(sys.__stdout__)
 sys.stderr = StdoutJsonInterceptor(sys.__stderr__)
 
-
 class TaskQueueManager:
     def __init__(self) -> None:
         set_start_method("spawn", force=True)

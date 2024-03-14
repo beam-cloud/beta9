@@ -1,5 +1,6 @@
 import json
 import time
+import sys
 
 import cloudpickle
 from grpclib.client import Channel
@@ -15,7 +16,10 @@ from beta9.config import with_runner_context
 from beta9.exceptions import InvalidFunctionArgumentsException, RunnerException
 from beta9.runner.common import config, load_handler
 from beta9.type import TaskStatus
+from beta9.logging import StdoutJsonInterceptor
 
+sys.stdout = StdoutJsonInterceptor(sys.__stdout__)
+sys.stderr = StdoutJsonInterceptor(sys.__stderr__)
 
 def _load_args(args: bytes) -> dict:
     try:
@@ -34,6 +38,10 @@ def main(channel: Channel):
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
 
     task_id = config.task_id
+    
+    # Add task_id to log interceptor context
+    StdoutJsonInterceptor.add_context_var("task_id", task_id)
+    
     container_id = config.container_id
     container_hostname = config.container_hostname
     if not task_id:

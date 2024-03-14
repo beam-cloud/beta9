@@ -12,11 +12,11 @@ class StdoutJsonInterceptor(io.TextIOBase):
     def write(self, buf):
         try:
             for line in buf.rstrip().splitlines():
-                ctx = log_context.get()
+                global_ctx = log_context.get()
                 
                 log_record = {
                     "message": line,
-                    **ctx
+                    **global_ctx,
                 }
                 
                 self.stream.write(json.dumps(log_record) + "\n")
@@ -29,6 +29,9 @@ class StdoutJsonInterceptor(io.TextIOBase):
 
     def close(self):
         return self.stream.close()
+    
+    def fileno(self) -> int:
+        return -1
     
     @staticmethod
     def set_context(**kwargs):
