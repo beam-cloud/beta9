@@ -149,18 +149,15 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
-	roleArn := "arn:aws:iam::187248174200:instance-profile/beta-dev-k3s-instance-profile"
-
 	log.Printf("Selected instance type <%s> for compute request: %+v\n", instance.Type, compute)
 	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
 	input := &ec2.RunInstancesInput{
-		ImageId:            aws.String(p.providerConfig.AMI),
-		InstanceType:       awsTypes.InstanceType(instance.Type),
-		MinCount:           aws.Int32(1),
-		MaxCount:           aws.Int32(1),
-		UserData:           aws.String(encodedUserData),
-		SubnetId:           p.providerConfig.SubnetId,
-		IamInstanceProfile: &awsTypes.IamInstanceProfileSpecification{Arn: &roleArn},
+		ImageId:      aws.String(p.providerConfig.AMI),
+		InstanceType: awsTypes.InstanceType(instance.Type),
+		MinCount:     aws.Int32(1),
+		MaxCount:     aws.Int32(1),
+		UserData:     aws.String(encodedUserData),
+		SubnetId:     p.providerConfig.SubnetId,
 	}
 
 	result, err := p.client.RunInstances(ctx, input)
