@@ -130,6 +130,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		ContainerId: containerId,
 		Env:         []string{},
 		Cpu:         defaultBuildContainerCpu,
+		Gpu:         "T4",
 		Memory:      defaultBuildContainerMemory,
 		ImageId:     baseImageId,
 		SourceImage: &sourceImage,
