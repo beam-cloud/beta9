@@ -1,4 +1,4 @@
-FROM golang:1.21 as base
+FROM golang:1.21-bullseye as base
 
 # Target used in development environments
 FROM base as build
