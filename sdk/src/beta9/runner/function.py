@@ -21,6 +21,7 @@ from beta9.logging import StdoutJsonInterceptor
 sys.stdout = StdoutJsonInterceptor(sys.__stdout__)
 sys.stderr = StdoutJsonInterceptor(sys.__stderr__)
 
+
 def _load_args(args: bytes) -> dict:
     try:
         return cloudpickle.loads(args)
@@ -38,10 +39,10 @@ def main(channel: Channel):
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
 
     task_id = config.task_id
-    
+
     # Add task_id to log interceptor context
     StdoutJsonInterceptor.add_context_var("task_id", task_id)
-    
+
     container_id = config.container_id
     container_hostname = config.container_hostname
     if not task_id:

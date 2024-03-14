@@ -36,6 +36,7 @@ TASK_POLLING_INTERVAL = 0.01
 sys.stdout = StdoutJsonInterceptor(sys.__stdout__)
 sys.stderr = StdoutJsonInterceptor(sys.__stderr__)
 
+
 class TaskQueueManager:
     def __init__(self) -> None:
         set_start_method("spawn", force=True)
@@ -227,13 +228,14 @@ class TaskQueueWorker:
             if not task:
                 time.sleep(TASK_POLLING_INTERVAL)
                 continue
-            
+
             def _run_handler(id: str, args, kwargs):
                 def fn():
                     StdoutJsonInterceptor.add_context_var("task_id", id)
                     return handler(*args, **kwargs)
+
                 return fn
-            
+
             async def _run_task():
                 print(f"Running task <{task.id}>")
                 monitor_task = loop.create_task(
@@ -245,7 +247,9 @@ class TaskQueueWorker:
                 try:
                     args = task.args or []
                     kwargs = task.kwargs or {}
-                    result = await loop.run_in_executor(executor, _run_handler(task.id, args, kwargs))
+                    result = await loop.run_in_executor(
+                        executor, _run_handler(task.id, args, kwargs)
+                    )
                     result = cloudpickle.dumps(result)
                 except BaseException as exc:
                     print(traceback.format_exc())

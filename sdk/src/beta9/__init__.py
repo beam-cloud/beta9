@@ -17,5 +17,5 @@ __all__ = [
     "task_queue",
     "function",
     "endpoint",
-    "Container"
+    "Container",
 ]
