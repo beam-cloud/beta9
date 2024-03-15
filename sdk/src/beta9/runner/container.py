@@ -16,7 +16,6 @@ from beta9.logging import StdoutJsonInterceptor
 sys.stdout = StdoutJsonInterceptor(sys.__stdout__)
 sys.stderr = StdoutJsonInterceptor(sys.__stderr__)
 
-
 class ContainerManager:
     def __init__(self, cmd: str) -> None:
         self.process = None
@@ -26,34 +25,26 @@ class ContainerManager:
         self.killed = False
 
         signal.signal(signal.SIGTERM, self.shutdown)
-
+    
     @with_runner_context
     def start(self, channel: Channel):
         async def _run():
             StdoutJsonInterceptor.add_context_var("task_id", self.task_id)
-
+            
             stub = GatewayServiceStub(channel)
             await stub.start_task(
                 task_id=self.task_id,
                 container_id=config.container_id,
             )
-
-            self.process = subprocess.Popen(
-                ["/bin/bash", "-c", cmd],
-                shell=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                env=os.environ,
-            )
-
-            for line in iter(
-                self.process.stdout.readline, b""
-            ):  # This breaks when the subprocess ends
-                if line:
-                    sys.stdout.write(line.decode("utf-8"))
-
-            self.process.wait()  # This isn't needed because the for loop breaks when the subprocess ends, but it's here for clarity
-
+                
+            self.process = subprocess.Popen(["/bin/bash", "-c", cmd], shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ)
+            
+            while self.process.poll() is None:
+                line = self.process.stdout.readline()
+                if not line:
+                    continue
+                sys.stdout.write(line.strip().decode("utf-8"))
+            
             if not self.killed:
                 await stub.end_task(
                     task_id=self.task_id,

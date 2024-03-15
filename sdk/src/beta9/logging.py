@@ -10,7 +10,7 @@ class StdoutJsonInterceptor(io.TextIOBase):
     def __init__(self, stream):
         self.stream = stream
 
-    def write(self, buf):
+    def write(self, buf: str):
         try:
             for line in buf.rstrip().splitlines():
                 global_ctx = log_context.get()
@@ -21,7 +21,6 @@ class StdoutJsonInterceptor(io.TextIOBase):
                 }
 
                 self.stream.write(json.dumps(log_record) + "\n")
-
         except BaseException:
             self.stream.write(buf)
 
