@@ -109,7 +109,7 @@ class _CallableWrapper:
             args=args,
         ):
             if r.output != "":
-                terminal.detail(r.output)
+                terminal.detail(r.output.strip())
 
             if r.done or r.exit_code != 0:
                 last_response = r

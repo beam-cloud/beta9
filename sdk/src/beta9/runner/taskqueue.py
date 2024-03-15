@@ -33,9 +33,6 @@ from beta9.logging import StdoutJsonInterceptor
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.01
 
-sys.stdout = StdoutJsonInterceptor(sys.__stdout__)
-sys.stderr = StdoutJsonInterceptor(sys.__stderr__)
-
 
 class TaskQueueManager:
     def __init__(self) -> None:
@@ -229,50 +226,44 @@ class TaskQueueWorker:
                 time.sleep(TASK_POLLING_INTERVAL)
                 continue
 
-            def _run_handler(id: str, args, kwargs):
-                def fn():
-                    StdoutJsonInterceptor.add_context_var("task_id", id)
-                    return handler(*args, **kwargs)
-
-                return fn
-
             async def _run_task():
-                print(f"Running task <{task.id}>")
-                monitor_task = loop.create_task(
-                    self._monitor_task(config.stub_id, config.container_id, taskqueue_stub, task),
-                )
-
-                start_time = time.time()
-                task_status = TaskStatus.Complete
-                try:
-                    args = task.args or []
-                    kwargs = task.kwargs or {}
-                    result = await loop.run_in_executor(
-                        executor, _run_handler(task.id, args, kwargs)
+                with StdoutJsonInterceptor(task_id=task.id):
+                    print(f"Running task <{task.id}>")
+                    monitor_task = loop.create_task(
+                        self._monitor_task(config.stub_id, config.container_id, taskqueue_stub, task),
                     )
-                    result = cloudpickle.dumps(result)
-                except BaseException as exc:
-                    print(traceback.format_exc())
-                    result = cloudpickle.dumps(exc)
-                    task_status = TaskStatus.Error
-                finally:
-                    complete_task_response: TaskQueueCompleteResponse = (
-                        await taskqueue_stub.task_queue_complete(
-                            task_id=task.id,
-                            stub_id=config.stub_id,
-                            task_duration=time.time() - start_time,
-                            task_status=task_status,
-                            container_id=config.container_id,
-                            container_hostname=config.container_hostname,
-                            keep_warm_seconds=config.keep_warm_seconds,
+
+                    start_time = time.time()
+                    task_status = TaskStatus.Complete
+                    try:
+                        args = task.args or []
+                        kwargs = task.kwargs or {}
+                        result = await loop.run_in_executor(
+                            executor, lambda: handler(*args, **kwargs)
                         )
-                    )
+                        result = cloudpickle.dumps(result)
+                    except BaseException as exc:
+                        print(traceback.format_exc())
+                        result = cloudpickle.dumps(exc)
+                        task_status = TaskStatus.Error
+                    finally:
+                        complete_task_response: TaskQueueCompleteResponse = (
+                            await taskqueue_stub.task_queue_complete(
+                                task_id=task.id,
+                                stub_id=config.stub_id,
+                                task_duration=time.time() - start_time,
+                                task_status=task_status,
+                                container_id=config.container_id,
+                                container_hostname=config.container_hostname,
+                                keep_warm_seconds=config.keep_warm_seconds,
+                            )
+                        )
 
-                    if not complete_task_response.ok:
-                        raise RunnerException("Unable to end task")
+                        if not complete_task_response.ok:
+                            raise RunnerException("Unable to end task")
 
-                    print(f"Task completed <{task.id}>")
-                    monitor_task.cancel()
+                        print(f"Task completed <{task.id}>")
+                        monitor_task.cancel()
 
             loop.run_until_complete(_run_task())
 
