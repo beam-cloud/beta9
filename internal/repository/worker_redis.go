@@ -43,6 +43,15 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 		return fmt.Errorf("failed to add worker state key to index <%v>: %w", indexKey, err)
 	}
 
+	// If this worker is assigned to a remote provider (e.g. a bare-metal node, associate the worker state keys with that machine)
+	if worker.MachineId != "" {
+		machineIndexKey := common.RedisKeys.ProviderMachineWorkerIndex(worker.MachineId)
+		err = r.rdb.SAdd(context.TODO(), machineIndexKey, stateKey).Err()
+		if err != nil {
+			return fmt.Errorf("failed to add worker id key to index <%v>: %w", machineIndexKey, err)
+		}
+	}
+
 	worker.ResourceVersion = 0
 	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(worker)).Err()
 	if err != nil {
@@ -81,6 +90,14 @@ func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
 	err = r.rdb.SRem(context.TODO(), indexKey, stateKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to remove worker state key from index <%v>: %w", indexKey, err)
+	}
+
+	if worker.MachineId != "" {
+		machineIndexKey := common.RedisKeys.ProviderMachineWorkerIndex(worker.MachineId)
+		err = r.rdb.SRem(context.TODO(), machineIndexKey, stateKey).Err()
+		if err != nil {
+			return fmt.Errorf("failed to remove worker id key from index <%v>: %w", machineIndexKey, err)
+		}
 	}
 
 	err = r.rdb.Del(context.TODO(), stateKey).Err()

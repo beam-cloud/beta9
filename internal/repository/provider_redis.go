@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -44,6 +45,53 @@ func (r *ProviderRedisRepository) GetMachine(providerName, poolName, machineId s
 	}
 
 	return state, nil
+}
+
+func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string) ([]*types.ProviderMachineState, error) {
+	machines := []*types.ProviderMachineState{}
+
+	// Get all machines from the machine index
+	keys, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.ProviderMachineIndex(providerName, poolName)).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve machine state keys: %v", err)
+	}
+
+	for _, key := range keys {
+		machineId := strings.Split(key, ":")[2]
+
+		err := r.lock.Acquire(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+		if err != nil {
+			continue
+		}
+
+		m, err := r.getMachineFromKey(key)
+		if err != nil {
+			r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
+
+			continue
+		}
+
+		r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
+
+		machines = append(machines, m)
+	}
+
+	return machines, nil
+}
+
+func (r *ProviderRedisRepository) getMachineFromKey(key string) (*types.ProviderMachineState, error) {
+	machine := &types.ProviderMachineState{}
+
+	res, err := r.rdb.HGetAll(context.TODO(), key).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get worker <%s>: %v", key, err)
+	}
+
+	if err = common.ToStruct(res, machine); err != nil {
+		return nil, fmt.Errorf("failed to deserialize machine state <%v>: %v", key, err)
+	}
+
+	return machine, nil
 }
 
 func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error) {
@@ -89,8 +137,14 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 }
 
 func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error {
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	if err != nil {
+		return err
+	}
+	defer r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
+
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
-	err := r.rdb.HSet(context.TODO(),
+	err = r.rdb.HSet(context.TODO(),
 		stateKey, "machine_id", machineId, "status",
 		string(types.MachineStatusPending), "cpu", info.Cpu, "memory", info.Memory,
 		"gpu", info.Gpu, "gpu_count", info.GpuCount).Err()
@@ -98,6 +152,35 @@ func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId s
 	if err != nil {
 		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
 	}
+
+	machineIndexKey := common.RedisKeys.ProviderMachineIndex(providerName, poolName)
+	err = r.rdb.SAdd(context.TODO(), machineIndexKey, stateKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to add machine state key to index <%v>: %w", machineIndexKey, err)
+	}
+
+	return nil
+}
+
+func (r *ProviderRedisRepository) RemoveMachine(providerName, poolName, machineId string) error {
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	if err != nil {
+		return err
+	}
+	defer r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
+
+	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
+	err = r.rdb.Del(context.TODO(), stateKey).Err()
+	if err != nil {
+		return err
+	}
+
+	machineIndexKey := common.RedisKeys.ProviderMachineIndex(providerName, poolName)
+	err = r.rdb.SRem(context.TODO(), machineIndexKey, stateKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to remove machine state key from index <%v>: %w", machineIndexKey, err)
+	}
+
 	return nil
 }
 
