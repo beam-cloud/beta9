@@ -86,6 +86,10 @@ func NewMetalWorkerPoolController(
 	return wpc, nil
 }
 
+func (wpc *MetalWorkerPoolController) chooseMachine() {
+
+}
+
 func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
@@ -93,6 +97,13 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	if err != nil {
 		return nil, err
 	}
+
+	machines, err := wpc.providerRepo.ListAllMachines(string(*wpc.providerName), wpc.name)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("existing machines: %+v\n", machines)
 
 	machineId, err := wpc.provider.ProvisionMachine(wpc.ctx, wpc.name, token.Key, types.ProviderComputeRequest{
 		Cpu:      cpu,

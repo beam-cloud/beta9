@@ -66,13 +66,12 @@ func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string)
 
 		m, err := r.getMachineFromKey(key)
 		if err != nil {
+			r.RemoveMachine(providerName, poolName, machineId)
 			r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
-
 			continue
 		}
 
 		r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
-
 		machines = append(machines, m)
 	}
 
@@ -137,14 +136,8 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 }
 
 func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), common.RedisLockOptions{TtlS: 10, Retries: 3})
-	if err != nil {
-		return err
-	}
-	defer r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
-
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
-	err = r.rdb.HSet(context.TODO(),
+	err := r.rdb.HSet(context.TODO(),
 		stateKey, "machine_id", machineId, "status",
 		string(types.MachineStatusPending), "cpu", info.Cpu, "memory", info.Memory,
 		"gpu", info.Gpu, "gpu_count", info.GpuCount).Err()
@@ -163,22 +156,17 @@ func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId s
 }
 
 func (r *ProviderRedisRepository) RemoveMachine(providerName, poolName, machineId string) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), common.RedisLockOptions{TtlS: 10, Retries: 3})
-	if err != nil {
-		return err
-	}
-	defer r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
-
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
+
+	machineIndexKey := common.RedisKeys.ProviderMachineIndex(providerName, poolName)
+	err := r.rdb.SRem(context.TODO(), machineIndexKey, stateKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to remove machine state key from index <%v>: %w", machineIndexKey, err)
+	}
+
 	err = r.rdb.Del(context.TODO(), stateKey).Err()
 	if err != nil {
 		return err
-	}
-
-	machineIndexKey := common.RedisKeys.ProviderMachineIndex(providerName, poolName)
-	err = r.rdb.SRem(context.TODO(), machineIndexKey, stateKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to remove machine state key from index <%v>: %w", machineIndexKey, err)
 	}
 
 	return nil
