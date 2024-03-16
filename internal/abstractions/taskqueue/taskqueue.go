@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	acommon "github.com/beam-cloud/beta9/internal/abstractions/common"
 	"github.com/beam-cloud/beta9/internal/auth"
 	common "github.com/beam-cloud/beta9/internal/common"
+
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -84,15 +86,10 @@ func NewRedisTaskQueueService(
 	return tq, nil
 }
 
-type TaskPayload struct {
-	Args   []interface{}          `json:"args"`
-	Kwargs map[string]interface{} `json:"kwargs"`
-}
-
 func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	var payload TaskPayload
+	var payload acommon.FunctionPayload
 	err := json.Unmarshal(in.Payload, &payload)
 	if err != nil {
 		return &pb.TaskQueuePutResponse{
@@ -107,7 +104,7 @@ func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 	}, nil
 }
 
-func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *TaskPayload) (string, error) {
+func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *acommon.FunctionPayload) (string, error) {
 	queue, exists := tq.queueInstances.Get(stubId)
 	if !exists {
 		err := tq.createQueueInstance(stubId)

@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/beam-cloud/beta9/internal/abstractions/common"
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/types"
+
 	"github.com/labstack/echo/v4"
 )
 
@@ -24,12 +26,6 @@ func registerTaskQueueRoutes(g *echo.Group, tq *RedisTaskQueue) *taskQueueGroup 
 }
 
 func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
-	/*
-		 TODO: support three different unmarshalling strategies
-		 	- explicit args/kwargs (nested under {"args", "kwargs"})
-			- just kwargs (key/value)
-			- just args (in list)
-	*/
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	stubId := ctx.Param("stubId")
@@ -54,9 +50,9 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 		stubId = deployment.Stub.ExternalId
 	}
 
-	var payload TaskPayload
-
-	if err := ctx.Bind(&payload); err != nil {
+	var payload common.FunctionPayload
+	payload, err := common.UnmarshalFunctionPayload(ctx)
+	if err != nil {
 		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error": "invalid request payload",
 		})
