@@ -1,6 +1,5 @@
 import json
 import time
-import sys
 
 import cloudpickle
 from grpclib.client import Channel
