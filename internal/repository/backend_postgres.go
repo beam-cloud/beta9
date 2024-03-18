@@ -384,6 +384,14 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 		}
 	}
 
+	if filters.CreatedAtStart != "" {
+		qb = qb.Where(squirrel.GtOrEq{"t.created_at": filters.CreatedAtStart})
+	}
+
+	if filters.CreatedAtEnd != "" {
+		qb = qb.Where(squirrel.LtOrEq{"t.created_at": filters.CreatedAtEnd})
+	}
+
 	if filters.Offset > 0 {
 		qb = qb.Offset(uint64(filters.Offset))
 	}
