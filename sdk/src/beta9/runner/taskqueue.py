@@ -27,6 +27,8 @@ from beta9.runner.common import config, load_handler
 from beta9.type import TaskExitCode, TaskStatus
 from grpclib.client import Channel
 from grpclib.exceptions import StreamTerminatedError
+from beta9.logging import StdoutJsonInterceptor
+
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.01
@@ -225,40 +227,43 @@ class TaskQueueWorker:
                 continue
 
             async def _run_task():
-                print(f"Running task <{task.id}>")
-                monitor_task = loop.create_task(
-                    self._monitor_task(config.stub_id, config.container_id, taskqueue_stub, task),
-                )
-
-                start_time = time.time()
-                task_status = TaskStatus.Complete
-                try:
-                    args = task.args or []
-                    kwargs = task.kwargs or {}
-                    result = await loop.run_in_executor(executor, lambda: handler(*args, **kwargs))
-                    result = cloudpickle.dumps(result)
-                except BaseException as exc:
-                    print(traceback.format_exc())
-                    result = cloudpickle.dumps(exc)
-                    task_status = TaskStatus.Error
-                finally:
-                    complete_task_response: TaskQueueCompleteResponse = (
-                        await taskqueue_stub.task_queue_complete(
-                            task_id=task.id,
-                            stub_id=config.stub_id,
-                            task_duration=time.time() - start_time,
-                            task_status=task_status,
-                            container_id=config.container_id,
-                            container_hostname=config.container_hostname,
-                            keep_warm_seconds=config.keep_warm_seconds,
-                        )
+                with StdoutJsonInterceptor(task_id=task.id):
+                    print(f"Running task <{task.id}>")
+                    monitor_task = loop.create_task(
+                        self._monitor_task(config.stub_id, config.container_id, taskqueue_stub, task),
                     )
 
-                    if not complete_task_response.ok:
-                        raise RunnerException("Unable to end task")
+                    start_time = time.time()
+                    task_status = TaskStatus.Complete
+                    try:
+                        args = task.args or []
+                        kwargs = task.kwargs or {}
+                        result = await loop.run_in_executor(
+                            executor, lambda: handler(*args, **kwargs)
+                        )
+                        result = cloudpickle.dumps(result)
+                    except BaseException as exc:
+                        print(traceback.format_exc())
+                        result = cloudpickle.dumps(exc)
+                        task_status = TaskStatus.Error
+                    finally:
+                        complete_task_response: TaskQueueCompleteResponse = (
+                            await taskqueue_stub.task_queue_complete(
+                                task_id=task.id,
+                                stub_id=config.stub_id,
+                                task_duration=time.time() - start_time,
+                                task_status=task_status,
+                                container_id=config.container_id,
+                                container_hostname=config.container_hostname,
+                                keep_warm_seconds=config.keep_warm_seconds,
+                            )
+                        )
 
-                    print(f"Task completed <{task.id}>")
-                    monitor_task.cancel()
+                        if not complete_task_response.ok:
+                            raise RunnerException("Unable to end task")
+
+                        print(f"Task completed <{task.id}>")
+                        monitor_task.cancel()
 
             loop.run_until_complete(_run_task())
 

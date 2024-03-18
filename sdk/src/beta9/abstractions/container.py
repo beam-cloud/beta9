@@ -82,7 +82,7 @@ class Container(RunnerAbstraction):
                 self.task_id = r.task_id
 
             if r.output != "":
-                terminal.detail(r.output)
+                terminal.detail(r.output.strip())
 
             if r.done or r.exit_code != 0:
                 last_response = r
