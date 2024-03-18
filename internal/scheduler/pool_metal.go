@@ -103,6 +103,27 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 		return nil, err
 	}
 
+	/*
+			 Let's think this through. We need to find out if any of the running machines in this pool
+			 Have the capacity to support this incoming worker.
+
+			 So we need to:
+			  - get all of the machines in the repo
+			  - get a list of all their workers
+			  - retrieve all their workers
+
+		     A worker is never gonna move from one machine to another (for now), so once we get a list of the workers
+			 we can guarantee that the worker is either on that node, occupying capacity, or its gone
+
+			 Because of the worker TTL, if the worker key is there, we can assume that capacity is unavailable on the node.
+			 So, I think what we can do here, is:
+			   - Get a list of every single worker across all of the machines (using the index)
+			   - Create a function that takes in a list of worker state keys, and retrieves all the workers based on that
+			   - Map those workers to each machine, and do the math to figure out the current machine capacity for each machine
+			   -
+
+	*/
+
 	log.Printf("existing machines: %+v\n", machines)
 
 	machineId, err := wpc.provider.ProvisionMachine(wpc.ctx, wpc.name, token.Key, types.ProviderComputeRequest{

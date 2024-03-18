@@ -7,6 +7,11 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	instanceComputeBufferPercent float64 = 10.0
+	k3sVersion                   string  = "v1.28.5+k3s1"
+)
+
 type Provider interface {
 	ProvisionMachine(ctx context.Context, poolName, token string, compute types.ProviderComputeRequest) (string, error)
 	TerminateMachine(ctx context.Context, poolName, machineId string) error
