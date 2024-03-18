@@ -11,7 +11,7 @@ from beta9.clients.gateway import GatewayServiceStub
 from beta9.config import with_runner_context
 from beta9.runner.common import config
 from beta9.type import TaskStatus
-
+from beta9.logging import StdoutJsonInterceptor
 
 class ContainerManager:
     def __init__(self, cmd: str) -> None:
@@ -22,28 +22,31 @@ class ContainerManager:
         self.killed = False
 
         signal.signal(signal.SIGTERM, self.shutdown)
-
+    
     @with_runner_context
     def start(self, channel: Channel):
         async def _run():
-            stub = GatewayServiceStub(channel)
-            await stub.start_task(
-                task_id=self.task_id,
-                container_id=config.container_id,
-            )
-
-            sys.stdout.flush()
-            sys.stderr.flush()
-
-            self.process = subprocess.Popen(cmd, shell=True, stderr=sys.stderr, stdout=sys.stdout)
-            self.process.wait()
-
-            if not self.killed:
-                await stub.end_task(
+            with StdoutJsonInterceptor(task_id=self.task_id):
+                stub = GatewayServiceStub(channel)
+                await stub.start_task(
                     task_id=self.task_id,
                     container_id=config.container_id,
-                    task_status=TaskStatus.Complete,
                 )
+                    
+                self.process = subprocess.Popen(["/bin/bash", "-c", cmd], shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ)
+                
+                while self.process.poll() is None:
+                    line = self.process.stdout.readline()
+                    if not line:
+                        continue
+                    print(line.strip().decode("utf-8"))
+                
+                if not self.killed:
+                    await stub.end_task(
+                        task_id=self.task_id,
+                        container_id=config.container_id,
+                        task_status=TaskStatus.Complete,
+                    )
 
         run_sync(_run())
 
