@@ -1,0 +1,144 @@
+package common
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"reflect"
+	"time"
+
+	"github.com/Masterminds/squirrel"
+	"github.com/jmoiron/sqlx"
+)
+
+type CursorPaginationInfo[DBType any] struct {
+	Next string   `json:"next"`
+	Data []DBType `json:"data"`
+}
+
+func StructToMap(obj interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+	val := reflect.ValueOf(obj)
+	typ := val.Type()
+
+	for i := 0; i < val.NumField(); i++ {
+		field := val.Field(i)
+		fieldType := typ.Field(i)
+
+		// Check if the field is an embedded struct
+		if fieldType.Anonymous {
+			embeddedFields := StructToMap(field.Interface())
+			for k, v := range embeddedFields {
+				result[k] = v
+			}
+		} else {
+			tag := fieldType.Tag.Get("db")
+			if tag != "" {
+				result[tag] = field.Interface()
+			} else {
+				fieldName := fieldType.Name
+				result[fieldName] = field.Interface()
+			}
+		}
+	}
+
+	return result
+}
+
+type DatetimeCursor struct {
+	Value string `json:"value"`
+	Id    uint   `json:"id"`
+}
+
+type SquirrelCursorPaginator[DBType any] struct {
+	Client          *sqlx.DB
+	SelectBuilder   squirrel.SelectBuilder
+	SortOrder       string
+	SortColumn      string
+	SortQueryPrefix string
+	PageSize        int
+}
+
+func EncodeCursor(cursor DatetimeCursor) string {
+	serializedCursor, err := json.Marshal(cursor)
+	if err != nil {
+		return ""
+	}
+	encodedCursor := base64.StdEncoding.EncodeToString(serializedCursor)
+	return encodedCursor
+}
+
+func DecodeCursor(cursor string) (*DatetimeCursor, error) {
+	if cursor == "" {
+		return nil, nil
+	}
+
+	decodedCursor, err := base64.StdEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, err
+	}
+
+	var cur DatetimeCursor
+	if err := json.Unmarshal(decodedCursor, &cur); err != nil {
+		return nil, err
+	}
+	return &cur, nil
+}
+
+func Paginate[DBType any](settings SquirrelCursorPaginator[DBType], cursorString string) (*CursorPaginationInfo[DBType], error) {
+	if settings.PageSize <= 0 {
+		settings.PageSize = 10
+	}
+
+	cursor, err := DecodeCursor(cursorString)
+	if err != nil {
+		return nil, err
+	}
+
+	settings.SelectBuilder = settings.SelectBuilder.OrderBy(settings.SortColumn + " " + settings.SortOrder)
+	settings.SelectBuilder = settings.SelectBuilder.Limit(uint64(settings.PageSize + 1))
+
+	if cursor != nil {
+		sortColumnName := settings.SortQueryPrefix + "." + settings.SortColumn
+		sortIdColumnName := settings.SortQueryPrefix + ".id"
+		timeValue, err := time.Parse("2006-01-02 15:04:05.999999 -0700 MST", cursor.Value)
+		if err != nil {
+			return nil, err
+		}
+
+		if settings.SortOrder == "ASC" {
+			settings.SelectBuilder = settings.SelectBuilder.Where(squirrel.GtOrEq{sortColumnName: timeValue, sortIdColumnName: cursor.Id})
+		} else {
+			settings.SelectBuilder = settings.SelectBuilder.Where(squirrel.LtOrEq{sortColumnName: timeValue, sortIdColumnName: cursor.Id})
+		}
+	}
+
+	sql, args, err := settings.SelectBuilder.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []DBType
+	err = settings.Client.Select(&rows, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var nextCursor string
+	pageReturnLength := len(rows)
+
+	if pageReturnLength > settings.PageSize {
+		pageReturnLength = settings.PageSize
+		lastRow := StructToMap(rows[len(rows)-1])
+		cursor := DatetimeCursor{
+			Value: lastRow[settings.SortColumn].(time.Time).Format("2006-01-02 15:04:05.999999 -0700 MST"),
+			Id:    lastRow["id"].(uint),
+		}
+
+		nextCursor = EncodeCursor(cursor)
+	}
+
+	return &CursorPaginationInfo[DBType]{
+		Next: nextCursor,
+		Data: rows[:pageReturnLength],
+	}, nil
+}

@@ -20,4 +20,5 @@ type TaskFilter struct {
 	Status         string `query:"status"`
 	CreatedAtStart string `query:"created_at_start"`
 	CreatedAtEnd   string `query:"created_at_end"`
+	Cursor         string `query:"cursor"`
 }
