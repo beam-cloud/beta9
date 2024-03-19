@@ -220,3 +220,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 )
+
+replace inet.af/wf => github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6

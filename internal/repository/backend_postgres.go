@@ -585,7 +585,7 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters
 	}
 
 	if filters.Name != "" {
-		qb = qb.Where(squirrel.Eq{"d.name": filters.Name})
+		qb = qb.Where(squirrel.Like{"d.name": "%" + filters.Name + "%"})
 	}
 
 	if filters.Offset > 0 {
