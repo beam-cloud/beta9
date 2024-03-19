@@ -44,6 +44,9 @@ func (p *AWSCredentialProvider) GetAuthorizationToken() (string, error) {
 			config.WithRegion(p.Region),
 		)
 	}
+	if err != nil {
+		return "", err
+	}
 
 	svc := ecr.NewFromConfig(cfg)
 	o, err := svc.GetAuthorizationToken(context.TODO(), &ecr.GetAuthorizationTokenInput{})

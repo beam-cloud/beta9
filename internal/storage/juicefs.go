@@ -46,11 +46,17 @@ func (s *JuiceFsStorage) Format(fsName string) error {
 		"format",
 		"--storage", "s3",
 		"--bucket", s.config.AWSS3Bucket,
-		"--access-key", s.config.AWSAccessKey,
-		"--secret-key", s.config.AWSSecretKey,
 		s.config.RedisURI,
 		fsName,
 	)
+
+	if s.config.AWSAccessKey != "" || s.config.AWSSecretKey != "" {
+		cmd.Args = append(
+			cmd.Args,
+			"--access-key", s.config.AWSAccessKey,
+			"--secret-key", s.config.AWSSecretKey,
+		)
+	}
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
