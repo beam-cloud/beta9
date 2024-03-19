@@ -9,16 +9,12 @@ import (
 	"path/filepath"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/beam-cloud/beta9/internal/types"
 )
 
 const (
-	DefaultAWSRegion string = "us-east-1"
-
 	s3ImageRegistryStoreName = "s3"
 	remoteImageFileExtension = "rclip"
 	localImageFileExtension  = "clip"
@@ -81,7 +77,7 @@ type ObjectStore interface {
 }
 
 func NewS3Store(config types.S3ImageRegistryConfig) (*S3Store, error) {
-	cfg, err := getAWSConfig(config.AWSAccessKey, config.AWSSecretKey, config.AWSRegion)
+	cfg, err := GetAWSConfig(config.AWSAccessKey, config.AWSSecretKey, config.AWSRegion)
 	if err != nil {
 		return nil, err
 	}
@@ -90,20 +86,6 @@ func NewS3Store(config types.S3ImageRegistryConfig) (*S3Store, error) {
 		client: s3.NewFromConfig(cfg),
 		config: config,
 	}, nil
-}
-
-func getAWSConfig(accessKey string, secretKey string, region string) (aws.Config, error) {
-	var cfg aws.Config
-	var err error
-
-	if accessKey == "" || secretKey == "" {
-		cfg, err = config.LoadDefaultConfig(context.TODO(), config.WithRegion(region))
-	} else {
-		credentials := credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")
-		cfg, err = config.LoadDefaultConfig(context.TODO(), config.WithRegion(region), config.WithCredentialsProvider(credentials))
-	}
-
-	return cfg, err
 }
 
 type S3Store struct {
