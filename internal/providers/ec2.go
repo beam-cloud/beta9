@@ -11,10 +11,9 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsTypes "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -37,14 +36,8 @@ const (
 )
 
 func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*EC2Provider, error) {
-	credentials := credentials.NewStaticCredentialsProvider(appConfig.Providers.EC2Config.AWSAccessKey, appConfig.Providers.EC2Config.AWSSecretKey, "")
-
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
-		config.WithRegion(appConfig.Providers.EC2Config.AWSRegion),
-		config.WithCredentialsProvider(credentials),
-	)
+	cfg, err := common.GetAWSConfig(appConfig.Providers.EC2Config.AWSAccessKey, appConfig.Providers.EC2Config.AWSSecretKey, "")
 	if err != nil {
-		log.Printf("Unable to load AWS config: %v", err)
 		return nil, err
 	}
 
