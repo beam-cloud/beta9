@@ -325,8 +325,7 @@ func (p *EC2Provider) removeMachine(ctx context.Context, poolName, machineId, in
 	log.Printf("Terminated machine <machineId: %s> due to inactivity\n", machineId)
 }
 
-const ec2UserDataTemplate string = `
-#!/bin/bash
+const ec2UserDataTemplate string = `#!/bin/bash
 
 INSTALL_K3S_VERSION="{{.K3sVersion}}"
 MACHINE_ID="{{.MachineId}}"

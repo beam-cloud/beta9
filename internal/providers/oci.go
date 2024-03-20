@@ -61,8 +61,8 @@ func NewOCIProvider(appConfig types.AppConfig, providerRepo repository.ProviderR
 // OCI does not have a direct method to select instances like AWS. You need to define your logic based on available shapes in OCI.
 func (p *OCIProvider) selectInstance(requiredCpu int64, requiredMemory int64, requiredGpuType string, requiredGpuCount uint32) (*Instance, error) {
 	return &Instance{
-		Type: "VM.Standard.E5.Flex",
-		Spec: InstanceSpec{Cpu: 1 * 1000, Memory: 12 * 1024, Gpu: "T4", GpuCount: 1},
+		Type: "VM.GPU.A10.1",
+		Spec: InstanceSpec{Cpu: 15 * 1000, Memory: 240 * 1024, Gpu: "T4", GpuCount: 1},
 	}, nil
 }
 
@@ -92,6 +92,8 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
+	sshPublicKey := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCkOEyPxGVNmoqW10QxR4uc3le0CGMQhXfLXbMLBFrdaEwaKarYdHTRZjHmI21LtkiXqY2KEH6UJBpx2uUozMU+2ur+gnIW8Itsi6NAQkIkawAW4MvTxBi2++6PbvQxaL7QHZqigFFRV9n/lt0l2QfMcClE14azS+Sn+WwzzJKGCslDUa6OEnD3evJqCGncvwNxkIVfGyeJz2Wh1fZK18jIlFj4efNBVeqx0RyE+SBd1h31QsLpMm5vBvrMXjqA/FGfNgQe25TQ8gA7Rgu9NZkcIExlIt/NQl2jhA7oWmjti5+JbYSJfm7J+309MVf9b0YjouupICDhs2ZFG2XzdDUf ssh-key-2024-03-20"
+
 	log.Printf("Selected shape <%s> for compute request: %+v\n", instance.Type, compute)
 	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
 	displayName := fmt.Sprintf("%s-%s-%s", p.clusterName, poolName, machineId)
@@ -107,8 +109,10 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 			AssignPublicIp: common.Bool(true),
 			SubnetId:       common.String(p.providerConfig.SubnetId),
 		},
+
 		Metadata: map[string]string{
-			"user_data": encodedUserData,
+			"user_data":           encodedUserData,
+			"ssh_authorized_keys": sshPublicKey,
 		},
 		SourceDetails: core.InstanceSourceViaImageDetails{
 			BootVolumeSizeInGBs: common.Int64(ociBootVolumeSizeInGB),
@@ -128,7 +132,7 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 	instanceId := *response.Instance.Id
 	log.Printf("Provisioned machine ID: %s\n", instanceId)
 
-	err = p.providerRepo.AddMachine(string(types.ProviderEC2), poolName, machineId, &types.ProviderMachineState{
+	err = p.providerRepo.AddMachine(string(types.ProviderOCI), poolName, machineId, &types.ProviderMachineState{
 		Cpu:      instance.Spec.Cpu,
 		Memory:   instance.Spec.Memory,
 		Gpu:      instance.Spec.Gpu,
@@ -176,8 +180,6 @@ func (p *OCIProvider) listMachines(ctx context.Context, poolName string) (map[st
 		if err != nil {
 			return nil, err
 		}
-
-		log.Println("response.items: ", response.Items)
 
 		for _, instance := range response.Items {
 			// Check if the instance matches the tag filters
@@ -264,8 +266,7 @@ func (p *OCIProvider) removeMachine(ctx context.Context, poolName, machineId, in
 	log.Printf("Terminated machine <machineId: %s> due to inactivity\n", machineId)
 }
 
-const ociUserDataTemplate string = `
-#!/bin/bash
+const ociUserDataTemplate string = `#!/bin/bash
 
 INSTALL_K3S_VERSION="{{.K3sVersion}}"
 MACHINE_ID="{{.MachineId}}"
@@ -280,14 +281,12 @@ K3S_DISABLE_COMPONENTS=""
 K3S_DISABLE_COMPONENTS="${K3S_DISABLE_COMPONENTS} --disable {{.}}"
 {{end}}
 
-distribution=$(. /etc/os-release;echo $ID$VERSION_ID) \
-   && curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.repo | sudo tee /etc/yum.repos.d/nvidia-docker.repo
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+  && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+    sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-# Configure nvidia container runtime
-# yum-config-manager --disable amzn2-nvidia-470-branch amzn2-core
-# yum remove -y libnvidia-container
-# yum install -y nvidia-container-toolkit nvidia-container-runtime
-# yum-config-manager --enable amzn2-nvidia-470-branch amzn2-core
+apt-get update &&  apt-get install -y nvidia-container-toolkit nvidia-container-runtime jq nvidia-driver-470-server
 
 # Install K3s
 curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$INSTALL_K3S_VERSION INSTALL_K3S_EXEC="$K3S_DISABLE_COMPONENTS" sh -
@@ -377,7 +376,7 @@ HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
               --data "$(jq -n \
                         --arg token "$TOKEN" \
                         --arg machineId "$MACHINE_ID" \
-                        --arg providerName "ec2" \
+                        --arg providerName "oci" \
                         --arg poolName "$POOL_NAME" \
                         '{token: $token, machine_id: $machineId, provider_name: $providerName, pool_name: $poolName}')" \
               "http://$GATEWAY_HOST/api/v1/machine/register")
