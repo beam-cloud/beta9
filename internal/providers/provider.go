@@ -21,7 +21,7 @@ type Provider interface {
 	Reconcile(ctx context.Context, poolName string)
 }
 
-func MachineId() string {
+func machineId() string {
 	return uuid.New().String()[:8]
 }
 

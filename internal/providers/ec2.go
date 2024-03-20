@@ -130,7 +130,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
-	machineId := MachineId()
+	machineId := machineId()
 	populatedUserData, err := populateUserData(userDataConfig{
 		AuthKey:           p.appConfig.Tailscale.AuthKey,
 		ControlURL:        p.appConfig.Tailscale.ControlURL,

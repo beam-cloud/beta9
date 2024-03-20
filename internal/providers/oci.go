@@ -77,7 +77,7 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
-	machineId := MachineId()
+	machineId := machineId()
 	populatedUserData, err := populateUserData(userDataConfig{
 		AuthKey:           p.appConfig.Tailscale.AuthKey,
 		ControlURL:        p.appConfig.Tailscale.ControlURL,
@@ -97,9 +97,10 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 
 	displayName := fmt.Sprintf("%s-%s-%s", p.clusterName, poolName, machineId)
 	launchDetails := core.LaunchInstanceDetails{
-		DisplayName:   common.String(displayName),
-		Shape:         common.String(instance.Type),
-		CompartmentId: common.String(p.providerConfig.CompartmentId),
+		DisplayName:        common.String(displayName),
+		AvailabilityDomain: common.String(p.providerConfig.AvailabilityDomain),
+		Shape:              common.String(instance.Type),
+		CompartmentId:      common.String(p.providerConfig.CompartmentId),
 		CreateVnicDetails: &core.CreateVnicDetails{
 			AssignPublicIp: common.Bool(true),
 			SubnetId:       common.String(p.providerConfig.SubnetId),
@@ -109,6 +110,7 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 		},
 		SourceDetails: core.InstanceSourceViaImageDetails{
 			BootVolumeSizeInGBs: common.Int64(ociBootVolumeSizeInGB),
+			ImageId:             common.String(p.providerConfig.ImageId),
 		},
 	}
 

@@ -211,6 +211,8 @@ type OCIProviderConfig struct {
 	PrivateKeyPassword string `key:"privateKeyPassword" json:"private_key_password"`
 	CompartmentId      string `key:"compartmentId" json:"compartment_id"`
 	SubnetId           string `key:"subnetId" json:"subnet_id"`
+	AvailabilityDomain string `key:"availabilityDomain" json:"availability_domain"`
+	ImageId            string `key:"imageId" json:"image_id"`
 }
 
 type MetricsCollector string
