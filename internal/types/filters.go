@@ -10,6 +10,7 @@ type DeploymentFilter struct {
 	WorkspaceID uint   `query:"workspace_id"`
 	StubType    string `query:"stub_type"`
 	Name        string `query:"name"`
+	Cursor      string `query:"cursor"`
 }
 
 type TaskFilter struct {

@@ -3,7 +3,9 @@ package common
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/Masterminds/squirrel"
@@ -58,6 +60,14 @@ type SquirrelCursorPaginator[DBType any] struct {
 	PageSize        int
 }
 
+func getOperator(sortOrder string) string {
+	lowercaseSortOrder := strings.ToLower(sortOrder)
+	if lowercaseSortOrder == "asc" {
+		return ">"
+	}
+	return "<"
+}
+
 func EncodeCursor(cursor DatetimeCursor) string {
 	serializedCursor, err := json.Marshal(cursor)
 	if err != nil {
@@ -105,19 +115,18 @@ func Paginate[DBType any](settings SquirrelCursorPaginator[DBType], cursorString
 			return nil, err
 		}
 
-		if settings.SortOrder == "ASC" {
-			settings.SelectBuilder = settings.SelectBuilder.Where(squirrel.GtOrEq{sortColumnName: timeValue, sortIdColumnName: cursor.Id})
-		} else {
-			settings.SelectBuilder = settings.SelectBuilder.Where(squirrel.LtOrEq{sortColumnName: timeValue, sortIdColumnName: cursor.Id})
-		}
+		operator := getOperator(settings.SortOrder)
+		whereExp := fmt.Sprintf("(%s %s ? OR (%s = ? AND %s %s ?))", sortColumnName, operator, sortColumnName, sortIdColumnName, operator)
+		settings.SelectBuilder = settings.SelectBuilder.Where(squirrel.Expr(whereExp, timeValue, timeValue, cursor.Id))
 	}
 
 	sql, args, err := settings.SelectBuilder.ToSql()
+
 	if err != nil {
 		return nil, err
 	}
 
-	var rows []DBType
+	rows := []DBType{}
 	err = settings.Client.Select(&rows, sql, args...)
 	if err != nil {
 		return nil, err
