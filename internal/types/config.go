@@ -207,7 +207,11 @@ type EC2ProviderConfig struct {
 }
 
 type OCIProviderConfig struct {
-	ConfigFilePath     string `key:"configFilePath" json:"config_file_path"`
+	Tenancy            string `key:"tenancy" json:"tenancy"`
+	UserId             string `key:"userId" json:"user_id"`
+	Region             string `key:"region" json:"region"`
+	FingerPrint        string `key:"fingerprint" json:"fingerprint"`
+	PrivateKey         string `key:"privateKey" json:"private_key"`
 	PrivateKeyPassword string `key:"privateKeyPassword" json:"private_key_password"`
 	CompartmentId      string `key:"compartmentId" json:"compartment_id"`
 	SubnetId           string `key:"subnetId" json:"subnet_id"`

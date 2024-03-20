@@ -31,10 +31,10 @@ const (
 )
 
 func NewOCIProvider(appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*OCIProvider, error) {
-	configProvider, err := common.ConfigurationProviderFromFile(appConfig.Providers.OCIConfig.ConfigFilePath, appConfig.Providers.OCIConfig.PrivateKeyPassword)
-	if err != nil {
-		return nil, err
-	}
+	configProvider := common.NewRawConfigurationProvider(appConfig.Providers.OCIConfig.Tenancy,
+		appConfig.Providers.OCIConfig.UserId, appConfig.Providers.OCIConfig.Region, appConfig.Providers.OCIConfig.FingerPrint,
+		appConfig.Providers.OCIConfig.PrivateKey, common.String(appConfig.Providers.OCIConfig.PrivateKeyPassword),
+	)
 
 	computeClient, err := core.NewComputeClientWithConfigurationProvider(configProvider)
 	if err != nil {
