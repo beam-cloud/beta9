@@ -1,7 +1,10 @@
 package providers
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"html/template"
 
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
@@ -20,4 +23,29 @@ type Provider interface {
 
 func MachineId() string {
 	return uuid.New().String()[:8]
+}
+
+type userDataConfig struct {
+	AuthKey           string
+	ControlURL        string
+	GatewayHost       string
+	Beta9Token        string
+	K3sVersion        string
+	DisableComponents []string
+	MachineId         string
+	PoolName          string
+}
+
+func populateUserData(config userDataConfig, userDataTemplate string) (string, error) {
+	t, err := template.New("userdata").Parse(userDataTemplate)
+	if err != nil {
+		return "", fmt.Errorf("error parsing user data template: %w", err)
+	}
+
+	var populatedTemplate bytes.Buffer
+	if err := t.Execute(&populatedTemplate, config); err != nil {
+		return "", fmt.Errorf("error executing user data template: %w", err)
+	}
+
+	return populatedTemplate.String(), nil
 }

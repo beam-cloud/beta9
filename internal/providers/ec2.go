@@ -1,13 +1,11 @@
 package providers
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
-	"text/template"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -142,7 +140,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		DisableComponents: []string{"traefik"},
 		MachineId:         machineId,
 		PoolName:          poolName,
-	})
+	}, ec2UserDataTemplate)
 	if err != nil {
 		return "", err
 	}
@@ -327,32 +325,7 @@ func (p *EC2Provider) removeMachine(ctx context.Context, poolName, machineId, in
 	log.Printf("Terminated machine <machineId: %s> due to inactivity\n", machineId)
 }
 
-type userDataConfig struct {
-	AuthKey           string
-	ControlURL        string
-	GatewayHost       string
-	Beta9Token        string
-	K3sVersion        string
-	DisableComponents []string
-	MachineId         string
-	PoolName          string
-}
-
-func populateUserData(config userDataConfig) (string, error) {
-	t, err := template.New("userdata").Parse(userDataTemplate)
-	if err != nil {
-		return "", fmt.Errorf("error parsing user data template: %w", err)
-	}
-
-	var populatedTemplate bytes.Buffer
-	if err := t.Execute(&populatedTemplate, config); err != nil {
-		return "", fmt.Errorf("error executing user data template: %w", err)
-	}
-
-	return populatedTemplate.String(), nil
-}
-
-const userDataTemplate string = `
+const ec2UserDataTemplate string = `
 #!/bin/bash
 
 INSTALL_K3S_VERSION="{{.K3sVersion}}"

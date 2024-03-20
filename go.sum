@@ -507,6 +507,8 @@ github.com/opencontainers/umoci v0.4.7 h1:mbIbtMpZ3v9oMpKaLopnWoLykgmnixeLzq51Ez
 github.com/opencontainers/umoci v0.4.7/go.mod h1:lgJ4bnwJezsN1o/5d7t/xdRPvmf8TvBko5kKYJsYvgo=
 github.com/openmeterio/openmeter v1.0.0-beta.47 h1:tZR4QiKLiJMAhPUsA/FXrskYF65wQ/23QNbxeFzWRA0=
 github.com/openmeterio/openmeter v1.0.0-beta.47/go.mod h1:rGwmmEiRR4uS4xNkdhFMkZPH9OjSPlQikEYPG8CzP2g=
+github.com/oracle/oci-go-sdk v24.3.0+incompatible h1:x4mcfb4agelf1O4/1/auGlZ1lr97jXRSSN5MxTgG/zU=
+github.com/oracle/oci-go-sdk v24.3.0+incompatible/go.mod h1:VQb79nF8Z2cwLkLS35ukwStZIg5F66tcBccjip/j888=
 github.com/ory/dockertest/v3 v3.10.0 h1:4K3z2VMe8Woe++invjaTB7VRyQXQy5UY+loujO4aNE4=
 github.com/ory/dockertest/v3 v3.10.0/go.mod h1:nr57ZbRWMqfsdGdFNLHz5jjNdDb7VVFnzAeW1n5N1Lg=
 github.com/paulmach/orb v0.10.0 h1:guVYVqzxHE/CQ1KpfGO077TR0ATHSNjp4s6XGLn3W9s=
