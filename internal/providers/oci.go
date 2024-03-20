@@ -62,7 +62,7 @@ func NewOCIProvider(appConfig types.AppConfig, providerRepo repository.ProviderR
 func (p *OCIProvider) selectInstance(requiredCpu int64, requiredMemory int64, requiredGpuType string, requiredGpuCount uint32) (*Instance, error) {
 	return &Instance{
 		Type: "VM.Standard.E5.Flex",
-		Spec: InstanceSpec{Cpu: 1, Memory: 12 * 1024, Gpu: "T4", GpuCount: 1},
+		Spec: InstanceSpec{Cpu: 1 * 1000, Memory: 12 * 1024, Gpu: "T4", GpuCount: 1},
 	}, nil
 }
 
@@ -94,13 +94,15 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 
 	log.Printf("Selected shape <%s> for compute request: %+v\n", instance.Type, compute)
 	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
-
 	displayName := fmt.Sprintf("%s-%s-%s", p.clusterName, poolName, machineId)
 	launchDetails := core.LaunchInstanceDetails{
 		DisplayName:        common.String(displayName),
 		AvailabilityDomain: common.String(p.providerConfig.AvailabilityDomain),
 		Shape:              common.String(instance.Type),
-		CompartmentId:      common.String(p.providerConfig.CompartmentId),
+		ShapeConfig: &core.LaunchInstanceShapeConfigDetails{
+			Ocpus: common.Float32(float32(instance.Spec.Cpu / 1000.0)),
+		},
+		CompartmentId: common.String(p.providerConfig.CompartmentId),
 		CreateVnicDetails: &core.CreateVnicDetails{
 			AssignPublicIp: common.Bool(true),
 			SubnetId:       common.String(p.providerConfig.SubnetId),
@@ -125,6 +127,16 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 
 	instanceId := *response.Instance.Id
 	log.Printf("Provisioned machine ID: %s\n", instanceId)
+
+	err = p.providerRepo.AddMachine(string(types.ProviderEC2), poolName, machineId, &types.ProviderMachineState{
+		Cpu:      instance.Spec.Cpu,
+		Memory:   instance.Spec.Memory,
+		Gpu:      instance.Spec.Gpu,
+		GpuCount: instance.Spec.GpuCount,
+	})
+	if err != nil {
+		return "", err
+	}
 
 	return machineId, nil
 }
@@ -164,6 +176,8 @@ func (p *OCIProvider) listMachines(ctx context.Context, poolName string) (map[st
 		if err != nil {
 			return nil, err
 		}
+
+		log.Println("response.items: ", response.Items)
 
 		for _, instance := range response.Items {
 			// Check if the instance matches the tag filters

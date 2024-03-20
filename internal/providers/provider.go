@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"html/template"
+	"text/template"
 
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
