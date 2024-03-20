@@ -49,7 +49,7 @@ func (g *TaskGroup) ListTasks(ctx echo.Context) error {
 
 	filters.WorkspaceID = workspace.Id
 
-	if tasks, err := g.backendRepo.ListTasksWithRelatedCursorNavigation(ctx.Request().Context(), filters); err != nil {
+	if tasks, err := g.backendRepo.ListTasksWithRelatedPaginated(ctx.Request().Context(), filters); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
 	} else {
 		return ctx.JSON(http.StatusOK, tasks)

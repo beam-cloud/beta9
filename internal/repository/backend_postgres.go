@@ -362,7 +362,7 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 	return tasks, nil
 }
 
-func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, filters types.TaskFilter) ([]types.TaskWithRelated, error) {
+func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters types.TaskFilter) squirrel.SelectBuilder {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\"",
 	).From("task t").
@@ -407,6 +407,12 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 	if filters.Limit > 0 {
 		qb = qb.Limit(uint64(filters.Limit))
 	}
+
+	return qb
+}
+
+func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, filters types.TaskFilter) ([]types.TaskWithRelated, error) {
+	qb := c.listTaskWithRelatedQueryBuilder(filters)
 
 	sql, args, err := qb.ToSql()
 	if err != nil {
@@ -422,51 +428,8 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 	return tasks, nil
 }
 
-func (c *PostgresBackendRepository) ListTasksWithRelatedCursorNavigation(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error) {
-	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\"",
-	).From("task t").
-		Join("workspace w ON t.workspace_id = w.id").
-		Join("stub s ON t.stub_id = s.id").OrderBy("t.id DESC")
-
-	// Apply filters
-	if filters.WorkspaceID > 0 {
-		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
-	}
-
-	if filters.StubId != "" {
-		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
-	}
-
-	if filters.StubType != "" {
-		stubTypes := strings.Split(filters.StubType, ",")
-		if len(stubTypes) > 0 {
-			qb = qb.Where(squirrel.Eq{"s.type": stubTypes})
-		}
-	}
-
-	if filters.CreatedAtStart != "" {
-		qb = qb.Where(squirrel.GtOrEq{"t.created_at": filters.CreatedAtStart})
-	}
-
-	if filters.CreatedAtEnd != "" {
-		qb = qb.Where(squirrel.LtOrEq{"t.created_at": filters.CreatedAtEnd})
-	}
-
-	if filters.Offset > 0 {
-		qb = qb.Offset(uint64(filters.Offset))
-	}
-
-	if filters.Status != "" {
-		statuses := strings.Split(filters.Status, ",")
-		if len(statuses) > 0 {
-			qb = qb.Where(squirrel.Eq{"t.status": statuses})
-		}
-	}
-
-	if filters.Limit > 0 {
-		qb = qb.Limit(uint64(filters.Limit))
-	}
+func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error) {
+	qb := c.listTaskWithRelatedQueryBuilder(filters)
 
 	page, err := common.Paginate(
 		common.SquirrelCursorPaginator[types.TaskWithRelated]{
@@ -475,7 +438,7 @@ func (c *PostgresBackendRepository) ListTasksWithRelatedCursorNavigation(ctx con
 			SortOrder:       "DESC",
 			SortColumn:      "created_at",
 			SortQueryPrefix: "t",
-			PageSize:        10,
+			PageSize:        int(filters.Limit),
 		},
 		filters.Cursor,
 	)
@@ -633,7 +596,7 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
 	return &deploymentWithRelated, nil
 }
 
-func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.DeploymentFilter) squirrel.SelectBuilder {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"d.id, d.external_id, d.name, d.active, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at",
 		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
@@ -660,6 +623,12 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters
 	if filters.Limit > 0 {
 		qb = qb.Limit(uint64(filters.Limit))
 	}
+
+	return qb
+}
+
+func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+	qb := c.listDeploymentsQueryBuilder(filters)
 
 	sql, args, err := qb.ToSql()
 	if err != nil {
@@ -675,33 +644,8 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters
 	return deployments, nil
 }
 
-func (c *PostgresBackendRepository) ListDeploymentsWithCursorNavigation(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
-	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		"d.id, d.external_id, d.name, d.active, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at",
-		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
-		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
-	).From("deployment d").
-		Join("workspace w ON d.workspace_id = w.id").
-		Join("stub s ON d.stub_id = s.id").OrderBy("d.created_at DESC")
-
-	// Apply filters
-	qb = qb.Where(squirrel.Eq{"d.workspace_id": filters.WorkspaceID})
-
-	if filters.StubType != "" {
-		qb = qb.Where(squirrel.Eq{"d.stub_type": filters.StubType})
-	}
-
-	if filters.Name != "" {
-		qb = qb.Where(squirrel.Like{"d.name": "%" + filters.Name + "%"})
-	}
-
-	if filters.Offset > 0 {
-		qb = qb.Offset(uint64(filters.Offset))
-	}
-
-	if filters.Limit > 0 {
-		qb = qb.Limit(uint64(filters.Limit))
-	}
+func (c *PostgresBackendRepository) ListDeploymentsPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
+	qb := c.listDeploymentsQueryBuilder(filters)
 
 	page, err := common.Paginate(
 		common.SquirrelCursorPaginator[types.DeploymentWithRelated]{
@@ -709,8 +653,8 @@ func (c *PostgresBackendRepository) ListDeploymentsWithCursorNavigation(ctx cont
 			SelectBuilder:   qb,
 			SortOrder:       "DESC",
 			SortColumn:      "created_at",
-			SortQueryPrefix: "t",
-			PageSize:        10,
+			SortQueryPrefix: "d",
+			PageSize:        int(filters.Limit),
 		},
 		filters.Cursor,
 	)

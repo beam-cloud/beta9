@@ -17,6 +17,8 @@ type CursorPaginationInfo[DBType any] struct {
 	Data []DBType `json:"data"`
 }
 
+const CursorTimestampFormat = "2006-01-02 15:04:05.999999 -0700 MST"
+
 func StructToMap(obj interface{}) map[string]interface{} {
 	result := make(map[string]interface{})
 	val := reflect.ValueOf(obj)
@@ -110,7 +112,7 @@ func Paginate[DBType any](settings SquirrelCursorPaginator[DBType], cursorString
 	if cursor != nil {
 		sortColumnName := settings.SortQueryPrefix + "." + settings.SortColumn
 		sortIdColumnName := settings.SortQueryPrefix + ".id"
-		timeValue, err := time.Parse("2006-01-02 15:04:05.999999 -0700 MST", cursor.Value)
+		timeValue, err := time.Parse(CursorTimestampFormat, cursor.Value)
 		if err != nil {
 			return nil, err
 		}
@@ -139,7 +141,7 @@ func Paginate[DBType any](settings SquirrelCursorPaginator[DBType], cursorString
 		pageReturnLength = settings.PageSize
 		lastRow := StructToMap(rows[len(rows)-1])
 		cursor := DatetimeCursor{
-			Value: lastRow[settings.SortColumn].(time.Time).Format("2006-01-02 15:04:05.999999 -0700 MST"),
+			Value: lastRow[settings.SortColumn].(time.Time).Format(CursorTimestampFormat),
 			Id:    lastRow["id"].(uint),
 		}
 
