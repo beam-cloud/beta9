@@ -188,12 +188,14 @@ type MachineProvider string
 
 var (
 	ProviderEC2        MachineProvider = "ec2"
+	ProviderOCI        MachineProvider = "oci"
 	ProviderVastAI     MachineProvider = "vastai"
 	ProviderLambdaLabs MachineProvider = "lambda"
 )
 
 type ProviderConfig struct {
 	EC2Config EC2ProviderConfig `key:"ec2" json:"ec2"`
+	OCIConfig OCIProviderConfig `key:"oci" json:"oci"`
 }
 
 type EC2ProviderConfig struct {
@@ -202,6 +204,13 @@ type EC2ProviderConfig struct {
 	AWSRegion    string  `key:"awsRegion" json:"aws_region"`
 	AMI          string  `key:"ami" json:"ami"`
 	SubnetId     *string `key:"subnetId" json:"subnet_id"`
+}
+
+type OCIProviderConfig struct {
+	ConfigFilePath     string `key:"configFilePath" json:"config_file_path"`
+	PrivateKeyPassword string `key:"privateKeyPassword" json:"private_key_password"`
+	CompartmentId      string `key:"compartmentId" json:"compartment_id"`
+	SubnetId           string `key:"subnetId" json:"subnet_id"`
 }
 
 type MetricsCollector string

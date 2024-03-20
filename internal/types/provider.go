@@ -14,6 +14,11 @@ type ProviderComputeRequest struct {
 	GpuCount uint32
 }
 
+type ProviderMachine struct {
+	State      *ProviderMachineState
+	WorkerKeys []string
+}
+
 type ProviderMachineState struct {
 	MachineId string        `json:"machine_id" redis:"machine_id"`
 	Status    MachineStatus `json:"status" redis:"status"`

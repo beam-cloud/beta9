@@ -24,7 +24,7 @@ func NewProviderRedisRepository(rdb *common.RedisClient) ProviderRepository {
 }
 
 func (r *ProviderRedisRepository) GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error) {
-	ctx := context.TODO() // TODO: pass context as an argument to GetMachine
+	ctx := context.TODO()
 
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
 	res, err := r.rdb.HGetAll(ctx, stateKey).Result()
@@ -47,8 +47,8 @@ func (r *ProviderRedisRepository) GetMachine(providerName, poolName, machineId s
 	return state, nil
 }
 
-func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string) ([]*types.ProviderMachineState, error) {
-	machines := []*types.ProviderMachineState{}
+func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string) ([]*types.ProviderMachine, error) {
+	machines := []*types.ProviderMachine{}
 
 	// Get all machines from the machine index
 	keys, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.ProviderMachineIndex(providerName, poolName)).Result()
@@ -57,14 +57,20 @@ func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string)
 	}
 
 	for _, key := range keys {
-		machineId := strings.Split(key, ":")[2]
+		keyParts := strings.Split(key, ":")
+		machineId := ""
+		if len(keyParts) == 0 {
+			continue
+		}
+
+		machineId = keyParts[len(keyParts)-1]
 
 		err := r.lock.Acquire(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 		if err != nil {
 			continue
 		}
 
-		m, err := r.getMachineFromKey(key)
+		machineState, err := r.getMachineFromKey(key)
 		if err != nil {
 			r.RemoveMachine(providerName, poolName, machineId)
 			r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
@@ -72,7 +78,12 @@ func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string)
 		}
 
 		r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
-		machines = append(machines, m)
+
+		workerStateKeys, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.ProviderMachineWorkerIndex(machineId)).Result()
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
+		}
+		machines = append(machines, &types.ProviderMachine{State: machineState, WorkerKeys: workerStateKeys})
 	}
 
 	return machines, nil

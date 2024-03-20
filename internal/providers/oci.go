@@ -11,61 +11,58 @@ import (
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/oracle/oci-go-sdk/common"
-	"github.com/oracle/oci-go-sdk/common/auth"
 	"github.com/oracle/oci-go-sdk/core"
 )
 
 type OCIProvider struct {
-	computeClient core.ComputeClient
-	networkClient core.VirtualNetworkClient
-	clusterName   string
-	appConfig     types.AppConfig
-	providerRepo  repository.ProviderRepository
-	tailscale     *network.Tailscale
-	workerRepo    repository.WorkerRepository
+	computeClient  core.ComputeClient
+	networkClient  core.VirtualNetworkClient
+	clusterName    string
+	appConfig      types.AppConfig
+	providerRepo   repository.ProviderRepository
+	providerConfig types.OCIProviderConfig
+	tailscale      *network.Tailscale
+	workerRepo     repository.WorkerRepository
 }
 
 const (
-	ociReconcileInterval time.Duration = 5 * time.Second
+	ociReconcileInterval  time.Duration = 5 * time.Second
+	ociBootVolumeSizeInGB int64         = 1000
 )
 
 func NewOCIProvider(appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*OCIProvider, error) {
-	provider, err := auth.InstancePrincipalConfigurationProviderForRegion(common.RegionIAD)
+	configProvider, err := common.ConfigurationProviderFromFile(appConfig.Providers.OCIConfig.ConfigFilePath, appConfig.Providers.OCIConfig.PrivateKeyPassword)
 	if err != nil {
-		log.Printf("Unable to create OCI config provider: %v", err)
 		return nil, err
 	}
 
-	computeClient, err := core.NewComputeClientWithConfigurationProvider(provider)
+	computeClient, err := core.NewComputeClientWithConfigurationProvider(configProvider)
 	if err != nil {
-		log.Printf("Unable to create OCI Compute client: %v", err)
 		return nil, err
 	}
 
-	networkClient, err := core.NewVirtualNetworkClientWithConfigurationProvider(provider)
+	networkClient, err := core.NewVirtualNetworkClientWithConfigurationProvider(configProvider)
 	if err != nil {
-		log.Printf("Unable to create OCI Virtual Network client: %v", err)
 		return nil, err
 	}
 
 	return &OCIProvider{
-		computeClient: computeClient,
-		networkClient: networkClient,
-		clusterName:   appConfig.ClusterName,
-		appConfig:     appConfig,
-		providerRepo:  providerRepo,
-		tailscale:     tailscale,
-		workerRepo:    workerRepo,
+		computeClient:  computeClient,
+		networkClient:  networkClient,
+		clusterName:    appConfig.ClusterName,
+		appConfig:      appConfig,
+		providerRepo:   providerRepo,
+		providerConfig: appConfig.Providers.OCIConfig,
+		tailscale:      tailscale,
+		workerRepo:     workerRepo,
 	}, nil
 }
 
 // OCI does not have a direct method to select instances like AWS. You need to define your logic based on available shapes in OCI.
 func (p *OCIProvider) selectInstance(requiredCpu int64, requiredMemory int64, requiredGpuType string, requiredGpuCount uint32) (*Instance, error) {
-	// This function needs to be implemented based on the specific requirements and available shapes in OCI.
-	// For now, return a placeholder instance. You should replace this logic with actual instance selection logic.
 	return &Instance{
-		Type: "VM.Standard2.1",
-		Spec: InstanceSpec{Cpu: 1, Memory: 15 * 1024, Gpu: "A10G", GpuCount: 1},
+		Type: "VM.Standard.E5.Flex",
+		Spec: InstanceSpec{Cpu: 1, Memory: 12 * 1024, Gpu: "T4", GpuCount: 1},
 	}, nil
 }
 
@@ -98,16 +95,21 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 	log.Printf("Selected shape <%s> for compute request: %+v\n", instance.Type, compute)
 	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
 
-	// Example launch details, replace with actual details like imageId, compartmentId, subnetId, etc.
+	displayName := fmt.Sprintf("%s-%s-%s", p.clusterName, poolName, machineId)
 	launchDetails := core.LaunchInstanceDetails{
-		DisplayName:   common.String("test-instance"),
+		DisplayName:   common.String(displayName),
 		Shape:         common.String(instance.Type),
-		CompartmentId: common.String("beam-dev"), // Replace with actual compartment OCID
-		// Add additional required fields like ImageId, SubnetId, etc.
+		CompartmentId: common.String(p.providerConfig.CompartmentId),
+		CreateVnicDetails: &core.CreateVnicDetails{
+			AssignPublicIp: common.Bool(true),
+			SubnetId:       common.String(p.providerConfig.SubnetId),
+		},
 		Metadata: map[string]string{
 			"user_data": encodedUserData,
 		},
-		SourceDetails: core.InstanceSourceViaImageDetails{},
+		SourceDetails: core.InstanceSourceViaImageDetails{
+			BootVolumeSizeInGBs: common.Int64(ociBootVolumeSizeInGB),
+		},
 	}
 
 	request := core.LaunchInstanceRequest{
@@ -148,7 +150,7 @@ func (p *OCIProvider) listMachines(ctx context.Context, poolName string) (map[st
 	machines := make(map[string]string)
 
 	request := core.ListInstancesRequest{
-		CompartmentId:  common.String("<compartment_ocid>"),
+		CompartmentId:  common.String(p.providerConfig.CompartmentId),
 		LifecycleState: core.InstanceLifecycleStateRunning,
 	}
 
@@ -190,7 +192,7 @@ func (p *OCIProvider) listMachines(ctx context.Context, poolName string) (map[st
 }
 
 func (p *OCIProvider) Reconcile(ctx context.Context, poolName string) {
-	ticker := time.NewTicker(ec2ReconcileInterval)
+	ticker := time.NewTicker(ociReconcileInterval)
 	defer ticker.Stop()
 
 	for {

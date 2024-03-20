@@ -84,7 +84,7 @@ type ProviderRepository interface {
 	RemoveMachine(providerName, poolName, machineId string) error
 	RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error
 	WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
-	ListAllMachines(providerName, poolName string) ([]*types.ProviderMachineState, error)
+	ListAllMachines(providerName, poolName string) ([]*types.ProviderMachine, error)
 	SetMachineLock(providerName, poolName, machineId string) error
 	RemoveMachineLock(providerName, poolName, machineId string) error
 }

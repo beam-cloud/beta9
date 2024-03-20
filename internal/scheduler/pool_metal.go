@@ -52,6 +52,8 @@ func NewMetalWorkerPoolController(
 	switch *providerName {
 	case types.ProviderEC2:
 		provider, err = providers.NewEC2Provider(config, providerRepo, workerRepo, tailscale)
+	case types.ProviderOCI:
+		provider, err = providers.NewOCIProvider(config, providerRepo, workerRepo, tailscale)
 	default:
 		return nil, errors.New("invalid provider name")
 	}
@@ -101,6 +103,10 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	machines, err := wpc.providerRepo.ListAllMachines(string(*wpc.providerName), wpc.name)
 	if err != nil {
 		return nil, err
+	}
+
+	for _, machine := range machines {
+		log.Printf("worker keys: %+v\n", machine.WorkerKeys)
 	}
 
 	/*
