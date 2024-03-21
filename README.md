@@ -110,20 +110,20 @@ We welcome contributions, big or small! These are the most helpful things for us
 
 Our mission is to simplify the complexity of the cloud. To do this, we've built a Python-first abstraction for launching serverless containers on GPUs.
 
-In our view, the existing cloud providers provide tools that are too bloated and complicated for developers to iterate quickly. 
+In our view, the existing cloud providers offer tools that are too bloated and complicated for developers to iterate quickly. 
 
-Beam is the alternative to setting up a  Kubernetes cluster or spinning up a cloud VM.
+Beam is the alternative to setting up a Kubernetes cluster or logging into the console to spin up a cloud VM.
 
 Beam gives you all the tools you need to run code on cloud GPUs, expose that code behind an API, and iterate quickly on your app.
 
 ## Open-source vs. paid 
 
-This repo is available under the Apache license. If you'd like to use the cloud hosted version, you can visit our [pricing page](https://beam.cloud/pricing).
+This repo is available under the [Apache](https://www.apache.org/licenses/LICENSE-2.0) license. If you'd like to use the cloud hosted version, you can visit our [pricing page](https://beam.cloud/pricing).
 
 ## Community & Support
 
 If you need support, you can reach out through any of these channels:
 
-- [Slack](https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g) \(Chat live with our engineering team\)
+- [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-2f16bwiiq-oP8weCLWNrf_9lJZIDf0Fg) \(Chat live with our engineering team\)
 - [GitHub issues](https://github.com/beam-cloud//issues) \(Bug reports, feature requests, and anything roadmap related)
 - [Twitter](https://twitter.com/beam_cloud) \(Updates on releases)
