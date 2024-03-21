@@ -152,6 +152,7 @@ func TestPaginateTasks(t *testing.T) {
 	assert.NotEqual(t, "", cursorPaginator.Next)
 
 	// Encode the cursor for row id 2 (assuming that previous paginate returned next at id 2)
+	// Paginate page with cursor and should return a next cursor because the total rows > page size
 	mockDatetimeCursor := DatetimeCursor{
 		Value: time.Now().Format(CursorTimestampFormat),
 		Id:    2,
@@ -166,7 +167,6 @@ func TestPaginateTasks(t *testing.T) {
 
 	mock.ExpectQuery("SELECT \\* FROM tasks t WHERE (.*) ORDER BY \\w+ (asc|desc) LIMIT \\d+").WillReturnRows(tasksMockRows)
 
-	// Paginate page with cursor and should return a next cursor because the total rows > page size
 	cursorPaginator, err = Paginate(SquirrelCursorPaginator[types.Task]{
 		Client:          sqlxDB,
 		SelectBuilder:   squirrel.Select("*").From("tasks t"),
