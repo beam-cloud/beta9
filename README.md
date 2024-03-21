@@ -1,5 +1,5 @@
 <p align="center">
-<img alt="Logo" src="https://github.com/beam-cloud/beta9/assets/10925686/860052a1-2a96-4bad-a991-dd2b24e3b524"/ width="40%">
+<img alt="Logo" src="https://github.com/beam-cloud/beta9/assets/10925686/fb46cc59-fbd1-47a7-9d88-9d3f5b66722f"/ width="40%">
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 
 ---
 
-Beta9 is an open-source platform for running remote containers directly from Python. It supports GPU/CUDA acceleration, allows you to scale out arbitrary Python code to hundreds of machines, easily deploy functions and task queues, and distribute workloads across various cloud providers (including bare metal providers).
+Beam is an open-source platform for running remote containers directly from Python. It supports GPU/CUDA acceleration, allows you to scale out arbitrary Python code to hundreds of machines, easily deploy functions and task queues, and distribute workloads across various cloud providers (including bare metal providers).
 
 ### Features
 
@@ -33,10 +33,8 @@ Beta9 is an open-source platform for running remote containers directly from Pyt
 - Distribute workloads across multiple cloud providers
 - Easily deploy task queues and functions using simple Python abstractions
 
-We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale.
-
 ```python
-from beta9 import function
+from beam import function
 
 
 @function(cpu=8, gpu="A100-40")
@@ -91,7 +89,7 @@ After you've setup the server and SDK, check out the SDK readme [here](sdk/READM
 
 ## How it works
 
-Beta9 is designed for launching remote serverless containers very quickly. There are a few things that make this possible:
+Beam is designed for launching remote serverless containers very quickly. There are a few things that make this possible:
 
 - A custom, lazy loading image format (CLIP) backed by S3/FUSE
 - A fast, redis-based container scheduling engine
@@ -127,5 +125,5 @@ This repo is available under the Apache license. If you'd like to use the cloud 
 If you need support, you can reach out through any of these channels:
 
 - [Slack](https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g) \(Chat live with our engineering team\)
-- [GitHub issues](https://github.com/beam-cloud/beta9/issues) \(Bug reports, feature requests, and anything roadmap related)
+- [GitHub issues](https://github.com/beam-cloud//issues) \(Bug reports, feature requests, and anything roadmap related)
 - [Twitter](https://twitter.com/beam_cloud) \(Updates on releases)
