@@ -2,7 +2,6 @@ package apiv1
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 
@@ -72,8 +71,6 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 
 	remoteConfig.Database.Redis.Addrs[0] = redisHostname
 	remoteConfig.GatewayService.Host = strings.Split(gatewayGrpcHostname, ":")[0]
-
-	log.Printf("request: %+v\n", request)
 
 	hostName := fmt.Sprintf("%s.%s.%s", request.MachineID, g.config.Tailscale.User, g.config.Tailscale.HostName)
 	err = g.providerRepo.RegisterMachine(request.ProviderName, request.PoolName, request.MachineID, &types.ProviderMachineState{

@@ -58,16 +58,20 @@ func NewOCIProvider(appConfig types.AppConfig, providerRepo repository.ProviderR
 	}, nil
 }
 
-// OCI does not have a direct method to select instances like AWS. You need to define your logic based on available shapes in OCI.
-func (p *OCIProvider) selectInstance(requiredCpu int64, requiredMemory int64, requiredGpuType string, requiredGpuCount uint32) (*Instance, error) {
-	return &Instance{
+func (p *OCIProvider) getAvailableInstances() ([]Instance, error) {
+	return []Instance{{
 		Type: "VM.GPU.A10.1",
 		Spec: InstanceSpec{Cpu: 15 * 1000, Memory: 240 * 1024, Gpu: "T4", GpuCount: 1},
-	}, nil
+	}}, nil
 }
 
 func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token string, compute types.ProviderComputeRequest) (string, error) {
-	instance, err := p.selectInstance(compute.Cpu, compute.Memory, compute.Gpu, compute.GpuCount)
+	availableInstances, err := p.getAvailableInstances()
+	if err != nil {
+		return "", err
+	}
+
+	instance, err := selectInstance(availableInstances, compute.Cpu, compute.Memory, compute.Gpu, compute.GpuCount)
 	if err != nil {
 		return "", err
 	}
@@ -120,11 +124,9 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 		},
 	}
 
-	request := core.LaunchInstanceRequest{
+	response, err := p.computeClient.LaunchInstance(ctx, core.LaunchInstanceRequest{
 		LaunchInstanceDetails: launchDetails,
-	}
-
-	response, err := p.computeClient.LaunchInstance(ctx, request)
+	})
 	if err != nil {
 		return "", err
 	}

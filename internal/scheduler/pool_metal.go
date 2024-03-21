@@ -252,6 +252,7 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 			Containers:                   containers,
 			Volumes:                      wpc.getWorkerVolumes(workerMemory),
 			EnableServiceLinks:           ptr.To(false),
+			DNSPolicy:                    corev1.DNSClusterFirstWithHostNet,
 		},
 	}
 
