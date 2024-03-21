@@ -152,7 +152,7 @@ func TestPaginateTasks(t *testing.T) {
 	assert.NotEqual(t, "", cursorPaginator.Next)
 
 	// Encode the cursor for row id 2 (assuming that previous paginate returned next at id 2)
-	// Paginate page with cursor and should return a next cursor because the total rows > page size
+	// Paginate page with cursor and should not return a next cursor because the total rows == page size and there are no more rows after the cursor
 	mockDatetimeCursor := DatetimeCursor{
 		Value: time.Now().Format(CursorTimestampFormat),
 		Id:    2,
