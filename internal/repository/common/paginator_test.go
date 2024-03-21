@@ -100,6 +100,7 @@ func TestPaginateTasks(t *testing.T) {
 	}
 	sqlxDB := sqlx.NewDb(db, "sqlmock")
 
+	// Paginate page with no cursor and should not return a next cursor because the total rows == page size
 	tasksMockRows := sqlmock.NewRows(
 		[]string{"id", "external_id", "status", "container_id", "started_at", "ended_at", "workspace_id", "stub_id", "created_at", "updated_at"},
 	).
@@ -109,7 +110,6 @@ func TestPaginateTasks(t *testing.T) {
 
 	mock.ExpectQuery("SELECT \\* FROM tasks t ORDER BY \\w+ (asc|desc) LIMIT \\d+").WillReturnRows(tasksMockRows)
 
-	// Paginate page with no cursor and should not return a next cursor because the total rows == page size
 	cursorPaginator, err := Paginate(SquirrelCursorPaginator[types.Task]{
 		Client:          sqlxDB,
 		SelectBuilder:   squirrel.Select("*").From("tasks t"),
@@ -125,6 +125,7 @@ func TestPaginateTasks(t *testing.T) {
 	assert.Equal(t, 3, len(cursorPaginator.Data))
 	assert.Equal(t, "", cursorPaginator.Next)
 
+	// Paginate page with no cursor and should return a next cursor because the total rows > page size
 	tasksMockRows = sqlmock.NewRows(
 		[]string{"id", "external_id", "status", "container_id", "started_at", "ended_at", "workspace_id", "stub_id", "created_at", "updated_at"},
 	).
@@ -134,7 +135,6 @@ func TestPaginateTasks(t *testing.T) {
 
 	mock.ExpectQuery("SELECT \\* FROM tasks t ORDER BY \\w+ (asc|desc) LIMIT \\d+").WillReturnRows(tasksMockRows)
 
-	// Paginate page with no cursor and should return a next cursor because the total rows > page size
 	cursorPaginator, err = Paginate(SquirrelCursorPaginator[types.Task]{
 		Client:          sqlxDB,
 		SelectBuilder:   squirrel.Select("*").From("tasks t"),
