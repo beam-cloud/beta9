@@ -12,6 +12,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	_ "github.com/beam-cloud/beta9/internal/repository/backend_postgres_migrations"
+	"github.com/beam-cloud/beta9/internal/repository/common"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -361,7 +362,7 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 	return tasks, nil
 }
 
-func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, filters types.TaskFilter) ([]types.TaskWithRelated, error) {
+func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters types.TaskFilter) squirrel.SelectBuilder {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\"",
 	).From("task t").
@@ -407,6 +408,12 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 		qb = qb.Limit(uint64(filters.Limit))
 	}
 
+	return qb
+}
+
+func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, filters types.TaskFilter) ([]types.TaskWithRelated, error) {
+	qb := c.listTaskWithRelatedQueryBuilder(filters)
+
 	sql, args, err := qb.ToSql()
 	if err != nil {
 		return nil, err
@@ -419,6 +426,27 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 	}
 
 	return tasks, nil
+}
+
+func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error) {
+	qb := c.listTaskWithRelatedQueryBuilder(filters)
+
+	page, err := common.Paginate(
+		common.SquirrelCursorPaginator[types.TaskWithRelated]{
+			Client:          c.client,
+			SelectBuilder:   qb,
+			SortOrder:       "DESC",
+			SortColumn:      "created_at",
+			SortQueryPrefix: "t",
+			PageSize:        int(filters.Limit),
+		},
+		filters.Cursor,
+	)
+	if err != nil {
+		return common.CursorPaginationInfo[types.TaskWithRelated]{}, err
+	}
+
+	return *page, nil
 }
 
 // Stub
@@ -568,7 +596,7 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
 	return &deploymentWithRelated, nil
 }
 
-func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.DeploymentFilter) squirrel.SelectBuilder {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"d.id, d.external_id, d.name, d.active, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at",
 		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
@@ -585,7 +613,7 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters
 	}
 
 	if filters.Name != "" {
-		qb = qb.Where(squirrel.Eq{"d.name": filters.Name})
+		qb = qb.Where(squirrel.Like{"d.name": "%" + filters.Name + "%"})
 	}
 
 	if filters.Offset > 0 {
@@ -595,6 +623,12 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters
 	if filters.Limit > 0 {
 		qb = qb.Limit(uint64(filters.Limit))
 	}
+
+	return qb
+}
+
+func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+	qb := c.listDeploymentsQueryBuilder(filters)
 
 	sql, args, err := qb.ToSql()
 	if err != nil {
@@ -608,6 +642,27 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters
 	}
 
 	return deployments, nil
+}
+
+func (c *PostgresBackendRepository) ListDeploymentsPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
+	qb := c.listDeploymentsQueryBuilder(filters)
+
+	page, err := common.Paginate(
+		common.SquirrelCursorPaginator[types.DeploymentWithRelated]{
+			Client:          c.client,
+			SelectBuilder:   qb,
+			SortOrder:       "DESC",
+			SortColumn:      "created_at",
+			SortQueryPrefix: "d",
+			PageSize:        int(filters.Limit),
+		},
+		filters.Cursor,
+	)
+	if err != nil {
+		return common.CursorPaginationInfo[types.DeploymentWithRelated]{}, err
+	}
+
+	return *page, nil
 }
 
 func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error) {
