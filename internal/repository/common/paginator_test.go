@@ -78,6 +78,21 @@ func TestStructToMap(t *testing.T) {
 	}
 }
 
+func TestEncodeDecodeCursor(t *testing.T) {
+	mockDatetimeCursor := DatetimeCursor{
+		Value: time.Now().Format(CursorTimestampFormat),
+		Id:    1,
+	}
+	cursorEncoded := EncodeCursor(mockDatetimeCursor)
+
+	decodedCursor, err := DecodeCursor(cursorEncoded)
+	if err != nil {
+		t.Errorf("Failed to decode cursor: %v", err)
+	}
+
+	assert.Equal(t, mockDatetimeCursor, *decodedCursor)
+}
+
 func TestPaginateTasks(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
