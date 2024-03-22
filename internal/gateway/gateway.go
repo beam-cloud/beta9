@@ -273,7 +273,7 @@ func (g *Gateway) registerServices() error {
 
 // Gateway entry point
 func (g *Gateway) Start() error {
-	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", g.config.GatewayService.GRPCPort))
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", g.config.GatewayService.GRPCPort))
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
