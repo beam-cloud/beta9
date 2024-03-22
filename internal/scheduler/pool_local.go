@@ -130,7 +130,8 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		workerMemory = wpc.config.Worker.DefaultWorkerMemoryRequest
 	}
 
-	if gpuType != "" && wpc.workerPool.Runtime == "nvidia" {
+	// We only support nvidia for now
+	if gpuType != "" {
 		resourceRequests[corev1.ResourceName("nvidia.com/gpu")] = *resource.NewQuantity(int64(gpuCount), resource.DecimalSI)
 	}
 
@@ -267,14 +268,22 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 		}
 	}
 
+	volumeSource := corev1.VolumeSource{}
+	if wpc.config.Worker.ImagePVCName != "" {
+		volumeSource.PersistentVolumeClaim = &corev1.PersistentVolumeClaimVolumeSource{
+			ClaimName: wpc.config.Worker.ImagePVCName,
+		}
+	} else {
+		volumeSource.HostPath = &corev1.HostPathVolumeSource{
+			Path: defaultImagesPath,
+			Type: &hostPathType,
+		}
+	}
+
 	return append(volumes,
 		corev1.Volume{
-			Name: imagesVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: wpc.config.Worker.ImagePVCName,
-				},
-			},
+			Name:         imagesVolumeName,
+			VolumeSource: volumeSource,
 		},
 	)
 }
@@ -288,7 +297,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 		},
 		{
 			Name:      imagesVolumeName,
-			MountPath: "/images",
+			MountPath: defaultImagesPath,
 			ReadOnly:  false,
 		},
 		{
