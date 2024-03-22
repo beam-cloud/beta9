@@ -130,7 +130,8 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		workerMemory = wpc.config.Worker.DefaultWorkerMemoryRequest
 	}
 
-	if gpuType != "" && wpc.workerPool.Runtime == "nvidia" {
+	// We only support nvidia for now
+	if gpuType != "" {
 		resourceRequests[corev1.ResourceName("nvidia.com/gpu")] = *resource.NewQuantity(int64(gpuCount), resource.DecimalSI)
 	}
 
