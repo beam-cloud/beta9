@@ -1,5 +1,5 @@
 <p align="center">
-<img alt="Logo" src="https://github.com/beam-cloud/beta9/assets/10925686/fb46cc59-fbd1-47a7-9d88-9d3f5b66722f"/ width="40%">
+<img alt="Logo" src="https://github.com/beam-cloud/beta9/assets/10925686/a23019e2-3a34-4efa-9ac7-033c83f528cf"/ width="20%">
 </p>
 
 <p align="center">
@@ -19,12 +19,12 @@
 </p>
 
 <h3 align="center">
-    The distributed Python container runtime
+    Serverless container runtime for AI applications 
 </h3>
 
 ---
 
-Beam is an open-source platform for running remote containers directly from Python. It supports GPU/CUDA acceleration, allows you to scale out arbitrary Python code to hundreds of machines, easily deploy functions and task queues, and distribute workloads across various cloud providers (including bare metal providers).
+Beta9 is an open-source platform for running remote containers directly from Python. It supports GPU/CUDA acceleration, allows you to scale out arbitrary Python code to hundreds of machines, easily deploy functions and task queues, and distribute workloads across various cloud providers (including bare metal providers).
 
 ### Features
 
@@ -34,7 +34,7 @@ Beam is an open-source platform for running remote containers directly from Pyth
 - Easily deploy task queues and functions using simple Python abstractions
 
 ```python
-from beam import function
+from beta9 import function
 
 
 @function(cpu=8, gpu="A100-40")
@@ -55,7 +55,7 @@ def main():
 
 ### Beam Cloud (Recommended)
 
-The fastest way and most reliable way to get started with Beam is by signing up for free to [Beam Cloud](https://beam.cloud). Your first 10 hours of usage are free, and afterwards you pay based on usage. 
+The fastest way and most reliable way to get started with Beta9 is by signing up for free to [Beam Cloud](https://beam.cloud). Your first 10 hours of usage are free, and afterwards you pay based on usage. 
 
 ### Open-source deploy (Advanced)
 
@@ -89,7 +89,7 @@ After you've setup the server and SDK, check out the SDK readme [here](sdk/READM
 
 ## How it works
 
-Beam is designed for launching remote serverless containers very quickly. There are a few things that make this possible:
+Beta9 is designed for launching remote serverless containers very quickly. There are a few things that make this possible:
 
 - A custom, lazy loading image format (CLIP) backed by S3/FUSE
 - A fast, redis-based container scheduling engine
@@ -112,9 +112,9 @@ Our mission is to simplify the complexity of the cloud. To do this, we've built 
 
 In our view, the existing cloud providers offer tools that are too bloated and complicated for developers to iterate quickly. 
 
-Beam is the alternative to setting up a Kubernetes cluster or logging into the console to spin up a cloud VM.
+Beta9 is the alternative to setting up a Kubernetes cluster or logging into the console to spin up a cloud VM.
 
-Beam gives you all the tools you need to run code on cloud GPUs, expose that code behind an API, and iterate quickly on your app.
+Beta9 gives you all the tools you need to run code on cloud GPUs, expose that code behind an API, and iterate quickly on your app.
 
 ## Open-source vs. paid 
 
