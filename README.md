@@ -104,7 +104,7 @@ We welcome contributions, big or small! These are the most helpful things for us
 
 * Rank features in our roadmap
 * Open a PR
-* Submit a [feature request](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=issue--feature-request.md&title=) or [bug report](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=issue--bug-report.md&title=)
+* Submit a [feature request](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) or [bug report](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=bug-report.md&title=)
 
 ## Philosophy
 
