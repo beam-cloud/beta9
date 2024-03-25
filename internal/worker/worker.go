@@ -412,11 +412,6 @@ func (s *Worker) terminateContainer(containerId string, request *types.Container
 		log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
 	}
 
-	if containerErr != nil {
-		log.Printf("<%s> - container error: %v\n", containerId, containerErr)
-
-	}
-
 	defer s.containerWg.Done()
 
 	s.clearContainer(containerId, request, time.Duration(s.config.Worker.TerminationGracePeriod)*time.Second)

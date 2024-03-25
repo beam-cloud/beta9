@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"bytes"
 	"errors"
 	"log"
+	"os/exec"
 
 	"github.com/beam-cloud/beta9/internal/types"
 )
@@ -16,6 +18,15 @@ type Storage interface {
 	Mount(localPath string) error
 	Format(fsName string) error
 	Unmount(localPath string) error
+}
+
+// isMounted uses findmnt to check if the specified mount point is currently mounted
+func isMounted(mountPoint string) bool {
+	cmd := exec.Command("findmnt", "-n", mountPoint)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	return err == nil && out.String() != ""
 }
 
 func NewStorage(config types.StorageConfig) (Storage, error) {

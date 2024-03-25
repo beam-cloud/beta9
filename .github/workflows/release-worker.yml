@@ -3,11 +3,10 @@ name: Build and release Worker
 on:
   release:
     types: [created]
-    tags:
-      - 'worker-*'
 
 jobs:
   build_and_release_worker:
+    if: startsWith(github.ref, 'refs/tags/worker-')
     environment: Release
     runs-on: ubuntu-latest
 
