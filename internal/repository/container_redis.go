@@ -149,28 +149,28 @@ func (cr *ContainerRedisRepository) DeleteContainerState(request *types.Containe
 		return fmt.Errorf("failed to delete container state <%v>: %w", stateKey, err)
 	}
 
-	hostKey := common.RedisKeys.SchedulerContainerHost(containerId)
-	err = cr.rdb.Del(context.TODO(), hostKey).Err()
+	addrKey := common.RedisKeys.SchedulerContainerAddress(containerId)
+	err = cr.rdb.Del(context.TODO(), addrKey).Err()
 	if err != nil {
-		return fmt.Errorf("failed to delete container host <%v>: %w", hostKey, err)
+		return fmt.Errorf("failed to delete container addr <%v>: %w", addrKey, err)
 	}
 
 	return nil
 }
 
 func (cr *ContainerRedisRepository) SetContainerAddress(containerId string, addr string) error {
-	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerHost(containerId), addr, 0).Err()
+	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerAddress(containerId), addr, 0).Err()
 }
 
 func (cr *ContainerRedisRepository) GetContainerAddress(containerId string) (string, error) {
-	return cr.rdb.Get(context.TODO(), common.RedisKeys.SchedulerContainerHost(containerId)).Result()
+	return cr.rdb.Get(context.TODO(), common.RedisKeys.SchedulerContainerAddress(containerId)).Result()
 }
 
-func (cr *ContainerRedisRepository) SetContainerWorkerHostname(containerId string, addr string) error {
-	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerContainerHost(containerId), addr, 0).Err()
+func (cr *ContainerRedisRepository) SetWorkerAddress(containerId string, addr string) error {
+	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerAddress(containerId), addr, 0).Err()
 }
 
-func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId string) (string, error) {
+func (cr *ContainerRedisRepository) GetWorkerAddress(containerId string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -183,9 +183,9 @@ func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId strin
 	for {
 		select {
 		case <-ctx.Done():
-			return "", errors.New("timeout reached while trying to get worker hostname")
+			return "", errors.New("timeout reached while trying to get worker addr")
 		case <-ticker.C:
-			hostname, err = cr.rdb.Get(ctx, common.RedisKeys.SchedulerWorkerContainerHost(containerId)).Result()
+			hostname, err = cr.rdb.Get(ctx, common.RedisKeys.SchedulerWorkerAddress(containerId)).Result()
 			if err == nil {
 				return hostname, nil
 			}

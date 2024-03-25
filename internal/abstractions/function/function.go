@@ -93,7 +93,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return err
 	}
 
-	hostname, err := fs.containerRepo.GetContainerWorkerHostname(task.ContainerId)
+	hostname, err := fs.containerRepo.GetWorkerAddress(task.ContainerId)
 	if err != nil {
 		return err
 	}
