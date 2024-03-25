@@ -31,7 +31,6 @@ import (
 const (
 	imagePullCommand       string = "skopeo"
 	imageCachePath         string = "/dev/shm/images"
-	imageMountPath         string = "/dev/shm/images/mount"
 	imageAvailableFilename string = "IMAGE_AVAILABLE"
 	imageMountLockFilename string = "IMAGE_MOUNT_LOCK"
 )
@@ -89,11 +88,6 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		return nil, err
 	}
 
-	err = os.MkdirAll(imageMountPath, os.ModePerm)
-	if err != nil {
-		return nil, err
-	}
-
 	// TODO: refactor credentials logic for base image registries
 	// Right now, the aws credential provider is not actually being used
 	// because the base image is stored in a public registry
@@ -131,7 +125,7 @@ func (c *ImageClient) PullLazy(imageId string) error {
 
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           remoteArchivePath,
-		MountPoint:            fmt.Sprintf("%s/%s", imageMountPath, imageId),
+		MountPoint:            fmt.Sprintf("%s/%s", imagePath, imageId),
 		Verbose:               false,
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
