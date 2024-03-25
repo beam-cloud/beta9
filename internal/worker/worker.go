@@ -255,7 +255,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	bundlePath := filepath.Join(s.userImagePath, request.ImageId)
 
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, defaultWorkerServerPort)
-	err := s.containerRepo.SetContainerWorkerHostname(request.ContainerId, hostname)
+	err := s.containerRepo.SetWorkerAddress(request.ContainerId, hostname)
 	if err != nil {
 		return err
 	}

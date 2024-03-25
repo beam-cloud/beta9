@@ -37,8 +37,8 @@ type ContainerRepository interface {
 	GetContainerAddress(containerId string) (string, error)
 	UpdateContainerStatus(string, types.ContainerStatus, time.Duration) error
 	DeleteContainerState(*types.ContainerRequest) error
-	SetContainerWorkerHostname(containerId string, addr string) error
-	GetContainerWorkerHostname(containerId string) (string, error)
+	SetWorkerAddress(containerId string, addr string) error
+	GetWorkerAddress(containerId string) (string, error)
 	GetActiveContainersByPrefix(patternPrefix string) ([]types.ContainerState, error)
 	GetFailedContainerCountByPrefix(patternPrefix string) (int, error)
 }
