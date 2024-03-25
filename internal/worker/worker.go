@@ -222,7 +222,7 @@ func (s *Worker) Run() error {
 					}
 
 					s.containerLock.Unlock()
-					s.clearContainer(containerId, request)
+					s.clearContainer(containerId, request, time.Duration(0))
 					continue
 				}
 			}
@@ -412,31 +412,37 @@ func (s *Worker) terminateContainer(containerId string, request *types.Container
 		log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
 	}
 
+	if containerErr != nil {
+		log.Printf("<%s> - container error: %v\n", containerId, containerErr)
+
+	}
+
 	defer s.containerWg.Done()
 
-	// Allow for some time to pass before clearing the container. This way we can handle some last
-	// minute logs or events or if the user wants to inspect the container before it's cleared.
-	time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
-
-	s.clearContainer(containerId, request)
+	s.clearContainer(containerId, request, time.Duration(s.config.Worker.TerminationGracePeriod)*time.Second)
 }
 
-func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest) {
+func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, delay time.Duration) {
 	s.containerLock.Lock()
-	defer s.containerLock.Unlock()
-
-	s.containerInstances.Delete(containerId)
 
 	if request.Gpu != "" {
 		s.containerCudaManager.UnassignGpuDevices(containerId)
 	}
 
-	err := s.containerRepo.DeleteContainerState(request)
-	if err != nil {
-		log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
-	}
-
 	s.completedRequests <- request
+	s.containerLock.Unlock()
+
+	go func() {
+		// Allow for some time to pass before clearing the container. This way we can handle some last
+		// minute logs or events or if the user wants to inspect the container before it's cleared.
+		time.Sleep(delay)
+
+		s.containerInstances.Delete(containerId)
+		err := s.containerRepo.DeleteContainerState(request)
+		if err != nil {
+			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
+		}
+	}()
 }
 
 // spawn a container using runc binary
