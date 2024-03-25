@@ -140,11 +140,12 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	hostname, err := b.containerRepo.GetContainerWorkerHostname(containerId)
+	hostname, err := b.containerRepo.GetWorkerAddress(containerId)
 	if err != nil {
 		return err
 	}
 
+	log.Println("Retrieved worker address: ", hostname)
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
 		return err
