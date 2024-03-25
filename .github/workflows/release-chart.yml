@@ -3,6 +3,7 @@ name: Build and push Chart
 on:
   release:
     types: [created]
+
   workflow_dispatch:
     inputs:
       chart_version:

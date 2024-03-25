@@ -3,11 +3,10 @@ name: Build and release Runner
 on:
   release:
     types: [created]
-    tags:
-      - 'runner-*'
 
 jobs:
   build_and_release_runner:
+    if: startsWith(github.ref, 'refs/tags/runner-')
     environment: Release
     runs-on: ubuntu-latest
     strategy:

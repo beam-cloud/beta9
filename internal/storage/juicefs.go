@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"time"
 
 	"github.com/beam-cloud/beta9/internal/types"
 )
+
+const juiceFsMountTimeout time.Duration = 30 * time.Second
 
 type JuiceFsStorage struct {
 	mountCmd *exec.Cmd
@@ -27,20 +30,43 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		localPath,
 	)
 
+	// Start the mount command in the background
 	go func() {
 		output, err := s.mountCmd.CombinedOutput()
 		if err != nil {
-			log.Printf("error executing juicefs mount: %v, output: %s", err, string(output))
+			log.Fatalf("error executing juicefs mount: %v, output: %s", err, string(output))
 		}
 	}()
 
-	log.Printf("JuiceFS filesystem is being mounted to: '%s'\n", localPath)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	timeout := time.After(juiceFsMountTimeout)
+
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case <-timeout:
+				done <- false
+				return
+			case <-ticker.C:
+				if isMounted(localPath) {
+					done <- true
+					return
+				}
+			}
+		}
+	}()
+
+	// Wait for confirmation or timeout
+	if !<-done {
+		return fmt.Errorf("failed to mount JuiceFS filesystem to: '%s'", localPath)
+	}
+
+	log.Printf("JuiceFS filesystem mounted to: '%s'", localPath)
 	return nil
 }
 
 func (s *JuiceFsStorage) Format(fsName string) error {
-	log.Printf("Formatting JuiceFS filesystem with name: '%s'\n", fsName)
-
 	cmd := exec.Command(
 		"juicefs",
 		"format",
@@ -63,7 +89,6 @@ func (s *JuiceFsStorage) Format(fsName string) error {
 		return fmt.Errorf("error executing juicefs format: %v, output: %s", err, string(output))
 	}
 
-	log.Printf("JuiceFS filesystem formatted: '%s'\n", fsName)
 	return nil
 }
 
