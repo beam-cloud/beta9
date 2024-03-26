@@ -42,11 +42,11 @@ var RingBufferSize int = 10000000
 var RequestTimeout = 120 * time.Second
 
 type EndpointServiceOpts struct {
-	Config         types.AppConfig
-	RedisClient    *common.RedisClient
-	Scheduler      *scheduler.Scheduler
-	BaseRouteGroup *echo.Group
-	Tailscale      *network.Tailscale
+	Config      types.AppConfig
+	RedisClient *common.RedisClient
+	Scheduler   *scheduler.Scheduler
+	RouteGroup  *echo.Group
+	Tailscale   *network.Tailscale
 }
 
 func NewEndpointService(
@@ -78,7 +78,7 @@ func NewEndpointService(
 
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(backendRepo)
-	registerEndpointRoutes(opts.BaseRouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
+	registerEndpointRoutes(opts.RouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
 
 	return es, nil
 }

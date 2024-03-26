@@ -52,7 +52,7 @@ func NewRedisTaskQueueService(
 	scheduler *scheduler.Scheduler,
 	containerRepo repository.ContainerRepository,
 	backendRepo repository.BackendRepository,
-	baseRouteGroup *echo.Group,
+	routeGroup *echo.Group,
 ) (TaskQueueService, error) {
 	keyEventChan := make(chan common.KeyEvent)
 	keyEventManager, err := common.NewKeyEventManager(rdb)
@@ -79,7 +79,7 @@ func NewRedisTaskQueueService(
 
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(backendRepo)
-	registerTaskQueueRoutes(baseRouteGroup.Group(taskQueueRoutePrefix, authMiddleware), tq)
+	registerTaskQueueRoutes(routeGroup.Group(taskQueueRoutePrefix, authMiddleware), tq)
 
 	return tq, nil
 }

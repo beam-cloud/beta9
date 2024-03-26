@@ -10,12 +10,12 @@ import (
 )
 
 type endpointGroup struct {
-	routerGroup *echo.Group
-	es          *RingBufferEndpointService
+	routeGroup *echo.Group
+	es         *RingBufferEndpointService
 }
 
 func registerEndpointRoutes(g *echo.Group, es *RingBufferEndpointService) *endpointGroup {
-	group := &endpointGroup{routerGroup: g, es: es}
+	group := &endpointGroup{routeGroup: g, es: es}
 
 	g.GET("/id/:stubId/", group.endpointRequest)
 	g.POST("/:deploymentName/v:version", group.endpointRequest)
