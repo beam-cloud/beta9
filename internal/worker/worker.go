@@ -747,7 +747,7 @@ func (s *Worker) shutdown() error {
 
 	err = s.storage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
-		return err
+		log.Printf("Failed to unmount storage: %v\n", err)
 	}
 
 	s.cancel()
