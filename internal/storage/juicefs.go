@@ -23,6 +23,8 @@ func NewJuiceFsStorage(config types.JuiceFSConfig) (Storage, error) {
 }
 
 func (s *JuiceFsStorage) Mount(localPath string) error {
+	log.Printf("JuiceFS filesystem mounting to: '%s'\n", localPath)
+
 	s.mountCmd = exec.Command(
 		"juicefs",
 		"mount",
