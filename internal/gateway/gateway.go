@@ -55,6 +55,7 @@ type Gateway struct {
 	ctx            context.Context
 	cancelFunc     context.CancelFunc
 	baseRouteGroup *echo.Group
+	rootRouteGroup *echo.Group
 }
 
 func NewGateway() (*Gateway, error) {
@@ -139,6 +140,7 @@ func (g *Gateway) initHttp() error {
 
 	authMiddleware := auth.AuthMiddleware(g.BackendRepo)
 	g.baseRouteGroup = e.Group(apiv1.HttpServerBaseRoute)
+	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
 
 	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.redisClient)
 	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.config)
@@ -202,7 +204,7 @@ func (g *Gateway) registerServices() error {
 		ContainerRepo:  g.ContainerRepo,
 		Scheduler:      g.Scheduler,
 		Tailscale:      g.Tailscale,
-		BaseRouteGroup: g.baseRouteGroup,
+		BaseRouteGroup: g.rootRouteGroup,
 	})
 	if err != nil {
 		return err
@@ -210,7 +212,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterFunctionServiceServer(g.grpcServer, fs)
 
 	// Register task queue service
-	tq, err := taskqueue.NewRedisTaskQueueService(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo, g.baseRouteGroup)
+	tq, err := taskqueue.NewRedisTaskQueueService(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo, g.rootRouteGroup)
 	if err != nil {
 		return err
 	}
@@ -221,7 +223,7 @@ func (g *Gateway) registerServices() error {
 		Config:         g.config,
 		RedisClient:    g.redisClient,
 		Scheduler:      g.Scheduler,
-		BaseRouteGroup: g.baseRouteGroup,
+		BaseRouteGroup: g.rootRouteGroup,
 		Tailscale:      g.Tailscale,
 	})
 	if err != nil {

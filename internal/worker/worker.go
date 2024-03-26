@@ -745,6 +745,11 @@ func (s *Worker) shutdown() error {
 		return err
 	}
 
+	err = s.storage.Unmount(s.config.Storage.FilesystemPath)
+	if err != nil {
+		return err
+	}
+
 	s.cancel()
 	return nil
 }
