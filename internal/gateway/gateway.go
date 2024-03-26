@@ -198,13 +198,13 @@ func (g *Gateway) registerServices() error {
 
 	// Register function service
 	fs, err := function.NewRuncFunctionService(g.ctx, function.FunctionServiceOpts{
-		Config:         g.config,
-		RedisClient:    g.redisClient,
-		BackendRepo:    g.BackendRepo,
-		ContainerRepo:  g.ContainerRepo,
-		Scheduler:      g.Scheduler,
-		Tailscale:      g.Tailscale,
-		BaseRouteGroup: g.rootRouteGroup,
+		Config:        g.config,
+		RedisClient:   g.redisClient,
+		BackendRepo:   g.BackendRepo,
+		ContainerRepo: g.ContainerRepo,
+		Scheduler:     g.Scheduler,
+		Tailscale:     g.Tailscale,
+		RouteGroup:    g.rootRouteGroup,
 	})
 	if err != nil {
 		return err
@@ -220,11 +220,11 @@ func (g *Gateway) registerServices() error {
 
 	// Register endpoint service
 	ws, err := endpoint.NewEndpointService(g.ctx, endpoint.EndpointServiceOpts{
-		Config:         g.config,
-		RedisClient:    g.redisClient,
-		Scheduler:      g.Scheduler,
-		BaseRouteGroup: g.rootRouteGroup,
-		Tailscale:      g.Tailscale,
+		Config:      g.config,
+		RedisClient: g.redisClient,
+		Scheduler:   g.Scheduler,
+		RouteGroup:  g.rootRouteGroup,
+		Tailscale:   g.Tailscale,
 	})
 	if err != nil {
 		return err

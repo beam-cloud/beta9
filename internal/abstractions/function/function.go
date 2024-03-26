@@ -47,13 +47,13 @@ type RunCFunctionService struct {
 }
 
 type FunctionServiceOpts struct {
-	Config         types.AppConfig
-	RedisClient    *common.RedisClient
-	BackendRepo    repository.BackendRepository
-	ContainerRepo  repository.ContainerRepository
-	Scheduler      *scheduler.Scheduler
-	Tailscale      *network.Tailscale
-	BaseRouteGroup *echo.Group
+	Config        types.AppConfig
+	RedisClient   *common.RedisClient
+	BackendRepo   repository.BackendRepository
+	ContainerRepo repository.ContainerRepository
+	Scheduler     *scheduler.Scheduler
+	Tailscale     *network.Tailscale
+	RouteGroup    *echo.Group
 }
 
 func NewRuncFunctionService(ctx context.Context,
@@ -76,7 +76,7 @@ func NewRuncFunctionService(ctx context.Context,
 
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(fs.backendRepo)
-	registerFunctionRoutes(opts.BaseRouteGroup.Group(functionRoutePrefix, authMiddleware), fs)
+	registerFunctionRoutes(opts.RouteGroup.Group(functionRoutePrefix, authMiddleware), fs)
 
 	return fs, nil
 }
