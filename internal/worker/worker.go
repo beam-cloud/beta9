@@ -477,7 +477,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		overlayPath = "/dev/shm"
 	}
 
-	overlay := common.NewContainerOverlay(containerId, bundlePath, overlayPath, rootPath)
+	overlay := common.NewContainerOverlay(containerId, rootPath, overlayPath)
 
 	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
