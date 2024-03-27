@@ -119,6 +119,7 @@ type JuiceFSConfig struct {
 	AWSS3Bucket  string `key:"awsS3Bucket" json:"aws_s3_bucket"`
 	AWSAccessKey string `key:"awsAccessKey" json:"aws_access_key"`
 	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`
+	CacheSize    int64  `key:"cacheSize" json:"cache_size"`
 }
 
 type MountPointConfig struct {

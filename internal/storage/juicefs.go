@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strconv"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/types"
@@ -25,12 +26,16 @@ func NewJuiceFsStorage(config types.JuiceFSConfig) (Storage, error) {
 func (s *JuiceFsStorage) Mount(localPath string) error {
 	log.Printf("JuiceFS filesystem mounting to: '%s'\n", localPath)
 
+	cacheSize := strconv.FormatInt(s.config.CacheSize, 10)
+
 	s.mountCmd = exec.Command(
 		"juicefs",
 		"mount",
 		s.config.RedisURI,
 		localPath,
 		"-d",
+		"--cache-size",
+		cacheSize,
 	)
 
 	// Start the mount command in the background
@@ -77,6 +82,7 @@ func (s *JuiceFsStorage) Format(fsName string) error {
 		"--bucket", s.config.AWSS3Bucket,
 		s.config.RedisURI,
 		fsName,
+		"--no-update",
 	)
 
 	if s.config.AWSAccessKey != "" || s.config.AWSSecretKey != "" {
