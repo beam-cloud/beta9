@@ -441,6 +441,15 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}()
 }
 
+// isBuildRequest checks if the sourceImage field is not-nil, which means the container request is for a build container
+func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
+	if request.SourceImage != nil {
+		return true
+	}
+
+	return false
+}
+
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec *specs.Spec, outputChan chan common.OutputMsg) {
 	s.workerRepo.AddContainerRequestToWorker(s.workerId, request.ContainerId, request)
@@ -464,11 +473,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 
 	overlayPath := baseConfigPath
-
-	// If we are building an image, put overlay into /dev/shm for faster archiving
-	if request.SourceImage != nil {
+	if s.isBuildRequest(request) {
 		overlayPath = "/dev/shm"
 	}
+
 	overlay := common.NewContainerOverlay(containerId, bundlePath, overlayPath, rootPath)
 
 	// Add the container instance to the runningContainers map
