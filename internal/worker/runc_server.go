@@ -71,11 +71,11 @@ func (s *RunCServer) Start() error {
 }
 
 func (s *RunCServer) RunCKill(ctx context.Context, in *pb.RunCKillRequest) (*pb.RunCKillResponse, error) {
-	err := s.runcHandle.Kill(ctx, in.ContainerId, int(syscall.SIGTERM), &runc.KillOpts{
+	_ = s.runcHandle.Kill(ctx, in.ContainerId, int(syscall.SIGTERM), &runc.KillOpts{
 		All: true,
 	})
 
-	err = s.runcHandle.Delete(ctx, in.ContainerId, &runc.DeleteOpts{
+	err := s.runcHandle.Delete(ctx, in.ContainerId, &runc.DeleteOpts{
 		Force: true,
 	})
 

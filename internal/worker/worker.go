@@ -252,6 +252,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerID := request.ContainerId
+
 	bundlePath := filepath.Join(s.userImagePath, request.ImageId)
 
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, defaultWorkerServerPort)
@@ -462,12 +463,20 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		rootPath = bundlePath
 	}
 
+	overlayPath := baseConfigPath
+
+	// If we are building an image, put overlay into /dev/shm for faster archiving
+	if request.SourceImage != nil {
+		overlayPath = "/dev/shm"
+	}
+	overlay := common.NewContainerOverlay(containerId, bundlePath, overlayPath, rootPath)
+
 	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
 		Id:         containerId,
 		StubId:     request.StubId,
 		BundlePath: bundlePath,
-		Overlay:    common.NewContainerOverlay(containerId, bundlePath, baseConfigPath, rootPath),
+		Overlay:    overlay,
 		Spec:       spec,
 		ExitCode:   -1,
 		OutputWriter: common.NewOutputWriter(func(s string) {
