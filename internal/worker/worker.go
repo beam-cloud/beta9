@@ -450,6 +450,22 @@ func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 	return false
 }
 
+func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
+	// For images that have a rootfs, set that as the root path
+	// otherwise, assume runc config files are in the rootfs themselves
+	rootPath := filepath.Join(bundlePath, "rootfs")
+	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
+		rootPath = bundlePath
+	}
+
+	overlayPath := baseConfigPath
+	if s.isBuildRequest(request) {
+		overlayPath = "/dev/shm"
+	}
+
+	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
+}
+
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec *specs.Spec, outputChan chan common.OutputMsg) {
 	s.workerRepo.AddContainerRequestToWorker(s.workerId, request.ContainerId, request)
@@ -465,19 +481,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		s.terminateContainer(containerId, request, &exitCode, &containerErr)
 	}()
 
-	// For images that have a rootfs, set that as the root path
-	// otherwise, assume runc config files are in the rootfs themselves
-	rootPath := filepath.Join(bundlePath, "rootfs")
-	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
-		rootPath = bundlePath
-	}
-
-	overlayPath := baseConfigPath
-	if s.isBuildRequest(request) {
-		overlayPath = "/dev/shm"
-	}
-
-	overlay := common.NewContainerOverlay(containerId, rootPath, overlayPath)
+	// Create overlayfs for container
+	overlay := s.createOverlay(request, bundlePath)
 
 	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
