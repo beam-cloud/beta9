@@ -30,6 +30,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		"mount",
 		s.config.RedisURI,
 		localPath,
+		"-d",
 	)
 
 	// Start the mount command in the background
