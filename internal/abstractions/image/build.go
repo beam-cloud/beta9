@@ -126,11 +126,23 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	sourceImage := fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
 	containerId := b.genContainerId()
 
+	// Allow config to override default build container settings
+	cpu := defaultBuildContainerCpu
+	memory := defaultBuildContainerMemory
+
+	if b.config.ImageService.BuildContainerCpu > 0 {
+		cpu = b.config.ImageService.BuildContainerCpu
+	}
+
+	if b.config.ImageService.BuildContainerMemory > 0 {
+		memory = b.config.ImageService.BuildContainerMemory
+	}
+
 	err = b.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env:         []string{},
-		Cpu:         defaultBuildContainerCpu,
-		Memory:      defaultBuildContainerMemory,
+		Cpu:         cpu,
+		Memory:      memory,
 		ImageId:     baseImageId,
 		SourceImage: &sourceImage,
 		WorkspaceId: authInfo.Workspace.ExternalId,

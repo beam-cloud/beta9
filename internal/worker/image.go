@@ -29,13 +29,11 @@ import (
 )
 
 const (
-	imagePullCommand       string = "skopeo"
-	imageCachePath         string = "/dev/shm/images"
-	imageAvailableFilename string = "IMAGE_AVAILABLE"
-	imageMountLockFilename string = "IMAGE_MOUNT_LOCK"
+	imagePullCommand string = "skopeo"
+	imageCachePath   string = "/dev/shm/images"
 )
 
-var requiredContainerDirectories []string = []string{"/workspace", "/volumes", "/snapshot"}
+var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
 
 type ImageClient struct {
 	registry       *common.ImageRegistry

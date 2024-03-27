@@ -76,6 +76,8 @@ type ImageServiceConfig struct {
 	RegistryCredentialProviderName string                `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
 	Registries                     ImageRegistriesConfig `key:"registries" json:"registries"`
 	EnableTLS                      bool                  `key:"enableTLS" json:"enable_tls"`
+	BuildContainerCpu              int64                 `key:"buildContainerCpu" json:"build_container_cpu"`
+	BuildContainerMemory           int64                 `key:"buildContainerMemory" json:"build_container_memory"`
 	Runner                         RunnerConfig          `key:"runner" json:"runner"`
 }
 

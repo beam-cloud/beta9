@@ -252,6 +252,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerID := request.ContainerId
+
 	bundlePath := filepath.Join(s.userImagePath, request.ImageId)
 
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, defaultWorkerServerPort)
@@ -440,6 +441,31 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}()
 }
 
+// isBuildRequest checks if the sourceImage field is not-nil, which means the container request is for a build container
+func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
+	if request.SourceImage != nil {
+		return true
+	}
+
+	return false
+}
+
+func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
+	// For images that have a rootfs, set that as the root path
+	// otherwise, assume runc config files are in the rootfs themselves
+	rootPath := filepath.Join(bundlePath, "rootfs")
+	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
+		rootPath = bundlePath
+	}
+
+	overlayPath := baseConfigPath
+	if s.isBuildRequest(request) {
+		overlayPath = "/dev/shm"
+	}
+
+	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
+}
+
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec *specs.Spec, outputChan chan common.OutputMsg) {
 	s.workerRepo.AddContainerRequestToWorker(s.workerId, request.ContainerId, request)
@@ -455,19 +481,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		s.terminateContainer(containerId, request, &exitCode, &containerErr)
 	}()
 
-	// For images that have a rootfs, set that as the root path
-	// otherwise, assume runc config files are in the rootfs themselves
-	rootPath := filepath.Join(bundlePath, "rootfs")
-	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
-		rootPath = bundlePath
-	}
+	// Create overlayfs for container
+	overlay := s.createOverlay(request, bundlePath)
 
 	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
 		Id:         containerId,
 		StubId:     request.StubId,
 		BundlePath: bundlePath,
-		Overlay:    common.NewContainerOverlay(containerId, bundlePath, baseConfigPath, rootPath),
+		Overlay:    overlay,
 		Spec:       spec,
 		ExitCode:   -1,
 		OutputWriter: common.NewOutputWriter(func(s string) {
