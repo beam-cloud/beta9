@@ -4,6 +4,10 @@ images:
     tag: latest
     pullPolicy: Always
 
+service:
+  gateway:
+    type: LoadBalancer
+
 metrics:
   enabled: true
 
