@@ -3,9 +3,10 @@ import os
 import sys
 
 import click
-from beta9 import terminal
-from beta9.cli.contexts import get_gateway_service
-from beta9.clients.gateway import GatewayServiceStub
+
+from .. import terminal
+from ..cli.contexts import get_gateway_service
+from ..clients.gateway import GatewayServiceStub
 
 
 @click.group(

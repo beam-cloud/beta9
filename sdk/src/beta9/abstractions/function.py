@@ -4,21 +4,21 @@ from typing import Any, Callable, Iterator, List, Optional, Sequence, Union
 
 import cloudpickle
 
-from beta9 import terminal
-from beta9.abstractions.base.runner import (
+from .. import terminal
+from ..abstractions.base.runner import (
     FUNCTION_DEPLOYMENT_STUB_TYPE,
     FUNCTION_STUB_TYPE,
     RunnerAbstraction,
 )
-from beta9.abstractions.image import Image
-from beta9.abstractions.volume import Volume
-from beta9.clients.function import (
+from ..abstractions.image import Image
+from ..abstractions.volume import Volume
+from ..clients.function import (
     FunctionInvokeResponse,
     FunctionServiceStub,
 )
-from beta9.clients.gateway import DeployStubResponse
-from beta9.config import GatewayConfig, get_gateway_config
-from beta9.sync import FileSyncer
+from ..clients.gateway import DeployStubResponse
+from ..config import GatewayConfig, get_gateway_config
+from ..sync import FileSyncer
 
 
 class Function(RunnerAbstraction):

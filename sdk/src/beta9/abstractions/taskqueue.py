@@ -2,16 +2,16 @@ import json
 import os
 from typing import Any, Callable, Union
 
-from beta9 import terminal
-from beta9.abstractions.base.runner import (
+from .. import terminal
+from ..abstractions.base.runner import (
     TASKQUEUE_DEPLOYMENT_STUB_TYPE,
     TASKQUEUE_STUB_TYPE,
     RunnerAbstraction,
 )
-from beta9.abstractions.image import Image
-from beta9.clients.gateway import DeployStubResponse
-from beta9.clients.taskqueue import TaskQueuePutResponse, TaskQueueServiceStub
-from beta9.config import GatewayConfig, get_gateway_config
+from ..abstractions.image import Image
+from ..clients.gateway import DeployStubResponse
+from ..clients.taskqueue import TaskQueuePutResponse, TaskQueueServiceStub
+from ..config import GatewayConfig, get_gateway_config
 
 
 class TaskQueue(RunnerAbstraction):

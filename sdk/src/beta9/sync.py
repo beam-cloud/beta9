@@ -7,8 +7,8 @@ import zipfile
 from pathlib import Path
 from typing import Generator, NamedTuple, Optional
 
-from beta9 import terminal
-from beta9.clients.gateway import (
+from . import terminal
+from .clients.gateway import (
     GatewayServiceStub,
     HeadObjectResponse,
     ObjectMetadata,
