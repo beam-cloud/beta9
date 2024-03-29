@@ -1,8 +1,9 @@
 from typing import Any
 
 import cloudpickle
-from beta9.abstractions.base import BaseAbstraction
-from beta9.clients.simplequeue import (
+
+from ..abstractions.base import BaseAbstraction
+from ..clients.simplequeue import (
     SimpleQueueEmptyResponse,
     SimpleQueuePeekResponse,
     SimpleQueuePopResponse,

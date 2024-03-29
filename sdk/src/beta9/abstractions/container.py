@@ -1,17 +1,17 @@
 from typing import List, Optional, Union
 
-from beta9 import terminal
-from beta9.abstractions.base.runner import (
+from .. import terminal
+from ..abstractions.base.runner import (
     CONTAINER_STUB_TYPE,
     RunnerAbstraction,
 )
-from beta9.abstractions.image import Image
-from beta9.abstractions.volume import Volume
-from beta9.clients.container import (
+from ..abstractions.image import Image
+from ..abstractions.volume import Volume
+from ..clients.container import (
     CommandExecutionResponse,
     ContainerServiceStub,
 )
-from beta9.sync import FileSyncer
+from ..sync import FileSyncer
 
 
 class Container(RunnerAbstraction):

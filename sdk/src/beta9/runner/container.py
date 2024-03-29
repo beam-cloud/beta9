@@ -6,12 +6,13 @@ import sys
 
 from grpclib.client import Channel
 
-from beta9.aio import run_sync
-from beta9.clients.gateway import GatewayServiceStub
-from beta9.config import with_runner_context
-from beta9.runner.common import config
-from beta9.type import TaskStatus
-from beta9.logging import StdoutJsonInterceptor
+from ..aio import run_sync
+from ..clients.gateway import GatewayServiceStub
+from ..config import with_runner_context
+from ..logging import StdoutJsonInterceptor
+from ..runner.common import config
+from ..type import TaskStatus
+
 
 class ContainerManager:
     def __init__(self, cmd: str) -> None:
@@ -22,7 +23,7 @@ class ContainerManager:
         self.killed = False
 
         signal.signal(signal.SIGTERM, self.shutdown)
-    
+
     @with_runner_context
     def start(self, channel: Channel):
         async def _run():
@@ -32,15 +33,21 @@ class ContainerManager:
                     task_id=self.task_id,
                     container_id=config.container_id,
                 )
-                    
-                self.process = subprocess.Popen(["/bin/bash", "-c", cmd], shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ)
-                
+
+                self.process = subprocess.Popen(
+                    ["/bin/bash", "-c", cmd],
+                    shell=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    env=os.environ,
+                )
+
                 while self.process.poll() is None:
                     line = self.process.stdout.readline()
                     if not line:
                         continue
                     print(line.strip().decode("utf-8"))
-                
+
                 if not self.killed:
                     await stub.end_task(
                         task_id=self.task_id,

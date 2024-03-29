@@ -4,10 +4,10 @@ import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
-from beta9 import aio, terminal
-from beta9.cli.contexts import get_gateway_service
-from beta9.cli.formatters import EpilogFormatter
-from beta9.clients.gateway import (
+from .. import aio, terminal
+from ..cli.contexts import get_gateway_service
+from ..cli.formatters import EpilogFormatter
+from ..clients.gateway import (
     GatewayServiceStub,
     ListTasksResponse,
     StopTaskResponse,

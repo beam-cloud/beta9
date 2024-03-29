@@ -14,21 +14,21 @@ from typing import Any, List, NamedTuple, Union
 import cloudpickle
 import grpc
 import grpclib
-from beta9.aio import run_sync
-from beta9.clients.taskqueue import (
+from grpclib.client import Channel
+from grpclib.exceptions import StreamTerminatedError
+
+from ..aio import run_sync
+from ..clients.taskqueue import (
     TaskQueueCompleteResponse,
     TaskQueueMonitorResponse,
     TaskQueuePopResponse,
     TaskQueueServiceStub,
 )
-from beta9.config import with_runner_context
-from beta9.exceptions import RunnerException
-from beta9.runner.common import config, load_handler
-from beta9.type import TaskExitCode, TaskStatus
-from grpclib.client import Channel
-from grpclib.exceptions import StreamTerminatedError
-from beta9.logging import StdoutJsonInterceptor
-
+from ..config import with_runner_context
+from ..exceptions import RunnerException
+from ..logging import StdoutJsonInterceptor
+from ..runner.common import config, load_handler
+from ..type import TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.01
@@ -230,7 +230,9 @@ class TaskQueueWorker:
                 with StdoutJsonInterceptor(task_id=task.id):
                     print(f"Running task <{task.id}>")
                     monitor_task = loop.create_task(
-                        self._monitor_task(config.stub_id, config.container_id, taskqueue_stub, task),
+                        self._monitor_task(
+                            config.stub_id, config.container_id, taskqueue_stub, task
+                        ),
                     )
 
                     start_time = time.time()

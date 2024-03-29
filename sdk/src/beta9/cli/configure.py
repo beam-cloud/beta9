@@ -1,7 +1,7 @@
 import click
 
-from beta9 import terminal
-from beta9.config import (
+from .. import terminal
+from ..config import (
     configure_gateway_credentials,
     load_config_from_file,
     save_config_to_file,
