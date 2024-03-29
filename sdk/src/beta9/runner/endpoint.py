@@ -5,7 +5,7 @@ import signal
 from fastapi import FastAPI, Request, Response
 from uvicorn import Config, Server
 
-from beta9.runner.common import load_handler
+from ..runner.common import load_handler
 
 logger = logging.getLogger("uvicorn.access")
 

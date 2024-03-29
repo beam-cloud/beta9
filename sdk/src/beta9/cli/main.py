@@ -1,7 +1,8 @@
 import shutil
 
 import click
-from beta9.cli import configure, deploy, tasks
+
+from ..cli import configure, deploy, tasks
 
 click.formatting.FORCED_WIDTH = shutil.get_terminal_size().columns
 

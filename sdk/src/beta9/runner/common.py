@@ -4,7 +4,7 @@ import sys
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from beta9.exceptions import RunnerException
+from ..exceptions import RunnerException
 
 USER_CODE_VOLUME = "/mnt/code"
 

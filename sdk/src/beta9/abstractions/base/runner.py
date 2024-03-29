@@ -2,11 +2,11 @@ import inspect
 import os
 from typing import Callable, List, Optional, Union
 
-from beta9.abstractions.base import BaseAbstraction
-from beta9.abstractions.image import Image, ImageBuildResult
-from beta9.abstractions.volume import Volume
-from beta9.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
-from beta9.sync import FileSyncer
+from ...abstractions.base import BaseAbstraction
+from ...abstractions.image import Image, ImageBuildResult
+from ...abstractions.volume import Volume
+from ...clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
+from ...sync import FileSyncer
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"

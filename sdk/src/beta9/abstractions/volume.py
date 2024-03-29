@@ -1,6 +1,6 @@
-from beta9.abstractions.base import BaseAbstraction
-from beta9.clients.gateway import Volume as VolumeConfig
-from beta9.clients.volume import VolumeServiceStub
+from ..abstractions.base import BaseAbstraction
+from ..clients.gateway import Volume as VolumeConfig
+from ..clients.volume import VolumeServiceStub
 
 
 class Volume(BaseAbstraction):
