@@ -159,12 +159,12 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 	}
 
 	go client.StreamLogs(ctx, task.ContainerId, outputChan)
-	return cs.handleStreams(ctx, stream, authInfo.Workspace.Name, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
+	return cs.handleStreams(ctx, stream, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
 }
 
 func (cs *CmdContainerService) handleStreams(ctx context.Context,
 	stream pb.ContainerService_ExecuteCommandServer,
-	workspaceName, taskId, containerId string,
+	taskId, containerId string,
 	outputChan chan common.OutputMsg, keyEventChan chan common.KeyEvent) error {
 
 	var lastMessage common.OutputMsg
