@@ -125,7 +125,7 @@ proxy:
     localPort: 1993
     destination: beta9-gateway.beta9:1993
 monitoring:
-  metricsCollector: prometheus
+  metricsCollector: openmeter
   prometheus:
     scrapeWorkers: true
     port: 9090
@@ -137,3 +137,6 @@ monitoring:
       idleConnTimeout: 10s
       dialTimeout: 2s
       keepAlive: 30s
+  openmeter:
+    serverUrl: https://openmeter.cloud
+    apiKey: om_rwOP5UeSmtP7KHhkLFdoFHS8LLeDhLO4.Y4YAiXGOzOIEmlkjEuq0P6W0gQysS5CgYDe3J5B4zdY
