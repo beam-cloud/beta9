@@ -1,6 +1,7 @@
 package taskqueue
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 
@@ -36,6 +37,8 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 	deploymentName := ctx.Param("deploymentName")
 	version := ctx.Param("version")
 
+	log.Println("stub Id: ", stubId)
+
 	if deploymentName != "" && version != "" {
 		version, err := strconv.Atoi(version)
 		if err != nil {
@@ -62,7 +65,7 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 		})
 	}
 
-	taskId, err := g.tq.put(ctx.Request().Context(), cc.AuthInfo, stubId, &payload)
+	taskId, err := g.tq.put(ctx.Request().Context(), &payload)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": err.Error(),
