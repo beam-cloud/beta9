@@ -3,12 +3,10 @@ package taskqueue
 import (
 	"context"
 	"strconv"
-	"sync"
 	"time"
 
 	common "github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/types"
-	"github.com/gofrs/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -16,16 +14,6 @@ const defaultTaskRunningExpiration int = 60
 
 type taskQueueClient struct {
 	rdb *common.RedisClient
-}
-
-var taskMessagePool = sync.Pool{
-	New: func() interface{} {
-		return &types.TaskMessage{
-			ID:     uuid.Must(uuid.NewV4()).String(),
-			Args:   nil,
-			Kwargs: nil,
-		}
-	},
 }
 
 func newRedisTaskQueueClient(rdb *common.RedisClient) *taskQueueClient {
@@ -86,19 +74,19 @@ func (qc *taskQueueClient) Pop(workspaceName, stubId, containerId string) ([]byt
 	}
 
 	// Set a lock to prevent spin-down during decoding (decoding can take a long time for larger payloads)
-	err = qc.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(workspaceName, stubId, containerId, tm.ID), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
+	err = qc.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(workspaceName, stubId, containerId, tm.TaskId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
 	if err != nil {
 		return nil, err
 	}
 
 	// Set a heartbeat to prevent retries before task actually starts processing
-	err = qc.rdb.SetEx(context.TODO(), Keys.taskQueueTaskHeartbeat(workspaceName, stubId, tm.ID), 1, 60*time.Second).Err()
+	err = qc.rdb.SetEx(context.TODO(), Keys.taskQueueTaskHeartbeat(workspaceName, stubId, tm.TaskId), 1, 60*time.Second).Err()
 	if err != nil {
 		return nil, err
 	}
 
 	// Set the task claim
-	err = qc.rdb.Set(context.TODO(), Keys.taskQueueTaskClaim(workspaceName, stubId, tm.ID), task, 0).Err()
+	err = qc.rdb.Set(context.TODO(), Keys.taskQueueTaskClaim(workspaceName, stubId, tm.TaskId), task, 0).Err()
 	if err != nil {
 		return nil, err
 	}

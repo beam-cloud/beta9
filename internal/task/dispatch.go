@@ -22,7 +22,7 @@ type Dispatcher struct {
 var taskMessagePool = sync.Pool{
 	New: func() interface{} {
 		return &types.TaskMessage{
-			ID:     uuid.Must(uuid.NewV4()).String(),
+			TaskId: uuid.Must(uuid.NewV4()).String(),
 			Args:   nil,
 			Kwargs: nil,
 		}

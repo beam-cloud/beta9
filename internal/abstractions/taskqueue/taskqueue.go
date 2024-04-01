@@ -122,37 +122,39 @@ type TaskQueueTask struct {
 }
 
 func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.TaskMessage) (types.TaskInterface, error) {
-	// task, err := tq.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, queue.stub.Id)
-	// if err != nil {
-	// 	return nil, err
-	// }
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	_, err := tq.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	queue, exists := tq.queueInstances.Get(msg.StubId)
+	if !exists {
+		err := tq.createQueueInstance(msg.StubId)
+		if err != nil {
+			return nil, err
+		}
+
+		queue, _ = tq.queueInstances.Get(msg.StubId)
+	}
+
+	err = queue.client.Push(msg)
+	if err != nil {
+		tq.backendRepo.DeleteTask(ctx, msg.TaskId)
+		return nil, err
+	}
+
+	log.Println("queue: ", queue)
 
 	return nil, nil
 }
 
 func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *TaskPayload) (string, error) {
-	queue, exists := tq.queueInstances.Get(stubId)
-	if !exists {
-		err := tq.createQueueInstance(stubId)
-		if err != nil {
-			return "", err
-		}
-
-		queue, _ = tq.queueInstances.Get(stubId)
-	}
-
 	task, err := tq.taskDispatcher.Send(ctx, payload.Args, payload.Kwargs, tq.taskQueueTaskFactory)
 	if err != nil {
 		return "", err
 	}
-
-	log.Println("queue: ", queue)
-
-	// err = queue.client.Push(queue.workspace.Name, queue.stub.ExternalId, task.ExternalId, payload.Args, payload.Kwargs)
-	// if err != nil {
-	// 	tq.backendRepo.DeleteTask(ctx, task.ExternalId)
-	// 	return "", err
-	// }
 
 	meta := task.Metadata()
 	return meta.TaskId, nil
@@ -184,17 +186,18 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 		return nil, err
 	}
 
-	task, err := tq.backendRepo.GetTask(ctx, tm.ID)
+	task, err := tq.backendRepo.GetTask(ctx, tm.TaskId)
 	if err != nil {
 		return &pb.TaskQueuePopResponse{
 			Ok: false,
 		}, nil
 	}
+
 	task.ContainerId = in.ContainerId
 	task.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatusRunning
 
-	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, tm.ID), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
+	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, tm.TaskId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
 	if err != nil {
 		return &pb.TaskQueuePopResponse{
 			Ok: false,

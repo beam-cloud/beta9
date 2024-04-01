@@ -23,14 +23,16 @@ type TaskInterface interface {
 // TaskMessage represents a JSON serializable message
 // to be added to the queue
 type TaskMessage struct {
-	ID      string                 `json:"id"`
+	TaskId  string                 `json:"task_id"`
+	StubId  string                 `json:"stub_id"`
 	Args    []interface{}          `json:"args"`
 	Kwargs  map[string]interface{} `json:"kwargs"`
 	Expires *time.Time             `json:"expires"`
 }
 
 func (tm *TaskMessage) Reset() {
-	tm.ID = uuid.Must(uuid.NewV4()).String()
+	tm.TaskId = uuid.Must(uuid.NewV4()).String()
+	tm.StubId = ""
 	tm.Args = nil
 	tm.Kwargs = nil
 }
