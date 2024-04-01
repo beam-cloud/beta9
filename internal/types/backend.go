@@ -6,7 +6,6 @@ import (
 	"time"
 
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/gofrs/uuid"
 )
 
 type Workspace struct {
@@ -101,45 +100,6 @@ var DefaultTaskPolicy = TaskPolicy{
 type TaskPolicy struct {
 	MaxRetries uint `json:"max_retries"`
 	Timeout    int  `json:"timeout"`
-}
-
-// TaskMessage represents a JSON serializable message
-// to be added to the task queue
-type TaskMessage struct {
-	ID      string                 `json:"id"`
-	Args    []interface{}          `json:"args"`
-	Kwargs  map[string]interface{} `json:"kwargs"`
-	Expires *time.Time             `json:"expires"`
-}
-
-func (tm *TaskMessage) Reset() {
-	tm.ID = uuid.Must(uuid.NewV4()).String()
-	tm.Args = nil
-	tm.Kwargs = nil
-}
-
-// Encode returns a binary representation of the TaskMessage
-func (tm *TaskMessage) Encode() ([]byte, error) {
-	if tm.Args == nil {
-		tm.Args = make([]interface{}, 0)
-	}
-
-	encodedData, err := json.Marshal(tm)
-	if err != nil {
-		return nil, err
-	}
-
-	return encodedData, err
-}
-
-// Decode initializes the TaskMessage fields from a byte array
-func (tm *TaskMessage) Decode(encodedData []byte) error {
-	err := json.Unmarshal(encodedData, tm)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 type Task struct {

@@ -188,11 +188,17 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 	return task, nil
 }
 
+func (fs *RunCFunctionService) functionTaskFactory() (types.TaskInterface, error) {
+	return &FunctionTask{}, nil
+}
+
 func (fs *RunCFunctionService) createTask(ctx context.Context, authInfo *auth.AuthInfo, stub *types.Stub) (*types.Task, error) {
 	task, err := fs.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, stub.Id)
 	if err != nil {
 		return nil, err
 	}
+
+	// TODO: dispatch
 
 	return task, nil
 }
@@ -220,7 +226,7 @@ _stream:
 				lastMessage = o
 				break _stream
 			}
-		case _ = <-keyEventChan:
+		case <-keyEventChan:
 			exitCode, err := fs.containerRepo.GetContainerExitCode(containerId)
 			if err != nil {
 				exitCode = -1
@@ -271,6 +277,32 @@ func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.Fun
 
 func (fs *RunCFunctionService) genContainerId(taskId string) string {
 	return fmt.Sprintf("%s%s", functionContainerPrefix, taskId)
+}
+
+type FunctionTask struct {
+	StubId        string
+	WorkspaceName string
+	TaskId        string
+}
+
+func (ft *FunctionTask) Cancel() error {
+	return nil
+}
+
+func (ft *FunctionTask) Execute() error {
+	return nil
+}
+
+func (ft *FunctionTask) Update() error {
+	return nil
+}
+
+func (ft *FunctionTask) Metadata() types.TaskMetadata {
+	return types.TaskMetadata{
+		StubId:        ft.StubId,
+		WorkspaceName: ft.WorkspaceName,
+		TaskId:        ft.TaskId,
+	}
 }
 
 // Redis keys

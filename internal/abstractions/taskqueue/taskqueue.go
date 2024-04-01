@@ -12,8 +12,10 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	common "github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
+	"github.com/beam-cloud/beta9/internal/task"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
@@ -28,17 +30,29 @@ type TaskQueueService interface {
 	TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error
 }
 
+type TaskQueueServiceOpts struct {
+	Config         types.AppConfig
+	RedisClient    *common.RedisClient
+	BackendRepo    repository.BackendRepository
+	ContainerRepo  repository.ContainerRepository
+	TaskDispatcher *task.Dispatcher
+	Scheduler      *scheduler.Scheduler
+	Tailscale      *network.Tailscale
+	RouteGroup     *echo.Group
+}
+
 const (
 	taskQueueContainerPrefix string = "taskqueue"
 	taskQueueRoutePrefix     string = "/taskqueue"
 )
 
 type RedisTaskQueue struct {
-	ctx           context.Context
-	rdb           *common.RedisClient
-	containerRepo repository.ContainerRepository
-	backendRepo   repository.BackendRepository
-	scheduler     *scheduler.Scheduler
+	ctx            context.Context
+	rdb            *common.RedisClient
+	taskDispatcher *task.Dispatcher
+	containerRepo  repository.ContainerRepository
+	backendRepo    repository.BackendRepository
+	scheduler      *scheduler.Scheduler
 	pb.UnimplementedTaskQueueServiceServer
 	queueInstances  *common.SafeMap[*taskQueueInstance]
 	keyEventManager *common.KeyEventManager
@@ -48,14 +62,10 @@ type RedisTaskQueue struct {
 
 func NewRedisTaskQueueService(
 	ctx context.Context,
-	rdb *common.RedisClient,
-	scheduler *scheduler.Scheduler,
-	containerRepo repository.ContainerRepository,
-	backendRepo repository.BackendRepository,
-	routeGroup *echo.Group,
+	opts TaskQueueServiceOpts,
 ) (TaskQueueService, error) {
 	keyEventChan := make(chan common.KeyEvent)
-	keyEventManager, err := common.NewKeyEventManager(rdb)
+	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
 	if err != nil {
 		return nil, err
 	}
@@ -64,13 +74,14 @@ func NewRedisTaskQueueService(
 
 	tq := &RedisTaskQueue{
 		ctx:             ctx,
-		rdb:             rdb,
-		scheduler:       scheduler,
+		rdb:             opts.RedisClient,
+		scheduler:       opts.Scheduler,
 		keyEventChan:    keyEventChan,
 		keyEventManager: keyEventManager,
-		containerRepo:   containerRepo,
-		backendRepo:     backendRepo,
-		queueClient:     newRedisTaskQueueClient(rdb),
+		taskDispatcher:  opts.TaskDispatcher,
+		containerRepo:   opts.ContainerRepo,
+		backendRepo:     opts.BackendRepo,
+		queueClient:     newRedisTaskQueueClient(opts.RedisClient),
 		queueInstances:  common.NewSafeMap[*taskQueueInstance](),
 	}
 
@@ -78,8 +89,8 @@ func NewRedisTaskQueueService(
 	go tq.monitorTasks()
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(backendRepo)
-	registerTaskQueueRoutes(routeGroup.Group(taskQueueRoutePrefix, authMiddleware), tq)
+	authMiddleware := auth.AuthMiddleware(opts.BackendRepo)
+	registerTaskQueueRoutes(opts.RouteGroup.Group(taskQueueRoutePrefix, authMiddleware), tq)
 
 	return tq, nil
 }
@@ -176,6 +187,12 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 	}
 
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
+	if err != nil {
+		return &pb.TaskQueuePopResponse{
+			Ok: false,
+		}, nil
+	}
+
 	return &pb.TaskQueuePopResponse{
 		Ok: true, TaskMsg: msg,
 	}, nil

@@ -65,6 +65,7 @@ func NewRequestBuffer(
 		httpClient:              &http.Client{},
 		length:                  atomic.Int32{},
 	}
+
 	go b.discoverContainers()
 	go b.ProcessRequests()
 

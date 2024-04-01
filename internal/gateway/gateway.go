@@ -11,6 +11,8 @@ import (
 	"syscall"
 
 	"github.com/beam-cloud/beta9/internal/abstractions/endpoint"
+	"github.com/beam-cloud/beta9/internal/task"
+
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"google.golang.org/grpc"
@@ -45,6 +47,7 @@ type Gateway struct {
 	httpServer     *http.Server
 	grpcServer     *grpc.Server
 	redisClient    *common.RedisClient
+	TaskDispatcher *task.Dispatcher
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
@@ -108,6 +111,10 @@ func NewGateway() (*Gateway, error) {
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
+	taskDispatcher, err := task.NewDispatcher(redisClient)
+	if err != nil {
+		return nil, err
+	}
 
 	gateway.config = config
 	gateway.Scheduler = scheduler
@@ -115,6 +122,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.ProviderRepo = providerRepo
 	gateway.BackendRepo = backendRepo
 	gateway.Tailscale = tailscale
+	gateway.TaskDispatcher = taskDispatcher
 	gateway.metricsRepo = metricsRepo
 
 	return gateway, nil
@@ -212,7 +220,15 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterFunctionServiceServer(g.grpcServer, fs)
 
 	// Register task queue service
-	tq, err := taskqueue.NewRedisTaskQueueService(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo, g.rootRouteGroup)
+	tq, err := taskqueue.NewRedisTaskQueueService(g.ctx, taskqueue.TaskQueueServiceOpts{
+		Config:        g.config,
+		RedisClient:   g.redisClient,
+		BackendRepo:   g.BackendRepo,
+		ContainerRepo: g.ContainerRepo,
+		Scheduler:     g.Scheduler,
+		Tailscale:     g.Tailscale,
+		RouteGroup:    g.rootRouteGroup,
+	})
 	if err != nil {
 		return err
 	}
