@@ -95,13 +95,8 @@ func NewRedisTaskQueueService(
 	return tq, nil
 }
 
-type TaskPayload struct {
-	Args   []interface{}          `json:"args"`
-	Kwargs map[string]interface{} `json:"kwargs"`
-}
-
 func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
-	var payload TaskPayload
+	var payload types.TaskPayload
 	err := json.Unmarshal(in.Payload, &payload)
 	if err != nil {
 		return &pb.TaskQueuePutResponse{
@@ -148,7 +143,7 @@ func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.T
 	return nil, nil
 }
 
-func (tq *RedisTaskQueue) put(ctx context.Context, payload *TaskPayload) (string, error) {
+func (tq *RedisTaskQueue) put(ctx context.Context, payload *types.TaskPayload) (string, error) {
 	task, err := tq.taskDispatcher.Send(ctx, payload.Args, payload.Kwargs, tq.taskQueueTaskFactory)
 	if err != nil {
 		return "", err

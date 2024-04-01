@@ -7,6 +7,11 @@ import (
 	"github.com/gofrs/uuid"
 )
 
+type TaskPayload struct {
+	Args   []interface{}          `json:"args"`
+	Kwargs map[string]interface{} `json:"kwargs"`
+}
+
 type TaskMetadata struct {
 	TaskId        string
 	StubId        string

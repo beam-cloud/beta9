@@ -28,9 +28,8 @@ func (qc *taskQueueClient) Push(taskMessage *types.TaskMessage) error {
 	}
 
 	workspaceName := "test"
-	stubId := ""
 
-	err = qc.rdb.RPush(context.TODO(), Keys.taskQueueList(workspaceName, stubId), encodedMessage).Err()
+	err = qc.rdb.RPush(context.TODO(), Keys.taskQueueList(workspaceName, taskMessage.StubId), encodedMessage).Err()
 	if err != nil {
 		return err
 	}
