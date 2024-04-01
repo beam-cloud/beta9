@@ -45,13 +45,13 @@ func (d *Dispatcher) Register() {
 
 }
 
-func (d *Dispatcher) Send(ctx context.Context, args []interface{}, kwargs map[string]interface{}, taskFactory func(message *types.TaskMessage) (types.TaskInterface, error)) (types.TaskInterface, error) {
+func (d *Dispatcher) Send(ctx context.Context, args []interface{}, kwargs map[string]interface{}, taskFactory func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)) (types.TaskInterface, error) {
 	taskMessage := d.getTaskMessage()
 	taskMessage.Args = args
 	taskMessage.Kwargs = kwargs
 
 	defer d.releaseTaskMessage(taskMessage)
-	task, err := taskFactory(taskMessage)
+	task, err := taskFactory(ctx, taskMessage)
 	if err != nil {
 		return nil, err
 	}

@@ -26,11 +26,6 @@ var (
 )
 
 var (
-	taskPrefix string = "task"
-	taskList   string = "task:%s:%s"
-)
-
-var (
 	workerPrefix                 string = "worker"
 	workerImageLock              string = "worker:%s:image:%s:lock"
 	workerContainerRequest       string = "worker:%s:container:%s:request"
@@ -128,15 +123,6 @@ func (rk *redisKeys) GatewayAuthKey(appId string, encodedAuthToken string) strin
 
 func (rk *redisKeys) GatewayDeploymentMinContainerCount(appId string) string {
 	return fmt.Sprintf(gatewayDeploymentMinContainerCount, appId)
-}
-
-// Task keys
-func (rk *redisKeys) TaskPrefix() string {
-	return taskPrefix
-}
-
-func (rk *redisKeys) TaskList(workspaceId, stubId string) string {
-	return fmt.Sprintf(taskList, workspaceId, stubId)
 }
 
 // Worker keys

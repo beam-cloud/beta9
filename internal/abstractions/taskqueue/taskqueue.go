@@ -118,6 +118,18 @@ func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 	}, nil
 }
 
+type TaskQueueTask struct {
+}
+
+func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.TaskMessage) (types.TaskInterface, error) {
+	// task, err := tq.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, queue.stub.Id)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	return nil, nil
+}
+
 func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *TaskPayload) (string, error) {
 	queue, exists := tq.queueInstances.Get(stubId)
 	if !exists {
@@ -129,18 +141,21 @@ func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stub
 		queue, _ = tq.queueInstances.Get(stubId)
 	}
 
-	task, err := tq.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, queue.stub.Id)
+	task, err := tq.taskDispatcher.Send(ctx, payload.Args, payload.Kwargs, tq.taskQueueTaskFactory)
 	if err != nil {
 		return "", err
 	}
 
-	err = queue.client.Push(queue.workspace.Name, queue.stub.ExternalId, task.ExternalId, payload.Args, payload.Kwargs)
-	if err != nil {
-		tq.backendRepo.DeleteTask(ctx, task.ExternalId)
-		return "", err
-	}
+	log.Println("queue: ", queue)
 
-	return task.ExternalId, nil
+	// err = queue.client.Push(queue.workspace.Name, queue.stub.ExternalId, task.ExternalId, payload.Args, payload.Kwargs)
+	// if err != nil {
+	// 	tq.backendRepo.DeleteTask(ctx, task.ExternalId)
+	// 	return "", err
+	// }
+
+	meta := task.Metadata()
+	return meta.TaskId, nil
 }
 
 func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error) {
@@ -346,7 +361,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 			return nil
 
 		case <-cancelFlag:
-			err := tq.rdb.Del(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Err()
+			err := tq.rdb.Del(ctx, Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Err()
 			if err != nil {
 				return err
 			}
@@ -355,7 +370,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 			return nil
 
 		case <-timeoutFlag:
-			err := tq.rdb.Del(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Err()
+			err := tq.rdb.Del(ctx, Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Err()
 			if err != nil {
 				log.Printf("error deleting task claim: %v", err)
 				continue
@@ -370,18 +385,18 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				return nil
 			}
 
-			err := tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskHeartbeat(authInfo.Workspace.Name, req.StubId, task.ExternalId), 1, time.Duration(60)*time.Second).Err()
+			err := tq.rdb.SetEx(ctx, Keys.taskQueueTaskHeartbeat(authInfo.Workspace.Name, req.StubId, task.ExternalId), 1, time.Duration(60)*time.Second).Err()
 			if err != nil {
 				return err
 			}
 
-			err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
+			err = tq.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
 			if err != nil {
 				return err
 			}
 
 			// Check if the task is currently claimed
-			exists, err := tq.rdb.Exists(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Result()
+			exists, err := tq.rdb.Exists(ctx, Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Result()
 			if err != nil {
 				return err
 			}
