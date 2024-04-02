@@ -56,7 +56,7 @@ type BackendRepository interface {
 	ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error)
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
 	GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error)
-	CreateTask(ctx context.Context, containerId string, workspaceId, stubId uint) (*types.Task, error)
+	CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error)
 	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error)
 	DeleteTask(ctx context.Context, externalId string) error
 	ListTasks(ctx context.Context) ([]types.Task, error)

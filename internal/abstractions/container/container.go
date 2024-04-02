@@ -85,7 +85,10 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		return err
 	}
 
-	task, err := cs.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, stub.Stub.Id)
+	task, err := cs.backendRepo.CreateTask(ctx, &types.TaskParams{
+		WorkspaceId: authInfo.Workspace.Id,
+		StubId:      stub.Stub.Id,
+	})
 	if err != nil {
 		return err
 	}

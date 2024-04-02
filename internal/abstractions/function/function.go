@@ -193,7 +193,10 @@ func (fs *RunCFunctionService) functionTaskFactory() (types.TaskInterface, error
 }
 
 func (fs *RunCFunctionService) createTask(ctx context.Context, authInfo *auth.AuthInfo, stub *types.Stub) (*types.Task, error) {
-	task, err := fs.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, stub.Id)
+	task, err := fs.backendRepo.CreateTask(ctx, &types.TaskParams{
+		WorkspaceId: authInfo.Workspace.Id,
+		StubId:      stub.Id,
+	})
 	if err != nil {
 		return nil, err
 	}

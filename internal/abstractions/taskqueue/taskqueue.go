@@ -117,11 +117,6 @@ type TaskQueueTask struct {
 func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.TaskMessage) (types.TaskInterface, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	_, err := tq.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, 1)
-	if err != nil {
-		return nil, err
-	}
-
 	queue, exists := tq.queueInstances.Get(msg.StubId)
 	if !exists {
 		err := tq.createQueueInstance(msg.StubId)
@@ -130,6 +125,14 @@ func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.T
 		}
 
 		queue, _ = tq.queueInstances.Get(msg.StubId)
+	}
+
+	_, err := tq.backendRepo.CreateTask(ctx, &types.TaskParams{
+		StubId:      queue.stub.Id,
+		WorkspaceId: authInfo.Workspace.Id,
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	err = queue.client.Push(msg)
@@ -219,28 +222,28 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}, nil
 	}
 
-	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
+	err = tq.rdb.SetEx(ctx, Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
 			Ok: false,
 		}, nil
 	}
 
-	err = tq.rdb.Del(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, in.StubId, task.ExternalId)).Err()
+	err = tq.rdb.Del(ctx, Keys.taskQueueTaskClaim(authInfo.Workspace.Name, in.StubId, task.ExternalId)).Err()
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
 			Ok: false,
 		}, nil
 	}
 
-	err = tq.rdb.Del(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId)).Err()
+	err = tq.rdb.Del(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId)).Err()
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
 			Ok: false,
 		}, nil
 	}
 
-	err = tq.rdb.RPush(context.TODO(), Keys.taskQueueTaskDuration(authInfo.Workspace.Name, in.StubId), in.TaskDuration).Err()
+	err = tq.rdb.RPush(ctx, Keys.taskQueueTaskDuration(authInfo.Workspace.Name, in.StubId), in.TaskDuration).Err()
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
 			Ok: false,

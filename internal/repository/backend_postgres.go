@@ -282,7 +282,7 @@ func (r *PostgresBackendRepository) GetObjectByExternalId(ctx context.Context, e
 
 // Task
 
-func (r *PostgresBackendRepository) CreateTask(ctx context.Context, containerId string, contextId, stubId uint) (*types.Task, error) {
+func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error) {
 	query := `
     INSERT INTO task (container_id, workspace_id, stub_id)
     VALUES ($1, $2, $3)
@@ -290,7 +290,8 @@ func (r *PostgresBackendRepository) CreateTask(ctx context.Context, containerId 
     `
 
 	var newTask types.Task
-	if err := r.client.GetContext(ctx, &newTask, query, containerId, contextId, stubId); err != nil {
+
+	if err := r.client.GetContext(ctx, &newTask, query, params.ContainerId, params.WorkspaceId, params.StubId); err != nil {
 		return &types.Task{}, err
 	}
 

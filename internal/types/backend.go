@@ -102,6 +102,12 @@ type TaskPolicy struct {
 	Timeout    int  `json:"timeout"`
 }
 
+type TaskParams struct {
+	ContainerId string
+	StubId      uint
+	WorkspaceId uint
+}
+
 type Task struct {
 	Id          uint         `db:"id" json:"id"`
 	ExternalId  string       `db:"external_id" json:"external_id"`
