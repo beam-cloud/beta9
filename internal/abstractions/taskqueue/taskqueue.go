@@ -104,7 +104,7 @@ func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 		}, nil
 	}
 
-	taskId, err := tq.put(ctx, &payload)
+	taskId, err := tq.put(ctx, in.StubId, &payload)
 	return &pb.TaskQueuePutResponse{
 		Ok:     err == nil,
 		TaskId: taskId,
@@ -146,8 +146,8 @@ func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.T
 	return nil, nil
 }
 
-func (tq *RedisTaskQueue) put(ctx context.Context, payload *types.TaskPayload) (string, error) {
-	task, err := tq.taskDispatcher.Send(ctx, payload.Args, payload.Kwargs, tq.taskQueueTaskFactory)
+func (tq *RedisTaskQueue) put(ctx context.Context, stubId string, payload *types.TaskPayload) (string, error) {
+	task, err := tq.taskDispatcher.Send(ctx, stubId, payload.Args, payload.Kwargs, tq.taskQueueTaskFactory)
 	if err != nil {
 		return "", err
 	}

@@ -1,7 +1,6 @@
 package taskqueue
 
 import (
-	"log"
 	"net/http"
 	"strconv"
 
@@ -50,8 +49,6 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 		stubId = deployment.Stub.ExternalId
 	}
 
-	log.Println("stub Id: ", stubId)
-
 	payload, err := task.SerializeHttpPayload(ctx)
 	if err != nil {
 		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
@@ -59,7 +56,7 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 		})
 	}
 
-	taskId, err := g.tq.put(ctx.Request().Context(), payload)
+	taskId, err := g.tq.put(ctx.Request().Context(), stubId, payload)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": err.Error(),

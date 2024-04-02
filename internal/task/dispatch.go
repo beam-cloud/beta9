@@ -31,6 +31,7 @@ var taskMessagePool = sync.Pool{
 
 func (d *Dispatcher) getTaskMessage() *types.TaskMessage {
 	msg := taskMessagePool.Get().(*types.TaskMessage)
+	msg.StubId = ""
 	msg.Args = make([]interface{}, 0)
 	msg.Kwargs = make(map[string]interface{})
 	return msg
@@ -45,8 +46,9 @@ func (d *Dispatcher) Register() {
 
 }
 
-func (d *Dispatcher) Send(ctx context.Context, args []interface{}, kwargs map[string]interface{}, taskFactory func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)) (types.TaskInterface, error) {
+func (d *Dispatcher) Send(ctx context.Context, stubId string, args []interface{}, kwargs map[string]interface{}, taskFactory func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)) (types.TaskInterface, error) {
 	taskMessage := d.getTaskMessage()
+	taskMessage.StubId = stubId
 	taskMessage.Args = args
 	taskMessage.Kwargs = kwargs
 
