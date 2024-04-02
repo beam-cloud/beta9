@@ -683,10 +683,13 @@ func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, worksp
 	return &deployment, nil
 }
 
-func (c *PostgresBackendRepository) ListStubs(ctx context.Context, filters types.StubFilter) ([]types.Stub, error) {
+func (c *PostgresBackendRepository) ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error) {
 	query := `
-		SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at FROM stub WHERE external_id = ANY($1);`
-	var stubs []types.Stub
+		SELECT s.*, w.external_id AS "workspace.external_id", w.name AS "workspace.name"
+		FROM stub s
+		JOIN workspace w ON s.workspace_id = w.id
+		WHERE s.external_id = ANY($1);`
+	var stubs []types.StubWithRelated
 	err := c.client.SelectContext(ctx, &stubs, query, pq.Array(filters.StubIds))
 	if err != nil {
 		return nil, err
