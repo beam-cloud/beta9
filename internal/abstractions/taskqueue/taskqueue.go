@@ -107,13 +107,13 @@ type TaskQueueTask struct {
 	client *taskQueueClient
 	msg    *types.TaskMessage
 	rdb    *common.RedisClient
+	tq     *RedisTaskQueue
 }
 
 func (t *TaskQueueTask) Execute() error {
 	err := t.client.Push(t.msg)
 	if err != nil {
-		// TODO: handle this
-		// tq.backendRepo.DeleteTask(ctx, msg.TaskId)
+		t.tq.backendRepo.DeleteTask(context.TODO(), t.msg.TaskId)
 		return err
 	}
 
@@ -186,7 +186,6 @@ func (tq *RedisTaskQueue) getStubConfig(stubId string) (*types.StubConfigV1, err
 
 		config = &stubConfig
 		tq.stubConfigCache.Set(stubId, config)
-
 	}
 
 	return config, nil
@@ -241,6 +240,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 
 		queue, _ = tq.queueInstances.Get(in.StubId)
 	}
+
 	msg, err := queue.client.Pop(authInfo.Workspace.Name, in.StubId, in.ContainerId)
 	if err != nil || msg == nil {
 		return &pb.TaskQueuePopResponse{Ok: false}, nil
