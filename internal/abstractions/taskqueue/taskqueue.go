@@ -678,7 +678,6 @@ func (tq *RedisTaskQueue) handleContainerEvents() {
 
 // Redis keys
 var (
-	taskQueuePrefix              string = "taskqueue"
 	taskQueueInstanceLock        string = "taskqueue:%s:%s:instance_lock"
 	taskQueueList                string = "taskqueue:%s:%s"
 	taskQueueTaskDuration        string = "taskqueue:%s:%s:task_duration"
@@ -695,10 +694,6 @@ var (
 var Keys = &keys{}
 
 type keys struct{}
-
-func (k *keys) taskQueuePrefix() string {
-	return taskQueuePrefix
-}
 
 func (k *keys) taskQueueInstanceLock(workspaceName, stubId string) string {
 	return fmt.Sprintf(taskQueueInstanceLock, workspaceName, stubId)
