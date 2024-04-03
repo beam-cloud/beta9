@@ -15,7 +15,7 @@ import (
 func NewDispatcher(ctx context.Context, rdb *common.RedisClient) (*Dispatcher, error) {
 	d := &Dispatcher{
 		rdb:       rdb,
-		executors: common.NewSafeMap[func()](),
+		executors: common.NewSafeMap[func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)](),
 	}
 
 	go d.monitor(ctx)
@@ -24,7 +24,7 @@ func NewDispatcher(ctx context.Context, rdb *common.RedisClient) (*Dispatcher, e
 
 type Dispatcher struct {
 	rdb       *common.RedisClient
-	executors *common.SafeMap[func()]
+	executors *common.SafeMap[func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)]
 }
 
 var taskMessagePool = sync.Pool{
@@ -56,17 +56,23 @@ func (d *Dispatcher) releaseTaskMessage(v *types.TaskMessage) {
 	taskMessagePool.Put(v)
 }
 
-func (d *Dispatcher) Register(executor string, callback func()) {
-	d.executors.Set(executor, callback)
+func (d *Dispatcher) Register(executor string, taskFactory func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)) {
+	d.executors.Set(executor, taskFactory)
 }
 
-func (d *Dispatcher) Send(ctx context.Context, workspaceName, stubId string, payload *types.TaskPayload, policy types.TaskPolicy, taskFactory func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)) (types.TaskInterface, error) {
+func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, stubId string, payload *types.TaskPayload, policy types.TaskPolicy) (types.TaskInterface, error) {
 	taskMessage := d.getTaskMessage()
+	taskMessage.Executor = executor
 	taskMessage.WorkspaceName = workspaceName
 	taskMessage.StubId = stubId
 	taskMessage.Args = payload.Args
 	taskMessage.Kwargs = payload.Kwargs
 	taskMessage.Policy = policy
+
+	taskFactory, exists := d.executors.Get(executor)
+	if !exists {
+		return nil, fmt.Errorf("invalid task executor: %v", executor)
+	}
 
 	defer d.releaseTaskMessage(taskMessage)
 	task, err := taskFactory(ctx, taskMessage)
@@ -81,20 +87,12 @@ func (d *Dispatcher) Send(ctx context.Context, workspaceName, stubId string, pay
 
 	taskId := task.Metadata().TaskId
 
-	indexKey := common.RedisKeys.TaskIndex()
-	entryKey := common.RedisKeys.TaskEntry(workspaceName, taskId)
-
-	err = d.rdb.SAdd(ctx, indexKey, entryKey).Err()
+	err = d.setTaskState(ctx, workspaceName, taskId, msg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to add task key to index <%v>: %w", indexKey, err)
+		return nil, err
 	}
 
-	err = d.rdb.Set(ctx, entryKey, msg, 0).Err()
-	if err != nil {
-		return nil, fmt.Errorf("failed to add task entry <%v>: %w", entryKey, err)
-	}
-
-	err = task.Execute()
+	err = task.Execute(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +100,39 @@ func (d *Dispatcher) Send(ctx context.Context, workspaceName, stubId string, pay
 	return task, nil
 }
 
-func (d *Dispatcher) Resolve(ctx context.Context, workspaceName, taskId string) error {
+func (d *Dispatcher) Complete(ctx context.Context, workspaceName, taskId string) error {
+	return d.removeTaskState(ctx, workspaceName, taskId)
+}
+
+func (d *Dispatcher) Claim(ctx context.Context, workspaceName, taskId, containerId string) error {
+	claimKey := common.RedisKeys.TaskClaim(workspaceName, taskId)
+	err := d.rdb.Set(ctx, claimKey, containerId, 0).Err()
+	if err != nil {
+		return fmt.Errorf("failed to claim task <%v>: %w", claimKey, err)
+	}
+
+	return nil
+}
+
+func (d *Dispatcher) setTaskState(ctx context.Context, workspaceName, taskId string, msg []byte) error {
+	indexKey := common.RedisKeys.TaskIndex()
+	entryKey := common.RedisKeys.TaskEntry(workspaceName, taskId)
+
+	err := d.rdb.SAdd(ctx, indexKey, entryKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to add task key to index <%v>: %w", indexKey, err)
+	}
+
+	err = d.rdb.Set(ctx, entryKey, msg, 0).Err()
+	if err != nil {
+		return fmt.Errorf("failed to add task entry <%v>: %w", entryKey, err)
+	}
+
+	return nil
+
+}
+
+func (d *Dispatcher) removeTaskState(ctx context.Context, workspaceName, taskId string) error {
 	indexKey := common.RedisKeys.TaskIndex()
 	err := d.rdb.SRem(ctx, indexKey, taskId).Err()
 	if err != nil {
@@ -119,16 +149,6 @@ func (d *Dispatcher) Resolve(ctx context.Context, workspaceName, taskId string) 
 	err = d.rdb.Del(ctx, claimKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to remove claim <%v>: %w", claimKey, err)
-	}
-
-	return nil
-}
-
-func (d *Dispatcher) Claim(ctx context.Context, workspaceName, taskId, containerId string) error {
-	claimKey := common.RedisKeys.TaskClaim(workspaceName, taskId)
-	err := d.rdb.Set(ctx, claimKey, containerId, 0).Err()
-	if err != nil {
-		return fmt.Errorf("failed to claim task <%v>: %w", claimKey, err)
 	}
 
 	return nil
@@ -155,18 +175,65 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 					continue
 				}
 
-				log.Println("task key: ", taskKey)
-
 				taskMessage := types.TaskMessage{}
 				taskMessage.Decode(msg)
 
-				// if taskMessage.
+				taskFactory, exists := d.executors.Get(taskMessage.Executor)
+				if !exists {
+					d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.TaskId)
+					continue
+				}
 
-				log.Printf("task msg: %+v\n", taskMessage)
+				task, err := taskFactory(ctx, &taskMessage)
+				if err != nil {
+					continue
+				}
 
-				// recentHeartbeat := res > 0
+				heartbeat, err := task.HeartBeat(ctx)
+				if err != nil {
+					continue
+				}
+
+				log.Printf("task %s, heartbeat: %v\n", taskMessage.TaskId, heartbeat)
+
+				if !heartbeat {
+
+					// Hit retry limit, cancel task and resolve
+					if taskMessage.Retries >= taskMessage.Policy.MaxRetries {
+						log.Printf("<dispatcher> hit retry limit, not reinserting task <%s> into queue: %s\n", taskMessage.TaskId, taskMessage.StubId)
+
+						err := task.Cancel(ctx)
+						if err != nil {
+							continue
+						}
+
+						err = d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.TaskId)
+						if err != nil {
+							continue
+						}
+					}
+
+					// Retry task
+					log.Printf("<dispatcher> missing heartbeat, reinserting task<%s:%s> into queue: %s\n",
+						taskMessage.WorkspaceName, taskMessage.TaskId, taskMessage.StubId)
+
+					taskMessage.Retries += 1
+					msg, err := taskMessage.Encode()
+					if err != nil {
+						continue
+					}
+
+					err = d.setTaskState(ctx, taskMessage.WorkspaceName, taskMessage.TaskId, msg)
+					if err != nil {
+						continue
+					}
+
+					err = task.Retry(ctx)
+					if err != nil {
+						log.Printf("<dispatcher> retry failed: %+v\n", err)
+					}
+				}
 			}
 		}
-
 	}
 }

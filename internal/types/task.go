@@ -20,8 +20,9 @@ type TaskMetadata struct {
 }
 
 type TaskInterface interface {
-	Execute() error
-	Cancel() error
+	Execute(ctx context.Context) error
+	Cancel(ctx context.Context) error
+	Retry(ctx context.Context) error
 	HeartBeat(ctx context.Context) (bool, error)
 	Metadata() TaskMetadata
 }
@@ -46,13 +47,17 @@ type TaskMessage struct {
 	Kwargs        map[string]interface{} `json:"kwargs"`
 	Expires       *time.Time             `json:"expires"`
 	Policy        TaskPolicy             `json:"policy"`
+	Retries       uint                   `json:"retries"`
 }
 
 func (tm *TaskMessage) Reset() {
+	tm.WorkspaceName = ""
 	tm.TaskId = uuid.Must(uuid.NewV4()).String()
 	tm.StubId = ""
 	tm.Args = nil
 	tm.Kwargs = nil
+	tm.Policy = DefaultTaskPolicy
+	tm.Retries = 0
 }
 
 // Encode returns a binary representation of the TaskMessage

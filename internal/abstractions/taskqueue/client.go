@@ -103,7 +103,6 @@ func (qc *taskQueueClient) TasksRunning(workspaceName, stubId string) (int, erro
 	// }
 
 	keys := []string{}
-
 	return len(keys), nil
 }
 

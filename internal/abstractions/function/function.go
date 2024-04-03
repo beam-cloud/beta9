@@ -286,11 +286,15 @@ type FunctionTask struct {
 	TaskId        string
 }
 
-func (ft *FunctionTask) Execute() error {
+func (ft *FunctionTask) Execute(ctx context.Context) error {
 	return nil
 }
 
-func (ft *FunctionTask) Cancel() error {
+func (ft *FunctionTask) Retry(ctx context.Context) error {
+	return nil
+}
+
+func (ft *FunctionTask) Cancel(ctx context.Context) error {
 	return nil
 }
 
