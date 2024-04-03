@@ -87,7 +87,7 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 
 	taskId := task.Metadata().TaskId
 
-	err = d.setTaskState(ctx, workspaceName, taskId, msg)
+	err = d.setTaskState(ctx, workspaceName, taskId, stubId, msg)
 	if err != nil {
 		return nil, err
 	}
@@ -100,12 +100,12 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 	return task, nil
 }
 
-func (d *Dispatcher) Complete(ctx context.Context, workspaceName, taskId string) error {
-	return d.removeTaskState(ctx, workspaceName, taskId)
+func (d *Dispatcher) Complete(ctx context.Context, workspaceName, stubId, taskId string) error {
+	return d.removeTaskState(ctx, workspaceName, stubId, taskId)
 }
 
-func (d *Dispatcher) Claim(ctx context.Context, workspaceName, taskId, containerId string) error {
-	claimKey := common.RedisKeys.TaskClaim(workspaceName, taskId)
+func (d *Dispatcher) Claim(ctx context.Context, workspaceName, stubId, taskId, containerId string) error {
+	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
 	err := d.rdb.Set(ctx, claimKey, containerId, 0).Err()
 	if err != nil {
 		return fmt.Errorf("failed to claim task <%v>: %w", claimKey, err)
@@ -114,9 +114,9 @@ func (d *Dispatcher) Claim(ctx context.Context, workspaceName, taskId, container
 	return nil
 }
 
-func (d *Dispatcher) setTaskState(ctx context.Context, workspaceName, taskId string, msg []byte) error {
+func (d *Dispatcher) setTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error {
 	indexKey := common.RedisKeys.TaskIndex()
-	entryKey := common.RedisKeys.TaskEntry(workspaceName, taskId)
+	entryKey := common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)
 
 	err := d.rdb.SAdd(ctx, indexKey, entryKey).Err()
 	if err != nil {
@@ -132,20 +132,20 @@ func (d *Dispatcher) setTaskState(ctx context.Context, workspaceName, taskId str
 
 }
 
-func (d *Dispatcher) removeTaskState(ctx context.Context, workspaceName, taskId string) error {
+func (d *Dispatcher) removeTaskState(ctx context.Context, workspaceName, stubId, taskId string) error {
 	indexKey := common.RedisKeys.TaskIndex()
 	err := d.rdb.SRem(ctx, indexKey, taskId).Err()
 	if err != nil {
 		return err
 	}
 
-	entryKey := common.RedisKeys.TaskEntry(workspaceName, taskId)
+	entryKey := common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)
 	err = d.rdb.Del(ctx, entryKey).Err()
 	if err != nil {
 		return err
 	}
 
-	claimKey := common.RedisKeys.TaskClaim(workspaceName, taskId)
+	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
 	err = d.rdb.Del(ctx, claimKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to remove claim <%v>: %w", claimKey, err)
@@ -180,7 +180,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 
 				taskFactory, exists := d.executors.Get(taskMessage.Executor)
 				if !exists {
-					d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.TaskId)
+					d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 					continue
 				}
 
@@ -207,7 +207,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 							continue
 						}
 
-						err = d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.TaskId)
+						err = d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 						if err != nil {
 							continue
 						}
@@ -223,7 +223,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 						continue
 					}
 
-					err = d.setTaskState(ctx, taskMessage.WorkspaceName, taskMessage.TaskId, msg)
+					err = d.setTaskState(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId, msg)
 					if err != nil {
 						continue
 					}

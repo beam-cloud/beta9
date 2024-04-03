@@ -276,7 +276,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 		return nil, err
 	}
 
-	err = tq.taskDispatcher.Claim(ctx, authInfo.Workspace.Name, tm.TaskId, in.ContainerId)
+	err = tq.taskDispatcher.Claim(ctx, authInfo.Workspace.Name, tm.StubId, tm.TaskId, in.ContainerId)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +345,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatus(in.TaskStatus)
 
-	err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.TaskId)
+	err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
 			Ok: false,
@@ -455,7 +455,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 			return nil
 
 		case <-cancelFlag:
-			err := tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, task.ExternalId)
+			err := tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
 			if err != nil {
 				return err
 			}
@@ -464,7 +464,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 			return nil
 
 		case <-timeoutFlag:
-			err := tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, task.ExternalId)
+			err := tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
 			if err != nil {
 				return err
 			}
