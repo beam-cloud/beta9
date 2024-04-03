@@ -25,10 +25,12 @@ type Dispatcher struct {
 var taskMessagePool = sync.Pool{
 	New: func() interface{} {
 		return &types.TaskMessage{
-			TaskId:   uuid.Must(uuid.NewV4()).String(),
-			Args:     nil,
-			Kwargs:   nil,
-			Executor: "",
+			TaskId:        uuid.Must(uuid.NewV4()).String(),
+			Args:          nil,
+			Kwargs:        nil,
+			Executor:      "",
+			StubId:        "",
+			WorkspaceName: "",
 		}
 	},
 }
@@ -37,6 +39,7 @@ func (d *Dispatcher) getTaskMessage() *types.TaskMessage {
 	msg := taskMessagePool.Get().(*types.TaskMessage)
 	msg.TaskId = uuid.Must(uuid.NewV4()).String()
 	msg.StubId = ""
+	msg.WorkspaceName = ""
 	msg.Args = make([]interface{}, 0)
 	msg.Kwargs = make(map[string]interface{})
 	msg.Executor = ""
@@ -52,8 +55,9 @@ func (d *Dispatcher) Register(executor string, callback func()) {
 	d.executors.Set(executor, callback)
 }
 
-func (d *Dispatcher) Send(ctx context.Context, stubId string, args []interface{}, kwargs map[string]interface{}, taskFactory func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)) (types.TaskInterface, error) {
+func (d *Dispatcher) Send(ctx context.Context, workspaceName, stubId string, args []interface{}, kwargs map[string]interface{}, taskFactory func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)) (types.TaskInterface, error) {
 	taskMessage := d.getTaskMessage()
+	taskMessage.WorkspaceName = workspaceName
 	taskMessage.StubId = stubId
 	taskMessage.Args = args
 	taskMessage.Kwargs = kwargs

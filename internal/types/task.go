@@ -37,12 +37,13 @@ var (
 // TaskMessage represents a JSON serializable message
 // to be added to the queue
 type TaskMessage struct {
-	TaskId   string                 `json:"task_id"`
-	StubId   string                 `json:"stub_id"`
-	Executor string                 `json:"executor"`
-	Args     []interface{}          `json:"args"`
-	Kwargs   map[string]interface{} `json:"kwargs"`
-	Expires  *time.Time             `json:"expires"`
+	TaskId        string                 `json:"task_id"`
+	WorkspaceName string                 `json:"workspace_name"`
+	StubId        string                 `json:"stub_id"`
+	Executor      string                 `json:"executor"`
+	Args          []interface{}          `json:"args"`
+	Kwargs        map[string]interface{} `json:"kwargs"`
+	Expires       *time.Time             `json:"expires"`
 }
 
 func (tm *TaskMessage) Reset() {

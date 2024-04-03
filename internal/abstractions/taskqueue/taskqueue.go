@@ -107,6 +107,7 @@ type TaskQueueTask struct {
 }
 
 func (t *TaskQueueTask) Execute() error {
+	log.Printf("t.msg: %+v\n", t.msg)
 	err := t.client.Push(t.msg)
 	if err != nil {
 		// TODO: handle this
@@ -126,7 +127,10 @@ func (t *TaskQueueTask) Update() error {
 }
 
 func (t *TaskQueueTask) Metadata() types.TaskMetadata {
-	return types.TaskMetadata{}
+	return types.TaskMetadata{
+		TaskId: t.msg.TaskId,
+		StubId: t.msg.StubId,
+	}
 }
 
 func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.TaskMessage) (types.TaskInterface, error) {
@@ -157,8 +161,8 @@ func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.T
 	}, nil
 }
 
-func (tq *RedisTaskQueue) put(ctx context.Context, stubId string, payload *types.TaskPayload) (string, error) {
-	task, err := tq.taskDispatcher.Send(ctx, stubId, payload.Args, payload.Kwargs, tq.taskQueueTaskFactory)
+func (tq *RedisTaskQueue) put(ctx context.Context, workspaceName, stubId string, payload *types.TaskPayload) (string, error) {
+	task, err := tq.taskDispatcher.Send(ctx, workspaceName, stubId, payload.Args, payload.Kwargs, tq.taskQueueTaskFactory)
 	if err != nil {
 		return "", err
 	}
@@ -168,6 +172,8 @@ func (tq *RedisTaskQueue) put(ctx context.Context, stubId string, payload *types
 }
 
 func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
 	var payload types.TaskPayload
 	err := json.Unmarshal(in.Payload, &payload)
 	if err != nil {
@@ -176,7 +182,9 @@ func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 		}, nil
 	}
 
-	taskId, err := tq.put(ctx, in.StubId, &payload)
+	workspaceName := authInfo.Workspace.Name
+
+	taskId, err := tq.put(ctx, workspaceName, in.StubId, &payload)
 	return &pb.TaskQueuePutResponse{
 		Ok:     err == nil,
 		TaskId: taskId,
@@ -279,6 +287,14 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatus(in.TaskStatus)
+
+	// Resolve task with dispatcher
+	err = tq.taskDispatcher.Resolve(ctx, in.TaskId)
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{
+			Ok: false,
+		}, nil
+	}
 
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
 	return &pb.TaskQueueCompleteResponse{
@@ -500,6 +516,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string) error {
 	queue.autoscaler = autoscaler
 
 	tq.queueInstances.Set(stubId, queue)
+
 	go queue.monitor()
 
 	// Clean up the queue instance once it's done

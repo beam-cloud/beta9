@@ -56,7 +56,8 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 		})
 	}
 
-	taskId, err := g.tq.put(ctx.Request().Context(), stubId, payload)
+	workspaceName := cc.AuthInfo.Workspace.Name
+	taskId, err := g.tq.put(ctx.Request().Context(), workspaceName, stubId, payload)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": err.Error(),
