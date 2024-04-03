@@ -65,8 +65,6 @@ class TaskQueueManager:
             task_process.join()
 
     def shutdown(self, signum=None, frame=None):
-        print("Shutting down task queue")
-
         for task_process in self.task_processes:
             task_process.terminate()
             task_process.join()
