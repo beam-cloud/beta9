@@ -92,17 +92,8 @@ const (
 	TaskStatusRetry     TaskStatus = "RETRY"
 )
 
-var DefaultTaskPolicy = TaskPolicy{
-	MaxRetries: 3,
-	Timeout:    3600,
-}
-
-type TaskPolicy struct {
-	MaxRetries uint `json:"max_retries"`
-	Timeout    int  `json:"timeout"`
-}
-
 type TaskParams struct {
+	TaskId      string
 	ContainerId string
 	StubId      uint
 	WorkspaceId uint

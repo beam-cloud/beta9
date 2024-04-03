@@ -36,6 +36,8 @@ TASK_POLLING_INTERVAL = 0.01
 
 class TaskQueueManager:
     def __init__(self) -> None:
+        self._setup_signal_handlers()
+
         set_start_method("spawn", force=True)
 
         # Manager attributes
@@ -50,6 +52,9 @@ class TaskQueueManager:
             Event() for _ in range(self.task_worker_count)
         ]
         self.task_worker_watchdog_threads: List[threading.Thread] = []
+
+    def _setup_signal_handlers(self):
+        signal.signal(signal.SIGTERM, self.shutdown)
 
     def run(self):
         for worker_index in range(self.task_worker_count):

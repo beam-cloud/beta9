@@ -201,8 +201,6 @@ func (fs *RunCFunctionService) createTask(ctx context.Context, authInfo *auth.Au
 		return nil, err
 	}
 
-	// TODO: dispatch
-
 	return task, nil
 }
 
@@ -288,11 +286,11 @@ type FunctionTask struct {
 	TaskId        string
 }
 
-func (ft *FunctionTask) Cancel() error {
+func (ft *FunctionTask) Execute() error {
 	return nil
 }
 
-func (ft *FunctionTask) Execute() error {
+func (ft *FunctionTask) Cancel() error {
 	return nil
 }
 

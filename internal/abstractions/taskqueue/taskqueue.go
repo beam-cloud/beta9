@@ -85,6 +85,8 @@ func NewRedisTaskQueueService(
 		queueInstances:  common.NewSafeMap[*taskQueueInstance](),
 	}
 
+	tq.taskDispatcher.Register(string(types.ExecutorTaskQueue), executorCb)
+
 	go tq.handleContainerEvents()
 	go tq.monitorTasks()
 
@@ -95,23 +97,36 @@ func NewRedisTaskQueueService(
 	return tq, nil
 }
 
-func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
-	var payload types.TaskPayload
-	err := json.Unmarshal(in.Payload, &payload)
-	if err != nil {
-		return &pb.TaskQueuePutResponse{
-			Ok: false,
-		}, nil
-	}
+func executorCb() {
 
-	taskId, err := tq.put(ctx, in.StubId, &payload)
-	return &pb.TaskQueuePutResponse{
-		Ok:     err == nil,
-		TaskId: taskId,
-	}, nil
 }
 
 type TaskQueueTask struct {
+	client *taskQueueClient
+	msg    *types.TaskMessage
+}
+
+func (t *TaskQueueTask) Execute() error {
+	err := t.client.Push(t.msg)
+	if err != nil {
+		// TODO: handle this
+		// tq.backendRepo.DeleteTask(ctx, msg.TaskId)
+		return err
+	}
+
+	return nil
+}
+
+func (t *TaskQueueTask) Cancel() error {
+	return nil
+}
+
+func (t *TaskQueueTask) Update() error {
+	return nil
+}
+
+func (t *TaskQueueTask) Metadata() types.TaskMetadata {
+	return types.TaskMetadata{}
 }
 
 func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.TaskMessage) (types.TaskInterface, error) {
@@ -128,6 +143,7 @@ func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.T
 	}
 
 	_, err := tq.backendRepo.CreateTask(ctx, &types.TaskParams{
+		TaskId:      msg.TaskId,
 		StubId:      queue.stub.Id,
 		WorkspaceId: authInfo.Workspace.Id,
 	})
@@ -135,15 +151,10 @@ func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.T
 		return nil, err
 	}
 
-	err = queue.client.Push(msg)
-	if err != nil {
-		tq.backendRepo.DeleteTask(ctx, msg.TaskId)
-		return nil, err
-	}
-
-	log.Println("queue: ", queue)
-
-	return nil, nil
+	return &TaskQueueTask{
+		client: tq.queueClient,
+		msg:    msg,
+	}, nil
 }
 
 func (tq *RedisTaskQueue) put(ctx context.Context, stubId string, payload *types.TaskPayload) (string, error) {
@@ -154,6 +165,22 @@ func (tq *RedisTaskQueue) put(ctx context.Context, stubId string, payload *types
 
 	meta := task.Metadata()
 	return meta.TaskId, nil
+}
+
+func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
+	var payload types.TaskPayload
+	err := json.Unmarshal(in.Payload, &payload)
+	if err != nil {
+		return &pb.TaskQueuePutResponse{
+			Ok: false,
+		}, nil
+	}
+
+	taskId, err := tq.put(ctx, in.StubId, &payload)
+	return &pb.TaskQueuePutResponse{
+		Ok:     err == nil,
+		TaskId: taskId,
+	}, nil
 }
 
 func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error) {
