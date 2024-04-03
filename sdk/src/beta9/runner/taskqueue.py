@@ -64,7 +64,9 @@ class TaskQueueManager:
         for task_process in self.task_processes:
             task_process.join()
 
-    def shutdown(self):
+    def shutdown(self, signum=None, frame=None):
+        print("Shutting down task queue")
+
         for task_process in self.task_processes:
             task_process.terminate()
             task_process.join()
@@ -81,6 +83,7 @@ class TaskQueueManager:
         # Initialize task worker
         self.task_workers.append(
             TaskQueueWorker(
+                worker_index=worker_index,
                 parent_pid=self.pid,
                 worker_startup_event=self.task_worker_startup_events[worker_index],
             )
@@ -139,9 +142,11 @@ class TaskQueueWorker:
     def __init__(
         self,
         *,
+        worker_index: int,
         parent_pid: int,
         worker_startup_event: Event,
     ) -> None:
+        self.worker_index: int = worker_index
         self.parent_pid: int = parent_pid
         self.worker_startup_event: Event = worker_startup_event
 
@@ -156,7 +161,7 @@ class TaskQueueWorker:
                 return None
 
             task = json.loads(r.task_msg)
-            return Task(id=task["id"], args=task["args"], kwargs=task["kwargs"])
+            return Task(id=task["task_id"], args=task["args"], kwargs=task["kwargs"])
         except (grpclib.exceptions.StreamTerminatedError, OSError):
             return None
 
@@ -225,6 +230,7 @@ class TaskQueueWorker:
         handler = load_handler()
         executor = ThreadPoolExecutor()
 
+        print(f"Worker[{self.worker_index}] ready")
         while True:
             task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)
             if not task:

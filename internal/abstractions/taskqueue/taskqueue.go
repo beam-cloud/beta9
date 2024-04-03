@@ -107,7 +107,6 @@ type TaskQueueTask struct {
 }
 
 func (t *TaskQueueTask) Execute() error {
-	log.Printf("t.msg: %+v\n", t.msg)
 	err := t.client.Push(t.msg)
 	if err != nil {
 		// TODO: handle this
@@ -390,8 +389,10 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 					return
 
 				case err := <-errs:
-					log.Printf("error with monitor task subscription: %v", err)
-					break retry
+					if err != nil {
+						log.Printf("error with monitor task subscription: %v", err)
+						break retry
+					}
 				}
 			}
 		}
