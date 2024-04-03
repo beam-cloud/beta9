@@ -134,18 +134,19 @@ func (d *Dispatcher) setTaskState(ctx context.Context, workspaceName, stubId, ta
 
 func (d *Dispatcher) removeTaskState(ctx context.Context, workspaceName, stubId, taskId string) error {
 	indexKey := common.RedisKeys.TaskIndex()
-	err := d.rdb.SRem(ctx, indexKey, taskId).Err()
+	entryKey := common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)
+	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
+
+	err := d.rdb.SRem(ctx, indexKey, entryKey).Err()
 	if err != nil {
 		return err
 	}
 
-	entryKey := common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)
 	err = d.rdb.Del(ctx, entryKey).Err()
 	if err != nil {
 		return err
 	}
 
-	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
 	err = d.rdb.Del(ctx, claimKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to remove claim <%v>: %w", claimKey, err)
