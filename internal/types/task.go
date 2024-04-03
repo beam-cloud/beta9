@@ -1,6 +1,7 @@
 package types
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
@@ -21,7 +22,7 @@ type TaskMetadata struct {
 type TaskInterface interface {
 	Execute() error
 	Cancel() error
-	Update() error
+	HeartBeat(ctx context.Context) (bool, error)
 	Metadata() TaskMetadata
 }
 
@@ -44,6 +45,7 @@ type TaskMessage struct {
 	Args          []interface{}          `json:"args"`
 	Kwargs        map[string]interface{} `json:"kwargs"`
 	Expires       *time.Time             `json:"expires"`
+	Policy        TaskPolicy             `json:"policy"`
 }
 
 func (tm *TaskMessage) Reset() {

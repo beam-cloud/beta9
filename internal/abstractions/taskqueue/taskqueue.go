@@ -47,12 +47,13 @@ const (
 )
 
 type RedisTaskQueue struct {
-	ctx            context.Context
-	rdb            *common.RedisClient
-	taskDispatcher *task.Dispatcher
-	containerRepo  repository.ContainerRepository
-	backendRepo    repository.BackendRepository
-	scheduler      *scheduler.Scheduler
+	ctx             context.Context
+	rdb             *common.RedisClient
+	stubConfigCache *common.SafeMap[*types.StubConfigV1]
+	taskDispatcher  *task.Dispatcher
+	containerRepo   repository.ContainerRepository
+	backendRepo     repository.BackendRepository
+	scheduler       *scheduler.Scheduler
 	pb.UnimplementedTaskQueueServiceServer
 	queueInstances  *common.SafeMap[*taskQueueInstance]
 	keyEventManager *common.KeyEventManager
@@ -76,6 +77,7 @@ func NewRedisTaskQueueService(
 		ctx:             ctx,
 		rdb:             opts.RedisClient,
 		scheduler:       opts.Scheduler,
+		stubConfigCache: common.NewSafeMap[*types.StubConfigV1](),
 		keyEventChan:    keyEventChan,
 		keyEventManager: keyEventManager,
 		taskDispatcher:  opts.TaskDispatcher,
@@ -104,6 +106,7 @@ func executorCb() {
 type TaskQueueTask struct {
 	client *taskQueueClient
 	msg    *types.TaskMessage
+	rdb    *common.RedisClient
 }
 
 func (t *TaskQueueTask) Execute() error {
@@ -117,11 +120,16 @@ func (t *TaskQueueTask) Execute() error {
 	return nil
 }
 
-func (t *TaskQueueTask) Cancel() error {
-	return nil
+func (t *TaskQueueTask) HeartBeat(ctx context.Context) (bool, error) {
+	res, err := t.rdb.Exists(ctx, Keys.taskQueueTaskHeartbeat(t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)).Result()
+	if err != nil {
+		return false, err
+	}
+
+	return res > 0, nil
 }
 
-func (t *TaskQueueTask) Update() error {
+func (t *TaskQueueTask) Cancel() error {
 	return nil
 }
 
@@ -157,11 +165,40 @@ func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.T
 	return &TaskQueueTask{
 		client: tq.queueClient,
 		msg:    msg,
+		rdb:    tq.rdb,
 	}, nil
 }
 
+func (tq *RedisTaskQueue) getStubConfig(stubId string) (*types.StubConfigV1, error) {
+	config, exists := tq.stubConfigCache.Get(stubId)
+
+	if !exists {
+		stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId)
+		if err != nil {
+			return nil, nil
+		}
+
+		var stubConfig types.StubConfigV1 = types.StubConfigV1{}
+		err = json.Unmarshal([]byte(stub.Config), &stubConfig)
+		if err != nil {
+			return nil, err
+		}
+
+		config = &stubConfig
+		tq.stubConfigCache.Set(stubId, config)
+
+	}
+
+	return config, nil
+}
+
 func (tq *RedisTaskQueue) put(ctx context.Context, workspaceName, stubId string, payload *types.TaskPayload) (string, error) {
-	task, err := tq.taskDispatcher.Send(ctx, workspaceName, stubId, payload.Args, payload.Kwargs, tq.taskQueueTaskFactory)
+	stubConfig, err := tq.getStubConfig(stubId)
+	if err != nil {
+		return "", err
+	}
+
+	task, err := tq.taskDispatcher.Send(ctx, workspaceName, stubId, payload, stubConfig.TaskPolicy, tq.taskQueueTaskFactory)
 	if err != nil {
 		return "", err
 	}
@@ -204,7 +241,6 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 
 		queue, _ = tq.queueInstances.Get(in.StubId)
 	}
-
 	msg, err := queue.client.Pop(authInfo.Workspace.Name, in.StubId, in.ContainerId)
 	if err != nil || msg == nil {
 		return &pb.TaskQueuePopResponse{Ok: false}, nil
@@ -212,6 +248,11 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 
 	var tm types.TaskMessage
 	err = tm.Decode(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	err = tq.taskDispatcher.Claim(ctx, authInfo.Workspace.Name, tm.TaskId, in.ContainerId)
 	if err != nil {
 		return nil, err
 	}
@@ -263,13 +304,6 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}, nil
 	}
 
-	err = tq.rdb.Del(ctx, Keys.taskQueueTaskClaim(authInfo.Workspace.Name, in.StubId, task.ExternalId)).Err()
-	if err != nil {
-		return &pb.TaskQueueCompleteResponse{
-			Ok: false,
-		}, nil
-	}
-
 	err = tq.rdb.Del(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId)).Err()
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
@@ -287,8 +321,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatus(in.TaskStatus)
 
-	// Resolve task with dispatcher
-	err = tq.taskDispatcher.Resolve(ctx, in.TaskId)
+	err = tq.taskDispatcher.Resolve(ctx, authInfo.Workspace.Name, in.TaskId)
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
 			Ok: false,
@@ -312,13 +345,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 		return err
 	}
 
-	stub, err := tq.backendRepo.GetStubByExternalId(stream.Context(), req.StubId)
-	if err != nil {
-		return err
-	}
-
-	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
-	err = json.Unmarshal([]byte(stub.Config), &stubConfig)
+	stubConfig, err := tq.getStubConfig(req.StubId)
 	if err != nil {
 		return err
 	}
@@ -404,7 +431,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 			return nil
 
 		case <-cancelFlag:
-			err := tq.rdb.Del(ctx, Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Err()
+			err := tq.taskDispatcher.Resolve(ctx, authInfo.Workspace.Name, task.ExternalId)
 			if err != nil {
 				return err
 			}
@@ -413,10 +440,9 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 			return nil
 
 		case <-timeoutFlag:
-			err := tq.rdb.Del(ctx, Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Err()
+			err := tq.taskDispatcher.Resolve(ctx, authInfo.Workspace.Name, task.ExternalId)
 			if err != nil {
-				log.Printf("error deleting task claim: %v", err)
-				continue
+				return err
 			}
 
 			stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: true})
@@ -438,17 +464,17 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				return err
 			}
 
-			// Check if the task is currently claimed
-			exists, err := tq.rdb.Exists(ctx, Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Result()
-			if err != nil {
-				return err
-			}
+			// // Check if the task is currently claimed
+			// exists, err := tq.rdb.Exists(ctx, Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Result()
+			// if err != nil {
+			// 	return err
+			// }
 
-			// If the task claim key doesn't exist, send a message and return
-			if exists == 0 {
-				stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: true, TimedOut: false})
-				return nil
-			}
+			// // If the task claim key doesn't exist, send a message and return
+			// if exists == 0 {
+			// 	stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: true, TimedOut: false})
+			// 	return nil
+			// }
 
 			stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: false})
 			time.Sleep(time.Second * 1)
@@ -540,11 +566,12 @@ func (tq *RedisTaskQueue) monitorTasks() {
 		case <-tq.ctx.Done():
 			return
 		case <-ticker.C:
-			claimedTasks, err := tq.rdb.Scan(tq.ctx, Keys.taskQueueTaskClaim("*", "*", "*"))
-			if err != nil {
-				return
-			}
+			// claimedTasks, err := tq.rdb.Scan(tq.ctx, Keys.taskQueueTaskClaim("*", "*", "*"))
+			// if err != nil {
+			// 	return
+			// }
 
+			claimedTasks := []string{}
 			for _, claimKey := range claimedTasks {
 				v := strings.Split(claimKey, ":")
 				workspaceName := v[1]
@@ -586,10 +613,10 @@ func (tq *RedisTaskQueue) monitorTasks() {
 							continue
 						}
 
-						err = tq.rdb.Del(tq.ctx, Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Err()
-						if err != nil {
-							log.Printf("<taskqueue> unable to delete task claim: %s\n", taskId)
-						}
+						// err = tq.rdb.Del(tq.ctx, Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Err()
+						// if err != nil {
+						// 	log.Printf("<taskqueue> unable to delete task claim: %s\n", taskId)
+						// }
 
 						continue
 					}
@@ -606,22 +633,22 @@ func (tq *RedisTaskQueue) monitorTasks() {
 						continue
 					}
 
-					encodedMessage, err := tq.rdb.Get(tq.ctx, Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Bytes()
-					if err != nil {
-						continue
-					}
+					// encodedMessage, err := tq.rdb.Get(tq.ctx, Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Bytes()
+					// if err != nil {
+					// 	continue
+					// }
 
-					err = tq.rdb.Del(tq.ctx, Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Err()
-					if err != nil {
-						log.Printf("<taskqueue> unable to delete task claim: %s\n", taskId)
-						continue
-					}
+					// err = tq.rdb.Del(tq.ctx, Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Err()
+					// if err != nil {
+					// 	log.Printf("<taskqueue> unable to delete task claim: %s\n", taskId)
+					// 	continue
+					// }
 
-					err = tq.rdb.RPush(tq.ctx, Keys.taskQueueList(workspaceName, stubId), encodedMessage).Err()
-					if err != nil {
-						log.Printf("<taskqueue> unable to insert task <%s> into queue <%s>: %v\n", taskId, stubId, err)
-						continue
-					}
+					// err = tq.rdb.RPush(tq.ctx, Keys.taskQueueList(workspaceName, stubId), encodedMessage).Err()
+					// if err != nil {
+					// 	log.Printf("<taskqueue> unable to insert task <%s> into queue <%s>: %v\n", taskId, stubId, err)
+					// 	continue
+					// }
 
 					_, exists := tq.queueInstances.Get(stubId)
 					if !exists {
@@ -682,7 +709,6 @@ var (
 	taskQueueList                string = "taskqueue:%s:%s"
 	taskQueueTaskDuration        string = "taskqueue:%s:%s:task_duration"
 	taskQueueAverageTaskDuration string = "taskqueue:%s:%s:avg_task_duration"
-	taskQueueTaskClaim           string = "taskqueue:%s:%s:task:claim:%s"
 	taskQueueTaskCancel          string = "taskqueue:%s:%s:task:cancel:%s"
 	taskQueueTaskRetries         string = "taskqueue:%s:%s:task:retries:%s"
 	taskQueueTaskHeartbeat       string = "taskqueue:%s:%s:task:heartbeat:%s"
@@ -701,10 +727,6 @@ func (k *keys) taskQueueInstanceLock(workspaceName, stubId string) string {
 
 func (k *keys) taskQueueList(workspaceName, stubId string) string {
 	return fmt.Sprintf(taskQueueList, workspaceName, stubId)
-}
-
-func (k *keys) taskQueueTaskClaim(workspaceName, stubId, taskId string) string {
-	return fmt.Sprintf(taskQueueTaskClaim, workspaceName, stubId, taskId)
 }
 
 func (k *keys) taskQueueTaskCancel(workspaceName, stubId, taskId string) string {

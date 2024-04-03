@@ -35,7 +35,8 @@ var (
 var (
 	taskPrefix string = "task"
 	taskIndex  string = "task:index"
-	taskEntry  string = "task:%s"
+	taskEntry  string = "task:%s:%s"
+	taskClaim  string = "task:%s:%s:claim"
 )
 
 var (
@@ -157,8 +158,12 @@ func (rk *redisKeys) TaskIndex() string {
 	return taskIndex
 }
 
-func (rk *redisKeys) TaskEntry(taskId string) string {
-	return fmt.Sprintf(taskEntry, taskId)
+func (rk *redisKeys) TaskEntry(workspaceName, taskId string) string {
+	return fmt.Sprintf(taskEntry, workspaceName, taskId)
+}
+
+func (rk *redisKeys) TaskClaim(workspaceName, taskId string) string {
+	return fmt.Sprintf(taskClaim, workspaceName, taskId)
 }
 
 // Workspace keys

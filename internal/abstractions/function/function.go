@@ -294,8 +294,8 @@ func (ft *FunctionTask) Cancel() error {
 	return nil
 }
 
-func (ft *FunctionTask) Update() error {
-	return nil
+func (ft *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
+	return false, nil
 }
 
 func (ft *FunctionTask) Metadata() types.TaskMetadata {

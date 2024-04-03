@@ -111,7 +111,7 @@ func NewGateway() (*Gateway, error) {
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
-	taskDispatcher, err := task.NewDispatcher(redisClient)
+	taskDispatcher, err := task.NewDispatcher(ctx, redisClient)
 	if err != nil {
 		return nil, err
 	}

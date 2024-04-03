@@ -82,12 +82,6 @@ func (qc *taskQueueClient) Pop(workspaceName, stubId, containerId string) ([]byt
 		return nil, err
 	}
 
-	// Set the task claim
-	err = qc.rdb.Set(context.TODO(), Keys.taskQueueTaskClaim(workspaceName, stubId, tm.TaskId), task, 0).Err()
-	if err != nil {
-		return nil, err
-	}
-
 	return task, nil
 }
 
@@ -101,22 +95,14 @@ func (qc *taskQueueClient) QueueLength(workspaceName, stubId string) (int64, err
 	return res, nil
 }
 
-// Check if any tasks are running
-func (qc *taskQueueClient) TaskRunning(workspaceName, stubId string) (bool, error) {
-	keys, err := qc.rdb.Scan(context.TODO(), Keys.taskQueueTaskClaim(workspaceName, stubId, "*"))
-	if err != nil {
-		return false, err
-	}
-
-	return len(keys) > 0, nil
-}
-
 // Check how many tasks are running
 func (qc *taskQueueClient) TasksRunning(workspaceName, stubId string) (int, error) {
-	keys, err := qc.rdb.Scan(context.TODO(), Keys.taskQueueTaskClaim(workspaceName, stubId, "*"))
-	if err != nil {
-		return -1, err
-	}
+	// keys, err := qc.rdb.Scan(context.TODO(), Keys.taskQueueTaskClaim(workspaceName, stubId, "*"))
+	// if err != nil {
+	// 	return -1, err
+	// }
+
+	keys := []string{}
 
 	return len(keys), nil
 }
