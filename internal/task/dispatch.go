@@ -88,7 +88,7 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 
 	taskId := task.Metadata().TaskId
 
-	err = d.taskRepo.SetTaskState(ctx, workspaceName, taskId, stubId, msg)
+	err = d.taskRepo.SetTaskState(ctx, workspaceName, stubId, taskId, msg)
 	if err != nil {
 		return nil, err
 	}
