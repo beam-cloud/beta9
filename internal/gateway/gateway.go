@@ -48,6 +48,7 @@ type Gateway struct {
 	grpcServer     *grpc.Server
 	redisClient    *common.RedisClient
 	TaskDispatcher *task.Dispatcher
+	TaskRepo       repository.TaskRepository
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
@@ -111,13 +112,15 @@ func NewGateway() (*Gateway, error) {
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
-	taskDispatcher, err := task.NewDispatcher(ctx, redisClient)
+	taskRepo := repository.NewTaskRedisRepository(redisClient)
+	taskDispatcher, err := task.NewDispatcher(ctx, taskRepo)
 	if err != nil {
 		return nil, err
 	}
 
 	gateway.config = config
 	gateway.Scheduler = scheduler
+	gateway.TaskRepo = taskRepo
 	gateway.ContainerRepo = containerRepo
 	gateway.ProviderRepo = providerRepo
 	gateway.BackendRepo = backendRepo
@@ -209,6 +212,7 @@ func (g *Gateway) registerServices() error {
 		Config:        g.config,
 		RedisClient:   g.redisClient,
 		BackendRepo:   g.BackendRepo,
+		TaskRepo:      g.TaskRepo,
 		ContainerRepo: g.ContainerRepo,
 		Scheduler:     g.Scheduler,
 		Tailscale:     g.Tailscale,
@@ -224,6 +228,7 @@ func (g *Gateway) registerServices() error {
 		Config:         g.config,
 		RedisClient:    g.redisClient,
 		BackendRepo:    g.BackendRepo,
+		TaskRepo:       g.TaskRepo,
 		ContainerRepo:  g.ContainerRepo,
 		Scheduler:      g.Scheduler,
 		Tailscale:      g.Tailscale,

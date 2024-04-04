@@ -80,6 +80,13 @@ type WorkerPoolRepository interface {
 	RemovePool(name string) error
 }
 
+type TaskRepository interface {
+	SetTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error
+	DeleteTaskState(ctx context.Context, workspaceName, stubId, taskId string) error
+	GetTasksInFlight(ctx context.Context) ([]*types.TaskMessage, error)
+	ClaimTask(ctx context.Context, workspaceName, stubId, taskId, containerId string) error
+}
+
 type ProviderRepository interface {
 	GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
 	RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error

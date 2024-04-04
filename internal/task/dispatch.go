@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/gofrs/uuid"
 )
 
-func NewDispatcher(ctx context.Context, rdb *common.RedisClient) (*Dispatcher, error) {
+func NewDispatcher(ctx context.Context, taskRepo repository.TaskRepository) (*Dispatcher, error) {
 	d := &Dispatcher{
-		rdb:       rdb,
+		taskRepo:  taskRepo,
 		executors: common.NewSafeMap[func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)](),
 	}
 
@@ -23,7 +24,7 @@ func NewDispatcher(ctx context.Context, rdb *common.RedisClient) (*Dispatcher, e
 }
 
 type Dispatcher struct {
-	rdb       *common.RedisClient
+	taskRepo  repository.TaskRepository
 	executors *common.SafeMap[func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)]
 }
 
@@ -87,7 +88,7 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 
 	taskId := task.Metadata().TaskId
 
-	err = d.setTaskState(ctx, workspaceName, taskId, stubId, msg)
+	err = d.taskRepo.SetTaskState(ctx, workspaceName, taskId, stubId, msg)
 	if err != nil {
 		return nil, err
 	}
@@ -101,58 +102,11 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 }
 
 func (d *Dispatcher) Complete(ctx context.Context, workspaceName, stubId, taskId string) error {
-	return d.removeTaskState(ctx, workspaceName, stubId, taskId)
+	return d.taskRepo.DeleteTaskState(ctx, workspaceName, stubId, taskId)
 }
 
 func (d *Dispatcher) Claim(ctx context.Context, workspaceName, stubId, taskId, containerId string) error {
-	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
-	err := d.rdb.Set(ctx, claimKey, containerId, 0).Err()
-	if err != nil {
-		return fmt.Errorf("failed to claim task <%v>: %w", claimKey, err)
-	}
-
-	return nil
-}
-
-func (d *Dispatcher) setTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error {
-	indexKey := common.RedisKeys.TaskIndex()
-	entryKey := common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)
-
-	err := d.rdb.SAdd(ctx, indexKey, entryKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add task key to index <%v>: %w", indexKey, err)
-	}
-
-	err = d.rdb.Set(ctx, entryKey, msg, 0).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add task entry <%v>: %w", entryKey, err)
-	}
-
-	return nil
-
-}
-
-func (d *Dispatcher) removeTaskState(ctx context.Context, workspaceName, stubId, taskId string) error {
-	indexKey := common.RedisKeys.TaskIndex()
-	entryKey := common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)
-	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
-
-	err := d.rdb.SRem(ctx, indexKey, entryKey).Err()
-	if err != nil {
-		return err
-	}
-
-	err = d.rdb.Del(ctx, entryKey).Err()
-	if err != nil {
-		return err
-	}
-
-	err = d.rdb.Del(ctx, claimKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to remove claim <%v>: %w", claimKey, err)
-	}
-
-	return nil
+	return d.taskRepo.ClaimTask(ctx, workspaceName, stubId, taskId, containerId)
 }
 
 func (d *Dispatcher) monitor(ctx context.Context) {
@@ -165,19 +119,21 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			tasks, err := d.rdb.SMembers(ctx, common.RedisKeys.TaskIndex()).Result()
+			tasks, err := d.taskRepo.GetTasksInFlight(ctx)
 			if err != nil {
 				continue
 			}
 
-			for _, taskKey := range tasks {
-				msg, err := d.rdb.Get(ctx, taskKey).Bytes()
-				if err != nil {
-					continue
-				}
+			log.Println("set: ", tasks)
 
-				taskMessage := types.TaskMessage{}
-				taskMessage.Decode(msg)
+			for _, taskMessage := range tasks {
+				// msg, err := d.rdb.Get(ctx, taskKey).Bytes()
+				// if err != nil {
+				// 	continue
+				// }
+
+				// taskMessage := types.TaskMessage{}
+				// taskMessage.Decode(msg)
 
 				taskFactory, exists := d.executors.Get(taskMessage.Executor)
 				if !exists {
@@ -185,7 +141,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 					continue
 				}
 
-				task, err := taskFactory(ctx, &taskMessage)
+				task, err := taskFactory(ctx, taskMessage)
 				if err != nil {
 					continue
 				}
@@ -224,7 +180,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 						continue
 					}
 
-					err = d.setTaskState(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId, msg)
+					err = d.taskRepo.SetTaskState(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId, msg)
 					if err != nil {
 						continue
 					}

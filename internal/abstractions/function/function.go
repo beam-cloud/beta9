@@ -37,6 +37,7 @@ const (
 type RunCFunctionService struct {
 	pb.UnimplementedFunctionServiceServer
 	backendRepo     repository.BackendRepository
+	taskRepo        repository.TaskRepository
 	containerRepo   repository.ContainerRepository
 	scheduler       *scheduler.Scheduler
 	tailscale       *network.Tailscale
@@ -50,6 +51,7 @@ type FunctionServiceOpts struct {
 	Config        types.AppConfig
 	RedisClient   *common.RedisClient
 	BackendRepo   repository.BackendRepository
+	TaskRepo      repository.TaskRepository
 	ContainerRepo repository.ContainerRepository
 	Scheduler     *scheduler.Scheduler
 	Tailscale     *network.Tailscale
@@ -67,6 +69,7 @@ func NewRuncFunctionService(ctx context.Context,
 	fs := &RunCFunctionService{
 		config:          opts.Config,
 		backendRepo:     opts.BackendRepo,
+		taskRepo:        opts.TaskRepo,
 		containerRepo:   opts.ContainerRepo,
 		scheduler:       opts.Scheduler,
 		tailscale:       opts.Tailscale,

@@ -34,6 +34,7 @@ type TaskQueueServiceOpts struct {
 	Config         types.AppConfig
 	RedisClient    *common.RedisClient
 	BackendRepo    repository.BackendRepository
+	TaskRepo       repository.TaskRepository
 	ContainerRepo  repository.ContainerRepository
 	TaskDispatcher *task.Dispatcher
 	Scheduler      *scheduler.Scheduler
@@ -51,6 +52,7 @@ type RedisTaskQueue struct {
 	rdb             *common.RedisClient
 	stubConfigCache *common.SafeMap[*types.StubConfigV1]
 	taskDispatcher  *task.Dispatcher
+	taskRepo        repository.TaskRepository
 	containerRepo   repository.ContainerRepository
 	backendRepo     repository.BackendRepository
 	scheduler       *scheduler.Scheduler
@@ -81,6 +83,7 @@ func NewRedisTaskQueueService(
 		keyEventChan:    keyEventChan,
 		keyEventManager: keyEventManager,
 		taskDispatcher:  opts.TaskDispatcher,
+		taskRepo:        opts.TaskRepo,
 		containerRepo:   opts.ContainerRepo,
 		backendRepo:     opts.BackendRepo,
 		queueClient:     newRedisTaskQueueClient(opts.RedisClient),
