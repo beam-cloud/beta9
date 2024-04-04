@@ -6,6 +6,7 @@ import (
 	"time"
 
 	common "github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/redis/go-redis/v9"
 )
@@ -13,11 +14,15 @@ import (
 const defaultTaskRunningExpiration int = 60
 
 type taskQueueClient struct {
-	rdb *common.RedisClient
+	rdb      *common.RedisClient
+	taskRepo repository.TaskRepository
 }
 
-func newRedisTaskQueueClient(rdb *common.RedisClient) *taskQueueClient {
-	return &taskQueueClient{rdb: rdb}
+func newRedisTaskQueueClient(rdb *common.RedisClient, taskRepo repository.TaskRepository) *taskQueueClient {
+	return &taskQueueClient{
+		rdb:      rdb,
+		taskRepo: taskRepo,
+	}
 }
 
 // Add a new task to the queue
@@ -95,15 +100,14 @@ func (qc *taskQueueClient) QueueLength(ctx context.Context, workspaceName, stubI
 	return res, nil
 }
 
-// Check how many tasks are running
+// Check how many tasks are running (which is the same as the number of tasks "claimed")
 func (qc *taskQueueClient) TasksRunning(ctx context.Context, workspaceName, stubId string) (int, error) {
-	// TODO: replace with call to task repo
-	keys, err := qc.rdb.Scan(ctx, common.RedisKeys.TaskClaim(workspaceName, stubId, "*"))
+	nTasks, err := qc.taskRepo.TasksClaimed(ctx, workspaceName, stubId)
 	if err != nil {
 		return -1, err
 	}
 
-	return len(keys), nil
+	return nTasks, nil
 }
 
 // Get most recent task duration

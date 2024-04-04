@@ -28,6 +28,15 @@ func (r *TaskRedisRepository) ClaimTask(ctx context.Context, workspaceName, stub
 	return nil
 }
 
+func (r *TaskRedisRepository) TasksClaimed(ctx context.Context, workspaceName, stubId string) (int, error) {
+	keys, err := r.rdb.Scan(ctx, common.RedisKeys.TaskClaim(workspaceName, stubId, "*"))
+	if err != nil {
+		return -1, err
+	}
+
+	return len(keys), nil
+}
+
 func (r *TaskRedisRepository) IsClaimed(ctx context.Context, workspaceName, stubId, taskId string) (bool, error) {
 	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
 	exists, err := r.rdb.Exists(ctx, claimKey).Result()

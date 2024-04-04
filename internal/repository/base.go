@@ -86,6 +86,7 @@ type TaskRepository interface {
 	GetTasksInFlight(ctx context.Context) ([]*types.TaskMessage, error)
 	ClaimTask(ctx context.Context, workspaceName, stubId, taskId, containerId string) error
 	IsClaimed(ctx context.Context, workspaceName, stubId, taskId string) (bool, error)
+	TasksClaimed(ctx context.Context, workspaceName, stubId string) (int, error)
 }
 
 type ProviderRepository interface {

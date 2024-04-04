@@ -86,7 +86,7 @@ func NewRedisTaskQueueService(
 		taskRepo:        opts.TaskRepo,
 		containerRepo:   opts.ContainerRepo,
 		backendRepo:     opts.BackendRepo,
-		queueClient:     newRedisTaskQueueClient(opts.RedisClient),
+		queueClient:     newRedisTaskQueueClient(opts.RedisClient, opts.TaskRepo),
 		queueInstances:  common.NewSafeMap[*taskQueueInstance](),
 	}
 
