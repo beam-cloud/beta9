@@ -28,6 +28,16 @@ func (r *TaskRedisRepository) ClaimTask(ctx context.Context, workspaceName, stub
 	return nil
 }
 
+func (r *TaskRedisRepository) IsClaimed(ctx context.Context, workspaceName, stubId, taskId string) (bool, error) {
+	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
+	exists, err := r.rdb.Exists(ctx, claimKey).Result()
+	if err != nil {
+		return false, fmt.Errorf("failed to retrieve claim task <%v>: %w", claimKey, err)
+	}
+
+	return exists > 0, nil
+}
+
 func (r *TaskRedisRepository) SetTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error {
 	indexKey := common.RedisKeys.TaskIndex()
 	entryKey := common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)

@@ -491,19 +491,14 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				return err
 			}
 
-			// TODO: find a way to break out
+			claimed, err := tq.taskRepo.IsClaimed(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
+			if err != nil {
+				return err
+			}
 
-			// Check if the task is currently claimed
-			// exists, err := tq.rdb.Exists(ctx, Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Result()
-			// if err != nil {
-			// 	return err
-			// }
-
-			// // If the task claim key doesn't exist, send a message and return
-			// if exists == 0 {
-			// 	stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: true, TimedOut: false})
-			// 	return nil
-			// }
+			if !claimed {
+				stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: true, TimedOut: false})
+			}
 
 			stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: false})
 			time.Sleep(time.Second * 1)

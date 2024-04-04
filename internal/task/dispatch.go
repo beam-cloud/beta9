@@ -124,16 +124,15 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 				continue
 			}
 
-			log.Println("set: ", tasks)
-
 			for _, taskMessage := range tasks {
-				// msg, err := d.rdb.Get(ctx, taskKey).Bytes()
-				// if err != nil {
-				// 	continue
-				// }
+				claimed, err := d.taskRepo.IsClaimed(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+				if err != nil {
+					continue
+				}
 
-				// taskMessage := types.TaskMessage{}
-				// taskMessage.Decode(msg)
+				if !claimed {
+					continue
+				}
 
 				taskFactory, exists := d.executors.Get(taskMessage.Executor)
 				if !exists {
@@ -151,9 +150,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 					continue
 				}
 
-				log.Printf("task %s, heartbeat: %v\n", taskMessage.TaskId, heartbeat)
-
-				if !heartbeat {
+				if !heartbeat && claimed {
 
 					// Hit retry limit, cancel task and resolve
 					if taskMessage.Retries >= taskMessage.Policy.MaxRetries {
@@ -188,6 +185,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 					err = task.Retry(ctx)
 					if err != nil {
 						log.Printf("<dispatcher> retry failed: %+v\n", err)
+						continue
 					}
 				}
 			}

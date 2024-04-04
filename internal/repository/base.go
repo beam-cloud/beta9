@@ -85,6 +85,7 @@ type TaskRepository interface {
 	DeleteTaskState(ctx context.Context, workspaceName, stubId, taskId string) error
 	GetTasksInFlight(ctx context.Context) ([]*types.TaskMessage, error)
 	ClaimTask(ctx context.Context, workspaceName, stubId, taskId, containerId string) error
+	IsClaimed(ctx context.Context, workspaceName, stubId, taskId string) (bool, error)
 }
 
 type ProviderRepository interface {

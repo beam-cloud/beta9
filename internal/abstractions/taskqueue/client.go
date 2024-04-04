@@ -97,10 +97,12 @@ func (qc *taskQueueClient) QueueLength(workspaceName, stubId string) (int64, err
 
 // Check how many tasks are running
 func (qc *taskQueueClient) TasksRunning(workspaceName, stubId string) (int, error) {
+	// TODO: replace with call to task repo
 	keys, err := qc.rdb.Scan(context.TODO(), common.RedisKeys.TaskClaim(workspaceName, stubId, "*"))
 	if err != nil {
 		return -1, err
 	}
+
 	return len(keys), nil
 }
 
