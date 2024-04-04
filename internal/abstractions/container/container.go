@@ -85,7 +85,10 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		return err
 	}
 
-	task, err := cs.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, stub.Stub.Id)
+	task, err := cs.backendRepo.CreateTask(ctx, &types.TaskParams{
+		WorkspaceId: authInfo.Workspace.Id,
+		StubId:      stub.Stub.Id,
+	})
 	if err != nil {
 		return err
 	}
@@ -159,12 +162,12 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 	}
 
 	go client.StreamLogs(ctx, task.ContainerId, outputChan)
-	return cs.handleStreams(ctx, stream, authInfo.Workspace.Name, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
+	return cs.handleStreams(ctx, stream, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
 }
 
 func (cs *CmdContainerService) handleStreams(ctx context.Context,
 	stream pb.ContainerService_ExecuteCommandServer,
-	workspaceName, taskId, containerId string,
+	taskId, containerId string,
 	outputChan chan common.OutputMsg, keyEventChan chan common.KeyEvent) error {
 
 	var lastMessage common.OutputMsg

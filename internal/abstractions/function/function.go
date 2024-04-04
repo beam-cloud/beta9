@@ -37,6 +37,7 @@ const (
 type RunCFunctionService struct {
 	pb.UnimplementedFunctionServiceServer
 	backendRepo     repository.BackendRepository
+	taskRepo        repository.TaskRepository
 	containerRepo   repository.ContainerRepository
 	scheduler       *scheduler.Scheduler
 	tailscale       *network.Tailscale
@@ -50,6 +51,7 @@ type FunctionServiceOpts struct {
 	Config        types.AppConfig
 	RedisClient   *common.RedisClient
 	BackendRepo   repository.BackendRepository
+	TaskRepo      repository.TaskRepository
 	ContainerRepo repository.ContainerRepository
 	Scheduler     *scheduler.Scheduler
 	Tailscale     *network.Tailscale
@@ -67,6 +69,7 @@ func NewRuncFunctionService(ctx context.Context,
 	fs := &RunCFunctionService{
 		config:          opts.Config,
 		backendRepo:     opts.BackendRepo,
+		taskRepo:        opts.TaskRepo,
 		containerRepo:   opts.ContainerRepo,
 		scheduler:       opts.Scheduler,
 		tailscale:       opts.Tailscale,
@@ -188,8 +191,15 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 	return task, nil
 }
 
+func (fs *RunCFunctionService) functionTaskFactory() (types.TaskInterface, error) {
+	return &FunctionTask{}, nil
+}
+
 func (fs *RunCFunctionService) createTask(ctx context.Context, authInfo *auth.AuthInfo, stub *types.Stub) (*types.Task, error) {
-	task, err := fs.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, stub.Id)
+	task, err := fs.backendRepo.CreateTask(ctx, &types.TaskParams{
+		WorkspaceId: authInfo.Workspace.Id,
+		StubId:      stub.Id,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +230,7 @@ _stream:
 				lastMessage = o
 				break _stream
 			}
-		case _ = <-keyEventChan:
+		case <-keyEventChan:
 			exitCode, err := fs.containerRepo.GetContainerExitCode(containerId)
 			if err != nil {
 				exitCode = -1
@@ -271,6 +281,36 @@ func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.Fun
 
 func (fs *RunCFunctionService) genContainerId(taskId string) string {
 	return fmt.Sprintf("%s%s", functionContainerPrefix, taskId)
+}
+
+type FunctionTask struct {
+	StubId        string
+	WorkspaceName string
+	TaskId        string
+}
+
+func (ft *FunctionTask) Execute(ctx context.Context) error {
+	return nil
+}
+
+func (ft *FunctionTask) Retry(ctx context.Context) error {
+	return nil
+}
+
+func (ft *FunctionTask) Cancel(ctx context.Context) error {
+	return nil
+}
+
+func (ft *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
+	return false, nil
+}
+
+func (ft *FunctionTask) Metadata() types.TaskMetadata {
+	return types.TaskMetadata{
+		StubId:        ft.StubId,
+		WorkspaceName: ft.WorkspaceName,
+		TaskId:        ft.TaskId,
+	}
 }
 
 // Redis keys

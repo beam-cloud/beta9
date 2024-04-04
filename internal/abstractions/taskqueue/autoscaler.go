@@ -65,17 +65,17 @@ func newAutoscaler(i *taskQueueInstance) *autoscaler {
 func (as *autoscaler) sample() (*autoscalerSample, error) {
 	instance := as.instance
 
-	queueLength, err := instance.client.QueueLength(instance.workspace.Name, instance.stub.ExternalId)
+	queueLength, err := instance.client.QueueLength(instance.ctx, instance.workspace.Name, instance.stub.ExternalId)
 	if err != nil {
 		queueLength = -1
 	}
 
-	runningTasks, err := instance.client.TasksRunning(instance.workspace.Name, instance.stub.ExternalId)
+	runningTasks, err := instance.client.TasksRunning(instance.ctx, instance.workspace.Name, instance.stub.ExternalId)
 	if err != nil {
 		runningTasks = -1
 	}
 
-	taskDuration, err := instance.client.GetTaskDuration(instance.workspace.Name, instance.stub.ExternalId)
+	taskDuration, err := instance.client.GetTaskDuration(instance.ctx, instance.workspace.Name, instance.stub.ExternalId)
 	if err != nil {
 		taskDuration = -1
 	}

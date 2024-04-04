@@ -12,8 +12,10 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	common "github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
+	"github.com/beam-cloud/beta9/internal/task"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
@@ -28,17 +30,32 @@ type TaskQueueService interface {
 	TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error
 }
 
+type TaskQueueServiceOpts struct {
+	Config         types.AppConfig
+	RedisClient    *common.RedisClient
+	BackendRepo    repository.BackendRepository
+	TaskRepo       repository.TaskRepository
+	ContainerRepo  repository.ContainerRepository
+	TaskDispatcher *task.Dispatcher
+	Scheduler      *scheduler.Scheduler
+	Tailscale      *network.Tailscale
+	RouteGroup     *echo.Group
+}
+
 const (
 	taskQueueContainerPrefix string = "taskqueue"
 	taskQueueRoutePrefix     string = "/taskqueue"
 )
 
 type RedisTaskQueue struct {
-	ctx           context.Context
-	rdb           *common.RedisClient
-	containerRepo repository.ContainerRepository
-	backendRepo   repository.BackendRepository
-	scheduler     *scheduler.Scheduler
+	ctx             context.Context
+	rdb             *common.RedisClient
+	stubConfigCache *common.SafeMap[*types.StubConfigV1]
+	taskDispatcher  *task.Dispatcher
+	taskRepo        repository.TaskRepository
+	containerRepo   repository.ContainerRepository
+	backendRepo     repository.BackendRepository
+	scheduler       *scheduler.Scheduler
 	pb.UnimplementedTaskQueueServiceServer
 	queueInstances  *common.SafeMap[*taskQueueInstance]
 	keyEventManager *common.KeyEventManager
@@ -48,14 +65,10 @@ type RedisTaskQueue struct {
 
 func NewRedisTaskQueueService(
 	ctx context.Context,
-	rdb *common.RedisClient,
-	scheduler *scheduler.Scheduler,
-	containerRepo repository.ContainerRepository,
-	backendRepo repository.BackendRepository,
-	routeGroup *echo.Group,
+	opts TaskQueueServiceOpts,
 ) (TaskQueueService, error) {
 	keyEventChan := make(chan common.KeyEvent)
-	keyEventManager, err := common.NewKeyEventManager(rdb)
+	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
 	if err != nil {
 		return nil, err
 	}
@@ -64,35 +77,167 @@ func NewRedisTaskQueueService(
 
 	tq := &RedisTaskQueue{
 		ctx:             ctx,
-		rdb:             rdb,
-		scheduler:       scheduler,
+		rdb:             opts.RedisClient,
+		scheduler:       opts.Scheduler,
+		stubConfigCache: common.NewSafeMap[*types.StubConfigV1](),
 		keyEventChan:    keyEventChan,
 		keyEventManager: keyEventManager,
-		containerRepo:   containerRepo,
-		backendRepo:     backendRepo,
-		queueClient:     newRedisTaskQueueClient(rdb),
+		taskDispatcher:  opts.TaskDispatcher,
+		taskRepo:        opts.TaskRepo,
+		containerRepo:   opts.ContainerRepo,
+		backendRepo:     opts.BackendRepo,
+		queueClient:     newRedisTaskQueueClient(opts.RedisClient, opts.TaskRepo),
 		queueInstances:  common.NewSafeMap[*taskQueueInstance](),
 	}
 
+	tq.taskDispatcher.Register(string(types.ExecutorTaskQueue), tq.taskQueueTaskFactory)
+
 	go tq.handleContainerEvents()
-	go tq.monitorTasks()
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(backendRepo)
-	registerTaskQueueRoutes(routeGroup.Group(taskQueueRoutePrefix, authMiddleware), tq)
+	authMiddleware := auth.AuthMiddleware(opts.BackendRepo)
+	registerTaskQueueRoutes(opts.RouteGroup.Group(taskQueueRoutePrefix, authMiddleware), tq)
 
 	return tq, nil
 }
 
-type TaskPayload struct {
-	Args   []interface{}          `json:"args"`
-	Kwargs map[string]interface{} `json:"kwargs"`
+type TaskQueueTask struct {
+	msg *types.TaskMessage
+	tq  *RedisTaskQueue
+}
+
+func (t *TaskQueueTask) Execute(ctx context.Context) error {
+	queue, exists := t.tq.queueInstances.Get(t.msg.StubId)
+	if !exists {
+		err := t.tq.createQueueInstance(t.msg.StubId)
+		if err != nil {
+			return err
+		}
+
+		queue, _ = t.tq.queueInstances.Get(t.msg.StubId)
+	}
+
+	_, err := t.tq.backendRepo.CreateTask(ctx, &types.TaskParams{
+		TaskId:      t.msg.TaskId,
+		StubId:      queue.stub.Id,
+		WorkspaceId: queue.stub.WorkspaceId,
+	})
+	if err != nil {
+		return err
+	}
+
+	err = t.tq.queueClient.Push(ctx, t.msg)
+	if err != nil {
+		t.tq.backendRepo.DeleteTask(context.TODO(), t.msg.TaskId)
+		return err
+	}
+
+	return nil
+}
+
+func (t *TaskQueueTask) Retry(ctx context.Context) error {
+	_, exists := t.tq.queueInstances.Get(t.msg.StubId)
+	if !exists {
+		err := t.tq.createQueueInstance(t.msg.StubId)
+		if err != nil {
+			return err
+		}
+	}
+
+	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
+	if err != nil {
+		return err
+	}
+
+	task.Status = types.TaskStatusRetry
+	_, err = t.tq.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
+	if err != nil {
+		return err
+	}
+
+	return t.tq.queueClient.Push(ctx, t.msg)
+}
+
+func (t *TaskQueueTask) HeartBeat(ctx context.Context) (bool, error) {
+	res, err := t.tq.rdb.Exists(ctx, Keys.taskQueueTaskHeartbeat(t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)).Result()
+	if err != nil {
+		return false, err
+	}
+
+	return res > 0, nil
+}
+
+func (t *TaskQueueTask) Cancel(ctx context.Context) error {
+	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
+	if err != nil {
+		return err
+	}
+
+	task.Status = types.TaskStatusError
+	_, err = t.tq.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (t *TaskQueueTask) Metadata() types.TaskMetadata {
+	return types.TaskMetadata{
+		TaskId:        t.msg.TaskId,
+		StubId:        t.msg.StubId,
+		WorkspaceName: t.msg.WorkspaceName,
+	}
+}
+
+func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.TaskMessage) (types.TaskInterface, error) {
+	return &TaskQueueTask{
+		tq:  tq,
+		msg: msg,
+	}, nil
+}
+
+func (tq *RedisTaskQueue) getStubConfig(stubId string) (*types.StubConfigV1, error) {
+	config, exists := tq.stubConfigCache.Get(stubId)
+
+	if !exists {
+		stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId)
+		if err != nil {
+			return nil, nil
+		}
+
+		var stubConfig types.StubConfigV1 = types.StubConfigV1{}
+		err = json.Unmarshal([]byte(stub.Config), &stubConfig)
+		if err != nil {
+			return nil, err
+		}
+
+		config = &stubConfig
+		tq.stubConfigCache.Set(stubId, config)
+	}
+
+	return config, nil
+}
+
+func (tq *RedisTaskQueue) put(ctx context.Context, workspaceName, stubId string, payload *types.TaskPayload) (string, error) {
+	stubConfig, err := tq.getStubConfig(stubId)
+	if err != nil {
+		return "", err
+	}
+
+	task, err := tq.taskDispatcher.Send(ctx, string(types.ExecutorTaskQueue), workspaceName, stubId, payload, stubConfig.TaskPolicy)
+	if err != nil {
+		return "", err
+	}
+
+	meta := task.Metadata()
+	return meta.TaskId, nil
 }
 
 func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	var payload TaskPayload
+	var payload types.TaskPayload
 	err := json.Unmarshal(in.Payload, &payload)
 	if err != nil {
 		return &pb.TaskQueuePutResponse{
@@ -100,36 +245,13 @@ func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 		}, nil
 	}
 
-	taskId, err := tq.put(ctx, authInfo, in.StubId, &payload)
+	workspaceName := authInfo.Workspace.Name
+
+	taskId, err := tq.put(ctx, workspaceName, in.StubId, &payload)
 	return &pb.TaskQueuePutResponse{
 		Ok:     err == nil,
 		TaskId: taskId,
 	}, nil
-}
-
-func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *TaskPayload) (string, error) {
-	queue, exists := tq.queueInstances.Get(stubId)
-	if !exists {
-		err := tq.createQueueInstance(stubId)
-		if err != nil {
-			return "", err
-		}
-
-		queue, _ = tq.queueInstances.Get(stubId)
-	}
-
-	task, err := tq.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, queue.stub.Id)
-	if err != nil {
-		return "", err
-	}
-
-	err = queue.client.Push(queue.workspace.Name, queue.stub.ExternalId, task.ExternalId, payload.Args, payload.Kwargs)
-	if err != nil {
-		tq.backendRepo.DeleteTask(ctx, task.ExternalId)
-		return "", err
-	}
-
-	return task.ExternalId, nil
 }
 
 func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error) {
@@ -147,7 +269,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 		queue, _ = tq.queueInstances.Get(in.StubId)
 	}
 
-	msg, err := queue.client.Pop(authInfo.Workspace.Name, in.StubId, in.ContainerId)
+	msg, err := queue.client.Pop(ctx, authInfo.Workspace.Name, in.StubId, in.ContainerId)
 	if err != nil || msg == nil {
 		return &pb.TaskQueuePopResponse{Ok: false}, nil
 	}
@@ -158,17 +280,23 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 		return nil, err
 	}
 
-	task, err := tq.backendRepo.GetTask(ctx, tm.ID)
+	err = tq.taskDispatcher.Claim(ctx, authInfo.Workspace.Name, tm.StubId, tm.TaskId, in.ContainerId)
+	if err != nil {
+		return nil, err
+	}
+
+	task, err := tq.backendRepo.GetTask(ctx, tm.TaskId)
 	if err != nil {
 		return &pb.TaskQueuePopResponse{
 			Ok: false,
 		}, nil
 	}
+
 	task.ContainerId = in.ContainerId
 	task.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatusRunning
 
-	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, tm.ID), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
+	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, tm.TaskId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
 	if err != nil {
 		return &pb.TaskQueuePopResponse{
 			Ok: false,
@@ -176,6 +304,12 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 	}
 
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
+	if err != nil {
+		return &pb.TaskQueuePopResponse{
+			Ok: false,
+		}, nil
+	}
+
 	return &pb.TaskQueuePopResponse{
 		Ok: true, TaskMsg: msg,
 	}, nil
@@ -191,28 +325,21 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}, nil
 	}
 
-	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
+	err = tq.rdb.SetEx(ctx, Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
 			Ok: false,
 		}, nil
 	}
 
-	err = tq.rdb.Del(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, in.StubId, task.ExternalId)).Err()
+	err = tq.rdb.Del(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId)).Err()
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
 			Ok: false,
 		}, nil
 	}
 
-	err = tq.rdb.Del(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId)).Err()
-	if err != nil {
-		return &pb.TaskQueueCompleteResponse{
-			Ok: false,
-		}, nil
-	}
-
-	err = tq.rdb.RPush(context.TODO(), Keys.taskQueueTaskDuration(authInfo.Workspace.Name, in.StubId), in.TaskDuration).Err()
+	err = tq.rdb.RPush(ctx, Keys.taskQueueTaskDuration(authInfo.Workspace.Name, in.StubId), in.TaskDuration).Err()
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
 			Ok: false,
@@ -221,6 +348,13 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatus(in.TaskStatus)
+
+	err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{
+			Ok: false,
+		}, nil
+	}
 
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
 	return &pb.TaskQueueCompleteResponse{
@@ -239,13 +373,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 		return err
 	}
 
-	stub, err := tq.backendRepo.GetStubByExternalId(stream.Context(), req.StubId)
-	if err != nil {
-		return err
-	}
-
-	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
-	err = json.Unmarshal([]byte(stub.Config), &stubConfig)
+	stubConfig, err := tq.getStubConfig(req.StubId)
 	if err != nil {
 		return err
 	}
@@ -316,8 +444,10 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 					return
 
 				case err := <-errs:
-					log.Printf("error with monitor task subscription: %v", err)
-					break retry
+					if err != nil {
+						log.Printf("error with monitor task subscription: %v", err)
+						break retry
+					}
 				}
 			}
 		}
@@ -329,7 +459,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 			return nil
 
 		case <-cancelFlag:
-			err := tq.rdb.Del(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Err()
+			err := tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
 			if err != nil {
 				return err
 			}
@@ -338,10 +468,9 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 			return nil
 
 		case <-timeoutFlag:
-			err := tq.rdb.Del(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Err()
+			err := tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
 			if err != nil {
-				log.Printf("error deleting task claim: %v", err)
-				continue
+				return err
 			}
 
 			stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: true})
@@ -353,26 +482,23 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				return nil
 			}
 
-			err := tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskHeartbeat(authInfo.Workspace.Name, req.StubId, task.ExternalId), 1, time.Duration(60)*time.Second).Err()
+			err := tq.rdb.SetEx(ctx, Keys.taskQueueTaskHeartbeat(authInfo.Workspace.Name, req.StubId, task.ExternalId), 1, time.Duration(60)*time.Second).Err()
 			if err != nil {
 				return err
 			}
 
-			err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
+			err = tq.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
 			if err != nil {
 				return err
 			}
 
-			// Check if the task is currently claimed
-			exists, err := tq.rdb.Exists(context.TODO(), Keys.taskQueueTaskClaim(authInfo.Workspace.Name, req.StubId, task.ExternalId)).Result()
+			claimed, err := tq.taskRepo.IsClaimed(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
 			if err != nil {
 				return err
 			}
 
-			// If the task claim key doesn't exist, send a message and return
-			if exists == 0 {
+			if !claimed {
 				stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: true, TimedOut: false})
-				return nil
 			}
 
 			stream.Send(&pb.TaskQueueMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: false})
@@ -384,7 +510,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 func (tq *RedisTaskQueue) TaskQueueLength(ctx context.Context, in *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	length, err := tq.queueClient.QueueLength(authInfo.Workspace.Name, in.StubId)
+	length, err := tq.queueClient.QueueLength(ctx, authInfo.Workspace.Name, in.StubId)
 	if err != nil {
 		return &pb.TaskQueueLengthResponse{Ok: false}, nil
 	}
@@ -442,6 +568,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string) error {
 	queue.autoscaler = autoscaler
 
 	tq.queueInstances.Set(stubId, queue)
+
 	go queue.monitor()
 
 	// Clean up the queue instance once it's done
@@ -453,119 +580,11 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string) error {
 	return nil
 }
 
-// Monitor tasks -- if a container is killed unexpectedly, it will automatically be re-added to the queue
-func (tq *RedisTaskQueue) monitorTasks() {
-	monitorRate := time.Duration(5) * time.Second
-	ticker := time.NewTicker(monitorRate)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-tq.ctx.Done():
-			return
-		case <-ticker.C:
-			claimedTasks, err := tq.rdb.Scan(tq.ctx, Keys.taskQueueTaskClaim("*", "*", "*"))
-			if err != nil {
-				return
-			}
-
-			for _, claimKey := range claimedTasks {
-				v := strings.Split(claimKey, ":")
-				workspaceName := v[1]
-				stubId := v[2]
-				taskId := v[5]
-
-				res, err := tq.rdb.Exists(tq.ctx, Keys.taskQueueTaskHeartbeat(workspaceName, stubId, taskId)).Result()
-				if err != nil {
-					continue
-				}
-
-				recentHeartbeat := res > 0
-				if !recentHeartbeat {
-					log.Printf("<taskqueue> missing heartbeat, reinserting task<%s:%s> into queue: %s\n", workspaceName, taskId, stubId)
-
-					retries, err := tq.rdb.Get(tq.ctx, Keys.taskQueueTaskRetries(workspaceName, stubId, taskId)).Int()
-					if err != nil {
-						retries = 0
-					}
-
-					task, err := tq.backendRepo.GetTaskWithRelated(tq.ctx, taskId)
-					if err != nil {
-						continue
-					}
-
-					var stubConfig types.StubConfigV1 = types.StubConfigV1{}
-					err = json.Unmarshal([]byte(task.Stub.Config), &stubConfig)
-					if err != nil {
-						continue
-					}
-
-					taskPolicy := stubConfig.TaskPolicy
-					if retries >= int(taskPolicy.MaxRetries) {
-						log.Printf("<taskqueue> hit retry limit, not reinserting task <%s> into queue: %s\n", taskId, stubId)
-
-						task.Task.Status = types.TaskStatusError
-						_, err = tq.backendRepo.UpdateTask(tq.ctx, taskId, task.Task)
-						if err != nil {
-							continue
-						}
-
-						err = tq.rdb.Del(tq.ctx, Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Err()
-						if err != nil {
-							log.Printf("<taskqueue> unable to delete task claim: %s\n", taskId)
-						}
-
-						continue
-					}
-
-					retries += 1
-					err = tq.rdb.Set(tq.ctx, Keys.taskQueueTaskRetries(workspaceName, stubId, taskId), retries, 0).Err()
-					if err != nil {
-						continue
-					}
-
-					task.Task.Status = types.TaskStatusRetry
-					_, err = tq.backendRepo.UpdateTask(tq.ctx, taskId, task.Task)
-					if err != nil {
-						continue
-					}
-
-					encodedMessage, err := tq.rdb.Get(tq.ctx, Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Bytes()
-					if err != nil {
-						continue
-					}
-
-					err = tq.rdb.Del(tq.ctx, Keys.taskQueueTaskClaim(workspaceName, stubId, taskId)).Err()
-					if err != nil {
-						log.Printf("<taskqueue> unable to delete task claim: %s\n", taskId)
-						continue
-					}
-
-					err = tq.rdb.RPush(tq.ctx, Keys.taskQueueList(workspaceName, stubId), encodedMessage).Err()
-					if err != nil {
-						log.Printf("<taskqueue> unable to insert task <%s> into queue <%s>: %v\n", taskId, stubId, err)
-						continue
-					}
-
-					_, exists := tq.queueInstances.Get(stubId)
-					if !exists {
-						err := tq.createQueueInstance(stubId)
-						if err != nil {
-							continue
-						}
-					}
-
-				}
-			}
-		}
-	}
-}
-
 func (tq *RedisTaskQueue) handleContainerEvents() {
 	for {
 		select {
 		case event := <-tq.keyEventChan:
-			containerId := fmt.Sprintf("%s-%s", taskQueueContainerPrefix, event.Key)
+			containerId := fmt.Sprintf("%s%s", taskQueueContainerPrefix, event.Key)
 
 			operation := event.Operation
 			containerIdParts := strings.Split(containerId, "-")
@@ -602,14 +621,11 @@ func (tq *RedisTaskQueue) handleContainerEvents() {
 
 // Redis keys
 var (
-	taskQueuePrefix              string = "taskqueue"
-	taskQueueInstanceLock        string = "taskqueue:%s:%s:instance_lock"
 	taskQueueList                string = "taskqueue:%s:%s"
+	taskQueueInstanceLock        string = "taskqueue:%s:%s:instance_lock"
 	taskQueueTaskDuration        string = "taskqueue:%s:%s:task_duration"
 	taskQueueAverageTaskDuration string = "taskqueue:%s:%s:avg_task_duration"
-	taskQueueTaskClaim           string = "taskqueue:%s:%s:task:claim:%s"
 	taskQueueTaskCancel          string = "taskqueue:%s:%s:task:cancel:%s"
-	taskQueueTaskRetries         string = "taskqueue:%s:%s:task:retries:%s"
 	taskQueueTaskHeartbeat       string = "taskqueue:%s:%s:task:heartbeat:%s"
 	taskQueueProcessingLock      string = "taskqueue:%s:%s:processing_lock:%s"
 	taskQueueKeepWarmLock        string = "taskqueue:%s:%s:keep_warm_lock:%s"
@@ -620,10 +636,6 @@ var Keys = &keys{}
 
 type keys struct{}
 
-func (k *keys) taskQueuePrefix() string {
-	return taskQueuePrefix
-}
-
 func (k *keys) taskQueueInstanceLock(workspaceName, stubId string) string {
 	return fmt.Sprintf(taskQueueInstanceLock, workspaceName, stubId)
 }
@@ -632,20 +644,12 @@ func (k *keys) taskQueueList(workspaceName, stubId string) string {
 	return fmt.Sprintf(taskQueueList, workspaceName, stubId)
 }
 
-func (k *keys) taskQueueTaskClaim(workspaceName, stubId, taskId string) string {
-	return fmt.Sprintf(taskQueueTaskClaim, workspaceName, stubId, taskId)
-}
-
 func (k *keys) taskQueueTaskCancel(workspaceName, stubId, taskId string) string {
 	return fmt.Sprintf(taskQueueTaskCancel, workspaceName, stubId, taskId)
 }
 
 func (k *keys) taskQueueTaskHeartbeat(workspaceName, stubId, taskId string) string {
 	return fmt.Sprintf(taskQueueTaskHeartbeat, workspaceName, stubId, taskId)
-}
-
-func (k *keys) taskQueueTaskRetries(workspaceName, stubId, taskId string) string {
-	return fmt.Sprintf(taskQueueTaskRetries, workspaceName, stubId, taskId)
 }
 
 func (k *keys) taskQueueTaskDuration(workspaceName, stubId string) string {
