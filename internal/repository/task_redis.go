@@ -49,7 +49,8 @@ func (r *TaskRedisRepository) SetTaskState(ctx context.Context, workspaceName, s
 
 	err = r.rdb.Set(ctx, entryKey, msg, 0).Err()
 	if err != nil {
-		return fmt.Errorf("failed to add task entry <%v>: %w", entryKey, err)
+		r.DeleteTaskState(ctx, workspaceName, stubId, taskId)
+		return err
 	}
 
 	return nil
@@ -65,15 +66,8 @@ func (r *TaskRedisRepository) DeleteTaskState(ctx context.Context, workspaceName
 		return err
 	}
 
-	err = r.rdb.Del(ctx, entryKey).Err()
-	if err != nil {
-		return err
-	}
-
-	err = r.rdb.Del(ctx, claimKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to remove claim <%v>: %w", claimKey, err)
-	}
+	r.rdb.Del(ctx, entryKey)
+	r.rdb.Del(ctx, claimKey)
 
 	return nil
 }

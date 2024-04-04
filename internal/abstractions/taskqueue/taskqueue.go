@@ -184,8 +184,9 @@ func (t *TaskQueueTask) Cancel(ctx context.Context) error {
 
 func (t *TaskQueueTask) Metadata() types.TaskMetadata {
 	return types.TaskMetadata{
-		TaskId: t.msg.TaskId,
-		StubId: t.msg.StubId,
+		TaskId:        t.msg.TaskId,
+		StubId:        t.msg.StubId,
+		WorkspaceName: t.msg.WorkspaceName,
 	}
 }
 
