@@ -583,7 +583,7 @@ func (tq *RedisTaskQueue) handleContainerEvents() {
 	for {
 		select {
 		case event := <-tq.keyEventChan:
-			containerId := fmt.Sprintf("%s-%s", taskQueueContainerPrefix, event.Key)
+			containerId := fmt.Sprintf("%s%s", taskQueueContainerPrefix, event.Key)
 
 			operation := event.Operation
 			containerIdParts := strings.Split(containerId, "-")
