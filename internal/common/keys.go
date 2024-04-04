@@ -33,6 +33,13 @@ var (
 )
 
 var (
+	taskPrefix string = "task"
+	taskIndex  string = "task:index"
+	taskEntry  string = "task:%s:%s:%s"
+	taskClaim  string = "task:%s:%s:%s:claim"
+)
+
+var (
 	workerPoolLock  string = "workerpool:lock:%s"
 	workerPoolState string = "workerpool:state:%s"
 )
@@ -140,6 +147,23 @@ func (rk *redisKeys) WorkerContainerResourceUsage(workerId string, containerId s
 
 func (rk *redisKeys) WorkerImageLock(workerId string, imageId string) string {
 	return fmt.Sprintf(workerImageLock, workerId, imageId)
+}
+
+// Task keys
+func (rk *redisKeys) TaskPrefix() string {
+	return taskPrefix
+}
+
+func (rk *redisKeys) TaskIndex() string {
+	return taskIndex
+}
+
+func (rk *redisKeys) TaskEntry(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskEntry, workspaceName, stubId, taskId)
+}
+
+func (rk *redisKeys) TaskClaim(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskClaim, workspaceName, stubId, taskId)
 }
 
 // Workspace keys

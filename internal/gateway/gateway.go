@@ -11,6 +11,8 @@ import (
 	"syscall"
 
 	"github.com/beam-cloud/beta9/internal/abstractions/endpoint"
+	"github.com/beam-cloud/beta9/internal/task"
+
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"google.golang.org/grpc"
@@ -45,6 +47,8 @@ type Gateway struct {
 	httpServer     *http.Server
 	grpcServer     *grpc.Server
 	redisClient    *common.RedisClient
+	TaskDispatcher *task.Dispatcher
+	TaskRepo       repository.TaskRepository
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
@@ -108,13 +112,20 @@ func NewGateway() (*Gateway, error) {
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
+	taskRepo := repository.NewTaskRedisRepository(redisClient)
+	taskDispatcher, err := task.NewDispatcher(ctx, taskRepo)
+	if err != nil {
+		return nil, err
+	}
 
 	gateway.config = config
 	gateway.Scheduler = scheduler
+	gateway.TaskRepo = taskRepo
 	gateway.ContainerRepo = containerRepo
 	gateway.ProviderRepo = providerRepo
 	gateway.BackendRepo = backendRepo
 	gateway.Tailscale = tailscale
+	gateway.TaskDispatcher = taskDispatcher
 	gateway.metricsRepo = metricsRepo
 
 	return gateway, nil
@@ -201,6 +212,7 @@ func (g *Gateway) registerServices() error {
 		Config:        g.config,
 		RedisClient:   g.redisClient,
 		BackendRepo:   g.BackendRepo,
+		TaskRepo:      g.TaskRepo,
 		ContainerRepo: g.ContainerRepo,
 		Scheduler:     g.Scheduler,
 		Tailscale:     g.Tailscale,
@@ -212,7 +224,17 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterFunctionServiceServer(g.grpcServer, fs)
 
 	// Register task queue service
-	tq, err := taskqueue.NewRedisTaskQueueService(g.ctx, g.redisClient, g.Scheduler, g.ContainerRepo, g.BackendRepo, g.rootRouteGroup)
+	tq, err := taskqueue.NewRedisTaskQueueService(g.ctx, taskqueue.TaskQueueServiceOpts{
+		Config:         g.config,
+		RedisClient:    g.redisClient,
+		BackendRepo:    g.BackendRepo,
+		TaskRepo:       g.TaskRepo,
+		ContainerRepo:  g.ContainerRepo,
+		Scheduler:      g.Scheduler,
+		Tailscale:      g.Tailscale,
+		RouteGroup:     g.rootRouteGroup,
+		TaskDispatcher: g.TaskDispatcher,
+	})
 	if err != nil {
 		return err
 	}

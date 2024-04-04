@@ -56,7 +56,7 @@ type BackendRepository interface {
 	ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error)
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
 	GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error)
-	CreateTask(ctx context.Context, containerId string, workspaceId, stubId uint) (*types.Task, error)
+	CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error)
 	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error)
 	DeleteTask(ctx context.Context, externalId string) error
 	ListTasks(ctx context.Context) ([]types.Task, error)
@@ -78,6 +78,15 @@ type WorkerPoolRepository interface {
 	GetPools() ([]types.WorkerPoolConfig, error)
 	SetPool(name string, pool types.WorkerPoolConfig) error
 	RemovePool(name string) error
+}
+
+type TaskRepository interface {
+	SetTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error
+	DeleteTaskState(ctx context.Context, workspaceName, stubId, taskId string) error
+	GetTasksInFlight(ctx context.Context) ([]*types.TaskMessage, error)
+	ClaimTask(ctx context.Context, workspaceName, stubId, taskId, containerId string) error
+	IsClaimed(ctx context.Context, workspaceName, stubId, taskId string) (bool, error)
+	TasksClaimed(ctx context.Context, workspaceName, stubId string) (int, error)
 }
 
 type ProviderRepository interface {

@@ -2,7 +2,7 @@ package endpoint
 
 import (
 	"context"
-	"io/ioutil"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -65,6 +65,7 @@ func NewRequestBuffer(
 		httpClient:              &http.Client{},
 		length:                  atomic.Int32{},
 	}
+
 	go b.discoverContainers()
 	go b.ProcessRequests()
 
@@ -209,7 +210,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	defer rb.postProcessRequest(req, c.id)
 
 	// Read the response body
-	bytes, err := ioutil.ReadAll(resp.Body)
+	bytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
