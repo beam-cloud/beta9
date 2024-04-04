@@ -126,7 +126,7 @@ func (t *TaskQueueTask) Execute(ctx context.Context) error {
 		return err
 	}
 
-	err = t.tq.queueClient.Push(t.msg)
+	err = t.tq.queueClient.Push(ctx, t.msg)
 	if err != nil {
 		t.tq.backendRepo.DeleteTask(context.TODO(), t.msg.TaskId)
 		return err
@@ -155,7 +155,7 @@ func (t *TaskQueueTask) Retry(ctx context.Context) error {
 		return err
 	}
 
-	return t.tq.queueClient.Push(t.msg)
+	return t.tq.queueClient.Push(ctx, t.msg)
 }
 
 func (t *TaskQueueTask) HeartBeat(ctx context.Context) (bool, error) {
@@ -269,7 +269,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 		queue, _ = tq.queueInstances.Get(in.StubId)
 	}
 
-	msg, err := queue.client.Pop(authInfo.Workspace.Name, in.StubId, in.ContainerId)
+	msg, err := queue.client.Pop(ctx, authInfo.Workspace.Name, in.StubId, in.ContainerId)
 	if err != nil || msg == nil {
 		return &pb.TaskQueuePopResponse{Ok: false}, nil
 	}
@@ -510,7 +510,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 func (tq *RedisTaskQueue) TaskQueueLength(ctx context.Context, in *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	length, err := tq.queueClient.QueueLength(authInfo.Workspace.Name, in.StubId)
+	length, err := tq.queueClient.QueueLength(ctx, authInfo.Workspace.Name, in.StubId)
 	if err != nil {
 		return &pb.TaskQueueLengthResponse{Ok: false}, nil
 	}
