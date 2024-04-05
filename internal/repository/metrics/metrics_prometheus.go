@@ -247,7 +247,7 @@ func (pr *PrometheusMetricsRepository) getHistogramVec(opts prometheus.Histogram
 
 func (pr *PrometheusMetricsRepository) parseMetadata(metadata map[string]interface{}) (keys []string, values []string) {
 	keys = maps.Keys(metadata)
-	values = make([]string, 0, len(metadata))
+	values = []string{}
 	sort.Strings(keys)
 
 	for _, key := range keys {
