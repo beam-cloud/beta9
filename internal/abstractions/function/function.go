@@ -186,11 +186,6 @@ func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.Fun
 		return &pb.FunctionSetResultResponse{Ok: false}, nil
 	}
 
-	err = fs.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
-	if err != nil {
-		return &pb.FunctionSetResultResponse{Ok: false}, nil
-	}
-
 	return &pb.FunctionSetResultResponse{
 		Ok: true,
 	}, nil

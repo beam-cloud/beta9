@@ -34,7 +34,6 @@ message FunctionGetArgsResponse {
 
 message FunctionSetResultRequest {
   string task_id = 1;
-  string stub_id = 2;
   bytes result = 3;
 }
 

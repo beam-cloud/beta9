@@ -35,7 +35,6 @@ def main(channel: Channel):
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
 
     task_id = config.task_id
-    stub_id = config.stub_id
 
     with StdoutJsonInterceptor(task_id=task_id):
         container_id = config.container_id
@@ -73,7 +72,7 @@ def main(channel: Channel):
         finally:
             result = cloudpickle.dumps(result)
             set_result_resp: FunctionSetResultResponse = run_sync(
-                function_stub.function_set_result(task_id=task_id, stub_id=stub_id, result=result),
+                function_stub.function_set_result(task_id=task_id, result=result),
             )
             if not set_result_resp.ok:
                 raise RunnerException("Unable to set function result")

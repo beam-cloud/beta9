@@ -37,7 +37,7 @@ class FunctionGetArgsResponse(betterproto.Message):
 @dataclass
 class FunctionSetResultRequest(betterproto.Message):
     task_id: str = betterproto.string_field(1)
-    result: bytes = betterproto.bytes_field(2)
+    result: bytes = betterproto.bytes_field(3)
 
 
 @dataclass
