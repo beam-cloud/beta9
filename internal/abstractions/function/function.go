@@ -2,8 +2,10 @@ package function
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/auth"
@@ -222,15 +224,131 @@ func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.Fun
 	}, nil
 }
 
+func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, stream pb.FunctionService_FunctionMonitorServer) error {
+	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
+
+	ctx, cancel := context.WithCancel(stream.Context())
+	defer cancel()
+
+	task, err := fs.backendRepo.GetTaskWithRelated(ctx, req.TaskId)
+	if err != nil {
+		return err
+	}
+
+	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
+	err = json.Unmarshal([]byte(task.Stub.Config), &stubConfig)
+	if err != nil {
+		return err
+	}
+
+	timeout := int64(stubConfig.TaskPolicy.Timeout)
+	timeoutCallback := func() error {
+		task.Status = types.TaskStatusTimeout
+
+		_, err = fs.backendRepo.UpdateTask(
+			stream.Context(),
+			task.ExternalId,
+			task.Task,
+		)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	timeoutFlag := make(chan bool, 1)
+
+	var timeoutChan <-chan time.Time
+	taskStartTimeSeconds := task.StartedAt.Time.Unix()
+	currentTimeSeconds := time.Now().Unix()
+	timeoutTimeSeconds := taskStartTimeSeconds + timeout
+	leftoverTimeoutSeconds := timeoutTimeSeconds - currentTimeSeconds
+
+	if timeout <= 0 {
+		timeoutChan = make(<-chan time.Time) // Indicates that the task does not have a timeout
+	} else if leftoverTimeoutSeconds <= 0 {
+		err := timeoutCallback()
+		if err != nil {
+			log.Printf("error timing out task: %v", err)
+			return err
+		}
+
+		timeoutFlag <- true
+		timeoutChan = make(<-chan time.Time)
+	} else {
+		timeoutChan = time.After(time.Duration(leftoverTimeoutSeconds) * time.Second)
+	}
+
+	go func() {
+		for {
+			for {
+				select {
+				case <-timeoutChan:
+					err := timeoutCallback()
+					if err != nil {
+						log.Printf("error timing out task: %v", err)
+					}
+					timeoutFlag <- true
+					return
+
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-stream.Context().Done():
+			return nil
+
+		case <-timeoutFlag:
+			err := fs.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
+			if err != nil {
+				return err
+			}
+
+			stream.Send(&pb.FunctionMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: true})
+			return nil
+
+		default:
+			if task.Status == types.TaskStatusCancelled {
+				stream.Send(&pb.FunctionMonitorResponse{Ok: true, Cancelled: true, Complete: false, TimedOut: false})
+				return nil
+			}
+
+			err := fs.rdb.SetEx(ctx, Keys.FunctionHeartbeat(authInfo.Workspace.Name, task.ExternalId), 1, time.Duration(60)*time.Second).Err()
+			if err != nil {
+				return err
+			}
+
+			claimed, err := fs.taskRepo.IsClaimed(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
+			if err != nil {
+				return err
+			}
+
+			if !claimed {
+				stream.Send(&pb.FunctionMonitorResponse{Ok: true, Cancelled: false, Complete: true, TimedOut: false})
+			}
+
+			stream.Send(&pb.FunctionMonitorResponse{Ok: true, Cancelled: false, Complete: false, TimedOut: false})
+			time.Sleep(time.Second * 1)
+		}
+	}
+}
+
 func (fs *RunCFunctionService) genContainerId(taskId string) string {
 	return fmt.Sprintf("%s-%s", functionContainerPrefix, taskId)
 }
 
 // Redis keys
 var (
-	functionPrefix string = "function"
-	functionArgs   string = "function:%s:%s:args"
-	functionResult string = "function:%s:%s:result"
+	functionPrefix    string = "function"
+	functionArgs      string = "function:%s:%s:args"
+	functionResult    string = "function:%s:%s:result"
+	functionHeartbeat string = "function:%s:%s:heartbeat"
 )
 
 var Keys = &keys{}
@@ -247,4 +365,8 @@ func (k *keys) FunctionArgs(workspaceName, taskId string) string {
 
 func (k *keys) FunctionResult(workspaceName, taskId string) string {
 	return fmt.Sprintf(functionResult, workspaceName, taskId)
+}
+
+func (k *keys) FunctionHeartbeat(workspaceName, taskId string) string {
+	return fmt.Sprintf(functionHeartbeat, workspaceName, taskId)
 }

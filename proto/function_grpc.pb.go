@@ -22,6 +22,7 @@ const (
 	FunctionService_FunctionInvoke_FullMethodName    = "/function.FunctionService/FunctionInvoke"
 	FunctionService_FunctionGetArgs_FullMethodName   = "/function.FunctionService/FunctionGetArgs"
 	FunctionService_FunctionSetResult_FullMethodName = "/function.FunctionService/FunctionSetResult"
+	FunctionService_FunctionMonitor_FullMethodName   = "/function.FunctionService/FunctionMonitor"
 )
 
 // FunctionServiceClient is the client API for FunctionService service.
@@ -31,6 +32,7 @@ type FunctionServiceClient interface {
 	FunctionInvoke(ctx context.Context, in *FunctionInvokeRequest, opts ...grpc.CallOption) (FunctionService_FunctionInvokeClient, error)
 	FunctionGetArgs(ctx context.Context, in *FunctionGetArgsRequest, opts ...grpc.CallOption) (*FunctionGetArgsResponse, error)
 	FunctionSetResult(ctx context.Context, in *FunctionSetResultRequest, opts ...grpc.CallOption) (*FunctionSetResultResponse, error)
+	FunctionMonitor(ctx context.Context, in *FunctionMonitorRequest, opts ...grpc.CallOption) (FunctionService_FunctionMonitorClient, error)
 }
 
 type functionServiceClient struct {
@@ -91,6 +93,38 @@ func (c *functionServiceClient) FunctionSetResult(ctx context.Context, in *Funct
 	return out, nil
 }
 
+func (c *functionServiceClient) FunctionMonitor(ctx context.Context, in *FunctionMonitorRequest, opts ...grpc.CallOption) (FunctionService_FunctionMonitorClient, error) {
+	stream, err := c.cc.NewStream(ctx, &FunctionService_ServiceDesc.Streams[1], FunctionService_FunctionMonitor_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &functionServiceFunctionMonitorClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type FunctionService_FunctionMonitorClient interface {
+	Recv() (*FunctionMonitorResponse, error)
+	grpc.ClientStream
+}
+
+type functionServiceFunctionMonitorClient struct {
+	grpc.ClientStream
+}
+
+func (x *functionServiceFunctionMonitorClient) Recv() (*FunctionMonitorResponse, error) {
+	m := new(FunctionMonitorResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // FunctionServiceServer is the server API for FunctionService service.
 // All implementations must embed UnimplementedFunctionServiceServer
 // for forward compatibility
@@ -98,6 +132,7 @@ type FunctionServiceServer interface {
 	FunctionInvoke(*FunctionInvokeRequest, FunctionService_FunctionInvokeServer) error
 	FunctionGetArgs(context.Context, *FunctionGetArgsRequest) (*FunctionGetArgsResponse, error)
 	FunctionSetResult(context.Context, *FunctionSetResultRequest) (*FunctionSetResultResponse, error)
+	FunctionMonitor(*FunctionMonitorRequest, FunctionService_FunctionMonitorServer) error
 	mustEmbedUnimplementedFunctionServiceServer()
 }
 
@@ -113,6 +148,9 @@ func (UnimplementedFunctionServiceServer) FunctionGetArgs(context.Context, *Func
 }
 func (UnimplementedFunctionServiceServer) FunctionSetResult(context.Context, *FunctionSetResultRequest) (*FunctionSetResultResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method FunctionSetResult not implemented")
+}
+func (UnimplementedFunctionServiceServer) FunctionMonitor(*FunctionMonitorRequest, FunctionService_FunctionMonitorServer) error {
+	return status.Errorf(codes.Unimplemented, "method FunctionMonitor not implemented")
 }
 func (UnimplementedFunctionServiceServer) mustEmbedUnimplementedFunctionServiceServer() {}
 
@@ -184,6 +222,27 @@ func _FunctionService_FunctionSetResult_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FunctionService_FunctionMonitor_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(FunctionMonitorRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FunctionServiceServer).FunctionMonitor(m, &functionServiceFunctionMonitorServer{stream})
+}
+
+type FunctionService_FunctionMonitorServer interface {
+	Send(*FunctionMonitorResponse) error
+	grpc.ServerStream
+}
+
+type functionServiceFunctionMonitorServer struct {
+	grpc.ServerStream
+}
+
+func (x *functionServiceFunctionMonitorServer) Send(m *FunctionMonitorResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // FunctionService_ServiceDesc is the grpc.ServiceDesc for FunctionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -204,6 +263,11 @@ var FunctionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "FunctionInvoke",
 			Handler:       _FunctionService_FunctionInvoke_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "FunctionMonitor",
+			Handler:       _FunctionService_FunctionMonitor_Handler,
 			ServerStreams: true,
 		},
 	},

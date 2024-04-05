@@ -17,20 +17,18 @@ type FunctionTask struct {
 	containerId string
 }
 
-var cloudPickleHeader []byte = []byte{0x80, 0x05, 0x95}
-
-func (ft *FunctionTask) Execute(ctx context.Context) error {
-	stub, err := ft.fs.backendRepo.GetStubByExternalId(ctx, ft.msg.StubId)
+func (t *FunctionTask) Execute(ctx context.Context) error {
+	stub, err := t.fs.backendRepo.GetStubByExternalId(ctx, t.msg.StubId)
 	if err != nil {
 		return err
 	}
 
-	taskId := ft.msg.TaskId
-	containerId := ft.fs.genContainerId(taskId)
+	taskId := t.msg.TaskId
+	containerId := t.fs.genContainerId(taskId)
 
-	ft.containerId = containerId
+	t.containerId = containerId
 
-	_, err = ft.fs.backendRepo.CreateTask(ctx, &types.TaskParams{
+	_, err = t.fs.backendRepo.CreateTask(ctx, &types.TaskParams{
 		WorkspaceId: stub.WorkspaceId,
 		StubId:      stub.Id,
 		TaskId:      taskId,
@@ -40,29 +38,55 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 		return err
 	}
 
+	return t.run(ctx, stub)
+}
+
+func (t *FunctionTask) Retry(ctx context.Context) error {
+	stub, err := t.fs.backendRepo.GetStubByExternalId(ctx, t.msg.StubId)
+	if err != nil {
+		return err
+	}
+
+	task, err := t.fs.backendRepo.GetTaskWithRelated(ctx, t.msg.TaskId)
+	if err != nil {
+		return err
+	}
+
+	task.Status = types.TaskStatusRetry
+	_, err = t.fs.backendRepo.UpdateTask(ctx, t.msg.TaskId, task.Task)
+	if err != nil {
+		return err
+	}
+
+	return t.run(ctx, stub)
+}
+
+var cloudPickleHeader []byte = []byte{0x80, 0x05, 0x95}
+
+func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) error {
 	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
-	err = json.Unmarshal([]byte(stub.Config), &stubConfig)
+	err := json.Unmarshal([]byte(stub.Config), &stubConfig)
 	if err != nil {
 		return err
 	}
 
 	args, err := json.Marshal(types.TaskPayload{
-		Args:   ft.msg.Args,
-		Kwargs: ft.msg.Kwargs,
+		Args:   t.msg.Args,
+		Kwargs: t.msg.Kwargs,
 	})
 	if err != nil {
 		return err
 	}
 
-	// If ft.msg.Args has exactly one element and it is a []byte, check for magic bytes
+	// If t.msg.Args has exactly one element and it's a []byte, check for magic bytes
 	// This means the payload was cloudpickled
-	if len(ft.msg.Args) == 1 {
-		if arg, ok := ft.msg.Args[0].([]byte); ok && bytes.HasPrefix(arg, cloudPickleHeader) {
+	if len(t.msg.Args) == 1 {
+		if arg, ok := t.msg.Args[0].([]byte); ok && bytes.HasPrefix(arg, cloudPickleHeader) {
 			args = arg
 		}
 	}
 
-	err = ft.fs.rdb.Set(ctx, Keys.FunctionArgs(stub.Workspace.Name, taskId), args, functionArgsExpirationTimeout).Err()
+	err = t.fs.rdb.Set(ctx, Keys.FunctionArgs(stub.Workspace.Name, t.msg.TaskId), args, functionArgsExpirationTimeout).Err()
 	if err != nil {
 		return errors.New("unable to store function args")
 	}
@@ -82,15 +106,15 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 		stubConfig,
 	)
 
-	token, err := ft.fs.backendRepo.RetrieveActiveToken(ctx, stub.Workspace.Id)
+	token, err := t.fs.backendRepo.RetrieveActiveToken(ctx, stub.Workspace.Id)
 	if err != nil {
 		return err
 	}
 
-	err = ft.fs.scheduler.Run(&types.ContainerRequest{
-		ContainerId: containerId,
+	err = t.fs.scheduler.Run(&types.ContainerRequest{
+		ContainerId: t.containerId,
 		Env: []string{
-			fmt.Sprintf("TASK_ID=%s", taskId),
+			fmt.Sprintf("TASK_ID=%s", t.msg.TaskId),
 			fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
 			fmt.Sprintf("BETA9_TOKEN=%s", token.Key),
 			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
@@ -112,23 +136,35 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 	return nil
 }
 
-func (ft *FunctionTask) Retry(ctx context.Context) error {
+func (t *FunctionTask) Cancel(ctx context.Context) error {
+	task, err := t.fs.backendRepo.GetTask(ctx, t.msg.TaskId)
+	if err != nil {
+		return err
+	}
+
+	task.Status = types.TaskStatusError
+	_, err = t.fs.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func (ft *FunctionTask) Cancel(ctx context.Context) error {
-	return nil
+func (t *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
+	res, err := t.fs.rdb.Exists(ctx, Keys.FunctionHeartbeat(t.msg.WorkspaceName, t.msg.TaskId)).Result()
+	if err != nil {
+		return false, err
+	}
+
+	return res > 0, nil
 }
 
-func (ft *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
-	return true, nil
-}
-
-func (ft *FunctionTask) Metadata() types.TaskMetadata {
+func (t *FunctionTask) Metadata() types.TaskMetadata {
 	return types.TaskMetadata{
-		StubId:        ft.msg.StubId,
-		WorkspaceName: ft.msg.WorkspaceName,
-		TaskId:        ft.msg.TaskId,
-		ContainerId:   ft.containerId,
+		StubId:        t.msg.StubId,
+		WorkspaceName: t.msg.WorkspaceName,
+		TaskId:        t.msg.TaskId,
+		ContainerId:   t.containerId,
 	}
 }
