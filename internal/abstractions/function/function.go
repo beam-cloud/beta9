@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/abstractions"
@@ -210,6 +209,7 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 	task, err := ft.fs.backendRepo.CreateTask(ctx, &types.TaskParams{
 		WorkspaceId: stub.WorkspaceId,
 		StubId:      stub.Id,
+		TaskId:      ft.msg.TaskId,
 	})
 	if err != nil {
 		return err
@@ -242,7 +242,6 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 
 	err = ft.fs.rdb.Set(ctx, Keys.FunctionArgs(stub.Workspace.Name, taskId), args, functionArgsExpirationTimeout).Err()
 	if err != nil {
-		log.Println("ERR: ", err)
 		return errors.New("unable to store function args")
 	}
 
