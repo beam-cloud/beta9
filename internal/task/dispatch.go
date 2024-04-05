@@ -16,7 +16,7 @@ import (
 func NewDispatcher(ctx context.Context, taskRepo repository.TaskRepository) (*Dispatcher, error) {
 	d := &Dispatcher{
 		taskRepo:  taskRepo,
-		executors: common.NewSafeMap[func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)](),
+		executors: common.NewSafeMap[func(ctx context.Context, message types.TaskMessage) (types.TaskInterface, error)](),
 	}
 
 	go d.monitor(ctx)
@@ -25,7 +25,7 @@ func NewDispatcher(ctx context.Context, taskRepo repository.TaskRepository) (*Di
 
 type Dispatcher struct {
 	taskRepo  repository.TaskRepository
-	executors *common.SafeMap[func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)]
+	executors *common.SafeMap[func(ctx context.Context, message types.TaskMessage) (types.TaskInterface, error)]
 }
 
 var taskMessagePool = sync.Pool{
@@ -57,7 +57,7 @@ func (d *Dispatcher) releaseTaskMessage(v *types.TaskMessage) {
 	taskMessagePool.Put(v)
 }
 
-func (d *Dispatcher) Register(executor string, taskFactory func(ctx context.Context, message *types.TaskMessage) (types.TaskInterface, error)) {
+func (d *Dispatcher) Register(executor string, taskFactory func(ctx context.Context, message types.TaskMessage) (types.TaskInterface, error)) {
 	d.executors.Set(executor, taskFactory)
 }
 
@@ -76,7 +76,7 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 	}
 
 	defer d.releaseTaskMessage(taskMessage)
-	task, err := taskFactory(ctx, taskMessage)
+	task, err := taskFactory(ctx, *taskMessage)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +140,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 					continue
 				}
 
-				task, err := taskFactory(ctx, taskMessage)
+				task, err := taskFactory(ctx, *taskMessage)
 				if err != nil {
 					continue
 				}
@@ -172,6 +172,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 						taskMessage.WorkspaceName, taskMessage.TaskId, taskMessage.StubId)
 
 					taskMessage.Retries += 1
+
 					msg, err := taskMessage.Encode()
 					if err != nil {
 						continue

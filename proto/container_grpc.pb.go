@@ -19,8 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	ContainerService_ExecuteCommand_FullMethodName   = "/container.ContainerService/ExecuteCommand"
-	ContainerService_UpdateTaskStatus_FullMethodName = "/container.ContainerService/UpdateTaskStatus"
+	ContainerService_ExecuteCommand_FullMethodName = "/container.ContainerService/ExecuteCommand"
 )
 
 // ContainerServiceClient is the client API for ContainerService service.
@@ -28,7 +27,6 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ContainerServiceClient interface {
 	ExecuteCommand(ctx context.Context, in *CommandExecutionRequest, opts ...grpc.CallOption) (ContainerService_ExecuteCommandClient, error)
-	UpdateTaskStatus(ctx context.Context, in *ContainerTaskStatusUpdateRequest, opts ...grpc.CallOption) (*ContainerTaskStatusUpdateResponse, error)
 }
 
 type containerServiceClient struct {
@@ -71,21 +69,11 @@ func (x *containerServiceExecuteCommandClient) Recv() (*CommandExecutionResponse
 	return m, nil
 }
 
-func (c *containerServiceClient) UpdateTaskStatus(ctx context.Context, in *ContainerTaskStatusUpdateRequest, opts ...grpc.CallOption) (*ContainerTaskStatusUpdateResponse, error) {
-	out := new(ContainerTaskStatusUpdateResponse)
-	err := c.cc.Invoke(ctx, ContainerService_UpdateTaskStatus_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // ContainerServiceServer is the server API for ContainerService service.
 // All implementations must embed UnimplementedContainerServiceServer
 // for forward compatibility
 type ContainerServiceServer interface {
 	ExecuteCommand(*CommandExecutionRequest, ContainerService_ExecuteCommandServer) error
-	UpdateTaskStatus(context.Context, *ContainerTaskStatusUpdateRequest) (*ContainerTaskStatusUpdateResponse, error)
 	mustEmbedUnimplementedContainerServiceServer()
 }
 
@@ -95,9 +83,6 @@ type UnimplementedContainerServiceServer struct {
 
 func (UnimplementedContainerServiceServer) ExecuteCommand(*CommandExecutionRequest, ContainerService_ExecuteCommandServer) error {
 	return status.Errorf(codes.Unimplemented, "method ExecuteCommand not implemented")
-}
-func (UnimplementedContainerServiceServer) UpdateTaskStatus(context.Context, *ContainerTaskStatusUpdateRequest) (*ContainerTaskStatusUpdateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method UpdateTaskStatus not implemented")
 }
 func (UnimplementedContainerServiceServer) mustEmbedUnimplementedContainerServiceServer() {}
 
@@ -133,36 +118,13 @@ func (x *containerServiceExecuteCommandServer) Send(m *CommandExecutionResponse)
 	return x.ServerStream.SendMsg(m)
 }
 
-func _ContainerService_UpdateTaskStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ContainerTaskStatusUpdateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ContainerServiceServer).UpdateTaskStatus(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ContainerService_UpdateTaskStatus_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ContainerServiceServer).UpdateTaskStatus(ctx, req.(*ContainerTaskStatusUpdateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // ContainerService_ServiceDesc is the grpc.ServiceDesc for ContainerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var ContainerService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "container.ContainerService",
 	HandlerType: (*ContainerServiceServer)(nil),
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "UpdateTaskStatus",
-			Handler:    _ContainerService_UpdateTaskStatus_Handler,
-		},
-	},
+	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "ExecuteCommand",

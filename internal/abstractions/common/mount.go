@@ -1,4 +1,4 @@
-package abstractions
+package common
 
 import (
 	"path"

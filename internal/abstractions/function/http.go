@@ -1,11 +1,11 @@
 package function
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
 	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/internal/task"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/labstack/echo/v4"
 )
@@ -13,11 +13,6 @@ import (
 type functionGroup struct {
 	routerGroup *echo.Group
 	fs          *RunCFunctionService
-}
-
-type functionPayload struct {
-	Args   []interface{} `json:"args"`
-	Kwargs []interface{} `json:"kwargs"`
 }
 
 func registerFunctionRoutes(g *echo.Group, fs *RunCFunctionService) *functionGroup {
@@ -30,12 +25,6 @@ func registerFunctionRoutes(g *echo.Group, fs *RunCFunctionService) *functionGro
 }
 
 func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
-	/*
-		 TODO: support three different unmarshalling strategies
-		 	- explicit args/kwargs (nested under {"args", "kwargs"})
-			- just kwargs (key/value)
-			- just args (in list)
-	*/
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	stubId := ctx.Param("stubId")
@@ -60,21 +49,14 @@ func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
 		stubId = deployment.Stub.ExternalId
 	}
 
-	var payload functionPayload
-	if err := ctx.Bind(&payload); err != nil {
-		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error": "invalid function payload",
-		})
-	}
-
-	args, err := json.Marshal(payload)
+	payload, err := task.SerializeHttpPayload(ctx)
 	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "error marshalling function payload",
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "invalid request payload",
 		})
 	}
 
-	task, err := g.fs.invoke(ctx.Request().Context(), cc.AuthInfo, stubId, args, nil)
+	task, err := g.fs.invoke(ctx.Request().Context(), cc.AuthInfo, stubId, payload)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": err.Error(),
@@ -82,6 +64,6 @@ func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"task_id": task.ExternalId,
+		"task_id": task.Metadata().TaskId,
 	})
 }

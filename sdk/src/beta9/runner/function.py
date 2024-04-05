@@ -1,12 +1,18 @@
+import asyncio
 import json
+import os
 import time
 
 import cloudpickle
+import grpc
+import grpclib
 from grpclib.client import Channel
+from grpclib.exceptions import StreamTerminatedError
 
 from ..aio import run_sync
 from ..clients.function import (
     FunctionGetArgsResponse,
+    FunctionMonitorResponse,
     FunctionServiceStub,
     FunctionSetResultResponse,
 )
@@ -15,7 +21,7 @@ from ..config import with_runner_context
 from ..exceptions import InvalidFunctionArgumentsException, RunnerException
 from ..logging import StdoutJsonInterceptor
 from ..runner.common import config, load_handler
-from ..type import TaskStatus
+from ..type import TaskExitCode, TaskStatus
 
 
 def _load_args(args: bytes) -> dict:
@@ -29,11 +35,71 @@ def _load_args(args: bytes) -> dict:
             raise InvalidFunctionArgumentsException
 
 
+async def _monitor_task(
+    *,
+    stub_id: str,
+    task_id: str,
+    container_id: str,
+    function_stub: FunctionServiceStub,
+) -> None:
+    initial_backoff = 5
+    max_retries = 5
+    backoff = initial_backoff
+    retry = 0
+
+    while retry <= max_retries:
+        try:
+            async for response in function_stub.function_monitor(
+                task_id=task_id,
+                stub_id=stub_id,
+                container_id=container_id,
+            ):
+                response: FunctionMonitorResponse
+                if response.cancelled:
+                    print(f"Task cancelled: {task_id}")
+                    os._exit(TaskExitCode.Cancelled)
+
+                if response.complete:
+                    return
+
+                if response.timed_out:
+                    print(f"Task timed out: {task_id}")
+                    os._exit(TaskExitCode.Timeout)
+
+                retry = 0
+                backoff = initial_backoff
+
+            # If successful, it means the stream is finished.
+            # Break out of the retry loop
+            break
+
+        except (
+            grpc.aio.AioRpcError,
+            grpclib.exceptions.GRPCError,
+            StreamTerminatedError,
+            ConnectionRefusedError,
+        ):
+            if retry == max_retries:
+                print("Lost connection to task monitor, exiting")
+                os._exit(0)
+
+            await asyncio.sleep(backoff)
+            backoff *= 2
+            retry += 1
+
+        except asyncio.exceptions.CancelledError:
+            return
+
+        except BaseException:
+            print("Unexpected error occurred in task monitor")
+            os._exit(0)
+
+
 @with_runner_context
 def main(channel: Channel):
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
-
+    loop = asyncio.get_event_loop()
     task_id = config.task_id
 
     with StdoutJsonInterceptor(task_id=task_id):
@@ -49,6 +115,16 @@ def main(channel: Channel):
         )
         if not start_task_response.ok:
             raise RunnerException("Unable to start task")
+
+        # Kick off monitoring task
+        monitor_task = loop.create_task(
+            _monitor_task(
+                stub_id=config.stub_id,
+                task_id=config.task_id,
+                container_id=config.container_id,
+                function_stub=function_stub,
+            ),
+        )
 
         task_status = TaskStatus.Complete
         error = None
@@ -92,6 +168,8 @@ def main(channel: Channel):
         )
         if not end_task_response.ok:
             raise RunnerException("Unable to end task")
+
+        monitor_task.cancel()
 
         if task_status == TaskStatus.Error:
             raise error.with_traceback(error.__traceback__)

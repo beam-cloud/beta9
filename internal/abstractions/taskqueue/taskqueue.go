@@ -36,10 +36,10 @@ type TaskQueueServiceOpts struct {
 	BackendRepo    repository.BackendRepository
 	TaskRepo       repository.TaskRepository
 	ContainerRepo  repository.ContainerRepository
-	TaskDispatcher *task.Dispatcher
 	Scheduler      *scheduler.Scheduler
 	Tailscale      *network.Tailscale
 	RouteGroup     *echo.Group
+	TaskDispatcher *task.Dispatcher
 }
 
 const (
@@ -190,10 +190,10 @@ func (t *TaskQueueTask) Metadata() types.TaskMetadata {
 	}
 }
 
-func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.TaskMessage) (types.TaskInterface, error) {
+func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
 	return &TaskQueueTask{
 		tq:  tq,
-		msg: msg,
+		msg: &msg,
 	}, nil
 }
 

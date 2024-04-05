@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"time"
 
@@ -17,6 +18,7 @@ type TaskMetadata struct {
 	TaskId        string
 	StubId        string
 	WorkspaceName string
+	ContainerId   string
 }
 
 type TaskInterface interface {
@@ -39,15 +41,15 @@ var (
 // TaskMessage represents a JSON serializable message
 // to be added to the queue
 type TaskMessage struct {
-	TaskId        string                 `json:"task_id"`
-	WorkspaceName string                 `json:"workspace_name"`
-	StubId        string                 `json:"stub_id"`
-	Executor      string                 `json:"executor"`
-	Args          []interface{}          `json:"args"`
-	Kwargs        map[string]interface{} `json:"kwargs"`
-	Expires       *time.Time             `json:"expires"`
-	Policy        TaskPolicy             `json:"policy"`
-	Retries       uint                   `json:"retries"`
+	TaskId        string                 `json:"task_id" redis:"task_id"`
+	WorkspaceName string                 `json:"workspace_name" redis:"workspace_name"`
+	StubId        string                 `json:"stub_id" redis:"stub_id"`
+	Executor      string                 `json:"executor" redis:"executor"`
+	Args          []interface{}          `json:"args" redis:"args"`
+	Kwargs        map[string]interface{} `json:"kwargs" redis:"kwargs"`
+	Expires       *time.Time             `json:"expires" redis:"expires"`
+	Policy        TaskPolicy             `json:"policy" redis:"policy"`
+	Retries       uint                   `json:"retries" redis:"retries"`
 }
 
 func (tm *TaskMessage) Reset() {
@@ -81,6 +83,14 @@ func (tm *TaskMessage) Decode(encodedData []byte) error {
 		return err
 	}
 
+	for i, arg := range tm.Args {
+		if str, ok := arg.(string); ok {
+			if data, err := base64.StdEncoding.DecodeString(str); err == nil {
+				tm.Args[i] = data
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -90,6 +100,6 @@ var DefaultTaskPolicy = TaskPolicy{
 }
 
 type TaskPolicy struct {
-	MaxRetries uint `json:"max_retries"`
-	Timeout    int  `json:"timeout"`
+	MaxRetries uint `json:"max_retries" redis:"max_retries"`
+	Timeout    int  `json:"timeout" redis:"timeout"`
 }

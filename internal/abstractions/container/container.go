@@ -8,14 +8,15 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/beam-cloud/beta9/internal/abstractions"
+	abCommon "github.com/beam-cloud/beta9/internal/abstractions/common"
+	pb "github.com/beam-cloud/beta9/proto"
+
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
-	pb "github.com/beam-cloud/beta9/proto"
 )
 
 const (
@@ -119,7 +120,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		stubConfig.Runtime.Memory = defaultContainerMemory
 	}
 
-	mounts := abstractions.ConfigureContainerRequestMounts(
+	mounts := abCommon.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
 		authInfo.Workspace.Name,
 		stubConfig,
