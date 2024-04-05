@@ -47,16 +47,3 @@ class ContainerServiceStub(betterproto.ServiceStub):
             CommandExecutionResponse,
         ):
             yield response
-
-    async def update_task_status(
-        self, *, task_id: str = "", status: str = ""
-    ) -> ContainerTaskStatusUpdateResponse:
-        request = ContainerTaskStatusUpdateRequest()
-        request.task_id = task_id
-        request.status = status
-
-        return await self._unary_unary(
-            "/container.ContainerService/UpdateTaskStatus",
-            request,
-            ContainerTaskStatusUpdateResponse,
-        )
