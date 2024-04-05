@@ -256,14 +256,9 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 	bundlePath := filepath.Join(s.userImagePath, request.ImageId)
 
-	hostname := fmt.Sprintf("%s:%d", s.podAddr, defaultWorkerServerPort)
-	err := s.containerRepo.SetWorkerAddress(request.ContainerId, hostname)
-	if err != nil {
-		return err
-	}
-
+	// Pull image
 	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, request.ImageId)
-	err = s.imageClient.PullLazy(request.ImageId)
+	err := s.imageClient.PullLazy(request.ImageId)
 	if err != nil && request.SourceImage != nil {
 		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerID, *request.SourceImage)
 		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, nil)
@@ -500,6 +495,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		LogBuffer: common.NewLogBuffer(),
 	}
 	s.containerInstances.Set(containerId, containerInstance)
+
+	// Set worker hostname
+	hostname := fmt.Sprintf("%s:%d", s.podAddr, defaultWorkerServerPort)
+	s.containerRepo.SetWorkerAddress(request.ContainerId, hostname)
 
 	// Handle stdout/stderr from spawned container
 	go s.containerLogger.CaptureLogs(request.ContainerId, outputChan)
