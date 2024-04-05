@@ -190,10 +190,10 @@ func (t *TaskQueueTask) Metadata() types.TaskMetadata {
 	}
 }
 
-func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg *types.TaskMessage) (types.TaskInterface, error) {
+func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
 	return &TaskQueueTask{
 		tq:  tq,
-		msg: msg,
+		msg: &msg,
 	}, nil
 }
 

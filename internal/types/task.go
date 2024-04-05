@@ -17,6 +17,7 @@ type TaskMetadata struct {
 	TaskId        string
 	StubId        string
 	WorkspaceName string
+	ContainerId   string
 }
 
 type TaskInterface interface {

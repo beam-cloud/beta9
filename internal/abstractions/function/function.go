@@ -100,20 +100,51 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return err
 	}
 
-	return task.Stream(ctx, stream, authInfo)
+	return fs.Stream(ctx, stream, authInfo, task)
 }
 
-func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (*FunctionTask, error) {
+func (fs *RunCFunctionService) Stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface) error {
+	meta := task.Metadata()
+
+	hostname, err := fs.containerRepo.GetWorkerAddress(meta.ContainerId)
+	if err != nil {
+		return err
+	}
+
+	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, fs.tailscale, fs.config.Tailscale)
+	if err != nil {
+		return err
+	}
+
+	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
+	if err != nil {
+		return err
+	}
+
+	outputChan := make(chan common.OutputMsg, 1000)
+	keyEventChan := make(chan common.KeyEvent, 1000)
+
+	err = fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(meta.ContainerId), keyEventChan)
+	if err != nil {
+		return err
+	}
+
+	go client.StreamLogs(ctx, meta.ContainerId, outputChan)
+	return fs.handleStreams(ctx, stream, authInfo.Workspace.Name, meta.TaskId, meta.ContainerId, outputChan, keyEventChan)
+}
+
+func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (types.TaskInterface, error) {
 	task, err := fs.taskDispatcher.Send(ctx, string(types.ExecutorFunction), authInfo.Workspace.Name, stubId, payload, types.DefaultTaskPolicy)
 	if err != nil {
 		return nil, err
 	}
-	return task.(*FunctionTask), err
+
+	return task, err
 }
 
-func (fs *RunCFunctionService) functionTaskFactory(ctx context.Context, msg *types.TaskMessage) (types.TaskInterface, error) {
+func (fs *RunCFunctionService) functionTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
 	return &FunctionTask{
-		msg: msg,
+		msg: &msg,
 		fs:  fs,
 	}, nil
 }
@@ -312,35 +343,8 @@ func (ft *FunctionTask) Metadata() types.TaskMetadata {
 		StubId:        ft.msg.StubId,
 		WorkspaceName: ft.msg.WorkspaceName,
 		TaskId:        ft.msg.TaskId,
+		ContainerId:   ft.containerId,
 	}
-}
-
-func (ft *FunctionTask) Stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo) error {
-	hostname, err := ft.fs.containerRepo.GetWorkerAddress(ft.containerId)
-	if err != nil {
-		return err
-	}
-
-	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, ft.fs.tailscale, ft.fs.config.Tailscale)
-	if err != nil {
-		return err
-	}
-
-	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
-	if err != nil {
-		return err
-	}
-
-	outputChan := make(chan common.OutputMsg, 1000)
-	keyEventChan := make(chan common.KeyEvent, 1000)
-
-	err = ft.fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(ft.containerId), keyEventChan)
-	if err != nil {
-		return err
-	}
-
-	go client.StreamLogs(ctx, ft.containerId, outputChan)
-	return ft.fs.handleStreams(ctx, stream, authInfo.Workspace.Name, ft.msg.TaskId, ft.containerId, outputChan, keyEventChan)
 }
 
 // Redis keys
