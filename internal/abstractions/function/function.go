@@ -27,7 +27,7 @@ type FunctionService interface {
 }
 
 const (
-	functionContainerPrefix         string        = "function-"
+	functionContainerPrefix         string        = "function"
 	functionRoutePrefix             string        = "/function"
 	defaultFunctionContainerCpu     int64         = 100
 	defaultFunctionContainerMemory  int64         = 128
@@ -222,7 +222,7 @@ func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.Fun
 }
 
 func (fs *RunCFunctionService) genContainerId(taskId string) string {
-	return fmt.Sprintf("%s%s", functionContainerPrefix, taskId)
+	return fmt.Sprintf("%s-%s", functionContainerPrefix, taskId)
 }
 
 type FunctionTask struct {
