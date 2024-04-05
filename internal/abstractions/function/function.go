@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/beam-cloud/beta9/internal/abstractions"
+	abCommon "github.com/beam-cloud/beta9/internal/abstractions/common"
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
@@ -240,7 +240,9 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 	taskId := ft.msg.TaskId
 	containerId := ft.fs.genContainerId(taskId)
 
-	task, err := ft.fs.backendRepo.CreateTask(ctx, &types.TaskParams{
+	ft.containerId = containerId
+
+	_, err = ft.fs.backendRepo.CreateTask(ctx, &types.TaskParams{
 		WorkspaceId: stub.WorkspaceId,
 		StubId:      stub.Id,
 		TaskId:      taskId,
@@ -252,14 +254,6 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 
 	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
 	err = json.Unmarshal([]byte(stub.Config), &stubConfig)
-	if err != nil {
-		return err
-	}
-
-	task.ContainerId = containerId
-	ft.containerId = containerId
-
-	_, err = ft.fs.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
 	if err != nil {
 		return err
 	}
@@ -286,7 +280,7 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
-	mounts := abstractions.ConfigureContainerRequestMounts(
+	mounts := abCommon.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
 		stub.Workspace.Name,
 		stubConfig,

@@ -15,11 +15,6 @@ type functionGroup struct {
 	fs          *RunCFunctionService
 }
 
-type functionPayload struct {
-	Args   []interface{} `json:"args"`
-	Kwargs []interface{} `json:"kwargs"`
-}
-
 func registerFunctionRoutes(g *echo.Group, fs *RunCFunctionService) *functionGroup {
 	group := &functionGroup{routerGroup: g, fs: fs}
 
@@ -30,12 +25,6 @@ func registerFunctionRoutes(g *echo.Group, fs *RunCFunctionService) *functionGro
 }
 
 func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
-	/*
-		 TODO: support three different unmarshalling strategies
-		 	- explicit args/kwargs (nested under {"args", "kwargs"})
-			- just kwargs (key/value)
-			- just args (in list)
-	*/
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	stubId := ctx.Param("stubId")
