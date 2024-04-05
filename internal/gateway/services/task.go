@@ -13,7 +13,7 @@ import (
 )
 
 func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskRequest) (*pb.StartTaskResponse, error) {
-	task, err := gws.backendRepo.GetTask(ctx, in.TaskId)
+	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
 	if err != nil {
 		return &pb.StartTaskResponse{
 			Ok: false,
@@ -23,7 +23,14 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 	task.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatusRunning
 
-	_, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
+	err = gws.taskDispatcher.Claim(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId, task.ContainerId)
+	if err != nil {
+		return &pb.StartTaskResponse{
+			Ok: false,
+		}, nil
+	}
+
+	_, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task)
 	return &pb.StartTaskResponse{
 		Ok: err == nil,
 	}, nil

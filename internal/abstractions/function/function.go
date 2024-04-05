@@ -237,10 +237,14 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 		return err
 	}
 
+	taskId := ft.msg.TaskId
+	containerId := ft.fs.genContainerId(taskId)
+
 	task, err := ft.fs.backendRepo.CreateTask(ctx, &types.TaskParams{
 		WorkspaceId: stub.WorkspaceId,
 		StubId:      stub.Id,
-		TaskId:      ft.msg.TaskId,
+		TaskId:      taskId,
+		ContainerId: containerId,
 	})
 	if err != nil {
 		return err
@@ -251,9 +255,6 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
-	taskId := task.ExternalId
-	containerId := ft.fs.genContainerId(taskId)
 
 	task.ContainerId = containerId
 	ft.containerId = containerId
@@ -274,11 +275,6 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 	err = ft.fs.rdb.Set(ctx, Keys.FunctionArgs(stub.Workspace.Name, taskId), args, functionArgsExpirationTimeout).Err()
 	if err != nil {
 		return errors.New("unable to store function args")
-	}
-
-	err = ft.fs.taskDispatcher.Claim(ctx, ft.msg.WorkspaceName, ft.msg.StubId, ft.msg.TaskId, ft.containerId)
-	if err != nil {
-		return err
 	}
 
 	// Don't allow negative compute requests
