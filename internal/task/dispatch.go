@@ -134,8 +134,6 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 					continue
 				}
 
-				log.Println("claimed...")
-
 				taskFactory, exists := d.executors.Get(taskMessage.Executor)
 				if !exists {
 					d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
