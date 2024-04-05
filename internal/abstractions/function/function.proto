@@ -34,7 +34,7 @@ message FunctionGetArgsResponse {
 
 message FunctionSetResultRequest {
   string task_id = 1;
-  bytes result = 3;
+  bytes result = 2;
 }
 
 message FunctionSetResultResponse { bool ok = 1; }
