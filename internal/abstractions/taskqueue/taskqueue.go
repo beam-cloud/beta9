@@ -36,10 +36,10 @@ type TaskQueueServiceOpts struct {
 	BackendRepo    repository.BackendRepository
 	TaskRepo       repository.TaskRepository
 	ContainerRepo  repository.ContainerRepository
-	TaskDispatcher *task.Dispatcher
 	Scheduler      *scheduler.Scheduler
 	Tailscale      *network.Tailscale
 	RouteGroup     *echo.Group
+	TaskDispatcher *task.Dispatcher
 }
 
 const (

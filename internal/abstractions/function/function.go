@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/abstractions"
@@ -13,6 +14,7 @@ import (
 	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
+	"github.com/beam-cloud/beta9/internal/task"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
@@ -36,6 +38,7 @@ const (
 
 type RunCFunctionService struct {
 	pb.UnimplementedFunctionServiceServer
+	taskDispatcher  *task.Dispatcher
 	backendRepo     repository.BackendRepository
 	taskRepo        repository.TaskRepository
 	containerRepo   repository.ContainerRepository
@@ -48,14 +51,15 @@ type RunCFunctionService struct {
 }
 
 type FunctionServiceOpts struct {
-	Config        types.AppConfig
-	RedisClient   *common.RedisClient
-	BackendRepo   repository.BackendRepository
-	TaskRepo      repository.TaskRepository
-	ContainerRepo repository.ContainerRepository
-	Scheduler     *scheduler.Scheduler
-	Tailscale     *network.Tailscale
-	RouteGroup    *echo.Group
+	Config         types.AppConfig
+	RedisClient    *common.RedisClient
+	BackendRepo    repository.BackendRepository
+	TaskRepo       repository.TaskRepository
+	ContainerRepo  repository.ContainerRepository
+	Scheduler      *scheduler.Scheduler
+	Tailscale      *network.Tailscale
+	RouteGroup     *echo.Group
+	TaskDispatcher *task.Dispatcher
 }
 
 func NewRuncFunctionService(ctx context.Context,
@@ -75,11 +79,15 @@ func NewRuncFunctionService(ctx context.Context,
 		tailscale:       opts.Tailscale,
 		rdb:             opts.RedisClient,
 		keyEventManager: keyEventManager,
+		taskDispatcher:  opts.TaskDispatcher,
+		routeGroup:      opts.RouteGroup,
 	}
+
+	fs.taskDispatcher.Register(string(types.ExecutorFunction), fs.functionTaskFactory)
 
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(fs.backendRepo)
-	registerFunctionRoutes(opts.RouteGroup.Group(functionRoutePrefix, authMiddleware), fs)
+	registerFunctionRoutes(fs.routeGroup.Group(functionRoutePrefix, authMiddleware), fs)
 
 	return fs, nil
 }
@@ -88,123 +96,28 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 
 	ctx := stream.Context()
-	outputChan := make(chan common.OutputMsg, 1000)
-	keyEventChan := make(chan common.KeyEvent, 1000)
-
-	task, err := fs.invoke(ctx, authInfo, in.StubId, in.Args, keyEventChan)
+	task, err := fs.invoke(ctx, authInfo, in.StubId, &types.TaskPayload{})
 	if err != nil {
 		return err
 	}
 
-	hostname, err := fs.containerRepo.GetWorkerAddress(task.ContainerId)
-	if err != nil {
-		return err
-	}
-
-	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, fs.tailscale, fs.config.Tailscale)
-	if err != nil {
-		return err
-	}
-
-	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
-	if err != nil {
-		return err
-	}
-
-	go client.StreamLogs(ctx, task.ContainerId, outputChan)
-	return fs.handleStreams(ctx, stream, authInfo.Workspace.Name, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
+	return task.Stream(ctx, stream, authInfo)
 }
 
-func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, args []byte, keyEventChan chan common.KeyEvent) (*types.Task, error) {
-	stub, err := fs.backendRepo.GetStubByExternalId(ctx, stubId)
+func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (*FunctionTask, error) {
+	task, err := fs.taskDispatcher.Send(ctx, string(types.ExecutorFunction), authInfo.Workspace.Name, stubId, payload, types.DefaultTaskPolicy)
 	if err != nil {
+		log.Println("error on send: ", err)
 		return nil, err
 	}
-
-	task, err := fs.createTask(ctx, authInfo, &stub.Stub)
-	if err != nil {
-		return nil, err
-	}
-
-	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
-	err = json.Unmarshal([]byte(stub.Config), &stubConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	taskId := task.ExternalId
-	containerId := fs.genContainerId(taskId)
-	task.ContainerId = containerId
-
-	err = fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = fs.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
-	if err != nil {
-		return nil, err
-	}
-
-	err = fs.rdb.Set(ctx, Keys.FunctionArgs(authInfo.Workspace.Name, taskId), args, functionArgsExpirationTimeout).Err()
-	if err != nil {
-		return nil, errors.New("unable to store function args")
-	}
-
-	// Don't allow negative compute requests
-	if stubConfig.Runtime.Cpu <= 0 {
-		stubConfig.Runtime.Cpu = defaultFunctionContainerCpu
-	}
-
-	if stubConfig.Runtime.Memory <= 0 {
-		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
-	}
-
-	mounts := abstractions.ConfigureContainerRequestMounts(
-		stub.Object.ExternalId,
-		authInfo.Workspace.Name,
-		stubConfig,
-	)
-
-	err = fs.scheduler.Run(&types.ContainerRequest{
-		ContainerId: containerId,
-		Env: []string{
-			fmt.Sprintf("TASK_ID=%s", taskId),
-			fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
-			fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
-			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
-		},
-		Cpu:         stubConfig.Runtime.Cpu,
-		Memory:      stubConfig.Runtime.Memory,
-		Gpu:         string(stubConfig.Runtime.Gpu),
-		GpuCount:    1,
-		ImageId:     stubConfig.Runtime.ImageId,
-		StubId:      stub.ExternalId,
-		WorkspaceId: authInfo.Workspace.ExternalId,
-		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
-		Mounts:      mounts,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return task, nil
+	return task.(*FunctionTask), err
 }
 
-func (fs *RunCFunctionService) functionTaskFactory() (types.TaskInterface, error) {
-	return &FunctionTask{}, nil
-}
-
-func (fs *RunCFunctionService) createTask(ctx context.Context, authInfo *auth.AuthInfo, stub *types.Stub) (*types.Task, error) {
-	task, err := fs.backendRepo.CreateTask(ctx, &types.TaskParams{
-		WorkspaceId: authInfo.Workspace.Id,
-		StubId:      stub.Id,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return task, nil
+func (fs *RunCFunctionService) functionTaskFactory(ctx context.Context, msg *types.TaskMessage) (types.TaskInterface, error) {
+	return &FunctionTask{
+		msg: msg,
+		fs:  fs,
+	}, nil
 }
 
 func (fs *RunCFunctionService) handleStreams(
@@ -274,6 +187,11 @@ func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.Fun
 		return &pb.FunctionSetResultResponse{Ok: false}, nil
 	}
 
+	err = fs.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, "", in.TaskId)
+	if err != nil {
+		return &pb.FunctionSetResultResponse{Ok: false}, nil
+	}
+
 	return &pb.FunctionSetResultResponse{
 		Ok: true,
 	}, nil
@@ -284,12 +202,98 @@ func (fs *RunCFunctionService) genContainerId(taskId string) string {
 }
 
 type FunctionTask struct {
-	StubId        string
-	WorkspaceName string
-	TaskId        string
+	msg         *types.TaskMessage
+	fs          *RunCFunctionService
+	containerId string
 }
 
 func (ft *FunctionTask) Execute(ctx context.Context) error {
+	stub, err := ft.fs.backendRepo.GetStubByExternalId(ctx, ft.msg.StubId)
+	if err != nil {
+		return err
+	}
+
+	task, err := ft.fs.backendRepo.CreateTask(ctx, &types.TaskParams{
+		WorkspaceId: stub.WorkspaceId,
+		StubId:      stub.Id,
+	})
+	if err != nil {
+		return err
+	}
+
+	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
+	err = json.Unmarshal([]byte(stub.Config), &stubConfig)
+	if err != nil {
+		return err
+	}
+
+	taskId := task.ExternalId
+	containerId := ft.fs.genContainerId(taskId)
+
+	task.ContainerId = containerId
+	ft.containerId = containerId
+
+	_, err = ft.fs.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
+	if err != nil {
+		return err
+	}
+
+	args, err := json.Marshal(types.TaskPayload{
+		Args:   ft.msg.Args,
+		Kwargs: ft.msg.Kwargs,
+	})
+	if err != nil {
+		return err
+	}
+
+	err = ft.fs.rdb.Set(ctx, Keys.FunctionArgs(stub.Workspace.Name, taskId), args, functionArgsExpirationTimeout).Err()
+	if err != nil {
+		log.Println("ERR: ", err)
+		return errors.New("unable to store function args")
+	}
+
+	err = ft.fs.taskDispatcher.Claim(ctx, ft.msg.WorkspaceName, ft.msg.StubId, ft.msg.TaskId, ft.containerId)
+	if err != nil {
+		return err
+	}
+
+	// Don't allow negative compute requests
+	if stubConfig.Runtime.Cpu <= 0 {
+		stubConfig.Runtime.Cpu = defaultFunctionContainerCpu
+	}
+
+	if stubConfig.Runtime.Memory <= 0 {
+		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
+	}
+
+	mounts := abstractions.ConfigureContainerRequestMounts(
+		stub.Object.ExternalId,
+		stub.Workspace.Name,
+		stubConfig,
+	)
+
+	err = ft.fs.scheduler.Run(&types.ContainerRequest{
+		ContainerId: containerId,
+		Env: []string{
+			fmt.Sprintf("TASK_ID=%s", taskId),
+			fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
+			fmt.Sprintf("BETA9_TOKEN=%s", "FIXKEY"),
+			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
+		},
+		Cpu:         stubConfig.Runtime.Cpu,
+		Memory:      stubConfig.Runtime.Memory,
+		Gpu:         string(stubConfig.Runtime.Gpu),
+		GpuCount:    1,
+		ImageId:     stubConfig.Runtime.ImageId,
+		StubId:      stub.ExternalId,
+		WorkspaceId: stub.Workspace.ExternalId,
+		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
+		Mounts:      mounts,
+	})
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -307,10 +311,39 @@ func (ft *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
 
 func (ft *FunctionTask) Metadata() types.TaskMetadata {
 	return types.TaskMetadata{
-		StubId:        ft.StubId,
-		WorkspaceName: ft.WorkspaceName,
-		TaskId:        ft.TaskId,
+		StubId:        ft.msg.StubId,
+		WorkspaceName: ft.msg.WorkspaceName,
+		TaskId:        ft.msg.TaskId,
 	}
+}
+
+func (ft *FunctionTask) Stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo) error {
+	log.Println("called stream")
+	hostname, err := ft.fs.containerRepo.GetWorkerAddress(ft.containerId)
+	if err != nil {
+		return err
+	}
+
+	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, ft.fs.tailscale, ft.fs.config.Tailscale)
+	if err != nil {
+		return err
+	}
+
+	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
+	if err != nil {
+		return err
+	}
+
+	outputChan := make(chan common.OutputMsg, 1000)
+	keyEventChan := make(chan common.KeyEvent, 1000)
+
+	err = ft.fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(ft.containerId), keyEventChan)
+	if err != nil {
+		return err
+	}
+
+	go client.StreamLogs(ctx, ft.containerId, outputChan)
+	return ft.fs.handleStreams(ctx, stream, authInfo.Workspace.Name, ft.msg.TaskId, ft.containerId, outputChan, keyEventChan)
 }
 
 // Redis keys

@@ -70,6 +70,8 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 	taskMessage.Kwargs = payload.Kwargs
 	taskMessage.Policy = policy
 
+	log.Println("executor: ", executor)
+
 	taskFactory, exists := d.executors.Get(executor)
 	if !exists {
 		return nil, fmt.Errorf("invalid task executor: %v", executor)
@@ -78,11 +80,13 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 	defer d.releaseTaskMessage(taskMessage)
 	task, err := taskFactory(ctx, taskMessage)
 	if err != nil {
+		log.Println("err on factory: ", err)
 		return nil, err
 	}
 
 	msg, err := taskMessage.Encode()
 	if err != nil {
+		log.Println("err on encode: ", err)
 		return nil, err
 	}
 
@@ -90,11 +94,14 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 
 	err = d.taskRepo.SetTaskState(ctx, workspaceName, stubId, taskId, msg)
 	if err != nil {
+		log.Println("err on set task statea: ", err)
 		return nil, err
 	}
 
 	err = task.Execute(ctx)
 	if err != nil {
+		log.Println("err on execute: ", err)
+
 		return nil, err
 	}
 
@@ -124,6 +131,8 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 				continue
 			}
 
+			log.Println("tasks: ", tasks)
+
 			for _, taskMessage := range tasks {
 				claimed, err := d.taskRepo.IsClaimed(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 				if err != nil {
@@ -133,6 +142,8 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 				if !claimed {
 					continue
 				}
+
+				log.Println("claimed...")
 
 				taskFactory, exists := d.executors.Get(taskMessage.Executor)
 				if !exists {

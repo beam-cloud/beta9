@@ -209,14 +209,15 @@ func (g *Gateway) registerServices() error {
 
 	// Register function service
 	fs, err := function.NewRuncFunctionService(g.ctx, function.FunctionServiceOpts{
-		Config:        g.config,
-		RedisClient:   g.redisClient,
-		BackendRepo:   g.BackendRepo,
-		TaskRepo:      g.TaskRepo,
-		ContainerRepo: g.ContainerRepo,
-		Scheduler:     g.Scheduler,
-		Tailscale:     g.Tailscale,
-		RouteGroup:    g.rootRouteGroup,
+		Config:         g.config,
+		RedisClient:    g.redisClient,
+		BackendRepo:    g.BackendRepo,
+		TaskRepo:       g.TaskRepo,
+		ContainerRepo:  g.ContainerRepo,
+		Scheduler:      g.Scheduler,
+		Tailscale:      g.Tailscale,
+		RouteGroup:     g.rootRouteGroup,
+		TaskDispatcher: g.TaskDispatcher,
 	})
 	if err != nil {
 		return err
