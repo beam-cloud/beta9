@@ -47,13 +47,19 @@ func (t *FunctionTask) Retry(ctx context.Context) error {
 		return err
 	}
 
-	task, err := t.fs.backendRepo.GetTaskWithRelated(ctx, t.msg.TaskId)
+	taskId := t.msg.TaskId
+
+	task, err := t.fs.backendRepo.GetTaskWithRelated(ctx, taskId)
 	if err != nil {
 		return err
 	}
 
+	containerId := t.fs.genContainerId(taskId)
+	t.containerId = containerId
+
 	task.Status = types.TaskStatusRetry
-	_, err = t.fs.backendRepo.UpdateTask(ctx, t.msg.TaskId, task.Task)
+	task.ContainerId = containerId
+	_, err = t.fs.backendRepo.UpdateTask(ctx, taskId, task.Task)
 	if err != nil {
 		return err
 	}

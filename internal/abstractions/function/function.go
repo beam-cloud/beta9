@@ -16,6 +16,7 @@ import (
 	"github.com/beam-cloud/beta9/internal/task"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 )
 
@@ -340,7 +341,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 }
 
 func (fs *RunCFunctionService) genContainerId(taskId string) string {
-	return fmt.Sprintf("%s-%s", functionContainerPrefix, taskId)
+	return fmt.Sprintf("%s-%s-%s", functionContainerPrefix, taskId, uuid.New().String()[:8])
 }
 
 // Redis keys
