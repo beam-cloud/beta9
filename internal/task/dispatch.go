@@ -172,6 +172,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 						taskMessage.WorkspaceName, taskMessage.TaskId, taskMessage.StubId)
 
 					taskMessage.Retries += 1
+
 					msg, err := taskMessage.Encode()
 					if err != nil {
 						continue
