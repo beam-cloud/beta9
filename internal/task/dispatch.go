@@ -81,8 +81,6 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 		return nil, err
 	}
 
-	log.Printf("meta in dispatch: %+v\n", task.Metadata())
-
 	msg, err := taskMessage.Encode()
 	if err != nil {
 		return nil, err
