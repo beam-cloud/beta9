@@ -8,7 +8,6 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/repository"
-	repoCommon "github.com/beam-cloud/beta9/internal/repository/common"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -16,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	maps "golang.org/x/exp/maps"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -246,23 +246,20 @@ func (pr *PrometheusMetricsRepository) getHistogramVec(opts prometheus.Histogram
 }
 
 func (pr *PrometheusMetricsRepository) parseMetadata(metadata map[string]interface{}) (keys []string, values []string) {
-	slices := repoCommon.TwoSlices{
-		MainSlice:  make([]string, 0, len(metadata)),
-		OtherSlice: make([]string, 0, len(metadata)),
-	}
+	keys = maps.Keys(metadata)
+	values = make([]string, 0, len(metadata))
+	sort.Strings(keys)
 
-	for key, value := range metadata {
-		slices.MainSlice = append(slices.MainSlice, key)
+	for _, key := range keys {
+		val := metadata[key]
 
-		switch v := value.(type) {
+		switch v := val.(type) {
 		case string:
-			slices.OtherSlice = append(slices.OtherSlice, v)
+			values = append(values, v)
 		default:
-			slices.OtherSlice = append(slices.OtherSlice, fmt.Sprintf("%v", v))
+			values = append(values, fmt.Sprintf("%v", v))
 		}
 	}
 
-	sort.Sort(slices)
-
-	return slices.MainSlice, slices.OtherSlice
+	return keys, values
 }
