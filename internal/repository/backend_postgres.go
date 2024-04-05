@@ -16,6 +16,7 @@ import (
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
 )
@@ -690,4 +691,19 @@ func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, worksp
 	}
 
 	return &deployment, nil
+}
+
+func (c *PostgresBackendRepository) ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error) {
+	query := `
+		SELECT s.*, w.external_id AS "workspace.external_id", w.name AS "workspace.name"
+		FROM stub s
+		JOIN workspace w ON s.workspace_id = w.id
+		WHERE s.external_id = ANY($1);`
+	var stubs []types.StubWithRelated
+	err := c.client.SelectContext(ctx, &stubs, query, pq.Array(filters.StubIds))
+	if err != nil {
+		return nil, err
+	}
+
+	return stubs, nil
 }

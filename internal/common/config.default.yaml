@@ -137,3 +137,6 @@ monitoring:
       idleConnTimeout: 10s
       dialTimeout: 2s
       keepAlive: 30s
+  openmeter:
+    serverUrl: ""
+    apiKey: ""
