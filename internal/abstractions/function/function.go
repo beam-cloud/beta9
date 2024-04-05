@@ -107,7 +107,6 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (*FunctionTask, error) {
 	task, err := fs.taskDispatcher.Send(ctx, string(types.ExecutorFunction), authInfo.Workspace.Name, stubId, payload, types.DefaultTaskPolicy)
 	if err != nil {
-		log.Println("error on send: ", err)
 		return nil, err
 	}
 	return task.(*FunctionTask), err
@@ -187,7 +186,7 @@ func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.Fun
 		return &pb.FunctionSetResultResponse{Ok: false}, nil
 	}
 
-	err = fs.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, "", in.TaskId)
+	err = fs.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
 	if err != nil {
 		return &pb.FunctionSetResultResponse{Ok: false}, nil
 	}
@@ -272,12 +271,17 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 		stubConfig,
 	)
 
+	token, err := ft.fs.backendRepo.RetrieveActiveToken(ctx, stub.Workspace.Id)
+	if err != nil {
+		return err
+	}
+
 	err = ft.fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env: []string{
 			fmt.Sprintf("TASK_ID=%s", taskId),
 			fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
-			fmt.Sprintf("BETA9_TOKEN=%s", "FIXKEY"),
+			fmt.Sprintf("BETA9_TOKEN=%s", token.Key),
 			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		},
 		Cpu:         stubConfig.Runtime.Cpu,
@@ -306,7 +310,7 @@ func (ft *FunctionTask) Cancel(ctx context.Context) error {
 }
 
 func (ft *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
-	return false, nil
+	return true, nil
 }
 
 func (ft *FunctionTask) Metadata() types.TaskMetadata {
@@ -318,7 +322,6 @@ func (ft *FunctionTask) Metadata() types.TaskMetadata {
 }
 
 func (ft *FunctionTask) Stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo) error {
-	log.Println("called stream")
 	hostname, err := ft.fs.containerRepo.GetWorkerAddress(ft.containerId)
 	if err != nil {
 		return err

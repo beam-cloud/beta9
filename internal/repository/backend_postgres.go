@@ -124,18 +124,6 @@ func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context
 	return workspace, nil
 }
 
-func (r *PostgresBackendRepository) GetWorkspaceByName(ctx context.Context, name string) (types.Workspace, error) {
-	var workspace types.Workspace
-
-	query := `SELECT id, name, created_at FROM workspace WHERE name = $1;`
-	err := r.client.GetContext(ctx, &workspace, query, name)
-	if err != nil {
-		return types.Workspace{}, err
-	}
-
-	return workspace, nil
-}
-
 // Token
 
 const tokenLength = 64
