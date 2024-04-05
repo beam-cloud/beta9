@@ -93,7 +93,10 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 
 	ctx := stream.Context()
-	task, err := fs.invoke(ctx, authInfo, in.StubId, &types.TaskPayload{})
+
+	task, err := fs.invoke(ctx, authInfo, in.StubId, &types.TaskPayload{
+		Args: []interface{}{in.Args},
+	})
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package function
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,8 @@ type FunctionTask struct {
 	fs          *RunCFunctionService
 	containerId string
 }
+
+var cloudPickleHeader []byte = []byte{0x80, 0x05, 0x95}
 
 func (ft *FunctionTask) Execute(ctx context.Context) error {
 	stub, err := ft.fs.backendRepo.GetStubByExternalId(ctx, ft.msg.StubId)
@@ -49,6 +52,14 @@ func (ft *FunctionTask) Execute(ctx context.Context) error {
 	})
 	if err != nil {
 		return err
+	}
+
+	// If ft.msg.Args has exactly one element and it is a []byte, check for magic bytes
+	// This means the payload was cloudpickled
+	if len(ft.msg.Args) == 1 {
+		if arg, ok := ft.msg.Args[0].([]byte); ok && bytes.HasPrefix(arg, cloudPickleHeader) {
+			args = arg
+		}
 	}
 
 	err = ft.fs.rdb.Set(ctx, Keys.FunctionArgs(stub.Workspace.Name, taskId), args, functionArgsExpirationTimeout).Err()
