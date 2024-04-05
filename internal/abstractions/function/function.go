@@ -100,10 +100,26 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return err
 	}
 
-	return fs.Stream(ctx, stream, authInfo, task)
+	return fs.stream(ctx, stream, authInfo, task)
 }
 
-func (fs *RunCFunctionService) Stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface) error {
+func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (types.TaskInterface, error) {
+	task, err := fs.taskDispatcher.Send(ctx, string(types.ExecutorFunction), authInfo.Workspace.Name, stubId, payload, types.DefaultTaskPolicy)
+	if err != nil {
+		return nil, err
+	}
+
+	return task, err
+}
+
+func (fs *RunCFunctionService) functionTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
+	return &FunctionTask{
+		msg: &msg,
+		fs:  fs,
+	}, nil
+}
+
+func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface) error {
 	meta := task.Metadata()
 
 	hostname, err := fs.containerRepo.GetWorkerAddress(meta.ContainerId)
@@ -131,22 +147,6 @@ func (fs *RunCFunctionService) Stream(ctx context.Context, stream pb.FunctionSer
 
 	go client.StreamLogs(ctx, meta.ContainerId, outputChan)
 	return fs.handleStreams(ctx, stream, authInfo.Workspace.Name, meta.TaskId, meta.ContainerId, outputChan, keyEventChan)
-}
-
-func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (types.TaskInterface, error) {
-	task, err := fs.taskDispatcher.Send(ctx, string(types.ExecutorFunction), authInfo.Workspace.Name, stubId, payload, types.DefaultTaskPolicy)
-	if err != nil {
-		return nil, err
-	}
-
-	return task, err
-}
-
-func (fs *RunCFunctionService) functionTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
-	return &FunctionTask{
-		msg: &msg,
-		fs:  fs,
-	}, nil
 }
 
 func (fs *RunCFunctionService) handleStreams(
