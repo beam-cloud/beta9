@@ -81,6 +81,12 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 		{"g5.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "A10G", 1}},
 		{"g5.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "A10G", 1}},
 
+		{"g6.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "G6", 1}},
+		{"g6.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "G6", 1}},
+		{"g6.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "G6", 1}},
+		{"g6.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "G6", 1}},
+		{"g6.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "G6", 1}},
+
 		{"m7i.large", InstanceSpec{2 * 1000, 8 * 1024, "", 0}},
 		{"m7i.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "", 0}},
 		{"m7i.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "", 0}},
