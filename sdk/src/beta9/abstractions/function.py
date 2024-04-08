@@ -137,7 +137,7 @@ class _CallableWrapper:
         ):
             return False
 
-        self.parent.watch_dir("./")
+        self.parent.watch_dir(os.getcwd())
 
     def deploy(self, name: str) -> bool:
         if not self.parent.prepare_runtime(

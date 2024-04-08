@@ -6,6 +6,7 @@ from typing import Callable, List, Optional, Union
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from ... import terminal
 from ...abstractions.base import BaseAbstraction
 from ...abstractions.image import Image, ImageBuildResult
 from ...abstractions.volume import Volume
@@ -24,15 +25,15 @@ FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
 class SyncEventHandler(FileSystemEventHandler):
     def on_created(self, event):
         if not event.is_directory:
-            print(f"File created: {event.src_path}")
+            terminal.detail(f"File created: {event.src_path}")
 
     def on_modified(self, event):
         if not event.is_directory:
-            print(f"File modified: {event.src_path}")
+            terminal.detail(f"File modified: {event.src_path}")
 
     def on_deleted(self, event):
         if not event.is_directory:
-            print(f"File deleted: {event.src_path}")
+            terminal.detail(f"File deleted: {event.src_path}")
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -137,7 +138,7 @@ class RunnerAbstraction(BaseAbstraction):
         observer.schedule(event_handler, dir, recursive=True)
         observer.start()
 
-        print("Monitoring started on path: ", dir)
+        terminal.detail(f"Watching {dir} for changes...")
         try:
             while True:
                 time.sleep(1)
