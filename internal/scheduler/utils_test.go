@@ -175,6 +175,12 @@ func TestParseGPUType(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "valid gpu l4",
+			gpuType: "L4",
+			wantVal: types.GPU_L4,
+			wantErr: false,
+		},
+		{
 			name:    "valid gpu a100-40 (with hyphen)",
 			gpuType: "A100-40",
 			wantVal: types.GPU_A100_40,
