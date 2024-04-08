@@ -10,6 +10,8 @@ service GatewayService {
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
   rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
+  rpc ReplaceObjectContent(stream ReplaceObjectContentRequest)
+      returns (ReplaceObjectContentResponse) {}
   rpc StartTask(StartTaskRequest) returns (StartTaskResponse);
   rpc EndTask(EndTaskRequest) returns (EndTaskResponse);
   rpc StopTask(StopTaskRequest) returns (StopTaskResponse);
@@ -54,6 +56,10 @@ message PutObjectResponse {
   string object_id = 2;
   string error_msg = 3;
 }
+
+message ReplaceObjectContentRequest { bytes content = 1; }
+
+message ReplaceObjectContentResponse { string hash = 1; }
 
 // Task queue messages
 message StartTaskRequest {

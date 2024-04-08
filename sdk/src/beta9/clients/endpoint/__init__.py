@@ -51,6 +51,7 @@ class EndpointServiceStub(betterproto.ServiceStub):
 
 
 class EndpointServiceBase(ServiceBase):
+
     async def endpoint_serve(
         self, endpoint_serve_request: "EndpointServeRequest"
     ) -> "EndpointServeResponse":

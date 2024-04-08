@@ -5,12 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"log"
 	"os"
 	"path"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
@@ -143,4 +146,27 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 		Ok:       true,
 		ObjectId: newObject.ExternalId,
 	})
+}
+
+func (gws *GatewayService) ReplaceObjectContent(stream pb.GatewayService_ReplaceObjectContentServer) error {
+	ctx := stream.Context()
+
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	log.Printf("auth info: %+v\n", authInfo)
+
+	for {
+		req, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			return status.Errorf(codes.Unknown, "Received an error: %v", err)
+		}
+
+		log.Printf("content: %+v\n", req.Content)
+	}
+
+	return stream.SendAndClose(&pb.ReplaceObjectContentResponse{Hash: "fake"})
 }

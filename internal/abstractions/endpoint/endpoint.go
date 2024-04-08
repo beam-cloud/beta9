@@ -39,7 +39,7 @@ var (
 )
 
 var RingBufferSize int = 10000000
-var RequestTimeout = 120 * time.Second
+var RequestTimeout = 180 * time.Second
 
 type EndpointServiceOpts struct {
 	Config      types.AppConfig

@@ -76,6 +76,16 @@ class PutObjectResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class ReplaceObjectContentRequest(betterproto.Message):
+    content: bytes = betterproto.bytes_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class ReplaceObjectContentResponse(betterproto.Message):
+    hash: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
 class StartTaskRequest(betterproto.Message):
     """Task queue messages"""
 
@@ -268,6 +278,27 @@ class GatewayServiceStub(betterproto.ServiceStub):
             metadata=metadata,
         )
 
+    async def replace_object_content(
+        self,
+        replace_object_content_request_iterator: Union[
+            AsyncIterable["ReplaceObjectContentRequest"],
+            Iterable["ReplaceObjectContentRequest"],
+        ],
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "ReplaceObjectContentResponse":
+        return await self._stream_unary(
+            "/gateway.GatewayService/ReplaceObjectContent",
+            replace_object_content_request_iterator,
+            ReplaceObjectContentRequest,
+            ReplaceObjectContentResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
     async def start_task(
         self,
         start_task_request: "StartTaskRequest",
@@ -372,6 +403,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
 
 
 class GatewayServiceBase(ServiceBase):
+
     async def authorize(
         self, authorize_request: "AuthorizeRequest"
     ) -> "AuthorizeResponse":
@@ -390,6 +422,14 @@ class GatewayServiceBase(ServiceBase):
     async def put_object_stream(
         self, put_object_request_iterator: AsyncIterator["PutObjectRequest"]
     ) -> "PutObjectResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def replace_object_content(
+        self,
+        replace_object_content_request_iterator: AsyncIterator[
+            "ReplaceObjectContentRequest"
+        ],
+    ) -> "ReplaceObjectContentResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
     async def start_task(
@@ -446,6 +486,14 @@ class GatewayServiceBase(ServiceBase):
     ) -> None:
         request = stream.__aiter__()
         response = await self.put_object_stream(request)
+        await stream.send_message(response)
+
+    async def __rpc_replace_object_content(
+        self,
+        stream: "grpclib.server.Stream[ReplaceObjectContentRequest, ReplaceObjectContentResponse]",
+    ) -> None:
+        request = stream.__aiter__()
+        response = await self.replace_object_content(request)
         await stream.send_message(response)
 
     async def __rpc_start_task(
@@ -516,6 +564,12 @@ class GatewayServiceBase(ServiceBase):
                 grpclib.const.Cardinality.STREAM_UNARY,
                 PutObjectRequest,
                 PutObjectResponse,
+            ),
+            "/gateway.GatewayService/ReplaceObjectContent": grpclib.const.Handler(
+                self.__rpc_replace_object_content,
+                grpclib.const.Cardinality.STREAM_UNARY,
+                ReplaceObjectContentRequest,
+                ReplaceObjectContentResponse,
             ),
             "/gateway.GatewayService/StartTask": grpclib.const.Handler(
                 self.__rpc_start_task,
