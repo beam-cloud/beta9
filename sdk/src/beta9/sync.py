@@ -15,6 +15,7 @@ from .clients.gateway import (
     HeadObjectRequest,
     HeadObjectResponse,
     ObjectMetadata,
+    PutObjectRequest,
     PutObjectResponse,
 )
 
