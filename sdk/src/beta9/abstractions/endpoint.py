@@ -95,4 +95,4 @@ class _CallableWrapper:
         )
         print(serve_response)
 
-        self.parent.sync_folder_to_workspace(dir=os.getcwd(), object_id=self.parent.object_id)
+        self.parent.sync_dir_to_workspace(dir=os.getcwd(), object_id=self.parent.object_id)

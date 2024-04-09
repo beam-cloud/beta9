@@ -3,7 +3,6 @@ import os
 from queue import Queue
 from typing import Callable, List, Optional, Union
 
-from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from ... import terminal
@@ -17,7 +16,7 @@ from ...clients.gateway import (
     ReplaceObjectContentOperation,
     ReplaceObjectContentRequest,
 )
-from ...sync import FileSyncer
+from ...sync import FileSyncer, SyncEventHandler
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -29,32 +28,6 @@ FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
 TASKQUEUE_SERVE_STUB_TYPE = "taskqueue/serve"
 ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
 FUNCTION_SERVE_STUB_TYPE = "function/serve"
-
-
-class SyncEventHandler(FileSystemEventHandler):
-    def __init__(self, queue: Queue):
-        super().__init__()
-        self.queue = queue
-
-    def on_created(self, event):
-        if not event.is_directory:
-            self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path))
-
-        terminal.detail(f"File created: {event.src_path}")
-
-    def on_modified(self, event):
-        if not event.is_directory:
-            self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path))
-
-        terminal.detail(f"File modified: {event.src_path}")
-
-    def on_deleted(self, event):
-        if event.is_directory:
-            terminal.detail(f"Folder deleted: {event.src_path}")
-        else:
-            terminal.detail(f"File deleted: {event.src_path}")
-
-        self.queue.put((ReplaceObjectContentOperation.DELETE, event.src_path))
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -174,7 +147,7 @@ class RunnerAbstraction(BaseAbstraction):
 
             file_update_queue.task_done()
 
-    def sync_folder_to_workspace(self, *, dir: str, object_id: str) -> None:
+    def sync_dir_to_workspace(self, *, dir: str, object_id: str) -> None:
         file_update_queue = Queue()
         event_handler = SyncEventHandler(file_update_queue)
 
