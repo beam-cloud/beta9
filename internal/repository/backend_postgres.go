@@ -281,6 +281,30 @@ func (r *PostgresBackendRepository) GetObjectByExternalId(ctx context.Context, e
 	return object, nil
 }
 
+func (r *PostgresBackendRepository) UpdateObjectSizeByExternalId(ctx context.Context, externalId string, size int) error {
+	query := `
+	UPDATE object
+	SET size = $2
+	WHERE external_id = $1;
+	`
+	_, err := r.client.ExecContext(ctx, query, externalId, size)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *PostgresBackendRepository) DeleteObjectByExternalId(ctx context.Context, externalId string) error {
+	query := `DELETE FROM object WHERE external_id = $1;`
+	_, err := r.client.ExecContext(ctx, query, externalId)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Task
 
 func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error) {
@@ -567,8 +591,8 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	var deploymentWithRelated types.DeploymentWithRelated
 
 	query := `
-        SELECT d.*, 
-               w.external_id AS "workspace.external_id", w.name AS "workspace.name", 
+        SELECT d.*,
+               w.external_id AS "workspace.external_id", w.name AS "workspace.name",
                s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
@@ -589,8 +613,8 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
 	var deploymentWithRelated types.DeploymentWithRelated
 
 	query := `
-        SELECT d.*, 
-               w.external_id AS "workspace.external_id", w.name AS "workspace.name", 
+        SELECT d.*,
+               w.external_id AS "workspace.external_id", w.name AS "workspace.name",
                s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id

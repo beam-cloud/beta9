@@ -7,7 +7,7 @@ MarkupSafe==2.0.0
 statsd==4.0.1
 websockets==11.0.3
 pydantic==2.1.1
-betterproto==1.2.5
+betterproto==v2.0.0-beta6
 grpcio==1.57.0
 httpx==0.24.1
 bson==0.5.10

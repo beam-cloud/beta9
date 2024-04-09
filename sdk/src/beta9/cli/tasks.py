@@ -9,7 +9,9 @@ from ..cli.contexts import get_gateway_service
 from ..cli.formatters import EpilogFormatter
 from ..clients.gateway import (
     GatewayServiceStub,
+    ListTasksRequest,
     ListTasksResponse,
+    StopTaskRequest,
     StopTaskResponse,
     StringList,
 )
@@ -82,7 +84,9 @@ def parse_filter_values(
 )
 @click.pass_obj
 def list_tasks(service: GatewayServiceStub, limit: int, format: str, filter: Dict[str, StringList]):
-    response: ListTasksResponse = aio.run_sync(service.list_tasks(filters=filter, limit=limit))
+    response: ListTasksResponse = aio.run_sync(
+        service.list_tasks(ListTasksRequest(filters=filter, limit=limit))
+    )
 
     if not response.ok:
         terminal.error(response.err_msg)
@@ -133,7 +137,7 @@ def list_tasks(service: GatewayServiceStub, limit: int, format: str, filter: Dic
 )
 @click.pass_obj
 def stop_task(service: GatewayServiceStub, task_id: str):
-    response: StopTaskResponse = aio.run_sync(service.stop_task(task_id=task_id))
+    response: StopTaskResponse = aio.run_sync(service.stop_task(StopTaskRequest(task_id=task_id)))
 
     if response.ok:
         terminal.detail(f"Stopped task {task_id}", dim=False)

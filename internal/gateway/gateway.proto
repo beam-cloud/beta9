@@ -9,6 +9,7 @@ service GatewayService {
   rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse) {}
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
   rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
+  rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
   rpc StartTask(StartTaskRequest) returns (StartTaskResponse);
   rpc EndTask(EndTaskRequest) returns (EndTaskResponse);
   rpc StopTask(StopTaskRequest) returns (StopTaskResponse);

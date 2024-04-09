@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"os"
 	"path"
 
@@ -72,4 +73,74 @@ func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectReques
 		Ok:       true,
 		ObjectId: newObject.ExternalId,
 	}, nil
+}
+
+func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStreamServer) error {
+	ctx := stream.Context()
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
+	os.MkdirAll(objectPath, 0644)
+
+	var size int
+	var file *os.File
+	var newObject types.Object
+
+	for {
+		request, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return stream.SendAndClose(&pb.PutObjectResponse{
+				Ok:       false,
+				ErrorMsg: "Unable to receive stream of bytes",
+			})
+		}
+
+		if file == nil {
+			newObject, err = gws.backendRepo.CreateObject(ctx, request.Hash, 0, authInfo.Workspace.Id)
+			if err != nil {
+				return stream.SendAndClose(&pb.PutObjectResponse{
+					Ok:       false,
+					ErrorMsg: "Unable to create object",
+				})
+			}
+
+			file, err = os.Create(path.Join(objectPath, newObject.ExternalId))
+			if err != nil {
+				gws.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
+				return stream.SendAndClose(&pb.PutObjectResponse{
+					Ok:       false,
+					ErrorMsg: "Unable to create file",
+				})
+			}
+			defer file.Close()
+		}
+
+		s, err := file.Write(request.ObjectContent)
+		if err != nil {
+			os.Remove(path.Join(objectPath, newObject.ExternalId))
+			gws.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
+			return stream.SendAndClose(&pb.PutObjectResponse{
+				Ok:       false,
+				ErrorMsg: "Unable to write file content",
+			})
+		}
+		size += s
+	}
+
+	if err := gws.backendRepo.UpdateObjectSizeByExternalId(ctx, newObject.ExternalId, size); err != nil {
+		os.Remove(path.Join(objectPath, newObject.ExternalId))
+		gws.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
+		return stream.SendAndClose(&pb.PutObjectResponse{
+			Ok:       false,
+			ErrorMsg: "Unable to complete file upload",
+		})
+	}
+
+	return stream.SendAndClose(&pb.PutObjectResponse{
+		Ok:       true,
+		ObjectId: newObject.ExternalId,
+	})
 }

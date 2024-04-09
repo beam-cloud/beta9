@@ -22,6 +22,7 @@ const (
 	GatewayService_Authorize_FullMethodName       = "/gateway.GatewayService/Authorize"
 	GatewayService_HeadObject_FullMethodName      = "/gateway.GatewayService/HeadObject"
 	GatewayService_PutObject_FullMethodName       = "/gateway.GatewayService/PutObject"
+	GatewayService_PutObjectStream_FullMethodName = "/gateway.GatewayService/PutObjectStream"
 	GatewayService_StartTask_FullMethodName       = "/gateway.GatewayService/StartTask"
 	GatewayService_EndTask_FullMethodName         = "/gateway.GatewayService/EndTask"
 	GatewayService_StopTask_FullMethodName        = "/gateway.GatewayService/StopTask"
@@ -37,6 +38,7 @@ type GatewayServiceClient interface {
 	Authorize(ctx context.Context, in *AuthorizeRequest, opts ...grpc.CallOption) (*AuthorizeResponse, error)
 	HeadObject(ctx context.Context, in *HeadObjectRequest, opts ...grpc.CallOption) (*HeadObjectResponse, error)
 	PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error)
+	PutObjectStream(ctx context.Context, opts ...grpc.CallOption) (GatewayService_PutObjectStreamClient, error)
 	StartTask(ctx context.Context, in *StartTaskRequest, opts ...grpc.CallOption) (*StartTaskResponse, error)
 	EndTask(ctx context.Context, in *EndTaskRequest, opts ...grpc.CallOption) (*EndTaskResponse, error)
 	StopTask(ctx context.Context, in *StopTaskRequest, opts ...grpc.CallOption) (*StopTaskResponse, error)
@@ -78,6 +80,40 @@ func (c *gatewayServiceClient) PutObject(ctx context.Context, in *PutObjectReque
 		return nil, err
 	}
 	return out, nil
+}
+
+func (c *gatewayServiceClient) PutObjectStream(ctx context.Context, opts ...grpc.CallOption) (GatewayService_PutObjectStreamClient, error) {
+	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[0], GatewayService_PutObjectStream_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &gatewayServicePutObjectStreamClient{stream}
+	return x, nil
+}
+
+type GatewayService_PutObjectStreamClient interface {
+	Send(*PutObjectRequest) error
+	CloseAndRecv() (*PutObjectResponse, error)
+	grpc.ClientStream
+}
+
+type gatewayServicePutObjectStreamClient struct {
+	grpc.ClientStream
+}
+
+func (x *gatewayServicePutObjectStreamClient) Send(m *PutObjectRequest) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *gatewayServicePutObjectStreamClient) CloseAndRecv() (*PutObjectResponse, error) {
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	m := new(PutObjectResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (c *gatewayServiceClient) StartTask(ctx context.Context, in *StartTaskRequest, opts ...grpc.CallOption) (*StartTaskResponse, error) {
@@ -141,6 +177,7 @@ type GatewayServiceServer interface {
 	Authorize(context.Context, *AuthorizeRequest) (*AuthorizeResponse, error)
 	HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error)
 	PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error)
+	PutObjectStream(GatewayService_PutObjectStreamServer) error
 	StartTask(context.Context, *StartTaskRequest) (*StartTaskResponse, error)
 	EndTask(context.Context, *EndTaskRequest) (*EndTaskResponse, error)
 	StopTask(context.Context, *StopTaskRequest) (*StopTaskResponse, error)
@@ -162,6 +199,9 @@ func (UnimplementedGatewayServiceServer) HeadObject(context.Context, *HeadObject
 }
 func (UnimplementedGatewayServiceServer) PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PutObject not implemented")
+}
+func (UnimplementedGatewayServiceServer) PutObjectStream(GatewayService_PutObjectStreamServer) error {
+	return status.Errorf(codes.Unimplemented, "method PutObjectStream not implemented")
 }
 func (UnimplementedGatewayServiceServer) StartTask(context.Context, *StartTaskRequest) (*StartTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StartTask not implemented")
@@ -246,6 +286,32 @@ func _GatewayService_PutObject_Handler(srv interface{}, ctx context.Context, dec
 		return srv.(GatewayServiceServer).PutObject(ctx, req.(*PutObjectRequest))
 	}
 	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_PutObjectStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(GatewayServiceServer).PutObjectStream(&gatewayServicePutObjectStreamServer{stream})
+}
+
+type GatewayService_PutObjectStreamServer interface {
+	SendAndClose(*PutObjectResponse) error
+	Recv() (*PutObjectRequest, error)
+	grpc.ServerStream
+}
+
+type gatewayServicePutObjectStreamServer struct {
+	grpc.ServerStream
+}
+
+func (x *gatewayServicePutObjectStreamServer) SendAndClose(m *PutObjectResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *gatewayServicePutObjectStreamServer) Recv() (*PutObjectRequest, error) {
+	m := new(PutObjectRequest)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func _GatewayService_StartTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -400,6 +466,12 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GatewayService_DeployStub_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "PutObjectStream",
+			Handler:       _GatewayService_PutObjectStream_Handler,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "gateway.proto",
 }
