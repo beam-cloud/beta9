@@ -45,7 +45,7 @@ class TestRunner(unittest.TestCase):
 
     def test_cpu_parsing_non_numeric_input(self):
         with self.assertRaises(TypeError):
-            self.runner._parse_cpu_to_millicores([])
+            self.runner._parse_cpu_to_millicores([])  # type:ignore[reportArgumentType]
 
         with self.assertRaises(TypeError):
-            self.runner._parse_cpu_to_millicores({})
+            self.runner._parse_cpu_to_millicores({})  # type:ignore[reportArgumentType]
