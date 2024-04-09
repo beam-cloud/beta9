@@ -131,14 +131,6 @@ class _CallableWrapper:
     def remote(self, *args, **kwargs) -> Any:
         return self(*args, **kwargs)
 
-    def serve(self):
-        if not self.parent.prepare_runtime(
-            func=self.func, stub_type=FUNCTION_STUB_TYPE, force_create_stub=True
-        ):
-            return False
-
-        self.parent.watch_dir(os.getcwd())
-
     def deploy(self, name: str) -> bool:
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=FUNCTION_DEPLOYMENT_STUB_TYPE, force_create_stub=True

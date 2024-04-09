@@ -11,10 +11,10 @@ import (
 
 type endpointGroup struct {
 	routeGroup *echo.Group
-	es         *RingBufferEndpointService
+	es         *HttpEndpointService
 }
 
-func registerEndpointRoutes(g *echo.Group, es *RingBufferEndpointService) *endpointGroup {
+func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGroup {
 	group := &endpointGroup{routeGroup: g, es: es}
 
 	g.GET("/id/:stubId/", group.endpointRequest)

@@ -10,7 +10,12 @@ from ... import terminal
 from ...abstractions.base import BaseAbstraction
 from ...abstractions.image import Image, ImageBuildResult
 from ...abstractions.volume import Volume
-from ...clients.gateway import GatewayServiceStub, GetOrCreateStubRequest, GetOrCreateStubResponse
+from ...clients.gateway import (
+    GatewayServiceStub,
+    GetOrCreateStubRequest,
+    GetOrCreateStubResponse,
+    ReplaceObjectContentRequest,
+)
 from ...sync import FileSyncer
 
 CONTAINER_STUB_TYPE = "container"
@@ -20,6 +25,9 @@ WEBSERVER_STUB_TYPE = "endpoint"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
+TASKQUEUE_SERVE_STUB_TYPE = "taskqueue/serve"
+ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
+FUNCTION_SERVE_STUB_TYPE = "function/serve"
 
 
 class SyncEventHandler(FileSystemEventHandler):
@@ -131,7 +139,11 @@ class RunnerAbstraction(BaseAbstraction):
         function_name = func.__name__
         self.handler = f"{module_name}:{function_name}"
 
-    def watch_dir(self, dir: str):
+    def _iterator(self):
+        for i in range(10):
+            yield ReplaceObjectContentRequest(content=bytes([i]))
+
+    def sync_folder_to_workspace(self, dir: str):
         event_handler = SyncEventHandler()
 
         observer = Observer()
@@ -142,6 +154,11 @@ class RunnerAbstraction(BaseAbstraction):
         try:
             while True:
                 time.sleep(1)
+                self.run_sync(
+                    self.gateway_stub.replace_object_content(
+                        replace_object_content_request_iterator=self._iterator()
+                    )
+                )
         except KeyboardInterrupt:
             observer.stop()
 

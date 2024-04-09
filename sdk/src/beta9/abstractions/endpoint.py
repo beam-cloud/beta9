@@ -4,9 +4,11 @@ from typing import Any, Callable, Union
 from .. import terminal
 from ..abstractions.base.runner import (
     ENDPOINT_DEPLOYMENT_STUB_TYPE,
+    ENDPOINT_SERVE_STUB_TYPE,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
+from ..clients.endpoint import EndpointServeRequest, EndpointServeResponse, EndpointServiceStub
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..config import GatewayConfig, get_gateway_config
 
@@ -38,6 +40,8 @@ class Endpoint(RunnerAbstraction):
             max_pending_tasks=max_pending_tasks,
         )
 
+        self.endpoint_stub: EndpointServiceStub = EndpointServiceStub(self.channel)
+
     def __call__(self, func):
         return _CallableWrapper(func, self)
 
@@ -52,10 +56,7 @@ class _CallableWrapper:
         if container_id is not None:
             return self.local(*args, **kwargs)
 
-        raise NotImplementedError(
-            "Direct calls to TaskQueues are not yet supported."
-            + " To enqueue items use .put(*args, **kwargs)"
-        )
+        raise NotImplementedError("Direct calls to Endpoints are not supported.")
 
     def deploy(self, name: str) -> bool:
         if not self.parent.prepare_runtime(
@@ -76,7 +77,22 @@ class _CallableWrapper:
 
             terminal.header("Deployed 🎉")
             terminal.detail(
-                f"Call your deployment at: {gateway_url}/api/v1/endpoint/{name}/v{deploy_response.version}"
+                f"Call your deployment at: {gateway_url}/endpoint/{name}/v{deploy_response.version}"
             )
 
         return deploy_response.ok
+
+    def serve(self):
+        if not self.parent.prepare_runtime(
+            func=self.func, stub_type=ENDPOINT_SERVE_STUB_TYPE, force_create_stub=True
+        ):
+            return False
+
+        serve_response: EndpointServeResponse = self.parent.run_sync(
+            self.parent.endpoint_stub.endpoint_serve(
+                EndpointServeRequest(stub_id=self.parent.stub_id)
+            )
+        )
+        print(serve_response)
+
+        # self.parent.sync_folder_to_workspace(os.getcwd())

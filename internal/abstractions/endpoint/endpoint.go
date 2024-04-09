@@ -20,9 +20,10 @@ import (
 
 type EndpointService interface {
 	pb.EndpointServiceServer
+	EndpointServe(context.Context, *pb.EndpointServeRequest) (*pb.EndpointServeResponse, error)
 }
 
-type RingBufferEndpointService struct {
+type HttpEndpointService struct {
 	pb.UnimplementedEndpointServiceServer
 	ctx               context.Context
 	rdb               *common.RedisClient
@@ -66,7 +67,7 @@ func NewEndpointService(
 
 	containerRepo := repository.NewContainerRedisRepository(opts.RedisClient)
 
-	es := &RingBufferEndpointService{
+	es := &HttpEndpointService{
 		ctx:               ctx,
 		rdb:               opts.RedisClient,
 		scheduler:         opts.Scheduler,
@@ -83,7 +84,13 @@ func NewEndpointService(
 	return es, nil
 }
 
-func (es *RingBufferEndpointService) forwardRequest(
+func (es *HttpEndpointService) EndpointServe(ctx context.Context, in *pb.EndpointServeRequest) (*pb.EndpointServeResponse, error) {
+	// authInfo, _ := auth.AuthInfoFromContext(ctx)
+	// workspaceName := authInfo.Workspace.Name
+	return &pb.EndpointServeResponse{}, nil
+}
+
+func (es *HttpEndpointService) forwardRequest(
 	ctx echo.Context,
 	stubId string,
 ) error {
@@ -102,7 +109,7 @@ func (es *RingBufferEndpointService) forwardRequest(
 	return instances.buffer.ForwardRequest(ctx)
 }
 
-func (es *RingBufferEndpointService) createEndpointInstance(stubId string) error {
+func (es *HttpEndpointService) createEndpointInstance(stubId string) error {
 	_, exists := es.endpointInstances.Get(stubId)
 	if exists {
 		return errors.New("endpoint already in memory")
