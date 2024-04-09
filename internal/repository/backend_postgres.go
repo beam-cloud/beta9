@@ -295,6 +295,16 @@ func (r *PostgresBackendRepository) UpdateObjectSizeByExternalId(ctx context.Con
 	return nil
 }
 
+func (r *PostgresBackendRepository) DeleteObjectSizeByExternalId(ctx context.Context, externalId string) error {
+	query := `DELETE FROM object WHERE external_id = $1;`
+	_, err := r.client.ExecContext(ctx, query, externalId)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Task
 
 func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error) {
