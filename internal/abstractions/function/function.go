@@ -3,7 +3,6 @@ package function
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -157,51 +156,6 @@ func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionSer
 	}
 
 	return logStream.Stream(ctx, authInfo, containerId)
-}
-
-func (fs *RunCFunctionService) handleStreams(
-	ctx context.Context,
-	stream pb.FunctionService_FunctionInvokeServer,
-	workspaceName, taskId, containerId string,
-	outputChan chan common.OutputMsg,
-	keyEventChan chan common.KeyEvent,
-) error {
-
-	var lastMessage common.OutputMsg
-
-_stream:
-	for {
-		select {
-		case o := <-outputChan:
-			if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg, Done: o.Done}); err != nil {
-				lastMessage = o
-				break
-			}
-
-			if o.Done {
-				lastMessage = o
-				break _stream
-			}
-		case <-keyEventChan:
-			exitCode, err := fs.containerRepo.GetContainerExitCode(containerId)
-			if err != nil {
-				exitCode = -1
-			}
-
-			result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(workspaceName, taskId)).Bytes()
-			if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: int32(exitCode)}); err != nil {
-				break _stream
-			}
-		case <-ctx.Done():
-			return nil
-		}
-	}
-
-	if !lastMessage.Success {
-		return errors.New("function failed")
-	}
-
-	return nil
 }
 
 func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {

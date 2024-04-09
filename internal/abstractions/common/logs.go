@@ -87,11 +87,6 @@ _stream:
 				break
 			}
 
-			// if err := stream.Send(&pb.EndpointServeResponse{Output: o.Msg, Done: o.Done}); err != nil {
-			// 	lastMessage = o
-			// 	break
-			// }
-
 			if o.Done {
 				lastMessage = o
 				break _stream
@@ -105,10 +100,6 @@ _stream:
 			if err := l.exitCallback(int32(exitCode)); err != nil {
 				break _stream
 			}
-
-			// if err := stream.Send(&pb.EndpointServeResponse{Done: true, ExitCode: int32(exitCode)}); err != nil {
-			// 	break _stream
-			// }
 
 		case <-ctx.Done():
 			return nil
