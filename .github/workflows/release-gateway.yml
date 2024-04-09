@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build_and_release_gateway:
-    if: startsWith(github.ref, 'refs/tags/gateway-')
+    if: startsWith(github.ref, 'refs/tags/gateway-') || inputs.app_version != ''
     environment: Release
     runs-on: ubuntu-latest
 
