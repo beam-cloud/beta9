@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/auth"
@@ -32,6 +34,8 @@ type HttpEndpointService struct {
 	containerRepo     repository.ContainerRepository
 	endpointInstances *common.SafeMap[*endpointInstance]
 	tailscale         *network.Tailscale
+	keyEventManager   *common.KeyEventManager
+	keyEventChan      chan common.KeyEvent
 }
 
 var (
@@ -54,6 +58,14 @@ func NewEndpointService(
 	ctx context.Context,
 	opts EndpointServiceOpts,
 ) (EndpointService, error) {
+	keyEventChan := make(chan common.KeyEvent)
+	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
+	if err != nil {
+		return nil, err
+	}
+
+	go keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(endpointContainerPrefix), keyEventChan)
+
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
 		return nil, err
@@ -70,12 +82,16 @@ func NewEndpointService(
 	es := &HttpEndpointService{
 		ctx:               ctx,
 		rdb:               opts.RedisClient,
+		keyEventChan:      keyEventChan,
+		keyEventManager:   keyEventManager,
 		scheduler:         opts.Scheduler,
 		backendRepo:       backendRepo,
 		containerRepo:     containerRepo,
 		endpointInstances: common.NewSafeMap[*endpointInstance](),
 		tailscale:         opts.Tailscale,
 	}
+
+	go es.handleContainerEvents()
 
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(backendRepo)
@@ -87,10 +103,51 @@ func NewEndpointService(
 func (es *HttpEndpointService) EndpointServe(ctx context.Context, in *pb.EndpointServeRequest) (*pb.EndpointServeResponse, error) {
 	// authInfo, _ := auth.AuthInfoFromContext(ctx)
 	// workspaceName := authInfo.Workspace.Name
+	// TODO: check auth here (on stubId/authInfo)
+
 	err := es.createEndpointInstance(in.StubId)
 	return &pb.EndpointServeResponse{
 		Ok: err == nil,
 	}, nil
+}
+
+func (es *HttpEndpointService) handleContainerEvents() {
+	for {
+		select {
+		case event := <-es.keyEventChan:
+			containerId := fmt.Sprintf("%s%s", endpointContainerPrefix, event.Key)
+
+			operation := event.Operation
+			containerIdParts := strings.Split(containerId, "-")
+			stubId := strings.Join(containerIdParts[1:6], "-")
+
+			instance, exists := es.endpointInstances.Get(stubId)
+			if !exists {
+				err := es.createEndpointInstance(stubId)
+				if err != nil {
+					continue
+				}
+
+				instance, _ = es.endpointInstances.Get(stubId)
+			}
+
+			switch operation {
+			case common.KeyOperationSet, common.KeyOperationHSet:
+				instance.containerEventChan <- types.ContainerEvent{
+					ContainerId: containerId,
+					Change:      +1,
+				}
+			case common.KeyOperationDel, common.KeyOperationExpired:
+				instance.containerEventChan <- types.ContainerEvent{
+					ContainerId: containerId,
+					Change:      -1,
+				}
+			}
+
+		case <-es.ctx.Done():
+			return
+		}
+	}
 }
 
 // Forward request to endpoint
@@ -165,7 +222,10 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string) error {
 	go func(q *endpointInstance) {
 		<-q.ctx.Done()
 		es.endpointInstances.Delete(stubId)
+		log.Println("cleaned up my guy.")
 	}(instance)
+
+	log.Println("created the instance.")
 
 	return nil
 }

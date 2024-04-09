@@ -10,7 +10,6 @@ import (
 
 type autoscaler struct {
 	instance         *endpointInstance
-	autoscalingMode  int
 	samples          *autoscalingWindows
 	mostRecentSample *autoscalerSample
 }
@@ -38,11 +37,8 @@ const (
 
 // Create a new autoscaler
 func newAutoscaler(i *endpointInstance) *autoscaler {
-	var autoscalingMode = -1
-
 	return &autoscaler{
 		instance:         i,
-		autoscalingMode:  autoscalingMode,
 		mostRecentSample: nil,
 		samples: &autoscalingWindows{
 			TotalRequests:     rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
@@ -111,7 +107,7 @@ func (as *autoscaler) start(ctx context.Context) {
 			if as.instance.buffer.Length() > 0 {
 				as.instance.scaleEventChan <- 1
 			} else {
-				as.instance.scaleEventChan <- 0
+				as.instance.scaleEventChan <- 1
 			}
 		}
 	}

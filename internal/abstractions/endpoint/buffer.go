@@ -2,6 +2,7 @@ package endpoint
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"math/rand"
@@ -121,7 +122,7 @@ func (rb *RequestBuffer) Length() int {
 
 func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
 	// Make a request to the health endpoint to check if the container is ready
-	resp, err := rb.httpClient.Get("http://" + address + "/health")
+	resp, err := rb.httpClient.Get(fmt.Sprintf("http://%s/health", address))
 	if err != nil {
 		return false
 	}
@@ -146,7 +147,6 @@ func (rb *RequestBuffer) discoverContainers() {
 			}
 
 			availableContainers := []container{}
-
 			for _, containerState := range containerStates {
 				if containerState.Status == types.ContainerStatusRunning {
 					containerAddress, err := rb.containerRepo.GetContainerAddress(containerState.ContainerId)
@@ -180,7 +180,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
-	// select a random container to forward the request to
+	// select a random available container to forward the request to
 	randIndex := rand.Intn(len(rb.availableContainers))
 	c := rb.availableContainers[randIndex]
 	rb.availableContainersLock.Unlock()
@@ -207,7 +207,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	}
 
 	defer resp.Body.Close()
-	defer rb.postProcessRequest(req, c.id)
+	defer rb.afterRequest(req, c.id)
 
 	// Read the response body
 	bytes, err := io.ReadAll(resp.Body)
@@ -222,7 +222,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	req.ctx.Response().Writer.Write(bytes)
 }
 
-func (rb *RequestBuffer) postProcessRequest(req request, containerId string) {
+func (rb *RequestBuffer) afterRequest(req request, containerId string) {
 	defer func() { req.done <- true }()
 
 	// Set keep warm lock

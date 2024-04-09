@@ -18,6 +18,7 @@ class Config:
     keep_warm_seconds: Optional[int]
     handler: str
     task_id: Optional[str]
+    bind_port: int
 
     @classmethod
     def load_from_env(cls) -> "Config":
@@ -28,6 +29,7 @@ class Config:
         keep_warm_seconds = float(os.getenv("KEEP_WARM_SECONDS", 10))
         handler = os.getenv("HANDLER")
         task_id = os.getenv("TASK_ID")
+        bind_port = int(os.getenv("BIND_PORT"))
 
         if concurrency <= 0:
             concurrency = 1
@@ -43,6 +45,7 @@ class Config:
             keep_warm_seconds=keep_warm_seconds,
             handler=handler,
             task_id=task_id,
+            bind_port=bind_port,
         )
 
 
