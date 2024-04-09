@@ -90,7 +90,7 @@ class ReplaceObjectContentRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class ReplaceObjectContentResponse(betterproto.Message):
-    hash: str = betterproto.string_field(1)
+    ok: bool = betterproto.bool_field(1)
 
 
 @dataclass(eq=False, repr=False)

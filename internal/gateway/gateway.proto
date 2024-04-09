@@ -69,7 +69,7 @@ message ReplaceObjectContentRequest {
   ReplaceObjectContentOperation op = 4;
 }
 
-message ReplaceObjectContentResponse { string hash = 1; }
+message ReplaceObjectContentResponse { bool ok = 1; }
 
 // Task queue messages
 message StartTaskRequest {

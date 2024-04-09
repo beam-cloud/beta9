@@ -40,13 +40,21 @@ class SyncEventHandler(FileSystemEventHandler):
         if not event.is_directory:
             self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path))
 
+        terminal.detail(f"File created: {event.src_path}")
+
     def on_modified(self, event):
         if not event.is_directory:
             self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path))
 
+        terminal.detail(f"File modified: {event.src_path}")
+
     def on_deleted(self, event):
-        if not event.is_directory:
-            self.queue.put((ReplaceObjectContentOperation.DELETE, event.src_path))
+        if event.is_directory:
+            terminal.detail(f"Folder deleted: {event.src_path}")
+        else:
+            terminal.detail(f"File deleted: {event.src_path}")
+
+        self.queue.put((ReplaceObjectContentOperation.DELETE, event.src_path))
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -166,7 +174,7 @@ class RunnerAbstraction(BaseAbstraction):
 
             file_update_queue.task_done()
 
-    def sync_folder_to_workspace(self, *, dir: str, object_id: str):
+    def sync_folder_to_workspace(self, *, dir: str, object_id: str) -> None:
         file_update_queue = Queue()
         event_handler = SyncEventHandler(file_update_queue)
 

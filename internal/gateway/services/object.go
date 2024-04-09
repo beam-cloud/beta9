@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"log"
 	"os"
 	"path"
 
@@ -68,7 +67,7 @@ func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectReques
 	if err != nil {
 		return &pb.PutObjectResponse{
 			Ok:       false,
-			ErrorMsg: "Unable to write files",
+			ErrorMsg: "Unable to write file",
 		}, nil
 	}
 
@@ -152,8 +151,8 @@ func (gws *GatewayService) ReplaceObjectContent(stream pb.GatewayService_Replace
 	ctx := stream.Context()
 
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
-	log.Printf("auth info: %+v\n", authInfo)
+	extractedObjectPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name)
+	os.MkdirAll(extractedObjectPath, 0644)
 
 	for {
 		req, err := stream.Recv()
@@ -165,9 +164,16 @@ func (gws *GatewayService) ReplaceObjectContent(stream pb.GatewayService_Replace
 			return status.Errorf(codes.Unknown, "Received an error: %v", err)
 		}
 
-		log.Printf("req: %+v\n", req)
-		log.Printf("op: %+v\n", req.Op)
+		destPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, req.ObjectId, req.Path)
+
+		switch req.Op {
+		case pb.ReplaceObjectContentOperation_DELETE:
+			os.RemoveAll(destPath)
+		case pb.ReplaceObjectContentOperation_WRITE:
+			os.MkdirAll(destPath, 0644)
+			os.WriteFile(destPath, req.Data, 0644)
+		}
 	}
 
-	return stream.SendAndClose(&pb.ReplaceObjectContentResponse{Hash: "fake"})
+	return stream.SendAndClose(&pb.ReplaceObjectContentResponse{Ok: true})
 }
