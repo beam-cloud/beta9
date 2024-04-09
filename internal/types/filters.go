@@ -18,20 +18,25 @@ func (s *StringSlice) UnmarshalParam(src string) error {
 
 type DeploymentFilter struct {
 	BaseFilter
-	WorkspaceID uint   `query:"workspace_id"`
-	StubType    string `query:"stub_type"`
-	Name        string `query:"name"`
-	Cursor      string `query:"cursor"`
+	WorkspaceID    uint   `query:"workspace_id"`
+	StubType       string `query:"stub_type"`
+	Name           string `query:"name"`
+	Cursor         string `query:"cursor"`
+	CreatedAtStart string `query:"created_at_start"`
+	CreatedAtEnd   string `query:"created_at_end"`
 }
 
 type TaskFilter struct {
 	BaseFilter
 	WorkspaceID    uint   `query:"workspace_id"`
+	TaskId         string `query:"task_id"`
 	StubType       string `query:"stub_type"`
 	StubId         string `query:"stub_id"`
 	Status         string `query:"status"`
 	CreatedAtStart string `query:"created_at_start"`
 	CreatedAtEnd   string `query:"created_at_end"`
+	MinDuration    uint   `query:"min_duration"`
+	MaxDuration    uint   `query:"max_duration"`
 	Cursor         string `query:"cursor"`
 }
 

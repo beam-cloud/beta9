@@ -420,6 +420,16 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 		}
 	}
 
+	if filters.TaskId != "" {
+		if err := uuid.Validate(filters.TaskId); err != nil {
+			// Postgres will throw an error if the uuid is invalid, which results in a 500 to the client
+			// So instead, we will make the query valid and make it return no results
+			qb = qb.Where(squirrel.Eq{"t.external_id": nil})
+		} else {
+			qb = qb.Where(squirrel.Eq{"t.external_id": filters.TaskId})
+		}
+	}
+
 	if filters.CreatedAtStart != "" {
 		qb = qb.Where(squirrel.GtOrEq{"t.created_at": filters.CreatedAtStart})
 	}
@@ -437,6 +447,14 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 		if len(statuses) > 0 {
 			qb = qb.Where(squirrel.Eq{"t.status": statuses})
 		}
+	}
+
+	if filters.MinDuration > 0 {
+		qb = qb.Where("EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000 >= ?", filters.MinDuration)
+	}
+
+	if filters.MaxDuration > 0 {
+		qb = qb.Where("EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000 <= ?", filters.MaxDuration)
 	}
 
 	if filters.Limit > 0 {
@@ -648,7 +666,11 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 	}
 
 	if filters.Name != "" {
-		qb = qb.Where(squirrel.Like{"d.name": "%" + filters.Name + "%"})
+		if err := uuid.Validate(filters.Name); err == nil {
+			qb = qb.Where(squirrel.Eq{"d.external_id": filters.Name})
+		} else {
+			qb = qb.Where(squirrel.Eq{"d.name": filters.Name})
+		}
 	}
 
 	if filters.Offset > 0 {
@@ -657,6 +679,14 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 
 	if filters.Limit > 0 {
 		qb = qb.Limit(uint64(filters.Limit))
+	}
+
+	if filters.CreatedAtStart != "" {
+		qb = qb.Where(squirrel.GtOrEq{"d.created_at": filters.CreatedAtStart})
+	}
+
+	if filters.CreatedAtEnd != "" {
+		qb = qb.Where(squirrel.LtOrEq{"d.created_at": filters.CreatedAtEnd})
 	}
 
 	return qb
