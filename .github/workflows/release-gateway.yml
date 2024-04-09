@@ -4,6 +4,9 @@ on:
   release:
     types: [created]
 
+permissions:
+  id-token: write
+
 jobs:
   build_and_release_gateway:
     if: startsWith(github.ref, 'refs/tags/gateway-')
