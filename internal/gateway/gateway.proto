@@ -57,7 +57,17 @@ message PutObjectResponse {
   string error_msg = 3;
 }
 
-message ReplaceObjectContentRequest { bytes content = 1; }
+enum ReplaceObjectContentOperation {
+  WRITE = 0;
+  DELETE = 1;
+}
+
+message ReplaceObjectContentRequest {
+  string object_id = 1;
+  string path = 2;
+  bytes data = 3;
+  ReplaceObjectContentOperation op = 4;
+}
 
 message ReplaceObjectContentResponse { string hash = 1; }
 

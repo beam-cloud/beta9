@@ -24,7 +24,7 @@ class Endpoint(RunnerAbstraction):
         retries: int = 3,
         concurrency: int = 1,
         max_containers: int = 1,
-        keep_warm_seconds: int = 10,
+        keep_warm_seconds: int = 300,
         max_pending_tasks: int = 100,
     ):
         super().__init__(
@@ -95,4 +95,4 @@ class _CallableWrapper:
         )
         print(serve_response)
 
-        # self.parent.sync_folder_to_workspace(os.getcwd())
+        self.parent.sync_folder_to_workspace(dir=os.getcwd(), object_id=self.parent.object_id)

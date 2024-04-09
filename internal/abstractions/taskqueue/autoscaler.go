@@ -8,10 +8,6 @@ import (
 	rolling "github.com/asecurityteam/rolling"
 )
 
-const (
-	autoScalingModeQueueDepth int = 0
-)
-
 type autoscaler struct {
 	instance         *taskQueueInstance
 	autoscalingMode  int
@@ -46,11 +42,8 @@ const (
 
 // Create a new autoscaler
 func newAutoscaler(i *taskQueueInstance) *autoscaler {
-	var autoscalingMode = autoScalingModeQueueDepth
-
 	return &autoscaler{
-		instance:        i,
-		autoscalingMode: autoscalingMode,
+		instance: i,
 		samples: &autoscalingWindows{
 			QueueLength:       rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
 			RunningTasks:      rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
@@ -138,13 +131,7 @@ func (as *autoscaler) start(ctx context.Context) {
 			as.samples.RunningTasks.Append(float64(sample.RunningTasks))
 			as.samples.TaskDuration.Append(float64(sample.TaskDuration))
 
-			var scaleResult *autoscaleResult = nil
-			switch as.autoscalingMode {
-			case autoScalingModeQueueDepth:
-				scaleResult = as.scaleByQueueDepth(sample)
-			default:
-			}
-
+			scaleResult := as.scaleByQueueDepth(sample)
 			if scaleResult != nil && scaleResult.ResultValid {
 				as.instance.scaleEventChan <- scaleResult.DesiredContainers // Send autoscaling result to request bucket
 			}

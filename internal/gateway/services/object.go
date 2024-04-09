@@ -165,7 +165,8 @@ func (gws *GatewayService) ReplaceObjectContent(stream pb.GatewayService_Replace
 			return status.Errorf(codes.Unknown, "Received an error: %v", err)
 		}
 
-		log.Printf("content: %+v\n", req.Content)
+		log.Printf("req: %+v\n", req)
+		log.Printf("op: %+v\n", req.Op)
 	}
 
 	return stream.SendAndClose(&pb.ReplaceObjectContentResponse{Hash: "fake"})

@@ -27,6 +27,11 @@ if TYPE_CHECKING:
     from grpclib.metadata import Deadline
 
 
+class ReplaceObjectContentOperation(betterproto.Enum):
+    WRITE = 0
+    DELETE = 1
+
+
 @dataclass(eq=False, repr=False)
 class AuthorizeRequest(betterproto.Message):
     pass
@@ -77,7 +82,10 @@ class PutObjectResponse(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class ReplaceObjectContentRequest(betterproto.Message):
-    content: bytes = betterproto.bytes_field(1)
+    object_id: str = betterproto.string_field(1)
+    path: str = betterproto.string_field(2)
+    data: bytes = betterproto.bytes_field(3)
+    op: "ReplaceObjectContentOperation" = betterproto.enum_field(4)
 
 
 @dataclass(eq=False, repr=False)

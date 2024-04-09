@@ -1,6 +1,6 @@
 import inspect
 import os
-import time
+from queue import Queue
 from typing import Callable, List, Optional, Union
 
 from watchdog.events import FileSystemEventHandler
@@ -14,6 +14,7 @@ from ...clients.gateway import (
     GatewayServiceStub,
     GetOrCreateStubRequest,
     GetOrCreateStubResponse,
+    ReplaceObjectContentOperation,
     ReplaceObjectContentRequest,
 )
 from ...sync import FileSyncer
@@ -31,17 +32,21 @@ FUNCTION_SERVE_STUB_TYPE = "function/serve"
 
 
 class SyncEventHandler(FileSystemEventHandler):
+    def __init__(self, queue: Queue):
+        super().__init__()
+        self.queue = queue
+
     def on_created(self, event):
         if not event.is_directory:
-            terminal.detail(f"File created: {event.src_path}")
+            self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path))
 
     def on_modified(self, event):
         if not event.is_directory:
-            terminal.detail(f"File modified: {event.src_path}")
+            self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path))
 
     def on_deleted(self, event):
         if not event.is_directory:
-            terminal.detail(f"File deleted: {event.src_path}")
+            self.queue.put((ReplaceObjectContentOperation.DELETE, event.src_path))
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -139,12 +144,31 @@ class RunnerAbstraction(BaseAbstraction):
         function_name = func.__name__
         self.handler = f"{module_name}:{function_name}"
 
-    def _iterator(self):
-        for i in range(10):
-            yield ReplaceObjectContentRequest(content=bytes([i]))
+    def _object_iterator(self, *, dir: str, object_id: str, file_update_queue: Queue):
+        while True:
+            operation, path = file_update_queue.get()
 
-    def sync_folder_to_workspace(self, dir: str):
-        event_handler = SyncEventHandler()
+            if operation == ReplaceObjectContentOperation.WRITE:
+                with open(path, "rb") as f:
+                    yield ReplaceObjectContentRequest(
+                        object_id=object_id,
+                        path=os.path.relpath(path, start=dir),
+                        data=f.read(),
+                        op=ReplaceObjectContentOperation.WRITE,
+                    )
+
+            elif operation == ReplaceObjectContentOperation.DELETE:
+                yield ReplaceObjectContentRequest(
+                    object_id=object_id,
+                    path=os.path.relpath(path, start=dir),
+                    op=ReplaceObjectContentOperation.DELETE,
+                )
+
+            file_update_queue.task_done()
+
+    def sync_folder_to_workspace(self, *, dir: str, object_id: str):
+        file_update_queue = Queue()
+        event_handler = SyncEventHandler(file_update_queue)
 
         observer = Observer()
         observer.schedule(event_handler, dir, recursive=True)
@@ -153,10 +177,11 @@ class RunnerAbstraction(BaseAbstraction):
         terminal.detail(f"Watching {dir} for changes...")
         try:
             while True:
-                time.sleep(1)
                 self.run_sync(
                     self.gateway_stub.replace_object_content(
-                        replace_object_content_request_iterator=self._iterator()
+                        replace_object_content_request_iterator=self._object_iterator(
+                            dir=dir, object_id=object_id, file_update_queue=file_update_queue
+                        )
                     )
                 )
         except KeyboardInterrupt:
