@@ -19,8 +19,11 @@ from grpclib.exceptions import StreamTerminatedError
 
 from ..aio import run_sync
 from ..clients.taskqueue import (
+    TaskQueueCompleteRequest,
     TaskQueueCompleteResponse,
+    TaskQueueMonitorRequest,
     TaskQueueMonitorResponse,
+    TaskQueuePopRequest,
     TaskQueuePopResponse,
     TaskQueueServiceStub,
 )
@@ -153,7 +156,9 @@ class TaskQueueWorker:
     ) -> Union[Task, None]:
         try:
             r: TaskQueuePopResponse = run_sync(
-                taskqueue_stub.task_queue_pop(stub_id=stub_id, container_id=container_id)
+                taskqueue_stub.task_queue_pop(
+                    TaskQueuePopRequest(stub_id=stub_id, container_id=container_id)
+                )
             )
             if not r.ok or not r.task_msg:
                 return None
@@ -174,9 +179,11 @@ class TaskQueueWorker:
         while retry <= max_retries:
             try:
                 async for response in taskqueue_stub.task_queue_monitor(
-                    task_id=task.id,
-                    stub_id=stub_id,
-                    container_id=container_id,
+                    TaskQueueMonitorRequest(
+                        task_id=task.id,
+                        stub_id=stub_id,
+                        container_id=container_id,
+                    )
                 ):
                     response: TaskQueueMonitorResponse
                     if response.cancelled:
@@ -260,13 +267,15 @@ class TaskQueueWorker:
                     finally:
                         complete_task_response: TaskQueueCompleteResponse = (
                             await taskqueue_stub.task_queue_complete(
-                                task_id=task.id,
-                                stub_id=config.stub_id,
-                                task_duration=time.time() - start_time,
-                                task_status=task_status,
-                                container_id=config.container_id,
-                                container_hostname=config.container_hostname,
-                                keep_warm_seconds=config.keep_warm_seconds,
+                                TaskQueueCompleteRequest(
+                                    task_id=task.id,
+                                    stub_id=config.stub_id,
+                                    task_duration=time.time() - start_time,
+                                    task_status=task_status,
+                                    container_id=config.container_id,
+                                    container_hostname=config.container_hostname,
+                                    keep_warm_seconds=config.keep_warm_seconds,
+                                )
                             )
                         )
 

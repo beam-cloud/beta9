@@ -8,6 +8,7 @@ from ..abstractions.base.runner import (
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
 from ..clients.container import (
+    CommandExecutionRequest,
     CommandExecutionResponse,
     ContainerServiceStub,
 )
@@ -54,7 +55,7 @@ class Container(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         name: Optional[str] = None,
-    ) -> "Container":
+    ) -> None:
         super().__init__(cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes)
 
         self.task_id = ""
@@ -76,7 +77,7 @@ class Container(RunnerAbstraction):
         last_response: Union[None, CommandExecutionResponse] = None
 
         async for r in self.container_stub.execute_command(
-            stub_id=self.stub_id, command=" ".join(command).encode()
+            CommandExecutionRequest(stub_id=self.stub_id, command=" ".join(command).encode())
         ):
             if r.task_id != "":
                 self.task_id = r.task_id

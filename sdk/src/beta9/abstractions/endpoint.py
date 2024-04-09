@@ -7,7 +7,7 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
-from ..clients.gateway import DeployStubResponse
+from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..config import GatewayConfig, get_gateway_config
 
 
@@ -65,7 +65,9 @@ class _CallableWrapper:
 
         terminal.header("Deploying endpoint")
         deploy_response: DeployStubResponse = self.parent.run_sync(
-            self.parent.gateway_stub.deploy_stub(stub_id=self.parent.stub_id, name=name)
+            self.parent.gateway_stub.deploy_stub(
+                DeployStubRequest(stub_id=self.parent.stub_id, name=name)
+            )
         )
 
         if deploy_response.ok:

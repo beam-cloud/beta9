@@ -13,10 +13,11 @@ from ..abstractions.base.runner import (
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
 from ..clients.function import (
+    FunctionInvokeRequest,
     FunctionInvokeResponse,
     FunctionServiceStub,
 )
-from ..clients.gateway import DeployStubResponse
+from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..config import GatewayConfig, get_gateway_config
 from ..sync import FileSyncer
 
@@ -105,8 +106,10 @@ class _CallableWrapper:
         last_response: Optional[FunctionInvokeResponse] = None
 
         async for r in self.parent.function_stub.function_invoke(
-            stub_id=self.parent.stub_id,
-            args=args,
+            FunctionInvokeRequest(
+                stub_id=self.parent.stub_id,
+                args=args,
+            )
         ):
             if r.output != "":
                 terminal.detail(r.output.strip())
@@ -136,7 +139,9 @@ class _CallableWrapper:
 
         terminal.header("Deploying function")
         deploy_response: DeployStubResponse = self.parent.run_sync(
-            self.parent.gateway_stub.deploy_stub(stub_id=self.parent.stub_id, name=name)
+            self.parent.gateway_stub.deploy_stub(
+                DeployStubRequest(stub_id=self.parent.stub_id, name=name)
+            )
         )
 
         if deploy_response.ok:

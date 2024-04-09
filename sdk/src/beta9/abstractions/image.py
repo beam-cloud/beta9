@@ -2,7 +2,13 @@ from typing import List, NamedTuple, Optional, Tuple, Union
 
 from .. import terminal
 from ..abstractions.base import BaseAbstraction
-from ..clients.image import BuildImageResponse, ImageServiceStub, VerifyImageBuildResponse
+from ..clients.image import (
+    BuildImageRequest,
+    BuildImageResponse,
+    ImageServiceStub,
+    VerifyImageBuildRequest,
+    VerifyImageBuildResponse,
+)
 from ..type import (
     PythonVersion,
 )
@@ -61,11 +67,13 @@ class Image(BaseAbstraction):
     def exists(self) -> Tuple[bool, ImageBuildResult]:
         r: VerifyImageBuildResponse = self.run_sync(
             self.stub.verify_image_build(
-                python_packages=self.python_packages,
-                python_version=self.python_version,
-                commands=self.commands,
-                force_rebuild=False,
-                existing_image_uri=self.base_image,
+                VerifyImageBuildRequest(
+                    python_packages=self.python_packages,
+                    python_version=self.python_version,
+                    commands=self.commands,
+                    force_rebuild=False,
+                    existing_image_uri=self.base_image,
+                )
             )
         )
         return (r.exists, ImageBuildResult(success=r.exists, image_id=r.image_id))
@@ -82,10 +90,12 @@ class Image(BaseAbstraction):
             last_response = BuildImageResponse()
 
             async for r in self.stub.build_image(
-                python_packages=self.python_packages,
-                python_version=self.python_version,
-                commands=self.commands,
-                existing_image_uri=self.base_image,
+                BuildImageRequest(
+                    python_packages=self.python_packages,
+                    python_version=self.python_version,
+                    commands=self.commands,
+                    existing_image_uri=self.base_image,
+                )
             ):
                 terminal.detail(r.msg)
 
