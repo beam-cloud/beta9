@@ -6,8 +6,11 @@ from ..abstractions.base import BaseAbstraction
 from ..clients.simplequeue import (
     SimpleQueueEmptyResponse,
     SimpleQueuePeekResponse,
+    SimpleQueuePopRequest,
     SimpleQueuePopResponse,
+    SimpleQueuePutRequest,
     SimpleQueuePutResponse,
+    SimpleQueueRequest,
     SimpleQueueServiceStub,
 )
 
@@ -19,7 +22,7 @@ class SimpleQueueInternalServerError(Exception):
 class SimpleQueue(BaseAbstraction):
     """A distributed python queue."""
 
-    def __init__(self, *, name: str, max_size=100) -> "SimpleQueue":
+    def __init__(self, *, name: str, max_size=100) -> None:
         """
         Creates a Queue instance.
 
@@ -58,7 +61,7 @@ class SimpleQueue(BaseAbstraction):
         self.max_size: int = max_size
 
     def __len__(self):
-        r = self.run_sync(self.stub.simple_queue_size(name=self.name))
+        r = self.run_sync(self.stub.simple_queue_size(SimpleQueueRequest(name=self.name)))
         return r.size if r.ok else 0
 
     def __del__(self):
@@ -66,7 +69,9 @@ class SimpleQueue(BaseAbstraction):
 
     def put(self, value: Any) -> bool:
         r: SimpleQueuePutResponse = self.run_sync(
-            self.stub.simple_queue_put(name=self.name, value=cloudpickle.dumps(value))
+            self.stub.simple_queue_put(
+                SimpleQueuePutRequest(name=self.name, value=cloudpickle.dumps(value))
+            )
         )
 
         if not r.ok:
@@ -75,7 +80,9 @@ class SimpleQueue(BaseAbstraction):
         return True
 
     def pop(self) -> Any:
-        r: SimpleQueuePopResponse = self.run_sync(self.stub.simple_queue_pop(name=self.name))
+        r: SimpleQueuePopResponse = self.run_sync(
+            self.stub.simple_queue_pop(SimpleQueuePopRequest(name=self.name))
+        )
         if not r.ok:
             raise SimpleQueueInternalServerError
 
@@ -85,14 +92,18 @@ class SimpleQueue(BaseAbstraction):
         return None
 
     def empty(self) -> bool:
-        r: SimpleQueueEmptyResponse = self.run_sync(self.stub.simple_queue_empty(name=self.name))
+        r: SimpleQueueEmptyResponse = self.run_sync(
+            self.stub.simple_queue_empty(SimpleQueueRequest(name=self.name))
+        )
         if not r.ok:
             raise SimpleQueueInternalServerError
 
         return r.empty if r.ok else True
 
     def peek(self) -> Any:
-        r: SimpleQueuePeekResponse = self.run_sync(self.stub.simple_queue_peek(name=self.name))
+        r: SimpleQueuePeekResponse = self.run_sync(
+            self.stub.simple_queue_peek(SimpleQueueRequest(name=self.name))
+        )
         if not r.ok:
             raise SimpleQueueInternalServerError
 

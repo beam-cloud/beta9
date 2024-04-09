@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 from beta9 import Image
 from beta9.abstractions.container import Container
-from beta9.clients.container import CommandExecutionResponse
+from beta9.clients.container import CommandExecutionRequest, CommandExecutionResponse
 
 
 class AsyncIterator:
@@ -46,5 +46,7 @@ class TestContainer(TestCase):
         )
 
         ec = c.run(["ls"])
-        mock_stub.execute_command.assert_called_once_with(stub_id=c.stub_id, command="ls".encode())
+        mock_stub.execute_command.assert_called_once_with(
+            CommandExecutionRequest(stub_id=c.stub_id, command="ls".encode())
+        )
         self.assertEqual(ec, 0)

@@ -9,8 +9,8 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
-from ..clients.gateway import DeployStubResponse
-from ..clients.taskqueue import TaskQueuePutResponse, TaskQueueServiceStub
+from ..clients.gateway import DeployStubRequest, DeployStubResponse
+from ..clients.taskqueue import TaskQueuePutRequest, TaskQueuePutResponse, TaskQueueServiceStub
 from ..config import GatewayConfig, get_gateway_config
 
 
@@ -81,7 +81,7 @@ class TaskQueue(RunnerAbstraction):
         max_containers: int = 1,
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
-    ) -> "TaskQueue":
+    ) -> None:
         super().__init__(
             cpu=cpu,
             memory=memory,
@@ -127,7 +127,9 @@ class _CallableWrapper:
 
         terminal.header("Deploying task queue")
         deploy_response: DeployStubResponse = self.parent.run_sync(
-            self.parent.gateway_stub.deploy_stub(stub_id=self.parent.stub_id, name=name)
+            self.parent.gateway_stub.deploy_stub(
+                DeployStubRequest(stub_id=self.parent.stub_id, name=name)
+            )
         )
 
         if deploy_response.ok:
@@ -153,7 +155,9 @@ class _CallableWrapper:
 
         r: TaskQueuePutResponse = self.parent.run_sync(
             self.parent.taskqueue_stub.task_queue_put(
-                stub_id=self.parent.stub_id, payload=json_payload.encode("utf-8")
+                TaskQueuePutRequest(
+                    stub_id=self.parent.stub_id, payload=json_payload.encode("utf-8")
+                )
             )
         )
         if not r.ok:

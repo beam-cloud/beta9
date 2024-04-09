@@ -5,7 +5,7 @@ from typing import Callable, List, Optional, Union
 from ...abstractions.base import BaseAbstraction
 from ...abstractions.image import Image, ImageBuildResult
 from ...abstractions.volume import Volume
-from ...clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
+from ...clients.gateway import GatewayServiceStub, GetOrCreateStubRequest, GetOrCreateStubResponse
 from ...sync import FileSyncer
 
 CONTAINER_STUB_TYPE = "container"
@@ -158,23 +158,25 @@ class RunnerAbstraction(BaseAbstraction):
         if not self.stub_created:
             stub_response: GetOrCreateStubResponse = self.run_sync(
                 self.gateway_stub.get_or_create_stub(
-                    object_id=self.object_id,
-                    image_id=self.image_id,
-                    stub_type=stub_type,
-                    name=stub_name,
-                    python_version=self.image.python_version,
-                    cpu=self.cpu,
-                    memory=self.memory,
-                    gpu=self.gpu,
-                    handler=self.handler,
-                    retries=self.retries,
-                    timeout=self.timeout,
-                    keep_warm_seconds=self.keep_warm_seconds,
-                    concurrency=self.concurrency,
-                    max_containers=self.max_containers,
-                    max_pending_tasks=self.max_pending_tasks,
-                    volumes=[v.export() for v in self.volumes],
-                    force_create=force_create_stub,
+                    GetOrCreateStubRequest(
+                        object_id=self.object_id,
+                        image_id=self.image_id,
+                        stub_type=stub_type,
+                        name=stub_name,
+                        python_version=self.image.python_version,
+                        cpu=self.cpu,
+                        memory=self.memory,
+                        gpu=self.gpu,
+                        handler=self.handler,
+                        retries=self.retries,
+                        timeout=self.timeout,
+                        keep_warm_seconds=self.keep_warm_seconds,
+                        concurrency=self.concurrency,
+                        max_containers=self.max_containers,
+                        max_pending_tasks=self.max_pending_tasks,
+                        volumes=[v.export() for v in self.volumes],
+                        force_create=force_create_stub,
+                    )
                 )
             )
 

@@ -25,7 +25,8 @@ asgiref = "^3.7.2"
 cloudpickle = "^3.0.0"
 rich = "^13.7.0"
 click = "^8.1.7"
-betterproto = {version = "^1.2.5", extras = ["compiler"]}
+# betterproto = {version = "v2.0.0-beta6", extras = ["compiler"]}
+betterproto = {version = "2.0.0b6", extras = ["compiler"]}
 protobuf = "^4.25.1"
 fastapi = "^0.109.0"
 uvicorn = "^0.27.0.post1"

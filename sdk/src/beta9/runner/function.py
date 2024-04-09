@@ -11,12 +11,21 @@ from grpclib.exceptions import StreamTerminatedError
 
 from ..aio import run_sync
 from ..clients.function import (
+    FunctionGetArgsRequest,
     FunctionGetArgsResponse,
+    FunctionMonitorRequest,
     FunctionMonitorResponse,
     FunctionServiceStub,
+    FunctionSetResultRequest,
     FunctionSetResultResponse,
 )
-from ..clients.gateway import EndTaskResponse, GatewayServiceStub, StartTaskResponse
+from ..clients.gateway import (
+    EndTaskRequest,
+    EndTaskResponse,
+    GatewayServiceStub,
+    StartTaskRequest,
+    StartTaskResponse,
+)
 from ..config import with_runner_context
 from ..exceptions import InvalidFunctionArgumentsException, RunnerException
 from ..logging import StdoutJsonInterceptor
@@ -50,9 +59,11 @@ async def _monitor_task(
     while retry <= max_retries:
         try:
             async for response in function_stub.function_monitor(
-                task_id=task_id,
-                stub_id=stub_id,
-                container_id=container_id,
+                FunctionMonitorRequest(
+                    task_id=task_id,
+                    stub_id=stub_id,
+                    container_id=container_id,
+                )
             ):
                 response: FunctionMonitorResponse
                 if response.cancelled:
@@ -111,7 +122,7 @@ def main(channel: Channel):
         # Start the task
         start_time = time.time()
         start_task_response: StartTaskResponse = run_sync(
-            gateway_stub.start_task(task_id=task_id, container_id=container_id)
+            gateway_stub.start_task(StartTaskRequest(task_id=task_id, container_id=container_id))
         )
         if not start_task_response.ok:
             raise RunnerException("Unable to start task")
@@ -133,7 +144,7 @@ def main(channel: Channel):
         try:
             handler = load_handler()
             get_args_resp: FunctionGetArgsResponse = run_sync(
-                function_stub.function_get_args(task_id=task_id),
+                function_stub.function_get_args(FunctionGetArgsRequest(task_id=task_id)),
             )
             if not get_args_resp.ok:
                 raise InvalidFunctionArgumentsException
@@ -148,7 +159,9 @@ def main(channel: Channel):
         finally:
             result = cloudpickle.dumps(result)
             set_result_resp: FunctionSetResultResponse = run_sync(
-                function_stub.function_set_result(task_id=task_id, result=result),
+                function_stub.function_set_result(
+                    FunctionSetResultRequest(task_id=task_id, result=result)
+                ),
             )
             if not set_result_resp.ok:
                 raise RunnerException("Unable to set function result")
@@ -158,12 +171,14 @@ def main(channel: Channel):
         # End the task
         end_task_response: EndTaskResponse = run_sync(
             gateway_stub.end_task(
-                task_id=task_id,
-                task_duration=task_duration,
-                task_status=task_status,
-                container_id=container_id,
-                container_hostname=container_hostname,
-                keep_warm_seconds=0,
+                EndTaskRequest(
+                    task_id=task_id,
+                    task_duration=task_duration,
+                    task_status=task_status,
+                    container_id=container_id,
+                    container_hostname=container_hostname,
+                    keep_warm_seconds=0,
+                )
             )
         )
         if not end_task_response.ok:
