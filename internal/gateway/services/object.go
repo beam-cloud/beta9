@@ -109,7 +109,7 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 
 			file, err = os.Create(path.Join(objectPath, newObject.ExternalId))
 			if err != nil {
-				gws.backendRepo.DeleteObjectSizeByExternalId(ctx, newObject.ExternalId)
+				gws.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
 				return stream.SendAndClose(&pb.PutObjectResponse{
 					Ok:       false,
 					ErrorMsg: "Unable to create file",
@@ -121,7 +121,7 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 		s, err := file.Write(request.ObjectContent)
 		if err != nil {
 			os.Remove(path.Join(objectPath, newObject.ExternalId))
-			gws.backendRepo.DeleteObjectSizeByExternalId(ctx, newObject.ExternalId)
+			gws.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
 			return stream.SendAndClose(&pb.PutObjectResponse{
 				Ok:       false,
 				ErrorMsg: "Unable to write file content",
@@ -132,7 +132,7 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 
 	if err := gws.backendRepo.UpdateObjectSizeByExternalId(ctx, newObject.ExternalId, size); err != nil {
 		os.Remove(path.Join(objectPath, newObject.ExternalId))
-		gws.backendRepo.DeleteObjectSizeByExternalId(ctx, newObject.ExternalId)
+		gws.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
 		return stream.SendAndClose(&pb.PutObjectResponse{
 			Ok:       false,
 			ErrorMsg: "Unable to complete file upload",

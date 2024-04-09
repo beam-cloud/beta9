@@ -295,7 +295,7 @@ func (r *PostgresBackendRepository) UpdateObjectSizeByExternalId(ctx context.Con
 	return nil
 }
 
-func (r *PostgresBackendRepository) DeleteObjectSizeByExternalId(ctx context.Context, externalId string) error {
+func (r *PostgresBackendRepository) DeleteObjectByExternalId(ctx context.Context, externalId string) error {
 	query := `DELETE FROM object WHERE external_id = $1;`
 	_, err := r.client.ExecContext(ctx, query, externalId)
 	if err != nil {
