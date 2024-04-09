@@ -12,14 +12,15 @@ RUN apt-get install -y libfuse2 && \
         ARCH="x86_64"; \
     fi && \
     curl -sSf -o mountpoint.deb https://s3.amazonaws.com/mountpoint-s3-release/1.5.0/${ARCH}/mount-s3-1.5.0-${ARCH}.deb && \
-    dpkg -i mountpoint.deb
+    dpkg -i mountpoint.deb && \
+    rm -vf mountpoint.deb
 
 # Target used in development environments
 FROM base as build
 
 WORKDIR /workspace
 
-RUN apt install -y libfuse3-dev && \
+RUN apt-get install -y libfuse3-dev && \
     go install github.com/cosmtrek/air@v1.49.0
 
 COPY go.mod go.sum ./
@@ -35,7 +36,7 @@ FROM base AS release
 
 WORKDIR /workspace
 
-RUN apt autoclean
+RUN apt-get autoclean
 
 COPY --from=build /usr/local/bin/gateway /usr/local/bin/
 
