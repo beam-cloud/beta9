@@ -5,7 +5,7 @@ on:
     types: [created]
   workflow_dispatch:
     inputs:
-      version:
+      app_version:
         description: Semantic version of release
         required: true
         type: string
@@ -31,6 +31,15 @@ jobs:
         with:
           version: v3.14.3
 
+      - name: Set version
+        id: set-version
+        run: |
+          if [[ ! -z "${{ inputs.app_version }}" ]]; then
+            echo "app_version=${{ inputs.app_version }}" >> $GITHUB_OUTPUT
+          else
+            echo "app_version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -50,7 +59,7 @@ jobs:
           file: ./docker/Dockerfile.gateway
           push: true
           tags: |
-            ${{ steps.login-ecr.outputs.registry }}/beta9-gateway:${{ github.ref_name }}
+            ${{ steps.login-ecr.outputs.registry }}/beta9-gateway:${{ steps.set-version.outputs.app_version }}
             ${{ steps.login-ecr.outputs.registry }}/beta9-gateway:latest
           target: release
           platforms: linux/amd64,linux/arm64
@@ -62,5 +71,5 @@ jobs:
           REPOSITORY: beta9-chart
         run: |
           cd deploy/charts
-          helm package ./beta9 --dependency-update --version ${{ github.ref_name }} --app-version ${{ github.ref_name }}
-          helm push $REPOSITORY-${{ github.ref_name }}.tgz oci://$REGISTRY
+          helm package ./beta9 --dependency-update --version ${{ steps.set-version.outputs.app_version }} --app-version ${{ steps.set-version.outputs.app_version }}
+          helm push $REPOSITORY-${{ steps.set-version.outputs.app_version }}.tgz oci://$REGISTRY
