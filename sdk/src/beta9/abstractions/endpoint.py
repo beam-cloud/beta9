@@ -8,7 +8,7 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
-from ..clients.endpoint import EndpointServeRequest, EndpointServeResponse, EndpointServiceStub
+from ..clients.endpoint import EndpointServeRequest, EndpointServiceStub
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..config import GatewayConfig, get_gateway_config
 
@@ -88,11 +88,25 @@ class _CallableWrapper:
         ):
             return False
 
-        serve_response: EndpointServeResponse = self.parent.run_sync(
-            self.parent.endpoint_stub.endpoint_serve(
-                EndpointServeRequest(stub_id=self.parent.stub_id)
-            )
-        )
-        print(serve_response)
+        with terminal.progress("Serving endpoint..."):
+            return self.parent.run_sync(self._serve())
 
-        self.parent.sync_dir_to_workspace(dir=os.getcwd(), object_id=self.parent.object_id)
+    async def _serve(self):
+        async for r in self.parent.endpoint_stub.endpoint_serve(
+            EndpointServeRequest(
+                stub_id=self.parent.stub_id,
+            )
+        ):
+            print("R:", r)
+            if r.output != "":
+                terminal.detail(r.output.strip())
+
+            if r.done or r.exit_code != 0:
+                last_response = r
+                break
+
+        if last_response is None or not last_response.done or last_response.exit_code != 0:
+            terminal.error("Serve container failed ☠️")
+            return None
+
+        # self.parent.sync_dir_to_workspace(dir=os.getcwd(), object_id=self.parent.object_id)

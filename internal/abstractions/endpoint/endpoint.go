@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	abCommon "github.com/beam-cloud/beta9/internal/abstractions/common"
+
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
@@ -22,12 +24,13 @@ import (
 
 type EndpointService interface {
 	pb.EndpointServiceServer
-	EndpointServe(context.Context, *pb.EndpointServeRequest) (*pb.EndpointServeResponse, error)
+	EndpointServe(in *pb.EndpointServeRequest, stream pb.EndpointService_EndpointServeServer) error
 }
 
 type HttpEndpointService struct {
 	pb.UnimplementedEndpointServiceServer
 	ctx               context.Context
+	config            types.AppConfig
 	rdb               *common.RedisClient
 	scheduler         *scheduler.Scheduler
 	backendRepo       repository.BackendRepository
@@ -81,6 +84,7 @@ func NewEndpointService(
 
 	es := &HttpEndpointService{
 		ctx:               ctx,
+		config:            config,
 		rdb:               opts.RedisClient,
 		keyEventChan:      keyEventChan,
 		keyEventManager:   keyEventManager,
@@ -100,15 +104,54 @@ func NewEndpointService(
 	return es, nil
 }
 
-func (es *HttpEndpointService) EndpointServe(ctx context.Context, in *pb.EndpointServeRequest) (*pb.EndpointServeResponse, error) {
-	// authInfo, _ := auth.AuthInfoFromContext(ctx)
+func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream pb.EndpointService_EndpointServeServer) error {
+	ctx := stream.Context()
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	// workspaceName := authInfo.Workspace.Name
 	// TODO: check auth here (on stubId/authInfo)
 
 	err := es.createEndpointInstance(in.StubId)
-	return &pb.EndpointServeResponse{
-		Ok: err == nil,
-	}, nil
+	if err != nil {
+		return err
+	}
+
+	instance, _ := es.endpointInstances.Get(in.StubId)
+	log.Printf("containers: %+v\n", instance.containers)
+
+	return es.stream(ctx, stream, authInfo)
+}
+
+func (es *HttpEndpointService) stream(ctx context.Context, stream pb.EndpointService_EndpointServeServer, authInfo *auth.AuthInfo) error {
+	containerId := "test2"
+
+	sendCallback := func(o common.OutputMsg) error {
+		if err := stream.Send(&pb.EndpointServeResponse{Output: o.Msg, Done: o.Done}); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	exitCallback := func(exitCode int32) error {
+		if err := stream.Send(&pb.EndpointServeResponse{Done: true, ExitCode: int32(exitCode)}); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	logStream, err := abCommon.NewLogStream(abCommon.LogStreamOpts{
+		SendCallback:    sendCallback,
+		ExitCallback:    exitCallback,
+		ContainerRepo:   es.containerRepo,
+		Config:          es.config,
+		Tailscale:       es.tailscale,
+		KeyEventManager: es.keyEventManager,
+	})
+	if err != nil {
+		return err
+	}
+
+	return logStream.Stream(ctx, authInfo, containerId)
 }
 
 func (es *HttpEndpointService) handleContainerEvents() {
