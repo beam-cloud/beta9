@@ -12,6 +12,7 @@ on:
 
 permissions:
   id-token: write
+  contents: read
 
 jobs:
   build_and_release_gateway:
@@ -21,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -59,10 +60,10 @@ jobs:
           file: ./docker/Dockerfile.gateway
           push: true
           tags: |
-            ${{ steps.login-ecr.outputs.registry }}/beta9-gateway:${{ steps.set-version.outputs.app_version }}
-            ${{ steps.login-ecr.outputs.registry }}/beta9-gateway:latest
+            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-gateway:${{ steps.set-version.outputs.app_version }}
+            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-gateway:latest
           target: release
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
 
       - name: Package and push Helm chart to Amazon ECR
         env:
@@ -72,4 +73,4 @@ jobs:
         run: |
           cd deploy/charts
           helm package ./beta9 --dependency-update --version ${{ steps.set-version.outputs.app_version }} --app-version ${{ steps.set-version.outputs.app_version }}
-          helm push $REPOSITORY-${{ steps.set-version.outputs.app_version }}.tgz oci://$REGISTRY
+          helm push $REPOSITORY-${{ steps.set-version.outputs.app_version }}.tgz oci://$REGISTRY/$REGISTRY_ALIAS
