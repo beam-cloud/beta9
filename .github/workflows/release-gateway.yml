@@ -56,12 +56,14 @@ jobs:
 
       - name: Build and push container image to Amazon ECR
         uses: docker/build-push-action@v5
+        env:
+          REGISTRY_ALIAS: n4e0e1y0
         with:
           file: ./docker/Dockerfile.gateway
           push: true
           tags: |
-            ${{ steps.login-ecr.outputs.registry }}/beta9-gateway:${{ steps.set-version.outputs.app_version }}
-            ${{ steps.login-ecr.outputs.registry }}/beta9-gateway:latest
+            ${{ steps.login-ecr.outputs.registry }}/$REGISTRY_ALIAS/beta9-gateway:${{ steps.set-version.outputs.app_version }}
+            ${{ steps.login-ecr.outputs.registry }}/$REGISTRY_ALIAS/beta9-gateway:latest
           target: release
           platforms: linux/amd64
 
@@ -73,4 +75,4 @@ jobs:
         run: |
           cd deploy/charts
           helm package ./beta9 --dependency-update --version ${{ steps.set-version.outputs.app_version }} --app-version ${{ steps.set-version.outputs.app_version }}
-          helm push $REPOSITORY-${{ steps.set-version.outputs.app_version }}.tgz oci://$REGISTRY
+          helm push $REPOSITORY-${{ steps.set-version.outputs.app_version }}.tgz oci://$REGISTRY/$REGISTRY_ALIAS
