@@ -87,16 +87,18 @@ func NewEndpointService(
 func (es *HttpEndpointService) EndpointServe(ctx context.Context, in *pb.EndpointServeRequest) (*pb.EndpointServeResponse, error) {
 	// authInfo, _ := auth.AuthInfoFromContext(ctx)
 	// workspaceName := authInfo.Workspace.Name
-	return &pb.EndpointServeResponse{}, nil
+	err := es.createEndpointInstance(in.StubId)
+	return &pb.EndpointServeResponse{
+		Ok: err == nil,
+	}, nil
 }
 
+// Forward request to endpoint
 func (es *HttpEndpointService) forwardRequest(
 	ctx echo.Context,
 	stubId string,
 ) error {
-	// Forward request to endpoint
 	instances, exists := es.endpointInstances.Get(stubId)
-
 	if !exists {
 		err := es.createEndpointInstance(stubId)
 		if err != nil {

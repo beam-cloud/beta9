@@ -28,7 +28,7 @@ class EndpointServeRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class EndpointServeResponse(betterproto.Message):
-    pass
+    ok: bool = betterproto.bool_field(1)
 
 
 class EndpointServiceStub(betterproto.ServiceStub):
