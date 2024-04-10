@@ -95,7 +95,7 @@ func (as *autoscaler) scaleByTotalRequests(sample *autoscalerSample) *autoscaleR
 }
 
 // Start the autoscaler
-func (as *autoscaler) start(ctx context.Context) {
+func (as *autoscaler) Start(ctx context.Context) {
 	ticker := time.NewTicker(sampleRate)
 	defer ticker.Stop()
 

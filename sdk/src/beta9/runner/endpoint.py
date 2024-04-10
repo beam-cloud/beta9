@@ -8,7 +8,7 @@ from fastapi import FastAPI, Response
 from uvicorn import Config, Server
 
 from ..runner.common import config as cfg
-from ..runner.common import load_handler, load_loader
+from ..runner.common import load_handler
 
 logger = logging.getLogger("uvicorn.access")
 
@@ -27,7 +27,9 @@ class EndpointManager:
         self.exit_code: int = 0
         self.app = FastAPI()
         self.handler: Callable = load_handler().func  # The function exists under the decorator
-        self.loader: Callable = load_loader().func
+
+        # loader = load_loader()
+        # self.loader: Callable =
         self.context = {"loader": "something"}  # TODO: implement context loader
 
         signal.signal(signal.SIGTERM, self.shutdown)

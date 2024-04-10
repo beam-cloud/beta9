@@ -97,7 +97,6 @@ class _CallableWrapper:
                 stub_id=self.parent.stub_id,
             )
         ):
-            print("R:", r)
             if r.output != "":
                 terminal.detail(r.output.strip())
 

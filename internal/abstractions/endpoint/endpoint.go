@@ -107,22 +107,17 @@ func NewEndpointService(
 func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream pb.EndpointService_EndpointServeServer) error {
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	// workspaceName := authInfo.Workspace.Name
-	// TODO: check auth here (on stubId/authInfo)
 
+	// TODO: check auth here (on stubId/authInfo)
 	err := es.createEndpointInstance(in.StubId)
 	if err != nil {
 		return err
 	}
 
-	instance, _ := es.endpointInstances.Get(in.StubId)
-	log.Printf("containers: %+v\n", instance.containers)
-
-	return es.stream(ctx, stream, authInfo)
-}
-
-func (es *HttpEndpointService) stream(ctx context.Context, stream pb.EndpointService_EndpointServeServer, authInfo *auth.AuthInfo) error {
-	containerId := "test2"
+	container, err := es.waitForContainer(ctx, in.StubId)
+	if err != nil {
+		return err
+	}
 
 	sendCallback := func(o common.OutputMsg) error {
 		if err := stream.Send(&pb.EndpointServeResponse{Output: o.Msg, Done: o.Done}); err != nil {
@@ -151,7 +146,32 @@ func (es *HttpEndpointService) stream(ctx context.Context, stream pb.EndpointSer
 		return err
 	}
 
-	return logStream.Stream(ctx, authInfo, containerId)
+	return logStream.Stream(ctx, authInfo, container.ContainerId)
+}
+
+func (es *HttpEndpointService) waitForContainer(ctx context.Context, stubId string) (*types.ContainerState, error) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	timeout := time.After(2 * time.Minute)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timeout:
+			return nil, errors.New("timed out waiting for a container")
+		case <-ticker.C:
+			containers, err := es.containerRepo.GetActiveContainersByStubId(stubId)
+			if err != nil {
+				return nil, err
+			}
+
+			if len(containers) > 0 {
+				return &containers[0], nil
+			}
+		}
+	}
 }
 
 func (es *HttpEndpointService) handleContainerEvents() {

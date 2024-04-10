@@ -1,6 +1,7 @@
 package abstractions
 
+import "context"
+
 type AutoScaler interface {
-	Sample()
-	Start()
+	Start(ctx context.Context)
 }

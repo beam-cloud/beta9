@@ -8,6 +8,7 @@ import (
 	"path"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
@@ -39,12 +40,12 @@ type endpointInstance struct {
 	scaleEventChan     chan int
 	rdb                *common.RedisClient
 	containerRepo      repository.ContainerRepository
-	autoscaler         *autoscaler
+	autoscaler         abstractions.AutoScaler
 	buffer             *RequestBuffer
 }
 
 func (i *endpointInstance) monitor() error {
-	go i.autoscaler.start(i.ctx) // Start the autoscaler
+	go i.autoscaler.Start(i.ctx) // Start the autoscaler
 
 	for {
 		select {
