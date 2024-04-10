@@ -42,12 +42,12 @@ type HttpEndpointService struct {
 }
 
 var (
-	endpointContainerPrefix string = "endpoint"
-	endpointRoutePrefix     string = "/endpoint"
+	endpointContainerPrefix       string        = "endpoint"
+	endpointRoutePrefix           string        = "/endpoint"
+	endpointRingBufferSize        int           = 10000000
+	endpointRequestTimeout        time.Duration = 180 * time.Second
+	endpointServeContainerTimeout time.Duration = 120 * time.Second
 )
-
-var RingBufferSize int = 10000000
-var RequestTimeout = 180 * time.Second
 
 type EndpointServiceOpts struct {
 	Config      types.AppConfig
@@ -109,7 +109,9 @@ func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	// TODO: check auth here (on stubId/authInfo)
-	err := es.createEndpointInstance(in.StubId)
+	err := es.createEndpointInstance(in.StubId, withAutoscaler(newDeploymentAutoscaler), withEntryPoint(func(instance *endpointInstance) []string {
+		return []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.serve"}
+	}))
 	if err != nil {
 		return err
 	}
@@ -153,8 +155,7 @@ func (es *HttpEndpointService) waitForContainer(ctx context.Context, stubId stri
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	timeout := time.After(2 * time.Minute)
-
+	timeout := time.After(endpointServeContainerTimeout)
 	for {
 		select {
 		case <-ctx.Done():
@@ -231,7 +232,7 @@ func (es *HttpEndpointService) forwardRequest(
 	return instances.buffer.ForwardRequest(ctx)
 }
 
-func (es *HttpEndpointService) createEndpointInstance(stubId string) error {
+func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...func(*endpointInstance)) error {
 	_, exists := es.endpointInstances.Get(stubId)
 	if exists {
 		return errors.New("endpoint already in memory")
@@ -256,6 +257,7 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string) error {
 	ctx, cancelFunc := context.WithCancel(es.ctx)
 	lock := common.NewRedisLock(es.rdb)
 
+	// Create endpoint instance & override any default options
 	instance := &endpointInstance{
 		ctx:                ctx,
 		cancelFunc:         cancelFunc,
@@ -272,11 +274,19 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string) error {
 		containers:         make(map[string]bool),
 		scaleEventChan:     make(chan int, 1),
 		rdb:                es.rdb,
+		buffer:             NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, endpointRingBufferSize, es.containerRepo, stubConfig),
+	}
+	for _, o := range options {
+		o(instance)
 	}
 
-	instance.buffer = NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, RingBufferSize, es.containerRepo, stubConfig)
-	autoscaler := newAutoscaler(instance)
-	instance.autoscaler = autoscaler
+	if instance.autoscaler == nil {
+		instance.autoscaler = newDeploymentAutoscaler(instance)
+	}
+
+	if len(instance.entryPoint) == 0 {
+		instance.entryPoint = []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.endpoint"}
+	}
 
 	es.endpointInstances.Set(stubId, instance)
 	go instance.monitor()

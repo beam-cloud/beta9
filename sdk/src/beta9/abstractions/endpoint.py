@@ -88,6 +88,7 @@ class _CallableWrapper:
         ):
             return False
 
+        print("stub_id: ", self.parent.stub_id)
         with terminal.progress("Serving endpoint..."):
             return self.parent.run_sync(self._serve())
 
@@ -108,4 +109,4 @@ class _CallableWrapper:
             terminal.error("Serve container failed ☠️")
             return None
 
-        # self.parent.sync_dir_to_workspace(dir=os.getcwd(), object_id=self.parent.object_id)
+        self.parent.sync_dir_to_workspace(dir=os.getcwd(), object_id=self.parent.object_id)

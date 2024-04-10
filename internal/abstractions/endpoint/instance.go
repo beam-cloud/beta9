@@ -24,6 +24,18 @@ type endpointState struct {
 	FailedContainers   int
 }
 
+func withAutoscaler(constructor func(i *endpointInstance) abstractions.AutoScaler) func(*endpointInstance) {
+	return func(i *endpointInstance) {
+		i.autoscaler = constructor(i)
+	}
+}
+
+func withEntryPoint(entryPoint func(instance *endpointInstance) []string) func(*endpointInstance) {
+	return func(i *endpointInstance) {
+		i.entryPoint = entryPoint(i)
+	}
+}
+
 type endpointInstance struct {
 	ctx                context.Context
 	cancelFunc         context.CancelFunc
@@ -31,6 +43,7 @@ type endpointInstance struct {
 	workspace          *types.Workspace
 	stub               *types.Stub
 	stubConfig         *types.StubConfigV1
+	entryPoint         []string
 	object             *types.Object
 	token              *types.Token
 	lock               *common.RedisLock
@@ -152,7 +165,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			ImageId:     i.stubConfig.Runtime.ImageId,
 			StubId:      i.stub.ExternalId,
 			WorkspaceId: i.workspace.ExternalId,
-			EntryPoint:  []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.endpoint"},
+			EntryPoint:  i.entryPoint,
 			Mounts: []types.Mount{
 				{
 					LocalPath: path.Join(types.DefaultExtractedObjectPath, i.workspace.Name, i.object.ExternalId),

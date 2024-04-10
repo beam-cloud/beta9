@@ -6,6 +6,7 @@ import (
 	"time"
 
 	rolling "github.com/asecurityteam/rolling"
+	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 )
 
 type autoscaler struct {
@@ -24,11 +25,6 @@ type autoscalerSample struct {
 	CurrentContainers int64
 }
 
-type autoscaleResult struct {
-	DesiredContainers int
-	ResultValid       bool
-}
-
 const (
 	maxReplicas uint          = 5                                      // Maximum number of desired replicas that can be returned
 	windowSize  int           = 60                                     // Number of samples in the sampling window
@@ -36,7 +32,7 @@ const (
 )
 
 // Create a new autoscaler
-func newAutoscaler(i *endpointInstance) *autoscaler {
+func newDeploymentAutoscaler(i *endpointInstance) abstractions.AutoScaler {
 	return &autoscaler{
 		instance:         i,
 		mostRecentSample: nil,
@@ -72,7 +68,7 @@ func (as *autoscaler) sample() (*autoscalerSample, error) {
 	return sample, nil
 }
 
-func (as *autoscaler) scaleByTotalRequests(sample *autoscalerSample) *autoscaleResult {
+func (as *autoscaler) scaleByTotalRequests(sample *autoscalerSample) *abstractions.AutoscaleResult {
 	desiredContainers := 0
 
 	if sample.TotalRequests == 0 {
@@ -88,7 +84,7 @@ func (as *autoscaler) scaleByTotalRequests(sample *autoscalerSample) *autoscaleR
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
 
-	return &autoscaleResult{
+	return &abstractions.AutoscaleResult{
 		DesiredContainers: desiredContainers,
 		ResultValid:       true,
 	}
@@ -101,6 +97,7 @@ func (as *autoscaler) Start(ctx context.Context) {
 
 	for {
 		select {
+
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
