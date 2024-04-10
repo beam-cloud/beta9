@@ -4,6 +4,7 @@ import signal
 import subprocess
 import sys
 import traceback
+from threading import Event
 from typing import List, Union
 
 from watchdog.events import FileSystemEventHandler
@@ -34,7 +35,6 @@ class SyncEventHandler(FileSystemEventHandler):
         self._trigger_reload(event)
 
     def _trigger_reload(self, event):
-        print(event)
         if not event.is_directory:
             self.restart_callback()
 
@@ -44,39 +44,60 @@ class ServeGateway:
         self.process: Union[subprocess.Popen, None] = None
         self.exit_code: int = 0
         self.watch_dir: str = USER_CODE_VOLUME
+        self.restart_event = Event()
+        self.exit_event = Event()
 
         # Set up the file change event handler and observer
-        self.event_handler = SyncEventHandler(self.restart)
+        self.event_handler = SyncEventHandler(self.trigger_restart)
         self.observer = PollingObserver()
         self.observer.schedule(self.event_handler, self.watch_dir, recursive=True)
         self.observer.start()
 
     def shutdown(self, signum=None, frame=None) -> None:
-        if self.process:
-            self.process.send_signal(signal.SIGTERM)
+        self.kill_subprocess()
+        self.observer.stop()
+        self.observer.join()
+        self.exit_event.set()
+        self.restart_event.set()
 
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            self.process = None
+    def kill_subprocess(self, signum=None, frame=None) -> None:
+        if self.process:
+            try:
+                os.killpg(
+                    os.getpgid(self.process.pid), signal.SIGTERM
+                )  # Send SIGTERM to the process group
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(
+                    os.getpgid(self.process.pid), signal.SIGKILL
+                )  # SIGTERM isn't working, kill the process group
+                self.process.wait()
+            except BaseException:
+                pass
+
+        self.process = None
+        self.restart_event.set()
 
     def run(self, *, command: List[str]) -> None:
-        if self.process:
-            self.shutdown()
+        while not self.exit_event.is_set():
+            if self.process:
+                self.kill_subprocess()
 
-        self.process = subprocess.Popen(
-            " ".join(command),
-            shell=True,
-            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_IGN),
-            env=os.environ,
-            stdout=sys.stdout,
-            stderr=sys.stdout,
-        )
+            self.process = subprocess.Popen(
+                " ".join(command),
+                shell=True,
+                preexec_fn=os.setsid,
+                env=os.environ,
+                stdout=sys.stdout,
+                stderr=sys.stdout,
+            )
 
-        self.exit_code = self.process.wait()
+            self.restart_event.clear()
+            self.restart_event.wait()
 
-    def restart(self) -> None:
+    def trigger_restart(self) -> None:
         print("Detected file change, restarting...")
-        self.run(command=_command())
+        self.restart_event.set()
 
 
 def _command() -> List[str]:
