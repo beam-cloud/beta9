@@ -97,6 +97,8 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	go s.eventRepo.PushContainerRequestedEvent(request)
 
 	err = s.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
+		ContainerId: request.ContainerId,
+		StubId:      request.StubId,
 		Status:      types.ContainerStatusPending,
 		ScheduledAt: time.Now().Unix(),
 	})

@@ -49,6 +49,7 @@ func (e *ContainerAlreadyScheduledError) Error() string {
 
 type ContainerState struct {
 	ContainerId string          `redis:"container_id"`
+	StubId      string          `redis:"stub_id"`
 	Status      ContainerStatus `redis:"status"`
 	ScheduledAt int64           `redis:"scheduled_at"`
 }

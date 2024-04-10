@@ -76,13 +76,12 @@ func (i *taskQueueInstance) monitor() error {
 }
 
 func (i *taskQueueInstance) state() (*taskQueueState, error) {
-	patternPrefix := fmt.Sprintf("%s-%s-*", taskQueueContainerPrefix, i.stub.ExternalId)
-	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
+	containers, err := i.containerRepo.GetActiveContainersByStubId(i.stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}
 
-	failedContainers, err := i.containerRepo.GetFailedContainerCountByPrefix(patternPrefix)
+	failedContainers, err := i.containerRepo.GetFailedContainerCountByStubId(i.stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}
@@ -202,8 +201,7 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 }
 
 func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
-	patternPrefix := fmt.Sprintf("%s-%s-*", taskQueueContainerPrefix, i.stub.ExternalId)
-	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
+	containers, err := i.containerRepo.GetActiveContainersByStubId(i.stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}

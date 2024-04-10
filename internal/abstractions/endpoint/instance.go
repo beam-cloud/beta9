@@ -76,13 +76,11 @@ func (i *endpointInstance) monitor() error {
 }
 
 func (i *endpointInstance) state() (*endpointState, error) {
-	patternPrefix := fmt.Sprintf("%s-%s-*", endpointContainerPrefix, i.stub.ExternalId)
-	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
+	containers, err := i.containerRepo.GetActiveContainersByStubId(i.stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}
-
-	failedContainers, err := i.containerRepo.GetFailedContainerCountByPrefix(patternPrefix)
+	failedContainers, err := i.containerRepo.GetFailedContainerCountByStubId(i.stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}
@@ -202,8 +200,7 @@ func (i *endpointInstance) stopContainers(containersToStop int) error {
 }
 
 func (i *endpointInstance) stoppableContainers() ([]string, error) {
-	patternPrefix := fmt.Sprintf("%s-%s-*", endpointContainerPrefix, i.stub.ExternalId)
-	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
+	containers, err := i.containerRepo.GetActiveContainersByStubId(i.stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}

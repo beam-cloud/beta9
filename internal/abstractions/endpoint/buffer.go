@@ -142,8 +142,7 @@ func (rb *RequestBuffer) discoverContainers() {
 		case <-rb.ctx.Done():
 			return
 		default:
-			containerNamePrefix := common.RedisKeys.ContainerName(endpointContainerPrefix, rb.stubId, "*")
-			containerStates, err := rb.containerRepo.GetActiveContainersByPrefix(containerNamePrefix)
+			containerStates, err := rb.containerRepo.GetActiveContainersByStubId(rb.stubId)
 			if err != nil {
 				continue
 			}

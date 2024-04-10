@@ -6,7 +6,7 @@ class ServeGateway:
     def __init__(self) -> None:
         self.exit_code = 0
 
-    def shutdown(self):
+    def shutdown(self, signum, frame):
         pass
 
     def run(self):
