@@ -2,12 +2,13 @@ import atexit
 import logging
 import os
 import signal
+from typing import Callable
 
 from fastapi import FastAPI, Response
 from uvicorn import Config, Server
 
 from ..runner.common import config as cfg
-from ..runner.common import load_handler
+from ..runner.common import load_handler, load_loader
 
 logger = logging.getLogger("uvicorn.access")
 
@@ -22,12 +23,13 @@ logger.addFilter(EndpointFilter())
 
 class EndpointManager:
     def __init__(self) -> None:
-        # Manager attributes
         self.pid: int = os.getpid()
         self.exit_code: int = 0
         self.app = FastAPI()
-        self.handler = load_handler().func  # The function exists under the decorator
+        self.handler: Callable = load_handler().func  # The function exists under the decorator
+        self.loader: Callable = load_loader().func
         self.context = {"loader": "something"}  # TODO: implement context loader
+
         signal.signal(signal.SIGTERM, self.shutdown)
 
         # Attach context
@@ -64,5 +66,6 @@ if __name__ == "__main__":
         port=cfg.bind_port,
         workers=cfg.concurrency,
     )
+
     server = Server(config)
     server.run()

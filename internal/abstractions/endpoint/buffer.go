@@ -68,7 +68,7 @@ func NewRequestBuffer(
 	}
 
 	go b.discoverContainers()
-	go b.ProcessRequests()
+	go b.processRequests()
 
 	return b
 }
@@ -96,7 +96,7 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context) error {
 	}
 }
 
-func (rb *RequestBuffer) ProcessRequests() {
+func (rb *RequestBuffer) processRequests() {
 	for {
 		select {
 		case <-rb.ctx.Done():

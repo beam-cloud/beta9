@@ -2,7 +2,7 @@ import importlib
 import os
 import sys
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 from ..exceptions import RunnerException
 
@@ -17,6 +17,7 @@ class Config:
     concurrency: Optional[int]
     keep_warm_seconds: Optional[int]
     handler: str
+    loader: str
     task_id: Optional[str]
     bind_port: int
 
@@ -28,6 +29,7 @@ class Config:
         concurrency = int(os.getenv("CONCURRENCY", 1))
         keep_warm_seconds = float(os.getenv("KEEP_WARM_SECONDS", 10))
         handler = os.getenv("HANDLER")
+        loader = os.getenv("LOADER")
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
 
@@ -44,6 +46,7 @@ class Config:
             concurrency=concurrency,
             keep_warm_seconds=keep_warm_seconds,
             handler=handler,
+            loader=loader,
             task_id=task_id,
             bind_port=bind_port,
         )
@@ -57,6 +60,21 @@ def load_handler() -> Callable:
 
     try:
         module, func = config.handler.split(":")
+        target_module = importlib.import_module(module)
+        method = getattr(target_module, func)
+        return method
+    except BaseException:
+        raise RunnerException()
+
+
+def load_loader() -> Union[Callable, None]:
+    sys.path.insert(0, USER_CODE_VOLUME)
+
+    if config.loader == "" or config.loader is None:
+        return None
+
+    try:
+        module, func = config.loader.split(":")
         target_module = importlib.import_module(module)
         method = getattr(target_module, func)
         return method
