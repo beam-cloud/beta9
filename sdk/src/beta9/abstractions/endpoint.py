@@ -88,25 +88,29 @@ class _CallableWrapper:
         ):
             return False
 
-        print("stub_id: ", self.parent.stub_id)
         with terminal.progress("Serving endpoint..."):
-            return self.parent.run_sync(self._serve())
-
-    async def _serve(self):
-        async for r in self.parent.endpoint_stub.endpoint_serve(
-            EndpointServeRequest(
-                stub_id=self.parent.stub_id,
+            return self.parent.run_sync(
+                self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
             )
-        ):
-            if r.output != "":
-                terminal.detail(r.output.strip())
 
-            if r.done or r.exit_code != 0:
-                last_response = r
-                break
+    async def _serve(self, *, dir: str, object_id: str):
+        sync_task = self.parent.loop.create_task(
+            self.parent.sync_dir_to_workspace(dir=dir, object_id=object_id)
+        )
+        try:
+            async for r in self.parent.endpoint_stub.endpoint_serve(
+                EndpointServeRequest(
+                    stub_id=self.parent.stub_id,
+                )
+            ):
+                if r.output != "":
+                    terminal.detail(r.output.strip())
 
-        if last_response is None or not last_response.done or last_response.exit_code != 0:
-            terminal.error("Serve container failed ☠️")
-            return None
+                if r.done or r.exit_code != 0:
+                    last_response = r
+                    break
 
-        self.parent.sync_dir_to_workspace(dir=os.getcwd(), object_id=self.parent.object_id)
+            if last_response is None or not last_response.done or last_response.exit_code != 0:
+                terminal.error("Serve container failed ☠️")
+        finally:
+            sync_task.cancel()

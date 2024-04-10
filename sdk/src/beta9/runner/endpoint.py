@@ -34,17 +34,13 @@ class EndpointManager:
 
         signal.signal(signal.SIGTERM, self.shutdown)
 
-        # Attach context
-        # TODO: remove this
-        self.app.add_api_route("/", self.handler, methods=["POST", "GET"])
-
         @self.app.get("/health")
         def health():
             return Response(status_code=200)
 
-        # @self.app.route("/", methods=["POST", "GET"])
-        # def function():
-        #     return Response(status_code=200)
+        @self.app.route("/", methods=["POST", "GET"])
+        async def function():
+            return Response(status_code=200)
 
         # @self.app.middleware("http")
         # def add_context(request: Request, call_next):

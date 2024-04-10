@@ -1,6 +1,7 @@
+import asyncio
 import inspect
 import os
-from queue import Queue
+from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
 
 from watchdog.observers import Observer
@@ -125,29 +126,32 @@ class RunnerAbstraction(BaseAbstraction):
         function_name = func.__name__
         self.handler = f"{module_name}:{function_name}"
 
-    def _object_iterator(self, *, dir: str, object_id: str, file_update_queue: Queue):
+    async def _object_iterator(self, *, dir: str, object_id: str, file_update_queue: Queue):
         while True:
-            operation, path = file_update_queue.get()
+            try:
+                operation, path = file_update_queue.get_nowait()
 
-            if operation == ReplaceObjectContentOperation.WRITE:
-                with open(path, "rb") as f:
+                if operation == ReplaceObjectContentOperation.WRITE:
+                    with open(path, "rb") as f:
+                        yield ReplaceObjectContentRequest(
+                            object_id=object_id,
+                            path=os.path.relpath(path, start=dir),
+                            data=f.read(),
+                            op=ReplaceObjectContentOperation.WRITE,
+                        )
+
+                elif operation == ReplaceObjectContentOperation.DELETE:
                     yield ReplaceObjectContentRequest(
                         object_id=object_id,
                         path=os.path.relpath(path, start=dir),
-                        data=f.read(),
-                        op=ReplaceObjectContentOperation.WRITE,
+                        op=ReplaceObjectContentOperation.DELETE,
                     )
 
-            elif operation == ReplaceObjectContentOperation.DELETE:
-                yield ReplaceObjectContentRequest(
-                    object_id=object_id,
-                    path=os.path.relpath(path, start=dir),
-                    op=ReplaceObjectContentOperation.DELETE,
-                )
+                file_update_queue.task_done()
+            except Empty:
+                await asyncio.sleep(0.1)
 
-            file_update_queue.task_done()
-
-    def sync_dir_to_workspace(self, *, dir: str, object_id: str) -> None:
+    async def sync_dir_to_workspace(self, *, dir: str, object_id: str) -> None:
         file_update_queue = Queue()
         event_handler = SyncEventHandler(file_update_queue)
 
@@ -156,17 +160,11 @@ class RunnerAbstraction(BaseAbstraction):
         observer.start()
 
         terminal.detail(f"Watching {dir} for changes...")
-        try:
-            while True:
-                self.run_sync(
-                    self.gateway_stub.replace_object_content(
-                        replace_object_content_request_iterator=self._object_iterator(
-                            dir=dir, object_id=object_id, file_update_queue=file_update_queue
-                        )
-                    )
-                )
-        except KeyboardInterrupt:
-            observer.stop()
+        return await self.gateway_stub.replace_object_content(
+            replace_object_content_request_iterator=self._object_iterator(
+                dir=dir, object_id=object_id, file_update_queue=file_update_queue
+            )
+        )
 
     def prepare_runtime(
         self,

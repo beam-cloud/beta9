@@ -147,6 +147,7 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 	})
 }
 
+// ReplaceObjectContent modifies files in an extracted object directory
 func (gws *GatewayService) ReplaceObjectContent(stream pb.GatewayService_ReplaceObjectContentServer) error {
 	ctx := stream.Context()
 

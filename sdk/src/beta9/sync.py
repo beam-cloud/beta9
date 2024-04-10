@@ -164,18 +164,17 @@ class SyncEventHandler(FileSystemEventHandler):
         if not event.is_directory:
             self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path))
 
-        terminal.detail(f"File created: {event.src_path}")
+        terminal.warn(f"File created: {event.src_path}")
 
     def on_modified(self, event):
         if not event.is_directory:
             self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path))
-
-        terminal.detail(f"File modified: {event.src_path}")
+            terminal.warn(f"File modified: {event.src_path}")
 
     def on_deleted(self, event):
         if event.is_directory:
-            terminal.detail(f"Folder deleted: {event.src_path}")
+            terminal.warn(f"Folder deleted: {event.src_path}")
         else:
-            terminal.detail(f"File deleted: {event.src_path}")
+            terminal.warn(f"File deleted: {event.src_path}")
 
         self.queue.put((ReplaceObjectContentOperation.DELETE, event.src_path))
