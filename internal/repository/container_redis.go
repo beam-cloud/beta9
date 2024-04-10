@@ -256,20 +256,23 @@ func (cr *ContainerRedisRepository) GetActiveContainersByStubId(stubId string) (
 }
 
 func (cr *ContainerRedisRepository) GetFailedContainerCountByStubId(stubId string) (int, error) {
-	pattern := common.RedisKeys.SchedulerContainerIndex(stubId)
-
-	// Retrieve keys with the specified pattern
-	keys, err := cr.rdb.Scan(context.Background(), pattern)
+	indexKey := common.RedisKeys.SchedulerContainerIndex(stubId)
+	keys, err := cr.rdb.SMembers(context.TODO(), indexKey).Result()
 	if err != nil {
-		return -1, fmt.Errorf("failed to get keys with pattern <%v>: %w", pattern, err)
+		return -1, err
 	}
 
+	// Retrieve the value (exit code) for each key
 	failedCount := 0
 	for _, key := range keys {
-		// Retrieve the value (exit code) for each key
-		exitCode, err := cr.rdb.Get(context.Background(), key).Int()
-		if err != nil {
+		containerId := strings.Split(key, ":")[len(strings.Split(key, ":"))-1]
+		exitCodeKey := common.RedisKeys.SchedulerContainerExitCode(containerId)
+
+		exitCode, err := cr.rdb.Get(context.Background(), exitCodeKey).Int()
+		if err != nil && err != redis.Nil {
 			return -1, fmt.Errorf("failed to get value for key <%v>: %w", key, err)
+		} else if err == redis.Nil {
+			continue
 		}
 
 		// Check if the exit code is non-zero

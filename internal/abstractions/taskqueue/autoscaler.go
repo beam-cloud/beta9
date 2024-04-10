@@ -2,6 +2,7 @@ package taskqueue
 
 import (
 	"context"
+	"log"
 	"math"
 	"time"
 
@@ -76,6 +77,7 @@ func (as *autoscaler) sample() (*autoscalerSample, error) {
 	currentContainers := 0
 	state, err := instance.state()
 	if err != nil {
+		log.Printf("err: %+v\n", err)
 		currentContainers = -1
 	}
 
