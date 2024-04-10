@@ -50,7 +50,7 @@ class EndpointManager:
     def _watchdog(self):
         pass
 
-    def shutdown(self, signum, frame):
+    def shutdown(self, signum=None, frame=None):
         os._exit(self.exit_code)
 
 
