@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	abCommon "github.com/beam-cloud/beta9/internal/abstractions/common"
+	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -37,7 +37,7 @@ type RequestBuffer struct {
 	workspace               *types.Workspace
 	rdb                     *common.RedisClient
 	containerRepo           repository.ContainerRepository
-	buffer                  *abCommon.RingBuffer[request]
+	buffer                  *abstractions.RingBuffer[request]
 	availableContainers     []container
 	availableContainersLock sync.Mutex
 
@@ -59,7 +59,7 @@ func NewRequestBuffer(
 		workspace:               workspace,
 		stubId:                  stubId,
 		stubConfig:              stubConfig,
-		buffer:                  abCommon.NewRingBuffer[request](size),
+		buffer:                  abstractions.NewRingBuffer[request](size),
 		availableContainers:     []container{},
 		availableContainersLock: sync.Mutex{},
 		containerRepo:           containerRepo,

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	abCommon "github.com/beam-cloud/beta9/internal/abstractions/common"
+	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 	"github.com/beam-cloud/beta9/internal/types"
 )
 
@@ -106,7 +106,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
-	mounts := abCommon.ConfigureContainerRequestMounts(
+	mounts := abstractions.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
 		stub.Workspace.Name,
 		stubConfig,

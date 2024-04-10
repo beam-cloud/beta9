@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	abCommon "github.com/beam-cloud/beta9/internal/abstractions/common"
+	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
@@ -139,7 +139,7 @@ func (es *HttpEndpointService) stream(ctx context.Context, stream pb.EndpointSer
 		return nil
 	}
 
-	logStream, err := abCommon.NewLogStream(abCommon.LogStreamOpts{
+	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
 		SendCallback:    sendCallback,
 		ExitCallback:    exitCallback,
 		ContainerRepo:   es.containerRepo,
