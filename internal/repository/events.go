@@ -2,7 +2,6 @@ package repository
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"log"
 	"net"
@@ -12,40 +11,45 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/types"
+	cloudevents "github.com/cloudevents/sdk-go/v2"
 )
 
 type TCPEventClientRepo struct {
 	config            types.FluentBitEventConfig
-	http              *http.Client
+	client            *cloudevents.Client
 	endpointAvailable bool
 }
 
 func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			MaxConnsPerHost: config.MaxConns,
-			MaxIdleConns:    config.MaxIdleConns,
-			IdleConnTimeout: config.IdleConnTimeout,
-			DialContext: (&net.Dialer{
-				Timeout:   config.DialTimeout,
-				KeepAlive: config.KeepAlive,
-			}).DialContext,
-		},
+	// httpClient := &http.Client{
+	// 	Transport: &http.Transport{
+	// 		MaxConnsPerHost: config.MaxConns,
+	// 		MaxIdleConns:    config.MaxIdleConns,
+	// 		IdleConnTimeout: config.IdleConnTimeout,
+	// 		DialContext: (&net.Dialer{
+	// 			Timeout:   config.DialTimeout,
+	// 			KeepAlive: config.KeepAlive,
+	// 		}).DialContext,
+	// 	},
+	// }
+	client, err := cloudevents.NewClientHTTP()
+	if err != nil {
+		log.Fatalf("failed to create client, %v", err)
 	}
 
-	endpointAvailable := eventEndpointAvailable(context.TODO(), config.Endpoint, time.Duration(config.DialTimeout))
+	endpointAvailable := eventEndpointAvailable(config.Endpoint, time.Duration(config.DialTimeout))
 	if !endpointAvailable {
 		log.Println("[WARNING] fluentbit host does not appear to be up, events will be dropped")
 	}
 
 	return &TCPEventClientRepo{
 		config:            config,
-		http:              httpClient,
+		client:            &client,
 		endpointAvailable: endpointAvailable,
 	}
 }
 
-func eventEndpointAvailable(ctx context.Context, addr string, timeout time.Duration) bool {
+func eventEndpointAvailable(addr string, timeout time.Duration) bool {
 	addr = strings.NewReplacer("http://", "", "https://", "").Replace(addr)
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
@@ -55,19 +59,22 @@ func eventEndpointAvailable(ctx context.Context, addr string, timeout time.Durat
 	return true
 }
 
-func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion string, data []byte) (types.Event, error) {
+func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion string, data interface{}) (cloudevents.Event, error) {
 	objectId, err := common.GenerateObjectId()
 	if err != nil {
-		return types.Event{}, err
+		return cloudevents.Event{}, err
+
 	}
 
-	return types.Event{
-		Id:            objectId,
-		Name:          eventName,
-		Created:       time.Now().Unix(),
-		SchemaVersion: schemaVersion,
-		Data:          data,
-	}, nil
+	event := cloudevents.NewEvent()
+	event.SetID(objectId)
+	event.SetSource("beam-cloud")
+	event.SetType(eventName)
+	event.SetSpecVersion(schemaVersion)
+	event.SetTime(time.Now())
+	event.SetData(cloudevents.ApplicationJSON, data)
+
+	return event, nil
 }
 
 func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, data interface{}) {
@@ -75,13 +82,7 @@ func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, d
 		return
 	}
 
-	dataBytes, err := json.Marshal(data)
-	if err != nil {
-		log.Println("failed to marshal event:", err)
-		return
-	}
-
-	event, err := t.createEventObject(eventName, schemaVersion, dataBytes)
+	event, err := t.createEventObject(eventName, schemaVersion, data)
 	if err != nil {
 		log.Println("failed to create event object:", err)
 		return
