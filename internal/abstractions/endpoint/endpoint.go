@@ -109,7 +109,7 @@ func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	// TODO: check auth here (on stubId/authInfo)
-	err := es.createEndpointInstance(in.StubId, withAutoscaler(newDeploymentAutoscaler), withEntryPoint(func(instance *endpointInstance) []string {
+	err := es.createEndpointInstance(in.StubId, withEntryPoint(func(instance *endpointInstance) []string {
 		return []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 	}))
 	if err != nil {
@@ -281,7 +281,7 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 	}
 
 	if instance.autoscaler == nil {
-		instance.autoscaler = newDeploymentAutoscaler(instance)
+		instance.autoscaler = abstractions.NewAutoscaler(instance, deploymentSampleFunc, deploymentScaleFunc)
 	}
 
 	if len(instance.entryPoint) == 0 {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 	"github.com/beam-cloud/beta9/internal/auth"
 	common "github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
@@ -564,7 +565,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string) error {
 		client:             tq.queueClient,
 	}
 
-	autoscaler := newAutoscaler(queue)
+	autoscaler := abstractions.NewAutoscaler(queue, taskQueueSampleFunc, taskQueueScaleFunc)
 	queue.autoscaler = autoscaler
 
 	tq.queueInstances.Set(stubId, queue)

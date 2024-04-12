@@ -1,26 +1,13 @@
 package endpoint
 
 import (
-	"context"
 	"math"
 	"time"
 
-	rolling "github.com/asecurityteam/rolling"
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 )
 
-type autoscaler struct {
-	instance         *endpointInstance
-	samples          *autoscalingWindows
-	mostRecentSample *autoscalerSample
-}
-
-type autoscalingWindows struct {
-	TotalRequests     *rolling.PointPolicy
-	CurrentContainers *rolling.PointPolicy
-}
-
-type autoscalerSample struct {
+type endpointSample struct {
 	TotalRequests     int64
 	CurrentContainers int64
 }
@@ -31,81 +18,44 @@ const (
 	sampleRate  time.Duration = time.Duration(1000) * time.Millisecond // Time between samples
 )
 
-// Create a new autoscaler
-func newDeploymentAutoscaler(i *endpointInstance) abstractions.AutoScaler {
-	return &autoscaler{
-		instance:         i,
-		mostRecentSample: nil,
-		samples: &autoscalingWindows{
-			TotalRequests:     rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
-			CurrentContainers: rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
-		},
-	}
-}
-
 // Retrieve a datapoint from the request bucket
-func (as *autoscaler) sample() (*autoscalerSample, error) {
-	instance := as.instance
-
-	totalRequests := instance.buffer.Length()
+func deploymentSampleFunc(i *endpointInstance) (*endpointSample, error) {
+	totalRequests := i.buffer.Length()
 
 	currentContainers := 0
-	state, err := instance.state()
+	state, err := i.state()
 	if err != nil {
 		currentContainers = -1
 	}
 
 	currentContainers = state.PendingContainers + state.RunningContainers
 
-	sample := &autoscalerSample{
+	sample := &endpointSample{
 		TotalRequests:     int64(totalRequests),
 		CurrentContainers: int64(currentContainers),
 	}
 
-	// Cache most recent autoscaler sample so RequestBucket can access without hitting redis
-	as.mostRecentSample = sample
-
 	return sample, nil
 }
 
-func (as *autoscaler) scaleByTotalRequests(sample *autoscalerSample) *abstractions.AutoscaleResult {
+func deploymentScaleFunc(instance *endpointInstance, sample *endpointSample) *abstractions.AutoscalerResult {
 	desiredContainers := 0
 
 	if sample.TotalRequests == 0 {
 		desiredContainers = 0
 	} else {
-		desiredContainers = int(sample.TotalRequests / int64(as.instance.stubConfig.Concurrency))
-		if sample.TotalRequests%int64(as.instance.stubConfig.Concurrency) > 0 {
+		desiredContainers = int(sample.TotalRequests / int64(instance.stubConfig.Concurrency))
+		if sample.TotalRequests%int64(instance.stubConfig.Concurrency) > 0 {
 			desiredContainers += 1
 		}
 
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
-		maxReplicas := math.Min(float64(as.instance.stubConfig.MaxContainers), float64(maxReplicas))
+		maxReplicas := math.Min(float64(instance.stubConfig.MaxContainers), float64(maxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
 
-	return &abstractions.AutoscaleResult{
+	return &abstractions.AutoscalerResult{
 		DesiredContainers: desiredContainers,
 		ResultValid:       true,
-	}
-}
-
-// Start the autoscaler
-func (as *autoscaler) Start(ctx context.Context) {
-	ticker := time.NewTicker(sampleRate)
-	defer ticker.Stop()
-
-	for {
-		select {
-
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if as.instance.buffer.Length() > 0 {
-				as.instance.scaleEventChan <- 1
-			} else {
-				as.instance.scaleEventChan <- 1
-			}
-		}
 	}
 }

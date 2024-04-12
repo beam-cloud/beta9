@@ -88,10 +88,13 @@ class _CallableWrapper:
         ):
             return False
 
-        with terminal.progress("Serving endpoint..."):
-            return self.parent.run_sync(
-                self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
-            )
+        try:
+            with terminal.progress("Serving endpoint..."):
+                return self.parent.run_sync(
+                    self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
+                )
+        except KeyboardInterrupt:
+            terminal.prompt(text="Would you like to stop the container? (y/n)", default="y")
 
     async def _serve(self, *, dir: str, object_id: str):
         sync_task = self.parent.loop.create_task(

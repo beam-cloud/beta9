@@ -24,11 +24,11 @@ type endpointState struct {
 	FailedContainers   int
 }
 
-func withAutoscaler(constructor func(i *endpointInstance) abstractions.AutoScaler) func(*endpointInstance) {
-	return func(i *endpointInstance) {
-		i.autoscaler = constructor(i)
-	}
-}
+// func withAutoscaler(constructor func(i *endpointInstance) abstractions.AutoScaler) func(*endpointInstance) {
+// 	return func(i *endpointInstance) {
+// 		i.autoscaler = constructor(i)
+// 	}
+// }
 
 func withEntryPoint(entryPoint func(instance *endpointInstance) []string) func(*endpointInstance) {
 	return func(i *endpointInstance) {
@@ -53,7 +53,7 @@ type endpointInstance struct {
 	scaleEventChan     chan int
 	rdb                *common.RedisClient
 	containerRepo      repository.ContainerRepository
-	autoscaler         abstractions.AutoScaler
+	autoscaler         *abstractions.AutoScaler[*endpointInstance, *endpointSample]
 	buffer             *RequestBuffer
 }
 
@@ -213,6 +213,10 @@ func (i *endpointInstance) stopContainers(containersToStop int) error {
 	}
 
 	return nil
+}
+
+func (i *endpointInstance) ConsumeScaleResult(result *abstractions.AutoscalerResult) {
+	i.scaleEventChan <- result.DesiredContainers
 }
 
 func (i *endpointInstance) stoppableContainers() ([]string, error) {

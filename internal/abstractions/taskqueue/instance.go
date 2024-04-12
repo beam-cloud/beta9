@@ -8,6 +8,7 @@ import (
 	"path"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 	common "github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
@@ -39,12 +40,16 @@ type taskQueueInstance struct {
 	scaleEventChan     chan int
 	rdb                *common.RedisClient
 	containerRepo      repository.ContainerRepository
-	autoscaler         *autoscaler
+	autoscaler         *abstractions.AutoScaler[*taskQueueInstance, *taskQueueSample]
 	client             *taskQueueClient
 }
 
+func (i *taskQueueInstance) ConsumeScaleResult(result *abstractions.AutoscalerResult) {
+	i.scaleEventChan <- result.DesiredContainers
+}
+
 func (i *taskQueueInstance) monitor() error {
-	go i.autoscaler.start(i.ctx) // Start the autoscaler
+	go i.autoscaler.Start(i.ctx) // Start the autoscaler
 
 	for {
 		select {

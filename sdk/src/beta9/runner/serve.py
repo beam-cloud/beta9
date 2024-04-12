@@ -47,7 +47,7 @@ class ServeGateway:
         self.restart_event = Event()
         self.exit_event = Event()
 
-        # Set up the file change event handler and observer
+        # Set up the file change event handler & observer
         self.event_handler = SyncEventHandler(self.trigger_restart)
         self.observer = PollingObserver()
         self.observer.schedule(self.event_handler, self.watch_dir, recursive=True)
