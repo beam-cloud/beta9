@@ -6,7 +6,7 @@ import (
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 )
 
-type taskQueueSample struct {
+type taskQueueAutoscalerSample struct {
 	QueueLength       int64
 	RunningTasks      int64
 	CurrentContainers int
@@ -14,7 +14,7 @@ type taskQueueSample struct {
 }
 
 // taskQueueSampleFunc retrieves an autoscaling sample from the task queue instance
-func taskQueueSampleFunc(i *taskQueueInstance) (*taskQueueSample, error) {
+func taskQueueSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSample, error) {
 	queueLength, err := i.client.QueueLength(i.ctx, i.workspace.Name, i.stub.ExternalId)
 	if err != nil {
 		queueLength = -1
@@ -38,7 +38,7 @@ func taskQueueSampleFunc(i *taskQueueInstance) (*taskQueueSample, error) {
 
 	currentContainers = state.PendingContainers + state.RunningContainers
 
-	sample := &taskQueueSample{
+	sample := &taskQueueAutoscalerSample{
 		QueueLength:       queueLength,
 		RunningTasks:      int64(runningTasks),
 		CurrentContainers: currentContainers,
@@ -53,7 +53,7 @@ func taskQueueSampleFunc(i *taskQueueInstance) (*taskQueueSample, error) {
 }
 
 // taskQueueScaleFunc scales based on the number of items in the queue
-func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueSample) *abstractions.AutoscalerResult {
+func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 0
 
 	if s.QueueLength == 0 {

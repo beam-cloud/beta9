@@ -40,7 +40,7 @@ type taskQueueInstance struct {
 	scaleEventChan     chan int
 	rdb                *common.RedisClient
 	containerRepo      repository.ContainerRepository
-	autoscaler         *abstractions.AutoScaler[*taskQueueInstance, *taskQueueSample]
+	autoscaler         *abstractions.AutoScaler[*taskQueueInstance, *taskQueueAutoscalerSample]
 	client             *taskQueueClient
 }
 

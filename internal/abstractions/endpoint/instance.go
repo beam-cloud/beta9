@@ -24,11 +24,11 @@ type endpointState struct {
 	FailedContainers   int
 }
 
-// func withAutoscaler(constructor func(i *endpointInstance) abstractions.AutoScaler) func(*endpointInstance) {
-// 	return func(i *endpointInstance) {
-// 		i.autoscaler = constructor(i)
-// 	}
-// }
+func withAutoscaler(constructor func(i *endpointInstance) *abstractions.AutoScaler[*endpointInstance, *endpointAutoscalerSample]) func(*endpointInstance) {
+	return func(i *endpointInstance) {
+		i.autoscaler = constructor(i)
+	}
+}
 
 func withEntryPoint(entryPoint func(instance *endpointInstance) []string) func(*endpointInstance) {
 	return func(i *endpointInstance) {

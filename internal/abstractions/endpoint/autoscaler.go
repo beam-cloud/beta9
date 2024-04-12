@@ -11,8 +11,8 @@ type endpointAutoscalerSample struct {
 	CurrentContainers int64
 }
 
-// Retrieve a datapoint from the request bucket
-func deploymentSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
+// endpointDeploymentSampleFunc retrieve a sample from the endpoint instance
+func endpointDeploymentSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
 	totalRequests := i.buffer.Length()
 
 	currentContainers := 0
@@ -31,7 +31,8 @@ func deploymentSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error
 	return sample, nil
 }
 
-func deploymentScaleFunc(instance *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
+// endpointDeploymentSampleFunc computes a scale result for an endpoint deployment
+func endpointDeploymentScaleFunc(instance *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 0
 
 	if sample.TotalRequests == 0 {
@@ -49,6 +50,18 @@ func deploymentScaleFunc(instance *endpointInstance, sample *endpointAutoscalerS
 
 	return &abstractions.AutoscalerResult{
 		DesiredContainers: desiredContainers,
+		ResultValid:       true,
+	}
+}
+
+func endpointServeSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
+	sample := &endpointAutoscalerSample{}
+	return sample, nil
+}
+
+func endpointServeScaleFunc(instance *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
+	return &abstractions.AutoscalerResult{
+		DesiredContainers: 1,
 		ResultValid:       true,
 	}
 }
