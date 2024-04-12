@@ -53,7 +53,7 @@ type endpointInstance struct {
 	scaleEventChan     chan int
 	rdb                *common.RedisClient
 	containerRepo      repository.ContainerRepository
-	autoscaler         *abstractions.AutoScaler[*endpointInstance, *endpointSample]
+	autoscaler         *abstractions.AutoScaler[*endpointInstance, *endpointAutoscalerSample]
 	buffer             *RequestBuffer
 }
 

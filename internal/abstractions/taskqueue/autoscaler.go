@@ -52,7 +52,7 @@ func taskQueueSampleFunc(i *taskQueueInstance) (*taskQueueSample, error) {
 	return sample, nil
 }
 
-// Scale based on the number of items in the queue
+// taskQueueScaleFunc scales based on the number of items in the queue
 func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueSample) *abstractions.AutoscalerResult {
 	desiredContainers := 0
 

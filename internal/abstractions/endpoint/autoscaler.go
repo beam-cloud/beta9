@@ -6,13 +6,13 @@ import (
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 )
 
-type endpointSample struct {
+type endpointAutoscalerSample struct {
 	TotalRequests     int64
 	CurrentContainers int64
 }
 
 // Retrieve a datapoint from the request bucket
-func deploymentSampleFunc(i *endpointInstance) (*endpointSample, error) {
+func deploymentSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
 	totalRequests := i.buffer.Length()
 
 	currentContainers := 0
@@ -23,7 +23,7 @@ func deploymentSampleFunc(i *endpointInstance) (*endpointSample, error) {
 
 	currentContainers = state.PendingContainers + state.RunningContainers
 
-	sample := &endpointSample{
+	sample := &endpointAutoscalerSample{
 		TotalRequests:     int64(totalRequests),
 		CurrentContainers: int64(currentContainers),
 	}
@@ -31,7 +31,7 @@ func deploymentSampleFunc(i *endpointInstance) (*endpointSample, error) {
 	return sample, nil
 }
 
-func deploymentScaleFunc(instance *endpointInstance, sample *endpointSample) *abstractions.AutoscalerResult {
+func deploymentScaleFunc(instance *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 0
 
 	if sample.TotalRequests == 0 {

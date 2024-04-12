@@ -3,8 +3,6 @@ package abstractions
 import (
 	"context"
 	"time"
-
-	rolling "github.com/asecurityteam/rolling"
 )
 
 type AutoscalerResult struct {
@@ -15,7 +13,6 @@ type AutoscalerResult struct {
 type AutoScaler[I AbstractionInstance, S AutoscalerSample] struct {
 	instance         I
 	mostRecentSample S
-	rollingWindows   map[string]*rolling.PointPolicy
 	sampleFunc       func(I) (S, error)
 	scaleFunc        func(I, S) *AutoscalerResult
 }
@@ -29,20 +26,14 @@ const (
 type AbstractionInstance interface {
 	ConsumeScaleResult(*AutoscalerResult)
 }
+
 type AutoscalerSample interface{}
 
 func NewAutoscaler[I AbstractionInstance, S AutoscalerSample](instance I, sampleFunc func(I) (S, error), scaleFunc func(I, S) *AutoscalerResult) *AutoScaler[I, S] {
-	windows := map[string]*rolling.PointPolicy{
-		"QueueLength":       rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
-		"RunningTasks":      rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
-		"CurrentContainers": rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
-		"TaskDuration":      rolling.NewPointPolicy(rolling.NewWindow(windowSize)),
-	}
 	return &AutoScaler[I, S]{
-		instance:       instance,
-		rollingWindows: windows,
-		sampleFunc:     sampleFunc,
-		scaleFunc:      scaleFunc,
+		instance:   instance,
+		sampleFunc: sampleFunc,
+		scaleFunc:  scaleFunc,
 	}
 }
 
@@ -60,6 +51,8 @@ func (as *AutoScaler[I, S]) Start(ctx context.Context) {
 			if err != nil {
 				continue
 			}
+
+			as.mostRecentSample = sample
 
 			scaleResult := as.scaleFunc(as.instance, sample)
 			if scaleResult != nil && scaleResult.ResultValid {
