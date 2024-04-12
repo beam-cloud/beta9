@@ -6,10 +6,6 @@ import (
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 )
 
-const (
-	maxReplicas uint = 5 // Maximum number of desired replicas that can be returned
-)
-
 type taskQueueSample struct {
 	QueueLength       int64
 	RunningTasks      int64
@@ -17,7 +13,7 @@ type taskQueueSample struct {
 	TaskDuration      float64
 }
 
-// Retrieve a datapoint from the request bucket
+// taskQueueSampleFunc retrieves an autoscaling sample from the task queue instance
 func taskQueueSampleFunc(i *taskQueueInstance) (*taskQueueSample, error) {
 	queueLength, err := i.client.QueueLength(i.ctx, i.workspace.Name, i.stub.ExternalId)
 	if err != nil {
@@ -69,7 +65,7 @@ func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueSample) *abstractions.
 		}
 
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
-		maxReplicas := math.Min(float64(i.stubConfig.MaxContainers), float64(maxReplicas))
+		maxReplicas := math.Min(float64(i.stubConfig.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
 

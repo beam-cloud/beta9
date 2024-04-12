@@ -2,7 +2,6 @@ package endpoint
 
 import (
 	"math"
-	"time"
 
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 )
@@ -11,12 +10,6 @@ type endpointSample struct {
 	TotalRequests     int64
 	CurrentContainers int64
 }
-
-const (
-	maxReplicas uint          = 5                                      // Maximum number of desired replicas that can be returned
-	windowSize  int           = 60                                     // Number of samples in the sampling window
-	sampleRate  time.Duration = time.Duration(1000) * time.Millisecond // Time between samples
-)
 
 // Retrieve a datapoint from the request bucket
 func deploymentSampleFunc(i *endpointInstance) (*endpointSample, error) {
@@ -50,7 +43,7 @@ func deploymentScaleFunc(instance *endpointInstance, sample *endpointSample) *ab
 		}
 
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
-		maxReplicas := math.Min(float64(instance.stubConfig.MaxContainers), float64(maxReplicas))
+		maxReplicas := math.Min(float64(instance.stubConfig.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
 
