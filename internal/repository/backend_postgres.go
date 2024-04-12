@@ -464,6 +464,122 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 	return qb
 }
 
+func (c *PostgresBackendRepository) ListTasksForMetrics(ctx context.Context, filters types.TaskFilter) ([]types.Task, error) {
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+		"t.status, t.started_at, t.ended_at, t.created_at",
+	).From("task t").OrderBy("t.created_at DESC")
+
+	// Apply filters
+	if filters.WorkspaceID > 0 {
+		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
+	}
+
+	if filters.StubId != "" {
+		qb = qb.Join("stub s ON t.stub_id = s.id")
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
+	}
+
+	sql, args, err := qb.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	var tasks []types.Task
+	err = c.client.SelectContext(ctx, &tasks, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return tasks, nil
+}
+
+func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountPerDeployment, error) {
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+		"d.name as deployment_name, COUNT(t.id) AS task_count",
+	).
+		From("deployment d").
+		Join("task t ON d.stub_id = t.stub_id").
+		GroupBy(
+			"d.name",
+		).OrderBy("task_count DESC")
+
+	// Apply filters
+	if filters.WorkspaceID > 0 {
+		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
+	}
+
+	if filters.StubId != "" {
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
+	}
+
+	if filters.CreatedAtStart != "" {
+		qb = qb.Where(squirrel.GtOrEq{"t.created_at": filters.CreatedAtStart})
+	}
+
+	if filters.CreatedAtEnd != "" {
+		qb = qb.Where(squirrel.LtOrEq{"t.created_at": filters.CreatedAtEnd})
+	}
+
+	if filters.Status != "" {
+		statuses := strings.Split(filters.Status, ",")
+		if len(statuses) > 0 {
+			qb = qb.Where(squirrel.Eq{"t.status": statuses})
+		}
+	}
+
+	if filters.MinDuration > 0 {
+		qb = qb.Where("EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000 >= ?", filters.MinDuration)
+	}
+
+	if filters.MaxDuration > 0 {
+		qb = qb.Where("EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000 <= ?", filters.MaxDuration)
+	}
+
+	sql, args, err := qb.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	var taskCounts []types.TaskCountPerDeployment
+	err = c.client.SelectContext(ctx, &taskCounts, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return taskCounts, nil
+}
+
+func (c *PostgresBackendRepository) AggregateDeploymentTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error) {
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+		"DATE_TRUNC('hour', t.created_at) as time, COUNT(t.id) as count",
+	).
+		From("task t").GroupBy("time").OrderBy("time DESC")
+
+	// Apply filters
+	if filters.WorkspaceID > 0 {
+		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
+	}
+
+	if filters.StubId != "" {
+		qb = qb.Join("stub s ON t.stub_id = s.id")
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
+	}
+
+	sql, args, err := qb.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	var taskCounts []types.TaskCountByTime
+	err = c.client.SelectContext(ctx, &taskCounts, sql, args...)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	return taskCounts, nil
+}
+
 func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, filters types.TaskFilter) ([]types.TaskWithRelated, error) {
 	qb := c.listTaskWithRelatedQueryBuilder(filters)
 
