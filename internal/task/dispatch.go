@@ -61,6 +61,15 @@ func (d *Dispatcher) Register(executor string, taskFactory func(ctx context.Cont
 	d.executors.Set(executor, taskFactory)
 }
 
+func (d *Dispatcher) SendAndExecute(ctx context.Context, executor string, workspaceName, stubId string, payload *types.TaskPayload, policy types.TaskPolicy) (types.TaskInterface, error) {
+	task, err := d.Send(ctx, executor, workspaceName, stubId, payload, policy)
+	if err != nil {
+		return nil, err
+	}
+
+	return task, task.Execute(ctx)
+}
+
 func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, stubId string, payload *types.TaskPayload, policy types.TaskPolicy) (types.TaskInterface, error) {
 	taskMessage := d.getTaskMessage()
 	taskMessage.Executor = executor
@@ -89,11 +98,6 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 	taskId := task.Metadata().TaskId
 
 	err = d.taskRepo.SetTaskState(ctx, workspaceName, stubId, taskId, msg)
-	if err != nil {
-		return nil, err
-	}
-
-	err = task.Execute(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -22,7 +22,7 @@ type TaskMetadata struct {
 }
 
 type TaskInterface interface {
-	Execute(ctx context.Context) error
+	Execute(ctx context.Context, options ...interface{}) error
 	Cancel(ctx context.Context) error
 	Retry(ctx context.Context) error
 	HeartBeat(ctx context.Context) (bool, error)

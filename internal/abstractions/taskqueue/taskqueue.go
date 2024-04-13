@@ -107,7 +107,7 @@ type TaskQueueTask struct {
 	tq  *RedisTaskQueue
 }
 
-func (t *TaskQueueTask) Execute(ctx context.Context) error {
+func (t *TaskQueueTask) Execute(ctx context.Context, options ...interface{}) error {
 	queue, exists := t.tq.queueInstances.Get(t.msg.StubId)
 	if !exists {
 		err := t.tq.createQueueInstance(t.msg.StubId)
@@ -226,7 +226,7 @@ func (tq *RedisTaskQueue) put(ctx context.Context, workspaceName, stubId string,
 		return "", err
 	}
 
-	task, err := tq.taskDispatcher.Send(ctx, string(types.ExecutorTaskQueue), workspaceName, stubId, payload, stubConfig.TaskPolicy)
+	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), workspaceName, stubId, payload, stubConfig.TaskPolicy)
 	if err != nil {
 		return "", err
 	}

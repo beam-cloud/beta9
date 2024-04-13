@@ -17,7 +17,7 @@ type FunctionTask struct {
 	containerId string
 }
 
-func (t *FunctionTask) Execute(ctx context.Context) error {
+func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) error {
 	stub, err := t.fs.backendRepo.GetStubByExternalId(ctx, t.msg.StubId)
 	if err != nil {
 		return err

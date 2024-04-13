@@ -1,10 +1,11 @@
 package endpoint
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"sync"
@@ -19,8 +20,9 @@ import (
 )
 
 type request struct {
-	ctx  echo.Context
-	done chan bool
+	ctx     echo.Context
+	payload *types.TaskPayload
+	done    chan bool
 }
 
 type container struct {
@@ -73,11 +75,12 @@ func NewRequestBuffer(
 	return b
 }
 
-func (rb *RequestBuffer) ForwardRequest(ctx echo.Context) error {
+func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPayload) error {
 	done := make(chan bool)
 	rb.buffer.Push(request{
-		ctx:  ctx,
-		done: done,
+		ctx:     ctx,
+		done:    done,
+		payload: payload,
 	})
 
 	// rb.stubId
@@ -181,15 +184,21 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
-	// select a random available container to forward the request to
+	// Select a random available container to forward the request to
 	randIndex := rand.Intn(len(rb.availableContainers))
 	c := rb.availableContainers[randIndex]
 	rb.availableContainersLock.Unlock()
 
 	request := req.ctx.Request()
-	containerUrl := "http://" + c.address
 
-	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, request.Body)
+	requestBody, err := json.Marshal(req.payload)
+	if err != nil {
+		return
+	}
+
+	containerUrl := fmt.Sprintf("http://%s", c.address)
+
+	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, bytes.NewReader(requestBody))
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
@@ -231,14 +240,10 @@ func (rb *RequestBuffer) afterRequest(req request, containerId string) {
 		return
 	}
 
-	err := rb.rdb.SetEx(
-		context.TODO(),
+	rb.rdb.SetEx(
+		context.Background(),
 		Keys.endpointKeepWarmLock(rb.workspace.Name, rb.stubId, containerId),
 		1,
 		time.Duration(rb.stubConfig.KeepWarmSeconds)*time.Second,
-	).Err()
-	if err != nil {
-		log.Println("Error setting keep warm lock", err)
-		return
-	}
+	)
 }

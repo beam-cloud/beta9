@@ -32,19 +32,19 @@ func endpointDeploymentSampleFunc(i *endpointInstance) (*endpointAutoscalerSampl
 }
 
 // endpointDeploymentSampleFunc computes a scale result for an endpoint deployment
-func endpointDeploymentScaleFunc(instance *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
+func endpointDeploymentScaleFunc(i *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 0
 
 	if sample.TotalRequests == 0 {
 		desiredContainers = 0
 	} else {
-		desiredContainers = int(sample.TotalRequests / int64(instance.stubConfig.Concurrency))
-		if sample.TotalRequests%int64(instance.stubConfig.Concurrency) > 0 {
+		desiredContainers = int(sample.TotalRequests / int64(i.stubConfig.Concurrency))
+		if sample.TotalRequests%int64(i.stubConfig.Concurrency) > 0 {
 			desiredContainers += 1
 		}
 
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
-		maxReplicas := math.Min(float64(instance.stubConfig.MaxContainers), float64(abstractions.MaxReplicas))
+		maxReplicas := math.Min(float64(i.stubConfig.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
 
@@ -59,7 +59,11 @@ func endpointServeSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, er
 	return sample, nil
 }
 
-func endpointServeScaleFunc(instance *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
+func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
+	// Criteria for serve autoscaling
+	//
+	// i.rdb.Get(i.ctx, Keys.endpointKeepWarmLock(i.workspace.Name, i.stub.ExternalId, "*"))
+
 	return &abstractions.AutoscalerResult{
 		DesiredContainers: 1,
 		ResultValid:       true,

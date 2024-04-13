@@ -10,6 +10,7 @@ import (
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
+	"github.com/beam-cloud/beta9/internal/task"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
@@ -39,6 +40,7 @@ type HttpEndpointService struct {
 	tailscale         *network.Tailscale
 	keyEventManager   *common.KeyEventManager
 	keyEventChan      chan common.KeyEvent
+	taskDispatcher    *task.Dispatcher
 }
 
 var (
@@ -50,11 +52,12 @@ var (
 )
 
 type EndpointServiceOpts struct {
-	Config      types.AppConfig
-	RedisClient *common.RedisClient
-	Scheduler   *scheduler.Scheduler
-	RouteGroup  *echo.Group
-	Tailscale   *network.Tailscale
+	Config         types.AppConfig
+	RedisClient    *common.RedisClient
+	Scheduler      *scheduler.Scheduler
+	RouteGroup     *echo.Group
+	Tailscale      *network.Tailscale
+	TaskDispatcher *task.Dispatcher
 }
 
 func NewEndpointService(
@@ -93,15 +96,25 @@ func NewEndpointService(
 		containerRepo:     containerRepo,
 		endpointInstances: common.NewSafeMap[*endpointInstance](),
 		tailscale:         opts.Tailscale,
+		taskDispatcher:    opts.TaskDispatcher,
 	}
 
 	go es.handleContainerEvents()
+
+	es.taskDispatcher.Register(string(types.ExecutorTaskQueue), es.endpointTaskFactory)
 
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(backendRepo)
 	registerEndpointRoutes(opts.RouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
 
 	return es, nil
+}
+
+func (es *HttpEndpointService) endpointTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
+	return &EndpointTask{
+		es:  es,
+		msg: &msg,
+	}, nil
 }
 
 func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream pb.EndpointService_EndpointServeServer) error {
@@ -224,17 +237,27 @@ func (es *HttpEndpointService) forwardRequest(
 	ctx echo.Context,
 	stubId string,
 ) error {
-	instances, exists := es.endpointInstances.Get(stubId)
+	payload, err := task.SerializeHttpPayload(ctx)
+	if err != nil {
+		return err
+	}
+
+	instance, exists := es.endpointInstances.Get(stubId)
 	if !exists {
 		err := es.createEndpointInstance(stubId)
 		if err != nil {
 			return err
 		}
 
-		instances, _ = es.endpointInstances.Get(stubId)
+		instance, _ = es.endpointInstances.Get(stubId)
 	}
 
-	return instances.buffer.ForwardRequest(ctx)
+	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorTaskQueue), instance.workspace.Name, stubId, payload, instance.stubConfig.TaskPolicy)
+	if err != nil {
+		return err
+	}
+
+	return task.Execute(ctx.Request().Context(), ctx)
 }
 
 func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...func(*endpointInstance)) error {
