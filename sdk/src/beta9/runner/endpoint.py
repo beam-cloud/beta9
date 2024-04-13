@@ -4,20 +4,21 @@ import os
 import signal
 import traceback
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 from typing import Any, Callable, Tuple
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, Response
 from grpclib.client import Channel
 from uvicorn import Config, Server
 
 from ..clients.gateway import (
     EndTaskRequest,
-    EndTaskResponse,
     GatewayServiceStub,
     StartTaskRequest,
-    StartTaskResponse,
 )
 from ..config import with_runner_context
+from ..logging import StdoutJsonInterceptor
 from ..runner.common import config as cfg
 from ..runner.common import load_handler
 from ..type import TaskStatus
@@ -57,29 +58,47 @@ class EndpointManager:
         @self.app.route("/", methods=["POST", "GET"])
         async def function(request: Request):
             payload = await request.json()
+            task_id = payload["kwargs"]["task_id"]
 
-            r: StartTaskResponse = await request.app.state.gateway_stub.start_task(
-                StartTaskRequest(
-                    task_id=payload["kwargs"]["task_id"], container_id=cfg.container_id
-                )
+            await request.app.state.gateway_stub.start_task(
+                StartTaskRequest(task_id=task_id, container_id=cfg.container_id)
             )
 
-            print("R.ok?: ", r.ok)
-            print(payload)
-            result = self._call_function(payload)
-            print(result)
+            task_status = TaskStatus.Complete
+            status_code = HTTPStatus.OK
 
-            r: EndTaskResponse = await request.app.state.gateway_stub.end_task(
+            with StdoutJsonInterceptor(task_id=task_id):
+                result, err = self._call_function(payload)
+                if err:
+                    task_status = TaskStatus.Error
+
+            await request.app.state.gateway_stub.end_task(
                 EndTaskRequest(
-                    task_id=payload["kwargs"]["task_id"],
+                    task_id=task_id,
                     container_id=cfg.container_id,
                     keep_warm_seconds=cfg.keep_warm_seconds,
-                    task_status=TaskStatus.Complete,
+                    task_status=task_status,
                 )
             )
-            print("R.ok?: ", r.ok)
 
-            return Response(status_code=200)
+            if task_status == TaskStatus.Error:
+                status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+
+            return self._create_response(body=result, status_code=status_code)
+
+    def _create_response(self, *, body: Any, status_code: int = HTTPStatus.OK) -> Response:
+        if isinstance(body, Response):
+            return body
+
+        try:
+            return JSONResponse(body, status_code=status_code)
+        except BaseException:
+            logger.exception("Response serialization failed")
+
+            return JSONResponse(
+                {"errors": [traceback.format_exc()]},
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
 
     def _call_function(self, payload: dict) -> Tuple[Response, Any]:
         error = None
