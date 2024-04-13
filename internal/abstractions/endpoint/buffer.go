@@ -188,14 +188,12 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	rb.availableContainersLock.Unlock()
 
 	request := req.ctx.Request()
-
 	requestBody, err := json.Marshal(req.payload)
 	if err != nil {
 		return
 	}
 
 	containerUrl := fmt.Sprintf("http://%s", c.address)
-
 	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, bytes.NewReader(requestBody))
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{

@@ -23,6 +23,10 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 	task.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatusRunning
 
+	if in.ContainerId != "" {
+		task.ContainerId = in.ContainerId
+	}
+
 	err = gws.taskDispatcher.Claim(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId, task.ContainerId)
 	if err != nil {
 		return &pb.StartTaskResponse{
@@ -46,6 +50,10 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatus(in.TaskStatus)
+
+	if in.ContainerId != "" {
+		task.ContainerId = in.ContainerId
+	}
 
 	err = gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, in.TaskId)
 	if err != nil {
