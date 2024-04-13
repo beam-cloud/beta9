@@ -54,6 +54,7 @@ class EndpointManager:
             print("R.ok?: ", r.ok)
 
             payload = await request.json()
+            print(payload)
             result = self._call_function(payload)
             print(result)
 
@@ -67,8 +68,16 @@ class EndpointManager:
         error = None
         response_body = {}
 
+        args = payload.get("args", [])
+        if args is None:
+            args = []
+
+        kwargs = payload.get("kwargs", {})
+        if kwargs is None:
+            kwargs = {}
+
         try:
-            response_body = self.handler(**payload)
+            response_body = self.handler(*args, **kwargs)
         except BaseException:
             logger.exception("Unhandled exception")
             error = traceback.format_exc()
