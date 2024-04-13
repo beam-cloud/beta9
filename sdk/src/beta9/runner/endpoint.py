@@ -10,10 +10,17 @@ from fastapi import FastAPI, Request, Response
 from grpclib.client import Channel
 from uvicorn import Config, Server
 
-from ..clients.gateway import GatewayServiceStub, StartTaskRequest, StartTaskResponse
+from ..clients.gateway import (
+    EndTaskRequest,
+    EndTaskResponse,
+    GatewayServiceStub,
+    StartTaskRequest,
+    StartTaskResponse,
+)
 from ..config import with_runner_context
 from ..runner.common import config as cfg
 from ..runner.common import load_handler
+from ..type import TaskStatus
 
 
 class EndpointFilter(logging.Filter):
@@ -44,23 +51,33 @@ class EndpointManager:
 
         @self.app.get("/health")
         def health():
+            # TODO: wait for loader to complete before returning a 200
             return Response(status_code=200)
 
         @self.app.route("/", methods=["POST", "GET"])
         async def function(request: Request):
-            r: StartTaskResponse = await request.app.state.gateway_stub.start_task(
-                StartTaskRequest(task_id="", container_id=cfg.container_id)
-            )
-            print("R.ok?: ", r.ok)
-
             payload = await request.json()
+
+            r: StartTaskResponse = await request.app.state.gateway_stub.start_task(
+                StartTaskRequest(
+                    task_id=payload["kwargs"]["task_id"], container_id=cfg.container_id
+                )
+            )
+
+            print("R.ok?: ", r.ok)
             print(payload)
             result = self._call_function(payload)
             print(result)
 
-            await request.app.state.gateway_stub.end_task(
-                StartTaskRequest(task_id="", container_id=cfg.container_id)
+            r: EndTaskResponse = await request.app.state.gateway_stub.end_task(
+                EndTaskRequest(
+                    task_id=payload["kwargs"]["task_id"],
+                    container_id=cfg.container_id,
+                    keep_warm_seconds=cfg.keep_warm_seconds,
+                    task_status=TaskStatus.Complete,
+                )
             )
+            print("R.ok?: ", r.ok)
 
             return Response(status_code=200)
 

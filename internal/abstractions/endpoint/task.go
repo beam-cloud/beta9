@@ -33,6 +33,9 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 		return err
 	}
 
+	// Send task ID as part of request payload
+	t.msg.Kwargs["task_id"] = t.msg.TaskId
+
 	return instance.buffer.ForwardRequest(echoCtx, &types.TaskPayload{
 		Args:   t.msg.Args,
 		Kwargs: t.msg.Kwargs,

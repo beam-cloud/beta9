@@ -83,8 +83,6 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPay
 		payload: payload,
 	})
 
-	// rb.stubId
-
 	rb.length.Add(1)
 	defer func() {
 		rb.length.Add(-1)

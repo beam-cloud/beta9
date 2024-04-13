@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"database/sql"
+	"log"
 	"strings"
 	"time"
 
@@ -39,6 +40,7 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (*pb.EndTaskResponse, error) {
 	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
 	if err != nil {
+		log.Printf("err: %+v\n", err)
 		return &pb.EndTaskResponse{
 			Ok: false,
 		}, nil
@@ -49,6 +51,7 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 
 	err = gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, in.TaskId)
 	if err != nil {
+		log.Printf("err: %+v\n", err)
 		return &pb.EndTaskResponse{
 			Ok: false,
 		}, nil
