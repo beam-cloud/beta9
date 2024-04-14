@@ -372,6 +372,7 @@ class GatewayServiceStub(betterproto.ServiceStub):
 
 
 class GatewayServiceBase(ServiceBase):
+
     async def authorize(
         self, authorize_request: "AuthorizeRequest"
     ) -> "AuthorizeResponse":

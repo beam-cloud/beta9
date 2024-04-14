@@ -4,6 +4,8 @@ from contextlib import contextmanager
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
+from rich.progress import open as _progress_open
 from rich.text import Text
 
 _console = Console()
@@ -29,9 +31,9 @@ def prompt(*, text: str, default: Any) -> Any:
     return user_input if user_input else default
 
 
-def detail(text: str, dim: bool = True) -> None:
+def detail(text: str, dim: bool = True, **kwargs) -> None:
     style = "dim" if dim else ""
-    _console.print(Text(text, style=style))
+    _console.print(Text(text, style=style), **kwargs)
 
 
 def success(text: str) -> None:
@@ -42,9 +44,10 @@ def warn(text: str) -> None:
     _console.print(Text(text, style="bold yellow"))
 
 
-def error(text: str) -> None:
+def error(text: str, exit: bool = True) -> None:
     _console.print(Text(text, style="bold red"))
-    sys.exit(1)
+    if exit:
+        sys.exit(1)
 
 
 def url(text: str) -> None:
@@ -55,6 +58,20 @@ def url(text: str) -> None:
 def progress(task_name: str):
     with _console.status(task_name, spinner="dots", spinner_style="white"):
         yield
+
+
+def progress_open(file, mode, **kwargs):
+    options = dict(
+        complete_style="green",
+        finished_style="slate_blue1",
+        refresh_per_second=60,
+        **kwargs,
+    )
+
+    if "description" in options:
+        options["description"] = escape("[" + options["description"] + "]")
+
+    return _progress_open(file, mode, **options)
 
 
 def humanize_date(d: datetime.datetime) -> str:

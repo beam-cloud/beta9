@@ -5,8 +5,6 @@ from betterproto import Casing
 from rich.table import Column, Table, box
 
 from .. import aio, terminal
-from ..cli.contexts import get_gateway_service
-from ..cli.formatters import EpilogFormatter
 from ..clients.gateway import (
     GatewayServiceStub,
     ListTasksRequest,
@@ -15,15 +13,17 @@ from ..clients.gateway import (
     StopTaskResponse,
     StringList,
 )
+from .contexts import ServiceClient
+from .extraclick import CustomCommand
 
 
 @click.group(
-    name="tasks",
-    help="List and stop tasks",
+    name="task",
+    help="Manage tasks.",
 )
 @click.pass_context
-def cli(ctx: click.Context):
-    ctx.obj = ctx.with_resource(get_gateway_service())
+def management(ctx: click.Context):
+    ctx.obj = ctx.with_resource(ServiceClient())
 
 
 def parse_filter_values(
@@ -48,19 +48,19 @@ def parse_filter_values(
     return filters
 
 
-@cli.command(
+@management.command(
     name="list",
-    help="List all tasks",
-    cls=EpilogFormatter,
+    help="List all tasks.",
+    cls=CustomCommand,
     epilog="""
     # List the first 10 tasks
-    beta9 tasks list --limit 10
+    beta9 task list --limit 10
 
     # List tasks with status 'running' or 'pending' and stub-id 'function/test:handler'
-    beta9 tasks list --filter status=running,pending --filter stub-id=function/test:handler
+    beta9 task list --filter status=running,pending --filter stub-id=function/test:handler
 
     # List tasks and output in JSON format
-    beta9 tasks list --format json
+    beta9 task list --format json
     """,
 )
 @click.option(
@@ -83,9 +83,9 @@ def parse_filter_values(
     help="Filters tasks. Add this option for each field you want to filter on.",
 )
 @click.pass_obj
-def list_tasks(service: GatewayServiceStub, limit: int, format: str, filter: Dict[str, StringList]):
+def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str, StringList]):
     response: ListTasksResponse = aio.run_sync(
-        service.list_tasks(ListTasksRequest(filters=filter, limit=limit))
+        service.gateway.list_tasks(ListTasksRequest(filters=filter, limit=limit))
     )
 
     if not response.ok:
@@ -127,9 +127,9 @@ def list_tasks(service: GatewayServiceStub, limit: int, format: str, filter: Dic
     terminal.print(table)
 
 
-@cli.command(
+@management.command(
     name="stop",
-    help="Stop a task",
+    help="Stop a task.",
 )
 @click.option(
     "--task-id",
