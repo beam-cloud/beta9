@@ -11,9 +11,9 @@ from rich.text import Text
 _console = Console()
 
 
-def header(text: str) -> None:
-    header_text = f"=> {text}"
-    _console.print(Text(header_text, style="bold white"))
+def header(text: str, subtext: str = "") -> None:
+    header_text = f"[bold white]=> {text}[/bold white]"
+    _console.print(header_text, subtext)
 
 
 def print(*objects: Any, **kwargs: Any) -> None:

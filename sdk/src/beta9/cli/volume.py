@@ -63,7 +63,7 @@ def ls(service: ServiceClient, remote_path: str, long_format: bool) -> None:
             for p in res.paths:
                 terminal.print(p, highlight=False, markup=False)
         else:
-            terminal.header(f"{remote_path} ([red]{res.err_msg})[/red]")
+            terminal.header(f"{remote_path} [traceback.title]({res.err_msg})[/traceback.title]")
 
 
 @common.command(
@@ -139,7 +139,7 @@ def cp(service: ServiceClient, local_path: str, remote_path: str) -> None:
         res: CopyPathResponse = aio.run_sync(service.volume.copy_path_stream(req))
 
         if not res.ok:
-            terminal.error(f"{dst} ([red]{res.error_msg}[/red])", False)
+            terminal.error(f"{dst} ({res.error_msg})", False)
 
 
 def read_with_progress(
@@ -188,7 +188,7 @@ def rm(service: ServiceClient, remote_path: str) -> None:
         for deleted in res.deleted:
             terminal.print(deleted, highlight=False, markup=False)
     else:
-        terminal.error(f"{remote_path} ([red]{res.err_msg}[/red])", False)
+        terminal.error(f"{remote_path} ({res.err_msg})", False)
 
 
 @click.group(
