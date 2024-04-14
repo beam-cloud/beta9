@@ -14,6 +14,7 @@ from beta9.clients.volume import (
     ListPathRequest,
     ListPathResponse,
 )
+from beta9.terminal import pluralize
 
 
 @click.group()
@@ -57,11 +58,12 @@ def ls(service: ServiceClient, remote_path: str, long_format: bool) -> None:
         res: ListPathResponse = aio.run_sync(service.volume.list_path(req))
 
         if res.ok:
+            num_list, suffix = pluralize(res.paths)
+            terminal.header(f"{remote_path} (found {num_list} object{suffix})")
             for p in res.paths:
-                terminal.print(p)
+                terminal.print(p, highlight=False, markup=False)
         else:
-            text = f"{res.err_msg}: {remote_path}"
-            terminal.error(text, False)
+            terminal.header(f"{remote_path} ([red]{res.err_msg})[/red]")
 
 
 @common.command(
@@ -124,6 +126,9 @@ def cp(service: ServiceClient, local_path: str, remote_path: str) -> None:
     if not files_to_upload:
         terminal.error("Could not find files to upload.")
 
+    num_upload, suffix = pluralize(files_to_upload)
+    terminal.header(f"{remote_path} (copying {num_upload} object{suffix})")
+
     desc_width = max((len(f.name) for f in files_to_upload))
     for file in files_to_upload:
         dst = str(remote_path / file.relative_to(Path.cwd()))
@@ -132,8 +137,9 @@ def cp(service: ServiceClient, local_path: str, remote_path: str) -> None:
             for chunk in read_with_progress(file, desc_width=desc_width)
         )
         res: CopyPathResponse = aio.run_sync(service.volume.copy_path_stream(req))
+
         if not res.ok:
-            terminal.error(f"{dst} {res.error_msg}")
+            terminal.error(f"{dst} ([red]{res.error_msg}[/red])", False)
 
 
 def read_with_progress(
@@ -177,15 +183,12 @@ def rm(service: ServiceClient, remote_path: str) -> None:
     res = aio.run_sync(service.volume.delete_path(req))
 
     if res.ok:
-        deleted = len(res.deleted)
-        text = f"{remote_path} ({deleted} object{'s' if deleted!=1 else ''} deleted)"
-        if res.deleted:
-            text += "\n> " + "\n> ".join(f"[{d}]" for d in res.deleted)
-
-        terminal.detail(text, markup=False, dim=False)
+        num_del, suffix = pluralize(res.deleted)
+        terminal.header(f"{remote_path} ({num_del} object{suffix} deleted)")
+        for deleted in res.deleted:
+            terminal.print(deleted, highlight=False, markup=False)
     else:
-        text = f"{remote_path} ({res.err_msg})"
-        terminal.error(text, False)
+        terminal.error(f"{remote_path} ([red]{res.err_msg}[/red])", False)
 
 
 @click.group(
