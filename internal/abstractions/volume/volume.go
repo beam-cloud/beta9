@@ -147,12 +147,10 @@ func (vs *GlobalVolumeService) copyPathStream(ctx context.Context, stream <-chan
 				return errors.New("unable to find volume")
 			}
 
-			rootVolumePath := GetVolumePath(workspace.Name, volume.ExternalId)
-			fullVolumePath = GetVolumePath(workspace.Name, volume.ExternalId, volumePath)
-
-			// Prevent access above parent directory
-			if !strings.HasPrefix(fullVolumePath, rootVolumePath) {
-				return errors.New("parent directory does not exist")
+			// Get volume paths
+			_, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
+			if err != nil {
+				return err
 			}
 
 			os.MkdirAll(path.Dir(fullVolumePath), os.FileMode(0755))
@@ -189,14 +187,12 @@ func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string,
 		return nil, errors.New("unable to find volume")
 	}
 
-	// Set up paths
-	rootVolumePath := GetVolumePath(workspace.Name, volume.ExternalId)
-	fullVolumePath := GetVolumePath(workspace.Name, volume.ExternalId, volumePath)
-
-	// Prevent access above parent directory
-	if !strings.HasPrefix(fullVolumePath, rootVolumePath) {
-		return nil, errors.New("parent directory does not exist")
+	// Prevent access above parent directory (and get paths)
+	rootVolumePath, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
+	if err != nil {
+		return nil, err
 	}
+
 	// Prevent deleting root volume path
 	if fullVolumePath == rootVolumePath {
 		return nil, errors.New("parent directory cannot be deleted")
@@ -234,12 +230,9 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 	}
 
 	// Set up paths
-	rootVolumePath := GetVolumePath(workspace.Name, volume.ExternalId)
-	fullVolumePath := GetVolumePath(workspace.Name, volume.ExternalId, volumePath)
-
-	// Prevent access above parent directory
-	if !strings.HasPrefix(fullVolumePath, rootVolumePath) {
-		return nil, errors.New("parent directory does not exist")
+	rootVolumePath, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
+	if err != nil {
+		return nil, err
 	}
 
 	// List all contents if path is a directory
@@ -270,6 +263,21 @@ func parseVolumeInput(input string) (string, string) {
 	return volumeName, filepath.Clean(volumePath)
 }
 
-func GetVolumePath(workspaceName, volumeExternalId string, subPaths ...string) string {
+// GetVolumePaths returns the absolute parent directory and absolute volumePath.
+// Because volumePath can contain 1 or more of "..", we will return an error if volumePath
+// tries to go above the rootVolumePath. The error should be used to indicate someone accessing
+// a directory above a Volume's directory, which may be a security issue depending on the context.
+func GetVolumePaths(workspaceName string, volumeExternalId string, volumePath string) (string, string, error) {
+	rootVolumePath := JoinVolumePath(workspaceName, volumeExternalId)
+	fullVolumePath := JoinVolumePath(workspaceName, volumeExternalId, volumePath)
+
+	if !strings.HasPrefix(fullVolumePath, rootVolumePath) {
+		return "", "", errors.New("parent directory does not exist")
+	}
+
+	return rootVolumePath, fullVolumePath, nil
+}
+
+func JoinVolumePath(workspaceName, volumeExternalId string, subPaths ...string) string {
 	return path.Join(append([]string{types.DefaultVolumesPath, workspaceName, volumeExternalId}, subPaths...)...)
 }
