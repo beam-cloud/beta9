@@ -86,7 +86,7 @@ func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
 		return err
 	}
 
-	if tasks, err := g.backendRepo.AggregateDeploymentTasksByTimeWindow(ctx.Request().Context(), *filters); err != nil {
+	if tasks, err := g.backendRepo.AggregateTasksByTimeWindow(ctx.Request().Context(), *filters); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
 	} else {
 		return ctx.JSON(http.StatusOK, tasks)
