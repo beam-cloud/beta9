@@ -56,13 +56,13 @@ def ls(service: ServiceClient, remote_path: str, long_format: bool) -> None:
         req = ListPathRequest(path=remote_path, long_format=long_format)
         res: ListPathResponse = aio.run_sync(service.volume.list_path(req))
 
-        if res.ok:
-            num_list, suffix = pluralize(res.paths)
-            terminal.header(f"{remote_path} (found {num_list} object{suffix})")
-            for p in res.paths:
-                terminal.print(p, highlight=False, markup=False)
-        else:
+        if not res.ok:
             terminal.header(f"{remote_path} [traceback.title]({res.err_msg})[/traceback.title]")
+
+        num_list, suffix = pluralize(res.paths)
+        terminal.header(f"{remote_path} (found {num_list} object{suffix})")
+        for p in res.paths:
+            terminal.print(p, highlight=False, markup=False)
 
 
 @common.command(
@@ -179,13 +179,13 @@ def rm(service: ServiceClient, remote_path: str) -> None:
     req = DeletePathRequest(path=remote_path)
     res = aio.run_sync(service.volume.delete_path(req))
 
-    if res.ok:
-        num_del, suffix = pluralize(res.deleted)
-        terminal.header(f"{remote_path} ({num_del} object{suffix} deleted)")
-        for deleted in res.deleted:
-            terminal.print(deleted, highlight=False, markup=False)
-    else:
-        terminal.error(f"{remote_path} ({res.err_msg})", False)
+    if not res.ok:
+        terminal.error(f"{remote_path} ({res.err_msg})")
+
+    num_del, suffix = pluralize(res.deleted)
+    terminal.header(f"{remote_path} ({num_del} object{suffix} deleted)")
+    for deleted in res.deleted:
+        terminal.print(deleted, highlight=False, markup=False)
 
 
 @click.group(
