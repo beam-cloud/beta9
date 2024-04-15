@@ -164,16 +164,16 @@ func (rk *redisKeys) TaskIndex() string {
 	return taskIndex
 }
 
-func (rk *redisKeys) TaskClaimIndex(workspaceName, stubId string) string {
-	return fmt.Sprintf(taskClaimIndex, workspaceName, stubId)
-}
-
 func (rk *redisKeys) TaskEntry(workspaceName, stubId, taskId string) string {
 	return fmt.Sprintf(taskEntry, workspaceName, stubId, taskId)
 }
 
 func (rk *redisKeys) TaskClaim(workspaceName, stubId, taskId string) string {
 	return fmt.Sprintf(taskClaim, workspaceName, stubId, taskId)
+}
+
+func (rk *redisKeys) TaskClaimIndex(workspaceName, stubId string) string {
+	return fmt.Sprintf(taskClaimIndex, workspaceName, stubId)
 }
 
 // Workspace keys
