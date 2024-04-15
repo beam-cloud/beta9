@@ -16,27 +16,10 @@ import (
 
 type TCPEventClientRepo struct {
 	config            types.FluentBitEventConfig
-	client            *cloudevents.Client
 	endpointAvailable bool
 }
 
 func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
-	// httpClient := &http.Client{
-	// 	Transport: &http.Transport{
-	// 		MaxConnsPerHost: config.MaxConns,
-	// 		MaxIdleConns:    config.MaxIdleConns,
-	// 		IdleConnTimeout: config.IdleConnTimeout,
-	// 		DialContext: (&net.Dialer{
-	// 			Timeout:   config.DialTimeout,
-	// 			KeepAlive: config.KeepAlive,
-	// 		}).DialContext,
-	// 	},
-	// }
-	client, err := cloudevents.NewClientHTTP()
-	if err != nil {
-		log.Fatalf("failed to create client, %v", err)
-	}
-
 	endpointAvailable := eventEndpointAvailable(config.Endpoint, time.Duration(config.DialTimeout))
 	if !endpointAvailable {
 		log.Println("[WARNING] fluentbit host does not appear to be up, events will be dropped")
@@ -44,7 +27,6 @@ func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
 
 	return &TCPEventClientRepo{
 		config:            config,
-		client:            &client,
 		endpointAvailable: endpointAvailable,
 	}
 }
