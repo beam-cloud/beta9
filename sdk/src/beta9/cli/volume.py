@@ -6,7 +6,7 @@ import click
 
 from beta9 import aio, terminal
 from beta9.cli.contexts import ServiceClient
-from beta9.cli.extraclick import CustomCommand
+from beta9.cli.extraclick import ClickCommonGroup, ClickManagementGroup
 from beta9.clients.volume import (
     CopyPathRequest,
     CopyPathResponse,
@@ -17,14 +17,13 @@ from beta9.clients.volume import (
 from beta9.terminal import pluralize
 
 
-@click.group()
+@click.group(cls=ClickCommonGroup)
 @click.pass_context
 def common(ctx: click.Context):
     ctx.obj = ctx.with_resource(ServiceClient())
 
 
 @common.command(
-    cls=CustomCommand,
     help="List contents in a volume.",
     epilog="""
     Match Syntax:
@@ -67,7 +66,6 @@ def ls(service: ServiceClient, remote_path: str, long_format: bool) -> None:
 
 
 @common.command(
-    cls=CustomCommand,
     help="Copy contents to a volume.",
     epilog="""
     Match Syntax:
@@ -157,7 +155,6 @@ def read_with_progress(
 
 
 @common.command(
-    cls=CustomCommand,
     help="Remove content from a volume.",
     epilog="""
     Match Syntax:
@@ -194,6 +191,7 @@ def rm(service: ServiceClient, remote_path: str) -> None:
 @click.group(
     name="volume",
     help="Manage volumes.",
+    cls=ClickManagementGroup,
 )
 @click.pass_context
 def management(ctx: click.Context):

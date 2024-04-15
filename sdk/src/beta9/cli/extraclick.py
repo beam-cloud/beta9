@@ -5,7 +5,7 @@ from gettext import gettext as _
 import click
 
 
-class CustomCommand(click.Command):
+class ClickCommand(click.Command):
     def format_epilog(self, ctx, formatter):
         """
         Writes the epilog text to the formatter if it exists.
@@ -37,6 +37,14 @@ class CustomCommand(click.Command):
                 text = textwrap.indent(text, " " * formatter.current_indent)
                 formatter.write(text)
                 formatter.write("\n")
+
+
+class ClickCommonGroup(click.Group):
+    command_class = ClickCommand
+
+
+class ClickManagementGroup(click.Group):
+    command_class = ClickCommand
 
 
 class CommandGroupCollection(click.CommandCollection):
@@ -76,7 +84,7 @@ class CommandGroupCollection(click.CommandCollection):
             if cmd.hidden:
                 continue
 
-            if cmd.help.startswith(("manage", "Manage")):
+            if isinstance(cmd, ClickManagementGroup):
                 commands["management"].append((subcommand, cmd))
             else:
                 commands["common"].append((subcommand, cmd))

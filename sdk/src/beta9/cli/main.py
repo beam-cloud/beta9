@@ -4,8 +4,9 @@ from typing import Any
 
 import click
 
-from ..cli import deploy, task, volume
+from ..cli import task, volume
 from ..cli.extraclick import CommandGroupCollection
+from . import deployment
 
 click.formatting.FORCED_WIDTH = shutil.get_terminal_size().columns
 
@@ -34,5 +35,5 @@ class CLI:
 
 cli = CLI()
 cli.register(task)
-cli.register(deploy)
+cli.register(deployment)
 cli.register(volume)

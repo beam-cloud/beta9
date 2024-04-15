@@ -14,12 +14,13 @@ from ..clients.gateway import (
     StringList,
 )
 from .contexts import ServiceClient
-from .extraclick import CustomCommand
+from .extraclick import ClickManagementGroup
 
 
 @click.group(
     name="task",
     help="Manage tasks.",
+    cls=ClickManagementGroup,
 )
 @click.pass_context
 def management(ctx: click.Context):
@@ -51,7 +52,6 @@ def parse_filter_values(
 @management.command(
     name="list",
     help="List all tasks.",
-    cls=CustomCommand,
     epilog="""
     # List the first 10 tasks
     beta9 task list --limit 10

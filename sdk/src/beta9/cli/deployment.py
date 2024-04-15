@@ -4,11 +4,13 @@ import sys
 
 import click
 
+from beta9.cli.extraclick import ClickCommonGroup, ClickManagementGroup
+
 from .. import terminal
-from ..cli.contexts import ServiceClient, get_gateway_service
+from .contexts import ServiceClient, get_gateway_service
 
 
-@click.group()
+@click.group(cls=ClickCommonGroup)
 @click.pass_context
 def common(ctx: click.Context):
     ctx.obj = ctx.with_resource(ServiceClient())
@@ -20,12 +22,14 @@ def common(ctx: click.Context):
 )
 @click.pass_obj
 def deploy(service: ServiceClient):
+    # todo: implement a quicker/shorter version of create_deployment()
     pass
 
 
 @click.group(
     name="deployment",
     help="Manage deployments.",
+    cls=ClickManagementGroup,
 )
 @click.pass_context
 def management(ctx: click.Context):
