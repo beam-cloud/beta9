@@ -1,12 +1,13 @@
 import inspect
 import textwrap
 from gettext import gettext as _
+from typing import Any
 
 import click
 
 
 class ClickCommand(click.Command):
-    def format_epilog(self, ctx, formatter):
+    def format_epilog(self, ctx: click.Context, formatter: click.HelpFormatter):
         """
         Writes the epilog text to the formatter if it exists.
         """
@@ -17,7 +18,7 @@ class ClickCommand(click.Command):
         formatter.write(text)
         formatter.write("\n")
 
-    def format_help_text(self, ctx, formatter) -> None:
+    def format_help_text(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         """
         Writes the help text to the formatter if it exists.
         """
@@ -61,14 +62,14 @@ class CommandGroupCollection(click.CommandCollection):
                 r[command] = source
         return r
 
-    def invoke(self, ctx):
+    def invoke(self, ctx: click.Context) -> Any:
         if ctx.protected_args:
             if group := self.sources_map.get(ctx.protected_args[0]):
                 group.invoke(ctx)
         else:
             super().invoke(ctx)
 
-    def format_commands(self, ctx, formatter) -> None:
+    def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         """
         Extra format methods for multi methods that adds all the commands after
         the options.
