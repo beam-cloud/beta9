@@ -25,12 +25,12 @@ type VolumeService interface {
 
 type GlobalVolumeService struct {
 	pb.UnimplementedVolumeServiceServer
-	volumeFileSystem *volumeFileSystem
+	backendRepo repository.BackendRepository
 }
 
 func NewGlobalVolumeService(backendRepo repository.BackendRepository) (VolumeService, error) {
 	return &GlobalVolumeService{
-		volumeFileSystem: &volumeFileSystem{backendRepo: backendRepo},
+		backendRepo: backendRepo,
 	}, nil
 }
 
@@ -38,7 +38,7 @@ func (vs *GlobalVolumeService) GetOrCreateVolume(ctx context.Context, in *pb.Get
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceId := authInfo.Workspace.Id
 
-	volume, err := vs.volumeFileSystem.backendRepo.GetOrCreateVolume(ctx, workspaceId, in.Name)
+	volume, err := vs.backendRepo.GetOrCreateVolume(ctx, workspaceId, in.Name)
 	if err != nil {
 		return &pb.GetOrCreateVolumeResponse{
 			Ok: false,
@@ -54,7 +54,7 @@ func (vs *GlobalVolumeService) GetOrCreateVolume(ctx context.Context, in *pb.Get
 func (vs *GlobalVolumeService) ListPath(ctx context.Context, in *pb.ListPathRequest) (*pb.ListPathResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	res, err := vs.volumeFileSystem.ListPath(ctx, in.Path, authInfo.Workspace)
+	paths, err := vs.listPath(ctx, in.Path, authInfo.Workspace)
 	if err != nil {
 		return &pb.ListPathResponse{
 			Ok:     false,
@@ -64,7 +64,7 @@ func (vs *GlobalVolumeService) ListPath(ctx context.Context, in *pb.ListPathRequ
 
 	return &pb.ListPathResponse{
 		Ok:    true,
-		Paths: res.Paths,
+		Paths: paths,
 	}, nil
 }
 
@@ -72,7 +72,7 @@ func (vs *GlobalVolumeService) CopyPathStream(stream pb.VolumeService_CopyPathSt
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	ch := make(chan VolumeCopyPathStream)
+	ch := make(chan CopyPathContent)
 
 	go func() {
 		defer close(ch)
@@ -86,14 +86,14 @@ func (vs *GlobalVolumeService) CopyPathStream(stream pb.VolumeService_CopyPathSt
 				break
 			}
 
-			ch <- VolumeCopyPathStream{
+			ch <- CopyPathContent{
 				Path:    request.Path,
 				Content: request.Content,
 			}
 		}
 	}()
 
-	if err := vs.volumeFileSystem.CopyPathStream(ctx, ch, authInfo.Workspace); err != nil {
+	if err := vs.copyPathStream(ctx, ch, authInfo.Workspace); err != nil {
 		return stream.SendAndClose(&pb.CopyPathResponse{
 			Ok:       false,
 			ErrorMsg: err.Error(),
@@ -106,7 +106,7 @@ func (vs *GlobalVolumeService) CopyPathStream(stream pb.VolumeService_CopyPathSt
 func (vs *GlobalVolumeService) DeletePath(ctx context.Context, in *pb.DeletePathRequest) (*pb.DeletePathResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	res, err := vs.volumeFileSystem.DeletePath(ctx, in.Path, authInfo.Workspace)
+	paths, err := vs.deletePath(ctx, in.Path, authInfo.Workspace)
 	if err != nil {
 		return &pb.DeletePathResponse{
 			Ok:     false,
@@ -116,24 +116,18 @@ func (vs *GlobalVolumeService) DeletePath(ctx context.Context, in *pb.DeletePath
 
 	return &pb.DeletePathResponse{
 		Ok:      true,
-		Deleted: res.Deleted,
+		Deleted: paths,
 	}, nil
 }
 
-type volumeFileSystem struct {
-	backendRepo repository.BackendRepository
-}
+// Volume business logic
 
-type VolumeDeletePath struct {
-	Deleted []string
-}
-
-type VolumeCopyPathStream struct {
+type CopyPathContent struct {
 	Path    string
 	Content []byte
 }
 
-func (fs *volumeFileSystem) CopyPathStream(ctx context.Context, stream <-chan VolumeCopyPathStream, workspace *types.Workspace) error {
+func (vs *GlobalVolumeService) copyPathStream(ctx context.Context, stream <-chan CopyPathContent, workspace *types.Workspace) error {
 	var file *os.File
 	var fullVolumePath string
 
@@ -148,7 +142,7 @@ func (fs *volumeFileSystem) CopyPathStream(ctx context.Context, stream <-chan Vo
 			}
 
 			// Check if the volume exists
-			volume, err := fs.backendRepo.GetVolume(ctx, workspace.Id, volumeName)
+			volume, err := vs.backendRepo.GetVolume(ctx, workspace.Id, volumeName)
 			if err != nil {
 				return errors.New("unable to find volume")
 			}
@@ -179,7 +173,7 @@ func (fs *volumeFileSystem) CopyPathStream(ctx context.Context, stream <-chan Vo
 	return nil
 }
 
-func (fs *volumeFileSystem) DeletePath(ctx context.Context, inputPath string, workspace *types.Workspace) (*VolumeDeletePath, error) {
+func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string, workspace *types.Workspace) ([]string, error) {
 	// Parse the volume and path/pattern
 	volumeName, volumePath := parseVolumeInput(inputPath)
 	if volumeName == "" {
@@ -190,7 +184,7 @@ func (fs *volumeFileSystem) DeletePath(ctx context.Context, inputPath string, wo
 	}
 
 	// Check if the volume exists
-	volume, err := fs.backendRepo.GetVolume(ctx, workspace.Id, volumeName)
+	volume, err := vs.backendRepo.GetVolume(ctx, workspace.Id, volumeName)
 	if err != nil {
 		return nil, errors.New("unable to find volume")
 	}
@@ -223,16 +217,10 @@ func (fs *volumeFileSystem) DeletePath(ctx context.Context, inputPath string, wo
 		}
 	}
 
-	return &VolumeDeletePath{
-		Deleted: deleted,
-	}, nil
+	return deleted, nil
 }
 
-type VolumeListPath struct {
-	Paths []string
-}
-
-func (fs *volumeFileSystem) ListPath(ctx context.Context, inputPath string, workspace *types.Workspace) (*VolumeListPath, error) {
+func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, workspace *types.Workspace) ([]string, error) {
 	// Parse the volume and path/pattern
 	volumeName, volumePath := parseVolumeInput(inputPath)
 	if volumeName == "" {
@@ -240,7 +228,7 @@ func (fs *volumeFileSystem) ListPath(ctx context.Context, inputPath string, work
 	}
 
 	// Check if the volume exists
-	volume, err := fs.backendRepo.GetVolume(ctx, workspace.Id, volumeName)
+	volume, err := vs.backendRepo.GetVolume(ctx, workspace.Id, volumeName)
 	if err != nil {
 		return nil, errors.New("unable to find volume")
 	}
@@ -270,9 +258,7 @@ func (fs *volumeFileSystem) ListPath(ctx context.Context, inputPath string, work
 		matches[i] = strings.TrimPrefix(p, rootVolumePath+"/")
 	}
 
-	return &VolumeListPath{
-		Paths: matches,
-	}, nil
+	return matches, nil
 }
 
 func parseVolumeInput(input string) (string, string) {
