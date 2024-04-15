@@ -147,7 +147,7 @@ func (vs *GlobalVolumeService) copyPathStream(ctx context.Context, stream <-chan
 				return errors.New("unable to find volume")
 			}
 
-			// Get volume paths
+			// Get paths and prevent access above parent directory
 			_, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
 			if err != nil {
 				return err
@@ -187,7 +187,7 @@ func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string,
 		return nil, errors.New("unable to find volume")
 	}
 
-	// Prevent access above parent directory (and get paths)
+	// Get paths and prevent access above parent directory
 	rootVolumePath, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
 	if err != nil {
 		return nil, err
@@ -229,7 +229,7 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 		return nil, errors.New("unable to find volume")
 	}
 
-	// Set up paths
+	// Get paths and prevent access above parent directory
 	rootVolumePath, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
 	if err != nil {
 		return nil, err
