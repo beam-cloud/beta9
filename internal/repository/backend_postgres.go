@@ -479,6 +479,14 @@ func (c *PostgresBackendRepository) ListTasksForMetrics(ctx context.Context, fil
 		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
 	}
 
+	if filters.CreatedAtStart != "" {
+		qb = qb.Where(squirrel.GtOrEq{"t.created_at": filters.CreatedAtStart})
+	}
+
+	if filters.CreatedAtEnd != "" {
+		qb = qb.Where(squirrel.LtOrEq{"t.created_at": filters.CreatedAtEnd})
+	}
+
 	sql, args, err := qb.ToSql()
 	if err != nil {
 		return nil, err
@@ -509,6 +517,7 @@ func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Contex
 	}
 
 	if filters.StubId != "" {
+		qb = qb.Join("stub s ON t.stub_id = s.id")
 		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
 	}
 
@@ -518,21 +527,6 @@ func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Contex
 
 	if filters.CreatedAtEnd != "" {
 		qb = qb.Where(squirrel.LtOrEq{"t.created_at": filters.CreatedAtEnd})
-	}
-
-	if filters.Status != "" {
-		statuses := strings.Split(filters.Status, ",")
-		if len(statuses) > 0 {
-			qb = qb.Where(squirrel.Eq{"t.status": statuses})
-		}
-	}
-
-	if filters.MinDuration > 0 {
-		qb = qb.Where("EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000 >= ?", filters.MinDuration)
-	}
-
-	if filters.MaxDuration > 0 {
-		qb = qb.Where("EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000 <= ?", filters.MaxDuration)
 	}
 
 	sql, args, err := qb.ToSql()
@@ -549,7 +543,7 @@ func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Contex
 	return taskCounts, nil
 }
 
-func (c *PostgresBackendRepository) AggregateDeploymentTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error) {
+func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error) {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"DATE_TRUNC('hour', t.created_at) as time, COUNT(t.id) as count",
 	).
@@ -565,6 +559,14 @@ func (c *PostgresBackendRepository) AggregateDeploymentTasksByTimeWindow(ctx con
 		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
 	}
 
+	if filters.CreatedAtStart != "" {
+		qb = qb.Where(squirrel.GtOrEq{"t.created_at": filters.CreatedAtStart})
+	}
+
+	if filters.CreatedAtEnd != "" {
+		qb = qb.Where(squirrel.LtOrEq{"t.created_at": filters.CreatedAtEnd})
+	}
+
 	sql, args, err := qb.ToSql()
 	if err != nil {
 		return nil, err
@@ -573,7 +575,6 @@ func (c *PostgresBackendRepository) AggregateDeploymentTasksByTimeWindow(ctx con
 	var taskCounts []types.TaskCountByTime
 	err = c.client.SelectContext(ctx, &taskCounts, sql, args...)
 	if err != nil {
-		log.Println(err)
 		return nil, err
 	}
 
