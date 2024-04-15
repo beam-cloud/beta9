@@ -1,6 +1,7 @@
 package endpoint
 
 import (
+	"log"
 	"math"
 
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
@@ -60,9 +61,29 @@ func endpointServeSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, er
 }
 
 func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
-	// Criteria for serve autoscaling
-	//
-	// i.rdb.Get(i.ctx, Keys.endpointKeepWarmLock(i.workspace.Name, i.stub.ExternalId, "*"))
+	containers, err := i.containerRepo.GetActiveContainersByStubId(i.stub.ExternalId)
+	if err != nil {
+		return &abstractions.AutoscalerResult{
+			DesiredContainers: 0,
+			ResultValid:       false,
+		}
+	}
+
+	// i.buffer.Length()
+	for _, container := range containers {
+		res, err := i.rdb.Exists(i.ctx, Keys.endpointKeepWarmLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId)).Result()
+		if err != nil {
+			continue
+		}
+
+		if res > 0 {
+			log.Println("keep warm exists: ", res)
+			return &abstractions.AutoscalerResult{
+				DesiredContainers: 1,
+				ResultValid:       true,
+			}
+		}
+	}
 
 	return &abstractions.AutoscalerResult{
 		DesiredContainers: 1,
