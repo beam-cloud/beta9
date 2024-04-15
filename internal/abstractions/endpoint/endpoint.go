@@ -36,6 +36,7 @@ type HttpEndpointService struct {
 	scheduler         *scheduler.Scheduler
 	backendRepo       repository.BackendRepository
 	containerRepo     repository.ContainerRepository
+	taskRepo          repository.TaskRepository
 	endpointInstances *common.SafeMap[*endpointInstance]
 	tailscale         *network.Tailscale
 	keyEventManager   *common.KeyEventManager
@@ -47,13 +48,16 @@ var (
 	endpointContainerPrefix       string        = "endpoint"
 	endpointRoutePrefix           string        = "/endpoint"
 	endpointRingBufferSize        int           = 10000000
-	endpointRequestTimeout        time.Duration = 180 * time.Second
+	endpointRequestTimeoutS       int           = 180
 	endpointServeContainerTimeout time.Duration = 120 * time.Second
 )
 
 type EndpointServiceOpts struct {
 	Config         types.AppConfig
 	RedisClient    *common.RedisClient
+	BackendRepo    repository.BackendRepository
+	TaskRepo       repository.TaskRepository
+	ContainerRepo  repository.ContainerRepository
 	Scheduler      *scheduler.Scheduler
 	RouteGroup     *echo.Group
 	Tailscale      *network.Tailscale
@@ -78,13 +82,6 @@ func NewEndpointService(
 	}
 	config := configManager.GetConfig()
 
-	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
-	if err != nil {
-		return nil, err
-	}
-
-	containerRepo := repository.NewContainerRedisRepository(opts.RedisClient)
-
 	es := &HttpEndpointService{
 		ctx:               ctx,
 		config:            config,
@@ -92,8 +89,9 @@ func NewEndpointService(
 		keyEventChan:      keyEventChan,
 		keyEventManager:   keyEventManager,
 		scheduler:         opts.Scheduler,
-		backendRepo:       backendRepo,
-		containerRepo:     containerRepo,
+		backendRepo:       opts.BackendRepo,
+		containerRepo:     opts.ContainerRepo,
+		taskRepo:          opts.TaskRepo,
 		endpointInstances: common.NewSafeMap[*endpointInstance](),
 		tailscale:         opts.Tailscale,
 		taskDispatcher:    opts.TaskDispatcher,
@@ -104,7 +102,7 @@ func NewEndpointService(
 	es.taskDispatcher.Register(string(types.ExecutorTaskQueue), es.endpointTaskFactory)
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(backendRepo)
+	authMiddleware := auth.AuthMiddleware(es.backendRepo)
 	registerEndpointRoutes(opts.RouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
 
 	return es, nil
@@ -252,7 +250,11 @@ func (es *HttpEndpointService) forwardRequest(
 		instance, _ = es.endpointInstances.Get(stubId)
 	}
 
-	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorTaskQueue), instance.workspace.Name, stubId, payload, instance.stubConfig.TaskPolicy)
+	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorTaskQueue), instance.workspace.Name, stubId, payload, types.TaskPolicy{
+		MaxRetries: 0,
+		Timeout:    endpointRequestTimeoutS,
+		Expires:    time.Now().Add(time.Duration(endpointRequestTimeoutS) * time.Second),
+	})
 	if err != nil {
 		return err
 	}
@@ -297,6 +299,7 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 		token:              token,
 		stubConfig:         stubConfig,
 		scheduler:          es.scheduler,
+		taskRepo:           es.taskRepo,
 		containerRepo:      es.containerRepo,
 		containerEventChan: make(chan types.ContainerEvent, 1),
 		containers:         make(map[string]bool),
@@ -309,7 +312,12 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 	}
 
 	if instance.autoscaler == nil {
-		instance.autoscaler = abstractions.NewAutoscaler(instance, endpointDeploymentSampleFunc, endpointDeploymentScaleFunc)
+		switch instance.stub.Type {
+		case types.StubTypeEndpointDeployment:
+			instance.autoscaler = abstractions.NewAutoscaler(instance, endpointDeploymentSampleFunc, endpointDeploymentScaleFunc)
+		case types.StubTypeEndpointServe:
+			instance.autoscaler = abstractions.NewAutoscaler(instance, endpointServeSampleFunc, endpointServeScaleFunc)
+		}
 	}
 
 	if len(instance.entryPoint) == 0 {

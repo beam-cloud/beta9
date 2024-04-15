@@ -57,13 +57,21 @@ func (t *EndpointTask) Retry(ctx context.Context) error {
 	return nil
 }
 
-func (t *EndpointTask) Cancel(ctx context.Context) error {
+func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellationReason) error {
 	task, err := t.es.backendRepo.GetTask(ctx, t.msg.TaskId)
 	if err != nil {
 		return err
 	}
 
-	task.Status = types.TaskStatusError
+	switch reason {
+	case types.TaskExpired:
+		task.Status = types.TaskStatusTimeout
+	case types.TaskExceededRetryLimit:
+		task.Status = types.TaskStatusError
+	default:
+		task.Status = types.TaskStatusError
+	}
+
 	_, err = t.es.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
 	if err != nil {
 		return err
@@ -74,7 +82,7 @@ func (t *EndpointTask) Cancel(ctx context.Context) error {
 
 func (t *EndpointTask) HeartBeat(ctx context.Context) (bool, error) {
 	// Endpoints don't support retries, so heartbeats are not required
-	return false, nil
+	return true, nil
 }
 
 func (t *EndpointTask) Metadata() types.TaskMetadata {

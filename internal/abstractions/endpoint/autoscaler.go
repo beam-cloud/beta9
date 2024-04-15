@@ -1,7 +1,6 @@
 package endpoint
 
 import (
-	"log"
 	"math"
 
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
@@ -14,7 +13,10 @@ type endpointAutoscalerSample struct {
 
 // endpointDeploymentSampleFunc retrieve a sample from the endpoint instance
 func endpointDeploymentSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
-	totalRequests := i.buffer.Length()
+	totalRequests, err := i.taskRepo.TasksInFlight(i.ctx, i.workspace.Name, i.stub.ExternalId)
+	if err != nil {
+		return nil, err
+	}
 
 	currentContainers := 0
 	state, err := i.state()
@@ -56,35 +58,28 @@ func endpointDeploymentScaleFunc(i *endpointInstance, sample *endpointAutoscaler
 }
 
 func endpointServeSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
-	sample := &endpointAutoscalerSample{}
+	totalRequests, err := i.taskRepo.TasksInFlight(i.ctx, i.workspace.Name, i.stub.ExternalId)
+	if err != nil {
+		return nil, err
+	}
+
+	currentContainers := 0
+	state, err := i.state()
+	if err != nil {
+		currentContainers = -1
+	}
+
+	currentContainers = state.PendingContainers + state.RunningContainers
+
+	sample := &endpointAutoscalerSample{
+		TotalRequests:     int64(totalRequests),
+		CurrentContainers: int64(currentContainers),
+	}
+
 	return sample, nil
 }
 
 func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
-	containers, err := i.containerRepo.GetActiveContainersByStubId(i.stub.ExternalId)
-	if err != nil {
-		return &abstractions.AutoscalerResult{
-			DesiredContainers: 0,
-			ResultValid:       false,
-		}
-	}
-
-	// i.buffer.Length()
-	for _, container := range containers {
-		res, err := i.rdb.Exists(i.ctx, Keys.endpointKeepWarmLock(i.workspace.Name, i.stub.ExternalId, container.ContainerId)).Result()
-		if err != nil {
-			continue
-		}
-
-		if res > 0 {
-			log.Println("keep warm exists: ", res)
-			return &abstractions.AutoscalerResult{
-				DesiredContainers: 1,
-				ResultValid:       true,
-			}
-		}
-	}
-
 	return &abstractions.AutoscalerResult{
 		DesiredContainers: 1,
 		ResultValid:       true,
