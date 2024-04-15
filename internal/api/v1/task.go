@@ -24,8 +24,8 @@ func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 	g.GET("/:workspaceId", group.ListTasksPaginated)
 	g.GET("/:workspaceId/", group.ListTasksPaginated)
 
-	g.GET("/:workspaceId/list", group.ListTasksForMetrics)
-	g.GET("/:workspaceId/list/", group.ListTasksForMetrics)
+	// g.GET("/:workspaceId/list", group.ListTasksForMetrics)
+	// g.GET("/:workspaceId/list/", group.ListTasksForMetrics)
 
 	g.GET("/:workspaceId/task-count-by-deployment", group.GetTaskCountByDeployment)
 	g.GET("/:workspaceId/task-count-by-deployment/", group.GetTaskCountByDeployment)
@@ -39,23 +39,23 @@ func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 	return group
 }
 
-func (g *TaskGroup) ListTasksForMetrics(ctx echo.Context) error {
-	_, err := g.authenticate(ctx)
-	if err != nil {
-		return err
-	}
+// func (g *TaskGroup) ListTasksForMetrics(ctx echo.Context) error {
+// 	_, err := g.authenticate(ctx)
+// 	if err != nil {
+// 		return err
+// 	}
 
-	filters, err := g.preprocessFilters(ctx)
-	if err != nil {
-		return err
-	}
+// 	filters, err := g.preprocessFilters(ctx)
+// 	if err != nil {
+// 		return err
+// 	}
 
-	if tasks, err := g.backendRepo.ListTasksForMetrics(ctx.Request().Context(), *filters); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
-	} else {
-		return ctx.JSON(http.StatusOK, tasks)
-	}
-}
+// 	if tasks, err := g.backendRepo.ListTasksForMetrics(ctx.Request().Context(), *filters); err != nil {
+// 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
+// 	} else {
+// 		return ctx.JSON(http.StatusOK, tasks)
+// 	}
+// }
 
 func (g *TaskGroup) GetTaskCountByDeployment(ctx echo.Context) error {
 	_, err := g.authenticate(ctx)

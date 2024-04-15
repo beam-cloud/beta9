@@ -464,43 +464,6 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 	return qb
 }
 
-func (c *PostgresBackendRepository) ListTasksForMetrics(ctx context.Context, filters types.TaskFilter) ([]types.Task, error) {
-	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		"t.status, t.started_at, t.ended_at, t.created_at",
-	).From("task t").OrderBy("t.created_at DESC")
-
-	// Apply filters
-	if filters.WorkspaceID > 0 {
-		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
-	}
-
-	if filters.StubId != "" {
-		qb = qb.Join("stub s ON t.stub_id = s.id")
-		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
-	}
-
-	if filters.CreatedAtStart != "" {
-		qb = qb.Where(squirrel.GtOrEq{"t.created_at": filters.CreatedAtStart})
-	}
-
-	if filters.CreatedAtEnd != "" {
-		qb = qb.Where(squirrel.LtOrEq{"t.created_at": filters.CreatedAtEnd})
-	}
-
-	sql, args, err := qb.ToSql()
-	if err != nil {
-		return nil, err
-	}
-
-	var tasks []types.Task
-	err = c.client.SelectContext(ctx, &tasks, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	return tasks, nil
-}
-
 func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountPerDeployment, error) {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"d.name as deployment_name, COUNT(t.id) AS task_count",
@@ -545,7 +508,16 @@ func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Contex
 
 func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error) {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		"DATE_TRUNC('hour', t.created_at) as time, COUNT(t.id) as count",
+		`DATE_TRUNC('hour', t.created_at) as time, COUNT(t.id) as count,
+			json_build_object(
+				'COMPLETE', SUM(CASE WHEN t.status = 'COMPLETE' THEN 1 ELSE 0 END),
+				'ERROR', SUM(CASE WHEN t.status = 'ERROR' THEN 1 ELSE 0 END),
+				'CANCELLED', SUM(CASE WHEN t.status = 'CANCELLED' THEN 1 ELSE 0 END),
+				'TIMEOUT', SUM(CASE WHEN t.status = 'TIMEOUT' THEN 1 ELSE 0 END),
+				'RETRY', SUM(CASE WHEN t.status = 'RETRY' THEN 1 ELSE 0 END),
+				'PENDING', SUM(CASE WHEN t.status = 'PENDING' THEN 1 ELSE 0 END),
+				'RUNNING', SUM(CASE WHEN t.status = 'RUNNING' THEN 1 ELSE 0 END)
+			)::json AS status_counts`,
 	).
 		From("task t").GroupBy("time").OrderBy("time DESC")
 

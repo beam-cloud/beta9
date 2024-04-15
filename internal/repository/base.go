@@ -62,7 +62,6 @@ type BackendRepository interface {
 	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error)
 	DeleteTask(ctx context.Context, externalId string) error
 	ListTasks(ctx context.Context) ([]types.Task, error)
-	ListTasksForMetrics(ctx context.Context, filters types.TaskFilter) ([]types.Task, error)
 	ListTasksWithRelated(ctx context.Context, filters types.TaskFilter) ([]types.TaskWithRelated, error)
 	ListTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error)
 	AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error)

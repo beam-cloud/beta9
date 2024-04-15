@@ -124,8 +124,9 @@ type TaskCountPerDeployment struct {
 }
 
 type TaskCountByTime struct {
-	Time  time.Time `db:"time" json:"time"`
-	Count uint      `count:"count" json:"count"`
+	Time         time.Time       `db:"time" json:"time"`
+	Count        uint            `count:"count" json:"count"`
+	StatusCounts json.RawMessage `db:"status_counts" json:"status_counts"`
 }
 
 type StubConfigV1 struct {
