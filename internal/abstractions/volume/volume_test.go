@@ -6,12 +6,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestInputArgument(t *testing.T) {
+func TestGetVolumePaths(t *testing.T) {
 	tests := []struct {
 		name        string
 		have        string
 		wantVolName string
 		wantVolPath string
+		wantErr     bool
 	}{
 		{
 			name:        "volume without path",
@@ -44,10 +45,18 @@ func TestInputArgument(t *testing.T) {
 			wantVolPath: "to/dir/file.txt",
 		},
 		{
-			name:        "volume with subdir file path up a level",
+			name:        "volume with subdir file path up one level past parent dir",
 			have:        "myvol/path/../../to/dir/file.txt",
 			wantVolName: "myvol",
 			wantVolPath: "../to/dir/file.txt",
+			wantErr:     true,
+		},
+		{
+			name:        "volume with subdir path up three levels past parent dir",
+			have:        "myvol/../../../path/to/dir",
+			wantVolName: "myvol",
+			wantVolPath: "../../../path/to/dir",
+			wantErr:     true,
 		},
 	}
 
@@ -56,6 +65,13 @@ func TestInputArgument(t *testing.T) {
 			volName, volPath := parseVolumeInput(test.have)
 			assert.Equal(t, test.wantVolName, volName)
 			assert.Equal(t, test.wantVolPath, volPath)
+
+			_, _, err := GetVolumePaths("work-name", "vol-id", volPath)
+			if test.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
 		})
 	}
 }
