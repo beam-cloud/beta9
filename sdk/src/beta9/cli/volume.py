@@ -57,7 +57,7 @@ def ls(service: ServiceClient, remote_path: str, long_format: bool) -> None:
         res: ListPathResponse = aio.run_sync(service.volume.list_path(req))
 
         if not res.ok:
-            terminal.header(f"{remote_path} [traceback.title]({res.err_msg})[/traceback.title]")
+            terminal.error(f"{remote_path} ({res.err_msg})")
 
         num_list, suffix = pluralize(res.paths)
         terminal.header(f"{remote_path} (found {num_list} object{suffix})")
@@ -137,7 +137,7 @@ def cp(service: ServiceClient, local_path: str, remote_path: str) -> None:
         res: CopyPathResponse = aio.run_sync(service.volume.copy_path_stream(req))
 
         if not res.ok:
-            terminal.error(f"{dst} ({res.error_msg})", False)
+            terminal.error(f"{dst} ({res.error_msg})")
 
 
 def read_with_progress(

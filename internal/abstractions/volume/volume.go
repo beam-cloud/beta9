@@ -159,14 +159,14 @@ func (vs *GlobalVolumeService) copyPathStream(ctx context.Context, stream <-chan
 
 			file, err = os.Create(fullVolumePath)
 			if err != nil {
-				return errors.New("unable to create file")
+				return errors.New("unable to create file on volume")
 			}
 			defer file.Close()
 		}
 
 		if _, err := file.Write(chunk.Content); err != nil {
 			os.RemoveAll(fullVolumePath)
-			return errors.New("unable to write file content")
+			return errors.New("unable to write file content to volume")
 		}
 	}
 
@@ -205,7 +205,7 @@ func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string,
 	// Find path matches
 	matches, err := filepath.Glob(fullVolumePath)
 	if err != nil {
-		return nil, errors.New("unable to find files")
+		return nil, errors.New("unable to find files on volume")
 	}
 
 	// Delete paths; both files and directories
@@ -250,7 +250,7 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 	// Find path matches
 	matches, err := filepath.Glob(fullVolumePath)
 	if err != nil {
-		return nil, errors.New("unable to find files")
+		return nil, errors.New("unable to find files on volume")
 	}
 
 	// Modify paths to be relative

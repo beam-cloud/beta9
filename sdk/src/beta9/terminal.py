@@ -44,10 +44,9 @@ def warn(text: str) -> None:
     _console.print(Text(text, style="bold yellow"))
 
 
-def error(text: str, exit: bool = True) -> None:
+def error(text: str) -> None:
     _console.print(Text(text, style="bold red"))
-    if exit:
-        sys.exit(1)
+    sys.exit(1)
 
 
 def url(text: str) -> None:
@@ -69,7 +68,7 @@ def progress_open(file, mode, **kwargs):
     )
 
     if "description" in options:
-        options["description"] = escape("[" + options["description"] + "]")
+        options["description"] = escape(f"[{options['description']}]")
 
     return _progress_open(file, mode, **options)
 
