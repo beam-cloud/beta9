@@ -561,14 +561,25 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	return &stub, nil
 }
 
-func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
+func (c *PostgresBackendRepository) GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
 	var volume types.Volume
 
 	queryGet := `SELECT id, external_id, name, workspace_id, created_at FROM volume WHERE name = $1 AND workspace_id = $2;`
 
-	err := c.client.GetContext(ctx, &volume, queryGet, name, workspaceId)
+	if err := c.client.GetContext(ctx, &volume, queryGet, name, workspaceId); err != nil {
+		return nil, err
+	}
+
+	return &volume, nil
+}
+
+func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
+	var volume *types.Volume
+	var err error
+
+	volume, err = c.GetVolume(ctx, workspaceId, name)
 	if err == nil {
-		return &volume, err
+		return volume, nil
 	}
 
 	queryCreate := `INSERT INTO volume (name, workspace_id) VALUES ($1, $2) RETURNING id, external_id, name, workspace_id, created_at;`
@@ -578,7 +589,7 @@ func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, works
 		return &types.Volume{}, err
 	}
 
-	return &volume, nil
+	return volume, nil
 }
 
 // Deployment
