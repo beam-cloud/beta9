@@ -36,9 +36,8 @@ def common(ctx: click.Context):
     required=True,
 )
 @click.pass_context
-def deploy(ctx: click.Context, name: str, function: str):
-    ctx.forward(create_deployment)
-    ctx.invoke(create_deployment, name=name, function=function)
+def deploy(ctx: click.Context, name: str, entrypoint: str):
+    ctx.invoke(create_deployment, name=name, entrypoint=entrypoint)
 
 
 @click.group(
@@ -56,13 +55,13 @@ def management(ctx: click.Context):
     help="Create a new deployment.",
 )
 @click.option("--name", help="The name the deployment.", required=True)
-@click.option("--function", help="The name the entry point and function.", required=True)
-def create_deployment(name: str, function: str):
+@click.option("--entrypoint", help='The name the entrypoint e.g. "file:function".', required=True)
+def create_deployment(name: str, entrypoint: str):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
 
-    module_path, func_name = function.split(":")
+    module_path, func_name = entrypoint.split(":")
     module_name = module_path.replace(".py", "").replace(os.path.sep, ".")
     module = importlib.import_module(module_name)
 
