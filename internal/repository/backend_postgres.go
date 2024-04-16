@@ -420,6 +420,16 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 		}
 	}
 
+	if filters.TaskId != "" {
+		if err := uuid.Validate(filters.TaskId); err != nil {
+			// Postgres will throw an error if the uuid is invalid, which results in a 500 to the client
+			// So instead, we will make the query valid and make it return no results
+			qb = qb.Where(squirrel.Eq{"t.external_id": nil})
+		} else {
+			qb = qb.Where(squirrel.Eq{"t.external_id": filters.TaskId})
+		}
+	}
+
 	if filters.CreatedAtStart != "" {
 		qb = qb.Where(squirrel.GtOrEq{"t.created_at": filters.CreatedAtStart})
 	}
@@ -437,6 +447,14 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 		if len(statuses) > 0 {
 			qb = qb.Where(squirrel.Eq{"t.status": statuses})
 		}
+	}
+
+	if filters.MinDuration > 0 {
+		qb = qb.Where("EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000 >= ?", filters.MinDuration)
+	}
+
+	if filters.MaxDuration > 0 {
+		qb = qb.Where("EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000 <= ?", filters.MaxDuration)
 	}
 
 	if filters.Limit > 0 {
@@ -543,14 +561,25 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	return &stub, nil
 }
 
-func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
+func (c *PostgresBackendRepository) GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
 	var volume types.Volume
 
 	queryGet := `SELECT id, external_id, name, workspace_id, created_at FROM volume WHERE name = $1 AND workspace_id = $2;`
 
-	err := c.client.GetContext(ctx, &volume, queryGet, name, workspaceId)
+	if err := c.client.GetContext(ctx, &volume, queryGet, name, workspaceId); err != nil {
+		return nil, err
+	}
+
+	return &volume, nil
+}
+
+func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
+	var volume *types.Volume
+	var err error
+
+	volume, err = c.GetVolume(ctx, workspaceId, name)
 	if err == nil {
-		return &volume, err
+		return volume, nil
 	}
 
 	queryCreate := `INSERT INTO volume (name, workspace_id) VALUES ($1, $2) RETURNING id, external_id, name, workspace_id, created_at;`
@@ -560,7 +589,7 @@ func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, works
 		return &types.Volume{}, err
 	}
 
-	return &volume, nil
+	return volume, nil
 }
 
 // Deployment
@@ -649,7 +678,11 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 	}
 
 	if filters.Name != "" {
-		qb = qb.Where(squirrel.Like{"d.name": "%" + filters.Name + "%"})
+		if err := uuid.Validate(filters.Name); err == nil {
+			qb = qb.Where(squirrel.Eq{"d.external_id": filters.Name})
+		} else {
+			qb = qb.Where(squirrel.Eq{"d.name": filters.Name})
+		}
 	}
 
 	if filters.Offset > 0 {
@@ -658,6 +691,14 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 
 	if filters.Limit > 0 {
 		qb = qb.Limit(uint64(filters.Limit))
+	}
+
+	if filters.CreatedAtStart != "" {
+		qb = qb.Where(squirrel.GtOrEq{"d.created_at": filters.CreatedAtStart})
+	}
+
+	if filters.CreatedAtEnd != "" {
+		qb = qb.Where(squirrel.LtOrEq{"d.created_at": filters.CreatedAtEnd})
 	}
 
 	return qb

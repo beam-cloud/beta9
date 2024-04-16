@@ -6,8 +6,13 @@
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
+    AsyncIterable,
+    AsyncIterator,
     Dict,
+    Iterable,
+    List,
     Optional,
+    Union,
 )
 
 import betterproto
@@ -32,6 +37,44 @@ class GetOrCreateVolumeResponse(betterproto.Message):
     volume_id: str = betterproto.string_field(2)
 
 
+@dataclass(eq=False, repr=False)
+class ListPathRequest(betterproto.Message):
+    path: str = betterproto.string_field(1)
+    long_format: bool = betterproto.bool_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ListPathResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    paths: List[str] = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class DeletePathRequest(betterproto.Message):
+    path: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class DeletePathResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    deleted: List[str] = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class CopyPathRequest(betterproto.Message):
+    path: str = betterproto.string_field(1)
+    content: bytes = betterproto.bytes_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class CopyPathResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    object_id: str = betterproto.string_field(2)
+    error_msg: str = betterproto.string_field(3)
+
+
 class VolumeServiceStub(betterproto.ServiceStub):
     async def get_or_create_volume(
         self,
@@ -50,12 +93,81 @@ class VolumeServiceStub(betterproto.ServiceStub):
             metadata=metadata,
         )
 
+    async def list_path(
+        self,
+        list_path_request: "ListPathRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "ListPathResponse":
+        return await self._unary_unary(
+            "/volume.VolumeService/ListPath",
+            list_path_request,
+            ListPathResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
+    async def delete_path(
+        self,
+        delete_path_request: "DeletePathRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "DeletePathResponse":
+        return await self._unary_unary(
+            "/volume.VolumeService/DeletePath",
+            delete_path_request,
+            DeletePathResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
+    async def copy_path_stream(
+        self,
+        copy_path_request_iterator: Union[
+            AsyncIterable["CopyPathRequest"], Iterable["CopyPathRequest"]
+        ],
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "CopyPathResponse":
+        return await self._stream_unary(
+            "/volume.VolumeService/CopyPathStream",
+            copy_path_request_iterator,
+            CopyPathRequest,
+            CopyPathResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
 
 class VolumeServiceBase(ServiceBase):
 
     async def get_or_create_volume(
         self, get_or_create_volume_request: "GetOrCreateVolumeRequest"
     ) -> "GetOrCreateVolumeResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def list_path(
+        self, list_path_request: "ListPathRequest"
+    ) -> "ListPathResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def delete_path(
+        self, delete_path_request: "DeletePathRequest"
+    ) -> "DeletePathResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def copy_path_stream(
+        self, copy_path_request_iterator: AsyncIterator["CopyPathRequest"]
+    ) -> "CopyPathResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
     async def __rpc_get_or_create_volume(
@@ -66,6 +178,27 @@ class VolumeServiceBase(ServiceBase):
         response = await self.get_or_create_volume(request)
         await stream.send_message(response)
 
+    async def __rpc_list_path(
+        self, stream: "grpclib.server.Stream[ListPathRequest, ListPathResponse]"
+    ) -> None:
+        request = await stream.recv_message()
+        response = await self.list_path(request)
+        await stream.send_message(response)
+
+    async def __rpc_delete_path(
+        self, stream: "grpclib.server.Stream[DeletePathRequest, DeletePathResponse]"
+    ) -> None:
+        request = await stream.recv_message()
+        response = await self.delete_path(request)
+        await stream.send_message(response)
+
+    async def __rpc_copy_path_stream(
+        self, stream: "grpclib.server.Stream[CopyPathRequest, CopyPathResponse]"
+    ) -> None:
+        request = stream.__aiter__()
+        response = await self.copy_path_stream(request)
+        await stream.send_message(response)
+
     def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
         return {
             "/volume.VolumeService/GetOrCreateVolume": grpclib.const.Handler(
@@ -73,5 +206,23 @@ class VolumeServiceBase(ServiceBase):
                 grpclib.const.Cardinality.UNARY_UNARY,
                 GetOrCreateVolumeRequest,
                 GetOrCreateVolumeResponse,
+            ),
+            "/volume.VolumeService/ListPath": grpclib.const.Handler(
+                self.__rpc_list_path,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                ListPathRequest,
+                ListPathResponse,
+            ),
+            "/volume.VolumeService/DeletePath": grpclib.const.Handler(
+                self.__rpc_delete_path,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                DeletePathRequest,
+                DeletePathResponse,
+            ),
+            "/volume.VolumeService/CopyPathStream": grpclib.const.Handler(
+                self.__rpc_copy_path_stream,
+                grpclib.const.Cardinality.STREAM_UNARY,
+                CopyPathRequest,
+                CopyPathResponse,
             ),
         }

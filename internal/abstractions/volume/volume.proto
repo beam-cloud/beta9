@@ -5,14 +5,49 @@ option go_package = "github.com/beam-cloud/beta9/proto";
 package volume;
 
 service VolumeService {
-    rpc GetOrCreateVolume(GetOrCreateVolumeRequest) returns (GetOrCreateVolumeResponse) {}
+  rpc GetOrCreateVolume(GetOrCreateVolumeRequest) returns (GetOrCreateVolumeResponse) {}
+  rpc ListPath(ListPathRequest) returns (ListPathResponse) {}
+  rpc DeletePath(DeletePathRequest) returns (DeletePathResponse) {}
+  rpc CopyPathStream(stream CopyPathRequest) returns (CopyPathResponse) {}
 }
 
 message GetOrCreateVolumeRequest {
-    string name = 1;
+  string name = 1;
 }
 
 message GetOrCreateVolumeResponse {
-    bool ok = 1;
-    string volume_id = 2;
+  bool ok = 1;
+  string volume_id = 2;
+}
+
+message ListPathRequest {
+  string path = 1;
+  bool long_format = 2;
+}
+
+message ListPathResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated string paths = 3;
+}
+
+message DeletePathRequest {
+  string path = 1;
+}
+
+message DeletePathResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated string deleted = 3;
+}
+
+message CopyPathRequest {
+  string path = 1;
+  bytes content = 2;
+}
+
+message CopyPathResponse {
+  bool ok = 1;
+  string object_id = 2;
+  string error_msg = 3;
 }
