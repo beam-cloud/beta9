@@ -37,7 +37,7 @@ func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 }
 
 func (g *TaskGroup) GetTaskCountByDeployment(ctx echo.Context) error {
-	_, err := g.authenticate(ctx)
+	_, err := g.authorize(ctx)
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func (g *TaskGroup) GetTaskCountByDeployment(ctx echo.Context) error {
 }
 
 func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
-	_, err := g.authenticate(ctx)
+	_, err := g.authorize(ctx)
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
 }
 
 func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
-	_, err := g.authenticate(ctx)
+	_, err := g.authorize(ctx)
 	if err != nil {
 		return err
 	}
