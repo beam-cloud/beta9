@@ -1,7 +1,7 @@
 import datetime
 import sys
 from contextlib import contextmanager
-from typing import Any, Sequence
+from typing import Any, Sequence, Tuple
 
 from rich.console import Console
 from rich.markup import escape
@@ -101,6 +101,6 @@ def humanize_date(d: datetime.datetime) -> str:
         return f"{s // 3600} hours ago"
 
 
-def pluralize(seq: Sequence, suffix: str = "s") -> tuple[int, str]:
+def pluralize(seq: Sequence, suffix: str = "s") -> Tuple[int, str]:
     n = len(seq)
     return n, "s" if n != 1 else ""
