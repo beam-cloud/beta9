@@ -43,7 +43,6 @@ type RequestBuffer struct {
 	workspace               *types.Workspace
 	rdb                     *common.RedisClient
 	containerRepo           repository.ContainerRepository
-	taskRepo                repository.TaskRepository
 	buffer                  *abstractions.RingBuffer[request]
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
@@ -58,7 +57,6 @@ func NewRequestBuffer(
 	stubId string,
 	size int,
 	containerRepo repository.ContainerRepository,
-	taskRepo repository.TaskRepository,
 	stubConfig *types.StubConfigV1,
 ) *RequestBuffer {
 	b := &RequestBuffer{
@@ -71,7 +69,6 @@ func NewRequestBuffer(
 		availableContainers:     []container{},
 		availableContainersLock: sync.RWMutex{},
 		containerRepo:           containerRepo,
-		taskRepo:                taskRepo,
 		httpClient:              &http.Client{},
 		httpHealthCheckClient: &http.Client{
 			Timeout: 1 * time.Second,

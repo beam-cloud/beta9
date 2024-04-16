@@ -310,7 +310,7 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 		containers:         make(map[string]bool),
 		scaleEventChan:     make(chan int, 1),
 		rdb:                es.rdb,
-		buffer:             NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, endpointRingBufferSize, es.containerRepo, es.taskRepo, stubConfig),
+		buffer:             NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, endpointRingBufferSize, es.containerRepo, stubConfig),
 	}
 	for _, o := range options {
 		o(instance)
