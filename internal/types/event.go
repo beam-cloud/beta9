@@ -1,17 +1,11 @@
 package types
 
-type Event struct {
-	Id            string `json:"id"`
-	Name          string `json:"name"`
-	SchemaVersion string `json:"schema_version"`
-	Created       int64  `json:"created"`
-	Data          []byte `json:"data"`
-}
+import cloudevents "github.com/cloudevents/sdk-go/v2/event"
 
-type EventSink = func(event []Event)
+type EventSink = func(event []cloudevents.Event)
 
 type EventClient interface {
-	PushEvent(event Event) error
+	PushEvent(event cloudevents.Event) error
 }
 
 var (
@@ -33,14 +27,14 @@ type EventContainerStatusSchema struct {
 	WorkerID    string `json:"worker_id"`
 }
 
-var EventContainerStatusRequestedSchemaVersion = "2024-01-24"
+var EventContainerStatusRequestedSchemaVersion = "1.0"
 
 type EventContainerStatusRequestedSchema struct {
 	ContainerID string           `json:"container_id"`
 	Request     ContainerRequest `json:"request"`
 }
 
-var EventWorkerStatusSchemaVersion = "2024-01-24"
+var EventWorkerStatusSchemaVersion = "1.0"
 
 type EventWorkerStatusSchema struct {
 	WorkerID string `json:"worker_id"`
