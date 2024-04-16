@@ -1,17 +1,19 @@
 import datetime
 import sys
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Sequence, Tuple
 
 from rich.console import Console
+from rich.markup import escape
+from rich.progress import open as _progress_open
 from rich.text import Text
 
 _console = Console()
 
 
-def header(text: str) -> None:
-    header_text = f"=> {text}"
-    _console.print(Text(header_text, style="bold white"))
+def header(text: str, subtext: str = "") -> None:
+    header_text = f"[bold white]=> {text}[/bold white]"
+    _console.print(header_text, subtext)
 
 
 def print(*objects: Any, **kwargs: Any) -> None:
@@ -29,9 +31,9 @@ def prompt(*, text: str, default: Any) -> Any:
     return user_input if user_input else default
 
 
-def detail(text: str, dim: bool = True) -> None:
+def detail(text: str, dim: bool = True, **kwargs) -> None:
     style = "dim" if dim else ""
-    _console.print(Text(text, style=style))
+    _console.print(Text(text, style=style), **kwargs)
 
 
 def success(text: str) -> None:
@@ -55,6 +57,20 @@ def url(text: str) -> None:
 def progress(task_name: str):
     with _console.status(task_name, spinner="dots", spinner_style="white"):
         yield
+
+
+def progress_open(file, mode, **kwargs):
+    options = dict(
+        complete_style="green",
+        finished_style="slate_blue1",
+        refresh_per_second=60,
+        **kwargs,
+    )
+
+    if "description" in options:
+        options["description"] = escape(f"[{options['description']}]")
+
+    return _progress_open(file, mode, **options)
 
 
 def humanize_date(d: datetime.datetime) -> str:
@@ -83,3 +99,8 @@ def humanize_date(d: datetime.datetime) -> str:
         return "1 hour ago"
     else:
         return f"{s // 3600} hours ago"
+
+
+def pluralize(seq: Sequence, suffix: str = "s") -> Tuple[int, str]:
+    n = len(seq)
+    return n, "s" if n != 1 else ""

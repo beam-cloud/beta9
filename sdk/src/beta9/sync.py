@@ -5,9 +5,10 @@ import os
 import uuid
 import zipfile
 from pathlib import Path
+from queue import Queue
 from typing import Generator, NamedTuple, Optional
 
-from beta9.clients.gateway import PutObjectRequest
+from watchdog.events import FileSystemEventHandler
 
 from . import terminal
 from .clients.gateway import (
@@ -15,7 +16,9 @@ from .clients.gateway import (
     HeadObjectRequest,
     HeadObjectResponse,
     ObjectMetadata,
+    PutObjectRequest,
     PutObjectResponse,
+    ReplaceObjectContentOperation,
 )
 
 CHUNK_SIZE = 1024 * 1024 * 4
@@ -150,3 +153,28 @@ class FileSyncer:
 
         terminal.header("Files synced")
         return FileSyncResult(success=True, object_id=put_response.object_id)  # pyright: ignore[reportOptionalMemberAccess]
+
+
+class SyncEventHandler(FileSystemEventHandler):
+    def __init__(self, queue: Queue):
+        super().__init__()
+        self.queue = queue
+
+    def on_created(self, event):
+        if not event.is_directory:
+            self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path))
+
+        terminal.warn(f"File created: {event.src_path}")
+
+    def on_modified(self, event):
+        if not event.is_directory:
+            self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path))
+            terminal.warn(f"File modified: {event.src_path}")
+
+    def on_deleted(self, event):
+        if event.is_directory:
+            terminal.warn(f"Folder deleted: {event.src_path}")
+        else:
+            terminal.warn(f"File deleted: {event.src_path}")
+
+        self.queue.put((ReplaceObjectContentOperation.DELETE, event.src_path))

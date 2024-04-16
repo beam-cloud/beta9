@@ -3,6 +3,7 @@ import os
 import signal
 import subprocess
 import sys
+from typing import Union
 
 from grpclib.client import Channel
 
@@ -16,11 +17,11 @@ from ..type import TaskStatus
 
 class ContainerManager:
     def __init__(self, cmd: str) -> None:
-        self.process = None
+        self.process: Union[subprocess.Popen, None] = None
         self.pid: int = os.getpid()
         self.exit_code: int = 0
-        self.task_id = os.getenv("TASK_ID")
-        self.killed = False
+        self.task_id: str = os.getenv("TASK_ID")
+        self.killed: bool = False
 
         signal.signal(signal.SIGTERM, self.shutdown)
 

@@ -155,6 +155,7 @@ class SimpleQueueServiceStub(betterproto.ServiceStub):
 
 
 class SimpleQueueServiceBase(ServiceBase):
+
     async def simple_queue_put(
         self, simple_queue_put_request: "SimpleQueuePutRequest"
     ) -> "SimpleQueuePutResponse":

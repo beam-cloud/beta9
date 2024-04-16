@@ -39,8 +39,8 @@ type ContainerRepository interface {
 	DeleteContainerState(*types.ContainerRequest) error
 	SetWorkerAddress(containerId string, addr string) error
 	GetWorkerAddress(containerId string) (string, error)
-	GetActiveContainersByPrefix(patternPrefix string) ([]types.ContainerState, error)
-	GetFailedContainerCountByPrefix(patternPrefix string) (int, error)
+	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
+	GetFailedContainerCountByStubId(stubId string) (int, error)
 }
 
 type BackendRepository interface {
@@ -68,6 +68,7 @@ type BackendRepository interface {
 	GetTaskCountPerDeployment(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountPerDeployment, error)
 	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool) (types.Stub, error)
 	GetStubByExternalId(ctx context.Context, externalId string) (*types.StubWithRelated, error)
+	GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
 	GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
 	ListDeployments(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error)
 	ListDeploymentsPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error)
@@ -92,6 +93,7 @@ type TaskRepository interface {
 	ClaimTask(ctx context.Context, workspaceName, stubId, taskId, containerId string) error
 	IsClaimed(ctx context.Context, workspaceName, stubId, taskId string) (bool, error)
 	TasksClaimed(ctx context.Context, workspaceName, stubId string) (int, error)
+	TasksInFlight(ctx context.Context, workspaceName, stubId string) (int, error)
 }
 
 type ProviderRepository interface {

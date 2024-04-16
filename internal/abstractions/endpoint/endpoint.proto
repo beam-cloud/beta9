@@ -6,9 +6,13 @@ package endpoint;
 
 service EndpointService {
   rpc EndpointServe(EndpointServeRequest)
-      returns (EndpointServeResponse) {}
+      returns (stream EndpointServeResponse) {}
 }
 
 message EndpointServeRequest { string stub_id = 1; }
 
-message EndpointServeResponse {}
+message EndpointServeResponse {
+  string output = 1;
+  bool done = 2;
+  int32 exit_code = 3;
+}

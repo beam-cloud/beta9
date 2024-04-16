@@ -61,6 +61,15 @@ func (d *Dispatcher) Register(executor string, taskFactory func(ctx context.Cont
 	d.executors.Set(executor, taskFactory)
 }
 
+func (d *Dispatcher) SendAndExecute(ctx context.Context, executor string, workspaceName, stubId string, payload *types.TaskPayload, policy types.TaskPolicy) (types.TaskInterface, error) {
+	task, err := d.Send(ctx, executor, workspaceName, stubId, payload, policy)
+	if err != nil {
+		return nil, err
+	}
+
+	return task, task.Execute(ctx)
+}
+
 func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, stubId string, payload *types.TaskPayload, policy types.TaskPolicy) (types.TaskInterface, error) {
 	taskMessage := d.getTaskMessage()
 	taskMessage.Executor = executor
@@ -93,11 +102,6 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 		return nil, err
 	}
 
-	err = task.Execute(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	return task, nil
 }
 
@@ -125,15 +129,6 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 			}
 
 			for _, taskMessage := range tasks {
-				claimed, err := d.taskRepo.IsClaimed(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
-				if err != nil {
-					continue
-				}
-
-				if !claimed {
-					continue
-				}
-
 				taskFactory, exists := d.executors.Get(taskMessage.Executor)
 				if !exists {
 					d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
@@ -145,26 +140,42 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 					continue
 				}
 
+				claimed, err := d.taskRepo.IsClaimed(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+				if err != nil {
+					continue
+				}
+
+				if !claimed {
+					if time.Now().After(taskMessage.Policy.Expires) {
+						err = task.Cancel(ctx, types.TaskExpired)
+						if err != nil {
+							log.Printf("<dispatcher> unable to cancel task: %s, %v\n", task.Metadata().TaskId, err)
+						}
+
+						d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+					}
+
+					continue
+				}
+
 				heartbeat, err := task.HeartBeat(ctx)
 				if err != nil {
 					continue
 				}
 
 				if !heartbeat && claimed {
-
 					// Hit retry limit, cancel task and resolve
 					if taskMessage.Retries >= taskMessage.Policy.MaxRetries {
 						log.Printf("<dispatcher> hit retry limit, not reinserting task <%s> into queue: %s\n", taskMessage.TaskId, taskMessage.StubId)
 
-						err := task.Cancel(ctx)
+						err := task.Cancel(ctx, types.TaskExceededRetryLimit)
 						if err != nil {
+							log.Printf("<dispatcher> unable to cancel task: %s, %v\n", task.Metadata().TaskId, err)
 							continue
 						}
 
-						err = d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
-						if err != nil {
-							continue
-						}
+						d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+						continue
 					}
 
 					// Retry task

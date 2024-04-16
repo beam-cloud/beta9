@@ -177,6 +177,7 @@ class TaskQueueServiceStub(betterproto.ServiceStub):
 
 
 class TaskQueueServiceBase(ServiceBase):
+
     async def task_queue_put(
         self, task_queue_put_request: "TaskQueuePutRequest"
     ) -> "TaskQueuePutResponse":

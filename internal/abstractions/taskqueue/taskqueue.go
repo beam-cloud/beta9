@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 	"github.com/beam-cloud/beta9/internal/auth"
 	common "github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
@@ -106,7 +107,7 @@ type TaskQueueTask struct {
 	tq  *RedisTaskQueue
 }
 
-func (t *TaskQueueTask) Execute(ctx context.Context) error {
+func (t *TaskQueueTask) Execute(ctx context.Context, options ...interface{}) error {
 	queue, exists := t.tq.queueInstances.Get(t.msg.StubId)
 	if !exists {
 		err := t.tq.createQueueInstance(t.msg.StubId)
@@ -167,13 +168,21 @@ func (t *TaskQueueTask) HeartBeat(ctx context.Context) (bool, error) {
 	return res > 0, nil
 }
 
-func (t *TaskQueueTask) Cancel(ctx context.Context) error {
+func (t *TaskQueueTask) Cancel(ctx context.Context, reason types.TaskCancellationReason) error {
 	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
 	if err != nil {
 		return err
 	}
 
-	task.Status = types.TaskStatusError
+	switch reason {
+	case types.TaskExpired:
+		task.Status = types.TaskStatusTimeout
+	case types.TaskExceededRetryLimit:
+		task.Status = types.TaskStatusError
+	default:
+		task.Status = types.TaskStatusError
+	}
+
 	_, err = t.tq.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
 	if err != nil {
 		return err
@@ -225,7 +234,7 @@ func (tq *RedisTaskQueue) put(ctx context.Context, workspaceName, stubId string,
 		return "", err
 	}
 
-	task, err := tq.taskDispatcher.Send(ctx, string(types.ExecutorTaskQueue), workspaceName, stubId, payload, stubConfig.TaskPolicy)
+	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), workspaceName, stubId, payload, stubConfig.TaskPolicy)
 	if err != nil {
 		return "", err
 	}
@@ -564,7 +573,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string) error {
 		client:             tq.queueClient,
 	}
 
-	autoscaler := newAutoscaler(queue)
+	autoscaler := abstractions.NewAutoscaler(queue, taskQueueSampleFunc, taskQueueScaleFunc)
 	queue.autoscaler = autoscaler
 
 	tq.queueInstances.Set(stubId, queue)

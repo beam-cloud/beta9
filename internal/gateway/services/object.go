@@ -11,6 +11,8 @@ import (
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
@@ -65,7 +67,7 @@ func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectReques
 	if err != nil {
 		return &pb.PutObjectResponse{
 			Ok:       false,
-			ErrorMsg: "Unable to write files",
+			ErrorMsg: "Unable to write file",
 		}, nil
 	}
 
@@ -143,4 +145,36 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 		Ok:       true,
 		ObjectId: newObject.ExternalId,
 	})
+}
+
+// ReplaceObjectContent modifies files in an extracted object directory
+func (gws *GatewayService) ReplaceObjectContent(stream pb.GatewayService_ReplaceObjectContentServer) error {
+	ctx := stream.Context()
+
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	extractedObjectPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name)
+	os.MkdirAll(extractedObjectPath, 0644)
+
+	for {
+		req, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			return status.Errorf(codes.Unknown, "Received an error: %v", err)
+		}
+
+		destPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, req.ObjectId, req.Path)
+
+		switch req.Op {
+		case pb.ReplaceObjectContentOperation_DELETE:
+			os.RemoveAll(destPath)
+		case pb.ReplaceObjectContentOperation_WRITE:
+			os.MkdirAll(destPath, 0644)
+			os.WriteFile(destPath, req.Data, 0644)
+		}
+	}
+
+	return stream.SendAndClose(&pb.ReplaceObjectContentResponse{Ok: true})
 }

@@ -1,12 +1,23 @@
+import asyncio
 import inspect
 import os
+from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
 
+from watchdog.observers import Observer
+
+from ... import terminal
 from ...abstractions.base import BaseAbstraction
 from ...abstractions.image import Image, ImageBuildResult
 from ...abstractions.volume import Volume
-from ...clients.gateway import GatewayServiceStub, GetOrCreateStubRequest, GetOrCreateStubResponse
-from ...sync import FileSyncer
+from ...clients.gateway import (
+    GatewayServiceStub,
+    GetOrCreateStubRequest,
+    GetOrCreateStubResponse,
+    ReplaceObjectContentOperation,
+    ReplaceObjectContentRequest,
+)
+from ...sync import FileSyncer, SyncEventHandler
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -15,6 +26,9 @@ WEBSERVER_STUB_TYPE = "endpoint"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
+TASKQUEUE_SERVE_STUB_TYPE = "taskqueue/serve"
+ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
+FUNCTION_SERVE_STUB_TYPE = "function/serve"
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -111,6 +125,46 @@ class RunnerAbstraction(BaseAbstraction):
 
         function_name = func.__name__
         self.handler = f"{module_name}:{function_name}"
+
+    async def _object_iterator(self, *, dir: str, object_id: str, file_update_queue: Queue):
+        while True:
+            try:
+                operation, path = file_update_queue.get_nowait()
+
+                if operation == ReplaceObjectContentOperation.WRITE:
+                    with open(path, "rb") as f:
+                        yield ReplaceObjectContentRequest(
+                            object_id=object_id,
+                            path=os.path.relpath(path, start=dir),
+                            data=f.read(),
+                            op=ReplaceObjectContentOperation.WRITE,
+                        )
+
+                elif operation == ReplaceObjectContentOperation.DELETE:
+                    yield ReplaceObjectContentRequest(
+                        object_id=object_id,
+                        path=os.path.relpath(path, start=dir),
+                        op=ReplaceObjectContentOperation.DELETE,
+                    )
+
+                file_update_queue.task_done()
+            except Empty:
+                await asyncio.sleep(0.1)
+
+    async def sync_dir_to_workspace(self, *, dir: str, object_id: str) -> None:
+        file_update_queue = Queue()
+        event_handler = SyncEventHandler(file_update_queue)
+
+        observer = Observer()
+        observer.schedule(event_handler, dir, recursive=True)
+        observer.start()
+
+        terminal.detail(f"Watching {dir} for changes...")
+        return await self.gateway_stub.replace_object_content(
+            replace_object_content_request_iterator=self._object_iterator(
+                dir=dir, object_id=object_id, file_update_queue=file_update_queue
+            )
+        )
 
     def prepare_runtime(
         self,

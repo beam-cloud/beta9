@@ -13,6 +13,7 @@ var (
 	schedulerContainerConfig   string = "scheduler:container:config:%s"
 	schedulerContainerState    string = "scheduler:container:state:%s"
 	schedulerContainerAddress  string = "scheduler:container:container_addr:%s"
+	schedulerContainerIndex    string = "scheduler:container:index:%s"
 	schedulerWorkerAddress     string = "scheduler:container:worker_addr:%s"
 	schedulerContainerLock     string = "scheduler:container:lock:%s"
 	schedulerContainerExitCode string = "scheduler:container:exit_code:%s"
@@ -33,10 +34,12 @@ var (
 )
 
 var (
-	taskPrefix string = "task"
-	taskIndex  string = "task:index"
-	taskEntry  string = "task:%s:%s:%s"
-	taskClaim  string = "task:%s:%s:%s:claim"
+	taskPrefix      string = "task"
+	taskIndex       string = "task:index"
+	taskIndexByStub string = "task:%s:%s:stub_index"
+	taskClaimIndex  string = "task:%s:%s:claim_index"
+	taskEntry       string = "task:%s:%s:%s"
+	taskClaim       string = "task:%s:%s:%s:claim"
 )
 
 var (
@@ -103,6 +106,10 @@ func (rk *redisKeys) SchedulerContainerConfig(containerId string) string {
 	return fmt.Sprintf(schedulerContainerConfig, containerId)
 }
 
+func (rk *redisKeys) SchedulerContainerIndex(stubId string) string {
+	return fmt.Sprintf(schedulerContainerIndex, stubId)
+}
+
 func (rk *redisKeys) SchedulerContainerAddress(containerId string) string {
 	return fmt.Sprintf(schedulerContainerAddress, containerId)
 }
@@ -156,6 +163,14 @@ func (rk *redisKeys) TaskPrefix() string {
 
 func (rk *redisKeys) TaskIndex() string {
 	return taskIndex
+}
+
+func (rk *redisKeys) TaskIndexByStub(workspaceName, stubId string) string {
+	return fmt.Sprintf(taskIndexByStub, workspaceName, stubId)
+}
+
+func (rk *redisKeys) TaskClaimIndex(workspaceName, stubId string) string {
+	return fmt.Sprintf(taskClaimIndex, workspaceName, stubId)
 }
 
 func (rk *redisKeys) TaskEntry(workspaceName, stubId, taskId string) string {
