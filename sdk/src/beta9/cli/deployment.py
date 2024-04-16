@@ -18,12 +18,27 @@ def common(ctx: click.Context):
 
 @common.command(
     name="deploy",
-    help="Deploy a new function.",
+    help="""
+    Deploy a new function.
+
+    ENTRYPOINT is in the format of "file:function".
+    """,
 )
-@click.pass_obj
-def deploy(service: ServiceClient):
-    # todo: implement a quicker/shorter version of create_deployment()
-    pass
+@click.option(
+    "--name",
+    type=click.STRING,
+    help="The name the deployment.",
+    required=True,
+)
+@click.argument(
+    "entrypoint",
+    nargs=1,
+    required=True,
+)
+@click.pass_context
+def deploy(ctx: click.Context, name: str, function: str):
+    ctx.forward(create_deployment)
+    ctx.invoke(create_deployment, name=name, function=function)
 
 
 @click.group(
