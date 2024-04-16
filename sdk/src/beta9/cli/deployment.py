@@ -72,6 +72,9 @@ def create_deployment(name: str, entrypoint: str):
 
     module = importlib.import_module(module_name)
 
-    func = getattr(module, func_name)
+    func = getattr(module, func_name, None)
+    if func is None:
+        terminal.error(f"Unable to find function '{func_name}'")
+
     if not func.deploy(name=name):
         terminal.error("Deployment failed ☠️")
