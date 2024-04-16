@@ -2,6 +2,7 @@ package endpoint
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/labstack/echo/v4"
@@ -39,7 +40,7 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 	return instance.buffer.ForwardRequest(echoCtx, &types.TaskPayload{
 		Args:   t.msg.Args,
 		Kwargs: t.msg.Kwargs,
-	})
+	}, t.msg.TaskId)
 }
 
 func (t *EndpointTask) Retry(ctx context.Context) error {
@@ -81,8 +82,13 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 }
 
 func (t *EndpointTask) HeartBeat(ctx context.Context) (bool, error) {
-	// Endpoints don't support retries, so heartbeats are not required
-	return true, nil
+	heartbeatKey := Keys.endpointRequestHeartbeat(t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
+	exists, err := t.es.rdb.Exists(ctx, heartbeatKey).Result()
+	if err != nil {
+		return false, fmt.Errorf("failed to retrieve endpoint heartbeat key <%v>: %w", heartbeatKey, err)
+	}
+
+	return exists > 0, nil
 }
 
 func (t *EndpointTask) Metadata() types.TaskMetadata {

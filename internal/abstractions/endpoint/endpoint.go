@@ -45,11 +45,12 @@ type HttpEndpointService struct {
 }
 
 var (
-	endpointContainerPrefix       string        = "endpoint"
-	endpointRoutePrefix           string        = "/endpoint"
-	endpointRingBufferSize        int           = 10000000
-	endpointRequestTimeoutS       int           = 180
-	endpointServeContainerTimeout time.Duration = 120 * time.Second
+	endpointContainerPrefix          string        = "endpoint"
+	endpointRoutePrefix              string        = "/endpoint"
+	endpointRingBufferSize           int           = 10000000
+	endpointRequestTimeoutS          int           = 180
+	endpointServeContainerTimeout    time.Duration = 120 * time.Second
+	endpointRequestHeartbeatInterval time.Duration = 30 * time.Second
 )
 
 type EndpointServiceOpts struct {
@@ -347,6 +348,7 @@ var (
 	endpointKeepWarmLock     string = "endpoint:%s:%s:keep_warm_lock:%s"
 	endpointInstanceLock     string = "endpoint:%s:%s:instance_lock"
 	endpointRequestsInFlight string = "endpoint:%s:%s:requests_in_flight:%s"
+	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s"
 )
 
 func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) string {
@@ -359,4 +361,8 @@ func (k *keys) endpointInstanceLock(workspaceName, stubId string) string {
 
 func (k *keys) endpointRequestsInFlight(workspaceName, stubId, containerId string) string {
 	return fmt.Sprintf(endpointRequestsInFlight, workspaceName, stubId, containerId)
+}
+
+func (k *keys) endpointRequestHeartbeat(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(endpointRequestHeartbeat, workspaceName, stubId, taskId)
 }

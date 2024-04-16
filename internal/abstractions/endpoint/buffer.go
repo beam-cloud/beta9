@@ -24,6 +24,7 @@ import (
 type request struct {
 	ctx     echo.Context
 	payload *types.TaskPayload
+	taskId  string
 	done    chan bool
 }
 
@@ -85,12 +86,13 @@ func NewRequestBuffer(
 	return b
 }
 
-func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPayload) error {
+func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPayload, taskId string) error {
 	done := make(chan bool)
 	rb.buffer.Push(request{
 		ctx:     ctx,
 		done:    done,
 		payload: payload,
+		taskId:  taskId,
 	})
 
 	rb.length.Add(1)
@@ -259,6 +261,8 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	c := rb.availableContainers[0]
 	rb.availableContainersLock.RUnlock()
 
+	go rb.heartBeat(req, c.id)
+
 	log.Println("container SELECTED:", c)
 	err := rb.incrementRequestsInFlight(c.id)
 	if err != nil {
@@ -304,6 +308,23 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 
 	req.ctx.Response().Writer.WriteHeader(resp.StatusCode)
 	req.ctx.Response().Writer.Write(bytes)
+}
+
+func (rb *RequestBuffer) heartBeat(req request, containerId string) {
+	ticker := time.NewTicker(endpointRequestHeartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-rb.ctx.Done():
+			return
+		case <-req.done:
+			log.Println("heartbeat complete!")
+			return
+		case <-ticker.C:
+			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskId), containerId, time.Duration(1)*time.Second)
+		}
+	}
 }
 
 func (rb *RequestBuffer) afterRequest(req request, containerId string) {
