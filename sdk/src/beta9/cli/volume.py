@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Iterable, Union
 
 import click
+from rich.table import Column, Table, box
 
 from beta9 import aio, terminal
 from beta9.cli.contexts import ServiceClient
@@ -11,8 +12,12 @@ from beta9.clients.volume import (
     CopyPathRequest,
     CopyPathResponse,
     DeletePathRequest,
+    GetOrCreateVolumeRequest,
+    GetOrCreateVolumeResponse,
     ListPathRequest,
     ListPathResponse,
+    ListVolumesRequest,
+    ListVolumesResponse,
 )
 from beta9.terminal import pluralize
 
@@ -137,7 +142,7 @@ def cp(service: ServiceClient, local_path: str, remote_path: str) -> None:
         res: CopyPathResponse = aio.run_sync(service.volume.copy_path_stream(req))
 
         if not res.ok:
-            terminal.error(f"{dst} ({res.error_msg})")
+            terminal.error(f"{dst} ({res.err_msg})")
 
 
 def read_with_progress(
@@ -198,17 +203,80 @@ def management(ctx: click.Context):
     ctx.obj = ctx.with_resource(ServiceClient())
 
 
-@management.command(name="list")
+@management.command(
+    name="list",
+    help="List available volumes.",
+)
 @click.pass_obj
 def list_volumes(service: ServiceClient):
-    pass
+    res: ListVolumesResponse
+    res = aio.run_sync(service.volume.list_volumes(ListVolumesRequest()))
+
+    if not res.ok:
+        terminal.error(res.err_msg)
+
+    table = Table(
+        Column("Name"),
+        Column("Size"),
+        Column("Created At"),
+        Column("Updated At"),
+        Column("Workspace Name"),
+        box=box.SIMPLE,
+    )
+
+    for volume in res.volumes:
+        table.add_row(
+            volume.name,
+            terminal.humanize_memory(volume.size),
+            terminal.humanize_date(volume.created_at),
+            terminal.humanize_date(volume.updated_at),
+            volume.workspace_name,
+        )
+
+    table.add_section()
+    table.add_row(f"[bold]Total: {len(res.volumes)}")
+    terminal.print(table)
 
 
-@management.command(name="create")
-def create_volume():
-    pass
+@management.command(
+    name="create",
+    help="Create a new volume.",
+)
+@click.option(
+    "--name",
+    "-n",
+    type=click.STRING,
+    required=True,
+)
+@click.pass_obj
+def create_volume(service: ServiceClient, name: str):
+    res: GetOrCreateVolumeResponse
+    res = aio.run_sync(service.volume.get_or_create_volume(GetOrCreateVolumeRequest(name=name)))
+
+    if not res.ok:
+        terminal.print(res.volume)
+        terminal.error(res.err_msg)
+
+    table = Table(
+        Column("Name"),
+        Column("Created At"),
+        Column("Updated At"),
+        Column("Workspace Name"),
+        box=box.SIMPLE,
+    )
+
+    table.add_row(
+        res.volume.name,
+        terminal.humanize_date(res.volume.created_at),
+        terminal.humanize_date(res.volume.updated_at),
+        res.volume.workspace_name,
+    )
+    terminal.print(table)
 
 
-@management.command(name="delete")
+@management.command(
+    name="delete",
+    help="Delete a volume.",
+)
 def delete_volume():
     pass

@@ -1,14 +1,26 @@
 syntax = "proto3";
 
 option go_package = "github.com/beam-cloud/beta9/proto";
+import "google/protobuf/timestamp.proto";
 
 package volume;
 
 service VolumeService {
   rpc GetOrCreateVolume(GetOrCreateVolumeRequest) returns (GetOrCreateVolumeResponse) {}
+  rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse) {}
   rpc ListPath(ListPathRequest) returns (ListPathResponse) {}
   rpc DeletePath(DeletePathRequest) returns (DeletePathResponse) {}
   rpc CopyPathStream(stream CopyPathRequest) returns (CopyPathResponse) {}
+}
+
+message VolumeInstance {
+  string id = 1;
+  string name = 2;
+  uint64 size = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string workspace_id = 6;
+  string workspace_name = 7;
 }
 
 message GetOrCreateVolumeRequest {
@@ -17,7 +29,8 @@ message GetOrCreateVolumeRequest {
 
 message GetOrCreateVolumeResponse {
   bool ok = 1;
-  string volume_id = 2;
+  string err_msg = 2;
+  VolumeInstance volume = 3;
 }
 
 message ListPathRequest {
@@ -49,5 +62,13 @@ message CopyPathRequest {
 message CopyPathResponse {
   bool ok = 1;
   string object_id = 2;
-  string error_msg = 3;
+  string err_msg = 3;
+}
+
+message ListVolumesRequest {}
+
+message ListVolumesResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated VolumeInstance volumes = 3;
 }
