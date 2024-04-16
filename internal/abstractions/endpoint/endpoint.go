@@ -254,7 +254,7 @@ func (es *HttpEndpointService) forwardRequest(
 		instance, _ = es.endpointInstances.Get(stubId)
 	}
 
-	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorTaskQueue), instance.workspace.Name, stubId, payload, types.TaskPolicy{
+	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), instance.workspace.Name, stubId, payload, types.TaskPolicy{
 		MaxRetries: 0,
 		Timeout:    endpointRequestTimeoutS,
 		Expires:    time.Now().Add(time.Duration(endpointRequestTimeoutS) * time.Second),
