@@ -257,11 +257,10 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
-	// Select an available container to forward the request to
+	// Select an available container to forward the request to (whichever one has the lowest # of inflight requests)
+	// Basically a least-connections load balancer
 	c := rb.availableContainers[0]
 	rb.availableContainersLock.RUnlock()
-
-	go rb.heartBeat(req, c.id)
 
 	log.Println("container SELECTED:", c)
 	err := rb.incrementRequestsInFlight(c.id)
@@ -284,6 +283,8 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		req.done <- true
 		return
 	}
+
+	go rb.heartBeat(req, c.id) // Send heartbeat via redis for duration of request
 
 	resp, err := rb.httpClient.Do(httpReq)
 	if err != nil {
@@ -311,15 +312,14 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 }
 
 func (rb *RequestBuffer) heartBeat(req request, containerId string) {
+	ctx := req.ctx.Request().Context()
 	ticker := time.NewTicker(endpointRequestHeartbeatInterval)
 	defer ticker.Stop()
 
+	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskId), containerId, time.Duration(30)*time.Second)
 	for {
 		select {
-		case <-rb.ctx.Done():
-			return
-		case <-req.done:
-			log.Println("heartbeat complete!")
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskId), containerId, time.Duration(1)*time.Second)

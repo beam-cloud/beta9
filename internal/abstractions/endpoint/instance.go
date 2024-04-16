@@ -151,8 +151,9 @@ func (i *endpointInstance) handleScalingEvent(desiredContainers int) error {
 
 func (i *endpointInstance) startContainers(containersToRun int) error {
 	for c := 0; c < containersToRun; c++ {
+		containerId := i.genContainerId()
 		runRequest := &types.ContainerRequest{
-			ContainerId: i.genContainerId(),
+			ContainerId: containerId,
 			Env: []string{
 				fmt.Sprintf("BETA9_TOKEN=%s", i.token.Key),
 				fmt.Sprintf("HANDLER=%s", i.stubConfig.Handler),
@@ -176,6 +177,14 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 				},
 			},
 		}
+
+		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers
+		i.rdb.SetEx(
+			context.Background(),
+			Keys.endpointKeepWarmLock(i.workspace.Name, i.stub.ExternalId, containerId),
+			1,
+			time.Duration(i.stubConfig.KeepWarmSeconds)*time.Second,
+		)
 
 		err := i.scheduler.Run(runRequest)
 		if err != nil {
