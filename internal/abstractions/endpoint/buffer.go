@@ -328,7 +328,7 @@ func (rb *RequestBuffer) afterRequest(req request, containerId string) {
 		req.done <- true
 	}()
 
-	rb.decrementRequestsInFlight(containerId)
+	defer rb.decrementRequestsInFlight(containerId)
 
 	// Set keep warm lock
 	if rb.stubConfig.KeepWarmSeconds == 0 {
