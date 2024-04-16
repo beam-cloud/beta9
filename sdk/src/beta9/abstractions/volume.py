@@ -1,6 +1,6 @@
 from ..abstractions.base import BaseAbstraction
 from ..clients.gateway import Volume as VolumeConfig
-from ..clients.volume import GetOrCreateVolumeRequest, VolumeServiceStub
+from ..clients.volume import GetOrCreateVolumeRequest, GetOrCreateVolumeResponse, VolumeServiceStub
 
 
 class Volume(BaseAbstraction):
@@ -34,13 +34,14 @@ class Volume(BaseAbstraction):
         self.stub: VolumeServiceStub = VolumeServiceStub(self.channel)
 
     def get_or_create(self) -> bool:
+        resp: GetOrCreateVolumeResponse
         resp = self.run_sync(
             self.stub.get_or_create_volume(GetOrCreateVolumeRequest(name=self.name))
         )
 
         if resp.ok:
             self.ready = True
-            self.volume_id = resp.volume_id
+            self.volume_id = resp.volume.id
             return True
 
         return False

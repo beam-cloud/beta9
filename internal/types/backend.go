@@ -39,8 +39,15 @@ type Volume struct {
 	Id          uint      `db:"id"`
 	ExternalId  string    `db:"external_id"`
 	Name        string    `db:"name"`
+	Size        uint64    // Populated by volume abstraction
 	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
 	CreatedAt   time.Time `db:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at"`
+}
+
+type VolumeWithRelated struct {
+	Volume
+	Workspace Workspace `db:"workspace" json:"workspace"`
 }
 
 type Deployment struct {

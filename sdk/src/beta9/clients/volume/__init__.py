@@ -4,6 +4,7 @@
 # This file has been @generated
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     AsyncIterable,
@@ -27,6 +28,17 @@ if TYPE_CHECKING:
 
 
 @dataclass(eq=False, repr=False)
+class VolumeInstance(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    name: str = betterproto.string_field(2)
+    size: int = betterproto.uint64_field(3)
+    created_at: datetime = betterproto.message_field(4)
+    updated_at: datetime = betterproto.message_field(5)
+    workspace_id: str = betterproto.string_field(6)
+    workspace_name: str = betterproto.string_field(7)
+
+
+@dataclass(eq=False, repr=False)
 class GetOrCreateVolumeRequest(betterproto.Message):
     name: str = betterproto.string_field(1)
 
@@ -34,7 +46,8 @@ class GetOrCreateVolumeRequest(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class GetOrCreateVolumeResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
-    volume_id: str = betterproto.string_field(2)
+    err_msg: str = betterproto.string_field(2)
+    volume: "VolumeInstance" = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -72,7 +85,19 @@ class CopyPathRequest(betterproto.Message):
 class CopyPathResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     object_id: str = betterproto.string_field(2)
-    error_msg: str = betterproto.string_field(3)
+    err_msg: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class ListVolumesRequest(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class ListVolumesResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    volumes: List["VolumeInstance"] = betterproto.message_field(3)
 
 
 class VolumeServiceStub(betterproto.ServiceStub):
@@ -88,6 +113,23 @@ class VolumeServiceStub(betterproto.ServiceStub):
             "/volume.VolumeService/GetOrCreateVolume",
             get_or_create_volume_request,
             GetOrCreateVolumeResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
+    async def list_volumes(
+        self,
+        list_volumes_request: "ListVolumesRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "ListVolumesResponse":
+        return await self._unary_unary(
+            "/volume.VolumeService/ListVolumes",
+            list_volumes_request,
+            ListVolumesResponse,
             timeout=timeout,
             deadline=deadline,
             metadata=metadata,
@@ -155,6 +197,11 @@ class VolumeServiceBase(ServiceBase):
     ) -> "GetOrCreateVolumeResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
+    async def list_volumes(
+        self, list_volumes_request: "ListVolumesRequest"
+    ) -> "ListVolumesResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
     async def list_path(
         self, list_path_request: "ListPathRequest"
     ) -> "ListPathResponse":
@@ -176,6 +223,13 @@ class VolumeServiceBase(ServiceBase):
     ) -> None:
         request = await stream.recv_message()
         response = await self.get_or_create_volume(request)
+        await stream.send_message(response)
+
+    async def __rpc_list_volumes(
+        self, stream: "grpclib.server.Stream[ListVolumesRequest, ListVolumesResponse]"
+    ) -> None:
+        request = await stream.recv_message()
+        response = await self.list_volumes(request)
         await stream.send_message(response)
 
     async def __rpc_list_path(
@@ -206,6 +260,12 @@ class VolumeServiceBase(ServiceBase):
                 grpclib.const.Cardinality.UNARY_UNARY,
                 GetOrCreateVolumeRequest,
                 GetOrCreateVolumeResponse,
+            ),
+            "/volume.VolumeService/ListVolumes": grpclib.const.Handler(
+                self.__rpc_list_volumes,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                ListVolumesRequest,
+                ListVolumesResponse,
             ),
             "/volume.VolumeService/ListPath": grpclib.const.Handler(
                 self.__rpc_list_path,

@@ -650,10 +650,12 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	return &stub, nil
 }
 
+// Volume
+
 func (c *PostgresBackendRepository) GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
 	var volume types.Volume
 
-	queryGet := `SELECT id, external_id, name, workspace_id, created_at FROM volume WHERE name = $1 AND workspace_id = $2;`
+	queryGet := `SELECT id, external_id, name, workspace_id, created_at, updated_at FROM volume WHERE name = $1 AND workspace_id = $2;`
 
 	if err := c.client.GetContext(ctx, &volume, queryGet, name, workspaceId); err != nil {
 		return nil, err
@@ -663,22 +665,37 @@ func (c *PostgresBackendRepository) GetVolume(ctx context.Context, workspaceId u
 }
 
 func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
-	var volume *types.Volume
-	var err error
-
-	volume, err = c.GetVolume(ctx, workspaceId, name)
+	v, err := c.GetVolume(ctx, workspaceId, name)
 	if err == nil {
-		return volume, nil
+		return v, nil
 	}
 
-	queryCreate := `INSERT INTO volume (name, workspace_id) VALUES ($1, $2) RETURNING id, external_id, name, workspace_id, created_at;`
+	queryCreate := `INSERT INTO volume (name, workspace_id) VALUES ($1, $2) RETURNING id, external_id, name, workspace_id, created_at, updated_at;`
 
+	var volume types.Volume
 	err = c.client.GetContext(ctx, &volume, queryCreate, name, workspaceId)
 	if err != nil {
-		return &types.Volume{}, err
+		return nil, err
 	}
 
-	return volume, nil
+	return &volume, nil
+}
+
+func (c *PostgresBackendRepository) ListVolumesWithRelated(ctx context.Context, workspaceId uint) ([]types.VolumeWithRelated, error) {
+	var volumes []types.VolumeWithRelated
+	query := `
+		SELECT v.id, v.external_id, v.name, v.workspace_id, v.created_at, v.updated_at, w.name as "workspace.name"
+		FROM volume v
+		JOIN workspace w ON v.workspace_id = w.id
+		WHERE v.workspace_id = $1;
+	`
+
+	err := c.client.SelectContext(ctx, &volumes, query, workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return volumes, nil
 }
 
 // Deployment
