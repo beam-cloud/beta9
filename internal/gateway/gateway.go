@@ -6,9 +6,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"runtime"
+	"runtime/pprof"
 	"syscall"
+	"time"
 
 	"github.com/beam-cloud/beta9/internal/abstractions/endpoint"
 	"github.com/beam-cloud/beta9/internal/task"
@@ -301,6 +305,35 @@ func (g *Gateway) registerServices() error {
 	return nil
 }
 
+func (g *Gateway) profile() {
+	go profileCPU(5 * time.Minute)
+	go profileMemory(5 * time.Minute)
+}
+
+func profileCPU(duration time.Duration) {
+	cpuFile, err := os.Create("cpu_profile.prof")
+	if err != nil {
+		log.Fatalf("Could not create CPU profile: %v", err)
+	}
+	defer cpuFile.Close()
+
+	pprof.StartCPUProfile(cpuFile)
+	time.Sleep(duration)
+	pprof.StopCPUProfile()
+}
+
+func profileMemory(duration time.Duration) {
+	time.Sleep(duration)
+	memFile, err := os.Create("mem_profile.prof")
+	if err != nil {
+		log.Fatalf("Could not create memory profile: %v", err)
+	}
+	defer memFile.Close()
+
+	runtime.GC()
+	pprof.WriteHeapProfile(memFile)
+}
+
 // Gateway entry point
 func (g *Gateway) Start() error {
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", g.config.GatewayService.GRPCPort))
@@ -329,6 +362,8 @@ func (g *Gateway) Start() error {
 			log.Printf("Failed to start grpc server: %v\n", err)
 		}
 	}()
+
+	g.profile() // Profile cpu/mem usage
 
 	go func() {
 		if err := g.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
