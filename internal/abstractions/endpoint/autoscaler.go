@@ -1,7 +1,6 @@
 package endpoint
 
 import (
-	"log"
 	"math"
 
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
@@ -12,7 +11,6 @@ type endpointAutoscalerSample struct {
 	CurrentContainers int64
 }
 
-// endpointDeploymentSampleFunc retrieve a sample from the endpoint instance
 func endpointDeploymentSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
 	totalRequests, err := i.taskRepo.TasksInFlight(i.ctx, i.workspace.Name, i.stub.ExternalId)
 	if err != nil {
@@ -35,11 +33,9 @@ func endpointDeploymentSampleFunc(i *endpointInstance) (*endpointAutoscalerSampl
 	return sample, nil
 }
 
-// endpointDeploymentSampleFunc computes a scale result for an endpoint deployment
 func endpointDeploymentScaleFunc(i *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 0
 
-	log.Println("sample: ", sample)
 	if sample.TotalRequests == 0 {
 		desiredContainers = 0
 	} else {

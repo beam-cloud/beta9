@@ -120,15 +120,14 @@ func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	// TODO: check auth here (on stubId/authInfo)
-
 	err := es.createEndpointInstance(in.StubId,
 		withEntryPoint(func(instance *endpointInstance) []string {
 			return []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 		}),
 		withAutoscaler(func(instance *endpointInstance) *abstractions.AutoScaler[*endpointInstance, *endpointAutoscalerSample] {
 			return abstractions.NewAutoscaler(instance, endpointServeSampleFunc, endpointServeScaleFunc)
-		}))
+		}),
+	)
 	if err != nil {
 		return err
 	}
