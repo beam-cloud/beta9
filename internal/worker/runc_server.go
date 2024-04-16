@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	pb "github.com/beam-cloud/beta9/proto"
 
@@ -131,22 +132,28 @@ func (s *RunCServer) RunCStreamLogs(req *pb.RunCStreamLogsRequest, stream pb.Run
 	}
 
 	buffer := make([]byte, 4096)
+	logEntry := &pb.RunCLogEntry{}
+
 	for {
 		n, err := instance.LogBuffer.Read(buffer)
 		if err == io.EOF {
 			break
 		}
+
 		if err != nil {
 			return err
 		}
 
-		logEntry := &pb.RunCLogEntry{
-			Msg: string(buffer[:n]),
+		if n > 0 {
+			logEntry.Msg = string(buffer[:n])
+			if err := stream.Send(logEntry); err != nil {
+				return err
+			}
+
+			continue
 		}
 
-		if err := stream.Send(logEntry); err != nil {
-			return err
-		}
+		time.Sleep(time.Duration(100) * time.Millisecond)
 	}
 
 	return nil
