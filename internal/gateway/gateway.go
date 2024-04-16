@@ -244,11 +244,15 @@ func (g *Gateway) registerServices() error {
 
 	// Register endpoint service
 	ws, err := endpoint.NewEndpointService(g.ctx, endpoint.EndpointServiceOpts{
-		Config:      g.config,
-		RedisClient: g.redisClient,
-		Scheduler:   g.Scheduler,
-		RouteGroup:  g.rootRouteGroup,
-		Tailscale:   g.Tailscale,
+		Config:         g.config,
+		ContainerRepo:  g.ContainerRepo,
+		BackendRepo:    g.BackendRepo,
+		TaskRepo:       g.TaskRepo,
+		RedisClient:    g.redisClient,
+		Scheduler:      g.Scheduler,
+		RouteGroup:     g.rootRouteGroup,
+		Tailscale:      g.Tailscale,
+		TaskDispatcher: g.TaskDispatcher,
 	})
 	if err != nil {
 		return err

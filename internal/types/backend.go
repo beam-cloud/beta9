@@ -135,10 +135,13 @@ type StubConfigV1 struct {
 const (
 	StubTypeFunction            string = "function"
 	StubTypeFunctionDeployment  string = "function/deployment"
+	StubTypeFunctionServe       string = "function/serve"
 	StubTypeTaskQueue           string = "taskqueue"
 	StubTypeTaskQueueDeployment string = "taskqueue/deployment"
+	StubTypeTaskQueueServe      string = "taskqueue/serve"
 	StubTypeEndpoint            string = "endpoint"
 	StubTypeEndpointDeployment  string = "endpoint/deployment"
+	StubTypeEndpointServe       string = "endpoint/serve"
 )
 
 type Stub struct {
