@@ -124,7 +124,7 @@ func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream
 			return []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 		}),
 		withAutoscaler(func(instance *endpointInstance) *abstractions.AutoScaler[*endpointInstance, *endpointAutoscalerSample] {
-			return abstractions.NewAutoscaler(instance, endpointServeSampleFunc, endpointServeScaleFunc)
+			return abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
 		}),
 	)
 	if err != nil {
@@ -319,9 +319,9 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 	if instance.autoscaler == nil {
 		switch instance.stub.Type {
 		case types.StubTypeEndpointDeployment:
-			instance.autoscaler = abstractions.NewAutoscaler(instance, endpointDeploymentSampleFunc, endpointDeploymentScaleFunc)
+			instance.autoscaler = abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointDeploymentScaleFunc)
 		case types.StubTypeEndpointServe:
-			instance.autoscaler = abstractions.NewAutoscaler(instance, endpointServeSampleFunc, endpointServeScaleFunc)
+			instance.autoscaler = abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
 		}
 	}
 

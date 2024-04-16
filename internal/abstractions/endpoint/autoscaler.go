@@ -11,7 +11,7 @@ type endpointAutoscalerSample struct {
 	CurrentContainers int64
 }
 
-func endpointDeploymentSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
+func endpointSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
 	totalRequests, err := i.taskRepo.TasksInFlight(i.ctx, i.workspace.Name, i.stub.ExternalId)
 	if err != nil {
 		return nil, err
@@ -54,28 +54,6 @@ func endpointDeploymentScaleFunc(i *endpointInstance, sample *endpointAutoscaler
 		DesiredContainers: desiredContainers,
 		ResultValid:       true,
 	}
-}
-
-func endpointServeSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
-	totalRequests, err := i.taskRepo.TasksInFlight(i.ctx, i.workspace.Name, i.stub.ExternalId)
-	if err != nil {
-		return nil, err
-	}
-
-	currentContainers := 0
-	state, err := i.state()
-	if err != nil {
-		currentContainers = -1
-	}
-
-	currentContainers = state.PendingContainers + state.RunningContainers
-
-	sample := &endpointAutoscalerSample{
-		TotalRequests:     int64(totalRequests),
-		CurrentContainers: int64(currentContainers),
-	}
-
-	return sample, nil
 }
 
 func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
