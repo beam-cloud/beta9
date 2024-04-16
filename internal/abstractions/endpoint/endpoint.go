@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -128,6 +127,12 @@ func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream
 			return abstractions.NewAutoscaler(instance, endpointServeSampleFunc, endpointServeScaleFunc)
 		}),
 	)
+	if err != nil {
+		return err
+	}
+
+	instance, _ := es.endpointInstances.Get(in.StubId)
+	err = instance.startContainers(1)
 	if err != nil {
 		return err
 	}
@@ -331,10 +336,7 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 	go func(q *endpointInstance) {
 		<-q.ctx.Done()
 		es.endpointInstances.Delete(stubId)
-		log.Println("cleaned up my guy.")
 	}(instance)
-
-	log.Println("created the instance.")
 
 	return nil
 }
