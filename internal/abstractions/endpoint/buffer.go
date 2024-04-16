@@ -112,8 +112,8 @@ func (rb *RequestBuffer) processRequests() {
 			return
 		default:
 			req, ok := rb.buffer.Pop()
-
 			if !ok {
+				time.Sleep(time.Millisecond * 100)
 				continue
 			}
 
