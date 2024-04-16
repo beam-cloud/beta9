@@ -6,6 +6,7 @@
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
+    AsyncIterator,
     Dict,
     Optional,
 )
@@ -28,7 +29,9 @@ class EndpointServeRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class EndpointServeResponse(betterproto.Message):
-    pass
+    output: str = betterproto.string_field(1)
+    done: bool = betterproto.bool_field(2)
+    exit_code: int = betterproto.int32_field(3)
 
 
 class EndpointServiceStub(betterproto.ServiceStub):
@@ -39,37 +42,42 @@ class EndpointServiceStub(betterproto.ServiceStub):
         timeout: Optional[float] = None,
         deadline: Optional["Deadline"] = None,
         metadata: Optional["MetadataLike"] = None
-    ) -> "EndpointServeResponse":
-        return await self._unary_unary(
+    ) -> AsyncIterator["EndpointServeResponse"]:
+        async for response in self._unary_stream(
             "/endpoint.EndpointService/EndpointServe",
             endpoint_serve_request,
             EndpointServeResponse,
             timeout=timeout,
             deadline=deadline,
             metadata=metadata,
-        )
+        ):
+            yield response
 
 
 class EndpointServiceBase(ServiceBase):
 
     async def endpoint_serve(
         self, endpoint_serve_request: "EndpointServeRequest"
-    ) -> "EndpointServeResponse":
+    ) -> AsyncIterator["EndpointServeResponse"]:
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+        yield EndpointServeResponse()
 
     async def __rpc_endpoint_serve(
         self,
         stream: "grpclib.server.Stream[EndpointServeRequest, EndpointServeResponse]",
     ) -> None:
         request = await stream.recv_message()
-        response = await self.endpoint_serve(request)
-        await stream.send_message(response)
+        await self._call_rpc_handler_server_stream(
+            self.endpoint_serve,
+            stream,
+            request,
+        )
 
     def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
         return {
             "/endpoint.EndpointService/EndpointServe": grpclib.const.Handler(
                 self.__rpc_endpoint_serve,
-                grpclib.const.Cardinality.UNARY_UNARY,
+                grpclib.const.Cardinality.UNARY_STREAM,
                 EndpointServeRequest,
                 EndpointServeResponse,
             ),

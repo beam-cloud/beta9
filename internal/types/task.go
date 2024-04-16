@@ -21,9 +21,16 @@ type TaskMetadata struct {
 	ContainerId   string
 }
 
+type TaskCancellationReason string
+
+const (
+	TaskExpired            TaskCancellationReason = "expired"
+	TaskExceededRetryLimit TaskCancellationReason = "exceeded_retry_limit"
+)
+
 type TaskInterface interface {
-	Execute(ctx context.Context) error
-	Cancel(ctx context.Context) error
+	Execute(ctx context.Context, options ...interface{}) error
+	Cancel(ctx context.Context, reason TaskCancellationReason) error
 	Retry(ctx context.Context) error
 	HeartBeat(ctx context.Context) (bool, error)
 	Metadata() TaskMetadata
@@ -47,7 +54,6 @@ type TaskMessage struct {
 	Executor      string                 `json:"executor" redis:"executor"`
 	Args          []interface{}          `json:"args" redis:"args"`
 	Kwargs        map[string]interface{} `json:"kwargs" redis:"kwargs"`
-	Expires       *time.Time             `json:"expires" redis:"expires"`
 	Policy        TaskPolicy             `json:"policy" redis:"policy"`
 	Retries       uint                   `json:"retries" redis:"retries"`
 }
@@ -100,6 +106,7 @@ var DefaultTaskPolicy = TaskPolicy{
 }
 
 type TaskPolicy struct {
-	MaxRetries uint `json:"max_retries" redis:"max_retries"`
-	Timeout    int  `json:"timeout" redis:"timeout"`
+	MaxRetries uint      `json:"max_retries" redis:"max_retries"`
+	Timeout    int       `json:"timeout" redis:"timeout"`
+	Expires    time.Time `json:"expires" redis:"expires"`
 }

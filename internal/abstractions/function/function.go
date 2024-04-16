@@ -3,10 +3,11 @@ package function
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"time"
+
+	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
@@ -94,7 +95,6 @@ func NewRuncFunctionService(ctx context.Context,
 
 func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
-
 	ctx := stream.Context()
 
 	task, err := fs.invoke(ctx, authInfo, in.StubId, &types.TaskPayload{
@@ -108,7 +108,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 }
 
 func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (types.TaskInterface, error) {
-	task, err := fs.taskDispatcher.Send(ctx, string(types.ExecutorFunction), authInfo.Workspace.Name, stubId, payload, types.DefaultTaskPolicy)
+	task, err := fs.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorFunction), authInfo.Workspace.Name, stubId, payload, types.DefaultTaskPolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -124,78 +124,38 @@ func (fs *RunCFunctionService) functionTaskFactory(ctx context.Context, msg type
 }
 
 func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface) error {
-	meta := task.Metadata()
+	taskId := task.Metadata().TaskId
+	containerId := task.Metadata().ContainerId
 
-	hostname, err := fs.containerRepo.GetWorkerAddress(meta.ContainerId)
-	if err != nil {
-		return err
-	}
-
-	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, fs.tailscale, fs.config.Tailscale)
-	if err != nil {
-		return err
-	}
-
-	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
-	if err != nil {
-		return err
-	}
-
-	outputChan := make(chan common.OutputMsg, 1000)
-	keyEventChan := make(chan common.KeyEvent, 1000)
-
-	err = fs.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(meta.ContainerId), keyEventChan)
-	if err != nil {
-		return err
-	}
-
-	go client.StreamLogs(ctx, meta.ContainerId, outputChan)
-	return fs.handleStreams(ctx, stream, authInfo.Workspace.Name, meta.TaskId, meta.ContainerId, outputChan, keyEventChan)
-}
-
-func (fs *RunCFunctionService) handleStreams(
-	ctx context.Context,
-	stream pb.FunctionService_FunctionInvokeServer,
-	workspaceName, taskId, containerId string,
-	outputChan chan common.OutputMsg,
-	keyEventChan chan common.KeyEvent,
-) error {
-
-	var lastMessage common.OutputMsg
-
-_stream:
-	for {
-		select {
-		case o := <-outputChan:
-			if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg, Done: o.Done}); err != nil {
-				lastMessage = o
-				break
-			}
-
-			if o.Done {
-				lastMessage = o
-				break _stream
-			}
-		case <-keyEventChan:
-			exitCode, err := fs.containerRepo.GetContainerExitCode(containerId)
-			if err != nil {
-				exitCode = -1
-			}
-
-			result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(workspaceName, taskId)).Bytes()
-			if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: int32(exitCode)}); err != nil {
-				break _stream
-			}
-		case <-ctx.Done():
-			return nil
+	sendCallback := func(o common.OutputMsg) error {
+		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg, Done: o.Done}); err != nil {
+			return err
 		}
+
+		return nil
 	}
 
-	if !lastMessage.Success {
-		return errors.New("function failed")
+	exitCallback := func(exitCode int32) error {
+		result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(authInfo.Workspace.Name, taskId)).Bytes()
+		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: int32(exitCode)}); err != nil {
+			return err
+		}
+		return nil
 	}
 
-	return nil
+	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
+		SendCallback:    sendCallback,
+		ExitCallback:    exitCallback,
+		ContainerRepo:   fs.containerRepo,
+		Config:          fs.config,
+		Tailscale:       fs.tailscale,
+		KeyEventManager: fs.keyEventManager,
+	})
+	if err != nil {
+		return err
+	}
+
+	return logStream.Stream(ctx, authInfo, containerId)
 }
 
 func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {

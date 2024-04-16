@@ -8,6 +8,7 @@ import (
 	"path"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
@@ -23,6 +24,18 @@ type endpointState struct {
 	FailedContainers   int
 }
 
+func withAutoscaler(constructor func(i *endpointInstance) *abstractions.AutoScaler[*endpointInstance, *endpointAutoscalerSample]) func(*endpointInstance) {
+	return func(i *endpointInstance) {
+		i.autoscaler = constructor(i)
+	}
+}
+
+func withEntryPoint(entryPoint func(instance *endpointInstance) []string) func(*endpointInstance) {
+	return func(i *endpointInstance) {
+		i.entryPoint = entryPoint(i)
+	}
+}
+
 type endpointInstance struct {
 	ctx                context.Context
 	cancelFunc         context.CancelFunc
@@ -30,6 +43,7 @@ type endpointInstance struct {
 	workspace          *types.Workspace
 	stub               *types.Stub
 	stubConfig         *types.StubConfigV1
+	entryPoint         []string
 	object             *types.Object
 	token              *types.Token
 	lock               *common.RedisLock
@@ -39,12 +53,13 @@ type endpointInstance struct {
 	scaleEventChan     chan int
 	rdb                *common.RedisClient
 	containerRepo      repository.ContainerRepository
-	autoscaler         *autoscaler
+	taskRepo           repository.TaskRepository
+	autoscaler         *abstractions.AutoScaler[*endpointInstance, *endpointAutoscalerSample]
 	buffer             *RequestBuffer
 }
 
 func (i *endpointInstance) monitor() error {
-	go i.autoscaler.start(i.ctx) // Start the autoscaler
+	go i.autoscaler.Start(i.ctx) // Start the autoscaler
 
 	for {
 		select {
@@ -76,13 +91,11 @@ func (i *endpointInstance) monitor() error {
 }
 
 func (i *endpointInstance) state() (*endpointState, error) {
-	patternPrefix := fmt.Sprintf("%s-%s-*", endpointContainerPrefix, i.stub.ExternalId)
-	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
+	containers, err := i.containerRepo.GetActiveContainersByStubId(i.stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}
-
-	failedContainers, err := i.containerRepo.GetFailedContainerCountByPrefix(patternPrefix)
+	failedContainers, err := i.containerRepo.GetFailedContainerCountByStubId(i.stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}
@@ -138,14 +151,17 @@ func (i *endpointInstance) handleScalingEvent(desiredContainers int) error {
 
 func (i *endpointInstance) startContainers(containersToRun int) error {
 	for c := 0; c < containersToRun; c++ {
+		containerId := i.genContainerId()
 		runRequest := &types.ContainerRequest{
-			ContainerId: i.genContainerId(),
+			ContainerId: containerId,
 			Env: []string{
 				fmt.Sprintf("BETA9_TOKEN=%s", i.token.Key),
 				fmt.Sprintf("HANDLER=%s", i.stubConfig.Handler),
 				fmt.Sprintf("STUB_ID=%s", i.stub.ExternalId),
+				fmt.Sprintf("STUB_TYPE=%s", i.stub.Type),
 				fmt.Sprintf("CONCURRENCY=%d", i.stubConfig.Concurrency),
 				fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.stubConfig.KeepWarmSeconds),
+				fmt.Sprintf("PYTHON_VERSION=%s", i.stubConfig.PythonVersion),
 			},
 			Cpu:         i.stubConfig.Runtime.Cpu,
 			Memory:      i.stubConfig.Runtime.Memory,
@@ -153,7 +169,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			ImageId:     i.stubConfig.Runtime.ImageId,
 			StubId:      i.stub.ExternalId,
 			WorkspaceId: i.workspace.ExternalId,
-			EntryPoint:  []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.endpoint"},
+			EntryPoint:  i.entryPoint,
 			Mounts: []types.Mount{
 				{
 					LocalPath: path.Join(types.DefaultExtractedObjectPath, i.workspace.Name, i.object.ExternalId),
@@ -161,6 +177,14 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 				},
 			},
 		}
+
+		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers
+		i.rdb.SetEx(
+			context.Background(),
+			Keys.endpointKeepWarmLock(i.workspace.Name, i.stub.ExternalId, containerId),
+			1,
+			time.Duration(i.stubConfig.KeepWarmSeconds)*time.Second,
+		)
 
 		err := i.scheduler.Run(runRequest)
 		if err != nil {
@@ -201,9 +225,12 @@ func (i *endpointInstance) stopContainers(containersToStop int) error {
 	return nil
 }
 
+func (i *endpointInstance) ConsumeScaleResult(result *abstractions.AutoscalerResult) {
+	i.scaleEventChan <- result.DesiredContainers
+}
+
 func (i *endpointInstance) stoppableContainers() ([]string, error) {
-	patternPrefix := fmt.Sprintf("%s-%s-*", endpointContainerPrefix, i.stub.ExternalId)
-	containers, err := i.containerRepo.GetActiveContainersByPrefix(patternPrefix)
+	containers, err := i.containerRepo.GetActiveContainersByStubId(i.stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}

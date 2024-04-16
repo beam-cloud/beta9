@@ -632,6 +632,7 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 
 	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, name, version, stubType)
 	if err != nil {
+		log.Println("err: ", err)
 		return nil, err
 	}
 

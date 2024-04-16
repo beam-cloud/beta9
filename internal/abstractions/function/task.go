@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	abCommon "github.com/beam-cloud/beta9/internal/abstractions/common"
+	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 	"github.com/beam-cloud/beta9/internal/types"
 )
 
@@ -17,7 +17,7 @@ type FunctionTask struct {
 	containerId string
 }
 
-func (t *FunctionTask) Execute(ctx context.Context) error {
+func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) error {
 	stub, err := t.fs.backendRepo.GetStubByExternalId(ctx, t.msg.StubId)
 	if err != nil {
 		return err
@@ -106,7 +106,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
-	mounts := abCommon.ConfigureContainerRequestMounts(
+	mounts := abstractions.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
 		stub.Workspace.Name,
 		stubConfig,
@@ -142,13 +142,21 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 	return nil
 }
 
-func (t *FunctionTask) Cancel(ctx context.Context) error {
+func (t *FunctionTask) Cancel(ctx context.Context, reason types.TaskCancellationReason) error {
 	task, err := t.fs.backendRepo.GetTask(ctx, t.msg.TaskId)
 	if err != nil {
 		return err
 	}
 
-	task.Status = types.TaskStatusError
+	switch reason {
+	case types.TaskExpired:
+		task.Status = types.TaskStatusTimeout
+	case types.TaskExceededRetryLimit:
+		task.Status = types.TaskStatusError
+	default:
+		task.Status = types.TaskStatusError
+	}
+
 	_, err = t.fs.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
 	if err != nil {
 		return err
