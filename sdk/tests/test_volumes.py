@@ -2,7 +2,7 @@ from unittest import TestCase
 from unittest.mock import MagicMock
 
 from beta9.abstractions.volume import Volume
-from beta9.clients.volume import GetOrCreateVolumeResponse
+from beta9.clients.volume import GetOrCreateVolumeResponse, VolumeInstance
 
 from .utils import mock_coroutine_with_result
 
@@ -16,7 +16,7 @@ class TestVolumes(TestCase):
 
         # Test that a valid grpc response sets the volume id and ready flag
         mock_stub.get_or_create_volume = mock_coroutine_with_result(
-            GetOrCreateVolumeResponse(ok=True, volume_id="1234")
+            GetOrCreateVolumeResponse(ok=True, volume=VolumeInstance(id="1234"))
         )
 
         volume = Volume(name="test", mount_path="/test")
@@ -29,7 +29,7 @@ class TestVolumes(TestCase):
 
         # Test that an invalid grpc response does not set the volume id or ready flag
         mock_stub.get_or_create_volume = mock_coroutine_with_result(
-            GetOrCreateVolumeResponse(ok=False, volume_id="")
+            GetOrCreateVolumeResponse(ok=False, volume=VolumeInstance(id=""))
         )
 
         volume = Volume(name="test", mount_path="/test")
