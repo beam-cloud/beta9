@@ -1,6 +1,7 @@
 import importlib
 import os
 import sys
+from pathlib import Path
 
 import click
 
@@ -61,8 +62,14 @@ def create_deployment(name: str, entrypoint: str):
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
 
-    module_path, func_name = entrypoint.split(":")
+    module_path, func_name, *_ = entrypoint.split(":") if ":" in entrypoint else (entrypoint, "")
     module_name = module_path.replace(".py", "").replace(os.path.sep, ".")
+
+    if not Path(module_path).exists():
+        terminal.error(f"Unable to find file '{module_path}'")
+    if not func_name:
+        terminal.error(f"Unable to parse function '{func_name}'")
+
     module = importlib.import_module(module_name)
 
     func = getattr(module, func_name)
