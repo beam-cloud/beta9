@@ -20,7 +20,7 @@ class Endpoint(RunnerAbstraction):
         memory: int = 128,
         gpu: str = "",
         image: Image = Image(),
-        timeout: int = 3600,
+        timeout: int = 180,
         concurrency: int = 1,
         max_containers: int = 1,
         keep_warm_seconds: int = 300,
