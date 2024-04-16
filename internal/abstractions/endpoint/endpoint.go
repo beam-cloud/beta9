@@ -46,7 +46,6 @@ type HttpEndpointService struct {
 var (
 	endpointContainerPrefix          string        = "endpoint"
 	endpointRoutePrefix              string        = "/endpoint"
-	endpointRingBufferSize           int           = 10000000
 	endpointRequestTimeoutS          int           = 180
 	endpointServeContainerTimeout    time.Duration = 120 * time.Second
 	endpointRequestHeartbeatInterval time.Duration = 30 * time.Second
@@ -99,7 +98,7 @@ func NewEndpointService(
 
 	go es.handleContainerEvents()
 
-	es.taskDispatcher.Register(string(types.ExecutorTaskQueue), es.endpointTaskFactory)
+	es.taskDispatcher.Register(string(types.ExecutorEndpoint), es.endpointTaskFactory)
 
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(es.backendRepo)
@@ -310,7 +309,7 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 		containers:         make(map[string]bool),
 		scaleEventChan:     make(chan int, 1),
 		rdb:                es.rdb,
-		buffer:             NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, endpointRingBufferSize, es.containerRepo, stubConfig),
+		buffer:             NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, int(stubConfig.MaxPendingTasks), es.containerRepo, stubConfig),
 	}
 	for _, o := range options {
 		o(instance)
