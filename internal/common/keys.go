@@ -34,12 +34,12 @@ var (
 )
 
 var (
-	taskPrefix     string = "task"
-	taskIndex      string = "task:index"
-	taskEntry      string = "task:%s:%s:%s"
-	taskClaim      string = "task:%s:%s:%s:claim"
-	taskClaimIndex string = "task:%s:%s:claim_index"
-	taskStubIndex  string = "task:%s:%s:stub_index"
+	taskPrefix      string = "task"
+	taskIndex       string = "task:index"
+	taskIndexByStub string = "task:%s:%s:stub_index"
+	taskClaimIndex  string = "task:%s:%s:claim_index"
+	taskEntry       string = "task:%s:%s:%s"
+	taskClaim       string = "task:%s:%s:%s:claim"
 )
 
 var (
@@ -165,20 +165,20 @@ func (rk *redisKeys) TaskIndex() string {
 	return taskIndex
 }
 
-func (rk *redisKeys) TaskEntry(workspaceName, stubId, taskId string) string {
-	return fmt.Sprintf(taskEntry, workspaceName, stubId, taskId)
-}
-
-func (rk *redisKeys) TaskClaim(workspaceName, stubId, taskId string) string {
-	return fmt.Sprintf(taskClaim, workspaceName, stubId, taskId)
+func (rk *redisKeys) TaskIndexByStub(workspaceName, stubId string) string {
+	return fmt.Sprintf(taskIndexByStub, workspaceName, stubId)
 }
 
 func (rk *redisKeys) TaskClaimIndex(workspaceName, stubId string) string {
 	return fmt.Sprintf(taskClaimIndex, workspaceName, stubId)
 }
 
-func (rk *redisKeys) TaskStubIndex(workspaceName, stubId string) string {
-	return fmt.Sprintf(taskStubIndex, workspaceName, stubId)
+func (rk *redisKeys) TaskEntry(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskEntry, workspaceName, stubId, taskId)
+}
+
+func (rk *redisKeys) TaskClaim(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskClaim, workspaceName, stubId, taskId)
 }
 
 // Workspace keys

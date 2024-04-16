@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Any, Callable, Tuple
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from grpclib.client import Channel
 from uvicorn import Config, Server
@@ -40,6 +40,33 @@ async def lifespan(app: FastAPI, channel: Channel):
     yield
 
 
+async def task_lifecycle(request: Request):
+    task_id = request.headers.get("X-TASK-ID")
+    if not task_id:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Task ID missing")
+
+    start_response = await request.app.state.gateway_stub.start_task(
+        StartTaskRequest(task_id=task_id, container_id=cfg.container_id)
+    )
+    if not start_response.ok:
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to start task"
+        )
+
+    try:
+        task_status = TaskStatus.Complete
+        yield task_status
+    finally:
+        await request.app.state.gateway_stub.end_task(
+            EndTaskRequest(
+                task_id=task_id,
+                container_id=cfg.container_id,
+                keep_warm_seconds=cfg.keep_warm_seconds,
+                task_status=task_status,
+            )
+        )
+
+
 class EndpointManager:
     def __init__(self) -> None:
         self.pid: int = os.getpid()
@@ -55,31 +82,16 @@ class EndpointManager:
             # TODO: wait for loader to complete before returning a 200
             return Response(status_code=HTTPStatus.OK)
 
-        @self.app.route("/", methods=["POST", "GET"])
-        async def function(request: Request):
+        @self.app.post("/")
+        async def function(request: Request, task_status: str = Depends(task_lifecycle)):
+            task_id = request.headers.get("X-TASK-ID")
             payload = await request.json()
-            task_id = payload["kwargs"]["task_id"]
 
-            await request.app.state.gateway_stub.start_task(
-                StartTaskRequest(task_id=task_id, container_id=cfg.container_id)
-            )
-
-            task_status = TaskStatus.Complete
             status_code = HTTPStatus.OK
-
             with StdoutJsonInterceptor(task_id=task_id):
                 result, err = self._call_function(payload)
                 if err:
                     task_status = TaskStatus.Error
-
-            await request.app.state.gateway_stub.end_task(
-                EndTaskRequest(
-                    task_id=task_id,
-                    container_id=cfg.container_id,
-                    keep_warm_seconds=cfg.keep_warm_seconds,
-                    task_status=task_status,
-                )
-            )
 
             if task_status == TaskStatus.Error:
                 status_code = HTTPStatus.INTERNAL_SERVER_ERROR
@@ -94,7 +106,6 @@ class EndpointManager:
             return JSONResponse(body, status_code=status_code)
         except BaseException:
             logger.exception("Response serialization failed")
-
             return JSONResponse(
                 {"errors": [traceback.format_exc()]},
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,

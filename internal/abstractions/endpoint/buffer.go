@@ -257,7 +257,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	}
 
 	// Select an available container to forward the request to (whichever one has the lowest # of inflight requests)
-	// Basically a least-connections load balancer
+	// Basically least-connections load balancing
 	c := rb.availableContainers[0]
 	rb.availableContainersLock.RUnlock()
 
@@ -282,7 +282,8 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
-	go rb.heartBeat(req, c.id) // Send heartbeat via redis for duration of request
+	httpReq.Header.Add("X-TASK-ID", req.taskId) // Add task ID to header
+	go rb.heartBeat(req, c.id)                  // Send heartbeat via redis for duration of request
 
 	resp, err := rb.httpClient.Do(httpReq)
 	if err != nil {

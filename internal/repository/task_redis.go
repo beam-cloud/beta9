@@ -57,7 +57,7 @@ func (r *TaskRedisRepository) IsClaimed(ctx context.Context, workspaceName, stub
 
 func (r *TaskRedisRepository) SetTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error {
 	indexKey := common.RedisKeys.TaskIndex()
-	stubIndexKey := common.RedisKeys.TaskStubIndex(workspaceName, stubId)
+	stubIndexKey := common.RedisKeys.TaskIndexByStub(workspaceName, stubId)
 	entryKey := common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)
 
 	err := r.rdb.SAdd(ctx, indexKey, entryKey).Err()
@@ -80,7 +80,7 @@ func (r *TaskRedisRepository) SetTaskState(ctx context.Context, workspaceName, s
 }
 
 func (r *TaskRedisRepository) TasksInFlight(ctx context.Context, workspaceName, stubId string) (int, error) {
-	tasks, err := r.rdb.SMembers(ctx, common.RedisKeys.TaskStubIndex(workspaceName, stubId)).Result()
+	tasks, err := r.rdb.SMembers(ctx, common.RedisKeys.TaskIndexByStub(workspaceName, stubId)).Result()
 	if err != nil {
 		return -1, err
 	}
@@ -93,7 +93,7 @@ func (r *TaskRedisRepository) DeleteTaskState(ctx context.Context, workspaceName
 	entryKey := common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)
 	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
 	claimIndexKey := common.RedisKeys.TaskClaimIndex(workspaceName, stubId)
-	stubIndexKey := common.RedisKeys.TaskStubIndex(workspaceName, stubId)
+	stubIndexKey := common.RedisKeys.TaskIndexByStub(workspaceName, stubId)
 
 	_, err := r.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.SRem(ctx, indexKey, entryKey)

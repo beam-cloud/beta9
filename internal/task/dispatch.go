@@ -147,7 +147,11 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 
 				if !claimed {
 					if time.Now().After(taskMessage.Policy.Expires) {
-						task.Cancel(ctx, types.TaskExpired)
+						err = task.Cancel(ctx, types.TaskExpired)
+						if err != nil {
+							log.Printf("<dispatcher> unable to cancel task: %s, %v\n", task.Metadata().TaskId, err)
+						}
+
 						d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 					}
 
@@ -166,14 +170,11 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 
 						err := task.Cancel(ctx, types.TaskExceededRetryLimit)
 						if err != nil {
+							log.Printf("<dispatcher> unable to cancel task: %s, %v\n", task.Metadata().TaskId, err)
 							continue
 						}
 
-						err = d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
-						if err != nil {
-							continue
-						}
-
+						d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 						continue
 					}
 
