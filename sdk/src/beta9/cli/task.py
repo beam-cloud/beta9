@@ -54,13 +54,13 @@ def parse_filter_values(
     help="List all tasks.",
     epilog="""
     # List the first 10 tasks
-    beta9 task list --limit 10
+    beam task list --limit 10
 
     # List tasks with status 'running' or 'pending' and stub-id 'function/test:handler'
-    beta9 task list --filter status=running,pending --filter stub-id=function/test:handler
+    beam task list --filter status=running,pending --filter stub-id=function/test:handler
 
     # List tasks and output in JSON format
-    beta9 task list --format json
+    beam task list --format json
     """,
 )
 @click.option(

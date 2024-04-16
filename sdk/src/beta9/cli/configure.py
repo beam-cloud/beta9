@@ -29,4 +29,4 @@ def configure(name: str, token: str, gateway_host: str, gateway_port: str):
         name=name,
     )
 
-    terminal.success("Successfully configured Beta9!")
+    terminal.success("Successfully configured Beam!")

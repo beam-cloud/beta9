@@ -17,7 +17,7 @@ from .aio import run_sync
 from .clients.gateway import AuthorizeRequest, AuthorizeResponse, GatewayServiceStub
 from .exceptions import RunnerException
 
-DEFAULT_CONFIG_FILE_PATH = "~/.beta9/creds"
+DEFAULT_CONFIG_FILE_PATH = "~/.beam/creds"
 DEFAULT_PROFILE_NAME = "default"
 DEFAULT_GATEWAY_HOST = "0.0.0.0"
 DEFAULT_GATEWAY_PORT = "1993"
@@ -106,10 +106,10 @@ def save_config_to_file(*, config: GatewayConfig, name: str) -> None:
 
 
 def get_gateway_config() -> GatewayConfig:
-    gateway_host = os.getenv("BETA9_GATEWAY_HOST", None)
-    gateway_port = os.getenv("BETA9_GATEWAY_PORT", None)
-    http_port = os.getenv("BETA9_HTTP_PORT", None)
-    token = os.getenv("BETA9_TOKEN", None)
+    gateway_host = os.getenv("BEAM_GATEWAY_HOST", None)
+    gateway_port = os.getenv("BEAM_GATEWAY_PORT", None)
+    http_port = os.getenv("BEAM_HTTP_PORT", None)
+    token = os.getenv("BEAM_TOKEN", None)
 
     if gateway_host and gateway_port and token:
         return GatewayConfig(
@@ -127,7 +127,7 @@ def configure_gateway_credentials(
     gateway_port: Optional[str] = None,
     token: Optional[str] = None,
 ) -> GatewayConfig:
-    terminal.header("Welcome to Beta9! Let's get started 📡")
+    terminal.header("Welcome to Beam! Let's get started 📡")
 
     name = name or terminal.prompt(text="Profile name", default=DEFAULT_PROFILE_NAME)
     gateway_host = gateway_host or terminal.prompt(

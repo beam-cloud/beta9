@@ -81,21 +81,21 @@ def ls(service: ServiceClient, remote_path: str, long_format: bool) -> None:
     Examples:
 
       # Copy contents to a remote volume
-      beta9 cp mydir myvol/subdir
-      beta9 cp myfile.txt myvol/subdir
+      beam cp mydir myvol/subdir
+      beam cp myfile.txt myvol/subdir
 
       # Use a question mark to match a single character in a path
-      beta9 cp 'mydir/?/data?.json' myvol/sub/path
+      beam cp 'mydir/?/data?.json' myvol/sub/path
 
       # Use an asterisk to match all characters in a path
-      beta9 cp 'mydir/*/*.json' myvol/data
+      beam cp 'mydir/*/*.json' myvol/data
 
       # Use a sequence to match a specific set of characters in a path
-      beta9 cp 'mydir/[a-c]/data[0-1].json' myvol/data
+      beam cp 'mydir/[a-c]/data[0-1].json' myvol/data
 
       # Escape special characters if you don't want to single quote your local path
-      beta9 cp mydir/\\[a-c\\]/data[0-1].json' myvol/data
-      beta9 cp mydir/\\?/data\\?.json myvol/sub/path
+      beam cp mydir/\\[a-c\\]/data[0-1].json' myvol/data
+      beam cp mydir/\\?/data\\?.json myvol/sub/path
       \b
     """,
 )
