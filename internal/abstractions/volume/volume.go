@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type VolumeService interface {
@@ -36,18 +37,55 @@ func NewGlobalVolumeService(backendRepo repository.BackendRepository) (VolumeSer
 
 func (vs *GlobalVolumeService) GetOrCreateVolume(ctx context.Context, in *pb.GetOrCreateVolumeRequest) (*pb.GetOrCreateVolumeResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	workspaceId := authInfo.Workspace.Id
 
-	volume, err := vs.backendRepo.GetOrCreateVolume(ctx, workspaceId, in.Name)
+	volume, err := vs.getOrCreateVolume(ctx, authInfo.Workspace, in.Name)
 	if err != nil {
 		return &pb.GetOrCreateVolumeResponse{
-			Ok: false,
+			Ok:     false,
+			ErrMsg: "Unable to get or create volume",
 		}, nil
 	}
 
 	return &pb.GetOrCreateVolumeResponse{
-		VolumeId: volume.ExternalId,
-		Ok:       true,
+		Ok: true,
+		Volume: &pb.VolumeInstance{
+			Id:            volume.ExternalId,
+			Name:          volume.Name,
+			CreatedAt:     timestamppb.New(volume.CreatedAt),
+			UpdatedAt:     timestamppb.New(volume.UpdatedAt),
+			WorkspaceId:   authInfo.Workspace.ExternalId,
+			WorkspaceName: authInfo.Workspace.Name,
+		},
+	}, nil
+}
+
+func (vs *GlobalVolumeService) ListVolumes(ctx context.Context, in *pb.ListVolumesRequest) (*pb.ListVolumesResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	volumes, err := vs.listVolumes(ctx, authInfo.Workspace)
+	if err != nil {
+		return &pb.ListVolumesResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
+
+	vols := make([]*pb.VolumeInstance, len(volumes))
+	for i, v := range volumes {
+		vols[i] = &pb.VolumeInstance{
+			Id:            v.ExternalId,
+			Name:          v.Name,
+			Size:          v.Size,
+			CreatedAt:     timestamppb.New(v.CreatedAt),
+			UpdatedAt:     timestamppb.New(v.UpdatedAt),
+			WorkspaceId:   v.Workspace.ExternalId,
+			WorkspaceName: v.Workspace.Name,
+		}
+	}
+
+	return &pb.ListVolumesResponse{
+		Ok:      true,
+		Volumes: vols,
 	}, nil
 }
 
@@ -95,8 +133,8 @@ func (vs *GlobalVolumeService) CopyPathStream(stream pb.VolumeService_CopyPathSt
 
 	if err := vs.copyPathStream(ctx, ch, authInfo.Workspace); err != nil {
 		return stream.SendAndClose(&pb.CopyPathResponse{
-			Ok:       false,
-			ErrorMsg: err.Error(),
+			Ok:     false,
+			ErrMsg: err.Error(),
 		})
 	}
 
@@ -121,6 +159,40 @@ func (vs *GlobalVolumeService) DeletePath(ctx context.Context, in *pb.DeletePath
 }
 
 // Volume business logic
+
+func (vs *GlobalVolumeService) getOrCreateVolume(ctx context.Context, workspace *types.Workspace, volumeName string) (*types.Volume, error) {
+	volume, err := vs.backendRepo.GetOrCreateVolume(ctx, workspace.Id, volumeName)
+	if err != nil {
+		return nil, err
+	}
+
+	volumePath := JoinVolumePath(workspace.Name, volume.ExternalId)
+	if _, err := os.Stat(volumePath); os.IsNotExist(err) {
+		os.MkdirAll(volumePath, os.FileMode(0755))
+	}
+
+	return volume, nil
+}
+
+func (vs *GlobalVolumeService) listVolumes(ctx context.Context, workspace *types.Workspace) ([]types.VolumeWithRelated, error) {
+	volumes, err := vs.backendRepo.ListVolumesWithRelated(ctx, workspace.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	for i, v := range volumes {
+		path := JoinVolumePath(workspace.Name, v.ExternalId)
+
+		size, err := CalculateDirSize(path)
+		if err != nil {
+			size = 0
+		}
+
+		volumes[i].Size = size
+	}
+
+	return volumes, nil
+}
 
 type CopyPathContent struct {
 	Path    string
@@ -280,4 +352,15 @@ func GetVolumePaths(workspaceName string, volumeExternalId string, volumePath st
 
 func JoinVolumePath(workspaceName, volumeExternalId string, subPaths ...string) string {
 	return path.Join(append([]string{types.DefaultVolumesPath, workspaceName, volumeExternalId}, subPaths...)...)
+}
+
+func CalculateDirSize(path string) (uint64, error) {
+	var size uint64
+	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if !info.IsDir() {
+			size += uint64(info.Size())
+		}
+		return err
+	})
+	return size, err
 }

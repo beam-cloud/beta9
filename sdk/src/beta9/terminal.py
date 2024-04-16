@@ -101,6 +101,15 @@ def humanize_date(d: datetime.datetime) -> str:
         return f"{s // 3600} hours ago"
 
 
+def humanize_memory(m: float) -> str:
+    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+    index = 0
+    while m >= 1024 and index < len(units) - 1:
+        m /= 1024
+        index += 1
+    return f"{m:.2f} {units[index]}"
+
+
 def pluralize(seq: Sequence, suffix: str = "s") -> Tuple[int, str]:
     n = len(seq)
     return n, "s" if n != 1 else ""

@@ -84,15 +84,14 @@ def parse_filter_values(
 )
 @click.pass_obj
 def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str, StringList]):
-    response: ListTasksResponse = aio.run_sync(
-        service.gateway.list_tasks(ListTasksRequest(filters=filter, limit=limit))
-    )
+    res: ListTasksResponse
+    res = aio.run_sync(service.gateway.list_tasks(ListTasksRequest(filters=filter, limit=limit)))
 
-    if not response.ok:
-        terminal.error(response.err_msg)
+    if not res.ok:
+        terminal.error(res.err_msg)
 
     if format == "json":
-        tasks = [task.to_dict(casing=Casing.SNAKE) for task in response.tasks]
+        tasks = [task.to_dict(casing=Casing.SNAKE) for task in res.tasks]
         terminal.print_json(tasks)
         return
 
@@ -107,7 +106,7 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
         box=box.SIMPLE,
     )
 
-    for task in response.tasks:
+    for task in res.tasks:
         table.add_row(
             task.id,
             (
@@ -123,7 +122,7 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
         )
 
     table.add_section()
-    table.add_row(f"[bold]Total: {response.total}")
+    table.add_row(f"[bold]Total: {res.total}")
     terminal.print(table)
 
 
@@ -137,9 +136,9 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
 )
 @click.pass_obj
 def stop_task(service: GatewayServiceStub, task_id: str):
-    response: StopTaskResponse = aio.run_sync(service.stop_task(StopTaskRequest(task_id=task_id)))
+    res: StopTaskResponse = aio.run_sync(service.stop_task(StopTaskRequest(task_id=task_id)))
 
-    if response.ok:
+    if res.ok:
         terminal.detail(f"Stopped task {task_id}", dim=False)
     else:
-        terminal.error(f"{response.err_msg}\nFailed to stop task {task_id}")
+        terminal.error(f"{res.err_msg}\nFailed to stop task {task_id}")
