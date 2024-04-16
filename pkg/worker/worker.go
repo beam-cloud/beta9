@@ -9,6 +9,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -191,11 +193,39 @@ func NewWorker() (*Worker, error) {
 	}, nil
 }
 
+func profileCPU(duration time.Duration) {
+	cpuFile, err := os.Create("cpu_profile.prof")
+	if err != nil {
+		log.Fatalf("Could not create CPU profile: %v", err)
+	}
+	defer cpuFile.Close()
+
+	pprof.StartCPUProfile(cpuFile)
+	time.Sleep(duration)
+	pprof.StopCPUProfile()
+}
+
+func profileMemory(duration time.Duration) {
+	time.Sleep(duration)
+	memFile, err := os.Create("mem_profile.prof")
+	if err != nil {
+		log.Fatalf("Could not create memory profile: %v", err)
+	}
+	defer memFile.Close()
+
+	runtime.GC()
+	pprof.WriteHeapProfile(memFile)
+}
+
 func (s *Worker) Run() error {
+
 	err := s.startup()
 	if err != nil {
 		return err
 	}
+
+	go profileCPU(10 * time.Minute)
+	go profileMemory(10 * time.Minute)
 
 	go s.manageWorkerCapacity()
 	go s.processStopContainerEvents()
