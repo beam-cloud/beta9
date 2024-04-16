@@ -83,8 +83,14 @@ func endpointServeSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, er
 }
 
 func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
+	desiredContainers := 1
+
+	if sample.TotalRequests == 0 {
+		desiredContainers = 0
+	}
+
 	return &abstractions.AutoscalerResult{
-		DesiredContainers: 1,
+		DesiredContainers: desiredContainers,
 		ResultValid:       true,
 	}
 }
