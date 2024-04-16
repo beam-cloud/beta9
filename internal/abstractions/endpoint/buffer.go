@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"sync"
@@ -262,7 +261,6 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	c := rb.availableContainers[0]
 	rb.availableContainersLock.RUnlock()
 
-	log.Println("container SELECTED:", c)
 	err := rb.incrementRequestsInFlight(c.id)
 	if err != nil {
 		return
@@ -316,13 +314,13 @@ func (rb *RequestBuffer) heartBeat(req request, containerId string) {
 	ticker := time.NewTicker(endpointRequestHeartbeatInterval)
 	defer ticker.Stop()
 
-	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskId), containerId, time.Duration(30)*time.Second)
+	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskId), containerId, endpointRequestHeartbeatInterval)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskId), containerId, time.Duration(1)*time.Second)
+			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskId), containerId, endpointRequestHeartbeatInterval)
 		}
 	}
 }
