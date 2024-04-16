@@ -1,4 +1,3 @@
-import atexit
 import os
 import signal
 import subprocess
@@ -47,6 +46,9 @@ class ServeGateway:
         self.restart_event = Event()
         self.exit_event = Event()
 
+        # Register signal handlers
+        signal.signal(signal.SIGTERM, self.shutdown)
+
         # Set up the file change event handler & observer
         self.event_handler = SyncEventHandler(self.trigger_restart)
         self.observer = PollingObserver()
@@ -56,7 +58,7 @@ class ServeGateway:
     def shutdown(self, signum=None, frame=None) -> None:
         self.kill_subprocess()
         self.observer.stop()
-        self.observer.join()
+        self.observer.join(timeout=0.1)
         self.exit_event.set()
         self.restart_event.set()
 
@@ -117,7 +119,6 @@ def _command() -> List[str]:
 
 if __name__ == "__main__":
     sg = ServeGateway()
-    atexit.register(sg.shutdown)
 
     try:
         sg.run(command=_command())

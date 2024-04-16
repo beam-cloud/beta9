@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"sync"
@@ -168,6 +169,8 @@ func (rb *RequestBuffer) discoverContainers() {
 						return
 					}
 
+					log.Printf("<%s> Retrieved container address: %s\n", cs.ContainerId, containerAddress)
+
 					inFlight, err := rb.requestsInFlight(cs.ContainerId)
 					if err != nil {
 						return
@@ -179,7 +182,11 @@ func (rb *RequestBuffer) discoverContainers() {
 							address:  containerAddress,
 							inFlight: inFlight,
 						}
+						return
 					}
+
+					log.Printf("<%s> Container not ready\n", cs.ContainerId)
+
 				}(containerState)
 			}
 
