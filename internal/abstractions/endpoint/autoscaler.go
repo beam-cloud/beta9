@@ -1,6 +1,7 @@
 package endpoint
 
 import (
+	"log"
 	"math"
 
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
@@ -38,6 +39,7 @@ func endpointDeploymentSampleFunc(i *endpointInstance) (*endpointAutoscalerSampl
 func endpointDeploymentScaleFunc(i *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 0
 
+	log.Println("sample: ", sample)
 	if sample.TotalRequests == 0 {
 		desiredContainers = 0
 	} else {
@@ -49,6 +51,7 @@ func endpointDeploymentScaleFunc(i *endpointInstance, sample *endpointAutoscaler
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
 		maxReplicas := math.Min(float64(i.stubConfig.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
+
 	}
 
 	return &abstractions.AutoscalerResult{

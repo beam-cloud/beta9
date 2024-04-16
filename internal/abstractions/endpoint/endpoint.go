@@ -305,7 +305,7 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 		containers:         make(map[string]bool),
 		scaleEventChan:     make(chan int, 1),
 		rdb:                es.rdb,
-		buffer:             NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, endpointRingBufferSize, es.containerRepo, stubConfig),
+		buffer:             NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, endpointRingBufferSize, es.containerRepo, es.taskRepo, stubConfig),
 	}
 	for _, o := range options {
 		o(instance)
@@ -344,8 +344,9 @@ var Keys = &keys{}
 type keys struct{}
 
 var (
-	endpointKeepWarmLock string = "endpoint:%s:%s:keep_warm_lock:%s"
-	endpointInstanceLock string = "endpoint:%s:%s:instance_lock"
+	endpointKeepWarmLock     string = "endpoint:%s:%s:keep_warm_lock:%s"
+	endpointInstanceLock     string = "endpoint:%s:%s:instance_lock"
+	endpointRequestsInFlight string = "endpoint:%s:%s:requests_in_flight:%s"
 )
 
 func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) string {
@@ -354,4 +355,8 @@ func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) s
 
 func (k *keys) endpointInstanceLock(workspaceName, stubId string) string {
 	return fmt.Sprintf(endpointInstanceLock, workspaceName, stubId)
+}
+
+func (k *keys) endpointRequestsInFlight(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(endpointRequestsInFlight, workspaceName, stubId, containerId)
 }

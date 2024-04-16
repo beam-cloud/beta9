@@ -147,13 +147,8 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 
 				if !claimed {
 					if time.Now().After(taskMessage.Policy.Expires) {
-						err := task.Cancel(ctx, types.TaskExpired)
-						if err != nil {
-							continue
-						}
-
+						task.Cancel(ctx, types.TaskExpired)
 						d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
-						continue
 					}
 
 					continue

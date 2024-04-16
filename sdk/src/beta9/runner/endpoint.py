@@ -51,7 +51,7 @@ class EndpointManager:
         signal.signal(signal.SIGTERM, self.shutdown)
 
         @self.app.get("/health")
-        def health():
+        async def health():
             # TODO: wait for loader to complete before returning a 200
             return Response(status_code=HTTPStatus.OK)
 
