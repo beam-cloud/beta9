@@ -1,7 +1,9 @@
 package task
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/labstack/echo/v4"
@@ -19,8 +21,13 @@ func isMap(payload map[string]interface{}) bool {
 }
 
 func SerializeHttpPayload(ctx echo.Context) (*types.TaskPayload, error) {
+	body, err := io.ReadAll(ctx.Request().Body)
+	if err != nil {
+		return nil, errors.New("failed to read request body")
+	}
+
 	payload := map[string]interface{}{}
-	if err := ctx.Bind(&payload); err != nil {
+	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, errors.New("invalid request payload")
 	}
 
