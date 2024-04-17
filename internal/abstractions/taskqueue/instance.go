@@ -91,6 +91,8 @@ func (i *taskQueueInstance) state() (*taskQueueState, error) {
 		return nil, err
 	}
 
+	log.Printf("failed containers: %d\n", failedContainers)
+
 	state := taskQueueState{}
 	for _, container := range containers {
 		switch container.Status {

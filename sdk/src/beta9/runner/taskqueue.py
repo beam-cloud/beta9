@@ -34,20 +34,18 @@ from ..type import TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.01
+TASK_MANAGER_INTERVAL = 0.1
 
 
 class TaskQueueManager:
     def __init__(self) -> None:
-        self._setup_signal_handlers()
-
-        set_start_method("spawn", force=True)
-
         # Manager attributes
         self.pid: int = os.getpid()
         self.exit_code: int = 0
+        self.shutdown_event = Event()
 
-        # Register signal handlers
-        signal.signal(signal.SIGTERM, self.shutdown)
+        self._setup_signal_handlers()
+        set_start_method("spawn", force=True)
 
         # Task worker attributes
         self.task_worker_count: int = config.concurrency
@@ -59,23 +57,33 @@ class TaskQueueManager:
         self.task_worker_watchdog_threads: List[threading.Thread] = []
 
     def _setup_signal_handlers(self):
-        signal.signal(signal.SIGTERM, self.shutdown)
+        if os.getpid() == self.pid:
+            signal.signal(signal.SIGTERM, self._init_shutdown)
+
+    def _init_shutdown(self, signum=None, frame=None):
+        self.shutdown_event.set()
 
     def run(self):
         for worker_index in range(self.task_worker_count):
             print(f"Starting task worker[{worker_index}]")
             self._start_worker(worker_index)
 
-        for task_process in self.task_processes:
-            task_process.join()
+        while not self.shutdown_event.is_set():
+            time.sleep(TASK_MANAGER_INTERVAL)
 
-    def shutdown(self, signum=None, frame=None):
+        self.shutdown()
+
+    def shutdown(self):
+        print("Spinning down taskqueue")
+
+        # Terminate all worker processes
         for task_process in self.task_processes:
             task_process.terminate()
-            task_process.join()
+            task_process.join(timeout=5)
 
         for task_process in self.task_processes:
             if task_process.is_alive():
+                print("Task process did not join within the timeout. Terminating...")
                 task_process.terminate()
                 task_process.join(timeout=0)
 

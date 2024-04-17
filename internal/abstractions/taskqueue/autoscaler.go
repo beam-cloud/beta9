@@ -59,6 +59,13 @@ func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSample) *abs
 	if s.QueueLength == 0 {
 		desiredContainers = 0
 	} else {
+		if s.QueueLength == -1 {
+			return &abstractions.AutoscalerResult{
+				DesiredContainers: 0,
+				ResultValid:       false,
+			}
+		}
+
 		desiredContainers = int(s.QueueLength / int64(i.stubConfig.Concurrency))
 		if s.QueueLength%int64(i.stubConfig.Concurrency) > 0 {
 			desiredContainers += 1
