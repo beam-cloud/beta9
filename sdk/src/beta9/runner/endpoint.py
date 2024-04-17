@@ -1,4 +1,3 @@
-import atexit
 import logging
 import os
 import signal
@@ -75,6 +74,7 @@ class EndpointManager:
         self.handler: Callable = load_handler().func  # The function exists under the decorator
         self.context = {"loader": "something"}  # TODO: implement context loader
 
+        # Register signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)
 
         @self.app.get("/health")
@@ -138,7 +138,6 @@ class EndpointManager:
 
 if __name__ == "__main__":
     mg = EndpointManager()
-    atexit.register(mg.shutdown)
 
     config = Config(
         app=mg.app,
