@@ -253,7 +253,7 @@ func (s *Worker) Run() error {
 					}
 
 					s.containerLock.Unlock()
-					s.clearContainer(containerId, request, time.Duration(0))
+					s.clearContainer(containerId, request, time.Duration(0), 1)
 					continue
 				}
 			}
@@ -394,7 +394,7 @@ func (s *Worker) stopContainer(event *common.Event) bool {
 	containerId := event.Args["container_id"].(string)
 
 	var err error = nil
-	if _, containerExists := s.containerInstances.Get(containerId); containerExists {
+	if _, exists := s.containerInstances.Get(containerId); exists {
 		log.Printf("<%s> - received stop container event.\n", containerId)
 		s.stopContainerChan <- containerId
 	}
@@ -406,7 +406,13 @@ func (s *Worker) processStopContainerEvents() {
 	for containerId := range s.stopContainerChan {
 		log.Printf("<%s> - stopping container.\n", containerId)
 
-		if _, containerExists := s.containerInstances.Get(containerId); !containerExists {
+		instance, exists := s.containerInstances.Get(containerId)
+		if !exists {
+			continue
+		}
+
+		// Container has already exited, just skip this event
+		if instance.ExitCode >= 0 {
 			continue
 		}
 
@@ -442,10 +448,10 @@ func (s *Worker) terminateContainer(containerId string, request *types.Container
 
 	defer s.containerWg.Done()
 
-	s.clearContainer(containerId, request, time.Duration(s.config.Worker.TerminationGracePeriod)*time.Second)
+	s.clearContainer(containerId, request, time.Duration(s.config.Worker.TerminationGracePeriod)*time.Second, *exitCode)
 }
 
-func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, delay time.Duration) {
+func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, delay time.Duration, exitCode int) {
 	s.containerLock.Lock()
 
 	if request.Gpu != "" {
@@ -454,6 +460,12 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	s.completedRequests <- request
 	s.containerLock.Unlock()
+
+	instance, exists := s.containerInstances.Get(containerId)
+	if exists {
+		instance.ExitCode = exitCode
+		s.containerInstances.Set(containerId, instance)
+	}
 
 	go func() {
 		// Allow for some time to pass before clearing the container. This way we can handle some last
