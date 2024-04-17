@@ -44,8 +44,9 @@ type TaskQueueServiceOpts struct {
 }
 
 const (
-	taskQueueContainerPrefix string = "taskqueue"
-	taskQueueRoutePrefix     string = "/taskqueue"
+	taskQueueContainerPrefix       string = "taskqueue"
+	taskQueueRoutePrefix           string = "/taskqueue"
+	taskQueueDefaultTaskExpiration int    = 3600 * 12 // 12 hours
 )
 
 type RedisTaskQueue struct {
@@ -234,7 +235,10 @@ func (tq *RedisTaskQueue) put(ctx context.Context, workspaceName, stubId string,
 		return "", err
 	}
 
-	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), workspaceName, stubId, payload, stubConfig.TaskPolicy)
+	policy := stubConfig.TaskPolicy
+	policy.Expires = time.Now().Add(time.Duration(taskQueueDefaultTaskExpiration) * time.Second)
+
+	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), workspaceName, stubId, payload, policy)
 	if err != nil {
 		return "", err
 	}
@@ -496,7 +500,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				return err
 			}
 
-			err = tq.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
+			err = tq.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(1)*time.Second).Err()
 			if err != nil {
 				return err
 			}
