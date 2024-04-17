@@ -163,13 +163,6 @@ func (cr *ContainerRedisRepository) DeleteContainerState(request *types.Containe
 		return fmt.Errorf("failed to delete container addr <%v>: %w", addrKey, err)
 	}
 
-	// Remove container state key from index
-	indexKey := common.RedisKeys.SchedulerContainerIndex(request.StubId)
-	err = cr.rdb.SRem(context.TODO(), indexKey, stateKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to remove container state key from index <%v>: %w", indexKey, err)
-	}
-
 	return nil
 }
 
