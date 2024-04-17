@@ -1,4 +1,3 @@
-import atexit
 import logging
 import os
 import signal
@@ -37,6 +36,7 @@ logger.addFilter(EndpointFilter())
 @with_runner_context
 async def lifespan(app: FastAPI, channel: Channel):
     app.state.gateway_stub = GatewayServiceStub(channel)
+
     yield
 
 
@@ -75,6 +75,7 @@ class EndpointManager:
         self.handler: Callable = load_handler().func  # The function exists under the decorator
         self.context = {"loader": "something"}  # TODO: implement context loader
 
+        # Register signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)
 
         @self.app.get("/health")
@@ -138,11 +139,10 @@ class EndpointManager:
 
 if __name__ == "__main__":
     mg = EndpointManager()
-    atexit.register(mg.shutdown)
 
     config = Config(
         app=mg.app,
-        host="0.0.0.0",
+        host="",
         port=cfg.bind_port,
         workers=cfg.concurrency,
     )
