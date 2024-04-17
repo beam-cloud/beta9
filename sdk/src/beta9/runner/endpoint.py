@@ -36,7 +36,10 @@ logger.addFilter(EndpointFilter())
 @with_runner_context
 async def lifespan(app: FastAPI, channel: Channel):
     app.state.gateway_stub = GatewayServiceStub(channel)
+
     yield
+
+    channel.close()
 
 
 async def task_lifecycle(request: Request):
