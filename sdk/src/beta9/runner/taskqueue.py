@@ -1,5 +1,4 @@
 import asyncio
-import atexit
 import json
 import os
 import signal
@@ -46,6 +45,9 @@ class TaskQueueManager:
         # Manager attributes
         self.pid: int = os.getpid()
         self.exit_code: int = 0
+
+        # Register signal handlers
+        signal.signal(signal.SIGTERM, self.shutdown)
 
         # Task worker attributes
         self.task_worker_count: int = config.concurrency
@@ -290,8 +292,6 @@ class TaskQueueWorker:
 
 if __name__ == "__main__":
     tq = TaskQueueManager()
-    atexit.register(tq.shutdown)
-
     tq.run()
 
     if tq.exit_code != 0 and tq.exit_code != TaskExitCode.SigTerm:
