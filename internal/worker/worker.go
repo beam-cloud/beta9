@@ -247,13 +247,15 @@ func (s *Worker) Run() error {
 				if err != nil {
 					log.Printf("Unable to run container <%s>: %v\n", containerId, err)
 
-					err := s.containerRepo.SetContainerExitCode(containerId, 1)
+					// Set a non-zero exit code for the container (both in memory, and in repo)
+					exitCode := 1
+					err := s.containerRepo.SetContainerExitCode(containerId, exitCode)
 					if err != nil {
 						log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
 					}
 
 					s.containerLock.Unlock()
-					s.clearContainer(containerId, request, time.Duration(0), 1)
+					s.clearContainer(containerId, request, time.Duration(0), exitCode)
 					continue
 				}
 			}
