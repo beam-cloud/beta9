@@ -5,10 +5,8 @@ from typing import Iterable, Union
 import click
 from rich.table import Column, Table, box
 
-from beta9 import aio, terminal
-from beta9.cli.contexts import ServiceClient
-from beta9.cli.extraclick import ClickCommonGroup, ClickManagementGroup
-from beta9.clients.volume import (
+from .. import aio, terminal
+from ..clients.volume import (
     CopyPathRequest,
     CopyPathResponse,
     DeletePathRequest,
@@ -19,7 +17,9 @@ from beta9.clients.volume import (
     ListVolumesRequest,
     ListVolumesResponse,
 )
-from beta9.terminal import pluralize
+from ..terminal import pluralize
+from .contexts import ServiceClient
+from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
 @click.group(cls=ClickCommonGroup)
@@ -40,6 +40,17 @@ def common(ctx: click.Context):
       [!seq]  matches any character not in `seq`
 
       For a literal match, wrap the meta-characters in brackets. For example, '[?]' matches the character '?'.
+
+    Examples:
+
+      # List files in the volume named myvol, in the directory named subdir/
+      beta9 ls myvol/subdir
+
+      # List files ending in .txt in the directory named subdir
+      beta9 ls myvol/subdir/\\*.txt
+
+      # Same as above, but with single quotes to avoid escaping
+      beta9 ls 'myvol/subdir/*.txt'
       \b
     """,
 )
@@ -171,6 +182,20 @@ def read_with_progress(
       [!seq]  matches any character not in `seq`
 
       For a literal match, wrap the meta-characters in brackets. For example, '[?]' matches the character '?'.
+
+    Examples:
+
+      # Remove the directory
+      beta9 rm myvol/subdir
+
+      # Remove files ending in .json
+      beta9 rm myvol/\\*.json
+
+      # Remove files with letters a - c in their names
+      beta9 rm myvol/\\[a-c\\].json
+
+      # Remove files, use single quotes to avoid escaping
+      beta9 rm 'myvol/?/[i-j][e-g]/*.txt'
       \b
     """,
 )
@@ -224,6 +249,7 @@ def list_volumes(service: ServiceClient):
         box=box.SIMPLE,
     )
 
+    total_size = 0
     for volume in res.volumes:
         table.add_row(
             volume.name,
@@ -232,9 +258,10 @@ def list_volumes(service: ServiceClient):
             terminal.humanize_date(volume.updated_at),
             volume.workspace_name,
         )
+        total_size += volume.size
 
     table.add_section()
-    table.add_row(f"[bold]Total: {len(res.volumes)}")
+    table.add_row(f"[bold]{len(res.volumes)} volumes | {terminal.humanize_memory(total_size)} used")
     terminal.print(table)
 
 
