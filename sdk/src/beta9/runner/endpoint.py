@@ -142,7 +142,7 @@ if __name__ == "__main__":
 
     config = Config(
         app=mg.app,
-        host="0.0.0.0",
+        host="",
         port=cfg.bind_port,
         workers=cfg.concurrency,
     )
