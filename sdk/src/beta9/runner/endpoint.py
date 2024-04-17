@@ -39,8 +39,6 @@ async def lifespan(app: FastAPI, channel: Channel):
 
     yield
 
-    channel.close()
-
 
 async def task_lifecycle(request: Request):
     task_id = request.headers.get("X-TASK-ID")
