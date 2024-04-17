@@ -24,9 +24,18 @@ def common(ctx: click.Context):
 
     ENTRYPOINT is in the format of "file:function".
     """,
+    epilog="""
+      Examples:
+
+        beta9 deploy --name my-app app.py:handler
+
+        beta9 deploy -n my-app-2 app.py:my_func
+        \b
+    """,
 )
 @click.option(
     "--name",
+    "-n",
     type=click.STRING,
     help="The name the deployment.",
     required=True,
@@ -54,9 +63,25 @@ def management(ctx: click.Context):
 @management.command(
     name="create",
     help="Create a new deployment.",
+    epilog="""
+      Examples:
+
+        beta9 deploy --name my-app --entrypoint app.py:handler
+        \b
+    """,
 )
-@click.option("--name", help="The name the deployment.", required=True)
-@click.option("--entrypoint", help='The name the entrypoint e.g. "file:function".', required=True)
+@click.option(
+    "--name",
+    "-n",
+    help="The name the deployment.",
+    required=True,
+)
+@click.option(
+    "--entrypoint",
+    "-e",
+    help='The name the entrypoint e.g. "file:function".',
+    required=True,
+)
 def create_deployment(name: str, entrypoint: str):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
