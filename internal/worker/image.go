@@ -35,7 +35,7 @@ const (
 
 var (
 	baseImagePath      string = "/images"
-	baseImageMountPath string = "/images/%s"
+	baseImageMountPath string = "/images/mnt/%s"
 )
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
