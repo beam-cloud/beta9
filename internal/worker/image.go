@@ -34,19 +34,31 @@ const (
 )
 
 var (
-	baseImagePath string = "/images"
+	baseImagePath      string = "/images"
+	baseImageMountPath string = "/images/%s"
 )
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
 
-func getImagePath(workerId string) string {
+func getImagePath() string {
 	return baseImagePath
+}
+
+func getImageMountPath(workerId string) string {
+	path := fmt.Sprintf(baseImageMountPath, workerId)
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		os.MkdirAll(path, 0755)
+	}
+
+	return path
 }
 
 type ImageClient struct {
 	registry        *common.ImageRegistry
 	cacheClient     *CacheClient
 	imagePath       string
+	imageMountPath  string
 	imageBundlePath string
 	pullCommand     string
 	pDeathSignal    syscall.Signal
@@ -95,7 +107,8 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		registry:        registry,
 		cacheClient:     cacheClient,
 		imageBundlePath: imageBundlePath,
-		imagePath:       getImagePath(workerId),
+		imagePath:       getImagePath(),
+		imageMountPath:  getImageMountPath(workerId),
 		pullCommand:     imagePullCommand,
 		commandTimeout:  -1,
 		debug:           false,
@@ -139,7 +152,7 @@ func (c *ImageClient) PullLazy(imageId string) error {
 
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           remoteArchivePath,
-		MountPoint:            fmt.Sprintf("%s/%s", c.imagePath, imageId),
+		MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
 		Verbose:               false,
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
@@ -156,13 +169,6 @@ func (c *ImageClient) PullLazy(imageId string) error {
 	if mounted, _ := mountinfo.Mounted(mountOptions.MountPoint); mounted {
 		return nil
 	}
-
-	// Get lock on image mount
-	err = c.workerRepo.SetImagePullLock(c.workerId, imageId)
-	if err != nil {
-		return err
-	}
-	defer c.workerRepo.RemoveImagePullLock(c.workerId, imageId)
 
 	startServer, _, err := clip.MountArchive(*mountOptions)
 	if err != nil {

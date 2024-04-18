@@ -365,15 +365,3 @@ func (r *WorkerRedisRepository) SetContainerResourceValues(workerId string, cont
 
 	return nil
 }
-
-func (r *WorkerRedisRepository) SetImagePullLock(workerId, imageId string) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerImageLock(workerId, imageId), common.RedisLockOptions{TtlS: 10, Retries: 3})
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (r *WorkerRedisRepository) RemoveImagePullLock(workerId, imageId string) error {
-	return r.lock.Release(common.RedisKeys.WorkerImageLock(workerId, imageId))
-}

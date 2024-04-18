@@ -162,7 +162,7 @@ func NewWorker() (*Worker, error) {
 		ctx:                  ctx,
 		cancel:               cancel,
 		config:               config,
-		imagePath:            getImagePath(workerId),
+		imagePath:            getImageMountPath(workerId),
 		cpuLimit:             cpuLimit,
 		memoryLimit:          memoryLimit,
 		gpuType:              gpuType,
@@ -811,6 +811,8 @@ func (s *Worker) shutdown() error {
 	if err != nil {
 		log.Printf("Failed to unmount storage: %v\n", err)
 	}
+
+	os.RemoveAll(s.imagePath)
 
 	s.cancel()
 	return nil

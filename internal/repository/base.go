@@ -24,8 +24,6 @@ type WorkerRepository interface {
 	AddContainerRequestToWorker(workerId string, containerId string, request *types.ContainerRequest) error
 	RemoveContainerRequestFromWorker(workerId string, containerId string) error
 	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
-	SetImagePullLock(workerId, imageId string) error
-	RemoveImagePullLock(workerId, imageId string) error
 }
 
 type ContainerRepository interface {
