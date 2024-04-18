@@ -34,19 +34,13 @@ const (
 )
 
 var (
-	baseImagePath string = "/images/%s"
+	baseImagePath string = "/images"
 )
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
 
 func getImagePath(workerId string) string {
-	path := fmt.Sprintf(baseImagePath, workerId)
-
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		os.MkdirAll(path, 0755)
-	}
-
-	return path
+	return baseImagePath
 }
 
 type ImageClient struct {
@@ -54,11 +48,11 @@ type ImageClient struct {
 	cacheClient     *CacheClient
 	imagePath       string
 	imageBundlePath string
-	PullCommand     string
-	PdeathSignal    syscall.Signal
-	CommandTimeout  int
-	Debug           bool
-	Creds           string
+	pullCommand     string
+	pDeathSignal    syscall.Signal
+	commandTimeout  int
+	debug           bool
+	creds           string
 	config          types.ImageServiceConfig
 	workerId        string
 	workerRepo      repository.WorkerRepository
@@ -102,10 +96,10 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		cacheClient:     cacheClient,
 		imageBundlePath: imageBundlePath,
 		imagePath:       getImagePath(workerId),
-		PullCommand:     imagePullCommand,
-		CommandTimeout:  -1,
-		Debug:           false,
-		Creds:           "",
+		pullCommand:     imagePullCommand,
+		commandTimeout:  -1,
+		debug:           false,
+		creds:           "",
 		workerId:        workerId,
 		workerRepo:      workerRepo,
 	}
@@ -193,7 +187,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
 
 	args = append(args, c.args(creds)...)
-	cmd := exec.CommandContext(ctx, c.PullCommand, args...)
+	cmd := exec.CommandContext(ctx, c.pullCommand, args...)
 	cmd.Env = os.Environ()
 	cmd.Dir = c.imageBundlePath
 	cmd.Stdout = os.Stdout
@@ -223,7 +217,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 }
 
 func (c *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
-	if c.PdeathSignal != 0 {
+	if c.pDeathSignal != 0 {
 		return runc.Monitor.StartLocked(cmd)
 	}
 	return runc.Monitor.Start(cmd)
@@ -234,19 +228,19 @@ func (c *ImageClient) args(creds *string) (out []string) {
 		out = append(out, "--src-creds", *creds)
 	} else if creds != nil && *creds == "" {
 		out = append(out, "--src-no-creds")
-	} else if c.Creds != "" {
-		out = append(out, "--src-creds", c.Creds)
+	} else if c.creds != "" {
+		out = append(out, "--src-creds", c.creds)
 	}
 
-	if c.CommandTimeout > 0 {
-		out = append(out, "--command-timeout", fmt.Sprintf("%d", c.CommandTimeout))
+	if c.commandTimeout > 0 {
+		out = append(out, "--command-timeout", fmt.Sprintf("%d", c.commandTimeout))
 	}
 
 	if !c.config.EnableTLS {
 		out = append(out, []string{"--src-tls-verify=false", "--dest-tls-verify=false"}...)
 	}
 
-	if c.Debug {
+	if c.debug {
 		out = append(out, "--debug")
 	}
 
@@ -304,7 +298,6 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	var err error = nil
 	switch c.config.RegistryStore {
 	case "s3":
-		log.Println("tying to archive on s3...")
 		err = clip.CreateAndUploadArchive(clip.CreateOptions{
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
@@ -325,8 +318,6 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 			OutputPath: archivePath,
 		})
 	}
-
-	log.Println("past that main archive step...?")
 
 	if err != nil {
 		log.Printf("Unable to create archive: %v\n", err)

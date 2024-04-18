@@ -33,7 +33,7 @@ gateway:
   maxSendMsgSize: 1024
 imageService:
   cacheURL:
-  localCacheEnabled: false
+  localCacheEnabled: true
   registryStore: local
   registryCredentialProvider: docker
   registries:
