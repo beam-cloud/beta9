@@ -113,7 +113,7 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 	policy := types.DefaultTaskPolicy
 	policy.Expires = time.Now().Add(time.Duration(functionDefaultTaskExpiration) * time.Second)
 
-	task, err := fs.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorFunction), authInfo.Workspace.Name, stubId, payload, types.DefaultTaskPolicy)
+	task, err := fs.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorFunction), authInfo.Workspace.Name, stubId, payload, policy)
 	if err != nil {
 		return nil, err
 	}
