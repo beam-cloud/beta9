@@ -92,64 +92,70 @@ func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, d
 
 func (t *TCPEventClientRepo) PushContainerRequestedEvent(request *types.ContainerRequest) {
 	t.pushEvent(
-		types.EventContainerRequested,
+		types.EventContainerLifecycle,
 		types.EventContainerStatusRequestedSchemaVersion,
 		types.EventContainerStatusRequestedSchema{
 			ContainerID: request.ContainerId,
 			Request:     *request,
+			Status:      types.EventContainerLifecycleRequested,
 		},
 	)
 }
 
 func (t *TCPEventClientRepo) PushContainerScheduledEvent(containerID string, workerID string) {
 	t.pushEvent(
-		types.EventContainerScheduled,
-		types.EventContainerStatusSchemaVersion,
-		types.EventContainerStatusSchema{
+		types.EventContainerLifecycle,
+		types.EventContainerLifecycleSchemaVersion,
+		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			Status:      types.EventContainerLifecycleScheduled,
 		},
 	)
 }
 
 func (t *TCPEventClientRepo) PushContainerStartedEvent(containerID string, workerID string) {
 	t.pushEvent(
-		types.EventContainerStarted,
-		types.EventContainerStatusSchemaVersion,
-		types.EventContainerStatusSchema{
+		types.EventContainerLifecycle,
+		types.EventContainerLifecycleSchemaVersion,
+		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			Status:      types.EventContainerLifecycleStarted,
 		},
 	)
 }
 
 func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, workerID string) {
 	t.pushEvent(
-		types.EventContainerStopped,
-		types.EventContainerStatusSchemaVersion,
-		types.EventContainerStatusSchema{
+		types.EventContainerLifecycle,
+		types.EventContainerLifecycleSchemaVersion,
+		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			Status:      types.EventContainerLifecycleStopped,
 		},
 	)
 }
 
 func (t *TCPEventClientRepo) PushWorkerStartedEvent(workerID string) {
 	t.pushEvent(
-		types.EventWorkerStarted,
-		types.EventWorkerStatusSchemaVersion,
-		types.EventWorkerStatusSchema{
+		types.EventWorkerLifecycle,
+		types.EventWorkerLifecycleSchemaVersion,
+		types.EventWorkerLifecycleSchema{
 			WorkerID: workerID,
+			Status:   types.EventWorkerLifecycleStarted,
 		},
 	)
 }
 
 func (t *TCPEventClientRepo) PushWorkerStoppedEvent(workerID string) {
 	t.pushEvent(
-		types.EventWorkerStopped,
-		types.EventWorkerStatusSchemaVersion,
-		types.EventWorkerStatusSchema{
+		types.EventWorkerLifecycle,
+		types.EventWorkerLifecycle,
+		types.EventWorkerLifecycleSchema{
 			WorkerID: workerID,
+			Status:   types.EventWorkerLifecycleStopped,
 		},
 	)
 }

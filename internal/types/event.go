@@ -9,22 +9,31 @@ type EventClient interface {
 }
 
 var (
-	EventContainerScheduled = "container.scheduled"
-	EventContainerRequested = "container.requested"
-	EventContainerStarted   = "container.started"
-	EventContainerStopped   = "container.stopped"
+	EventContainerLifecycle = "container.lifecycle"
+	EventWorkerLifecycle    = "worker.lifecycle"
+)
 
-	EventWorkerStarted = "worker.started"
-	EventWorkerStopped = "worker.stopped"
+var (
+	EventContainerLifecycleRequested = "requested"
+	EventContainerLifecycleScheduled = "scheduled"
+	EventContainerLifecycleStarted   = "started"
+	EventContainerLifecycleStopped   = "stopped"
+	EventContainerLifecycleFailed    = "failed"
+)
+
+var (
+	EventWorkerLifecycleStarted = "started"
+	EventWorkerLifecycleStopped = "stopped"
 )
 
 // Schema versions should be in ISO 8601 format
 
-var EventContainerStatusSchemaVersion = "2024-01-24"
+var EventContainerLifecycleSchemaVersion = "1.0"
 
-type EventContainerStatusSchema struct {
+type EventContainerLifecycleSchema struct {
 	ContainerID string `json:"container_id"`
 	WorkerID    string `json:"worker_id"`
+	Status      string `json:"status"`
 }
 
 var EventContainerStatusRequestedSchemaVersion = "1.0"
@@ -32,10 +41,12 @@ var EventContainerStatusRequestedSchemaVersion = "1.0"
 type EventContainerStatusRequestedSchema struct {
 	ContainerID string           `json:"container_id"`
 	Request     ContainerRequest `json:"request"`
+	Status      string           `json:"status"`
 }
 
-var EventWorkerStatusSchemaVersion = "1.0"
+var EventWorkerLifecycleSchemaVersion = "1.0"
 
-type EventWorkerStatusSchema struct {
+type EventWorkerLifecycleSchema struct {
 	WorkerID string `json:"worker_id"`
+	Status   string `json:"status"`
 }
