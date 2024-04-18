@@ -34,14 +34,20 @@ const (
 )
 
 var (
-	baseImagePath      string = "/images"
+	baseImageCachePath string = "/images/cache"
 	baseImageMountPath string = "/images/mnt/%s"
 )
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
 
-func getImagePath() string {
-	return baseImagePath
+func getImageCachePath() string {
+	path := baseImageCachePath
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		os.MkdirAll(path, 0755)
+	}
+
+	return path
 }
 
 func getImageMountPath(workerId string) string {
@@ -57,7 +63,7 @@ func getImageMountPath(workerId string) string {
 type ImageClient struct {
 	registry        *common.ImageRegistry
 	cacheClient     *CacheClient
-	imagePath       string
+	imageCachePath  string
 	imageMountPath  string
 	imageBundlePath string
 	pullCommand     string
@@ -107,7 +113,7 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		registry:        registry,
 		cacheClient:     cacheClient,
 		imageBundlePath: imageBundlePath,
-		imagePath:       getImagePath(),
+		imageCachePath:  getImageCachePath(),
 		imageMountPath:  getImageMountPath(workerId),
 		pullCommand:     imagePullCommand,
 		commandTimeout:  -1,
@@ -135,12 +141,12 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 }
 
 func (c *ImageClient) PullLazy(imageId string) error {
-	localCachePath := fmt.Sprintf("%s/%s.cache", c.imagePath, imageId)
+	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
 	if !c.config.LocalCacheEnabled {
 		localCachePath = ""
 	}
 
-	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imagePath, imageId, c.registry.ImageFileExtension)
+	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 	var err error = nil
 
 	if _, err := os.Stat(remoteArchivePath); err != nil {
