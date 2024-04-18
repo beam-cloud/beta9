@@ -26,6 +26,24 @@ func TestSerializeHttpPayload(t *testing.T) {
 		wantErr     bool
 	}{
 		{
+			name: "complete empty body",
+			body: ``,
+			wantPayload: &types.TaskPayload{
+				Args:   nil,
+				Kwargs: map[string]interface{}{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "empty json object",
+			body: `{}`,
+			wantPayload: &types.TaskPayload{
+				Args:   nil,
+				Kwargs: map[string]interface{}{},
+			},
+			wantErr: false,
+		},
+		{
 			name: "kwargs only",
 			body: `{"mykwarg": 1, "mykwarg2": 2}`,
 			wantPayload: &types.TaskPayload{

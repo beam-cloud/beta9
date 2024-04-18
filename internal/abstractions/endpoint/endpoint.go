@@ -99,6 +99,7 @@ func NewEndpointService(
 
 	go es.handleContainerEvents()
 
+	// Register task dispatcher
 	es.taskDispatcher.Register(string(types.ExecutorEndpoint), es.endpointTaskFactory)
 
 	// Register HTTP routes
