@@ -30,23 +30,38 @@ import (
 
 const (
 	imagePullCommand string = "skopeo"
-	imageCachePath   string = "/dev/shm/images"
+	imageBundlePath  string = "/dev/shm/images"
+)
+
+var (
+	baseImagePath string = "/images/%s"
 )
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
 
+func getImagePath(workerId string) string {
+	path := fmt.Sprintf(baseImagePath, workerId)
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		os.MkdirAll(path, 0755)
+	}
+
+	return path
+}
+
 type ImageClient struct {
-	registry       *common.ImageRegistry
-	cacheClient    *CacheClient
-	ImagePath      string
-	PullCommand    string
-	PdeathSignal   syscall.Signal
-	CommandTimeout int
-	Debug          bool
-	Creds          string
-	config         types.ImageServiceConfig
-	workerId       string
-	workerRepo     repository.WorkerRepository
+	registry        *common.ImageRegistry
+	cacheClient     *CacheClient
+	imagePath       string
+	imageBundlePath string
+	PullCommand     string
+	PdeathSignal    syscall.Signal
+	CommandTimeout  int
+	Debug           bool
+	Creds           string
+	config          types.ImageServiceConfig
+	workerId        string
+	workerRepo      repository.WorkerRepository
 }
 
 func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
@@ -81,7 +96,21 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		}
 	}
 
-	err = os.MkdirAll(imageCachePath, os.ModePerm)
+	c := &ImageClient{
+		config:          config,
+		registry:        registry,
+		cacheClient:     cacheClient,
+		imageBundlePath: imageBundlePath,
+		imagePath:       getImagePath(workerId),
+		PullCommand:     imagePullCommand,
+		CommandTimeout:  -1,
+		Debug:           false,
+		Creds:           "",
+		workerId:        workerId,
+		workerRepo:      workerRepo,
+	}
+
+	err = os.MkdirAll(c.imageBundlePath, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
@@ -95,23 +124,16 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		return nil, err
 	}
 
-	return &ImageClient{
-		config:         config,
-		registry:       registry,
-		cacheClient:    cacheClient,
-		ImagePath:      imageCachePath,
-		PullCommand:    imagePullCommand,
-		CommandTimeout: -1,
-		Debug:          false,
-		Creds:          "",
-		workerId:       workerId,
-		workerRepo:     workerRepo,
-	}, nil
+	return c, nil
 }
 
 func (c *ImageClient) PullLazy(imageId string) error {
-	localCachePath := fmt.Sprintf("%s/%s.cache", imagePath, imageId)
-	remoteArchivePath := fmt.Sprintf("%s/%s.%s", imagePath, imageId, c.registry.ImageFileExtension)
+	localCachePath := fmt.Sprintf("%s/%s.cache", c.imagePath, imageId)
+	if !c.config.LocalCacheEnabled {
+		localCachePath = ""
+	}
+
+	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imagePath, imageId, c.registry.ImageFileExtension)
 	var err error = nil
 
 	if _, err := os.Stat(remoteArchivePath); err != nil {
@@ -123,7 +145,7 @@ func (c *ImageClient) PullLazy(imageId string) error {
 
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           remoteArchivePath,
-		MountPoint:            fmt.Sprintf("%s/%s", imagePath, imageId),
+		MountPoint:            fmt.Sprintf("%s/%s", c.imagePath, imageId),
 		Verbose:               false,
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
@@ -161,7 +183,7 @@ func (c *ImageClient) PullLazy(imageId string) error {
 	return nil
 }
 
-func (i *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds *string) error {
+func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds *string) error {
 	baseImage, err := extractImageNameAndTag(sourceImage)
 	if err != nil {
 		return err
@@ -170,14 +192,14 @@ func (i *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
 
-	args = append(args, i.args(creds)...)
-	cmd := exec.CommandContext(ctx, i.PullCommand, args...)
+	args = append(args, c.args(creds)...)
+	cmd := exec.CommandContext(ctx, c.PullCommand, args...)
 	cmd.Env = os.Environ()
-	cmd.Dir = i.ImagePath
+	cmd.Dir = c.imageBundlePath
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	ec, err := i.startCommand(cmd)
+	ec, err := c.startCommand(cmd)
 	if err != nil {
 		return err
 	}
@@ -187,51 +209,51 @@ func (i *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 		log.Printf("unable to copy base image: %v -> %v", sourceImage, dest)
 	}
 
-	bundlePath := filepath.Join(imagePath, imageId)
-	err = i.unpack(baseImage.ImageName, baseImage.ImageTag, bundlePath)
+	tmpBundlePath := filepath.Join(c.imageBundlePath, imageId)
+	err = c.unpack(baseImage.ImageName, baseImage.ImageTag, tmpBundlePath)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}
 
 	defer func() {
-		os.RemoveAll(bundlePath)
+		os.RemoveAll(tmpBundlePath)
 	}()
 
-	return i.Archive(ctx, bundlePath, imageId)
+	return c.Archive(ctx, tmpBundlePath, imageId)
 }
 
-func (i *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
-	if i.PdeathSignal != 0 {
+func (c *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
+	if c.PdeathSignal != 0 {
 		return runc.Monitor.StartLocked(cmd)
 	}
 	return runc.Monitor.Start(cmd)
 }
 
-func (i *ImageClient) args(creds *string) (out []string) {
+func (c *ImageClient) args(creds *string) (out []string) {
 	if creds != nil && *creds != "" {
 		out = append(out, "--src-creds", *creds)
 	} else if creds != nil && *creds == "" {
 		out = append(out, "--src-no-creds")
-	} else if i.Creds != "" {
-		out = append(out, "--src-creds", i.Creds)
+	} else if c.Creds != "" {
+		out = append(out, "--src-creds", c.Creds)
 	}
 
-	if i.CommandTimeout > 0 {
-		out = append(out, "--command-timeout", fmt.Sprintf("%d", i.CommandTimeout))
+	if c.CommandTimeout > 0 {
+		out = append(out, "--command-timeout", fmt.Sprintf("%d", c.CommandTimeout))
 	}
 
-	if !i.config.EnableTLS {
+	if !c.config.EnableTLS {
 		out = append(out, []string{"--src-tls-verify=false", "--dest-tls-verify=false"}...)
 	}
 
-	if i.Debug {
+	if c.Debug {
 		out = append(out, "--debug")
 	}
 
 	return out
 }
 
-func (i *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePath string) error {
+func (c *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePath string) error {
 	var unpackOptions layer.UnpackOptions
 	var meta umoci.Meta
 	meta.Version = umoci.MetaVersion
@@ -240,7 +262,7 @@ func (i *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePa
 	unpackOptions.MapOptions = meta.MapOptions
 
 	// Get a reference to the CAS.
-	baseImagePath := fmt.Sprintf("%s/%s", imageCachePath, baseImageName)
+	baseImagePath := fmt.Sprintf("%s/%s", c.imageBundlePath, baseImageName)
 	engine, err := dir.Open(baseImagePath)
 	if err != nil {
 		return errors.Wrap(err, "open CAS")
@@ -269,10 +291,10 @@ func (i *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePa
 }
 
 // Generate and upload archived version of the image for distribution
-func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId string) error {
+func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId string) error {
 	startTime := time.Now()
 
-	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, i.registry.ImageFileExtension)
+	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, c.registry.ImageFileExtension)
 	archivePath := filepath.Join("/tmp", archiveName)
 
 	defer func() {
@@ -280,20 +302,21 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}()
 
 	var err error = nil
-	switch i.config.RegistryStore {
+	switch c.config.RegistryStore {
 	case "s3":
+		log.Println("tying to archive on s3...")
 		err = clip.CreateAndUploadArchive(clip.CreateOptions{
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
 			Credentials: storage.ClipStorageCredentials{
 				S3: &storage.S3ClipStorageCredentials{
-					AccessKey: i.config.Registries.S3.AWSAccessKey,
-					SecretKey: i.config.Registries.S3.AWSSecretKey,
+					AccessKey: c.config.Registries.S3.AWSAccessKey,
+					SecretKey: c.config.Registries.S3.AWSSecretKey,
 				},
 			},
 		}, &clipCommon.S3StorageInfo{
-			Bucket: i.config.Registries.S3.AWSS3Bucket,
-			Region: i.config.Registries.S3.AWSRegion,
+			Bucket: c.config.Registries.S3.AWSS3Bucket,
+			Region: c.config.Registries.S3.AWSRegion,
 			Key:    fmt.Sprintf("%s.clip", imageId),
 		})
 	case "local":
@@ -303,6 +326,8 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 		})
 	}
 
+	log.Println("past that main archive step...?")
+
 	if err != nil {
 		log.Printf("Unable to create archive: %v\n", err)
 		return err
@@ -311,7 +336,7 @@ func (i *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 
 	// Push the archive to a registry
 	startTime = time.Now()
-	err = i.registry.Push(ctx, archivePath, imageId)
+	err = c.registry.Push(ctx, archivePath, imageId)
 	if err != nil {
 		log.Printf("Failed to push image <%v>: %v\n", imageId, err)
 		return err

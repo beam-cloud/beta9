@@ -37,7 +37,7 @@ type Worker struct {
 	gpuCount             uint32
 	podAddr              string
 	podHostName          string
-	userImagePath        string
+	imagePath            string
 	runcHandle           runc.Runc
 	runcServer           *RunCServer
 	containerCudaManager *ContainerCudaManager
@@ -83,7 +83,6 @@ var (
 	//go:embed base_runc_config.json
 	baseRuncConfigRaw          string
 	baseConfigPath             string  = "/tmp"
-	imagePath                  string  = "/images"
 	containerLogsPath          string  = "/var/log/worker"
 	defaultContainerDirectory  string  = "/mnt/code"
 	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
@@ -163,7 +162,7 @@ func NewWorker() (*Worker, error) {
 		ctx:                  ctx,
 		cancel:               cancel,
 		config:               config,
-		userImagePath:        imagePath,
+		imagePath:            getImagePath(workerId),
 		cpuLimit:             cpuLimit,
 		memoryLimit:          memoryLimit,
 		gpuType:              gpuType,
@@ -286,7 +285,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerID := request.ContainerId
 
-	bundlePath := filepath.Join(s.userImagePath, request.ImageId)
+	bundlePath := filepath.Join(s.imagePath, request.ImageId)
 
 	// Pull image
 	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, request.ImageId)
@@ -643,7 +642,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 }
 
 func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
-	imageConfigPath := filepath.Join(s.userImagePath, imageId, "initial_config.json")
+	imageConfigPath := filepath.Join(s.imagePath, imageId, "initial_config.json")
 
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {

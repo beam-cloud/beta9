@@ -26,9 +26,25 @@ func SerializeHttpPayload(ctx echo.Context) (*types.TaskPayload, error) {
 		return nil, errors.New("failed to read request body")
 	}
 
+	// Handle completely empty body
+	if len(body) == 0 {
+		return &types.TaskPayload{
+			Args:   nil,
+			Kwargs: make(map[string]interface{}),
+		}, nil
+	}
+
 	payload := map[string]interface{}{}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, errors.New("invalid request payload")
+	}
+
+	// Handle empty JSON object
+	if len(payload) == 0 {
+		return &types.TaskPayload{
+			Args:   nil,
+			Kwargs: make(map[string]interface{}),
+		}, nil
 	}
 
 	taskPayload := &types.TaskPayload{}
