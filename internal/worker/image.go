@@ -176,6 +176,13 @@ func (c *ImageClient) PullLazy(imageId string) error {
 		return nil
 	}
 
+	// Get lock on image mount
+	err = c.workerRepo.SetImagePullLock(c.workerId, imageId)
+	if err != nil {
+		return err
+	}
+	defer c.workerRepo.RemoveImagePullLock(c.workerId, imageId)
+
 	startServer, _, err := clip.MountArchive(*mountOptions)
 	if err != nil {
 		return err
