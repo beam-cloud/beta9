@@ -448,7 +448,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 					return
 
 				case msg := <-messages:
-					if msg.Payload == task.ExternalId {
+					if msg != nil && task != nil && msg.Payload == task.ExternalId {
 						cancelFlag <- true
 						return
 					}
