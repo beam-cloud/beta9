@@ -85,6 +85,7 @@ func NewRuncFunctionService(ctx context.Context,
 		routeGroup:      opts.RouteGroup,
 	}
 
+	// Register task dispatcher
 	fs.taskDispatcher.Register(string(types.ExecutorFunction), fs.functionTaskFactory)
 
 	// Register HTTP routes

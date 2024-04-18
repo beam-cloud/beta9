@@ -51,9 +51,7 @@ func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
 
 	payload, err := task.SerializeHttpPayload(ctx)
 	if err != nil {
-		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error": "invalid request payload",
-		})
+		return err
 	}
 
 	task, err := g.fs.invoke(ctx.Request().Context(), cc.AuthInfo, stubId, payload)

@@ -92,6 +92,7 @@ func NewRedisTaskQueueService(
 		queueInstances:  common.NewSafeMap[*taskQueueInstance](),
 	}
 
+	// Register task dispatcher
 	tq.taskDispatcher.Register(string(types.ExecutorTaskQueue), tq.taskQueueTaskFactory)
 
 	go tq.handleContainerEvents()
