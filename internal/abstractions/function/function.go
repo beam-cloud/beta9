@@ -35,6 +35,7 @@ const (
 	defaultFunctionContainerMemory  int64         = 128
 	functionArgsExpirationTimeout   time.Duration = 600 * time.Second
 	functionResultExpirationTimeout time.Duration = 600 * time.Second
+	functionDefaultTaskExpiration   int           = 3600 * 12 // 12 hours
 )
 
 type RunCFunctionService struct {
@@ -108,6 +109,9 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 }
 
 func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (types.TaskInterface, error) {
+	policy := types.DefaultTaskPolicy
+	policy.Expires = time.Now().Add(time.Duration(functionDefaultTaskExpiration) * time.Second)
+
 	task, err := fs.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorFunction), authInfo.Workspace.Name, stubId, payload, types.DefaultTaskPolicy)
 	if err != nil {
 		return nil, err
