@@ -201,6 +201,7 @@ func (es *HttpEndpointService) StopEndpointServe(ctx context.Context, in *pb.Sto
 	)
 
 	// Delete all keep warms
+	// With serves, there should only ever be one container running, but this is the easiest way to get that container
 	containers, err := instance.containerRepo.GetActiveContainersByStubId(instance.stub.ExternalId)
 	if err != nil {
 		return nil, err
