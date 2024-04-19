@@ -205,7 +205,7 @@ class EndpointManager:
 
 if __name__ == "__main__":
     options = {
-        "bind": f":{cfg.bind_port}",
+        "bind": [f"[::]:{cfg.bind_port}"],
         "workers": cfg.concurrency,
         "worker_class": "uvicorn.workers.UvicornWorker",
         "loglevel": "info",
