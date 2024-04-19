@@ -14,6 +14,9 @@ from starlette.applications import Starlette
 from starlette.types import ASGIApp
 from uvicorn.workers import UvicornWorker
 
+from ..abstractions.base.runner import (
+    ENDPOINT_SERVE_STUB_TYPE,
+)
 from ..clients.gateway import (
     EndTaskRequest,
     GatewayServiceStub,
@@ -84,7 +87,9 @@ class GunicornApplication(BaseApplication):
         except EOFError:
             return
         except BaseException:
-            logger.exception("Exiting container due to startup error")
+            logger.exception("Exiting worker due to startup error")
+            if cfg.stub_type == ENDPOINT_SERVE_STUB_TYPE:
+                return
 
             # We send SIGUSR1 to indicate to the gunicorn master that the server should shut down completely
             # since our asgi_app callable is erroring out.
@@ -124,8 +129,8 @@ async def task_lifecycle(request: Request):
 class EndpointManager:
     @asynccontextmanager
     @with_runner_context
-    async def lifespan(self, app: FastAPI, channel: Channel):
-        app.state.gateway_stub = GatewayServiceStub(channel)
+    async def lifespan(self, _: FastAPI, channel: Channel):
+        self.app.state.gateway_stub = GatewayServiceStub(channel)
 
         yield
 

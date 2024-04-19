@@ -8,7 +8,7 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
-from ..clients.endpoint import EndpointServeRequest, EndpointServiceStub
+from ..clients.endpoint import EndpointServiceStub, StartEndpointServeRequest
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..config import GatewayConfig, get_gateway_config
 
@@ -100,8 +100,8 @@ class _CallableWrapper:
             self.parent.sync_dir_to_workspace(dir=dir, object_id=object_id)
         )
         try:
-            async for r in self.parent.endpoint_stub.endpoint_serve(
-                EndpointServeRequest(
+            async for r in self.parent.endpoint_stub.start_endpoint_serve(
+                StartEndpointServeRequest(
                     stub_id=self.parent.stub_id,
                 )
             ):

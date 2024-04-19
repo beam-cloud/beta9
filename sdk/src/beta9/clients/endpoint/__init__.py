@@ -23,30 +23,30 @@ if TYPE_CHECKING:
 
 
 @dataclass(eq=False, repr=False)
-class EndpointServeRequest(betterproto.Message):
+class StartEndpointServeRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
-class EndpointServeResponse(betterproto.Message):
+class StartEndpointServeResponse(betterproto.Message):
     output: str = betterproto.string_field(1)
     done: bool = betterproto.bool_field(2)
     exit_code: int = betterproto.int32_field(3)
 
 
 class EndpointServiceStub(betterproto.ServiceStub):
-    async def endpoint_serve(
+    async def start_endpoint_serve(
         self,
-        endpoint_serve_request: "EndpointServeRequest",
+        start_endpoint_serve_request: "StartEndpointServeRequest",
         *,
         timeout: Optional[float] = None,
         deadline: Optional["Deadline"] = None,
         metadata: Optional["MetadataLike"] = None
-    ) -> AsyncIterator["EndpointServeResponse"]:
+    ) -> AsyncIterator["StartEndpointServeResponse"]:
         async for response in self._unary_stream(
-            "/endpoint.EndpointService/EndpointServe",
-            endpoint_serve_request,
-            EndpointServeResponse,
+            "/endpoint.EndpointService/StartEndpointServe",
+            start_endpoint_serve_request,
+            StartEndpointServeResponse,
             timeout=timeout,
             deadline=deadline,
             metadata=metadata,
@@ -56,29 +56,29 @@ class EndpointServiceStub(betterproto.ServiceStub):
 
 class EndpointServiceBase(ServiceBase):
 
-    async def endpoint_serve(
-        self, endpoint_serve_request: "EndpointServeRequest"
-    ) -> AsyncIterator["EndpointServeResponse"]:
+    async def start_endpoint_serve(
+        self, start_endpoint_serve_request: "StartEndpointServeRequest"
+    ) -> AsyncIterator["StartEndpointServeResponse"]:
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-        yield EndpointServeResponse()
+        yield StartEndpointServeResponse()
 
-    async def __rpc_endpoint_serve(
+    async def __rpc_start_endpoint_serve(
         self,
-        stream: "grpclib.server.Stream[EndpointServeRequest, EndpointServeResponse]",
+        stream: "grpclib.server.Stream[StartEndpointServeRequest, StartEndpointServeResponse]",
     ) -> None:
         request = await stream.recv_message()
         await self._call_rpc_handler_server_stream(
-            self.endpoint_serve,
+            self.start_endpoint_serve,
             stream,
             request,
         )
 
     def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
         return {
-            "/endpoint.EndpointService/EndpointServe": grpclib.const.Handler(
-                self.__rpc_endpoint_serve,
+            "/endpoint.EndpointService/StartEndpointServe": grpclib.const.Handler(
+                self.__rpc_start_endpoint_serve,
                 grpclib.const.Cardinality.UNARY_STREAM,
-                EndpointServeRequest,
-                EndpointServeResponse,
+                StartEndpointServeRequest,
+                StartEndpointServeResponse,
             ),
         }
