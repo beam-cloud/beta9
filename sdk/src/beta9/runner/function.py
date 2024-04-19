@@ -142,12 +142,13 @@ def main(channel: Channel):
 
         # Invoke function
         try:
-            handler = load_handler()
             get_args_resp: FunctionGetArgsResponse = run_sync(
                 function_stub.function_get_args(FunctionGetArgsRequest(task_id=task_id)),
             )
             if not get_args_resp.ok:
                 raise InvalidFunctionArgumentsException
+
+            handler = load_handler()
 
             payload: dict = _load_args(get_args_resp.args)
             args = payload.get("args") or []

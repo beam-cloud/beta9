@@ -155,11 +155,20 @@ class _CallableWrapper:
 
         return deploy_response.ok
 
+    def _format_args(self, args):
+        if isinstance(args, tuple):
+            return list(args)
+        elif not isinstance(args, list):
+            return [args]
+        return args
+
     def _gather_and_yield_results(self, inputs: Sequence) -> Iterator[Any]:
         container_count = len(inputs)
 
         async def _gather_async():
-            tasks = [asyncio.create_task(self._call_remote(input)) for input in inputs]
+            tasks = [
+                asyncio.create_task(self._call_remote(*self._format_args(args))) for args in inputs
+            ]
             for task in asyncio.as_completed(tasks):
                 yield await task
 
