@@ -225,7 +225,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			continue
 		}
 
-		if r, err := client.Exec(containerId, cmd); !r.Ok || err != nil {
+		if r, err := client.Exec(containerId, cmd); r == nil || !r.Ok || err != nil {
 			log.Printf("failed to execute command for container <%v>: \"%v\" - %v\n", containerId, cmd, err)
 
 			errMsg := ""

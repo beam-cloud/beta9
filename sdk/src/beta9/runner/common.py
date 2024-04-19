@@ -17,6 +17,7 @@ class Config:
     stub_type: Optional[str]
     concurrency: Optional[int]
     keep_warm_seconds: Optional[int]
+    timeout: Optional[int]
     python_version: str
     handler: str
     loader: str
@@ -36,6 +37,7 @@ class Config:
         loader = os.getenv("LOADER")
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
+        timeout = int(os.getenv("TIMEOUT", 180))
 
         if concurrency <= 0:
             concurrency = 1
@@ -55,6 +57,7 @@ class Config:
             loader=loader,
             task_id=task_id,
             bind_port=bind_port,
+            timeout=timeout,
         )
 
 

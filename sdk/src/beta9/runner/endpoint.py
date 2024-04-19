@@ -4,12 +4,15 @@ import signal
 import traceback
 from contextlib import asynccontextmanager
 from http import HTTPStatus
-from typing import Any, Callable, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from grpclib.client import Channel
-from uvicorn import Config, Server
+from gunicorn.app.base import Arbiter, BaseApplication
+from starlette.applications import Starlette
+from starlette.types import ASGIApp
+from uvicorn.workers import UvicornWorker
 
 from ..clients.gateway import (
     EndTaskRequest,
@@ -25,19 +28,68 @@ from ..type import TaskStatus
 
 class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        return record.args and len(record.args) >= 3 and record.args[2] != "/health"
+        if record.args:
+            return record.args and len(record.args) >= 3 and record.args[2] != "/health"
+        else:
+            return True
 
 
-logger = logging.getLogger("uvicorn.access")
-logger.addFilter(EndpointFilter())
+class GunicornArbiter(Arbiter):
+    def init_signals(self):
+        super(GunicornArbiter, self).init_signals()
+
+        # Add a custom signal handler to kill gunicorn master process with non-zero exit code.
+        signal.signal(signal.SIGUSR1, self.handle_usr1)
+        signal.siginterrupt(signal.SIGUSR1, True)
+
+    # Override default usr1 handler to force shutdown server when forked processes crash
+    # during startup
+    def handle_usr1(self, sig, frame):
+        os._exit(1)
 
 
-@asynccontextmanager
-@with_runner_context
-async def lifespan(app: FastAPI, channel: Channel):
-    app.state.gateway_stub = GatewayServiceStub(channel)
+class GunicornApplication(BaseApplication):
+    def __init__(self, app: ASGIApp, options: Optional[Dict] = None) -> None:
+        self.options = options or {}
+        self.application = app
+        super().__init__()
 
-    yield
+    def load_config(self) -> None:
+        for key, value in self.options.items():
+            if value is not None:
+                self.cfg.set(key.lower(), value)
+
+    def load(self) -> ASGIApp:
+        return Starlette()  # Return a base Starlette app -- which will be replaced post-fork
+
+    def run(self):
+        GunicornArbiter(self).run()
+
+    @staticmethod
+    def post_fork_initialize(_, worker: UvicornWorker):
+        logger = logging.getLogger("uvicorn.access")
+        logger.addFilter(EndpointFilter())
+
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+        logger.addHandler(handler)
+        logger.propagate = False
+
+        try:
+            mg = EndpointManager(logger=logger)
+            asgi_app: ASGIApp = mg.app
+
+            # Override the default starlette app
+            worker.app.callable = asgi_app
+        except EOFError:
+            return
+        except BaseException:
+            logger.exception("Exiting container due to startup error")
+
+            # We send SIGUSR1 to indicate to the gunicorn master that the server should shut down completely
+            # since our asgi_app callable is erroring out.
+            os.kill(os.getppid(), signal.SIGUSR1)
+            os._exit(1)
 
 
 async def task_lifecycle(request: Request):
@@ -45,6 +97,7 @@ async def task_lifecycle(request: Request):
     if not task_id:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Task ID missing")
 
+    print(f"Received task <{task_id}>")
     start_response = await request.app.state.gateway_stub.start_task(
         StartTaskRequest(task_id=task_id, container_id=cfg.container_id)
     )
@@ -56,6 +109,7 @@ async def task_lifecycle(request: Request):
     try:
         task_status = TaskStatus.Complete
         yield task_status
+        print(f"Task <{task_id}> finished")
     finally:
         await request.app.state.gateway_stub.end_task(
             EndTaskRequest(
@@ -68,12 +122,20 @@ async def task_lifecycle(request: Request):
 
 
 class EndpointManager:
-    def __init__(self) -> None:
+    @asynccontextmanager
+    @with_runner_context
+    async def lifespan(self, app: FastAPI, channel: Channel):
+        app.state.gateway_stub = GatewayServiceStub(channel)
+
+        yield
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self.logger = logger
         self.pid: int = os.getpid()
         self.exit_code: int = 0
-        self.app = FastAPI(lifespan=lifespan)
+        self.app = FastAPI(lifespan=self.lifespan)
         self.handler: Callable = load_handler().func  # The function exists under the decorator
-        self.context = {"loader": "something"}  # TODO: implement context loader
+        self.context = {}  # TODO: implement context loader
 
         # Register signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)
@@ -106,7 +168,7 @@ class EndpointManager:
         try:
             return JSONResponse(body, status_code=status_code)
         except BaseException:
-            logger.exception("Response serialization failed")
+            self.logger.exception("Response serialization failed")
             return JSONResponse(
                 {"errors": [traceback.format_exc()]},
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -127,7 +189,7 @@ class EndpointManager:
         try:
             response_body = self.handler(*args, **kwargs)
         except BaseException:
-            logger.exception("Unhandled exception")
+            self.logger.exception("Unhandled exception")
             error = traceback.format_exc()
             response_body = {"errors": [traceback.format_exc()]}
 
@@ -138,14 +200,15 @@ class EndpointManager:
 
 
 if __name__ == "__main__":
-    mg = EndpointManager()
+    app = Starlette()
 
-    config = Config(
-        app=mg.app,
-        host="",
-        port=cfg.bind_port,
-        workers=cfg.concurrency,
-    )
+    options = {
+        "bind": f":{cfg.bind_port}",
+        "workers": cfg.concurrency,
+        "worker_class": "uvicorn.workers.UvicornWorker",
+        "loglevel": "info",
+        "post_fork": GunicornApplication.post_fork_initialize,
+        "timeout": cfg.timeout,
+    }
 
-    server = Server(config)
-    server.run()
+    GunicornApplication(app, options).run()
