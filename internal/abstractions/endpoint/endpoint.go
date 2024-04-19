@@ -44,12 +44,13 @@ type HttpEndpointService struct {
 }
 
 var (
-	endpointContainerPrefix          string        = "endpoint"
-	endpointRoutePrefix              string        = "/endpoint"
-	endpointRequestTimeoutS          int           = 180
-	endpointServeContainerTimeout    time.Duration = 600 * time.Second
-	endpointRequestHeartbeatInterval time.Duration = 30 * time.Second
-	endpointMinRequestBufferSize     int           = 10
+	endpointContainerPrefix                 string        = "endpoint"
+	endpointRoutePrefix                     string        = "/endpoint"
+	endpointRequestTimeoutS                 int           = 180
+	endpointServeContainerTimeout           time.Duration = 600 * time.Second
+	endpointServeContainerKeepaliveInterval time.Duration = 30 * time.Second
+	endpointRequestHeartbeatInterval        time.Duration = 30 * time.Second
+	endpointMinRequestBufferSize            int           = 10
 )
 
 type EndpointServiceOpts struct {
@@ -160,6 +161,27 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 		}
 		return nil
 	}
+
+	// Keep serve container active for as long as user has their terminal open
+	// We can handle timeouts on the client side
+	go func() {
+		ticker := time.NewTicker(endpointServeContainerKeepaliveInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				instance.rdb.SetEx(
+					context.Background(),
+					Keys.endpointServeLock(instance.workspace.Name, instance.stub.ExternalId),
+					1,
+					endpointServeContainerTimeout,
+				)
+			}
+		}
+	}()
 
 	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
 		SendCallback:    sendCallback,
