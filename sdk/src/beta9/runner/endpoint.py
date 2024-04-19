@@ -33,8 +33,7 @@ class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if record.args:
             return record.args and len(record.args) >= 3 and record.args[2] != "/health"
-        else:
-            return True
+        return True
 
 
 class GunicornArbiter(Arbiter):
@@ -205,8 +204,6 @@ class EndpointManager:
 
 
 if __name__ == "__main__":
-    app = Starlette()
-
     options = {
         "bind": f":{cfg.bind_port}",
         "workers": cfg.concurrency,
@@ -216,4 +213,4 @@ if __name__ == "__main__":
         "timeout": cfg.timeout,
     }
 
-    GunicornApplication(app, options).run()
+    GunicornApplication(Starlette(), options).run()

@@ -71,6 +71,7 @@ def load_handler() -> Callable:
         module, func = config.handler.split(":")
         target_module = importlib.import_module(module)
         method = getattr(target_module, func)
+        print(f"Handler {config.handler} loaded.")
         return method
     except BaseException:
         raise RunnerException()
