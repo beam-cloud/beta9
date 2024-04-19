@@ -24,6 +24,18 @@ type taskQueueState struct {
 	FailedContainers   int
 }
 
+func withAutoscaler(constructor func(i *taskQueueInstance) *abstractions.AutoScaler[*taskQueueInstance, *taskQueueAutoscalerSample]) func(*taskQueueInstance) {
+	return func(i *taskQueueInstance) {
+		i.autoscaler = constructor(i)
+	}
+}
+
+func withEntryPoint(entryPoint func(instance *taskQueueInstance) []string) func(*taskQueueInstance) {
+	return func(i *taskQueueInstance) {
+		i.entryPoint = entryPoint(i)
+	}
+}
+
 type taskQueueInstance struct {
 	ctx                context.Context
 	cancelFunc         context.CancelFunc
@@ -31,6 +43,7 @@ type taskQueueInstance struct {
 	workspace          *types.Workspace
 	stub               *types.Stub
 	stubConfig         *types.StubConfigV1
+	entryPoint         []string
 	object             *types.Object
 	token              *types.Token
 	lock               *common.RedisLock

@@ -25,6 +25,7 @@ import (
 type EndpointService interface {
 	pb.EndpointServiceServer
 	StartEndpointServe(in *pb.StartEndpointServeRequest, stream pb.EndpointService_StartEndpointServeServer) error
+	StopEndpointServe(ctx context.Context, in *pb.StopEndpointServeRequest) (*pb.StopEndpointServeResponse, error)
 }
 
 type HttpEndpointService struct {

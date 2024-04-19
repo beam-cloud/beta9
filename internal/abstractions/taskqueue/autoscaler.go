@@ -13,8 +13,8 @@ type taskQueueAutoscalerSample struct {
 	TaskDuration      float64
 }
 
-// taskQueueSampleFunc retrieves an autoscaling sample from the task queue instance
-func taskQueueSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSample, error) {
+// taskQueueAutoscalerSampleFunc retrieves an autoscaling sample from the task queue instance
+func taskQueueAutoscalerSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSample, error) {
 	queueLength, err := i.client.QueueLength(i.ctx, i.workspace.Name, i.stub.ExternalId)
 	if err != nil {
 		queueLength = -1
@@ -53,7 +53,7 @@ func taskQueueSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSample, erro
 }
 
 // taskQueueScaleFunc scales based on the number of items in the queue
-func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSample) *abstractions.AutoscalerResult {
+func taskQueueDeploymentScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 0
 
 	if s.QueueLength == 0 {
@@ -74,6 +74,27 @@ func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSample) *abs
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
 		maxReplicas := math.Min(float64(i.stubConfig.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
+	}
+
+	return &abstractions.AutoscalerResult{
+		DesiredContainers: desiredContainers,
+		ResultValid:       true,
+	}
+}
+
+func taskQueueServeScaleFunc(i *taskQueueInstance, sample *taskQueueAutoscalerSample) *abstractions.AutoscalerResult {
+	desiredContainers := 1
+
+	timeoutKey := Keys.taskQueueServeLock(i.workspace.Name, i.stub.ExternalId)
+	exists, err := i.rdb.Exists(i.ctx, timeoutKey).Result()
+	if err != nil {
+		return &abstractions.AutoscalerResult{
+			ResultValid: false,
+		}
+	}
+
+	if (sample.RunningTasks == 0 && sample.QueueLength == 0) && exists == 0 {
+		desiredContainers = 0
 	}
 
 	return &abstractions.AutoscalerResult{

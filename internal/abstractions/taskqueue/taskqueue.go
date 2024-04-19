@@ -29,6 +29,8 @@ type TaskQueueService interface {
 	TaskQueueLength(context.Context, *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error)
 	TaskQueueComplete(ctx context.Context, in *pb.TaskQueueCompleteRequest) (*pb.TaskQueueCompleteResponse, error)
 	TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error
+	StartTaskQueueServe(in *pb.StartTaskQueueServeRequest, stream pb.TaskQueueService_StartTaskQueueServeServer) error
+	StopTaskQueueServe(ctx context.Context, in *pb.StopTaskQueueServeRequest) (*pb.StopTaskQueueServeResponse, error)
 }
 
 type TaskQueueServiceOpts struct {
@@ -44,13 +46,16 @@ type TaskQueueServiceOpts struct {
 }
 
 const (
-	taskQueueContainerPrefix       string = "taskqueue"
-	taskQueueRoutePrefix           string = "/taskqueue"
-	taskQueueDefaultTaskExpiration int    = 3600 * 12 // 12 hours
+	taskQueueContainerPrefix                 string        = "taskqueue"
+	taskQueueRoutePrefix                     string        = "/taskqueue"
+	taskQueueDefaultTaskExpiration           int           = 3600 * 12 // 12 hours
+	taskQueueServeContainerTimeout           time.Duration = 600 * time.Second
+	taskQueueServeContainerKeepaliveInterval time.Duration = 30 * time.Second
 )
 
 type RedisTaskQueue struct {
 	ctx             context.Context
+	config          types.AppConfig
 	rdb             *common.RedisClient
 	stubConfigCache *common.SafeMap[*types.StubConfigV1]
 	taskDispatcher  *task.Dispatcher
@@ -63,6 +68,7 @@ type RedisTaskQueue struct {
 	keyEventManager *common.KeyEventManager
 	keyEventChan    chan common.KeyEvent
 	queueClient     *taskQueueClient
+	tailscale       *network.Tailscale
 }
 
 func NewRedisTaskQueueService(
@@ -77,8 +83,15 @@ func NewRedisTaskQueueService(
 
 	go keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(taskQueueContainerPrefix), keyEventChan)
 
+	configManager, err := common.NewConfigManager[types.AppConfig]()
+	if err != nil {
+		return nil, err
+	}
+	config := configManager.GetConfig()
+
 	tq := &RedisTaskQueue{
 		ctx:             ctx,
+		config:          config,
 		rdb:             opts.RedisClient,
 		scheduler:       opts.Scheduler,
 		stubConfigCache: common.NewSafeMap[*types.StubConfigV1](),
@@ -90,6 +103,7 @@ func NewRedisTaskQueueService(
 		backendRepo:     opts.BackendRepo,
 		queueClient:     newRedisTaskQueueClient(opts.RedisClient, opts.TaskRepo),
 		queueInstances:  common.NewSafeMap[*taskQueueInstance](),
+		tailscale:       opts.Tailscale,
 	}
 
 	// Register task dispatcher
@@ -103,104 +117,6 @@ func NewRedisTaskQueueService(
 
 	return tq, nil
 }
-
-type TaskQueueTask struct {
-	msg *types.TaskMessage
-	tq  *RedisTaskQueue
-}
-
-func (t *TaskQueueTask) Execute(ctx context.Context, options ...interface{}) error {
-	queue, exists := t.tq.queueInstances.Get(t.msg.StubId)
-	if !exists {
-		err := t.tq.createQueueInstance(t.msg.StubId)
-		if err != nil {
-			return err
-		}
-
-		queue, _ = t.tq.queueInstances.Get(t.msg.StubId)
-	}
-
-	_, err := t.tq.backendRepo.CreateTask(ctx, &types.TaskParams{
-		TaskId:      t.msg.TaskId,
-		StubId:      queue.stub.Id,
-		WorkspaceId: queue.stub.WorkspaceId,
-	})
-	if err != nil {
-		return err
-	}
-
-	err = t.tq.queueClient.Push(ctx, t.msg)
-	if err != nil {
-		t.tq.backendRepo.DeleteTask(context.TODO(), t.msg.TaskId)
-		return err
-	}
-
-	return nil
-}
-
-func (t *TaskQueueTask) Retry(ctx context.Context) error {
-	_, exists := t.tq.queueInstances.Get(t.msg.StubId)
-	if !exists {
-		err := t.tq.createQueueInstance(t.msg.StubId)
-		if err != nil {
-			return err
-		}
-	}
-
-	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
-	if err != nil {
-		return err
-	}
-
-	task.Status = types.TaskStatusRetry
-	_, err = t.tq.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
-	if err != nil {
-		return err
-	}
-
-	return t.tq.queueClient.Push(ctx, t.msg)
-}
-
-func (t *TaskQueueTask) HeartBeat(ctx context.Context) (bool, error) {
-	res, err := t.tq.rdb.Exists(ctx, Keys.taskQueueTaskHeartbeat(t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)).Result()
-	if err != nil {
-		return false, err
-	}
-
-	return res > 0, nil
-}
-
-func (t *TaskQueueTask) Cancel(ctx context.Context, reason types.TaskCancellationReason) error {
-	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
-	if err != nil {
-		return err
-	}
-
-	switch reason {
-	case types.TaskExpired:
-		task.Status = types.TaskStatusTimeout
-	case types.TaskExceededRetryLimit:
-		task.Status = types.TaskStatusError
-	default:
-		task.Status = types.TaskStatusError
-	}
-
-	_, err = t.tq.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (t *TaskQueueTask) Metadata() types.TaskMetadata {
-	return types.TaskMetadata{
-		TaskId:        t.msg.TaskId,
-		StubId:        t.msg.StubId,
-		WorkspaceName: t.msg.WorkspaceName,
-	}
-}
-
 func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
 	return &TaskQueueTask{
 		tq:  tq,
@@ -535,7 +451,7 @@ func (tq *RedisTaskQueue) TaskQueueLength(ctx context.Context, in *pb.TaskQueueL
 	}, nil
 }
 
-func (tq *RedisTaskQueue) createQueueInstance(stubId string) error {
+func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*taskQueueInstance)) error {
 	_, exists := tq.queueInstances.Get(stubId)
 	if exists {
 		return errors.New("queue already in memory")
@@ -559,7 +475,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string) error {
 
 	ctx, cancelFunc := context.WithCancel(tq.ctx)
 	lock := common.NewRedisLock(tq.rdb)
-	queue := &taskQueueInstance{
+	instance := &taskQueueInstance{
 		ctx:                ctx,
 		cancelFunc:         cancelFunc,
 		lock:               lock,
@@ -577,19 +493,32 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string) error {
 		rdb:                tq.rdb,
 		client:             tq.queueClient,
 	}
+	for _, o := range options {
+		o(instance)
+	}
 
-	autoscaler := abstractions.NewAutoscaler(queue, taskQueueSampleFunc, taskQueueScaleFunc)
-	queue.autoscaler = autoscaler
+	if instance.autoscaler == nil {
+		switch instance.stub.Type {
+		case types.StubTypeTaskQueueDeployment:
+			instance.autoscaler = abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueDeploymentScaleFunc)
+		case types.StubTypeTaskQueueServe:
+			instance.autoscaler = abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueServeScaleFunc)
+		}
+	}
 
-	tq.queueInstances.Set(stubId, queue)
+	if len(instance.entryPoint) == 0 {
+		instance.entryPoint = []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.taskqueue"}
+	}
 
-	go queue.monitor()
+	tq.queueInstances.Set(stubId, instance)
+
+	go instance.monitor()
 
 	// Clean up the queue instance once it's done
 	go func(q *taskQueueInstance) {
 		<-q.ctx.Done()
 		tq.queueInstances.Delete(stubId)
-	}(queue)
+	}(instance)
 
 	return nil
 }
@@ -636,6 +565,7 @@ func (tq *RedisTaskQueue) handleContainerEvents() {
 // Redis keys
 var (
 	taskQueueList                string = "taskqueue:%s:%s"
+	taskQueueServeLock           string = "taskqueue:%s:%s:serve_lock"
 	taskQueueInstanceLock        string = "taskqueue:%s:%s:instance_lock"
 	taskQueueTaskDuration        string = "taskqueue:%s:%s:task_duration"
 	taskQueueAverageTaskDuration string = "taskqueue:%s:%s:avg_task_duration"
@@ -652,6 +582,10 @@ type keys struct{}
 
 func (k *keys) taskQueueInstanceLock(workspaceName, stubId string) string {
 	return fmt.Sprintf(taskQueueInstanceLock, workspaceName, stubId)
+}
+
+func (k *keys) taskQueueServeLock(workspaceName, stubId string) string {
+	return fmt.Sprintf(taskQueueServeLock, workspaceName, stubId)
 }
 
 func (k *keys) taskQueueList(workspaceName, stubId string) string {
