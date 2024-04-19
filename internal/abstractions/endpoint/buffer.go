@@ -28,9 +28,9 @@ type request struct {
 }
 
 type container struct {
-	id       string
-	address  string
-	inFlight int
+	id               string
+	address          string
+	inFlightRequests int
 }
 
 type RequestBuffer struct {
@@ -168,16 +168,16 @@ func (rb *RequestBuffer) discoverContainers() {
 						return
 					}
 
-					inFlight, err := rb.requestsInFlight(cs.ContainerId)
+					inFlightRequests, err := rb.requestsInFlight(cs.ContainerId)
 					if err != nil {
 						return
 					}
 
 					if rb.checkAddressIsReady(containerAddress) {
 						availableContainersChan <- container{
-							id:       cs.ContainerId,
-							address:  containerAddress,
-							inFlight: inFlight,
+							id:               cs.ContainerId,
+							address:          containerAddress,
+							inFlightRequests: inFlightRequests,
 						}
 						return
 					}
@@ -195,7 +195,7 @@ func (rb *RequestBuffer) discoverContainers() {
 
 			// Sort availableContainers by # of in-flight requests (ascending)
 			sort.Slice(availableContainers, func(i, j int) bool {
-				return availableContainers[i].inFlight < availableContainers[j].inFlight
+				return availableContainers[i].inFlightRequests < availableContainers[j].inFlightRequests
 			})
 
 			rb.availableContainersLock.Lock()
