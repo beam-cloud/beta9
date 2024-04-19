@@ -5,13 +5,13 @@ option go_package = "github.com/beam-cloud/beta9/proto";
 package endpoint;
 
 service EndpointService {
-  rpc EndpointServe(EndpointServeRequest)
-      returns (stream EndpointServeResponse) {}
+  rpc StartEndpointServe(StartEndpointServeRequest)
+      returns (stream StartEndpointServeResponse) {}
 }
 
-message EndpointServeRequest { string stub_id = 1; }
+message StartEndpointServeRequest { string stub_id = 1; }
 
-message EndpointServeResponse {
+message StartEndpointServeResponse {
   string output = 1;
   bool done = 2;
   int32 exit_code = 3;

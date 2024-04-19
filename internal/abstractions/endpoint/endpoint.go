@@ -24,7 +24,7 @@ import (
 
 type EndpointService interface {
 	pb.EndpointServiceServer
-	EndpointServe(in *pb.EndpointServeRequest, stream pb.EndpointService_EndpointServeServer) error
+	StartEndpointServe(in *pb.StartEndpointServeRequest, stream pb.EndpointService_StartEndpointServeServer) error
 }
 
 type HttpEndpointService struct {
@@ -116,7 +116,7 @@ func (es *HttpEndpointService) endpointTaskFactory(ctx context.Context, msg type
 	}, nil
 }
 
-func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream pb.EndpointService_EndpointServeServer) error {
+func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeRequest, stream pb.EndpointService_StartEndpointServeServer) error {
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
@@ -144,7 +144,7 @@ func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream
 	}
 
 	sendCallback := func(o common.OutputMsg) error {
-		if err := stream.Send(&pb.EndpointServeResponse{Output: o.Msg, Done: o.Done}); err != nil {
+		if err := stream.Send(&pb.StartEndpointServeResponse{Output: o.Msg, Done: o.Done}); err != nil {
 			return err
 		}
 
@@ -152,7 +152,7 @@ func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream
 	}
 
 	exitCallback := func(exitCode int32) error {
-		if err := stream.Send(&pb.EndpointServeResponse{Done: true, ExitCode: int32(exitCode)}); err != nil {
+		if err := stream.Send(&pb.StartEndpointServeResponse{Done: true, ExitCode: int32(exitCode)}); err != nil {
 			return err
 		}
 		return nil
