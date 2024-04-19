@@ -19,14 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	EndpointService_EndpointServe_FullMethodName = "/endpoint.EndpointService/EndpointServe"
+	EndpointService_StartEndpointServe_FullMethodName = "/endpoint.EndpointService/StartEndpointServe"
 )
 
 // EndpointServiceClient is the client API for EndpointService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type EndpointServiceClient interface {
-	EndpointServe(ctx context.Context, in *EndpointServeRequest, opts ...grpc.CallOption) (EndpointService_EndpointServeClient, error)
+	StartEndpointServe(ctx context.Context, in *StartEndpointServeRequest, opts ...grpc.CallOption) (EndpointService_StartEndpointServeClient, error)
 }
 
 type endpointServiceClient struct {
@@ -37,12 +37,12 @@ func NewEndpointServiceClient(cc grpc.ClientConnInterface) EndpointServiceClient
 	return &endpointServiceClient{cc}
 }
 
-func (c *endpointServiceClient) EndpointServe(ctx context.Context, in *EndpointServeRequest, opts ...grpc.CallOption) (EndpointService_EndpointServeClient, error) {
-	stream, err := c.cc.NewStream(ctx, &EndpointService_ServiceDesc.Streams[0], EndpointService_EndpointServe_FullMethodName, opts...)
+func (c *endpointServiceClient) StartEndpointServe(ctx context.Context, in *StartEndpointServeRequest, opts ...grpc.CallOption) (EndpointService_StartEndpointServeClient, error) {
+	stream, err := c.cc.NewStream(ctx, &EndpointService_ServiceDesc.Streams[0], EndpointService_StartEndpointServe_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &endpointServiceEndpointServeClient{stream}
+	x := &endpointServiceStartEndpointServeClient{stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -52,17 +52,17 @@ func (c *endpointServiceClient) EndpointServe(ctx context.Context, in *EndpointS
 	return x, nil
 }
 
-type EndpointService_EndpointServeClient interface {
-	Recv() (*EndpointServeResponse, error)
+type EndpointService_StartEndpointServeClient interface {
+	Recv() (*StartEndpointServeResponse, error)
 	grpc.ClientStream
 }
 
-type endpointServiceEndpointServeClient struct {
+type endpointServiceStartEndpointServeClient struct {
 	grpc.ClientStream
 }
 
-func (x *endpointServiceEndpointServeClient) Recv() (*EndpointServeResponse, error) {
-	m := new(EndpointServeResponse)
+func (x *endpointServiceStartEndpointServeClient) Recv() (*StartEndpointServeResponse, error) {
+	m := new(StartEndpointServeResponse)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func (x *endpointServiceEndpointServeClient) Recv() (*EndpointServeResponse, err
 // All implementations must embed UnimplementedEndpointServiceServer
 // for forward compatibility
 type EndpointServiceServer interface {
-	EndpointServe(*EndpointServeRequest, EndpointService_EndpointServeServer) error
+	StartEndpointServe(*StartEndpointServeRequest, EndpointService_StartEndpointServeServer) error
 	mustEmbedUnimplementedEndpointServiceServer()
 }
 
@@ -81,8 +81,8 @@ type EndpointServiceServer interface {
 type UnimplementedEndpointServiceServer struct {
 }
 
-func (UnimplementedEndpointServiceServer) EndpointServe(*EndpointServeRequest, EndpointService_EndpointServeServer) error {
-	return status.Errorf(codes.Unimplemented, "method EndpointServe not implemented")
+func (UnimplementedEndpointServiceServer) StartEndpointServe(*StartEndpointServeRequest, EndpointService_StartEndpointServeServer) error {
+	return status.Errorf(codes.Unimplemented, "method StartEndpointServe not implemented")
 }
 func (UnimplementedEndpointServiceServer) mustEmbedUnimplementedEndpointServiceServer() {}
 
@@ -97,24 +97,24 @@ func RegisterEndpointServiceServer(s grpc.ServiceRegistrar, srv EndpointServiceS
 	s.RegisterService(&EndpointService_ServiceDesc, srv)
 }
 
-func _EndpointService_EndpointServe_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(EndpointServeRequest)
+func _EndpointService_StartEndpointServe_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StartEndpointServeRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(EndpointServiceServer).EndpointServe(m, &endpointServiceEndpointServeServer{stream})
+	return srv.(EndpointServiceServer).StartEndpointServe(m, &endpointServiceStartEndpointServeServer{stream})
 }
 
-type EndpointService_EndpointServeServer interface {
-	Send(*EndpointServeResponse) error
+type EndpointService_StartEndpointServeServer interface {
+	Send(*StartEndpointServeResponse) error
 	grpc.ServerStream
 }
 
-type endpointServiceEndpointServeServer struct {
+type endpointServiceStartEndpointServeServer struct {
 	grpc.ServerStream
 }
 
-func (x *endpointServiceEndpointServeServer) Send(m *EndpointServeResponse) error {
+func (x *endpointServiceStartEndpointServeServer) Send(m *StartEndpointServeResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
@@ -127,8 +127,8 @@ var EndpointService_ServiceDesc = grpc.ServiceDesc{
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "EndpointServe",
-			Handler:       _EndpointService_EndpointServe_Handler,
+			StreamName:    "StartEndpointServe",
+			Handler:       _EndpointService_StartEndpointServe_Handler,
 			ServerStreams: true,
 		},
 	},
