@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"log"
 	"os"
 	"path"
 
@@ -160,6 +161,8 @@ func (gws *GatewayService) ReplaceObjectContent(stream pb.GatewayService_Replace
 		if err == io.EOF {
 			break
 		}
+
+		log.Println("req: ", req)
 
 		if err != nil {
 			return status.Errorf(codes.Unknown, "Received an error: %v", err)

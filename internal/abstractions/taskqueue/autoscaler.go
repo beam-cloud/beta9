@@ -93,7 +93,8 @@ func taskQueueServeScaleFunc(i *taskQueueInstance, sample *taskQueueAutoscalerSa
 		}
 	}
 
-	if (sample.RunningTasks == 0 && sample.QueueLength == 0) && exists == 0 {
+	// desiredContainers = 0
+	if exists == 0 {
 		desiredContainers = 0
 	}
 

@@ -57,8 +57,7 @@ class TaskQueueManager:
         self.task_worker_watchdog_threads: List[threading.Thread] = []
 
     def _setup_signal_handlers(self):
-        if os.getpid() == self.pid:
-            signal.signal(signal.SIGTERM, self._init_shutdown)
+        signal.signal(signal.SIGTERM, self._init_shutdown)
 
     def _init_shutdown(self, signum=None, frame=None):
         self.shutdown_event.set()

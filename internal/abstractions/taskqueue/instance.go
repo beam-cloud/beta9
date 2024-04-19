@@ -163,6 +163,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 				fmt.Sprintf("STUB_ID=%s", i.stub.ExternalId),
 				fmt.Sprintf("CONCURRENCY=%d", i.stubConfig.Concurrency),
 				fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.stubConfig.KeepWarmSeconds),
+				fmt.Sprintf("PYTHON_VERSION=%s", i.stubConfig.PythonVersion),
 			},
 			Cpu:         i.stubConfig.Runtime.Cpu,
 			Memory:      i.stubConfig.Runtime.Memory,
@@ -170,7 +171,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			ImageId:     i.stubConfig.Runtime.ImageId,
 			StubId:      i.stub.ExternalId,
 			WorkspaceId: i.workspace.ExternalId,
-			EntryPoint:  []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.taskqueue"},
+			EntryPoint:  i.entryPoint,
 			Mounts: []types.Mount{
 				{
 					LocalPath: path.Join(types.DefaultExtractedObjectPath, i.workspace.Name, i.object.ExternalId),
