@@ -8,7 +8,11 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
-from ..clients.endpoint import EndpointServiceStub, StartEndpointServeRequest
+from ..clients.endpoint import (
+    EndpointServiceStub,
+    StartEndpointServeRequest,
+    StopEndpointServeRequest,
+)
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..config import GatewayConfig, get_gateway_config
 
@@ -93,7 +97,18 @@ class _CallableWrapper:
                     self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
                 )
         except KeyboardInterrupt:
-            terminal.prompt(text="Would you like to stop the container? (y/n)", default="y")
+            response = terminal.prompt(
+                text="Would you like to stop the container? (y/n)", default="y"
+            )
+            if response == "y":
+                terminal.header("Stopping serve container")
+                self.parent.run_sync(
+                    self.parent.endpoint_stub.stop_endpoint_serve(
+                        StopEndpointServeRequest(stub_id=self.parent.stub_id)
+                    )
+                )
+
+        terminal.print("Goodbye 👋")
 
     async def _serve(self, *, dir: str, object_id: str):
         sync_task = self.parent.loop.create_task(
