@@ -171,6 +171,11 @@ func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.Funct
 		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, nil
 	}
 
+	err = fs.rdb.SetEx(ctx, Keys.FunctionHeartbeat(authInfo.Workspace.Name, in.TaskId), 1, time.Duration(60)*time.Second).Err()
+	if err != nil {
+		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, nil
+	}
+
 	return &pb.FunctionGetArgsResponse{
 		Ok:   true,
 		Args: value,
