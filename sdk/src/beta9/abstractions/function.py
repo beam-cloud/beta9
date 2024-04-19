@@ -63,10 +63,20 @@ class Function(RunnerAbstraction):
         cpu: Union[int, float, str] = 1.0,
         memory: int = 128,
         gpu: str = "",
+        timeout: int = 3600,
+        retries: int = 3,
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
     ) -> None:
-        super().__init__(cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes)
+        super().__init__(
+            cpu=cpu,
+            memory=memory,
+            gpu=gpu,
+            image=image,
+            volumes=volumes,
+            timeout=timeout,
+            retries=retries,
+        )
 
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
