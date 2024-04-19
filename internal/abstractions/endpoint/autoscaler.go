@@ -59,7 +59,15 @@ func endpointDeploymentScaleFunc(i *endpointInstance, sample *endpointAutoscaler
 func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 1
 
-	if sample.TotalRequests == 0 {
+	timeoutKey := Keys.endpointServeLock(i.workspace.Name, i.stub.ExternalId)
+	exists, err := i.rdb.Exists(i.ctx, timeoutKey).Result()
+	if err != nil {
+		return &abstractions.AutoscalerResult{
+			ResultValid: false,
+		}
+	}
+
+	if sample.TotalRequests == 0 && exists == 0 {
 		desiredContainers = 0
 	}
 

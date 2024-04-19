@@ -162,6 +162,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 				fmt.Sprintf("CONCURRENCY=%d", i.stubConfig.Concurrency),
 				fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.stubConfig.KeepWarmSeconds),
 				fmt.Sprintf("PYTHON_VERSION=%s", i.stubConfig.PythonVersion),
+				fmt.Sprintf("TIMEOUT=%d", i.stubConfig.TaskPolicy.Timeout),
 			},
 			Cpu:         i.stubConfig.Runtime.Cpu,
 			Memory:      i.stubConfig.Runtime.Memory,

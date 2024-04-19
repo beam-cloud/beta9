@@ -24,7 +24,7 @@ import (
 
 type EndpointService interface {
 	pb.EndpointServiceServer
-	EndpointServe(in *pb.EndpointServeRequest, stream pb.EndpointService_EndpointServeServer) error
+	StartEndpointServe(in *pb.StartEndpointServeRequest, stream pb.EndpointService_StartEndpointServeServer) error
 }
 
 type HttpEndpointService struct {
@@ -44,12 +44,13 @@ type HttpEndpointService struct {
 }
 
 var (
-	endpointContainerPrefix          string        = "endpoint"
-	endpointRoutePrefix              string        = "/endpoint"
-	endpointRequestTimeoutS          int           = 180
-	endpointServeContainerTimeout    time.Duration = 120 * time.Second
-	endpointRequestHeartbeatInterval time.Duration = 30 * time.Second
-	endpointMinRequestBufferSize     int           = 10
+	endpointContainerPrefix                 string        = "endpoint"
+	endpointRoutePrefix                     string        = "/endpoint"
+	endpointRequestTimeoutS                 int           = 180
+	endpointServeContainerTimeout           time.Duration = 600 * time.Second
+	endpointServeContainerKeepaliveInterval time.Duration = 30 * time.Second
+	endpointRequestHeartbeatInterval        time.Duration = 30 * time.Second
+	endpointMinRequestBufferSize            int           = 10
 )
 
 type EndpointServiceOpts struct {
@@ -116,7 +117,7 @@ func (es *HttpEndpointService) endpointTaskFactory(ctx context.Context, msg type
 	}, nil
 }
 
-func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream pb.EndpointService_EndpointServeServer) error {
+func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeRequest, stream pb.EndpointService_StartEndpointServeServer) error {
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
@@ -132,11 +133,14 @@ func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream
 		return err
 	}
 
+	// Set lock (used by autoscaler to scale up the single serve container)
 	instance, _ := es.endpointInstances.Get(in.StubId)
-	err = instance.startContainers(1)
-	if err != nil {
-		return err
-	}
+	instance.rdb.SetEx(
+		context.Background(),
+		Keys.endpointServeLock(instance.workspace.Name, instance.stub.ExternalId),
+		1,
+		endpointServeContainerTimeout,
+	)
 
 	container, err := es.waitForContainer(ctx, in.StubId)
 	if err != nil {
@@ -144,7 +148,7 @@ func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream
 	}
 
 	sendCallback := func(o common.OutputMsg) error {
-		if err := stream.Send(&pb.EndpointServeResponse{Output: o.Msg, Done: o.Done}); err != nil {
+		if err := stream.Send(&pb.StartEndpointServeResponse{Output: o.Msg, Done: o.Done}); err != nil {
 			return err
 		}
 
@@ -152,11 +156,32 @@ func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream
 	}
 
 	exitCallback := func(exitCode int32) error {
-		if err := stream.Send(&pb.EndpointServeResponse{Done: true, ExitCode: int32(exitCode)}); err != nil {
+		if err := stream.Send(&pb.StartEndpointServeResponse{Done: true, ExitCode: int32(exitCode)}); err != nil {
 			return err
 		}
 		return nil
 	}
+
+	// Keep serve container active for as long as user has their terminal open
+	// We can handle timeouts on the client side
+	go func() {
+		ticker := time.NewTicker(endpointServeContainerKeepaliveInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				instance.rdb.SetEx(
+					context.Background(),
+					Keys.endpointServeLock(instance.workspace.Name, instance.stub.ExternalId),
+					1,
+					endpointServeContainerTimeout,
+				)
+			}
+		}
+	}()
 
 	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
 		SendCallback:    sendCallback,
@@ -171,6 +196,52 @@ func (es *HttpEndpointService) EndpointServe(in *pb.EndpointServeRequest, stream
 	}
 
 	return logStream.Stream(ctx, authInfo, container.ContainerId)
+}
+
+func (es *HttpEndpointService) StopEndpointServe(ctx context.Context, in *pb.StopEndpointServeRequest) (*pb.StopEndpointServeResponse, error) {
+	_, exists := es.endpointInstances.Get(in.StubId)
+	if !exists {
+		err := es.createEndpointInstance(in.StubId,
+			withEntryPoint(func(instance *endpointInstance) []string {
+				return []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.serve"}
+			}),
+			withAutoscaler(func(instance *endpointInstance) *abstractions.AutoScaler[*endpointInstance, *endpointAutoscalerSample] {
+				return abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
+			}),
+		)
+		if err != nil {
+			return &pb.StopEndpointServeResponse{Ok: false}, nil
+		}
+	}
+
+	instance, _ := es.endpointInstances.Get(in.StubId)
+
+	// Delete serve timeout lock
+	instance.rdb.Del(
+		context.Background(),
+		Keys.endpointServeLock(instance.workspace.Name, instance.stub.ExternalId),
+	)
+
+	// Delete all keep warms
+	// With serves, there should only ever be one container running, but this is the easiest way to find that container
+	containers, err := instance.containerRepo.GetActiveContainersByStubId(instance.stub.ExternalId)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, container := range containers {
+		if container.Status == types.ContainerStatusStopping || container.Status == types.ContainerStatusPending {
+			continue
+		}
+
+		instance.rdb.Del(
+			context.Background(),
+			Keys.endpointKeepWarmLock(instance.workspace.Name, instance.stub.ExternalId, container.ContainerId),
+		)
+
+	}
+
+	return &pb.StopEndpointServeResponse{Ok: true}, nil
 }
 
 func (es *HttpEndpointService) waitForContainer(ctx context.Context, stubId string) (*types.ContainerState, error) {
@@ -258,7 +329,7 @@ func (es *HttpEndpointService) forwardRequest(
 
 	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), instance.workspace.Name, stubId, payload, types.TaskPolicy{
 		MaxRetries: 0,
-		Timeout:    endpointRequestTimeoutS,
+		Timeout:    instance.stubConfig.TaskPolicy.Timeout,
 		Expires:    time.Now().Add(time.Duration(endpointRequestTimeoutS) * time.Second),
 	})
 	if err != nil {
@@ -356,6 +427,7 @@ var (
 	endpointInstanceLock     string = "endpoint:%s:%s:instance_lock"
 	endpointRequestsInFlight string = "endpoint:%s:%s:requests_in_flight:%s"
 	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s"
+	endpointServeLock        string = "endpoint:%s:%s:serve_lock"
 )
 
 func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) string {
@@ -372,4 +444,8 @@ func (k *keys) endpointRequestsInFlight(workspaceName, stubId, containerId strin
 
 func (k *keys) endpointRequestHeartbeat(workspaceName, stubId, taskId string) string {
 	return fmt.Sprintf(endpointRequestHeartbeat, workspaceName, stubId, taskId)
+}
+
+func (k *keys) endpointServeLock(workspaceName, stubId string) string {
+	return fmt.Sprintf(endpointServeLock, workspaceName, stubId)
 }
