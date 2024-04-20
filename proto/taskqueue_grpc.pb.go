@@ -19,11 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	TaskQueueService_TaskQueuePut_FullMethodName      = "/taskqueue.TaskQueueService/TaskQueuePut"
-	TaskQueueService_TaskQueuePop_FullMethodName      = "/taskqueue.TaskQueueService/TaskQueuePop"
-	TaskQueueService_TaskQueueMonitor_FullMethodName  = "/taskqueue.TaskQueueService/TaskQueueMonitor"
-	TaskQueueService_TaskQueueComplete_FullMethodName = "/taskqueue.TaskQueueService/TaskQueueComplete"
-	TaskQueueService_TaskQueueLength_FullMethodName   = "/taskqueue.TaskQueueService/TaskQueueLength"
+	TaskQueueService_TaskQueuePut_FullMethodName        = "/taskqueue.TaskQueueService/TaskQueuePut"
+	TaskQueueService_TaskQueuePop_FullMethodName        = "/taskqueue.TaskQueueService/TaskQueuePop"
+	TaskQueueService_TaskQueueMonitor_FullMethodName    = "/taskqueue.TaskQueueService/TaskQueueMonitor"
+	TaskQueueService_TaskQueueComplete_FullMethodName   = "/taskqueue.TaskQueueService/TaskQueueComplete"
+	TaskQueueService_TaskQueueLength_FullMethodName     = "/taskqueue.TaskQueueService/TaskQueueLength"
+	TaskQueueService_StartTaskQueueServe_FullMethodName = "/taskqueue.TaskQueueService/StartTaskQueueServe"
+	TaskQueueService_StopTaskQueueServe_FullMethodName  = "/taskqueue.TaskQueueService/StopTaskQueueServe"
 )
 
 // TaskQueueServiceClient is the client API for TaskQueueService service.
@@ -35,6 +37,8 @@ type TaskQueueServiceClient interface {
 	TaskQueueMonitor(ctx context.Context, in *TaskQueueMonitorRequest, opts ...grpc.CallOption) (TaskQueueService_TaskQueueMonitorClient, error)
 	TaskQueueComplete(ctx context.Context, in *TaskQueueCompleteRequest, opts ...grpc.CallOption) (*TaskQueueCompleteResponse, error)
 	TaskQueueLength(ctx context.Context, in *TaskQueueLengthRequest, opts ...grpc.CallOption) (*TaskQueueLengthResponse, error)
+	StartTaskQueueServe(ctx context.Context, in *StartTaskQueueServeRequest, opts ...grpc.CallOption) (TaskQueueService_StartTaskQueueServeClient, error)
+	StopTaskQueueServe(ctx context.Context, in *StopTaskQueueServeRequest, opts ...grpc.CallOption) (*StopTaskQueueServeResponse, error)
 }
 
 type taskQueueServiceClient struct {
@@ -113,6 +117,47 @@ func (c *taskQueueServiceClient) TaskQueueLength(ctx context.Context, in *TaskQu
 	return out, nil
 }
 
+func (c *taskQueueServiceClient) StartTaskQueueServe(ctx context.Context, in *StartTaskQueueServeRequest, opts ...grpc.CallOption) (TaskQueueService_StartTaskQueueServeClient, error) {
+	stream, err := c.cc.NewStream(ctx, &TaskQueueService_ServiceDesc.Streams[1], TaskQueueService_StartTaskQueueServe_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &taskQueueServiceStartTaskQueueServeClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type TaskQueueService_StartTaskQueueServeClient interface {
+	Recv() (*StartTaskQueueServeResponse, error)
+	grpc.ClientStream
+}
+
+type taskQueueServiceStartTaskQueueServeClient struct {
+	grpc.ClientStream
+}
+
+func (x *taskQueueServiceStartTaskQueueServeClient) Recv() (*StartTaskQueueServeResponse, error) {
+	m := new(StartTaskQueueServeResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (c *taskQueueServiceClient) StopTaskQueueServe(ctx context.Context, in *StopTaskQueueServeRequest, opts ...grpc.CallOption) (*StopTaskQueueServeResponse, error) {
+	out := new(StopTaskQueueServeResponse)
+	err := c.cc.Invoke(ctx, TaskQueueService_StopTaskQueueServe_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TaskQueueServiceServer is the server API for TaskQueueService service.
 // All implementations must embed UnimplementedTaskQueueServiceServer
 // for forward compatibility
@@ -122,6 +167,8 @@ type TaskQueueServiceServer interface {
 	TaskQueueMonitor(*TaskQueueMonitorRequest, TaskQueueService_TaskQueueMonitorServer) error
 	TaskQueueComplete(context.Context, *TaskQueueCompleteRequest) (*TaskQueueCompleteResponse, error)
 	TaskQueueLength(context.Context, *TaskQueueLengthRequest) (*TaskQueueLengthResponse, error)
+	StartTaskQueueServe(*StartTaskQueueServeRequest, TaskQueueService_StartTaskQueueServeServer) error
+	StopTaskQueueServe(context.Context, *StopTaskQueueServeRequest) (*StopTaskQueueServeResponse, error)
 	mustEmbedUnimplementedTaskQueueServiceServer()
 }
 
@@ -143,6 +190,12 @@ func (UnimplementedTaskQueueServiceServer) TaskQueueComplete(context.Context, *T
 }
 func (UnimplementedTaskQueueServiceServer) TaskQueueLength(context.Context, *TaskQueueLengthRequest) (*TaskQueueLengthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TaskQueueLength not implemented")
+}
+func (UnimplementedTaskQueueServiceServer) StartTaskQueueServe(*StartTaskQueueServeRequest, TaskQueueService_StartTaskQueueServeServer) error {
+	return status.Errorf(codes.Unimplemented, "method StartTaskQueueServe not implemented")
+}
+func (UnimplementedTaskQueueServiceServer) StopTaskQueueServe(context.Context, *StopTaskQueueServeRequest) (*StopTaskQueueServeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StopTaskQueueServe not implemented")
 }
 func (UnimplementedTaskQueueServiceServer) mustEmbedUnimplementedTaskQueueServiceServer() {}
 
@@ -250,6 +303,45 @@ func _TaskQueueService_TaskQueueLength_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskQueueService_StartTaskQueueServe_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StartTaskQueueServeRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(TaskQueueServiceServer).StartTaskQueueServe(m, &taskQueueServiceStartTaskQueueServeServer{stream})
+}
+
+type TaskQueueService_StartTaskQueueServeServer interface {
+	Send(*StartTaskQueueServeResponse) error
+	grpc.ServerStream
+}
+
+type taskQueueServiceStartTaskQueueServeServer struct {
+	grpc.ServerStream
+}
+
+func (x *taskQueueServiceStartTaskQueueServeServer) Send(m *StartTaskQueueServeResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func _TaskQueueService_StopTaskQueueServe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopTaskQueueServeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskQueueServiceServer).StopTaskQueueServe(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskQueueService_StopTaskQueueServe_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskQueueServiceServer).StopTaskQueueServe(ctx, req.(*StopTaskQueueServeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TaskQueueService_ServiceDesc is the grpc.ServiceDesc for TaskQueueService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -273,11 +365,20 @@ var TaskQueueService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "TaskQueueLength",
 			Handler:    _TaskQueueService_TaskQueueLength_Handler,
 		},
+		{
+			MethodName: "StopTaskQueueServe",
+			Handler:    _TaskQueueService_StopTaskQueueServe_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "TaskQueueMonitor",
 			Handler:       _TaskQueueService_TaskQueueMonitor_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StartTaskQueueServe",
+			Handler:       _TaskQueueService_StartTaskQueueServe_Handler,
 			ServerStreams: true,
 		},
 	},

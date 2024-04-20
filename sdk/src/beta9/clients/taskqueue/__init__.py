@@ -88,6 +88,28 @@ class TaskQueueMonitorResponse(betterproto.Message):
     timed_out: bool = betterproto.bool_field(4)
 
 
+@dataclass(eq=False, repr=False)
+class StartTaskQueueServeRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class StartTaskQueueServeResponse(betterproto.Message):
+    output: str = betterproto.string_field(1)
+    done: bool = betterproto.bool_field(2)
+    exit_code: int = betterproto.int32_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class StopTaskQueueServeRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class StopTaskQueueServeResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+
+
 class TaskQueueServiceStub(betterproto.ServiceStub):
     async def task_queue_put(
         self,
@@ -175,6 +197,41 @@ class TaskQueueServiceStub(betterproto.ServiceStub):
             metadata=metadata,
         )
 
+    async def start_task_queue_serve(
+        self,
+        start_task_queue_serve_request: "StartTaskQueueServeRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> AsyncIterator["StartTaskQueueServeResponse"]:
+        async for response in self._unary_stream(
+            "/taskqueue.TaskQueueService/StartTaskQueueServe",
+            start_task_queue_serve_request,
+            StartTaskQueueServeResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        ):
+            yield response
+
+    async def stop_task_queue_serve(
+        self,
+        stop_task_queue_serve_request: "StopTaskQueueServeRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "StopTaskQueueServeResponse":
+        return await self._unary_unary(
+            "/taskqueue.TaskQueueService/StopTaskQueueServe",
+            stop_task_queue_serve_request,
+            StopTaskQueueServeResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
 
 class TaskQueueServiceBase(ServiceBase):
 
@@ -202,6 +259,17 @@ class TaskQueueServiceBase(ServiceBase):
     async def task_queue_length(
         self, task_queue_length_request: "TaskQueueLengthRequest"
     ) -> "TaskQueueLengthResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def start_task_queue_serve(
+        self, start_task_queue_serve_request: "StartTaskQueueServeRequest"
+    ) -> AsyncIterator["StartTaskQueueServeResponse"]:
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+        yield StartTaskQueueServeResponse()
+
+    async def stop_task_queue_serve(
+        self, stop_task_queue_serve_request: "StopTaskQueueServeRequest"
+    ) -> "StopTaskQueueServeResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
     async def __rpc_task_queue_put(
@@ -245,6 +313,25 @@ class TaskQueueServiceBase(ServiceBase):
         response = await self.task_queue_length(request)
         await stream.send_message(response)
 
+    async def __rpc_start_task_queue_serve(
+        self,
+        stream: "grpclib.server.Stream[StartTaskQueueServeRequest, StartTaskQueueServeResponse]",
+    ) -> None:
+        request = await stream.recv_message()
+        await self._call_rpc_handler_server_stream(
+            self.start_task_queue_serve,
+            stream,
+            request,
+        )
+
+    async def __rpc_stop_task_queue_serve(
+        self,
+        stream: "grpclib.server.Stream[StopTaskQueueServeRequest, StopTaskQueueServeResponse]",
+    ) -> None:
+        request = await stream.recv_message()
+        response = await self.stop_task_queue_serve(request)
+        await stream.send_message(response)
+
     def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
         return {
             "/taskqueue.TaskQueueService/TaskQueuePut": grpclib.const.Handler(
@@ -276,5 +363,17 @@ class TaskQueueServiceBase(ServiceBase):
                 grpclib.const.Cardinality.UNARY_UNARY,
                 TaskQueueLengthRequest,
                 TaskQueueLengthResponse,
+            ),
+            "/taskqueue.TaskQueueService/StartTaskQueueServe": grpclib.const.Handler(
+                self.__rpc_start_task_queue_serve,
+                grpclib.const.Cardinality.UNARY_STREAM,
+                StartTaskQueueServeRequest,
+                StartTaskQueueServeResponse,
+            ),
+            "/taskqueue.TaskQueueService/StopTaskQueueServe": grpclib.const.Handler(
+                self.__rpc_stop_task_queue_serve,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                StopTaskQueueServeRequest,
+                StopTaskQueueServeResponse,
             ),
         }
