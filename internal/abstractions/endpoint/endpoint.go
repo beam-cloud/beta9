@@ -265,9 +265,8 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 
 	es.endpointInstances.Set(stubId, instance)
 
+	// Monitor and then clean up the instance once it's done
 	go instance.Monitor()
-
-	// Clean up the queue instance once it's done
 	go func(q *endpointInstance) {
 		<-q.Ctx.Done()
 		es.endpointInstances.Delete(stubId)

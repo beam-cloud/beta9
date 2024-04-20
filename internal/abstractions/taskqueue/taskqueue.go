@@ -524,7 +524,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*ta
 
 	tq.queueInstances.Set(stubId, instance)
 
-	// Clean up the queue instance once it's done
+	// Monitor and then clean up the instance once it's done
 	go instance.Monitor()
 	go func(q *taskQueueInstance) {
 		<-q.Ctx.Done()
