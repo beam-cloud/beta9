@@ -78,7 +78,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 
 		err := i.Scheduler.Run(runRequest)
 		if err != nil {
-			log.Printf("<endpoint %s> unable to run  container: %v", i.Name, err)
+			log.Printf("<%s> unable to run  container: %v", i.Name, err)
 			return err
 		}
 
@@ -103,7 +103,7 @@ func (i *endpointInstance) stopContainers(containersToStop int) error {
 
 		err := i.Scheduler.Stop(containerId)
 		if err != nil {
-			log.Printf("<endpoint %s> unable to stop container: %v", i.Name, err)
+			log.Printf("<%s> unable to stop container: %v", i.Name, err)
 			return err
 		}
 
