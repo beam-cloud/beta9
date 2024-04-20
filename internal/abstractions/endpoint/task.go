@@ -27,8 +27,8 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 
 	_, err := t.es.backendRepo.CreateTask(echoCtx.Request().Context(), &types.TaskParams{
 		TaskId:      t.msg.TaskId,
-		StubId:      instance.stub.Id,
-		WorkspaceId: instance.stub.WorkspaceId,
+		StubId:      instance.Stub.Id,
+		WorkspaceId: instance.Stub.WorkspaceId,
 	})
 	if err != nil {
 		return err

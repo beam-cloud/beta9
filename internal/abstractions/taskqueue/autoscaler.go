@@ -13,25 +13,25 @@ type taskQueueAutoscalerSample struct {
 	TaskDuration      float64
 }
 
-// taskQueueSampleFunc retrieves an autoscaling sample from the task queue instance
-func taskQueueSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSample, error) {
-	queueLength, err := i.client.QueueLength(i.ctx, i.workspace.Name, i.stub.ExternalId)
+// taskQueueAutoscalerSampleFunc retrieves an autoscaling sample from the task queue instance
+func taskQueueAutoscalerSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSample, error) {
+	queueLength, err := i.client.QueueLength(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
 	if err != nil {
 		queueLength = -1
 	}
 
-	runningTasks, err := i.client.TasksRunning(i.ctx, i.workspace.Name, i.stub.ExternalId)
+	runningTasks, err := i.client.TasksRunning(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
 	if err != nil {
 		runningTasks = -1
 	}
 
-	taskDuration, err := i.client.GetTaskDuration(i.ctx, i.workspace.Name, i.stub.ExternalId)
+	taskDuration, err := i.client.GetTaskDuration(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
 	if err != nil {
 		taskDuration = -1
 	}
 
 	currentContainers := 0
-	state, err := i.state()
+	state, err := i.State()
 	if err != nil {
 		currentContainers = -1
 	}
@@ -66,14 +66,36 @@ func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSample) *abs
 			}
 		}
 
-		desiredContainers = int(s.QueueLength / int64(i.stubConfig.Concurrency))
-		if s.QueueLength%int64(i.stubConfig.Concurrency) > 0 {
+		desiredContainers = int(s.QueueLength / int64(i.StubConfig.Concurrency))
+		if s.QueueLength%int64(i.StubConfig.Concurrency) > 0 {
 			desiredContainers += 1
 		}
 
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
-		maxReplicas := math.Min(float64(i.stubConfig.MaxContainers), float64(abstractions.MaxReplicas))
+		maxReplicas := math.Min(float64(i.StubConfig.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
+	}
+
+	return &abstractions.AutoscalerResult{
+		DesiredContainers: desiredContainers,
+		ResultValid:       true,
+	}
+}
+
+// taskQueueScaleFunc scales up and down based on the server container timeout
+func taskQueueServeScaleFunc(i *taskQueueInstance, sample *taskQueueAutoscalerSample) *abstractions.AutoscalerResult {
+	desiredContainers := 1
+
+	timeoutKey := Keys.taskQueueServeLock(i.Workspace.Name, i.Stub.ExternalId)
+	exists, err := i.Rdb.Exists(i.Ctx, timeoutKey).Result()
+	if err != nil {
+		return &abstractions.AutoscalerResult{
+			ResultValid: false,
+		}
+	}
+
+	if exists == 0 && sample.RunningTasks == 0 {
+		desiredContainers = 0
 	}
 
 	return &abstractions.AutoscalerResult{

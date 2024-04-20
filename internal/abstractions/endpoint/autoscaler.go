@@ -12,13 +12,13 @@ type endpointAutoscalerSample struct {
 }
 
 func endpointSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
-	totalRequests, err := i.taskRepo.TasksInFlight(i.ctx, i.workspace.Name, i.stub.ExternalId)
+	totalRequests, err := i.TaskRepo.TasksInFlight(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}
 
 	currentContainers := 0
-	state, err := i.state()
+	state, err := i.State()
 	if err != nil {
 		currentContainers = -1
 	}
@@ -39,13 +39,13 @@ func endpointDeploymentScaleFunc(i *endpointInstance, sample *endpointAutoscaler
 	if sample.TotalRequests == 0 {
 		desiredContainers = 0
 	} else {
-		desiredContainers = int(sample.TotalRequests / int64(i.stubConfig.Concurrency))
-		if sample.TotalRequests%int64(i.stubConfig.Concurrency) > 0 {
+		desiredContainers = int(sample.TotalRequests / int64(i.StubConfig.Concurrency))
+		if sample.TotalRequests%int64(i.StubConfig.Concurrency) > 0 {
 			desiredContainers += 1
 		}
 
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
-		maxReplicas := math.Min(float64(i.stubConfig.MaxContainers), float64(abstractions.MaxReplicas))
+		maxReplicas := math.Min(float64(i.StubConfig.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 
 	}
@@ -59,8 +59,8 @@ func endpointDeploymentScaleFunc(i *endpointInstance, sample *endpointAutoscaler
 func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 1
 
-	timeoutKey := Keys.endpointServeLock(i.workspace.Name, i.stub.ExternalId)
-	exists, err := i.rdb.Exists(i.ctx, timeoutKey).Result()
+	timeoutKey := Keys.endpointServeLock(i.Workspace.Name, i.Stub.ExternalId)
+	exists, err := i.Rdb.Exists(i.Ctx, timeoutKey).Result()
 	if err != nil {
 		return &abstractions.AutoscalerResult{
 			ResultValid: false,
