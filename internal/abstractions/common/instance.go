@@ -49,12 +49,13 @@ type AutoscaledInstance struct {
 	Object     *types.Object
 	Token      *types.Token
 
-	// Scheduling helpers
+	// Scheduling
 	Scheduler          *scheduler.Scheduler
 	ContainerEventChan chan types.ContainerEvent
 	Containers         map[string]bool
 	ScaleEventChan     chan int
 	EntryPoint         []string
+	Autoscaler         IAutoscaler
 
 	// Repositories
 	ContainerRepo repository.ContainerRepository
@@ -73,20 +74,24 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 	lock := common.NewRedisLock(cfg.Rdb)
 
 	instance := &AutoscaledInstance{
-		Lock:               lock,
-		Ctx:                ctx,
-		CancelFunc:         cancelFunc,
-		Name:               cfg.Name,
-		Workspace:          cfg.Workspace,
-		Stub:               cfg.Stub,
-		StubConfig:         cfg.StubConfig,
-		Scheduler:          cfg.Scheduler,
-		Rdb:                cfg.Rdb,
-		ContainerRepo:      cfg.ContainerRepo,
-		BackendRepo:        cfg.BackendRepo,
-		Containers:         make(map[string]bool),
-		ContainerEventChan: make(chan types.ContainerEvent, 1),
-		ScaleEventChan:     make(chan int, 1),
+		Lock:                lock,
+		Ctx:                 ctx,
+		CancelFunc:          cancelFunc,
+		Name:                cfg.Name,
+		Workspace:           cfg.Workspace,
+		Stub:                cfg.Stub,
+		StubConfig:          cfg.StubConfig,
+		Object:              cfg.Object,
+		Token:               cfg.Token,
+		Scheduler:           cfg.Scheduler,
+		Rdb:                 cfg.Rdb,
+		ContainerRepo:       cfg.ContainerRepo,
+		BackendRepo:         cfg.BackendRepo,
+		Containers:          make(map[string]bool),
+		ContainerEventChan:  make(chan types.ContainerEvent, 1),
+		ScaleEventChan:      make(chan int, 1),
+		StartContainersFunc: cfg.StartContainersFunc,
+		StopContainersFunc:  cfg.StopContainersFunc,
 	}
 
 	return instance, nil
@@ -121,7 +126,7 @@ func (i *AutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
 }
 
 func (i *AutoscaledInstance) Monitor() error {
-	// go i.Autoscaler.Start(i.Ctx) // Start the autoscaler
+	go i.Autoscaler.Start(i.Ctx) // Start the autoscaler
 
 	for {
 		select {

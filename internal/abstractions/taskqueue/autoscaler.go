@@ -53,7 +53,7 @@ func taskQueueAutoscalerSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSa
 }
 
 // taskQueueScaleFunc scales based on the number of items in the queue
-func taskQueueDeploymentScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSample) *abstractions.AutoscalerResult {
+func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 0
 
 	if s.QueueLength == 0 {

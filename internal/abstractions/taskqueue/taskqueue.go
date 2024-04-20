@@ -475,11 +475,12 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*ta
 		return err
 	}
 
-	// Create queue instance and attach common instance autoscaler
+	// Create queue instance to hold taskqueue specific methods/fields
 	instance := &taskQueueInstance{
 		client: tq.queueClient,
 	}
 
+	// Create base autoscaled instance
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(tq.ctx, &abstractions.AutoscaledInstanceConfig{
 		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
 		Rdb:                 tq.rdb,
@@ -499,17 +500,20 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*ta
 		return err
 	}
 
+	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance
+
+	// Set all options on the instance
 	for _, o := range options {
 		o(instance)
 	}
 
-	if instance.autoscaler == nil {
+	if instance.Autoscaler == nil {
 		switch instance.Stub.Type {
-		case types.StubTypeTaskQueueDeployment:
-			instance.autoscaler = abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueDeploymentScaleFunc)
+		case types.StubTypeTaskQueueDeployment, types.StubTypeTaskQueue:
+			instance.Autoscaler = abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueScaleFunc)
 		case types.StubTypeTaskQueueServe:
-			instance.autoscaler = abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueServeScaleFunc)
+			instance.Autoscaler = abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueServeScaleFunc)
 		}
 	}
 
@@ -519,9 +523,8 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*ta
 
 	tq.queueInstances.Set(stubId, instance)
 
-	go instance.Monitor()
-
 	// Clean up the queue instance once it's done
+	go instance.Monitor()
 	go func(q *taskQueueInstance) {
 		<-q.Ctx.Done()
 		tq.queueInstances.Delete(stubId)

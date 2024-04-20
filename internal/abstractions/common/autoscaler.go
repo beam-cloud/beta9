@@ -10,11 +10,15 @@ type AutoscalerResult struct {
 	ResultValid       bool
 }
 
-type AutoScaler[I AbstractionInstance, S AutoscalerSample] struct {
+type Autoscaler[I AbstractionInstance, S AutoscalerSample] struct {
 	instance         I
 	mostRecentSample S
 	sampleFunc       func(I) (S, error)
 	scaleFunc        func(I, S) *AutoscalerResult
+}
+
+type IAutoscaler interface {
+	Start(ctx context.Context)
 }
 
 const (
@@ -29,8 +33,8 @@ type AbstractionInstance interface {
 
 type AutoscalerSample interface{}
 
-func NewAutoscaler[I AbstractionInstance, S AutoscalerSample](instance I, sampleFunc func(I) (S, error), scaleFunc func(I, S) *AutoscalerResult) *AutoScaler[I, S] {
-	return &AutoScaler[I, S]{
+func NewAutoscaler[I AbstractionInstance, S AutoscalerSample](instance I, sampleFunc func(I) (S, error), scaleFunc func(I, S) *AutoscalerResult) *Autoscaler[I, S] {
+	return &Autoscaler[I, S]{
 		instance:   instance,
 		sampleFunc: sampleFunc,
 		scaleFunc:  scaleFunc,
@@ -38,7 +42,7 @@ func NewAutoscaler[I AbstractionInstance, S AutoscalerSample](instance I, sample
 }
 
 // Start the autoscaler
-func (as *AutoScaler[I, S]) Start(ctx context.Context) {
+func (as *Autoscaler[I, S]) Start(ctx context.Context) {
 	ticker := time.NewTicker(sampleRate)
 	defer ticker.Stop()
 

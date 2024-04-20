@@ -18,7 +18,7 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		withEntryPoint(func(instance *taskQueueInstance) []string {
 			return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 		}),
-		withAutoscaler(func(instance *taskQueueInstance) *abstractions.AutoScaler[*taskQueueInstance, *taskQueueAutoscalerSample] {
+		withAutoscaler(func(instance *taskQueueInstance) *abstractions.Autoscaler[*taskQueueInstance, *taskQueueAutoscalerSample] {
 			return abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueServeScaleFunc)
 		}),
 	)

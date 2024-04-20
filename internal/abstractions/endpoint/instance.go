@@ -24,7 +24,7 @@ type endpointState struct {
 	FailedContainers   int
 }
 
-func withAutoscaler(constructor func(i *endpointInstance) *abstractions.AutoScaler[*endpointInstance, *endpointAutoscalerSample]) func(*endpointInstance) {
+func withAutoscaler(constructor func(i *endpointInstance) *abstractions.Autoscaler[*endpointInstance, *endpointAutoscalerSample]) func(*endpointInstance) {
 	return func(i *endpointInstance) {
 		i.autoscaler = constructor(i)
 	}
@@ -54,7 +54,7 @@ type endpointInstance struct {
 	rdb                *common.RedisClient
 	containerRepo      repository.ContainerRepository
 	taskRepo           repository.TaskRepository
-	autoscaler         *abstractions.AutoScaler[*endpointInstance, *endpointAutoscalerSample]
+	autoscaler         *abstractions.Autoscaler[*endpointInstance, *endpointAutoscalerSample]
 	buffer             *RequestBuffer
 }
 

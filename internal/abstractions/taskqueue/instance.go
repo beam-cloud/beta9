@@ -14,9 +14,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func withAutoscaler(constructor func(i *taskQueueInstance) *abstractions.AutoScaler[*taskQueueInstance, *taskQueueAutoscalerSample]) func(*taskQueueInstance) {
+func withAutoscaler(constructor func(i *taskQueueInstance) *abstractions.Autoscaler[*taskQueueInstance, *taskQueueAutoscalerSample]) func(*taskQueueInstance) {
 	return func(i *taskQueueInstance) {
-		i.autoscaler = constructor(i)
+		i.Autoscaler = constructor(i)
 	}
 }
 
@@ -28,8 +28,7 @@ func withEntryPoint(entryPoint func(instance *taskQueueInstance) []string) func(
 
 type taskQueueInstance struct {
 	*abstractions.AutoscaledInstance
-	autoscaler *abstractions.AutoScaler[*taskQueueInstance, *taskQueueAutoscalerSample]
-	client     *taskQueueClient
+	client *taskQueueClient
 }
 
 func (i *taskQueueInstance) startContainers(containersToRun int) error {

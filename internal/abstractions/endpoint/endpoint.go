@@ -126,7 +126,7 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 		withEntryPoint(func(instance *endpointInstance) []string {
 			return []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 		}),
-		withAutoscaler(func(instance *endpointInstance) *abstractions.AutoScaler[*endpointInstance, *endpointAutoscalerSample] {
+		withAutoscaler(func(instance *endpointInstance) *abstractions.Autoscaler[*endpointInstance, *endpointAutoscalerSample] {
 			return abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
 		}),
 	)
@@ -206,7 +206,7 @@ func (es *HttpEndpointService) StopEndpointServe(ctx context.Context, in *pb.Sto
 			withEntryPoint(func(instance *endpointInstance) []string {
 				return []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 			}),
-			withAutoscaler(func(instance *endpointInstance) *abstractions.AutoScaler[*endpointInstance, *endpointAutoscalerSample] {
+			withAutoscaler(func(instance *endpointInstance) *abstractions.Autoscaler[*endpointInstance, *endpointAutoscalerSample] {
 				return abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
 			}),
 		)
