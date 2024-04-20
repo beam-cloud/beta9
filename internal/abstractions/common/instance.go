@@ -1,0 +1,207 @@
+package abstractions
+
+import (
+	"context"
+	"errors"
+	"log"
+	"time"
+
+	"github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/scheduler"
+	"github.com/beam-cloud/beta9/internal/types"
+)
+
+type AutoscaledInstanceState struct {
+	RunningContainers  int
+	PendingContainers  int
+	StoppingContainers int
+	FailedContainers   int
+}
+
+type AutoscaledInstanceConfig struct {
+	Name            string
+	Workspace       *types.Workspace
+	Stub            *types.Stub
+	StubConfig      *types.StubConfigV1
+	Object          *types.Object
+	Token           *types.Token
+	Scheduler       *scheduler.Scheduler
+	Rdb             *common.RedisClient
+	ContainerRepo   repository.ContainerRepository
+	BackendRepo     repository.BackendRepository
+	InstanceLockKey string
+}
+
+type AutoscaledInstance struct {
+	Ctx        context.Context
+	CancelFunc context.CancelFunc
+	Name       string
+	Rdb        *common.RedisClient
+	Lock       *common.RedisLock
+
+	// DB Objects
+	Workspace  *types.Workspace
+	Stub       *types.Stub
+	StubConfig *types.StubConfigV1
+	EntryPoint []string
+	Object     *types.Object
+	Token      *types.Token
+
+	// Scheduling helpers
+	Scheduler          *scheduler.Scheduler
+	ContainerEventChan chan types.ContainerEvent
+	Containers         map[string]bool
+	ScaleEventChan     chan int
+
+	// Repositories
+	ContainerRepo repository.ContainerRepository
+	BackendRepo   repository.BackendRepository
+
+	// Keys
+	InstanceLockKey string
+}
+
+func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (*AutoscaledInstance, error) {
+	ctx, cancelFunc := context.WithCancel(ctx)
+	lock := common.NewRedisLock(cfg.Rdb)
+
+	instance := &AutoscaledInstance{
+		Lock:               lock,
+		Ctx:                ctx,
+		CancelFunc:         cancelFunc,
+		Name:               cfg.Name,
+		Workspace:          cfg.Workspace,
+		Stub:               cfg.Stub,
+		StubConfig:         cfg.StubConfig,
+		Scheduler:          cfg.Scheduler,
+		Rdb:                cfg.Rdb,
+		ContainerRepo:      cfg.ContainerRepo,
+		BackendRepo:        cfg.BackendRepo,
+		Containers:         make(map[string]bool),
+		ContainerEventChan: make(chan types.ContainerEvent, 1),
+		ScaleEventChan:     make(chan int, 1),
+	}
+
+	return instance, nil
+}
+
+func (i *AutoscaledInstance) WaitForContainer(ctx context.Context, duration time.Duration) (*types.ContainerState, error) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	timeout := time.After(duration)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timeout:
+			return nil, errors.New("timed out waiting for a container")
+		case <-ticker.C:
+			containers, err := i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
+			if err != nil {
+				return nil, err
+			}
+
+			if len(containers) > 0 {
+				return &containers[0], nil
+			}
+		}
+	}
+}
+
+func (i *AutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
+	i.ScaleEventChan <- result.DesiredContainers
+}
+
+func (i *AutoscaledInstance) Monitor() error {
+	// go i.Autoscaler.Start(i.ctx) // Start the autoscaler
+
+	for {
+		select {
+
+		case <-i.Ctx.Done():
+			return nil
+
+		case containerEvent := <-i.ContainerEventChan:
+			initialContainerCount := len(i.Containers)
+
+			_, exists := i.Containers[containerEvent.ContainerId]
+			switch {
+			case !exists && containerEvent.Change == 1: // Container created and doesn't exist in map
+				i.Containers[containerEvent.ContainerId] = true
+			case exists && containerEvent.Change == -1: // Container removed and exists in map
+				delete(i.Containers, containerEvent.ContainerId)
+			}
+
+			if initialContainerCount != len(i.Containers) {
+				log.Printf("<%s> scaled from %d->%d", i.Name, initialContainerCount, len(i.Containers))
+			}
+
+		case desiredContainers := <-i.ScaleEventChan:
+			if err := i.HandleScalingEvent(desiredContainers); err != nil {
+				continue
+			}
+		}
+	}
+}
+
+func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
+	err := i.Lock.Acquire(i.Ctx, i.InstanceLockKey, common.RedisLockOptions{TtlS: 10, Retries: 0})
+	if err != nil {
+		return err
+	}
+	defer i.Lock.Release(i.InstanceLockKey)
+
+	state, err := i.State()
+	if err != nil {
+		return err
+	}
+
+	if state.FailedContainers >= types.FailedContainerThreshold {
+		log.Printf("<%s> reached failed container threshold, scaling to zero.", i.Name)
+		desiredContainers = 0
+	}
+
+	noContainersRunning := (state.PendingContainers == 0) && (state.RunningContainers == 0) && (state.StoppingContainers == 0)
+	if desiredContainers == 0 && noContainersRunning {
+		i.CancelFunc()
+		return nil
+	}
+
+	containerDelta := desiredContainers - (state.RunningContainers + state.PendingContainers)
+	if containerDelta > 0 {
+		// err = i.startContainers(containerDelta)
+	} else if containerDelta < 0 {
+		// err = i.stopContainers(-containerDelta)
+	}
+
+	return err
+}
+
+func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
+	containers, err := i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
+	if err != nil {
+		return nil, err
+	}
+
+	failedContainers, err := i.ContainerRepo.GetFailedContainerCountByStubId(i.Stub.ExternalId)
+	if err != nil {
+		return nil, err
+	}
+
+	state := AutoscaledInstanceState{}
+	for _, container := range containers {
+		switch container.Status {
+		case types.ContainerStatusRunning:
+			state.RunningContainers++
+		case types.ContainerStatusPending:
+			state.PendingContainers++
+		case types.ContainerStatusStopping:
+			state.StoppingContainers++
+		}
+	}
+
+	state.FailedContainers = failedContainers
+	return &state, nil
+}

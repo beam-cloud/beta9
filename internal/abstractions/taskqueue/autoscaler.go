@@ -15,23 +15,23 @@ type taskQueueAutoscalerSample struct {
 
 // taskQueueAutoscalerSampleFunc retrieves an autoscaling sample from the task queue instance
 func taskQueueAutoscalerSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSample, error) {
-	queueLength, err := i.client.QueueLength(i.ctx, i.workspace.Name, i.stub.ExternalId)
+	queueLength, err := i.client.QueueLength(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
 	if err != nil {
 		queueLength = -1
 	}
 
-	runningTasks, err := i.client.TasksRunning(i.ctx, i.workspace.Name, i.stub.ExternalId)
+	runningTasks, err := i.client.TasksRunning(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
 	if err != nil {
 		runningTasks = -1
 	}
 
-	taskDuration, err := i.client.GetTaskDuration(i.ctx, i.workspace.Name, i.stub.ExternalId)
+	taskDuration, err := i.client.GetTaskDuration(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
 	if err != nil {
 		taskDuration = -1
 	}
 
 	currentContainers := 0
-	state, err := i.state()
+	state, err := i.State()
 	if err != nil {
 		currentContainers = -1
 	}
@@ -66,13 +66,13 @@ func taskQueueDeploymentScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSa
 			}
 		}
 
-		desiredContainers = int(s.QueueLength / int64(i.stubConfig.Concurrency))
-		if s.QueueLength%int64(i.stubConfig.Concurrency) > 0 {
+		desiredContainers = int(s.QueueLength / int64(i.StubConfig.Concurrency))
+		if s.QueueLength%int64(i.StubConfig.Concurrency) > 0 {
 			desiredContainers += 1
 		}
 
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
-		maxReplicas := math.Min(float64(i.stubConfig.MaxContainers), float64(abstractions.MaxReplicas))
+		maxReplicas := math.Min(float64(i.StubConfig.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
 
@@ -85,8 +85,8 @@ func taskQueueDeploymentScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSa
 func taskQueueServeScaleFunc(i *taskQueueInstance, sample *taskQueueAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 1
 
-	timeoutKey := Keys.taskQueueServeLock(i.workspace.Name, i.stub.ExternalId)
-	exists, err := i.rdb.Exists(i.ctx, timeoutKey).Result()
+	timeoutKey := Keys.taskQueueServeLock(i.Workspace.Name, i.Stub.ExternalId)
+	exists, err := i.Rdb.Exists(i.Ctx, timeoutKey).Result()
 	if err != nil {
 		return &abstractions.AutoscalerResult{
 			ResultValid: false,

@@ -2,39 +2,13 @@ package taskqueue
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 	"github.com/beam-cloud/beta9/internal/auth"
 	common "github.com/beam-cloud/beta9/internal/common"
-	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
-
-func (tq *RedisTaskQueue) waitForContainer(ctx context.Context, stubId string) (*types.ContainerState, error) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	timeout := time.After(taskQueueServeContainerTimeout)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-timeout:
-			return nil, errors.New("timed out waiting for a container")
-		case <-ticker.C:
-			containers, err := tq.containerRepo.GetActiveContainersByStubId(stubId)
-			if err != nil {
-				return nil, err
-			}
-
-			if len(containers) > 0 {
-				return &containers[0], nil
-			}
-		}
-	}
-}
 
 func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest, stream pb.TaskQueueService_StartTaskQueueServeServer) error {
 	ctx := stream.Context()
@@ -42,7 +16,7 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 
 	err := tq.createQueueInstance(in.StubId,
 		withEntryPoint(func(instance *taskQueueInstance) []string {
-			return []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.serve"}
+			return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 		}),
 		withAutoscaler(func(instance *taskQueueInstance) *abstractions.AutoScaler[*taskQueueInstance, *taskQueueAutoscalerSample] {
 			return abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueServeScaleFunc)
@@ -54,14 +28,14 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 
 	// Set lock (used by autoscaler to scale up the single serve container)
 	instance, _ := tq.queueInstances.Get(in.StubId)
-	instance.rdb.SetEx(
+	instance.Rdb.SetEx(
 		context.Background(),
-		Keys.taskQueueServeLock(instance.workspace.Name, instance.stub.ExternalId),
+		Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
 		1,
 		taskQueueServeContainerTimeout,
 	)
 
-	container, err := tq.waitForContainer(ctx, in.StubId)
+	container, err := instance.WaitForContainer(ctx, taskQueueServeContainerTimeout)
 	if err != nil {
 		return err
 	}
@@ -92,9 +66,9 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				instance.rdb.SetEx(
+				instance.Rdb.SetEx(
 					context.Background(),
-					Keys.taskQueueServeLock(instance.workspace.Name, instance.stub.ExternalId),
+					Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
 					1,
 					taskQueueServeContainerTimeout,
 				)

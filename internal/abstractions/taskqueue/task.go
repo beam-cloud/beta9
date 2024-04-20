@@ -24,8 +24,8 @@ func (t *TaskQueueTask) Execute(ctx context.Context, options ...interface{}) err
 
 	_, err := t.tq.backendRepo.CreateTask(ctx, &types.TaskParams{
 		TaskId:      t.msg.TaskId,
-		StubId:      queue.stub.Id,
-		WorkspaceId: queue.stub.WorkspaceId,
+		StubId:      queue.Stub.Id,
+		WorkspaceId: queue.Stub.WorkspaceId,
 	})
 	if err != nil {
 		return err

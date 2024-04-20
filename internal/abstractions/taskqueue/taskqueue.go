@@ -316,6 +316,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 			task.ExternalId,
 			*task,
 		)
+
 		if err != nil {
 			return err
 		}
@@ -473,24 +474,25 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*ta
 		return err
 	}
 
-	ctx, cancelFunc := context.WithCancel(tq.ctx)
-	lock := common.NewRedisLock(tq.rdb)
+	autoscaledInstance, err := abstractions.NewAutoscaledInstance(tq.ctx, &abstractions.AutoscaledInstanceConfig{
+		Name:            fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
+		Rdb:             tq.rdb,
+		Stub:            &stub.Stub,
+		StubConfig:      stubConfig,
+		Object:          &stub.Object,
+		Workspace:       &stub.Workspace,
+		Token:           token,
+		Scheduler:       tq.scheduler,
+		ContainerRepo:   tq.containerRepo,
+		BackendRepo:     tq.backendRepo,
+		InstanceLockKey: Keys.taskQueueInstanceLock(stub.Workspace.Name, stubId),
+	})
+	if err != nil {
+		return err
+	}
+
 	instance := &taskQueueInstance{
-		ctx:                ctx,
-		cancelFunc:         cancelFunc,
-		lock:               lock,
-		name:               fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
-		workspace:          &stub.Workspace,
-		stub:               &stub.Stub,
-		object:             &stub.Object,
-		token:              token,
-		stubConfig:         stubConfig,
-		scheduler:          tq.scheduler,
-		containerRepo:      tq.containerRepo,
-		containerEventChan: make(chan types.ContainerEvent, 1),
-		containers:         make(map[string]bool),
-		scaleEventChan:     make(chan int, 1),
-		rdb:                tq.rdb,
+		AutoscaledInstance: autoscaledInstance,
 		client:             tq.queueClient,
 	}
 	for _, o := range options {
@@ -498,7 +500,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*ta
 	}
 
 	if instance.autoscaler == nil {
-		switch instance.stub.Type {
+		switch instance.Stub.Type {
 		case types.StubTypeTaskQueueDeployment:
 			instance.autoscaler = abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueDeploymentScaleFunc)
 		case types.StubTypeTaskQueueServe:
@@ -506,17 +508,17 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*ta
 		}
 	}
 
-	if len(instance.entryPoint) == 0 {
-		instance.entryPoint = []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.taskqueue"}
+	if len(instance.EntryPoint) == 0 {
+		instance.EntryPoint = []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.taskqueue"}
 	}
 
 	tq.queueInstances.Set(stubId, instance)
 
-	go instance.monitor()
+	go instance.Monitor()
 
 	// Clean up the queue instance once it's done
 	go func(q *taskQueueInstance) {
-		<-q.ctx.Done()
+		<-q.Ctx.Done()
 		tq.queueInstances.Delete(stubId)
 	}(instance)
 
@@ -545,12 +547,12 @@ func (tq *RedisTaskQueue) handleContainerEvents() {
 
 			switch operation {
 			case common.KeyOperationSet, common.KeyOperationHSet:
-				queue.containerEventChan <- types.ContainerEvent{
+				queue.ContainerEventChan <- types.ContainerEvent{
 					ContainerId: containerId,
 					Change:      +1,
 				}
 			case common.KeyOperationDel, common.KeyOperationExpired:
-				queue.containerEventChan <- types.ContainerEvent{
+				queue.ContainerEventChan <- types.ContainerEvent{
 					ContainerId: containerId,
 					Change:      -1,
 				}
