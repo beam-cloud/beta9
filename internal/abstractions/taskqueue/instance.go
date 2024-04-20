@@ -62,7 +62,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 
 		err := i.Scheduler.Run(runRequest)
 		if err != nil {
-			log.Printf("<taskqueue %s> unable to run  container: %v", i.Name, err)
+			log.Printf("<%s> unable to run container: %v", i.Name, err)
 			return err
 		}
 
@@ -87,7 +87,7 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 
 		err := i.Scheduler.Stop(containerId)
 		if err != nil {
-			log.Printf("<taskqueue %s> unable to stop container: %v", i.Name, err)
+			log.Printf("<%s> unable to stop container: %v", i.Name, err)
 			return err
 		}
 
@@ -115,7 +115,7 @@ func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
 		// Skip containers with keep warm locks
 		keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.taskQueueKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
 		if err != nil && err != redis.Nil {
-			log.Printf("<taskqueue %s> error getting keep warm lock for container: %v\n", i.Name, err)
+			log.Printf("<%s> error getting keep warm lock for container: %v\n", i.Name, err)
 			continue
 		}
 
@@ -134,7 +134,7 @@ func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
 		// If any tasks are currently running, skip this container
 		tasksRunning, err := i.Rdb.Keys(context.TODO(), Keys.taskQueueTaskRunningLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId, "*"))
 		if err != nil && err != redis.Nil {
-			log.Printf("<taskqueue %s> error getting task running locks for container: %v\n", i.Name, err)
+			log.Printf("<%s> error getting task running locks for container: %v\n", i.Name, err)
 			continue
 		}
 

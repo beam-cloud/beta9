@@ -117,6 +117,7 @@ func NewRedisTaskQueueService(
 
 	return tq, nil
 }
+
 func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
 	return &TaskQueueTask{
 		tq:  tq,
@@ -474,27 +475,31 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*ta
 		return err
 	}
 
+	// Create queue instance and attach common instance autoscaler
+	instance := &taskQueueInstance{
+		client: tq.queueClient,
+	}
+
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(tq.ctx, &abstractions.AutoscaledInstanceConfig{
-		Name:            fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
-		Rdb:             tq.rdb,
-		Stub:            &stub.Stub,
-		StubConfig:      stubConfig,
-		Object:          &stub.Object,
-		Workspace:       &stub.Workspace,
-		Token:           token,
-		Scheduler:       tq.scheduler,
-		ContainerRepo:   tq.containerRepo,
-		BackendRepo:     tq.backendRepo,
-		InstanceLockKey: Keys.taskQueueInstanceLock(stub.Workspace.Name, stubId),
+		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
+		Rdb:                 tq.rdb,
+		Stub:                &stub.Stub,
+		StubConfig:          stubConfig,
+		Object:              &stub.Object,
+		Workspace:           &stub.Workspace,
+		Token:               token,
+		Scheduler:           tq.scheduler,
+		ContainerRepo:       tq.containerRepo,
+		BackendRepo:         tq.backendRepo,
+		InstanceLockKey:     Keys.taskQueueInstanceLock(stub.Workspace.Name, stubId),
+		StartContainersFunc: instance.startContainers,
+		StopContainersFunc:  instance.stopContainers,
 	})
 	if err != nil {
 		return err
 	}
 
-	instance := &taskQueueInstance{
-		AutoscaledInstance: autoscaledInstance,
-		client:             tq.queueClient,
-	}
+	instance.AutoscaledInstance = autoscaledInstance
 	for _, o := range options {
 		o(instance)
 	}

@@ -82,6 +82,7 @@ func taskQueueDeploymentScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSa
 	}
 }
 
+// taskQueueScaleFunc scales up and down based on the server container timeout
 func taskQueueServeScaleFunc(i *taskQueueInstance, sample *taskQueueAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 1
 
@@ -93,8 +94,7 @@ func taskQueueServeScaleFunc(i *taskQueueInstance, sample *taskQueueAutoscalerSa
 		}
 	}
 
-	// desiredContainers = 0
-	if exists == 0 {
+	if exists == 0 && sample.RunningTasks == 0 {
 		desiredContainers = 0
 	}
 

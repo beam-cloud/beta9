@@ -20,17 +20,19 @@ type AutoscaledInstanceState struct {
 }
 
 type AutoscaledInstanceConfig struct {
-	Name            string
-	Workspace       *types.Workspace
-	Stub            *types.Stub
-	StubConfig      *types.StubConfigV1
-	Object          *types.Object
-	Token           *types.Token
-	Scheduler       *scheduler.Scheduler
-	Rdb             *common.RedisClient
-	ContainerRepo   repository.ContainerRepository
-	BackendRepo     repository.BackendRepository
-	InstanceLockKey string
+	Name                string
+	Workspace           *types.Workspace
+	Stub                *types.Stub
+	StubConfig          *types.StubConfigV1
+	Object              *types.Object
+	Token               *types.Token
+	Scheduler           *scheduler.Scheduler
+	Rdb                 *common.RedisClient
+	InstanceLockKey     string
+	ContainerRepo       repository.ContainerRepository
+	BackendRepo         repository.BackendRepository
+	StartContainersFunc func(containersToRun int) error
+	StopContainersFunc  func(containersToStop int) error
 }
 
 type AutoscaledInstance struct {
@@ -40,11 +42,10 @@ type AutoscaledInstance struct {
 	Rdb        *common.RedisClient
 	Lock       *common.RedisLock
 
-	// DB Objects
+	// DB objects
 	Workspace  *types.Workspace
 	Stub       *types.Stub
 	StubConfig *types.StubConfigV1
-	EntryPoint []string
 	Object     *types.Object
 	Token      *types.Token
 
@@ -53,6 +54,7 @@ type AutoscaledInstance struct {
 	ContainerEventChan chan types.ContainerEvent
 	Containers         map[string]bool
 	ScaleEventChan     chan int
+	EntryPoint         []string
 
 	// Repositories
 	ContainerRepo repository.ContainerRepository
@@ -60,6 +62,10 @@ type AutoscaledInstance struct {
 
 	// Keys
 	InstanceLockKey string
+
+	// Callbacks
+	StartContainersFunc func(containersToRun int) error
+	StopContainersFunc  func(containersToStop int) error
 }
 
 func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (*AutoscaledInstance, error) {
@@ -115,7 +121,7 @@ func (i *AutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
 }
 
 func (i *AutoscaledInstance) Monitor() error {
-	// go i.Autoscaler.Start(i.ctx) // Start the autoscaler
+	// go i.Autoscaler.Start(i.Ctx) // Start the autoscaler
 
 	for {
 		select {
@@ -171,9 +177,9 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 
 	containerDelta := desiredContainers - (state.RunningContainers + state.PendingContainers)
 	if containerDelta > 0 {
-		// err = i.startContainers(containerDelta)
+		err = i.StartContainersFunc(containerDelta)
 	} else if containerDelta < 0 {
-		// err = i.stopContainers(-containerDelta)
+		err = i.StopContainersFunc(-containerDelta)
 	}
 
 	return err
