@@ -14,13 +14,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type endpointState struct {
-	RunningContainers  int
-	PendingContainers  int
-	StoppingContainers int
-	FailedContainers   int
-}
-
 func withAutoscaler(constructor func(i *endpointInstance) *abstractions.Autoscaler[*endpointInstance, *endpointAutoscalerSample]) func(*endpointInstance) {
 	return func(i *endpointInstance) {
 		i.Autoscaler = constructor(i)
