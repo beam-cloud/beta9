@@ -81,8 +81,6 @@ func NewRedisTaskQueueService(
 		return nil, err
 	}
 
-	go keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(taskQueueContainerPrefix), keyEventChan)
-
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
 		return nil, err
@@ -109,6 +107,8 @@ func NewRedisTaskQueueService(
 	// Register task dispatcher
 	tq.taskDispatcher.Register(string(types.ExecutorTaskQueue), tq.taskQueueTaskFactory)
 
+	// Listen to changes to active containers
+	go keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(taskQueueContainerPrefix), keyEventChan)
 	go tq.handleContainerEvents()
 
 	// Register HTTP routes

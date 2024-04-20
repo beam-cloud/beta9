@@ -76,8 +76,6 @@ func NewEndpointService(
 		return nil, err
 	}
 
-	go keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(endpointContainerPrefix), keyEventChan)
-
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
 		return nil, err
@@ -99,6 +97,8 @@ func NewEndpointService(
 		taskDispatcher:    opts.TaskDispatcher,
 	}
 
+	// Listen to changes to active containers
+	go keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(endpointContainerPrefix), keyEventChan)
 	go es.handleContainerEvents()
 
 	// Register task dispatcher
