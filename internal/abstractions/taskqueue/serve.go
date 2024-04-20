@@ -7,6 +7,7 @@ import (
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
 	"github.com/beam-cloud/beta9/internal/auth"
 	common "github.com/beam-cloud/beta9/internal/common"
+	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -89,4 +90,50 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 	}
 
 	return logStream.Stream(ctx, authInfo, container.ContainerId)
+}
+
+func (tq *RedisTaskQueue) StopTaskQueueServe(ctx context.Context, in *pb.StopTaskQueueServeRequest) (*pb.StopTaskQueueServeResponse, error) {
+	_, exists := tq.queueInstances.Get(in.StubId)
+	if !exists {
+		err := tq.createQueueInstance(in.StubId,
+			withEntryPoint(func(instance *taskQueueInstance) []string {
+				return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
+			}),
+			withAutoscaler(func(instance *taskQueueInstance) *abstractions.Autoscaler[*taskQueueInstance, *taskQueueAutoscalerSample] {
+				return abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueServeScaleFunc)
+			}),
+		)
+		if err != nil {
+			return &pb.StopTaskQueueServeResponse{Ok: false}, nil
+		}
+	}
+
+	instance, _ := tq.queueInstances.Get(in.StubId)
+
+	// Delete serve timeout lock
+	instance.Rdb.Del(
+		context.Background(),
+		Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
+	)
+
+	// Delete all keep warms
+	// With serves, there should only ever be one container running, but this is the easiest way to find that container
+	containers, err := instance.ContainerRepo.GetActiveContainersByStubId(instance.Stub.ExternalId)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, container := range containers {
+		if container.Status == types.ContainerStatusStopping || container.Status == types.ContainerStatusPending {
+			continue
+		}
+
+		instance.Rdb.Del(
+			context.Background(),
+			Keys.taskQueueKeepWarmLock(instance.Workspace.Name, instance.Stub.ExternalId, container.ContainerId),
+		)
+
+	}
+
+	return &pb.StopTaskQueueServeResponse{Ok: true}, nil
 }

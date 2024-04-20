@@ -13,6 +13,7 @@ from ..abstractions.image import Image
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..clients.taskqueue import (
     StartTaskQueueServeRequest,
+    StopTaskQueueServeRequest,
     TaskQueuePutRequest,
     TaskQueuePutResponse,
     TaskQueueServiceStub,
@@ -161,17 +162,16 @@ class _CallableWrapper:
                     self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
                 )
         except KeyboardInterrupt:
-            pass
-            # response = terminal.prompt(
-            #     text="Would you like to stop the container? (y/n)", default="y"
-            # )
-            # if response == "y":
-            #     terminal.header("Stopping serve container")
-            #     self.parent.run_sync(
-            #         self.parent.taskqueue_stub.stop_task_queue_serve(
-            #             StopTaskQueueServeRequest(stub_id=self.parent.stub_id)
-            #         )
-            #     )
+            response = terminal.prompt(
+                text="Would you like to stop the container? (y/n)", default="y"
+            )
+            if response == "y":
+                terminal.header("Stopping serve container")
+                self.parent.run_sync(
+                    self.parent.taskqueue_stub.stop_task_queue_serve(
+                        StopTaskQueueServeRequest(stub_id=self.parent.stub_id)
+                    )
+                )
 
         terminal.print("Goodbye 👋")
 
