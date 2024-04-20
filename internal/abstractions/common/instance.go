@@ -31,6 +31,7 @@ type AutoscaledInstanceConfig struct {
 	InstanceLockKey     string
 	ContainerRepo       repository.ContainerRepository
 	BackendRepo         repository.BackendRepository
+	TaskRepo            repository.TaskRepository
 	StartContainersFunc func(containersToRun int) error
 	StopContainersFunc  func(containersToStop int) error
 }
@@ -60,6 +61,7 @@ type AutoscaledInstance struct {
 	// Repositories
 	ContainerRepo repository.ContainerRepository
 	BackendRepo   repository.BackendRepository
+	TaskRepo      repository.TaskRepository
 
 	// Keys
 	InstanceLockKey string
@@ -87,6 +89,7 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		Rdb:                 cfg.Rdb,
 		ContainerRepo:       cfg.ContainerRepo,
 		BackendRepo:         cfg.BackendRepo,
+		TaskRepo:            cfg.TaskRepo,
 		Containers:          make(map[string]bool),
 		ContainerEventChan:  make(chan types.ContainerEvent, 1),
 		ScaleEventChan:      make(chan int, 1),

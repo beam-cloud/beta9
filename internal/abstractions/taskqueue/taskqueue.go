@@ -492,6 +492,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*ta
 		Scheduler:           tq.scheduler,
 		ContainerRepo:       tq.containerRepo,
 		BackendRepo:         tq.backendRepo,
+		TaskRepo:            tq.taskRepo,
 		InstanceLockKey:     Keys.taskQueueInstanceLock(stub.Workspace.Name, stubId),
 		StartContainersFunc: instance.startContainers,
 		StopContainersFunc:  instance.stopContainers,

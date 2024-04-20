@@ -124,7 +124,7 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 
 	err := es.createEndpointInstance(in.StubId,
 		withEntryPoint(func(instance *endpointInstance) []string {
-			return []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.serve"}
+			return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 		}),
 		withAutoscaler(func(instance *endpointInstance) *abstractions.Autoscaler[*endpointInstance, *endpointAutoscalerSample] {
 			return abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
@@ -136,9 +136,9 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 
 	// Set lock (used by autoscaler to scale up the single serve container)
 	instance, _ := es.endpointInstances.Get(in.StubId)
-	instance.rdb.SetEx(
+	instance.Rdb.SetEx(
 		context.Background(),
-		Keys.endpointServeLock(instance.workspace.Name, instance.stub.ExternalId),
+		Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
 		1,
 		endpointServeContainerTimeout,
 	)
@@ -174,9 +174,9 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				instance.rdb.SetEx(
+				instance.Rdb.SetEx(
 					context.Background(),
-					Keys.endpointServeLock(instance.workspace.Name, instance.stub.ExternalId),
+					Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
 					1,
 					endpointServeContainerTimeout,
 				)
@@ -204,7 +204,7 @@ func (es *HttpEndpointService) StopEndpointServe(ctx context.Context, in *pb.Sto
 	if !exists {
 		err := es.createEndpointInstance(in.StubId,
 			withEntryPoint(func(instance *endpointInstance) []string {
-				return []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.serve"}
+				return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 			}),
 			withAutoscaler(func(instance *endpointInstance) *abstractions.Autoscaler[*endpointInstance, *endpointAutoscalerSample] {
 				return abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
@@ -218,14 +218,14 @@ func (es *HttpEndpointService) StopEndpointServe(ctx context.Context, in *pb.Sto
 	instance, _ := es.endpointInstances.Get(in.StubId)
 
 	// Delete serve timeout lock
-	instance.rdb.Del(
+	instance.Rdb.Del(
 		context.Background(),
-		Keys.endpointServeLock(instance.workspace.Name, instance.stub.ExternalId),
+		Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
 	)
 
 	// Delete all keep warms
 	// With serves, there should only ever be one container running, but this is the easiest way to find that container
-	containers, err := instance.containerRepo.GetActiveContainersByStubId(instance.stub.ExternalId)
+	containers, err := instance.ContainerRepo.GetActiveContainersByStubId(instance.Stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}
@@ -235,9 +235,9 @@ func (es *HttpEndpointService) StopEndpointServe(ctx context.Context, in *pb.Sto
 			continue
 		}
 
-		instance.rdb.Del(
+		instance.Rdb.Del(
 			context.Background(),
-			Keys.endpointKeepWarmLock(instance.workspace.Name, instance.stub.ExternalId, container.ContainerId),
+			Keys.endpointKeepWarmLock(instance.Workspace.Name, instance.Stub.ExternalId, container.ContainerId),
 		)
 
 	}
@@ -291,12 +291,12 @@ func (es *HttpEndpointService) handleContainerEvents() {
 
 			switch operation {
 			case common.KeyOperationSet, common.KeyOperationHSet:
-				instance.containerEventChan <- types.ContainerEvent{
+				instance.ContainerEventChan <- types.ContainerEvent{
 					ContainerId: containerId,
 					Change:      +1,
 				}
 			case common.KeyOperationDel, common.KeyOperationExpired:
-				instance.containerEventChan <- types.ContainerEvent{
+				instance.ContainerEventChan <- types.ContainerEvent{
 					ContainerId: containerId,
 					Change:      -1,
 				}
@@ -328,9 +328,9 @@ func (es *HttpEndpointService) forwardRequest(
 		instance, _ = es.endpointInstances.Get(stubId)
 	}
 
-	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), instance.workspace.Name, stubId, payload, types.TaskPolicy{
+	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), instance.Workspace.Name, stubId, payload, types.TaskPolicy{
 		MaxRetries: 0,
-		Timeout:    instance.stubConfig.TaskPolicy.Timeout,
+		Timeout:    instance.StubConfig.TaskPolicy.Timeout,
 		Expires:    time.Now().Add(time.Duration(endpointRequestTimeoutS) * time.Second),
 	})
 	if err != nil {
@@ -362,57 +362,64 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 		return err
 	}
 
-	ctx, cancelFunc := context.WithCancel(es.ctx)
-	lock := common.NewRedisLock(es.rdb)
-
 	requestBufferSize := int(stubConfig.MaxPendingTasks)
 	if requestBufferSize < endpointMinRequestBufferSize {
 		requestBufferSize = endpointMinRequestBufferSize
 	}
 
-	// Create endpoint instance & override any default options
+	// Create endpoint instance to hold endpoint specific methods/fields
 	instance := &endpointInstance{
-		ctx:                ctx,
-		cancelFunc:         cancelFunc,
-		lock:               lock,
-		name:               fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
-		workspace:          &stub.Workspace,
-		stub:               &stub.Stub,
-		object:             &stub.Object,
-		token:              token,
-		stubConfig:         stubConfig,
-		scheduler:          es.scheduler,
-		taskRepo:           es.taskRepo,
-		containerRepo:      es.containerRepo,
-		containerEventChan: make(chan types.ContainerEvent, 1),
-		containers:         make(map[string]bool),
-		scaleEventChan:     make(chan int, 1),
-		rdb:                es.rdb,
-		buffer:             NewRequestBuffer(ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig),
+		buffer: NewRequestBuffer(es.ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig),
 	}
+
+	// Create base autoscaled instance
+	autoscaledInstance, err := abstractions.NewAutoscaledInstance(es.ctx, &abstractions.AutoscaledInstanceConfig{
+		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
+		Rdb:                 es.rdb,
+		Stub:                &stub.Stub,
+		StubConfig:          stubConfig,
+		Object:              &stub.Object,
+		Workspace:           &stub.Workspace,
+		Token:               token,
+		Scheduler:           es.scheduler,
+		ContainerRepo:       es.containerRepo,
+		BackendRepo:         es.backendRepo,
+		TaskRepo:            es.taskRepo,
+		InstanceLockKey:     Keys.endpointInstanceLock(stub.Workspace.Name, stubId),
+		StartContainersFunc: instance.startContainers,
+		StopContainersFunc:  instance.stopContainers,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Embed autoscaled instance struct
+	instance.AutoscaledInstance = autoscaledInstance
+
+	// Set all options on the instance
 	for _, o := range options {
 		o(instance)
 	}
 
-	if instance.autoscaler == nil {
-		switch instance.stub.Type {
+	if instance.Autoscaler == nil {
+		switch instance.Stub.Type {
 		case types.StubTypeEndpointDeployment:
-			instance.autoscaler = abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointDeploymentScaleFunc)
+			instance.Autoscaler = abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointDeploymentScaleFunc)
 		case types.StubTypeEndpointServe:
-			instance.autoscaler = abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
+			instance.Autoscaler = abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
 		}
 	}
 
-	if len(instance.entryPoint) == 0 {
-		instance.entryPoint = []string{instance.stubConfig.PythonVersion, "-m", "beta9.runner.endpoint"}
+	if len(instance.EntryPoint) == 0 {
+		instance.EntryPoint = []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.endpoint"}
 	}
 
 	es.endpointInstances.Set(stubId, instance)
-	go instance.monitor()
 
+	go instance.Monitor()
 	// Clean up the queue instance once it's done
 	go func(q *endpointInstance) {
-		<-q.ctx.Done()
+		<-q.Ctx.Done()
 		es.endpointInstances.Delete(stubId)
 	}(instance)
 
