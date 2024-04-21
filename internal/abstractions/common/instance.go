@@ -12,7 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/internal/types"
 )
 
-type AbstractionInstance interface {
+type IAutoscaledInstance interface {
 	ConsumeScaleResult(*AutoscalerResult)
 	ConsumeContainerEvent(types.ContainerEvent)
 }

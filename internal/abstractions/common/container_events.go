@@ -13,10 +13,10 @@ type ContainerEventManager struct {
 	containerPrefix string
 	keyEventChan    chan common.KeyEvent
 	keyEventManager *common.KeyEventManager
-	instanceFactory func(stubId string, options ...func(AbstractionInstance)) (AbstractionInstance, error)
+	instanceFactory func(stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)
 }
 
-func NewContainerEventManager(containerPrefix string, keyEventManager *common.KeyEventManager, instanceFactory func(stubId string, options ...func(AbstractionInstance)) (AbstractionInstance, error)) (*ContainerEventManager, error) {
+func NewContainerEventManager(containerPrefix string, keyEventManager *common.KeyEventManager, instanceFactory func(stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)) (*ContainerEventManager, error) {
 	keyEventChan := make(chan common.KeyEvent)
 
 	return &ContainerEventManager{

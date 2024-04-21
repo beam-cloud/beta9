@@ -145,7 +145,7 @@ func (es *HttpEndpointService) forwardRequest(
 	return task.Execute(ctx.Request().Context(), ctx)
 }
 
-func (es *HttpEndpointService) InstanceFactory(stubId string, options ...func(abstractions.AbstractionInstance)) (abstractions.AbstractionInstance, error) {
+func (es *HttpEndpointService) InstanceFactory(stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
 	return es.getOrCreateEndpointInstance(stubId)
 }
 

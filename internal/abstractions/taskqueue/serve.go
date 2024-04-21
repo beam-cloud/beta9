@@ -15,7 +15,7 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	err := tq.createQueueInstance(in.StubId,
+	instance, err := tq.getOrCreateQueueInstance(in.StubId,
 		withEntryPoint(func(instance *taskQueueInstance) []string {
 			return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 		}),
@@ -28,7 +28,6 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 	}
 
 	// Set lock (used by autoscaler to scale up the single serve container)
-	instance, _ := tq.queueInstances.Get(in.StubId)
 	instance.Rdb.SetEx(
 		context.Background(),
 		Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
@@ -93,22 +92,17 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 }
 
 func (tq *RedisTaskQueue) StopTaskQueueServe(ctx context.Context, in *pb.StopTaskQueueServeRequest) (*pb.StopTaskQueueServeResponse, error) {
-	_, exists := tq.queueInstances.Get(in.StubId)
-	if !exists {
-		err := tq.createQueueInstance(in.StubId,
-			withEntryPoint(func(instance *taskQueueInstance) []string {
-				return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
-			}),
-			withAutoscaler(func(instance *taskQueueInstance) *abstractions.Autoscaler[*taskQueueInstance, *taskQueueAutoscalerSample] {
-				return abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueServeScaleFunc)
-			}),
-		)
-		if err != nil {
-			return &pb.StopTaskQueueServeResponse{Ok: false}, nil
-		}
+	instance, err := tq.getOrCreateQueueInstance(in.StubId,
+		withEntryPoint(func(instance *taskQueueInstance) []string {
+			return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
+		}),
+		withAutoscaler(func(instance *taskQueueInstance) *abstractions.Autoscaler[*taskQueueInstance, *taskQueueAutoscalerSample] {
+			return abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueServeScaleFunc)
+		}),
+	)
+	if err != nil {
+		return &pb.StopTaskQueueServeResponse{Ok: false}, nil
 	}
-
-	instance, _ := tq.queueInstances.Get(in.StubId)
 
 	// Delete serve timeout lock
 	instance.Rdb.Del(
