@@ -4,21 +4,22 @@ from typing import Any, Callable, Iterator, List, Optional, Sequence, Union
 
 import cloudpickle
 
-from beta9 import terminal
-from beta9.abstractions.base.runner import (
+from .. import terminal
+from ..abstractions.base.runner import (
     FUNCTION_DEPLOYMENT_STUB_TYPE,
     FUNCTION_STUB_TYPE,
     RunnerAbstraction,
 )
-from beta9.abstractions.image import Image
-from beta9.abstractions.volume import Volume
-from beta9.clients.function import (
+from ..abstractions.image import Image
+from ..abstractions.volume import Volume
+from ..clients.function import (
+    FunctionInvokeRequest,
     FunctionInvokeResponse,
     FunctionServiceStub,
 )
-from beta9.clients.gateway import DeployStubResponse
-from beta9.config import GatewayConfig, get_gateway_config
-from beta9.sync import FileSyncer
+from ..clients.gateway import DeployStubRequest, DeployStubResponse
+from ..config import GatewayConfig, get_gateway_config
+from ..sync import FileSyncer
 
 
 class Function(RunnerAbstraction):
@@ -62,10 +63,20 @@ class Function(RunnerAbstraction):
         cpu: Union[int, float, str] = 1.0,
         memory: int = 128,
         gpu: str = "",
+        timeout: int = 3600,
+        retries: int = 3,
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
     ) -> None:
-        super().__init__(cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes)
+        super().__init__(
+            cpu=cpu,
+            memory=memory,
+            gpu=gpu,
+            image=image,
+            volumes=volumes,
+            timeout=timeout,
+            retries=retries,
+        )
 
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
@@ -105,11 +116,13 @@ class _CallableWrapper:
         last_response: Optional[FunctionInvokeResponse] = None
 
         async for r in self.parent.function_stub.function_invoke(
-            stub_id=self.parent.stub_id,
-            args=args,
+            FunctionInvokeRequest(
+                stub_id=self.parent.stub_id,
+                args=args,
+            )
         ):
             if r.output != "":
-                terminal.detail(r.output)
+                terminal.detail(r.output.strip())
 
             if r.done or r.exit_code != 0:
                 last_response = r
@@ -136,7 +149,9 @@ class _CallableWrapper:
 
         terminal.header("Deploying function")
         deploy_response: DeployStubResponse = self.parent.run_sync(
-            self.parent.gateway_stub.deploy_stub(stub_id=self.parent.stub_id, name=name)
+            self.parent.gateway_stub.deploy_stub(
+                DeployStubRequest(stub_id=self.parent.stub_id, name=name)
+            )
         )
 
         if deploy_response.ok:
@@ -150,11 +165,20 @@ class _CallableWrapper:
 
         return deploy_response.ok
 
+    def _format_args(self, args):
+        if isinstance(args, tuple):
+            return list(args)
+        elif not isinstance(args, list):
+            return [args]
+        return args
+
     def _gather_and_yield_results(self, inputs: Sequence) -> Iterator[Any]:
         container_count = len(inputs)
 
         async def _gather_async():
-            tasks = [asyncio.create_task(self._call_remote(input)) for input in inputs]
+            tasks = [
+                asyncio.create_task(self._call_remote(*self._format_args(args))) for args in inputs
+            ]
             for task in asyncio.as_completed(tasks):
                 yield await task
 

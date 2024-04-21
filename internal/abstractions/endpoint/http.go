@@ -10,14 +10,14 @@ import (
 )
 
 type endpointGroup struct {
-	routerGroup *echo.Group
-	es          *RingBufferEndpointService
+	routeGroup *echo.Group
+	es         *HttpEndpointService
 }
 
-func registerEndpointRoutes(g *echo.Group, es *RingBufferEndpointService) *endpointGroup {
-	group := &endpointGroup{routerGroup: g, es: es}
+func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGroup {
+	group := &endpointGroup{routeGroup: g, es: es}
 
-	g.GET("/id/:stubId/", group.endpointRequest)
+	g.POST("/id/:stubId/", group.endpointRequest)
 	g.POST("/:deploymentName/v:version", group.endpointRequest)
 
 	return group
@@ -46,14 +46,6 @@ func (g *endpointGroup) endpointRequest(ctx echo.Context) error {
 		}
 
 		stubId = deployment.Stub.ExternalId
-	}
-
-	var payload interface{}
-
-	if err := ctx.Bind(&payload); err != nil {
-		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error": "invalid request payload",
-		})
 	}
 
 	return g.es.forwardRequest(ctx, stubId)

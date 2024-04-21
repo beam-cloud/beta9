@@ -12,9 +12,11 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	_ "github.com/beam-cloud/beta9/internal/repository/backend_postgres_migrations"
+	"github.com/beam-cloud/beta9/internal/repository/common"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
 )
@@ -279,17 +281,51 @@ func (r *PostgresBackendRepository) GetObjectByExternalId(ctx context.Context, e
 	return object, nil
 }
 
+func (r *PostgresBackendRepository) UpdateObjectSizeByExternalId(ctx context.Context, externalId string, size int) error {
+	query := `
+	UPDATE object
+	SET size = $2
+	WHERE external_id = $1;
+	`
+	_, err := r.client.ExecContext(ctx, query, externalId, size)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *PostgresBackendRepository) DeleteObjectByExternalId(ctx context.Context, externalId string) error {
+	query := `DELETE FROM object WHERE external_id = $1;`
+	_, err := r.client.ExecContext(ctx, query, externalId)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Task
 
-func (r *PostgresBackendRepository) CreateTask(ctx context.Context, containerId string, contextId, stubId uint) (*types.Task, error) {
+func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error) {
+	if params.TaskId == "" {
+		externalId, err := r.generateExternalId()
+		if err != nil {
+			return nil, err
+		}
+
+		params.TaskId = externalId
+	}
+
 	query := `
-    INSERT INTO task (container_id, workspace_id, stub_id)
-    VALUES ($1, $2, $3)
+    INSERT INTO task (external_id, container_id, workspace_id, stub_id)
+    VALUES ($1, $2, $3, $4)
     RETURNING id, external_id, status, container_id, workspace_id, stub_id, started_at, ended_at, created_at, updated_at;
     `
 
 	var newTask types.Task
-	if err := r.client.GetContext(ctx, &newTask, query, containerId, contextId, stubId); err != nil {
+
+	if err := r.client.GetContext(ctx, &newTask, query, params.TaskId, params.ContainerId, params.WorkspaceId, params.StubId); err != nil {
 		return &types.Task{}, err
 	}
 
@@ -361,9 +397,9 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 	return tasks, nil
 }
 
-func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, filters types.TaskFilter) ([]types.TaskWithRelated, error) {
+func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters types.TaskFilter) squirrel.SelectBuilder {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\"",
+		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\"",
 	).From("task t").
 		Join("workspace w ON t.workspace_id = w.id").
 		Join("stub s ON t.stub_id = s.id").OrderBy("t.id DESC")
@@ -384,6 +420,24 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 		}
 	}
 
+	if filters.TaskId != "" {
+		if err := uuid.Validate(filters.TaskId); err != nil {
+			// Postgres will throw an error if the uuid is invalid, which results in a 500 to the client
+			// So instead, we will make the query valid and make it return no results
+			qb = qb.Where(squirrel.Eq{"t.external_id": nil})
+		} else {
+			qb = qb.Where(squirrel.Eq{"t.external_id": filters.TaskId})
+		}
+	}
+
+	if filters.CreatedAtStart != "" {
+		qb = qb.Where(squirrel.GtOrEq{"t.created_at": filters.CreatedAtStart})
+	}
+
+	if filters.CreatedAtEnd != "" {
+		qb = qb.Where(squirrel.LtOrEq{"t.created_at": filters.CreatedAtEnd})
+	}
+
 	if filters.Offset > 0 {
 		qb = qb.Offset(uint64(filters.Offset))
 	}
@@ -395,9 +449,112 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 		}
 	}
 
+	if filters.MinDuration > 0 {
+		qb = qb.Where("EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000 >= ?", filters.MinDuration)
+	}
+
+	if filters.MaxDuration > 0 {
+		qb = qb.Where("EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000 <= ?", filters.MaxDuration)
+	}
+
 	if filters.Limit > 0 {
 		qb = qb.Limit(uint64(filters.Limit))
 	}
+
+	return qb
+}
+
+func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountPerDeployment, error) {
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+		"d.name as deployment_name, COUNT(t.id) AS task_count",
+	).
+		From("deployment d").
+		Join("task t ON d.stub_id = t.stub_id").
+		GroupBy(
+			"d.name",
+		).OrderBy("task_count DESC")
+
+	// Apply filters
+	if filters.WorkspaceID > 0 {
+		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
+	}
+
+	if filters.StubId != "" {
+		qb = qb.Join("stub s ON t.stub_id = s.id")
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
+	}
+
+	if filters.CreatedAtStart != "" {
+		qb = qb.Where(squirrel.GtOrEq{"t.created_at": filters.CreatedAtStart})
+	}
+
+	if filters.CreatedAtEnd != "" {
+		qb = qb.Where(squirrel.LtOrEq{"t.created_at": filters.CreatedAtEnd})
+	}
+
+	sql, args, err := qb.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	var taskCounts []types.TaskCountPerDeployment
+	err = c.client.SelectContext(ctx, &taskCounts, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return taskCounts, nil
+}
+
+func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error) {
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+		`DATE_TRUNC('hour', t.created_at) as time, COUNT(t.id) as count,
+			json_build_object(
+				'COMPLETE', SUM(CASE WHEN t.status = 'COMPLETE' THEN 1 ELSE 0 END),
+				'ERROR', SUM(CASE WHEN t.status = 'ERROR' THEN 1 ELSE 0 END),
+				'CANCELLED', SUM(CASE WHEN t.status = 'CANCELLED' THEN 1 ELSE 0 END),
+				'TIMEOUT', SUM(CASE WHEN t.status = 'TIMEOUT' THEN 1 ELSE 0 END),
+				'RETRY', SUM(CASE WHEN t.status = 'RETRY' THEN 1 ELSE 0 END),
+				'PENDING', SUM(CASE WHEN t.status = 'PENDING' THEN 1 ELSE 0 END),
+				'RUNNING', SUM(CASE WHEN t.status = 'RUNNING' THEN 1 ELSE 0 END)
+			)::json AS status_counts`,
+	).
+		From("task t").GroupBy("time").OrderBy("time DESC")
+
+	// Apply filters
+	if filters.WorkspaceID > 0 {
+		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
+	}
+
+	if filters.StubId != "" {
+		qb = qb.Join("stub s ON t.stub_id = s.id")
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
+	}
+
+	if filters.CreatedAtStart != "" {
+		qb = qb.Where(squirrel.GtOrEq{"t.created_at": filters.CreatedAtStart})
+	}
+
+	if filters.CreatedAtEnd != "" {
+		qb = qb.Where(squirrel.LtOrEq{"t.created_at": filters.CreatedAtEnd})
+	}
+
+	sql, args, err := qb.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	var taskCounts []types.TaskCountByTime
+	err = c.client.SelectContext(ctx, &taskCounts, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return taskCounts, nil
+}
+
+func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, filters types.TaskFilter) ([]types.TaskWithRelated, error) {
+	qb := c.listTaskWithRelatedQueryBuilder(filters)
 
 	sql, args, err := qb.ToSql()
 	if err != nil {
@@ -411,6 +568,27 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 	}
 
 	return tasks, nil
+}
+
+func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error) {
+	qb := c.listTaskWithRelatedQueryBuilder(filters)
+
+	page, err := common.Paginate(
+		common.SquirrelCursorPaginator[types.TaskWithRelated]{
+			Client:          c.client,
+			SelectBuilder:   qb,
+			SortOrder:       "DESC",
+			SortColumn:      "created_at",
+			SortQueryPrefix: "t",
+			PageSize:        int(filters.Limit),
+		},
+		filters.Cursor,
+	)
+	if err != nil {
+		return common.CursorPaginationInfo[types.TaskWithRelated]{}, err
+	}
+
+	return *page, nil
 }
 
 // Stub
@@ -472,24 +650,52 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	return &stub, nil
 }
 
-func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
+// Volume
+
+func (c *PostgresBackendRepository) GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
 	var volume types.Volume
 
-	queryGet := `SELECT id, external_id, name, workspace_id, created_at FROM volume WHERE name = $1 AND workspace_id = $2;`
+	queryGet := `SELECT id, external_id, name, workspace_id, created_at, updated_at FROM volume WHERE name = $1 AND workspace_id = $2;`
 
-	err := c.client.GetContext(ctx, &volume, queryGet, name, workspaceId)
-	if err == nil {
-		return &volume, err
-	}
-
-	queryCreate := `INSERT INTO volume (name, workspace_id) VALUES ($1, $2) RETURNING id, external_id, name, workspace_id, created_at;`
-
-	err = c.client.GetContext(ctx, &volume, queryCreate, name, workspaceId)
-	if err != nil {
-		return &types.Volume{}, err
+	if err := c.client.GetContext(ctx, &volume, queryGet, name, workspaceId); err != nil {
+		return nil, err
 	}
 
 	return &volume, nil
+}
+
+func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
+	v, err := c.GetVolume(ctx, workspaceId, name)
+	if err == nil {
+		return v, nil
+	}
+
+	queryCreate := `INSERT INTO volume (name, workspace_id) VALUES ($1, $2) RETURNING id, external_id, name, workspace_id, created_at, updated_at;`
+
+	var volume types.Volume
+	err = c.client.GetContext(ctx, &volume, queryCreate, name, workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &volume, nil
+}
+
+func (c *PostgresBackendRepository) ListVolumesWithRelated(ctx context.Context, workspaceId uint) ([]types.VolumeWithRelated, error) {
+	var volumes []types.VolumeWithRelated
+	query := `
+		SELECT v.id, v.external_id, v.name, v.workspace_id, v.created_at, v.updated_at, w.name as "workspace.name"
+		FROM volume v
+		JOIN workspace w ON v.workspace_id = w.id
+		WHERE v.workspace_id = $1;
+	`
+
+	err := c.client.SelectContext(ctx, &volumes, query, workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return volumes, nil
 }
 
 // Deployment
@@ -520,8 +726,8 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	var deploymentWithRelated types.DeploymentWithRelated
 
 	query := `
-        SELECT d.*, 
-               w.external_id AS "workspace.external_id", w.name AS "workspace.name", 
+        SELECT d.*,
+               w.external_id AS "workspace.external_id", w.name AS "workspace.name",
                s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
@@ -532,6 +738,7 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 
 	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, name, version, stubType)
 	if err != nil {
+		log.Println("err: ", err)
 		return nil, err
 	}
 
@@ -542,8 +749,8 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
 	var deploymentWithRelated types.DeploymentWithRelated
 
 	query := `
-        SELECT d.*, 
-               w.external_id AS "workspace.external_id", w.name AS "workspace.name", 
+        SELECT d.*,
+               w.external_id AS "workspace.external_id", w.name AS "workspace.name",
                s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
@@ -560,7 +767,7 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
 	return &deploymentWithRelated, nil
 }
 
-func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.DeploymentFilter) squirrel.SelectBuilder {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"d.id, d.external_id, d.name, d.active, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at",
 		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
@@ -577,7 +784,11 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters
 	}
 
 	if filters.Name != "" {
-		qb = qb.Where(squirrel.Eq{"d.name": filters.Name})
+		if err := uuid.Validate(filters.Name); err == nil {
+			qb = qb.Where(squirrel.Eq{"d.external_id": filters.Name})
+		} else {
+			qb = qb.Where(squirrel.Eq{"d.name": filters.Name})
+		}
 	}
 
 	if filters.Offset > 0 {
@@ -587,6 +798,20 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters
 	if filters.Limit > 0 {
 		qb = qb.Limit(uint64(filters.Limit))
 	}
+
+	if filters.CreatedAtStart != "" {
+		qb = qb.Where(squirrel.GtOrEq{"d.created_at": filters.CreatedAtStart})
+	}
+
+	if filters.CreatedAtEnd != "" {
+		qb = qb.Where(squirrel.LtOrEq{"d.created_at": filters.CreatedAtEnd})
+	}
+
+	return qb
+}
+
+func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+	qb := c.listDeploymentsQueryBuilder(filters)
 
 	sql, args, err := qb.ToSql()
 	if err != nil {
@@ -600,6 +825,27 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters
 	}
 
 	return deployments, nil
+}
+
+func (c *PostgresBackendRepository) ListDeploymentsPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
+	qb := c.listDeploymentsQueryBuilder(filters)
+
+	page, err := common.Paginate(
+		common.SquirrelCursorPaginator[types.DeploymentWithRelated]{
+			Client:          c.client,
+			SelectBuilder:   qb,
+			SortOrder:       "DESC",
+			SortColumn:      "created_at",
+			SortQueryPrefix: "d",
+			PageSize:        int(filters.Limit),
+		},
+		filters.Cursor,
+	)
+	if err != nil {
+		return common.CursorPaginationInfo[types.DeploymentWithRelated]{}, err
+	}
+
+	return *page, nil
 }
 
 func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error) {
@@ -617,4 +863,19 @@ func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, worksp
 	}
 
 	return &deployment, nil
+}
+
+func (c *PostgresBackendRepository) ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error) {
+	query := `
+		SELECT s.*, w.external_id AS "workspace.external_id", w.name AS "workspace.name"
+		FROM stub s
+		JOIN workspace w ON s.workspace_id = w.id
+		WHERE s.external_id = ANY($1);`
+	var stubs []types.StubWithRelated
+	err := c.client.SelectContext(ctx, &stubs, query, pq.Array(filters.StubIds))
+	if err != nil {
+		return nil, err
+	}
+
+	return stubs, nil
 }

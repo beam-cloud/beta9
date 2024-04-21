@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	pb "github.com/beam-cloud/beta9/proto"
 
@@ -24,7 +25,7 @@ import (
 
 const (
 	defaultWorkingDirectory string = "/mnt/code"
-	defaultWorkerServerPort int    = 1000
+	defaultWorkerServerPort int    = 1989
 )
 
 type RunCServer struct {
@@ -52,7 +53,7 @@ func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], image
 }
 
 func (s *RunCServer) Start() error {
-	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", defaultWorkerServerPort))
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", defaultWorkerServerPort))
 	if err != nil {
 		log.Fatalf("failed to listen: %v\n", err)
 	}
@@ -71,11 +72,11 @@ func (s *RunCServer) Start() error {
 }
 
 func (s *RunCServer) RunCKill(ctx context.Context, in *pb.RunCKillRequest) (*pb.RunCKillResponse, error) {
-	err := s.runcHandle.Kill(ctx, in.ContainerId, int(syscall.SIGTERM), &runc.KillOpts{
+	_ = s.runcHandle.Kill(ctx, in.ContainerId, int(syscall.SIGTERM), &runc.KillOpts{
 		All: true,
 	})
 
-	err = s.runcHandle.Delete(ctx, in.ContainerId, &runc.DeleteOpts{
+	err := s.runcHandle.Delete(ctx, in.ContainerId, &runc.DeleteOpts{
 		Force: true,
 	})
 
@@ -131,22 +132,28 @@ func (s *RunCServer) RunCStreamLogs(req *pb.RunCStreamLogsRequest, stream pb.Run
 	}
 
 	buffer := make([]byte, 4096)
+	logEntry := &pb.RunCLogEntry{}
+
 	for {
 		n, err := instance.LogBuffer.Read(buffer)
 		if err == io.EOF {
 			break
 		}
+
 		if err != nil {
 			return err
 		}
 
-		logEntry := &pb.RunCLogEntry{
-			Msg: string(buffer[:n]),
+		if n > 0 {
+			logEntry.Msg = string(buffer[:n])
+			if err := stream.Send(logEntry); err != nil {
+				return err
+			}
+
+			continue
 		}
 
-		if err := stream.Send(logEntry); err != nil {
-			return err
-		}
+		time.Sleep(time.Duration(100) * time.Millisecond)
 	}
 
 	return nil

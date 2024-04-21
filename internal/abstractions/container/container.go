@@ -8,14 +8,15 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/beam-cloud/beta9/internal/abstractions"
+	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
+	pb "github.com/beam-cloud/beta9/proto"
+
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
-	pb "github.com/beam-cloud/beta9/proto"
 )
 
 const (
@@ -85,7 +86,10 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		return err
 	}
 
-	task, err := cs.backendRepo.CreateTask(ctx, "", authInfo.Workspace.Id, stub.Stub.Id)
+	task, err := cs.backendRepo.CreateTask(ctx, &types.TaskParams{
+		WorkspaceId: authInfo.Workspace.Id,
+		StubId:      stub.Stub.Id,
+	})
 	if err != nil {
 		return err
 	}
@@ -143,7 +147,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		return err
 	}
 
-	hostname, err := cs.containerRepo.GetContainerWorkerHostname(task.ContainerId)
+	hostname, err := cs.containerRepo.GetWorkerAddress(task.ContainerId)
 	if err != nil {
 		return err
 	}
@@ -159,12 +163,12 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 	}
 
 	go client.StreamLogs(ctx, task.ContainerId, outputChan)
-	return cs.handleStreams(ctx, stream, authInfo.Workspace.Name, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
+	return cs.handleStreams(ctx, stream, task.ExternalId, task.ContainerId, outputChan, keyEventChan)
 }
 
 func (cs *CmdContainerService) handleStreams(ctx context.Context,
 	stream pb.ContainerService_ExecuteCommandServer,
-	workspaceName, taskId, containerId string,
+	taskId, containerId string,
 	outputChan chan common.OutputMsg, keyEventChan chan common.KeyEvent) error {
 
 	var lastMessage common.OutputMsg

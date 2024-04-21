@@ -32,10 +32,12 @@ func (s *MountPointStorage) Mount(localPath string) error {
 		localPath,
 	)
 
-	s.mountCmd.Env = append(s.mountCmd.Env,
-		fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", s.config.AWSAccessKey),
-		fmt.Sprintf("AWS_SECRET_ACCESS_KEY=%s", s.config.AWSSecretKey),
-	)
+	if s.config.AWSAccessKey != "" || s.config.AWSSecretKey != "" {
+		s.mountCmd.Env = append(s.mountCmd.Env,
+			fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", s.config.AWSAccessKey),
+			fmt.Sprintf("AWS_SECRET_ACCESS_KEY=%s", s.config.AWSSecretKey),
+		)
+	}
 
 	go func() {
 		output, err := s.mountCmd.CombinedOutput()

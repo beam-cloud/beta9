@@ -1,13 +1,19 @@
 from typing import Any
 
 import cloudpickle
-from beta9.abstractions.base import BaseAbstraction
-from beta9.clients.map import (
+
+from ..abstractions.base import BaseAbstraction
+from ..clients.map import (
+    MapCountRequest,
     MapCountResponse,
+    MapDeleteRequest,
     MapDeleteResponse,
+    MapGetRequest,
     MapGetResponse,
+    MapKeysRequest,
     MapKeysResponse,
     MapServiceStub,
+    MapSetRequest,
     MapSetResponse,
 )
 
@@ -15,7 +21,7 @@ from beta9.clients.map import (
 class Map(BaseAbstraction):
     """A distributed python dictionary."""
 
-    def __init__(self, *, name: str) -> "Map":
+    def __init__(self, *, name: str) -> None:
         """
         Creates a Map Instance.
 
@@ -55,12 +61,14 @@ class Map(BaseAbstraction):
 
     def set(self, key: str, value: Any) -> bool:
         r: MapSetResponse = self.run_sync(
-            self.stub.map_set(name=self.name, key=key, value=cloudpickle.dumps(value))
+            self.stub.map_set(
+                MapSetRequest(name=self.name, key=key, value=cloudpickle.dumps(value))
+            )
         )
         return r.ok
 
     def get(self, key: str) -> Any:
-        r: MapGetResponse = self.run_sync(self.stub.map_get(name=self.name, key=key))
+        r: MapGetResponse = self.run_sync(self.stub.map_get(MapGetRequest(name=self.name, key=key)))
         return cloudpickle.loads(r.value) if r.ok else None
 
     def __setitem__(self, key, value):
@@ -70,27 +78,31 @@ class Map(BaseAbstraction):
         return self.get(key)
 
     def __delitem__(self, key):
-        r: MapDeleteResponse = self.run_sync(self.stub.map_delete(name=self.name, key=key))
+        r: MapDeleteResponse = self.run_sync(
+            self.stub.map_delete(MapDeleteRequest(name=self.name, key=key))
+        )
         if not r.ok:
             raise KeyError(key)
 
     def __len__(self):
-        r: MapCountResponse = self.run_sync(self.stub.map_count(name=self.name))
+        r: MapCountResponse = self.run_sync(self.stub.map_count(MapCountRequest(name=self.name)))
         return r.count if r.ok else 0
 
     def __iter__(self):
-        r: MapKeysResponse = self.run_sync(self.stub.map_keys(name=self.name))
+        r: MapKeysResponse = self.run_sync(self.stub.map_keys(MapKeysRequest(name=self.name)))
         return iter(r.keys) if r.ok else iter([])
 
     def items(self):
-        keys_response: MapKeysResponse = self.run_sync(self.stub.map_keys(name=self.name))
+        keys_response: MapKeysResponse = self.run_sync(
+            self.stub.map_keys(MapKeysRequest(name=self.name))
+        )
         if not keys_response.ok:
             return iter([])
 
         def _generate_items():
             for key in keys_response.keys:
                 value_response: MapGetResponse = self.run_sync(
-                    self.stub.map_get(name=self.name, key=key)
+                    self.stub.map_get(MapGetRequest(name=self.name, key=key))
                 )
 
                 if value_response.ok:

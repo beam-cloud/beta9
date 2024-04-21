@@ -5,9 +5,9 @@ go 1.21
 toolchain go1.21.8
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/alicebob/miniredis/v2 v2.30.5
-	github.com/asecurityteam/rolling v0.0.0-20230418204413-b4052899307d
 	github.com/aws/aws-sdk-go-v2 v1.25.0
 	github.com/aws/aws-sdk-go-v2/config v1.26.6
 	github.com/aws/aws-sdk-go-v2/credentials v1.16.16
@@ -16,7 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.48.1
 	github.com/beam-cloud/blobcache v0.0.0-20240111193326-cae10a611c3f
-	github.com/beam-cloud/clip v0.0.0-20240220210835-036152bc50ee
+	github.com/beam-cloud/clip v0.0.0-20240418200512-cdc1e65d102a
 	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
 	github.com/bsm/redislock v0.9.4
 	github.com/cloudevents/sdk-go/v2 v2.15.1
@@ -37,6 +37,7 @@ require (
 	github.com/opencontainers/runtime-spec v1.1.0
 	github.com/opencontainers/umoci v0.4.7
 	github.com/openmeterio/openmeter v1.0.0-beta.47
+	github.com/oracle/oci-go-sdk v24.3.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/pressly/goose/v3 v3.17.0
 	github.com/prometheus/client_golang v1.19.0
@@ -162,7 +163,6 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.0-rc5 // indirect
 	github.com/opencontainers/runc v1.1.10 // indirect
-	github.com/oracle/oci-go-sdk v24.3.0+incompatible // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -194,6 +194,7 @@ require (
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	github.com/yuin/gopher-lua v1.1.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	go.uber.org/zap v1.26.0 // indirect
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13 // indirect
 	go4.org/netipx v0.0.0-20230824141953-6213f710f925 // indirect
 	golang.org/x/crypto v0.19.0 // indirect

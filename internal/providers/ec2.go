@@ -9,10 +9,9 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsTypes "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -33,14 +32,8 @@ const (
 )
 
 func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*EC2Provider, error) {
-	credentials := credentials.NewStaticCredentialsProvider(appConfig.Providers.EC2Config.AWSAccessKey, appConfig.Providers.EC2Config.AWSSecretKey, "")
-
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
-		config.WithRegion(appConfig.Providers.EC2Config.AWSRegion),
-		config.WithCredentialsProvider(credentials),
-	)
+	cfg, err := common.GetAWSConfig(appConfig.Providers.EC2Config.AWSAccessKey, appConfig.Providers.EC2Config.AWSSecretKey, "")
 	if err != nil {
-		log.Printf("Unable to load AWS config: %v", err)
 		return nil, err
 	}
 
@@ -92,6 +85,20 @@ func (p *EC2Provider) getAvailableInstances() ([]Instance, error) {
 		{"m6i.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "", 0}},
 		{"m6i.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "", 0}},
 		{"m6i.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "", 0}},
+
+		{"g6.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "G6", 1}},
+		{"g6.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "G6", 1}},
+		{"g6.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "G6", 1}},
+		{"g6.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "G6", 1}},
+		{"g6.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "G6", 1}},
+
+		{"m7i.large", InstanceSpec{2 * 1000, 8 * 1024, "", 0}},
+		{"m7i.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "", 0}},
+		{"m7i.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "", 0}},
+		{"m7i.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "", 0}},
+		{"m7i.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "", 0}},
+		{"m7i.12xlarge", InstanceSpec{48 * 1000, 192 * 1024, "", 0}},
+		{"m7i.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "", 0}},
 	}, nil
 }
 

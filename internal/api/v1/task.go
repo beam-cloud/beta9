@@ -21,8 +21,14 @@ func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 		config:      config,
 	}
 
-	g.GET("/:workspaceId", group.ListTasks)
-	g.GET("/:workspaceId/", group.ListTasks)
+	g.GET("/:workspaceId", group.ListTasksPaginated)
+	g.GET("/:workspaceId/", group.ListTasksPaginated)
+
+	g.GET("/:workspaceId/task-count-by-deployment", group.GetTaskCountByDeployment)
+	g.GET("/:workspaceId/task-count-by-deployment/", group.GetTaskCountByDeployment)
+
+	g.GET("/:workspaceId/aggregate-by-time-window", group.AggregateTasksByTimeWindow)
+	g.GET("/:workspaceId/aggregate-by-time-window/", group.AggregateTasksByTimeWindow)
 
 	g.GET("/:workspaceId/:taskId", group.RetrieveTask)
 	g.GET("/:workspaceId/:taskId/", group.RetrieveTask)
@@ -30,26 +36,54 @@ func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 	return group
 }
 
-func (g *TaskGroup) ListTasks(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return echo.NewHTTPError(http.StatusUnauthorized)
-	}
-
-	workspaceId := ctx.Param("workspaceId")
-	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+func (g *TaskGroup) GetTaskCountByDeployment(ctx echo.Context) error {
+	_, err := g.authorize(ctx)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+		return err
 	}
 
-	var filters types.TaskFilter
-	if err := ctx.Bind(&filters); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode query parameters")
+	filters, err := g.preprocessFilters(ctx)
+	if err != nil {
+		return err
 	}
 
-	filters.WorkspaceID = workspace.Id
+	if tasks, err := g.backendRepo.GetTaskCountPerDeployment(ctx.Request().Context(), *filters); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
+	} else {
+		return ctx.JSON(http.StatusOK, tasks)
+	}
+}
 
-	if tasks, err := g.backendRepo.ListTasksWithRelated(ctx.Request().Context(), filters); err != nil {
+func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
+	_, err := g.authorize(ctx)
+	if err != nil {
+		return err
+	}
+
+	filters, err := g.preprocessFilters(ctx)
+	if err != nil {
+		return err
+	}
+
+	if tasks, err := g.backendRepo.AggregateTasksByTimeWindow(ctx.Request().Context(), *filters); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
+	} else {
+		return ctx.JSON(http.StatusOK, tasks)
+	}
+}
+
+func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
+	_, err := g.authorize(ctx)
+	if err != nil {
+		return err
+	}
+
+	filters, err := g.preprocessFilters(ctx)
+	if err != nil {
+		return err
+	}
+
+	if tasks, err := g.backendRepo.ListTasksWithRelatedPaginated(ctx.Request().Context(), *filters); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
 	} else {
 		return ctx.JSON(http.StatusOK, tasks)
@@ -63,9 +97,34 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 	}
 
 	taskId := ctx.Param("taskId")
-	if task, err := g.backendRepo.GetTask(ctx.Request().Context(), taskId); err != nil {
+	if task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve task")
 	} else {
 		return ctx.JSON(http.StatusOK, task)
 	}
+}
+
+func (g *TaskGroup) authorize(ctx echo.Context) (*auth.HttpAuthContext, error) {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return nil, echo.NewHTTPError(http.StatusUnauthorized)
+	}
+	return cc, nil
+}
+
+func (g *TaskGroup) preprocessFilters(ctx echo.Context) (*types.TaskFilter, error) {
+	var filters types.TaskFilter
+	workspaceId := ctx.Param("workspaceId")
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return nil, echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+	}
+
+	if err := ctx.Bind(&filters); err != nil {
+		return nil, echo.NewHTTPError(http.StatusBadRequest, "Failed to decode query parameters")
+	}
+
+	filters.WorkspaceID = workspace.Id
+
+	return &filters, nil
 }

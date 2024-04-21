@@ -13,6 +13,10 @@ service TaskQueueService {
       returns (TaskQueueCompleteResponse) {}
   rpc TaskQueueLength(TaskQueueLengthRequest)
       returns (TaskQueueLengthResponse) {}
+  rpc StartTaskQueueServe(StartTaskQueueServeRequest)
+      returns (stream StartTaskQueueServeResponse) {}
+  rpc StopTaskQueueServe(StopTaskQueueServeRequest)
+      returns (StopTaskQueueServeResponse) {}
 }
 
 message TaskQueuePutRequest {
@@ -66,3 +70,14 @@ message TaskQueueMonitorResponse {
   bool complete = 3;
   bool timed_out = 4;
 }
+
+message StartTaskQueueServeRequest { string stub_id = 1; }
+
+message StartTaskQueueServeResponse {
+  string output = 1;
+  bool done = 2;
+  int32 exit_code = 3;
+}
+
+message StopTaskQueueServeRequest { string stub_id = 1; }
+message StopTaskQueueServeResponse { bool ok = 1; }

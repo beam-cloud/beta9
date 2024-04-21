@@ -75,7 +75,10 @@ type ImageServiceConfig struct {
 	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
 	RegistryCredentialProviderName string                `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
 	Registries                     ImageRegistriesConfig `key:"registries" json:"registries"`
+	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
 	EnableTLS                      bool                  `key:"enableTLS" json:"enable_tls"`
+	BuildContainerCpu              int64                 `key:"buildContainerCpu" json:"build_container_cpu"`
+	BuildContainerMemory           int64                 `key:"buildContainerMemory" json:"build_container_memory"`
 	Runner                         RunnerConfig          `key:"runner" json:"runner"`
 }
 
@@ -117,6 +120,7 @@ type JuiceFSConfig struct {
 	AWSS3Bucket  string `key:"awsS3Bucket" json:"aws_s3_bucket"`
 	AWSAccessKey string `key:"awsAccessKey" json:"aws_access_key"`
 	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`
+	CacheSize    int64  `key:"cacheSize" json:"cache_size"`
 }
 
 type MountPointConfig struct {

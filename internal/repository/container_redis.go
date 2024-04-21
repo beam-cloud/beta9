@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -63,6 +64,13 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, info *
 	err = cr.rdb.Expire(context.TODO(), stateKey, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set container state ttl <%v>: %w", stateKey, err)
+	}
+
+	// Add container state key to index (by stub id)
+	indexKey := common.RedisKeys.SchedulerContainerIndex(info.StubId)
+	err = cr.rdb.SAdd(context.TODO(), indexKey, stateKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to add container state key to index <%v>: %w", indexKey, err)
 	}
 
 	return nil
@@ -149,28 +157,28 @@ func (cr *ContainerRedisRepository) DeleteContainerState(request *types.Containe
 		return fmt.Errorf("failed to delete container state <%v>: %w", stateKey, err)
 	}
 
-	hostKey := common.RedisKeys.SchedulerContainerHost(containerId)
-	err = cr.rdb.Del(context.TODO(), hostKey).Err()
+	addrKey := common.RedisKeys.SchedulerContainerAddress(containerId)
+	err = cr.rdb.Del(context.TODO(), addrKey).Err()
 	if err != nil {
-		return fmt.Errorf("failed to delete container host <%v>: %w", hostKey, err)
+		return fmt.Errorf("failed to delete container addr <%v>: %w", addrKey, err)
 	}
 
 	return nil
 }
 
 func (cr *ContainerRedisRepository) SetContainerAddress(containerId string, addr string) error {
-	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerHost(containerId), addr, 0).Err()
+	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerAddress(containerId), addr, 0).Err()
 }
 
 func (cr *ContainerRedisRepository) GetContainerAddress(containerId string) (string, error) {
-	return cr.rdb.Get(context.TODO(), common.RedisKeys.SchedulerContainerHost(containerId)).Result()
+	return cr.rdb.Get(context.TODO(), common.RedisKeys.SchedulerContainerAddress(containerId)).Result()
 }
 
-func (cr *ContainerRedisRepository) SetContainerWorkerHostname(containerId string, addr string) error {
-	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerContainerHost(containerId), addr, 0).Err()
+func (cr *ContainerRedisRepository) SetWorkerAddress(containerId string, addr string) error {
+	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerAddress(containerId), addr, 0).Err()
 }
 
-func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId string) (string, error) {
+func (cr *ContainerRedisRepository) GetWorkerAddress(containerId string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -183,9 +191,9 @@ func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId strin
 	for {
 		select {
 		case <-ctx.Done():
-			return "", errors.New("timeout reached while trying to get worker hostname")
+			return "", errors.New("timeout reached while trying to get worker addr")
 		case <-ticker.C:
-			hostname, err = cr.rdb.Get(ctx, common.RedisKeys.SchedulerWorkerContainerHost(containerId)).Result()
+			hostname, err = cr.rdb.Get(ctx, common.RedisKeys.SchedulerWorkerAddress(containerId)).Result()
 			if err == nil {
 				return hostname, nil
 			}
@@ -193,47 +201,71 @@ func (cr *ContainerRedisRepository) GetContainerWorkerHostname(containerId strin
 	}
 }
 
-func (cr *ContainerRedisRepository) GetActiveContainersByPrefix(patternPrefix string) ([]types.ContainerState, error) {
-	pattern := common.RedisKeys.SchedulerContainerState(patternPrefix)
-
-	keys, err := cr.rdb.Scan(context.Background(), pattern)
+func (cr *ContainerRedisRepository) GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error) {
+	indexKey := common.RedisKeys.SchedulerContainerIndex(stubId)
+	keys, err := cr.rdb.SMembers(context.TODO(), indexKey).Result()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get keys for pattern <%v>: %v", pattern, err)
+		return nil, fmt.Errorf("failed to retrieve container state keys: %v", err)
 	}
 
-	containerStates := make([]types.ContainerState, 0, len(keys))
+	var containerStates []types.ContainerState
 	for _, key := range keys {
-		res, err := cr.rdb.HGetAll(context.Background(), key).Result()
+		exists, err := cr.rdb.Exists(context.TODO(), key).Result()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get container state for key %s: %w", key, err)
+			continue
+		}
+		if exists == 0 {
+			containerId := strings.Split(key, ":")[len(strings.Split(key, ":"))-1]
+			exitCodeKey := common.RedisKeys.SchedulerContainerExitCode(containerId)
+
+			exitCodeKeyExists, err := cr.rdb.Exists(context.TODO(), exitCodeKey).Result()
+			if err != nil {
+				continue
+			}
+
+			if exitCodeKeyExists > 0 {
+				continue
+			}
+
+			// We don't have an exit code, or a state key, remove key from set
+			cr.rdb.SRem(context.TODO(), indexKey, key)
+			continue
 		}
 
-		state := &types.ContainerState{}
-		if err = common.ToStruct(res, state); err != nil {
-			return nil, fmt.Errorf("failed to deserialize container state <%v>: %v", key, err)
+		res, err := cr.rdb.HGetAll(context.TODO(), key).Result()
+		if err != nil {
+			continue
 		}
 
-		containerStates = append(containerStates, *state)
+		var state types.ContainerState
+		if err = common.ToStruct(res, &state); err != nil {
+			continue
+		}
+
+		containerStates = append(containerStates, state)
 	}
 
 	return containerStates, nil
 }
 
-func (cr *ContainerRedisRepository) GetFailedContainerCountByPrefix(patternPrefix string) (int, error) {
-	pattern := common.RedisKeys.SchedulerContainerExitCode(patternPrefix)
-
-	// Retrieve keys with the specified pattern
-	keys, err := cr.rdb.Scan(context.Background(), pattern)
+func (cr *ContainerRedisRepository) GetFailedContainerCountByStubId(stubId string) (int, error) {
+	indexKey := common.RedisKeys.SchedulerContainerIndex(stubId)
+	keys, err := cr.rdb.SMembers(context.TODO(), indexKey).Result()
 	if err != nil {
-		return -1, fmt.Errorf("failed to get keys with pattern <%v>: %w", pattern, err)
+		return -1, err
 	}
 
+	// Retrieve the value (exit code) for each key
 	failedCount := 0
 	for _, key := range keys {
-		// Retrieve the value (exit code) for each key
-		exitCode, err := cr.rdb.Get(context.Background(), key).Int()
-		if err != nil {
+		containerId := strings.Split(key, ":")[len(strings.Split(key, ":"))-1]
+		exitCodeKey := common.RedisKeys.SchedulerContainerExitCode(containerId)
+
+		exitCode, err := cr.rdb.Get(context.Background(), exitCodeKey).Int()
+		if err != nil && err != redis.Nil {
 			return -1, fmt.Errorf("failed to get value for key <%v>: %w", key, err)
+		} else if err == redis.Nil {
+			continue
 		}
 
 		// Check if the exit code is non-zero

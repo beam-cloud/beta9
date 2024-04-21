@@ -11,7 +11,6 @@ import (
 
 type ContainerOverlay struct {
 	containerId string
-	bundlePath  string
 	layers      []ContainerOverlayLayer
 	root        string
 	overlayPath string
@@ -25,14 +24,9 @@ type ContainerOverlayLayer struct {
 	merged string
 }
 
-func NewContainerOverlay(containerId string, bundlePath string, overlayPath string, rootPath string) *ContainerOverlay {
-	if rootPath == "" {
-		rootPath = bundlePath
-	}
-
+func NewContainerOverlay(containerId string, rootPath string, overlayPath string) *ContainerOverlay {
 	return &ContainerOverlay{
 		containerId: containerId,
-		bundlePath:  bundlePath,
 		layers:      []ContainerOverlayLayer{},
 		root:        rootPath,
 		overlayPath: overlayPath,

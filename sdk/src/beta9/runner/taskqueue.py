@@ -1,5 +1,4 @@
 import asyncio
-import atexit
 import json
 import os
 import signal
@@ -14,31 +13,39 @@ from typing import Any, List, NamedTuple, Union
 import cloudpickle
 import grpc
 import grpclib
-from beta9.aio import run_sync
-from beta9.clients.taskqueue import (
-    TaskQueueCompleteResponse,
-    TaskQueueMonitorResponse,
-    TaskQueuePopResponse,
-    TaskQueueServiceStub,
-)
-from beta9.config import with_runner_context
-from beta9.exceptions import RunnerException
-from beta9.runner.common import config, load_handler
-from beta9.type import TaskExitCode, TaskStatus
 from grpclib.client import Channel
 from grpclib.exceptions import StreamTerminatedError
 
+from ..aio import run_sync
+from ..clients.taskqueue import (
+    TaskQueueCompleteRequest,
+    TaskQueueCompleteResponse,
+    TaskQueueMonitorRequest,
+    TaskQueueMonitorResponse,
+    TaskQueuePopRequest,
+    TaskQueuePopResponse,
+    TaskQueueServiceStub,
+)
+from ..config import with_runner_context
+from ..exceptions import RunnerException
+from ..logging import StdoutJsonInterceptor
+from ..runner.common import config, load_handler
+from ..type import TaskExitCode, TaskStatus
+
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.01
+TASK_MANAGER_INTERVAL = 0.1
 
 
 class TaskQueueManager:
     def __init__(self) -> None:
-        set_start_method("spawn", force=True)
-
         # Manager attributes
         self.pid: int = os.getpid()
         self.exit_code: int = 0
+        self.shutdown_event = Event()
+
+        self._setup_signal_handlers()
+        set_start_method("spawn", force=True)
 
         # Task worker attributes
         self.task_worker_count: int = config.concurrency
@@ -49,21 +56,34 @@ class TaskQueueManager:
         ]
         self.task_worker_watchdog_threads: List[threading.Thread] = []
 
+    def _setup_signal_handlers(self):
+        if os.getpid() == self.pid:
+            signal.signal(signal.SIGTERM, self._init_shutdown)
+
+    def _init_shutdown(self, signum=None, frame=None):
+        self.shutdown_event.set()
+
     def run(self):
         for worker_index in range(self.task_worker_count):
             print(f"Starting task worker[{worker_index}]")
             self._start_worker(worker_index)
 
-        for task_process in self.task_processes:
-            task_process.join()
+        while not self.shutdown_event.is_set():
+            time.sleep(TASK_MANAGER_INTERVAL)
+
+        self.shutdown()
 
     def shutdown(self):
+        print("Spinning down taskqueue")
+
+        # Terminate all worker processes
         for task_process in self.task_processes:
             task_process.terminate()
-            task_process.join()
+            task_process.join(timeout=5)
 
         for task_process in self.task_processes:
             if task_process.is_alive():
+                print("Task process did not join within the timeout. Terminating...")
                 task_process.terminate()
                 task_process.join(timeout=0)
 
@@ -74,6 +94,7 @@ class TaskQueueManager:
         # Initialize task worker
         self.task_workers.append(
             TaskQueueWorker(
+                worker_index=worker_index,
                 parent_pid=self.pid,
                 worker_startup_event=self.task_worker_startup_events[worker_index],
             )
@@ -132,9 +153,11 @@ class TaskQueueWorker:
     def __init__(
         self,
         *,
+        worker_index: int,
         parent_pid: int,
         worker_startup_event: Event,
     ) -> None:
+        self.worker_index: int = worker_index
         self.parent_pid: int = parent_pid
         self.worker_startup_event: Event = worker_startup_event
 
@@ -143,13 +166,15 @@ class TaskQueueWorker:
     ) -> Union[Task, None]:
         try:
             r: TaskQueuePopResponse = run_sync(
-                taskqueue_stub.task_queue_pop(stub_id=stub_id, container_id=container_id)
+                taskqueue_stub.task_queue_pop(
+                    TaskQueuePopRequest(stub_id=stub_id, container_id=container_id)
+                )
             )
             if not r.ok or not r.task_msg:
                 return None
 
             task = json.loads(r.task_msg)
-            return Task(id=task["id"], args=task["args"], kwargs=task["kwargs"])
+            return Task(id=task["task_id"], args=task["args"], kwargs=task["kwargs"])
         except (grpclib.exceptions.StreamTerminatedError, OSError):
             return None
 
@@ -164,9 +189,11 @@ class TaskQueueWorker:
         while retry <= max_retries:
             try:
                 async for response in taskqueue_stub.task_queue_monitor(
-                    task_id=task.id,
-                    stub_id=stub_id,
-                    container_id=container_id,
+                    TaskQueueMonitorRequest(
+                        task_id=task.id,
+                        stub_id=stub_id,
+                        container_id=container_id,
+                    )
                 ):
                     response: TaskQueueMonitorResponse
                     if response.cancelled:
@@ -218,6 +245,7 @@ class TaskQueueWorker:
         handler = load_handler()
         executor = ThreadPoolExecutor()
 
+        print(f"Worker[{self.worker_index}] ready")
         while True:
             task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)
             if not task:
@@ -225,48 +253,53 @@ class TaskQueueWorker:
                 continue
 
             async def _run_task():
-                print(f"Running task <{task.id}>")
-                monitor_task = loop.create_task(
-                    self._monitor_task(config.stub_id, config.container_id, taskqueue_stub, task),
-                )
-
-                start_time = time.time()
-                task_status = TaskStatus.Complete
-                try:
-                    args = task.args or []
-                    kwargs = task.kwargs or {}
-                    result = await loop.run_in_executor(executor, lambda: handler(*args, **kwargs))
-                    result = cloudpickle.dumps(result)
-                except BaseException as exc:
-                    print(traceback.format_exc())
-                    result = cloudpickle.dumps(exc)
-                    task_status = TaskStatus.Error
-                finally:
-                    complete_task_response: TaskQueueCompleteResponse = (
-                        await taskqueue_stub.task_queue_complete(
-                            task_id=task.id,
-                            stub_id=config.stub_id,
-                            task_duration=time.time() - start_time,
-                            task_status=task_status,
-                            container_id=config.container_id,
-                            container_hostname=config.container_hostname,
-                            keep_warm_seconds=config.keep_warm_seconds,
-                        )
+                with StdoutJsonInterceptor(task_id=task.id):
+                    print(f"Running task <{task.id}>")
+                    monitor_task = loop.create_task(
+                        self._monitor_task(
+                            config.stub_id, config.container_id, taskqueue_stub, task
+                        ),
                     )
 
-                    if not complete_task_response.ok:
-                        raise RunnerException("Unable to end task")
+                    start_time = time.time()
+                    task_status = TaskStatus.Complete
+                    try:
+                        args = task.args or []
+                        kwargs = task.kwargs or {}
+                        result = await loop.run_in_executor(
+                            executor, lambda: handler(*args, **kwargs)
+                        )
+                        result = cloudpickle.dumps(result)
+                    except BaseException as exc:
+                        print(traceback.format_exc())
+                        result = cloudpickle.dumps(exc)
+                        task_status = TaskStatus.Error
+                    finally:
+                        complete_task_response: TaskQueueCompleteResponse = (
+                            await taskqueue_stub.task_queue_complete(
+                                TaskQueueCompleteRequest(
+                                    task_id=task.id,
+                                    stub_id=config.stub_id,
+                                    task_duration=time.time() - start_time,
+                                    task_status=task_status,
+                                    container_id=config.container_id,
+                                    container_hostname=config.container_hostname,
+                                    keep_warm_seconds=config.keep_warm_seconds,
+                                )
+                            )
+                        )
 
-                    print(f"Task completed <{task.id}>")
-                    monitor_task.cancel()
+                        if not complete_task_response.ok:
+                            raise RunnerException("Unable to end task")
+
+                        print(f"Task completed <{task.id}>")
+                        monitor_task.cancel()
 
             loop.run_until_complete(_run_task())
 
 
 if __name__ == "__main__":
     tq = TaskQueueManager()
-    atexit.register(tq.shutdown)
-
     tq.run()
 
     if tq.exit_code != 0 and tq.exit_code != TaskExitCode.SigTerm:

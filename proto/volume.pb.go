@@ -9,6 +9,7 @@ package proto
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 )
@@ -19,6 +20,101 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+type VolumeInstance struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Size          uint64                 `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	WorkspaceId   string                 `protobuf:"bytes,6,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	WorkspaceName string                 `protobuf:"bytes,7,opt,name=workspace_name,json=workspaceName,proto3" json:"workspace_name,omitempty"`
+}
+
+func (x *VolumeInstance) Reset() {
+	*x = VolumeInstance{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_volume_proto_msgTypes[0]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *VolumeInstance) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VolumeInstance) ProtoMessage() {}
+
+func (x *VolumeInstance) ProtoReflect() protoreflect.Message {
+	mi := &file_volume_proto_msgTypes[0]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VolumeInstance.ProtoReflect.Descriptor instead.
+func (*VolumeInstance) Descriptor() ([]byte, []int) {
+	return file_volume_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *VolumeInstance) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *VolumeInstance) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *VolumeInstance) GetSize() uint64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *VolumeInstance) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *VolumeInstance) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *VolumeInstance) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
+}
+
+func (x *VolumeInstance) GetWorkspaceName() string {
+	if x != nil {
+		return x.WorkspaceName
+	}
+	return ""
+}
 
 type GetOrCreateVolumeRequest struct {
 	state         protoimpl.MessageState
@@ -31,7 +127,7 @@ type GetOrCreateVolumeRequest struct {
 func (x *GetOrCreateVolumeRequest) Reset() {
 	*x = GetOrCreateVolumeRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_volume_proto_msgTypes[0]
+		mi := &file_volume_proto_msgTypes[1]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -44,7 +140,7 @@ func (x *GetOrCreateVolumeRequest) String() string {
 func (*GetOrCreateVolumeRequest) ProtoMessage() {}
 
 func (x *GetOrCreateVolumeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_volume_proto_msgTypes[0]
+	mi := &file_volume_proto_msgTypes[1]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -57,7 +153,7 @@ func (x *GetOrCreateVolumeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrCreateVolumeRequest.ProtoReflect.Descriptor instead.
 func (*GetOrCreateVolumeRequest) Descriptor() ([]byte, []int) {
-	return file_volume_proto_rawDescGZIP(), []int{0}
+	return file_volume_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *GetOrCreateVolumeRequest) GetName() string {
@@ -72,14 +168,15 @@ type GetOrCreateVolumeResponse struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Ok       bool   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	VolumeId string `protobuf:"bytes,2,opt,name=volume_id,json=volumeId,proto3" json:"volume_id,omitempty"`
+	Ok     bool            `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	ErrMsg string          `protobuf:"bytes,2,opt,name=err_msg,json=errMsg,proto3" json:"err_msg,omitempty"`
+	Volume *VolumeInstance `protobuf:"bytes,3,opt,name=volume,proto3" json:"volume,omitempty"`
 }
 
 func (x *GetOrCreateVolumeResponse) Reset() {
 	*x = GetOrCreateVolumeResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_volume_proto_msgTypes[1]
+		mi := &file_volume_proto_msgTypes[2]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -92,7 +189,7 @@ func (x *GetOrCreateVolumeResponse) String() string {
 func (*GetOrCreateVolumeResponse) ProtoMessage() {}
 
 func (x *GetOrCreateVolumeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_volume_proto_msgTypes[1]
+	mi := &file_volume_proto_msgTypes[2]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -105,7 +202,7 @@ func (x *GetOrCreateVolumeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrCreateVolumeResponse.ProtoReflect.Descriptor instead.
 func (*GetOrCreateVolumeResponse) Descriptor() ([]byte, []int) {
-	return file_volume_proto_rawDescGZIP(), []int{1}
+	return file_volume_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *GetOrCreateVolumeResponse) GetOk() bool {
@@ -115,35 +212,564 @@ func (x *GetOrCreateVolumeResponse) GetOk() bool {
 	return false
 }
 
-func (x *GetOrCreateVolumeResponse) GetVolumeId() string {
+func (x *GetOrCreateVolumeResponse) GetErrMsg() string {
 	if x != nil {
-		return x.VolumeId
+		return x.ErrMsg
 	}
 	return ""
+}
+
+func (x *GetOrCreateVolumeResponse) GetVolume() *VolumeInstance {
+	if x != nil {
+		return x.Volume
+	}
+	return nil
+}
+
+type ListPathRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Path       string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	LongFormat bool   `protobuf:"varint,2,opt,name=long_format,json=longFormat,proto3" json:"long_format,omitempty"`
+}
+
+func (x *ListPathRequest) Reset() {
+	*x = ListPathRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_volume_proto_msgTypes[3]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ListPathRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPathRequest) ProtoMessage() {}
+
+func (x *ListPathRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_volume_proto_msgTypes[3]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPathRequest.ProtoReflect.Descriptor instead.
+func (*ListPathRequest) Descriptor() ([]byte, []int) {
+	return file_volume_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ListPathRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *ListPathRequest) GetLongFormat() bool {
+	if x != nil {
+		return x.LongFormat
+	}
+	return false
+}
+
+type ListPathResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Ok     bool     `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	ErrMsg string   `protobuf:"bytes,2,opt,name=err_msg,json=errMsg,proto3" json:"err_msg,omitempty"`
+	Paths  []string `protobuf:"bytes,3,rep,name=paths,proto3" json:"paths,omitempty"`
+}
+
+func (x *ListPathResponse) Reset() {
+	*x = ListPathResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_volume_proto_msgTypes[4]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ListPathResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPathResponse) ProtoMessage() {}
+
+func (x *ListPathResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_volume_proto_msgTypes[4]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPathResponse.ProtoReflect.Descriptor instead.
+func (*ListPathResponse) Descriptor() ([]byte, []int) {
+	return file_volume_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ListPathResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *ListPathResponse) GetErrMsg() string {
+	if x != nil {
+		return x.ErrMsg
+	}
+	return ""
+}
+
+func (x *ListPathResponse) GetPaths() []string {
+	if x != nil {
+		return x.Paths
+	}
+	return nil
+}
+
+type DeletePathRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+}
+
+func (x *DeletePathRequest) Reset() {
+	*x = DeletePathRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_volume_proto_msgTypes[5]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *DeletePathRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeletePathRequest) ProtoMessage() {}
+
+func (x *DeletePathRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_volume_proto_msgTypes[5]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeletePathRequest.ProtoReflect.Descriptor instead.
+func (*DeletePathRequest) Descriptor() ([]byte, []int) {
+	return file_volume_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *DeletePathRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+type DeletePathResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Ok      bool     `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	ErrMsg  string   `protobuf:"bytes,2,opt,name=err_msg,json=errMsg,proto3" json:"err_msg,omitempty"`
+	Deleted []string `protobuf:"bytes,3,rep,name=deleted,proto3" json:"deleted,omitempty"`
+}
+
+func (x *DeletePathResponse) Reset() {
+	*x = DeletePathResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_volume_proto_msgTypes[6]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *DeletePathResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeletePathResponse) ProtoMessage() {}
+
+func (x *DeletePathResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_volume_proto_msgTypes[6]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeletePathResponse.ProtoReflect.Descriptor instead.
+func (*DeletePathResponse) Descriptor() ([]byte, []int) {
+	return file_volume_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *DeletePathResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *DeletePathResponse) GetErrMsg() string {
+	if x != nil {
+		return x.ErrMsg
+	}
+	return ""
+}
+
+func (x *DeletePathResponse) GetDeleted() []string {
+	if x != nil {
+		return x.Deleted
+	}
+	return nil
+}
+
+type CopyPathRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Path    string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Content []byte `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
+}
+
+func (x *CopyPathRequest) Reset() {
+	*x = CopyPathRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_volume_proto_msgTypes[7]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *CopyPathRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CopyPathRequest) ProtoMessage() {}
+
+func (x *CopyPathRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_volume_proto_msgTypes[7]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CopyPathRequest.ProtoReflect.Descriptor instead.
+func (*CopyPathRequest) Descriptor() ([]byte, []int) {
+	return file_volume_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *CopyPathRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *CopyPathRequest) GetContent() []byte {
+	if x != nil {
+		return x.Content
+	}
+	return nil
+}
+
+type CopyPathResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Ok       bool   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	ObjectId string `protobuf:"bytes,2,opt,name=object_id,json=objectId,proto3" json:"object_id,omitempty"`
+	ErrMsg   string `protobuf:"bytes,3,opt,name=err_msg,json=errMsg,proto3" json:"err_msg,omitempty"`
+}
+
+func (x *CopyPathResponse) Reset() {
+	*x = CopyPathResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_volume_proto_msgTypes[8]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *CopyPathResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CopyPathResponse) ProtoMessage() {}
+
+func (x *CopyPathResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_volume_proto_msgTypes[8]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CopyPathResponse.ProtoReflect.Descriptor instead.
+func (*CopyPathResponse) Descriptor() ([]byte, []int) {
+	return file_volume_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *CopyPathResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *CopyPathResponse) GetObjectId() string {
+	if x != nil {
+		return x.ObjectId
+	}
+	return ""
+}
+
+func (x *CopyPathResponse) GetErrMsg() string {
+	if x != nil {
+		return x.ErrMsg
+	}
+	return ""
+}
+
+type ListVolumesRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+}
+
+func (x *ListVolumesRequest) Reset() {
+	*x = ListVolumesRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_volume_proto_msgTypes[9]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ListVolumesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListVolumesRequest) ProtoMessage() {}
+
+func (x *ListVolumesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_volume_proto_msgTypes[9]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListVolumesRequest.ProtoReflect.Descriptor instead.
+func (*ListVolumesRequest) Descriptor() ([]byte, []int) {
+	return file_volume_proto_rawDescGZIP(), []int{9}
+}
+
+type ListVolumesResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Ok      bool              `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	ErrMsg  string            `protobuf:"bytes,2,opt,name=err_msg,json=errMsg,proto3" json:"err_msg,omitempty"`
+	Volumes []*VolumeInstance `protobuf:"bytes,3,rep,name=volumes,proto3" json:"volumes,omitempty"`
+}
+
+func (x *ListVolumesResponse) Reset() {
+	*x = ListVolumesResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_volume_proto_msgTypes[10]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ListVolumesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListVolumesResponse) ProtoMessage() {}
+
+func (x *ListVolumesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_volume_proto_msgTypes[10]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListVolumesResponse.ProtoReflect.Descriptor instead.
+func (*ListVolumesResponse) Descriptor() ([]byte, []int) {
+	return file_volume_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ListVolumesResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *ListVolumesResponse) GetErrMsg() string {
+	if x != nil {
+		return x.ErrMsg
+	}
+	return ""
+}
+
+func (x *ListVolumesResponse) GetVolumes() []*VolumeInstance {
+	if x != nil {
+		return x.Volumes
+	}
+	return nil
 }
 
 var File_volume_proto protoreflect.FileDescriptor
 
 var file_volume_proto_rawDesc = []byte{
 	0x0a, 0x0c, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x12, 0x06,
-	0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x22, 0x2e, 0x0a, 0x18, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43,
-	0x72, 0x65, 0x61, 0x74, 0x65, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65,
-	0x73, 0x74, 0x12, 0x12, 0x0a, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09,
-	0x52, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x22, 0x48, 0x0a, 0x19, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43,
-	0x72, 0x65, 0x61, 0x74, 0x65, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f,
-	0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52,
-	0x02, 0x6f, 0x6b, 0x12, 0x1b, 0x0a, 0x09, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x5f, 0x69, 0x64,
-	0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x49, 0x64,
-	0x32, 0x6b, 0x0a, 0x0d, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63,
-	0x65, 0x12, 0x5a, 0x0a, 0x11, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65,
-	0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x12, 0x20, 0x2e, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x2e,
-	0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x56, 0x6f, 0x6c, 0x75, 0x6d,
-	0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x21, 0x2e, 0x76, 0x6f, 0x6c, 0x75, 0x6d,
-	0x65, 0x2e, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x56, 0x6f, 0x6c,
-	0x75, 0x6d, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x42, 0x23, 0x5a,
-	0x21, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x62, 0x65, 0x61, 0x6d,
-	0x2d, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x74, 0x61, 0x39, 0x2f, 0x70, 0x72, 0x6f,
-	0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x1a, 0x1f, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2f, 0x70,
+	0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2f, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d,
+	0x70, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x22, 0x88, 0x02, 0x0a, 0x0e, 0x56, 0x6f, 0x6c, 0x75,
+	0x6d, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x69, 0x64,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x02, 0x69, 0x64, 0x12, 0x12, 0x0a, 0x04, 0x6e, 0x61,
+	0x6d, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x12, 0x12,
+	0x0a, 0x04, 0x73, 0x69, 0x7a, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x04, 0x52, 0x04, 0x73, 0x69,
+	0x7a, 0x65, 0x12, 0x39, 0x0a, 0x0a, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74,
+	0x18, 0x04, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e,
+	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61,
+	0x6d, 0x70, 0x52, 0x09, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x41, 0x74, 0x12, 0x39, 0x0a,
+	0x0a, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18, 0x05, 0x20, 0x01, 0x28,
+	0x0b, 0x32, 0x1a, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f,
+	0x62, 0x75, 0x66, 0x2e, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x52, 0x09, 0x75,
+	0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x41, 0x74, 0x12, 0x21, 0x0a, 0x0c, 0x77, 0x6f, 0x72, 0x6b,
+	0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b,
+	0x77, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x25, 0x0a, 0x0e, 0x77,
+	0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x07, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x0d, 0x77, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x4e, 0x61,
+	0x6d, 0x65, 0x22, 0x2e, 0x0a, 0x18, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74,
+	0x65, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x12,
+	0x0a, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6e, 0x61,
+	0x6d, 0x65, 0x22, 0x74, 0x0a, 0x19, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74,
+	0x65, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
+	0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12,
+	0x17, 0x0a, 0x07, 0x65, 0x72, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x06, 0x65, 0x72, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x2e, 0x0a, 0x06, 0x76, 0x6f, 0x6c, 0x75,
+	0x6d, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x16, 0x2e, 0x76, 0x6f, 0x6c, 0x75, 0x6d,
+	0x65, 0x2e, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65,
+	0x52, 0x06, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x22, 0x46, 0x0a, 0x0f, 0x4c, 0x69, 0x73, 0x74,
+	0x50, 0x61, 0x74, 0x68, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x12, 0x0a, 0x04, 0x70,
+	0x61, 0x74, 0x68, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x70, 0x61, 0x74, 0x68, 0x12,
+	0x1f, 0x0a, 0x0b, 0x6c, 0x6f, 0x6e, 0x67, 0x5f, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x08, 0x52, 0x0a, 0x6c, 0x6f, 0x6e, 0x67, 0x46, 0x6f, 0x72, 0x6d, 0x61, 0x74,
+	0x22, 0x51, 0x0a, 0x10, 0x4c, 0x69, 0x73, 0x74, 0x50, 0x61, 0x74, 0x68, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08,
+	0x52, 0x02, 0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07, 0x65, 0x72, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18,
+	0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x65, 0x72, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x14, 0x0a,
+	0x05, 0x70, 0x61, 0x74, 0x68, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x09, 0x52, 0x05, 0x70, 0x61,
+	0x74, 0x68, 0x73, 0x22, 0x27, 0x0a, 0x11, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x50, 0x61, 0x74,
+	0x68, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x12, 0x0a, 0x04, 0x70, 0x61, 0x74, 0x68,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x70, 0x61, 0x74, 0x68, 0x22, 0x57, 0x0a, 0x12,
+	0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x50, 0x61, 0x74, 0x68, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
+	0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02,
+	0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07, 0x65, 0x72, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x06, 0x65, 0x72, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x18, 0x0a, 0x07, 0x64,
+	0x65, 0x6c, 0x65, 0x74, 0x65, 0x64, 0x18, 0x03, 0x20, 0x03, 0x28, 0x09, 0x52, 0x07, 0x64, 0x65,
+	0x6c, 0x65, 0x74, 0x65, 0x64, 0x22, 0x3f, 0x0a, 0x0f, 0x43, 0x6f, 0x70, 0x79, 0x50, 0x61, 0x74,
+	0x68, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x12, 0x0a, 0x04, 0x70, 0x61, 0x74, 0x68,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x70, 0x61, 0x74, 0x68, 0x12, 0x18, 0x0a, 0x07,
+	0x63, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x07, 0x63,
+	0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x22, 0x58, 0x0a, 0x10, 0x43, 0x6f, 0x70, 0x79, 0x50, 0x61,
+	0x74, 0x68, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x1b, 0x0a, 0x09, 0x6f, 0x62,
+	0x6a, 0x65, 0x63, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x6f,
+	0x62, 0x6a, 0x65, 0x63, 0x74, 0x49, 0x64, 0x12, 0x17, 0x0a, 0x07, 0x65, 0x72, 0x72, 0x5f, 0x6d,
+	0x73, 0x67, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x65, 0x72, 0x72, 0x4d, 0x73, 0x67,
+	0x22, 0x14, 0x0a, 0x12, 0x4c, 0x69, 0x73, 0x74, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x73, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x22, 0x70, 0x0a, 0x13, 0x4c, 0x69, 0x73, 0x74, 0x56, 0x6f,
+	0x6c, 0x75, 0x6d, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a,
+	0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x17, 0x0a,
+	0x07, 0x65, 0x72, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06,
+	0x65, 0x72, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x30, 0x0a, 0x07, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65,
+	0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x16, 0x2e, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65,
+	0x2e, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52,
+	0x07, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x73, 0x32, 0x86, 0x03, 0x0a, 0x0d, 0x56, 0x6f, 0x6c,
+	0x75, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x5a, 0x0a, 0x11, 0x47, 0x65,
+	0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x12,
+	0x20, 0x2e, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x2e, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72,
+	0x65, 0x61, 0x74, 0x65, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
+	0x74, 0x1a, 0x21, 0x2e, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x2e, 0x47, 0x65, 0x74, 0x4f, 0x72,
+	0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x48, 0x0a, 0x0b, 0x4c, 0x69, 0x73, 0x74, 0x56, 0x6f,
+	0x6c, 0x75, 0x6d, 0x65, 0x73, 0x12, 0x1a, 0x2e, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x2e, 0x4c,
+	0x69, 0x73, 0x74, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
+	0x74, 0x1a, 0x1b, 0x2e, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x56,
+	0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00,
+	0x12, 0x3f, 0x0a, 0x08, 0x4c, 0x69, 0x73, 0x74, 0x50, 0x61, 0x74, 0x68, 0x12, 0x17, 0x2e, 0x76,
+	0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x50, 0x61, 0x74, 0x68, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x2e, 0x4c,
+	0x69, 0x73, 0x74, 0x50, 0x61, 0x74, 0x68, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22,
+	0x00, 0x12, 0x45, 0x0a, 0x0a, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x50, 0x61, 0x74, 0x68, 0x12,
+	0x19, 0x2e, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x50,
+	0x61, 0x74, 0x68, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x76, 0x6f, 0x6c,
+	0x75, 0x6d, 0x65, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x50, 0x61, 0x74, 0x68, 0x52, 0x65,
+	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x47, 0x0a, 0x0e, 0x43, 0x6f, 0x70, 0x79,
+	0x50, 0x61, 0x74, 0x68, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x12, 0x17, 0x2e, 0x76, 0x6f, 0x6c,
+	0x75, 0x6d, 0x65, 0x2e, 0x43, 0x6f, 0x70, 0x79, 0x50, 0x61, 0x74, 0x68, 0x52, 0x65, 0x71, 0x75,
+	0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x76, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x2e, 0x43, 0x6f, 0x70,
+	0x79, 0x50, 0x61, 0x74, 0x68, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x28,
+	0x01, 0x42, 0x23, 0x5a, 0x21, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f,
+	0x62, 0x65, 0x61, 0x6d, 0x2d, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x74, 0x61, 0x39,
+	0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -158,19 +784,41 @@ func file_volume_proto_rawDescGZIP() []byte {
 	return file_volume_proto_rawDescData
 }
 
-var file_volume_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_volume_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_volume_proto_goTypes = []interface{}{
-	(*GetOrCreateVolumeRequest)(nil),  // 0: volume.GetOrCreateVolumeRequest
-	(*GetOrCreateVolumeResponse)(nil), // 1: volume.GetOrCreateVolumeResponse
+	(*VolumeInstance)(nil),            // 0: volume.VolumeInstance
+	(*GetOrCreateVolumeRequest)(nil),  // 1: volume.GetOrCreateVolumeRequest
+	(*GetOrCreateVolumeResponse)(nil), // 2: volume.GetOrCreateVolumeResponse
+	(*ListPathRequest)(nil),           // 3: volume.ListPathRequest
+	(*ListPathResponse)(nil),          // 4: volume.ListPathResponse
+	(*DeletePathRequest)(nil),         // 5: volume.DeletePathRequest
+	(*DeletePathResponse)(nil),        // 6: volume.DeletePathResponse
+	(*CopyPathRequest)(nil),           // 7: volume.CopyPathRequest
+	(*CopyPathResponse)(nil),          // 8: volume.CopyPathResponse
+	(*ListVolumesRequest)(nil),        // 9: volume.ListVolumesRequest
+	(*ListVolumesResponse)(nil),       // 10: volume.ListVolumesResponse
+	(*timestamppb.Timestamp)(nil),     // 11: google.protobuf.Timestamp
 }
 var file_volume_proto_depIdxs = []int32{
-	0, // 0: volume.VolumeService.GetOrCreateVolume:input_type -> volume.GetOrCreateVolumeRequest
-	1, // 1: volume.VolumeService.GetOrCreateVolume:output_type -> volume.GetOrCreateVolumeResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	11, // 0: volume.VolumeInstance.created_at:type_name -> google.protobuf.Timestamp
+	11, // 1: volume.VolumeInstance.updated_at:type_name -> google.protobuf.Timestamp
+	0,  // 2: volume.GetOrCreateVolumeResponse.volume:type_name -> volume.VolumeInstance
+	0,  // 3: volume.ListVolumesResponse.volumes:type_name -> volume.VolumeInstance
+	1,  // 4: volume.VolumeService.GetOrCreateVolume:input_type -> volume.GetOrCreateVolumeRequest
+	9,  // 5: volume.VolumeService.ListVolumes:input_type -> volume.ListVolumesRequest
+	3,  // 6: volume.VolumeService.ListPath:input_type -> volume.ListPathRequest
+	5,  // 7: volume.VolumeService.DeletePath:input_type -> volume.DeletePathRequest
+	7,  // 8: volume.VolumeService.CopyPathStream:input_type -> volume.CopyPathRequest
+	2,  // 9: volume.VolumeService.GetOrCreateVolume:output_type -> volume.GetOrCreateVolumeResponse
+	10, // 10: volume.VolumeService.ListVolumes:output_type -> volume.ListVolumesResponse
+	4,  // 11: volume.VolumeService.ListPath:output_type -> volume.ListPathResponse
+	6,  // 12: volume.VolumeService.DeletePath:output_type -> volume.DeletePathResponse
+	8,  // 13: volume.VolumeService.CopyPathStream:output_type -> volume.CopyPathResponse
+	9,  // [9:14] is the sub-list for method output_type
+	4,  // [4:9] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_volume_proto_init() }
@@ -180,7 +828,7 @@ func file_volume_proto_init() {
 	}
 	if !protoimpl.UnsafeEnabled {
 		file_volume_proto_msgTypes[0].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetOrCreateVolumeRequest); i {
+			switch v := v.(*VolumeInstance); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -192,7 +840,115 @@ func file_volume_proto_init() {
 			}
 		}
 		file_volume_proto_msgTypes[1].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetOrCreateVolumeRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_volume_proto_msgTypes[2].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*GetOrCreateVolumeResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_volume_proto_msgTypes[3].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ListPathRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_volume_proto_msgTypes[4].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ListPathResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_volume_proto_msgTypes[5].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*DeletePathRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_volume_proto_msgTypes[6].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*DeletePathResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_volume_proto_msgTypes[7].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*CopyPathRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_volume_proto_msgTypes[8].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*CopyPathResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_volume_proto_msgTypes[9].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ListVolumesRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_volume_proto_msgTypes[10].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ListVolumesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -210,7 +966,7 @@ func file_volume_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_volume_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

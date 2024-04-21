@@ -1,17 +1,18 @@
 from typing import List, Optional, Union
 
-from beta9 import terminal
-from beta9.abstractions.base.runner import (
+from .. import terminal
+from ..abstractions.base.runner import (
     CONTAINER_STUB_TYPE,
     RunnerAbstraction,
 )
-from beta9.abstractions.image import Image
-from beta9.abstractions.volume import Volume
-from beta9.clients.container import (
+from ..abstractions.image import Image
+from ..abstractions.volume import Volume
+from ..clients.container import (
+    CommandExecutionRequest,
     CommandExecutionResponse,
     ContainerServiceStub,
 )
-from beta9.sync import FileSyncer
+from ..sync import FileSyncer
 
 
 class Container(RunnerAbstraction):
@@ -54,7 +55,7 @@ class Container(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         name: Optional[str] = None,
-    ) -> "Container":
+    ) -> None:
         super().__init__(cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes)
 
         self.task_id = ""
@@ -76,13 +77,13 @@ class Container(RunnerAbstraction):
         last_response: Union[None, CommandExecutionResponse] = None
 
         async for r in self.container_stub.execute_command(
-            stub_id=self.stub_id, command=" ".join(command).encode()
+            CommandExecutionRequest(stub_id=self.stub_id, command=" ".join(command).encode())
         ):
             if r.task_id != "":
                 self.task_id = r.task_id
 
             if r.output != "":
-                terminal.detail(r.output)
+                terminal.detail(r.output.strip())
 
             if r.done or r.exit_code != 0:
                 last_response = r

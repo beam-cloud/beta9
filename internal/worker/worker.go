@@ -35,7 +35,7 @@ type Worker struct {
 	gpuCount             uint32
 	podAddr              string
 	podHostName          string
-	userImagePath        string
+	imageMountPath       string
 	runcHandle           runc.Runc
 	runcServer           *RunCServer
 	containerCudaManager *ContainerCudaManager
@@ -81,7 +81,6 @@ var (
 	//go:embed base_runc_config.json
 	baseRuncConfigRaw          string
 	baseConfigPath             string  = "/tmp"
-	imagePath                  string  = "/images"
 	containerLogsPath          string  = "/var/log/worker"
 	defaultContainerDirectory  string  = "/mnt/code"
 	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
@@ -161,10 +160,11 @@ func NewWorker() (*Worker, error) {
 		ctx:                  ctx,
 		cancel:               cancel,
 		config:               config,
-		userImagePath:        imagePath,
+		imageMountPath:       getImageMountPath(workerId),
 		cpuLimit:             cpuLimit,
 		memoryLimit:          memoryLimit,
 		gpuType:              gpuType,
+		gpuCount:             uint32(gpuCount),
 		runcHandle:           runc.Runc{},
 		runcServer:           runcServer,
 		containerCudaManager: NewContainerCudaManager(uint32(gpuCount)),
@@ -216,13 +216,15 @@ func (s *Worker) Run() error {
 				if err != nil {
 					log.Printf("Unable to run container <%s>: %v\n", containerId, err)
 
-					err := s.containerRepo.SetContainerExitCode(containerId, 1)
+					// Set a non-zero exit code for the container (both in memory, and in repo)
+					exitCode := 1
+					err := s.containerRepo.SetContainerExitCode(containerId, exitCode)
 					if err != nil {
 						log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
 					}
 
 					s.containerLock.Unlock()
-					s.clearContainer(containerId, request)
+					s.clearContainer(containerId, request, time.Duration(0), exitCode)
 					continue
 				}
 			}
@@ -252,16 +254,12 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerID := request.ContainerId
-	bundlePath := filepath.Join(s.userImagePath, request.ImageId)
 
-	hostname := fmt.Sprintf("%s:%d", s.podAddr, defaultWorkerServerPort)
-	err := s.containerRepo.SetContainerWorkerHostname(request.ContainerId, hostname)
-	if err != nil {
-		return err
-	}
+	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
+	// Pull image
 	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, request.ImageId)
-	err = s.imageClient.PullLazy(request.ImageId)
+	err := s.imageClient.PullLazy(request.ImageId)
 	if err != nil && request.SourceImage != nil {
 		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerID, *request.SourceImage)
 		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, nil)
@@ -329,7 +327,8 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 		}
 
 		// Stop container if it is "orphaned" - meaning it's running but has no associated state
-		if _, err := s.containerRepo.GetContainerState(request.ContainerId); err != nil {
+		state, err := s.containerRepo.GetContainerState(request.ContainerId)
+		if err != nil {
 			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
 				log.Printf("<%s> - container state not found, stopping container\n", request.ContainerId)
 				s.stopContainerChan <- request.ContainerId
@@ -339,7 +338,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			continue
 		}
 
-		err := s.containerRepo.UpdateContainerStatus(request.ContainerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
+		err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
 		if err != nil {
 			log.Printf("<%s> - unable to update container state: %v\n", request.ContainerId, err)
 		}
@@ -366,7 +365,7 @@ func (s *Worker) stopContainer(event *common.Event) bool {
 	containerId := event.Args["container_id"].(string)
 
 	var err error = nil
-	if _, containerExists := s.containerInstances.Get(containerId); containerExists {
+	if _, exists := s.containerInstances.Get(containerId); exists {
 		log.Printf("<%s> - received stop container event.\n", containerId)
 		s.stopContainerChan <- containerId
 	}
@@ -378,7 +377,13 @@ func (s *Worker) processStopContainerEvents() {
 	for containerId := range s.stopContainerChan {
 		log.Printf("<%s> - stopping container.\n", containerId)
 
-		if _, containerExists := s.containerInstances.Get(containerId); !containerExists {
+		instance, exists := s.containerInstances.Get(containerId)
+		if !exists {
+			continue
+		}
+
+		// Container has already exited, just skip this event
+		if instance.ExitCode >= 0 {
 			continue
 		}
 
@@ -414,29 +419,57 @@ func (s *Worker) terminateContainer(containerId string, request *types.Container
 
 	defer s.containerWg.Done()
 
-	// Allow for some time to pass before clearing the container. This way we can handle some last
-	// minute logs or events or if the user wants to inspect the container before it's cleared.
-	time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
-
-	s.clearContainer(containerId, request)
+	s.clearContainer(containerId, request, time.Duration(s.config.Worker.TerminationGracePeriod)*time.Second, *exitCode)
 }
 
-func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest) {
+func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, delay time.Duration, exitCode int) {
 	s.containerLock.Lock()
-	defer s.containerLock.Unlock()
-
-	s.containerInstances.Delete(containerId)
 
 	if request.Gpu != "" {
 		s.containerCudaManager.UnassignGpuDevices(containerId)
 	}
 
-	err := s.containerRepo.DeleteContainerState(request)
-	if err != nil {
-		log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
+	s.completedRequests <- request
+	s.containerLock.Unlock()
+
+	instance, exists := s.containerInstances.Get(containerId)
+	if exists {
+		instance.ExitCode = exitCode
+		s.containerInstances.Set(containerId, instance)
 	}
 
-	s.completedRequests <- request
+	go func() {
+		// Allow for some time to pass before clearing the container. This way we can handle some last
+		// minute logs or events or if the user wants to inspect the container before it's cleared.
+		time.Sleep(delay)
+
+		s.containerInstances.Delete(containerId)
+		err := s.containerRepo.DeleteContainerState(request)
+		if err != nil {
+			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
+		}
+	}()
+}
+
+// isBuildRequest checks if the sourceImage field is not-nil, which means the container request is for a build container
+func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
+	return request.SourceImage != nil
+}
+
+func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
+	// For images that have a rootfs, set that as the root path
+	// otherwise, assume runc config files are in the rootfs themselves
+	rootPath := filepath.Join(bundlePath, "rootfs")
+	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
+		rootPath = bundlePath
+	}
+
+	overlayPath := baseConfigPath
+	if s.isBuildRequest(request) {
+		overlayPath = "/dev/shm"
+	}
+
+	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
 }
 
 // spawn a container using runc binary
@@ -454,19 +487,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		s.terminateContainer(containerId, request, &exitCode, &containerErr)
 	}()
 
-	// For images that have a rootfs, set that as the root path
-	// otherwise, assume runc config files are in the rootfs themselves
-	rootPath := filepath.Join(bundlePath, "rootfs")
-	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
-		rootPath = bundlePath
-	}
+	// Create overlayfs for container
+	overlay := s.createOverlay(request, bundlePath)
 
 	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
 		Id:         containerId,
 		StubId:     request.StubId,
 		BundlePath: bundlePath,
-		Overlay:    common.NewContainerOverlay(containerId, bundlePath, baseConfigPath, rootPath),
+		Overlay:    overlay,
 		Spec:       spec,
 		ExitCode:   -1,
 		OutputWriter: common.NewOutputWriter(func(s string) {
@@ -479,6 +508,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		LogBuffer: common.NewLogBuffer(),
 	}
 	s.containerInstances.Set(containerId, containerInstance)
+
+	// Set worker hostname
+	hostname := fmt.Sprintf("%s:%d", s.podAddr, defaultWorkerServerPort)
+	s.containerRepo.SetWorkerAddress(request.ContainerId, hostname)
 
 	// Handle stdout/stderr from spawned container
 	go s.containerLogger.CaptureLogs(request.ContainerId, outputChan)
@@ -579,7 +612,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 }
 
 func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
-	imageConfigPath := filepath.Join(s.userImagePath, imageId, "initial_config.json")
+	imageConfigPath := filepath.Join(s.imageMountPath, imageId, "initial_config.json")
 
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
@@ -761,5 +794,16 @@ func (s *Worker) shutdown() error {
 		return err
 	}
 
+<<<<<<< HEAD
+=======
+	err = s.storage.Unmount(s.config.Storage.FilesystemPath)
+	if err != nil {
+		log.Printf("Failed to unmount storage: %v\n", err)
+	}
+
+	os.RemoveAll(s.imageMountPath)
+
+	s.cancel()
+>>>>>>> master
 	return nil
 }

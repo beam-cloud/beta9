@@ -12,10 +12,10 @@ from grpclib.metadata import Deadline
 from multidict import MultiDict
 from rich import prompt
 
-from beta9 import terminal
-from beta9.aio import run_sync
-from beta9.clients.gateway import AuthorizeResponse, GatewayServiceStub
-from beta9.exceptions import RunnerException
+from . import terminal
+from .aio import run_sync
+from .clients.gateway import AuthorizeRequest, AuthorizeResponse, GatewayServiceStub
+from .exceptions import RunnerException
 
 DEFAULT_CONFIG_FILE_PATH = "~/.beta9/creds"
 DEFAULT_PROFILE_NAME = "default"
@@ -176,7 +176,7 @@ def get_gateway_channel() -> Channel:
         terminal.header("Authorizing with gateway")
 
         gateway_stub = GatewayServiceStub(channel=channel)
-        auth_response: AuthorizeResponse = run_sync(gateway_stub.authorize())
+        auth_response: AuthorizeResponse = run_sync(gateway_stub.authorize(AuthorizeRequest()))
         if not auth_response.ok:
             channel.close()
             terminal.error(f"Unable to authorize with gateway: {auth_response.error_msg}")

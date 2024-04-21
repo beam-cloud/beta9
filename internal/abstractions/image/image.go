@@ -21,9 +21,8 @@ type ImageService interface {
 
 type RuncImageService struct {
 	pb.UnimplementedImageServiceServer
-	builder   *Builder
-	scheduler *scheduler.Scheduler
-	config    types.AppConfig
+	builder *Builder
+	config  types.AppConfig
 }
 
 type ImageServiceOpts struct {
