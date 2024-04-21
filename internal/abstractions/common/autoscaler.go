@@ -10,7 +10,7 @@ type AutoscalerResult struct {
 	ResultValid       bool
 }
 
-type Autoscaler[I AbstractionInstance, S AutoscalerSample] struct {
+type Autoscaler[I IAutoscaledInstance, S AutoscalerSample] struct {
 	instance         I
 	mostRecentSample S
 	sampleFunc       func(I) (S, error)
@@ -27,13 +27,9 @@ const (
 	sampleRate  time.Duration = time.Duration(1000) * time.Millisecond // Time between samples
 )
 
-type AbstractionInstance interface {
-	ConsumeScaleResult(*AutoscalerResult)
-}
-
 type AutoscalerSample interface{}
 
-func NewAutoscaler[I AbstractionInstance, S AutoscalerSample](instance I, sampleFunc func(I) (S, error), scaleFunc func(I, S) *AutoscalerResult) *Autoscaler[I, S] {
+func NewAutoscaler[I IAutoscaledInstance, S AutoscalerSample](instance I, sampleFunc func(I) (S, error), scaleFunc func(I, S) *AutoscalerResult) *Autoscaler[I, S] {
 	return &Autoscaler[I, S]{
 		instance:   instance,
 		sampleFunc: sampleFunc,

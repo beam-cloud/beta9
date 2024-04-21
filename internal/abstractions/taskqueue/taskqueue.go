@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
@@ -66,7 +65,6 @@ type RedisTaskQueue struct {
 	pb.UnimplementedTaskQueueServiceServer
 	queueInstances  *common.SafeMap[*taskQueueInstance]
 	keyEventManager *common.KeyEventManager
-	keyEventChan    chan common.KeyEvent
 	queueClient     *taskQueueClient
 	tailscale       *network.Tailscale
 }
@@ -75,7 +73,6 @@ func NewRedisTaskQueueService(
 	ctx context.Context,
 	opts TaskQueueServiceOpts,
 ) (TaskQueueService, error) {
-	keyEventChan := make(chan common.KeyEvent)
 	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
 	if err != nil {
 		return nil, err
@@ -93,7 +90,6 @@ func NewRedisTaskQueueService(
 		rdb:             opts.RedisClient,
 		scheduler:       opts.Scheduler,
 		stubConfigCache: common.NewSafeMap[*types.StubConfigV1](),
-		keyEventChan:    keyEventChan,
 		keyEventManager: keyEventManager,
 		taskDispatcher:  opts.TaskDispatcher,
 		taskRepo:        opts.TaskRepo,
@@ -104,12 +100,16 @@ func NewRedisTaskQueueService(
 		tailscale:       opts.Tailscale,
 	}
 
+	// Listen for container events with a certain prefix
+	// For example if a container is created, destroyed, or updated
+	eventManager, err := abstractions.NewContainerEventManager(taskQueueContainerPrefix, keyEventManager, tq.InstanceFactory)
+	if err != nil {
+		return nil, err
+	}
+	eventManager.Listen(ctx)
+
 	// Register task dispatcher
 	tq.taskDispatcher.Register(string(types.ExecutorTaskQueue), tq.taskQueueTaskFactory)
-
-	// Listen to changes to active containers
-	go keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(taskQueueContainerPrefix), keyEventChan)
-	go tq.handleContainerEvents()
 
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(opts.BackendRepo)
@@ -188,19 +188,14 @@ func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	queue, exists := tq.queueInstances.Get(in.StubId)
-	if !exists {
-		err := tq.createQueueInstance(in.StubId)
-		if err != nil {
-			return &pb.TaskQueuePopResponse{
-				Ok: false,
-			}, nil
-		}
-
-		queue, _ = tq.queueInstances.Get(in.StubId)
+	instance, err := tq.getOrCreateQueueInstance(in.StubId)
+	if err != nil {
+		return &pb.TaskQueuePopResponse{
+			Ok: false,
+		}, nil
 	}
 
-	msg, err := queue.client.Pop(ctx, authInfo.Workspace.Name, in.StubId, in.ContainerId)
+	msg, err := instance.client.Pop(ctx, authInfo.Workspace.Name, in.StubId, in.ContainerId)
 	if err != nil || msg == nil {
 		return &pb.TaskQueuePopResponse{Ok: false}, nil
 	}
@@ -453,30 +448,34 @@ func (tq *RedisTaskQueue) TaskQueueLength(ctx context.Context, in *pb.TaskQueueL
 	}, nil
 }
 
-func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*taskQueueInstance)) error {
-	_, exists := tq.queueInstances.Get(stubId)
+func (tq *RedisTaskQueue) InstanceFactory(stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
+	return tq.getOrCreateQueueInstance(stubId)
+}
+
+func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...func(*taskQueueInstance)) (*taskQueueInstance, error) {
+	instance, exists := tq.queueInstances.Get(stubId)
 	if exists {
-		return errors.New("queue already in memory")
+		return instance, nil
 	}
 
 	stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId)
 	if err != nil {
-		return errors.New("invalid stub id")
+		return nil, errors.New("invalid stub id")
 	}
 
 	var stubConfig *types.StubConfigV1 = &types.StubConfigV1{}
 	err = json.Unmarshal([]byte(stub.Config), stubConfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	token, err := tq.backendRepo.RetrieveActiveToken(tq.ctx, stub.Workspace.Id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Create queue instance to hold taskqueue specific methods/fields
-	instance := &taskQueueInstance{
+	instance = &taskQueueInstance{
 		client: tq.queueClient,
 	}
 
@@ -498,7 +497,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*ta
 		StopContainersFunc:  instance.stopContainers,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Embed autoscaled instance struct
@@ -531,46 +530,7 @@ func (tq *RedisTaskQueue) createQueueInstance(stubId string, options ...func(*ta
 		tq.queueInstances.Delete(stubId)
 	}(instance)
 
-	return nil
-}
-
-func (tq *RedisTaskQueue) handleContainerEvents() {
-	for {
-		select {
-		case event := <-tq.keyEventChan:
-			containerId := fmt.Sprintf("%s%s", taskQueueContainerPrefix, event.Key)
-
-			operation := event.Operation
-			containerIdParts := strings.Split(containerId, "-")
-			stubId := strings.Join(containerIdParts[1:6], "-")
-
-			queue, exists := tq.queueInstances.Get(stubId)
-			if !exists {
-				err := tq.createQueueInstance(stubId)
-				if err != nil {
-					continue
-				}
-
-				queue, _ = tq.queueInstances.Get(stubId)
-			}
-
-			switch operation {
-			case common.KeyOperationSet, common.KeyOperationHSet:
-				queue.ContainerEventChan <- types.ContainerEvent{
-					ContainerId: containerId,
-					Change:      +1,
-				}
-			case common.KeyOperationDel, common.KeyOperationExpired:
-				queue.ContainerEventChan <- types.ContainerEvent{
-					ContainerId: containerId,
-					Change:      -1,
-				}
-			}
-
-		case <-tq.ctx.Done():
-			return
-		}
-	}
+	return instance, nil
 }
 
 // Redis keys

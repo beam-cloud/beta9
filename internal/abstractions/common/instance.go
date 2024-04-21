@@ -12,6 +12,11 @@ import (
 	"github.com/beam-cloud/beta9/internal/types"
 )
 
+type IAutoscaledInstance interface {
+	ConsumeScaleResult(*AutoscalerResult)
+	ConsumeContainerEvent(types.ContainerEvent)
+}
+
 type AutoscaledInstanceState struct {
 	RunningContainers  int
 	PendingContainers  int
@@ -126,6 +131,10 @@ func (i *AutoscaledInstance) WaitForContainer(ctx context.Context, duration time
 
 func (i *AutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
 	i.ScaleEventChan <- result.DesiredContainers
+}
+
+func (i *AutoscaledInstance) ConsumeContainerEvent(event types.ContainerEvent) {
+	i.ContainerEventChan <- event
 }
 
 func (i *AutoscaledInstance) Monitor() error {

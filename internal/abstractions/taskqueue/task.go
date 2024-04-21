@@ -12,20 +12,15 @@ type TaskQueueTask struct {
 }
 
 func (t *TaskQueueTask) Execute(ctx context.Context, options ...interface{}) error {
-	queue, exists := t.tq.queueInstances.Get(t.msg.StubId)
-	if !exists {
-		err := t.tq.createQueueInstance(t.msg.StubId)
-		if err != nil {
-			return err
-		}
-
-		queue, _ = t.tq.queueInstances.Get(t.msg.StubId)
+	instance, err := t.tq.getOrCreateQueueInstance(t.msg.StubId)
+	if err != nil {
+		return err
 	}
 
-	_, err := t.tq.backendRepo.CreateTask(ctx, &types.TaskParams{
+	_, err = t.tq.backendRepo.CreateTask(ctx, &types.TaskParams{
 		TaskId:      t.msg.TaskId,
-		StubId:      queue.Stub.Id,
-		WorkspaceId: queue.Stub.WorkspaceId,
+		StubId:      instance.Stub.Id,
+		WorkspaceId: instance.Stub.WorkspaceId,
 	})
 	if err != nil {
 		return err
@@ -41,12 +36,9 @@ func (t *TaskQueueTask) Execute(ctx context.Context, options ...interface{}) err
 }
 
 func (t *TaskQueueTask) Retry(ctx context.Context) error {
-	_, exists := t.tq.queueInstances.Get(t.msg.StubId)
-	if !exists {
-		err := t.tq.createQueueInstance(t.msg.StubId)
-		if err != nil {
-			return err
-		}
+	_, err := t.tq.getOrCreateQueueInstance(t.msg.StubId)
+	if err != nil {
+		return err
 	}
 
 	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
