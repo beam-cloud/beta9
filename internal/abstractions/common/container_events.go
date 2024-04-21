@@ -9,15 +9,17 @@ import (
 	"github.com/beam-cloud/beta9/internal/types"
 )
 
-type ContainerInstanceManager interface {
-	CreateInstance(stubId string) error
-	RetrieveInstance(stubId string) interface{}
+type ContainerEventManager struct {
+	containerPrefix string
+	keyEventChan    chan common.KeyEvent
+	keyEventManager *common.KeyEventManager
+	instanceFactory func(stubId string, options ...func(AbstractionInstance)) (AbstractionInstance, error)
 }
 
-func NewInstanceContainerEventManager(containerPrefix string, keyEventManager *common.KeyEventManager, instanceFactory func(stubId string, options ...func(*interface{})) error) (*InstanceContainerEventManager, error) {
+func NewContainerEventManager(containerPrefix string, keyEventManager *common.KeyEventManager, instanceFactory func(stubId string, options ...func(AbstractionInstance)) (AbstractionInstance, error)) (*ContainerEventManager, error) {
 	keyEventChan := make(chan common.KeyEvent)
 
-	return &InstanceContainerEventManager{
+	return &ContainerEventManager{
 		containerPrefix: containerPrefix,
 		instanceFactory: instanceFactory,
 		keyEventChan:    keyEventChan,
@@ -25,26 +27,18 @@ func NewInstanceContainerEventManager(containerPrefix string, keyEventManager *c
 	}, nil
 }
 
-type InstanceContainerEventManager struct {
-	ctx             context.Context
-	containerPrefix string
-	keyEventChan    chan common.KeyEvent
-	keyEventManager *common.KeyEventManager
-	instanceFactory func(stubId string, options ...func(*interface{})) error
+func (em *ContainerEventManager) ConsumeEvents(ctx context.Context) {
+	go em.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(em.containerPrefix), em.keyEventChan)
+	go em.handleContainerEvents(ctx)
 }
 
-func (em *InstanceContainerEventManager) ConsumeEvents() {
-	go em.keyEventManager.ListenForPattern(em.ctx, common.RedisKeys.SchedulerContainerState(em.containerPrefix), em.keyEventChan)
-	go em.handleContainerEvents()
-}
-
-func (em *InstanceContainerEventManager) handleContainerEvents() {
+func (em *ContainerEventManager) handleContainerEvents(ctx context.Context) {
 	for {
 		select {
 		case event := <-em.keyEventChan:
-			containerId := fmt.Sprintf("%s%s", em.containerPrefix, event.Key)
-
 			operation := event.Operation
+
+			containerId := fmt.Sprintf("%s%s", em.containerPrefix, event.Key)
 			containerIdParts := strings.Split(containerId, "-")
 			stubId := strings.Join(containerIdParts[1:6], "-")
 
@@ -55,23 +49,23 @@ func (em *InstanceContainerEventManager) handleContainerEvents() {
 
 			switch operation {
 			case common.KeyOperationSet, common.KeyOperationHSet:
-				instance.ContainerEventChan <- types.ContainerEvent{
+				instance.ConsumeContainerEvent(types.ContainerEvent{
 					ContainerId: containerId,
 					Change:      +1,
-				}
+				})
 			case common.KeyOperationDel, common.KeyOperationExpired:
-				instance.ContainerEventChan <- types.ContainerEvent{
+				instance.ConsumeContainerEvent(types.ContainerEvent{
 					ContainerId: containerId,
 					Change:      -1,
-				}
+				})
 			}
 
-		case <-em.ctx.Done():
+		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func parseContainerIdFromEvent(string) (string, error) {
+func parseContainerIdFromEvent(eventKey string) (string, error) {
 	return "", nil
 }

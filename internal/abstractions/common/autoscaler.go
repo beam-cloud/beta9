@@ -27,10 +27,6 @@ const (
 	sampleRate  time.Duration = time.Duration(1000) * time.Millisecond // Time between samples
 )
 
-type AbstractionInstance interface {
-	ConsumeScaleResult(*AutoscalerResult)
-}
-
 type AutoscalerSample interface{}
 
 func NewAutoscaler[I AbstractionInstance, S AutoscalerSample](instance I, sampleFunc func(I) (S, error), scaleFunc func(I, S) *AutoscalerResult) *Autoscaler[I, S] {

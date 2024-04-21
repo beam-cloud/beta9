@@ -95,11 +95,11 @@ func NewEndpointService(
 
 	// Listen for container events with a certain prefix
 	// For example if a container is created, destroyed, or updated
-	eventManager, err := abstractions.NewInstanceContainerEventManager(endpointContainerPrefix, keyEventManager, es.getOrCreateEndpointInstance)
+	eventManager, err := abstractions.NewContainerEventManager(endpointContainerPrefix, keyEventManager, es.InstanceFactory)
 	if err != nil {
 		return nil, err
 	}
-	eventManager.ConsumeEvents()
+	eventManager.ConsumeEvents(ctx)
 
 	// Register task dispatcher
 	es.taskDispatcher.Register(string(types.ExecutorEndpoint), es.endpointTaskFactory)
@@ -143,6 +143,10 @@ func (es *HttpEndpointService) forwardRequest(
 	}
 
 	return task.Execute(ctx.Request().Context(), ctx)
+}
+
+func (es *HttpEndpointService) InstanceFactory(stubId string, options ...func(abstractions.AbstractionInstance)) (abstractions.AbstractionInstance, error) {
+	return es.getOrCreateEndpointInstance(stubId)
 }
 
 func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {
