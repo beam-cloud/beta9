@@ -106,7 +106,7 @@ func NewRedisTaskQueueService(
 	if err != nil {
 		return nil, err
 	}
-	eventManager.ConsumeEvents(ctx)
+	eventManager.Listen(ctx)
 
 	// Register task dispatcher
 	tq.taskDispatcher.Register(string(types.ExecutorTaskQueue), tq.taskQueueTaskFactory)

@@ -12,15 +12,15 @@ type TaskQueueTask struct {
 }
 
 func (t *TaskQueueTask) Execute(ctx context.Context, options ...interface{}) error {
-	queue, err := t.tq.getOrCreateQueueInstance(t.msg.StubId)
+	instance, err := t.tq.getOrCreateQueueInstance(t.msg.StubId)
 	if err != nil {
 		return err
 	}
 
 	_, err = t.tq.backendRepo.CreateTask(ctx, &types.TaskParams{
 		TaskId:      t.msg.TaskId,
-		StubId:      queue.Stub.Id,
-		WorkspaceId: queue.Stub.WorkspaceId,
+		StubId:      instance.Stub.Id,
+		WorkspaceId: instance.Stub.WorkspaceId,
 	})
 	if err != nil {
 		return err

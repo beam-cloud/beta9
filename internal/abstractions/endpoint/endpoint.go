@@ -99,7 +99,7 @@ func NewEndpointService(
 	if err != nil {
 		return nil, err
 	}
-	eventManager.ConsumeEvents(ctx)
+	eventManager.Listen(ctx)
 
 	// Register task dispatcher
 	es.taskDispatcher.Register(string(types.ExecutorEndpoint), es.endpointTaskFactory)
