@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
@@ -33,14 +32,13 @@ type HttpEndpointService struct {
 	ctx               context.Context
 	config            types.AppConfig
 	rdb               *common.RedisClient
+	keyEventManager   *common.KeyEventManager
 	scheduler         *scheduler.Scheduler
 	backendRepo       repository.BackendRepository
 	containerRepo     repository.ContainerRepository
 	taskRepo          repository.TaskRepository
 	endpointInstances *common.SafeMap[*endpointInstance]
 	tailscale         *network.Tailscale
-	keyEventManager   *common.KeyEventManager
-	keyEventChan      chan common.KeyEvent
 	taskDispatcher    *task.Dispatcher
 }
 
@@ -70,23 +68,21 @@ func NewEndpointService(
 	ctx context.Context,
 	opts EndpointServiceOpts,
 ) (EndpointService, error) {
-	keyEventChan := make(chan common.KeyEvent)
-	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
-	if err != nil {
-		return nil, err
-	}
-
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
 		return nil, err
 	}
 	config := configManager.GetConfig()
 
+	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
+	if err != nil {
+		return nil, err
+	}
+
 	es := &HttpEndpointService{
 		ctx:               ctx,
 		config:            config,
 		rdb:               opts.RedisClient,
-		keyEventChan:      keyEventChan,
 		keyEventManager:   keyEventManager,
 		scheduler:         opts.Scheduler,
 		backendRepo:       opts.BackendRepo,
@@ -97,9 +93,13 @@ func NewEndpointService(
 		taskDispatcher:    opts.TaskDispatcher,
 	}
 
-	// Listen to changes to active containers
-	go keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(endpointContainerPrefix), keyEventChan)
-	go es.handleContainerEvents()
+	// Listen for container events with a certain prefix
+	// For example if a container is created, destroyed, or updated
+	eventManager, err := abstractions.NewContainerEventManager(endpointContainerPrefix, keyEventManager, es.InstanceFactory)
+	if err != nil {
+		return nil, err
+	}
+	eventManager.Listen(ctx)
 
 	// Register task dispatcher
 	es.taskDispatcher.Register(string(types.ExecutorEndpoint), es.endpointTaskFactory)
@@ -118,45 +118,6 @@ func (es *HttpEndpointService) endpointTaskFactory(ctx context.Context, msg type
 	}, nil
 }
 
-func (es *HttpEndpointService) handleContainerEvents() {
-	for {
-		select {
-		case event := <-es.keyEventChan:
-			containerId := fmt.Sprintf("%s%s", endpointContainerPrefix, event.Key)
-
-			operation := event.Operation
-			containerIdParts := strings.Split(containerId, "-")
-			stubId := strings.Join(containerIdParts[1:6], "-")
-
-			instance, exists := es.endpointInstances.Get(stubId)
-			if !exists {
-				err := es.createEndpointInstance(stubId)
-				if err != nil {
-					continue
-				}
-
-				instance, _ = es.endpointInstances.Get(stubId)
-			}
-
-			switch operation {
-			case common.KeyOperationSet, common.KeyOperationHSet:
-				instance.ContainerEventChan <- types.ContainerEvent{
-					ContainerId: containerId,
-					Change:      +1,
-				}
-			case common.KeyOperationDel, common.KeyOperationExpired:
-				instance.ContainerEventChan <- types.ContainerEvent{
-					ContainerId: containerId,
-					Change:      -1,
-				}
-			}
-
-		case <-es.ctx.Done():
-			return
-		}
-	}
-}
-
 // Forward request to endpoint
 func (es *HttpEndpointService) forwardRequest(
 	ctx echo.Context,
@@ -167,14 +128,9 @@ func (es *HttpEndpointService) forwardRequest(
 		return err
 	}
 
-	instance, exists := es.endpointInstances.Get(stubId)
-	if !exists {
-		err := es.createEndpointInstance(stubId)
-		if err != nil {
-			return err
-		}
-
-		instance, _ = es.endpointInstances.Get(stubId)
+	instance, err := es.getOrCreateEndpointInstance(stubId)
+	if err != nil {
+		return err
 	}
 
 	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), instance.Workspace.Name, stubId, payload, types.TaskPolicy{
@@ -189,26 +145,30 @@ func (es *HttpEndpointService) forwardRequest(
 	return task.Execute(ctx.Request().Context(), ctx)
 }
 
-func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...func(*endpointInstance)) error {
-	_, exists := es.endpointInstances.Get(stubId)
+func (es *HttpEndpointService) InstanceFactory(stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
+	return es.getOrCreateEndpointInstance(stubId)
+}
+
+func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {
+	instance, exists := es.endpointInstances.Get(stubId)
 	if exists {
-		return errors.New("endpoint already in memory")
+		return instance, nil
 	}
 
 	stub, err := es.backendRepo.GetStubByExternalId(es.ctx, stubId)
 	if err != nil {
-		return errors.New("invalid stub id")
+		return nil, errors.New("invalid stub id")
 	}
 
 	var stubConfig *types.StubConfigV1 = &types.StubConfigV1{}
 	err = json.Unmarshal([]byte(stub.Config), stubConfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	token, err := es.backendRepo.RetrieveActiveToken(es.ctx, stub.Workspace.Id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	requestBufferSize := int(stubConfig.MaxPendingTasks)
@@ -217,7 +177,7 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 	}
 
 	// Create endpoint instance to hold endpoint specific methods/fields
-	instance := &endpointInstance{
+	instance = &endpointInstance{
 		buffer: NewRequestBuffer(es.ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig),
 	}
 
@@ -239,7 +199,7 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 		StopContainersFunc:  instance.stopContainers,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Embed autoscaled instance struct
@@ -272,7 +232,7 @@ func (es *HttpEndpointService) createEndpointInstance(stubId string, options ...
 		es.endpointInstances.Delete(stubId)
 	}(instance)
 
-	return nil
+	return instance, nil
 }
 
 var Keys = &keys{}

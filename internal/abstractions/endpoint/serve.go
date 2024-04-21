@@ -17,7 +17,7 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	err := es.createEndpointInstance(in.StubId,
+	instance, err := es.getOrCreateEndpointInstance(in.StubId,
 		withEntryPoint(func(instance *endpointInstance) []string {
 			return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 		}),
@@ -30,7 +30,6 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 	}
 
 	// Set lock (used by autoscaler to scale up the single serve container)
-	instance, _ := es.endpointInstances.Get(in.StubId)
 	instance.Rdb.SetEx(
 		context.Background(),
 		Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
@@ -95,22 +94,17 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 }
 
 func (es *HttpEndpointService) StopEndpointServe(ctx context.Context, in *pb.StopEndpointServeRequest) (*pb.StopEndpointServeResponse, error) {
-	_, exists := es.endpointInstances.Get(in.StubId)
-	if !exists {
-		err := es.createEndpointInstance(in.StubId,
-			withEntryPoint(func(instance *endpointInstance) []string {
-				return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
-			}),
-			withAutoscaler(func(instance *endpointInstance) *abstractions.Autoscaler[*endpointInstance, *endpointAutoscalerSample] {
-				return abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
-			}),
-		)
-		if err != nil {
-			return &pb.StopEndpointServeResponse{Ok: false}, nil
-		}
+	instance, err := es.getOrCreateEndpointInstance(in.StubId,
+		withEntryPoint(func(instance *endpointInstance) []string {
+			return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
+		}),
+		withAutoscaler(func(instance *endpointInstance) *abstractions.Autoscaler[*endpointInstance, *endpointAutoscalerSample] {
+			return abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
+		}),
+	)
+	if err != nil {
+		return &pb.StopEndpointServeResponse{Ok: false}, nil
 	}
-
-	instance, _ := es.endpointInstances.Get(in.StubId)
 
 	// Delete serve timeout lock
 	instance.Rdb.Del(
