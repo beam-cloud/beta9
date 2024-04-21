@@ -20,6 +20,7 @@ func registerTaskQueueRoutes(g *echo.Group, tq *RedisTaskQueue) *taskQueueGroup 
 	group := &taskQueueGroup{routeGroup: g, tq: tq}
 
 	g.POST("/id/:stubId", group.TaskQueuePut)
+	g.POST("/id/:stubId/", group.TaskQueuePut)
 	g.POST("/:deploymentName/v:version", group.TaskQueuePut)
 
 	return group
