@@ -794,8 +794,6 @@ func (s *Worker) shutdown() error {
 		return err
 	}
 
-<<<<<<< HEAD
-=======
 	err = s.storage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
 		log.Printf("Failed to unmount storage: %v\n", err)
@@ -804,6 +802,5 @@ func (s *Worker) shutdown() error {
 	os.RemoveAll(s.imageMountPath)
 
 	s.cancel()
->>>>>>> master
 	return nil
 }
