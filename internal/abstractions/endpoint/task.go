@@ -14,18 +14,14 @@ type EndpointTask struct {
 }
 
 func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) error {
+	var err error = nil
 	echoCtx := options[0].(echo.Context)
-	instance, exists := t.es.endpointInstances.Get(t.msg.StubId)
-	if !exists {
-		err := t.es.createEndpointInstance(t.msg.StubId)
-		if err != nil {
-			return err
-		}
-
-		instance, _ = t.es.endpointInstances.Get(t.msg.StubId)
+	instance, err := t.es.getOrCreateEndpointInstance(t.msg.StubId)
+	if err != nil {
+		return err
 	}
 
-	_, err := t.es.backendRepo.CreateTask(echoCtx.Request().Context(), &types.TaskParams{
+	_, err = t.es.backendRepo.CreateTask(echoCtx.Request().Context(), &types.TaskParams{
 		TaskId:      t.msg.TaskId,
 		StubId:      instance.Stub.Id,
 		WorkspaceId: instance.Stub.WorkspaceId,
