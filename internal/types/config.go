@@ -93,10 +93,11 @@ type DockerImageRegistryConfig struct {
 }
 
 type S3ImageRegistryConfig struct {
-	AWSS3Bucket  string `key:"awsS3Bucket" json:"aws_s3_bucket"`
-	AWSAccessKey string `key:"awsAccessKey" json:"aws_access_key"`
-	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`
-	AWSRegion    string `key:"awsRegion" json:"aws_region"`
+	AWSS3Bucket          string `key:"awsS3Bucket" json:"aws_s3_bucket"`
+	AWSAccessKey         string `key:"awsAccessKey" json:"aws_access_key"`
+	AWSSecretKey         string `key:"awsSecretKey" json:"aws_secret_key"`
+	AWSRegion            string `key:"awsRegion" json:"aws_region"`
+	DualStackModeEnabled bool   `key:"dualStackModeEnabled" json:"dual_stack_mode_enabled"`
 }
 
 type RunnerConfig struct {

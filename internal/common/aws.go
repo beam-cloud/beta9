@@ -8,13 +8,18 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 )
 
-func GetAWSConfig(accessKey string, secretKey string, region string) (aws.Config, error) {
+func GetAWSConfig(accessKey string, secretKey string, region string, dualStackModeEnabled bool) (aws.Config, error) {
 	var cfg aws.Config
 	var err error
 	var opts []func(*config.LoadOptions) error
 
 	if region != "" {
 		opts = append(opts, config.WithRegion(region))
+	}
+
+	// Enabling dual-stack mode if the flag is true
+	if dualStackModeEnabled {
+		opts = append(opts, config.WithUseDualStackEndpoint(aws.DualStackEndpointStateEnabled))
 	}
 
 	if accessKey == "" || secretKey == "" {

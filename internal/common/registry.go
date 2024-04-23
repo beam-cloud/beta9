@@ -77,7 +77,7 @@ type ObjectStore interface {
 }
 
 func NewS3Store(config types.S3ImageRegistryConfig) (*S3Store, error) {
-	cfg, err := GetAWSConfig(config.AWSAccessKey, config.AWSSecretKey, config.AWSRegion)
+	cfg, err := GetAWSConfig(config.AWSAccessKey, config.AWSSecretKey, config.AWSRegion, config.DualStackModeEnabled)
 	if err != nil {
 		return nil, err
 	}
