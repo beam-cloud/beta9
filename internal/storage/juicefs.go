@@ -37,6 +37,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		"--cache-size",
 		cacheSize,
 		"--no-bgjob",
+		"--no-usage-report",
 	)
 
 	// Start the mount command in the background
