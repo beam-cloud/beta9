@@ -1,8 +1,9 @@
 FROM golang:1.21-bullseye as base
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends fuse3 && \
-    curl -sSL https://d.juicefs.com/install | sh -
+    apt-get install -y --no-install-recommends fuse3
+
+RUN  curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 
