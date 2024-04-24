@@ -153,9 +153,9 @@ def main(channel: Channel):
 
             payload: dict = _load_args(get_args_resp.args)
             args = payload.get("args") or []
-
             kwargs = payload.get("kwargs") or {}
             kwargs["context"] = context
+
             result = handler(*args, **kwargs)
         except BaseException as exc:
             result = error = exc
