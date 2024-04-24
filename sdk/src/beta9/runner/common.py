@@ -77,7 +77,7 @@ def load_handler() -> Callable:
         raise RunnerException()
 
 
-def load_loader() -> Union[Callable, None]:
+def load_and_execute_loader() -> Union[Any, None]:
     sys.path.insert(0, USER_CODE_VOLUME)
 
     if config.loader == "" or config.loader is None:
@@ -88,7 +88,7 @@ def load_loader() -> Union[Callable, None]:
         target_module = importlib.import_module(module)
         method = getattr(target_module, func)
         print(f"Loader {config.loader} loaded.")
-        return method
+        return method()
     except BaseException:
         raise RunnerException()
 

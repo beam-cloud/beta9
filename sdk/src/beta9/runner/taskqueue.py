@@ -29,7 +29,7 @@ from ..clients.taskqueue import (
 from ..config import with_runner_context
 from ..exceptions import RunnerException
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, config, load_handler, load_loader
+from ..runner.common import FunctionContext, config, load_and_execute_loader, load_handler
 from ..type import TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
@@ -242,16 +242,10 @@ class TaskQueueWorker:
 
         taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(channel)
 
-        loader = load_loader()
         handler = load_handler()
+        loader_result = load_and_execute_loader()
 
         executor = ThreadPoolExecutor()
-
-        print("Running loader")
-        loader_result = None
-        if loader is not None:
-            loader_result = loader()
-
         print(f"Worker[{self.worker_index}] ready")
         while True:
             task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)

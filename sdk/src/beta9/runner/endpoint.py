@@ -24,8 +24,8 @@ from ..clients.gateway import (
 )
 from ..config import with_runner_context
 from ..logging import StdoutJsonInterceptor
+from ..runner.common import FunctionContext, load_and_execute_loader, load_handler
 from ..runner.common import config as cfg
-from ..runner.common import load_handler
 from ..type import TaskStatus
 
 
@@ -139,7 +139,7 @@ class EndpointManager:
         self.exit_code: int = 0
         self.app = FastAPI(lifespan=self.lifespan)
         self.handler: Callable = load_handler().func  # The function exists under the decorator
-        self.context = {}  # TODO: implement context loader
+        self.loader_result = load_and_execute_loader()
 
         # Register signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)
@@ -156,7 +156,7 @@ class EndpointManager:
 
             status_code = HTTPStatus.OK
             with StdoutJsonInterceptor(task_id=task_id):
-                result, err = self._call_function(payload)
+                result, err = self._call_function(task_id=task_id, payload=payload)
                 if err:
                     task_status = TaskStatus.Error
 
@@ -178,7 +178,7 @@ class EndpointManager:
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 
-    def _call_function(self, payload: dict) -> Tuple[Response, Any]:
+    def _call_function(self, task_id: str, payload: dict) -> Tuple[Response, Any]:
         error = None
         response_body = {}
 
@@ -189,6 +189,9 @@ class EndpointManager:
         kwargs = payload.get("kwargs", {})
         if kwargs is None:
             kwargs = {}
+
+        context = FunctionContext.new(config=cfg, task_id=task_id, loader_result=self.loader_result)
+        kwargs["context"] = context
 
         try:
             response_body = self.handler(*args, **kwargs)
