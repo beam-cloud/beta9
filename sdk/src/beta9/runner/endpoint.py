@@ -146,7 +146,6 @@ class EndpointManager:
 
         @self.app.get("/health")
         async def health():
-            # TODO: wait for loader to complete before returning a 200
             return Response(status_code=HTTPStatus.OK)
 
         @self.app.post("/")
