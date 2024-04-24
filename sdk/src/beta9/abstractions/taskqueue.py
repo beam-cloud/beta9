@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Callable, Union
+from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
@@ -10,6 +10,7 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
+from ..abstractions.volume import Volume
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..clients.taskqueue import (
     StartTaskQueueServeRequest,
@@ -38,6 +39,8 @@ class TaskQueue(RunnerAbstraction):
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
+        volumes (Optional[List[Volume]]):
+            A list of volumes to be mounted to the app. Default is None.
         timeout (Optional[int]):
             The maximum number of seconds a task can run before it times out.
             Default is 3600. Set it to -1 to disable the timeout.
@@ -88,6 +91,7 @@ class TaskQueue(RunnerAbstraction):
         max_containers: int = 1,
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
+        volumes: Optional[List[Volume]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -100,6 +104,7 @@ class TaskQueue(RunnerAbstraction):
             retries=retries,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
+            volumes=volumes,
         )
 
         self.taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(self.channel)

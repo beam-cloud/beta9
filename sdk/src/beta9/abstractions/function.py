@@ -53,8 +53,6 @@ class Function(RunnerAbstraction):
         # Each of these inputs will be routed to remote containers
         for result in function.map(["file1.mp4", "file2.mp4"]):
             print(result)
-
-
         ```
     """
 
@@ -73,9 +71,9 @@ class Function(RunnerAbstraction):
             memory=memory,
             gpu=gpu,
             image=image,
-            volumes=volumes,
             timeout=timeout,
             retries=retries,
+            volumes=volumes,
         )
 
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
