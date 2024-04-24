@@ -15,6 +15,7 @@ from ..clients.endpoint import (
 )
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..config import GatewayConfig, get_gateway_config
+from ..env import is_local
 
 
 class Endpoint(RunnerAbstraction):
@@ -57,8 +58,7 @@ class _CallableWrapper:
         self.parent: Endpoint = parent
 
     def __call__(self, *args, **kwargs) -> Any:
-        container_id = os.getenv("CONTAINER_ID")
-        if container_id is not None:
+        if not is_local():
             return self.local(*args, **kwargs)
 
         raise NotImplementedError("Direct calls to Endpoints are not supported.")
