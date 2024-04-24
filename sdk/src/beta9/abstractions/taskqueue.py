@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Callable, Union
+from typing import Any, Callable, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
@@ -88,6 +88,7 @@ class TaskQueue(RunnerAbstraction):
         max_containers: int = 1,
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
+        loader: Optional[Callable] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -100,6 +101,7 @@ class TaskQueue(RunnerAbstraction):
             retries=retries,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
+            loader=loader,
         )
 
         self.taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(self.channel)

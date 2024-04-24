@@ -139,6 +139,7 @@ type TaskCountByTime struct {
 type StubConfigV1 struct {
 	Runtime         Runtime      `json:"runtime"`
 	Handler         string       `json:"handler"`
+	Loader          string       `json:"loader"`
 	PythonVersion   string       `json:"python_version"`
 	KeepWarmSeconds uint         `json:"keep_warm_seconds"`
 	MaxPendingTasks uint         `json:"max_pending_tasks"`

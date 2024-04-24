@@ -2,7 +2,7 @@ import importlib
 import os
 import sys
 from dataclasses import dataclass
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from ..exceptions import RunnerException
 
@@ -20,7 +20,7 @@ class Config:
     timeout: Optional[int]
     python_version: str
     handler: str
-    loader: str
+    loader: Optional[str]
     task_id: Optional[str]
     bind_port: int
 
@@ -87,6 +87,34 @@ def load_loader() -> Union[Callable, None]:
         module, func = config.loader.split(":")
         target_module = importlib.import_module(module)
         method = getattr(target_module, func)
+        print(f"Loader {config.loader} loaded.")
         return method
     except BaseException:
         raise RunnerException()
+
+
+@dataclass
+class FunctionContext:
+    container_id: Optional[str]
+    stub_id: Optional[str]
+    stub_type: Optional[str]
+    task_id: Optional[str]
+    loader_result: Optional[Any]
+    timeout: Optional[int]
+    bind_port: int
+    python_version: str
+
+    @classmethod
+    def new(
+        cls, *, config: Config, task_id: str, loader_result: Optional[Any] = None
+    ) -> "FunctionContext":
+        return cls(
+            container_id=config.container_id,
+            stub_id=config.stub_id,
+            stub_type=config.stub_type,
+            python_version=config.python_version,
+            task_id=task_id,
+            bind_port=config.bind_port,
+            timeout=config.timeout,
+            loader_result=loader_result,
+        )

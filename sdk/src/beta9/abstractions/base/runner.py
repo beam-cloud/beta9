@@ -2,7 +2,7 @@ import asyncio
 import inspect
 import os
 from queue import Empty, Queue
-from typing import Callable, List, Optional, Union
+from typing import Callable, List, Optional, Tuple, Union
 
 from watchdog.observers import Observer
 
@@ -45,6 +45,7 @@ class RunnerAbstraction(BaseAbstraction):
         retries: int = 3,
         timeout: int = 3600,
         volumes: Optional[List[Volume]] = None,
+        loader_func: Optional[Callable] = None,
     ) -> None:
         super().__init__()
 
@@ -60,10 +61,12 @@ class RunnerAbstraction(BaseAbstraction):
         self.image_id: str = ""
         self.stub_id: str = ""
         self.handler: str = ""
+        self.loader: str = ""
         self.cpu = cpu
         self.memory = memory
         self.gpu = gpu
         self.volumes = volumes or []
+        self.loader_func = loader_func
 
         self.concurrency = concurrency
         self.keep_warm_seconds = keep_warm_seconds
@@ -116,6 +119,17 @@ class RunnerAbstraction(BaseAbstraction):
         if self.handler or func is None:
             return
 
+        module_name, function_name = self._load_callable(func)
+        self.handler = f"{module_name}:{function_name}"
+
+    def _load_loader(self, func: Callable) -> None:
+        if self.loader or func is None:
+            return
+
+        module_name, function_name = self._load_callable(func)
+        self.loader = f"{module_name}:{function_name}"
+
+    def _load_callable(self, func: Callable) -> Tuple[str, str]:
         module = inspect.getmodule(func)  # Determine module / function name
         if module:
             module_file = os.path.basename(module.__file__)
@@ -124,7 +138,7 @@ class RunnerAbstraction(BaseAbstraction):
             module_name = "__main__"
 
         function_name = func.__name__
-        self.handler = f"{module_name}:{function_name}"
+        return module_name, function_name
 
     async def _object_iterator(self, *, dir: str, object_id: str, file_update_queue: Queue):
         while True:
@@ -177,6 +191,9 @@ class RunnerAbstraction(BaseAbstraction):
         if func is not None:
             self._load_handler(func)
 
+        if self.loader_func is not None:
+            self._load_loader(self.loader_func)
+
         stub_name = f"{stub_type}/{self.handler}" if self.handler else stub_type
 
         if name:
@@ -222,6 +239,7 @@ class RunnerAbstraction(BaseAbstraction):
                         memory=self.memory,
                         gpu=self.gpu,
                         handler=self.handler,
+                        loader=self.loader,
                         retries=self.retries,
                         timeout=self.timeout,
                         keep_warm_seconds=self.keep_warm_seconds,
