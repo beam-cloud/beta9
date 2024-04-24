@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/beam-cloud/beta9/internal/types"
+	"github.com/google/uuid"
 )
 
 const (
@@ -116,7 +117,9 @@ func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 }
 
 func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
-	f, err := os.Create(localPath)
+	tmpLocalPath := fmt.Sprintf("%s.%s", localPath, uuid.New().String()[:6])
+
+	f, err := os.Create(tmpLocalPath)
 	if err != nil {
 		log.Println(err)
 		return err
@@ -133,11 +136,17 @@ func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 
 	if err != nil {
 		f.Close()
-		os.Remove(localPath)
+		os.Remove(tmpLocalPath)
 		return err
 	}
 
 	f.Close()
+
+	err = os.Rename(tmpLocalPath, localPath)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
