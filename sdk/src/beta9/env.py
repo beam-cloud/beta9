@@ -4,7 +4,7 @@ from typing import Callable
 
 
 def is_local() -> bool:
-    """Check if we are currently in a remote container"""
+    """Check if we are currently running in a remote container"""
     return os.getenv("CONTAINER_ID", "") == ""
 
 
