@@ -9,11 +9,11 @@ import (
 )
 
 type Workspace struct {
-	Id         uint      `db:"id" json:"id"`
+	Id         uint      `db:"id" json:"id,omitempty"`
 	ExternalId string    `db:"external_id" json:"external_id"`
 	Name       string    `db:"name" json:"name"`
-	CreatedAt  time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
+	CreatedAt  time.Time `db:"created_at" json:"created_at,omitempty"`
+	UpdatedAt  time.Time `db:"updated_at" json:"updated_at,omitempty"`
 }
 
 const (
@@ -36,13 +36,13 @@ type Token struct {
 }
 
 type Volume struct {
-	Id          uint      `db:"id"`
-	ExternalId  string    `db:"external_id"`
-	Name        string    `db:"name"`
-	Size        uint64    // Populated by volume abstraction
-	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
-	CreatedAt   time.Time `db:"created_at"`
-	UpdatedAt   time.Time `db:"updated_at"`
+	Id          uint      `db:"id" json:"id"`
+	ExternalId  string    `db:"external_id" json:"external_id"`
+	Name        string    `db:"name" json:"name"`
+	Size        uint64    `json:"size"`                           // Populated by volume abstraction
+	WorkspaceId uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
 }
 
 type VolumeWithRelated struct {
