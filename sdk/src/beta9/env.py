@@ -9,7 +9,7 @@ def is_local() -> bool:
 
 
 def local_entrypoint(func: Callable) -> None:
-    """Decorator that executes the decorated function if the environment is local (not a remote container)"""
+    """Decorator that executes the decorated function if the environment is local (i.e. not a remote container)"""
 
     @wraps(func)
     def wrapper(*args, **kwargs):
