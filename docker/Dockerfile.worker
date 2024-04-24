@@ -88,7 +88,7 @@ RUN apt-get update && \
     curl -fsSL https://nvidia.github.io/nvidia-container-runtime/ubuntu20.04/nvidia-container-runtime.list | tee /etc/apt/sources.list.d/nvidia-container-runtime.list && \
     apt-get update
 
-RUN curl -sSL https://d.juicefs.com/install | sh -
+RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends criu nvidia-container-toolkit-base nvidia-container-toolkit
 RUN apt-get install -y libfuse2 && \
