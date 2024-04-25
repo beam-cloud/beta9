@@ -399,7 +399,7 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 
 func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters types.TaskFilter) squirrel.SelectBuilder {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\"",
+		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\", s.type AS \"stub.type\"",
 	).From("task t").
 		Join("workspace w ON t.workspace_id = w.id").
 		Join("stub s ON t.stub_id = s.id").OrderBy("t.id DESC")
