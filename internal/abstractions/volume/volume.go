@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/labstack/echo/v4"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -29,10 +30,25 @@ type GlobalVolumeService struct {
 	backendRepo repository.BackendRepository
 }
 
-func NewGlobalVolumeService(backendRepo repository.BackendRepository) (VolumeService, error) {
-	return &GlobalVolumeService{
+type FileInfo struct {
+	Path    string `json:"path"`
+	Size    uint64 `json:"size"`
+	ModTime int64  `json:"mod_time"`
+	IsDir   bool   `json:"is_dir"`
+}
+
+var volumeRoutePrefix string = "/volume"
+
+func NewGlobalVolumeService(backendRepo repository.BackendRepository, routeGroup *echo.Group) (VolumeService, error) {
+	gvs := &GlobalVolumeService{
 		backendRepo: backendRepo,
-	}, nil
+	}
+
+	// Register HTTP routes
+	authMiddleware := auth.AuthMiddleware(backendRepo)
+	registerVolumeRoutes(routeGroup.Group(volumeRoutePrefix, authMiddleware), gvs)
+
+	return gvs, nil
 }
 
 func (vs *GlobalVolumeService) GetOrCreateVolume(ctx context.Context, in *pb.GetOrCreateVolumeRequest) (*pb.GetOrCreateVolumeResponse, error) {
@@ -100,9 +116,15 @@ func (vs *GlobalVolumeService) ListPath(ctx context.Context, in *pb.ListPathRequ
 		}, nil
 	}
 
+	// Temporarily return the paths as strings
+	stringPaths := make([]string, len(paths))
+	for i, p := range paths {
+		stringPaths[i] = p.Path
+	}
+
 	return &pb.ListPathResponse{
 		Ok:    true,
-		Paths: paths,
+		Paths: stringPaths,
 	}, nil
 }
 
@@ -288,7 +310,7 @@ func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string,
 	return deleted, nil
 }
 
-func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, workspace *types.Workspace) ([]string, error) {
+func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, workspace *types.Workspace) ([]FileInfo, error) {
 	// Parse the volume and path/pattern
 	volumeName, volumePath := parseVolumeInput(inputPath)
 	if volumeName == "" {
@@ -319,11 +341,18 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 	}
 
 	// Modify paths to be relative
+	files := make([]FileInfo, len(matches))
 	for i, p := range matches {
-		matches[i] = strings.TrimPrefix(p, rootVolumePath+"/")
+		info, _ := os.Stat(p)
+		files[i] = FileInfo{
+			Path:    strings.TrimPrefix(p, rootVolumePath+"/"),
+			Size:    uint64(info.Size()),
+			ModTime: info.ModTime().Unix(),
+			IsDir:   info.IsDir(),
+		}
 	}
 
-	return matches, nil
+	return files, nil
 }
 
 func parseVolumeInput(input string) (string, string) {
