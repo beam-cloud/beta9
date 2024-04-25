@@ -1,7 +1,6 @@
 package volume
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/internal/auth"
@@ -20,18 +19,12 @@ func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup 
 	g.GET("/:workspaceId", group.ListVolumes)
 	g.GET("/:workspaceId/", group.ListVolumes)
 
-	// g.DELETE("/:workspaceId/delete/:volumeName", group.DeleteVolume)
-	// g.DELETE("/:workspaceId/delete/:volumeName/", group.DeleteVolume)
-
 	g.POST("/:workspaceId/:volumeName", group.CreateVolume)
 	g.POST("/:workspaceId/:volumeName/", group.CreateVolume)
 
 	g.GET("/:workspaceId/:volumeName/*", group.Ls)
 	g.DELETE("/:workspaceId/:volumeName/*", group.Rm)
 	g.PATCH("/:workspaceId/:volumeName/*", group.Mv)
-	// g.POST("/:workspaceId/:volumeName/*", group.UploadFile)
-
-	// g.GET("/:workspaceId/:volumeName/*", group.DownloadFile)
 
 	return group
 }
@@ -51,7 +44,6 @@ func (g *volumeGroup) ListVolumes(ctx echo.Context) error {
 	if volumes, err := g.gvs.listVolumes(ctx.Request().Context(), &workspace); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list volumes")
 	} else {
-		log.Println(volumes)
 		return ctx.JSON(http.StatusOK, volumes)
 	}
 }
