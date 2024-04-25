@@ -244,7 +244,6 @@ func (g *Gateway) registerServices() error {
 
 	// Register endpoint service
 	ws, err := endpoint.NewEndpointService(g.ctx, endpoint.EndpointServiceOpts{
-		Config:         g.config,
 		ContainerRepo:  g.ContainerRepo,
 		BackendRepo:    g.BackendRepo,
 		TaskRepo:       g.TaskRepo,
@@ -260,7 +259,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterEndpointServiceServer(g.grpcServer, ws)
 
 	// Register volume service
-	vs, err := volume.NewGlobalVolumeService(g.BackendRepo)
+	vs, err := volume.NewGlobalVolumeService(g.BackendRepo, g.rootRouteGroup)
 	if err != nil {
 		return err
 	}
