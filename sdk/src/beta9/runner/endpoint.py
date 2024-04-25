@@ -24,7 +24,7 @@ from ..clients.gateway import (
 )
 from ..config import with_runner_context
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, load_and_execute_loader, load_handler
+from ..runner.common import FunctionContext, execute_lifecycle_method, load_handler
 from ..runner.common import config as cfg
 from ..type import TaskStatus
 
@@ -139,7 +139,7 @@ class EndpointManager:
         self.exit_code: int = 0
         self.app = FastAPI(lifespan=self.lifespan)
         self.handler: Callable = load_handler().func  # The function exists under the decorator
-        self.loader_result = load_and_execute_loader()
+        self.on_start_value = execute_lifecycle_method(name="on_start")
 
         # Register signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)
@@ -189,7 +189,9 @@ class EndpointManager:
         if kwargs is None:
             kwargs = {}
 
-        context = FunctionContext.new(config=cfg, task_id=task_id, loader_result=self.loader_result)
+        context = FunctionContext.new(
+            config=cfg, task_id=task_id, on_start_value=self.on_start_value
+        )
         kwargs["context"] = context
 
         try:

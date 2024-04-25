@@ -148,7 +148,7 @@ message GetOrCreateStubRequest {
   uint32 max_pending_tasks = 15;
   repeated Volume volumes = 16;
   bool force_create = 17;
-  string loader = 18;
+  string on_start = 18;
 }
 
 message GetOrCreateStubResponse {

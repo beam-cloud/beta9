@@ -30,7 +30,7 @@ class Endpoint(RunnerAbstraction):
         max_containers: int = 1,
         keep_warm_seconds: int = 300,
         max_pending_tasks: int = 100,
-        loader: Optional[Callable] = None,
+        on_start: Optional[Callable] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -43,7 +43,7 @@ class Endpoint(RunnerAbstraction):
             retries=0,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
-            loader_func=loader,
+            on_start_func=on_start,
         )
 
         self.endpoint_stub: EndpointServiceStub = EndpointServiceStub(self.channel)

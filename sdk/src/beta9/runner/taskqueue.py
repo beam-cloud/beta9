@@ -29,7 +29,7 @@ from ..clients.taskqueue import (
 from ..config import with_runner_context
 from ..exceptions import RunnerException
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, config, load_and_execute_loader, load_handler
+from ..runner.common import FunctionContext, config, execute_lifecycle_method, load_handler
 from ..type import TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
@@ -243,7 +243,7 @@ class TaskQueueWorker:
         taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(channel)
 
         handler = load_handler()
-        loader_result = load_and_execute_loader()
+        on_start_value = execute_lifecycle_method(name="on_start")
 
         executor = ThreadPoolExecutor()
         print(f"Worker[{self.worker_index}] ready")
@@ -254,7 +254,7 @@ class TaskQueueWorker:
                 continue
 
             context = FunctionContext.new(
-                config=config, task_id=task.id, loader_result=loader_result
+                config=config, task_id=task.id, on_start_value=on_start_value
             )
 
             async def _run_task():
@@ -272,6 +272,8 @@ class TaskQueueWorker:
                         args = task.args or []
                         kwargs = task.kwargs or {}
                         kwargs["context"] = context
+
+                        # TODO: figure out if we can determine if they accept a var named context
                         result = await loop.run_in_executor(
                             executor, lambda: handler(*args, **kwargs)
                         )

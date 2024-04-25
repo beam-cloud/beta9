@@ -20,7 +20,7 @@ class Config:
     timeout: Optional[int]
     python_version: str
     handler: str
-    loader: Optional[str]
+    on_start: Optional[str]
     task_id: Optional[str]
     bind_port: int
 
@@ -34,7 +34,7 @@ class Config:
         keep_warm_seconds = float(os.getenv("KEEP_WARM_SECONDS", 10))
         python_version = os.getenv("PYTHON_VERSION")
         handler = os.getenv("HANDLER")
-        loader = os.getenv("LOADER")
+        on_start = os.getenv("ON_START")
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
@@ -54,7 +54,7 @@ class Config:
             keep_warm_seconds=keep_warm_seconds,
             python_version=python_version,
             handler=handler,
-            loader=loader,
+            on_start=on_start,
             task_id=task_id,
             bind_port=bind_port,
             timeout=timeout,
@@ -77,17 +77,18 @@ def load_handler() -> Callable:
         raise RunnerException()
 
 
-def load_and_execute_loader() -> Union[Any, None]:
+def execute_lifecycle_method(*, name: str) -> Union[Any, None]:
     sys.path.insert(0, USER_CODE_VOLUME)
 
-    if config.loader == "" or config.loader is None:
+    func: str = getattr(config, name)
+    if func == "" or func is None:
         return None
 
     try:
-        module, func = config.loader.split(":")
+        module, func = func.split(":")
         target_module = importlib.import_module(module)
         method = getattr(target_module, func)
-        print(f"Loader {config.loader} loaded.")
+        print(f"Running {name} func: {func}")
         return method()
     except BaseException:
         raise RunnerException()
@@ -99,14 +100,14 @@ class FunctionContext:
     stub_id: Optional[str]
     stub_type: Optional[str]
     task_id: Optional[str]
-    loader_result: Optional[Any]
     timeout: Optional[int]
     bind_port: int
     python_version: str
+    on_start_value: Optional[Any]
 
     @classmethod
     def new(
-        cls, *, config: Config, task_id: str, loader_result: Optional[Any] = None
+        cls, *, config: Config, task_id: str, on_start_value: Optional[Any] = None
     ) -> "FunctionContext":
         return cls(
             container_id=config.container_id,
@@ -116,5 +117,5 @@ class FunctionContext:
             task_id=task_id,
             bind_port=config.bind_port,
             timeout=config.timeout,
-            loader_result=loader_result,
+            on_start_value=on_start_value,
         )

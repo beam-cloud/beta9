@@ -63,7 +63,7 @@ class TaskQueue(RunnerAbstraction):
             The maximum number of tasks that can be pending in the queue. If the number of
             pending tasks exceeds this value, the task queue will stop accepting new tasks.
             Default is 100.
-        loader (Optional[Callable]):
+        on_start (Optional[Callable]):
             An optional function to run once (per process) when the container starts. Can be used for downloading data,
             loading models, or anything else computationally expensive.
     Example:
@@ -92,7 +92,7 @@ class TaskQueue(RunnerAbstraction):
         max_containers: int = 1,
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
-        loader: Optional[Callable] = None,
+        on_start: Optional[Callable] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -105,7 +105,7 @@ class TaskQueue(RunnerAbstraction):
             retries=retries,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
-            loader_func=loader,
+            on_start_func=on_start,
         )
 
         self.taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(self.channel)
