@@ -1,5 +1,5 @@
 import os
-from typing import Any, Callable, Union
+from typing import Any, Callable, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
@@ -15,6 +15,7 @@ from ..clients.endpoint import (
 )
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..config import GatewayConfig, get_gateway_config
+from ..env import is_local
 
 
 class Endpoint(RunnerAbstraction):
@@ -29,6 +30,7 @@ class Endpoint(RunnerAbstraction):
         max_containers: int = 1,
         keep_warm_seconds: int = 300,
         max_pending_tasks: int = 100,
+        on_start: Optional[Callable] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -41,6 +43,7 @@ class Endpoint(RunnerAbstraction):
             retries=0,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
+            on_start=on_start,
         )
 
         self.endpoint_stub: EndpointServiceStub = EndpointServiceStub(self.channel)
@@ -55,11 +58,13 @@ class _CallableWrapper:
         self.parent: Endpoint = parent
 
     def __call__(self, *args, **kwargs) -> Any:
-        container_id = os.getenv("CONTAINER_ID")
-        if container_id is not None:
+        if not is_local():
             return self.local(*args, **kwargs)
 
         raise NotImplementedError("Direct calls to Endpoints are not supported.")
+
+    def local(self, *args, **kwargs) -> Any:
+        return self.func(*args, **kwargs)
 
     def deploy(self, name: str) -> bool:
         if not self.parent.prepare_runtime(

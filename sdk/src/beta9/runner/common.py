@@ -1,8 +1,9 @@
 import importlib
+import inspect
 import os
 import sys
 from dataclasses import dataclass
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from ..exceptions import RunnerException
 
@@ -20,7 +21,7 @@ class Config:
     timeout: Optional[int]
     python_version: str
     handler: str
-    loader: str
+    on_start: Optional[str]
     task_id: Optional[str]
     bind_port: int
 
@@ -34,7 +35,7 @@ class Config:
         keep_warm_seconds = float(os.getenv("KEEP_WARM_SECONDS", 10))
         python_version = os.getenv("PYTHON_VERSION")
         handler = os.getenv("HANDLER")
-        loader = os.getenv("LOADER")
+        on_start = os.getenv("ON_START")
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
@@ -54,7 +55,7 @@ class Config:
             keep_warm_seconds=keep_warm_seconds,
             python_version=python_version,
             handler=handler,
-            loader=loader,
+            on_start=on_start,
             task_id=task_id,
             bind_port=bind_port,
             timeout=timeout,
@@ -64,29 +65,83 @@ class Config:
 config: Config = Config.load_from_env()
 
 
-def load_handler() -> Callable:
-    sys.path.insert(0, USER_CODE_VOLUME)
+@dataclass
+class FunctionContext:
+    """
+    A dataclass used to store various useful fields you might want to access in your entry point logic
+    """
 
-    try:
-        module, func = config.handler.split(":")
-        target_module = importlib.import_module(module)
-        method = getattr(target_module, func)
-        print(f"Handler {config.handler} loaded.")
-        return method
-    except BaseException:
-        raise RunnerException()
+    container_id: Optional[str] = None
+    stub_id: Optional[str] = None
+    stub_type: Optional[str] = None
+    task_id: Optional[str] = None
+    timeout: Optional[int] = None
+    on_start_value: Optional[Any] = None
+    bind_port: int = 0
+    python_version: str = ""
+
+    @classmethod
+    def new(cls, *, config: Config, task_id: str, on_start_value: Any) -> "FunctionContext":
+        """
+        Create a new instance of FunctionContext, to be passed directly into a function handler
+        """
+        return cls(
+            container_id=config.container_id,
+            stub_id=config.stub_id,
+            stub_type=config.stub_type,
+            python_version=config.python_version,
+            task_id=task_id,
+            bind_port=config.bind_port,
+            timeout=config.timeout,
+            on_start_value=on_start_value,
+        )
 
 
-def load_loader() -> Union[Callable, None]:
-    sys.path.insert(0, USER_CODE_VOLUME)
+class FunctionHandler:
+    """
+    Helper class for loading user entry point functions
+    """
 
-    if config.loader == "" or config.loader is None:
+    def __init__(self) -> None:
+        self.pass_context: bool = False
+        self.handler: Union[Callable, None] = None
+        self._load()
+
+    def _load(self) -> Callable:
+        if sys.path[0] != USER_CODE_VOLUME:
+            sys.path.insert(0, USER_CODE_VOLUME)
+
+        try:
+            module, func = config.handler.split(":")
+            target_module = importlib.import_module(module)
+            self.handler = getattr(target_module, func)
+            sig = inspect.signature(self.handler.func)
+            self.pass_context = "context" in sig.parameters
+        except BaseException:
+            raise RunnerException()
+
+    def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+        if self.pass_context:
+            kwargs["context"] = context
+
+        return self.handler(*args, **kwargs)
+
+
+def execute_lifecycle_method(*, name: str) -> Union[Any, None]:
+    """Executes a container lifecycle method defined by the user and return it's value"""
+
+    if sys.path[0] != USER_CODE_VOLUME:
+        sys.path.insert(0, USER_CODE_VOLUME)
+
+    func: str = getattr(config, name)
+    if func == "" or func is None:
         return None
 
+    print(f"Running {name} func: {func}")
     try:
-        module, func = config.loader.split(":")
+        module, func = func.split(":")
         target_module = importlib.import_module(module)
         method = getattr(target_module, func)
-        return method
+        return method()
     except BaseException:
         raise RunnerException()

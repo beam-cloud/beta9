@@ -29,7 +29,7 @@ from ..clients.gateway import (
 from ..config import with_runner_context
 from ..exceptions import InvalidFunctionArgumentsException, RunnerException
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import config, load_handler
+from ..runner.common import FunctionContext, FunctionHandler, config
 from ..type import TaskExitCode, TaskStatus
 
 
@@ -131,7 +131,7 @@ def main(channel: Channel):
         monitor_task = loop.create_task(
             _monitor_task(
                 stub_id=config.stub_id,
-                task_id=config.task_id,
+                task_id=task_id,
                 container_id=config.container_id,
                 function_stub=function_stub,
             ),
@@ -148,12 +148,14 @@ def main(channel: Channel):
             if not get_args_resp.ok:
                 raise InvalidFunctionArgumentsException
 
-            handler = load_handler()
+            handler = FunctionHandler()
+            context = FunctionContext.new(config=config, task_id=task_id)
 
             payload: dict = _load_args(get_args_resp.args)
             args = payload.get("args") or []
             kwargs = payload.get("kwargs") or {}
-            result = handler(*args, **kwargs)
+
+            result = handler(context, *args, **kwargs)
         except BaseException as exc:
             result = error = exc
             task_status = TaskStatus.Error

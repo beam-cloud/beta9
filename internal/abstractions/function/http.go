@@ -19,6 +19,7 @@ func registerFunctionRoutes(g *echo.Group, fs *RunCFunctionService) *functionGro
 	group := &functionGroup{routerGroup: g, fs: fs}
 
 	g.POST("/id/:stubId", group.FunctionInvoke)
+	g.POST("/id/:stubId/", group.FunctionInvoke)
 	g.POST("/:deploymentName/v:version", group.FunctionInvoke)
 
 	return group

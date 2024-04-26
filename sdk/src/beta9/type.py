@@ -1,6 +1,10 @@
 from enum import Enum
 
 
+class LifeCycleMethod(str, Enum):
+    OnStart = "on_start"
+
+
 class TaskStatus(str, Enum):
     Complete = "COMPLETE"
     Error = "ERROR"

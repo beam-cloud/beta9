@@ -20,6 +20,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			ImageId: in.ImageId,
 		},
 		Handler:       in.Handler,
+		OnStart:       in.OnStart,
 		PythonVersion: in.PythonVersion,
 		TaskPolicy: types.TaskPolicy{
 			MaxRetries: uint(in.Retries),
