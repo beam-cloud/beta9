@@ -242,9 +242,9 @@ class TaskQueueWorker:
         executor = ThreadPoolExecutor()
         taskqueue_stub = TaskQueueServiceStub(channel)
 
+        # Load handler and execute on_start method
         handler = FunctionHandler()
-
-        execute_lifecycle_method(name=LifeCycleMethod.OnStart)
+        on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
 
         print(f"Worker[{self.worker_index}] ready")
         while True:
@@ -272,6 +272,7 @@ class TaskQueueWorker:
                         context = FunctionContext.new(
                             config=config,
                             task_id=task.id,
+                            on_start_value=on_start_value,
                         )
 
                         result = await loop.run_in_executor(

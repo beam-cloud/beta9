@@ -67,26 +67,25 @@ config: Config = Config.load_from_env()
 
 @dataclass
 class FunctionContext:
+    """
+    A dataclass used to store various useful fields you might want to access in your entry point logic
+    """
+
     container_id: Optional[str] = None
     stub_id: Optional[str] = None
     stub_type: Optional[str] = None
     task_id: Optional[str] = None
     timeout: Optional[int] = None
+    on_start_value: Optional[Any] = None
     bind_port: int = 0
     python_version: str = ""
 
-    def __setattr__(self, name: str, value: Any) -> None:
-        self.__dict__[name] = value
-
-    def __getattr__(self, name: str) -> Any:
-        try:
-            return self.__dict__[name]
-        except KeyError:
-            raise AttributeError(f"{name} attribute is not set")
-
     @classmethod
-    def new(cls, *, config: Config, task_id: str, **kwargs) -> "FunctionContext":
-        obj = cls(
+    def new(cls, *, config: Config, task_id: str, on_start_value: Any) -> "FunctionContext":
+        """
+        Create a new instance of FunctionContext, to be passed directly into a function handler
+        """
+        return cls(
             container_id=config.container_id,
             stub_id=config.stub_id,
             stub_type=config.stub_type,
@@ -94,15 +93,15 @@ class FunctionContext:
             task_id=task_id,
             bind_port=config.bind_port,
             timeout=config.timeout,
+            on_start_value=on_start_value,
         )
-
-        for key, value in kwargs.items():
-            setattr(obj, key, value)
-
-        return obj
 
 
 class FunctionHandler:
+    """
+    Helper class for loading user entry point functions
+    """
+
     def __init__(self) -> None:
         self.pass_context: bool = False
         self.handler: Union[Callable, None] = None
@@ -129,6 +128,8 @@ class FunctionHandler:
 
 
 def execute_lifecycle_method(*, name: str) -> Union[Any, None]:
+    """Executes a container lifecycle method defined by the user and return it's value"""
+
     if sys.path[0] != USER_CODE_VOLUME:
         sys.path.insert(0, USER_CODE_VOLUME)
 

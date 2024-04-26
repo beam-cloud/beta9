@@ -138,6 +138,8 @@ class EndpointManager:
         self.pid: int = os.getpid()
         self.exit_code: int = 0
         self.app = FastAPI(lifespan=self.lifespan)
+
+        # Load handler and execute on_start method
         self.handler: FunctionHandler = FunctionHandler()
         self.on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
 
