@@ -22,7 +22,7 @@ from ...sync import FileSyncer, SyncEventHandler
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
 TASKQUEUE_STUB_TYPE = "taskqueue"
-WEBSERVER_STUB_TYPE = "endpoint"
+ENDPOINT_STUB_TYPE = "endpoint"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
@@ -45,11 +45,15 @@ class RunnerAbstraction(BaseAbstraction):
         retries: int = 3,
         timeout: int = 3600,
         volumes: Optional[List[Volume]] = None,
+        on_start: Optional[Callable] = None,
     ) -> None:
         super().__init__()
 
         if image is None:
             image = Image()
+
+        if on_start is not None:
+            self._map_callable_to_attr(attr="on_start", func=on_start)
 
         self.image: Image = image
         self.image_available: bool = False
@@ -112,8 +116,12 @@ class RunnerAbstraction(BaseAbstraction):
         else:
             raise TypeError("CPU must be a float or a string.")
 
-    def _load_handler(self, func: Callable) -> None:
-        if self.handler or func is None:
+    def _map_callable_to_attr(self, *, attr: str, func: Callable):
+        """
+        Determine the module and function name of a callable function, and cache on the class.
+        This is used for passing callables to stub config.
+        """
+        if getattr(self, attr):
             return
 
         module = inspect.getmodule(func)  # Determine module / function name
@@ -124,7 +132,7 @@ class RunnerAbstraction(BaseAbstraction):
             module_name = "__main__"
 
         function_name = func.__name__
-        self.handler = f"{module_name}:{function_name}"
+        setattr(self, attr, f"{module_name}:{function_name}")
 
     async def _object_iterator(self, *, dir: str, object_id: str, file_update_queue: Queue):
         while True:
@@ -175,7 +183,7 @@ class RunnerAbstraction(BaseAbstraction):
         name: Optional[str] = None,
     ) -> bool:
         if func is not None:
-            self._load_handler(func)
+            self._map_callable_to_attr(attr="handler", func=func)
 
         stub_name = f"{stub_type}/{self.handler}" if self.handler else stub_type
 
@@ -222,6 +230,7 @@ class RunnerAbstraction(BaseAbstraction):
                         memory=self.memory,
                         gpu=self.gpu,
                         handler=self.handler,
+                        on_start=self.on_start,
                         retries=self.retries,
                         timeout=self.timeout,
                         keep_warm_seconds=self.keep_warm_seconds,

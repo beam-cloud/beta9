@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Callable, Union
+from typing import Any, Callable, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
@@ -19,6 +19,7 @@ from ..clients.taskqueue import (
     TaskQueueServiceStub,
 )
 from ..config import GatewayConfig, get_gateway_config
+from ..env import is_local
 
 
 class TaskQueue(RunnerAbstraction):
@@ -62,6 +63,9 @@ class TaskQueue(RunnerAbstraction):
             The maximum number of tasks that can be pending in the queue. If the number of
             pending tasks exceeds this value, the task queue will stop accepting new tasks.
             Default is 100.
+        on_start (Optional[Callable]):
+            An optional function to run once (per process) when the container starts. Can be used for downloading data,
+            loading models, or anything else computationally expensive.
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -88,6 +92,7 @@ class TaskQueue(RunnerAbstraction):
         max_containers: int = 1,
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
+        on_start: Optional[Callable] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -100,6 +105,7 @@ class TaskQueue(RunnerAbstraction):
             retries=retries,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
+            on_start=on_start,
         )
 
         self.taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(self.channel)
@@ -114,8 +120,7 @@ class _CallableWrapper:
         self.parent: TaskQueue = parent
 
     def __call__(self, *args, **kwargs) -> Any:
-        container_id = os.getenv("CONTAINER_ID")
-        if container_id is not None:
+        if not is_local():
             return self.local(*args, **kwargs)
 
         raise NotImplementedError(

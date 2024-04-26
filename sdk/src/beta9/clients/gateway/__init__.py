@@ -193,6 +193,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     max_pending_tasks: int = betterproto.uint32_field(15)
     volumes: List["Volume"] = betterproto.message_field(16)
     force_create: bool = betterproto.bool_field(17)
+    on_start: str = betterproto.string_field(18)
 
 
 @dataclass(eq=False, repr=False)

@@ -1,6 +1,7 @@
 import io
-import sys
 import json
+import sys
+
 
 class StdoutJsonInterceptor(io.TextIOBase):
     def __init__(self, stream=sys.__stdout__, **ctx):
@@ -34,4 +35,3 @@ class StdoutJsonInterceptor(io.TextIOBase):
 
     def fileno(self) -> int:
         return -1
-    
