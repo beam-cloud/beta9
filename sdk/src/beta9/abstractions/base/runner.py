@@ -45,12 +45,15 @@ class RunnerAbstraction(BaseAbstraction):
         retries: int = 3,
         timeout: int = 3600,
         volumes: Optional[List[Volume]] = None,
-        on_start_func: Optional[Callable] = None,
+        on_start: Optional[Callable] = None,
     ) -> None:
         super().__init__()
 
         if image is None:
             image = Image()
+
+        if on_start is not None:
+            self._map_callable_to_attr(attr="on_start", func=on_start)
 
         self.image: Image = image
         self.image_available: bool = False
@@ -61,12 +64,11 @@ class RunnerAbstraction(BaseAbstraction):
         self.image_id: str = ""
         self.stub_id: str = ""
         self.handler: str = ""
-        self.on_start: str = ""
+        self.on_start: str = on_start
         self.cpu = cpu
         self.memory = memory
         self.gpu = gpu
         self.volumes = volumes or []
-        self.on_start_func = on_start_func
 
         self.concurrency = concurrency
         self.keep_warm_seconds = keep_warm_seconds
@@ -115,7 +117,11 @@ class RunnerAbstraction(BaseAbstraction):
         else:
             raise TypeError("CPU must be a float or a string.")
 
-    def _load_callable(self, *, attr: str, func: Callable):
+    def _map_callable_to_attr(self, *, attr: str, func: Callable):
+        """
+        Determine the module and function name of a callable function, and cache on the class.
+        This is used for passing callables to stub config.
+        """
         if getattr(self, attr):
             return
 
@@ -178,10 +184,7 @@ class RunnerAbstraction(BaseAbstraction):
         name: Optional[str] = None,
     ) -> bool:
         if func is not None:
-            self._load_callable(attr="handler", func=func)
-
-        if self.on_start_func is not None:
-            self._load_callable(attr="on_start", func=self.on_start_func)
+            self._map_callable_to_attr(attr="handler", func=func)
 
         stub_name = f"{stub_type}/{self.handler}" if self.handler else stub_type
 
