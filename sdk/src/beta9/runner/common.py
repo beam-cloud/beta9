@@ -81,7 +81,9 @@ class FunctionContext:
     python_version: str = ""
 
     @classmethod
-    def new(cls, *, config: Config, task_id: str, on_start_value: Any) -> "FunctionContext":
+    def new(
+        cls, *, config: Config, task_id: str, on_start_value: Optional[Any] = None
+    ) -> "FunctionContext":
         """
         Create a new instance of FunctionContext, to be passed directly into a function handler
         """
