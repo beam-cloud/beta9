@@ -29,7 +29,7 @@ from ..clients.taskqueue import (
 from ..config import with_runner_context
 from ..exceptions import RunnerException
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, Handler, config, execute_lifecycle_method
+from ..runner.common import FunctionContext, FunctionHandler, config, execute_lifecycle_method
 from ..type import LifeCycleMethod, TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
@@ -242,7 +242,7 @@ class TaskQueueWorker:
         executor = ThreadPoolExecutor()
         taskqueue_stub = TaskQueueServiceStub(channel)
 
-        handler = Handler()  # Load taskqueue handler
+        handler = FunctionHandler()
 
         execute_lifecycle_method(name=LifeCycleMethod.OnStart)
 

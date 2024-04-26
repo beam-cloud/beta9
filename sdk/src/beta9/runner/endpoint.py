@@ -24,7 +24,7 @@ from ..clients.gateway import (
 )
 from ..config import with_runner_context
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, Handler, execute_lifecycle_method
+from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_method
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
 
@@ -138,7 +138,7 @@ class EndpointManager:
         self.pid: int = os.getpid()
         self.exit_code: int = 0
         self.app = FastAPI(lifespan=self.lifespan)
-        self.handler: Handler = Handler()
+        self.handler: FunctionHandler = FunctionHandler()
         self.on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
 
         # Register signal handlers

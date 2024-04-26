@@ -29,7 +29,7 @@ from ..clients.gateway import (
 from ..config import with_runner_context
 from ..exceptions import InvalidFunctionArgumentsException, RunnerException
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, Handler, config
+from ..runner.common import FunctionContext, FunctionHandler, config
 from ..type import TaskExitCode, TaskStatus
 
 
@@ -148,7 +148,7 @@ def main(channel: Channel):
             if not get_args_resp.ok:
                 raise InvalidFunctionArgumentsException
 
-            handler = Handler()
+            handler = FunctionHandler()
             context = FunctionContext.new(config=config, task_id=task_id)
 
             payload: dict = _load_args(get_args_resp.args)

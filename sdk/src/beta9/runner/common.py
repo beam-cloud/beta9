@@ -102,7 +102,7 @@ class FunctionContext:
         return obj
 
 
-class Handler:
+class FunctionHandler:
     def __init__(self) -> None:
         self.pass_context: bool = False
         self.handler: Union[Callable, None] = None
