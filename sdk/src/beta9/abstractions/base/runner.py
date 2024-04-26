@@ -22,7 +22,7 @@ from ...sync import FileSyncer, SyncEventHandler
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
 TASKQUEUE_STUB_TYPE = "taskqueue"
-WEBSERVER_STUB_TYPE = "endpoint"
+ENDPOINT_STUB_TYPE = "endpoint"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
@@ -127,7 +127,6 @@ class RunnerAbstraction(BaseAbstraction):
             module_name = "__main__"
 
         function_name = func.__name__
-
         setattr(self, attr, f"{module_name}:{function_name}")
 
     async def _object_iterator(self, *, dir: str, object_id: str, file_update_queue: Queue):
