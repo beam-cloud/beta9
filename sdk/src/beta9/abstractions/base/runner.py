@@ -64,7 +64,6 @@ class RunnerAbstraction(BaseAbstraction):
         self.image_id: str = ""
         self.stub_id: str = ""
         self.handler: str = ""
-        self.on_start: str = on_start
         self.cpu = cpu
         self.memory = memory
         self.gpu = gpu
