@@ -4,7 +4,7 @@ import signal
 import traceback
 from contextlib import asynccontextmanager
 from http import HTTPStatus
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -24,9 +24,9 @@ from ..clients.gateway import (
 )
 from ..config import with_runner_context
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, execute_lifecycle_method, load_handler
+from ..runner.common import FunctionContext, Handler, execute_lifecycle_method
 from ..runner.common import config as cfg
-from ..type import TaskStatus
+from ..type import LifeCycleMethod, TaskStatus
 
 
 class EndpointFilter(logging.Filter):
@@ -138,8 +138,8 @@ class EndpointManager:
         self.pid: int = os.getpid()
         self.exit_code: int = 0
         self.app = FastAPI(lifespan=self.lifespan)
-        self.handler: Callable = load_handler().func  # The function exists under the decorator
-        self.on_start_value = execute_lifecycle_method(name="on_start")
+        self.handler: Handler = Handler()
+        self.on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
 
         # Register signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)
@@ -192,10 +192,13 @@ class EndpointManager:
         context = FunctionContext.new(
             config=cfg, task_id=task_id, on_start_value=self.on_start_value
         )
-        kwargs["context"] = context
 
         try:
-            response_body = self.handler(*args, **kwargs)
+            response_body = self.handler(
+                context,
+                *args,
+                **kwargs,
+            )
         except BaseException:
             self.logger.exception("Unhandled exception")
             error = traceback.format_exc()

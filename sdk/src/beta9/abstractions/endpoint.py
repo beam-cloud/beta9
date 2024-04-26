@@ -63,6 +63,9 @@ class _CallableWrapper:
 
         raise NotImplementedError("Direct calls to Endpoints are not supported.")
 
+    def local(self, *args, **kwargs) -> Any:
+        return self.func(*args, **kwargs)
+
     def deploy(self, name: str) -> bool:
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=ENDPOINT_DEPLOYMENT_STUB_TYPE, force_create_stub=True

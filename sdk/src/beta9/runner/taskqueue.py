@@ -29,8 +29,8 @@ from ..clients.taskqueue import (
 from ..config import with_runner_context
 from ..exceptions import RunnerException
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, config, execute_lifecycle_method, load_handler
-from ..type import TaskExitCode, TaskStatus
+from ..runner.common import FunctionContext, Handler, config, execute_lifecycle_method
+from ..type import LifeCycleMethod, TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.01
@@ -239,13 +239,13 @@ class TaskQueueWorker:
     def process_tasks(self, channel: Channel) -> None:
         self.worker_startup_event.set()
         loop = asyncio.get_event_loop()
-
-        taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(channel)
-
-        handler = load_handler()
-        on_start_value = execute_lifecycle_method(name="on_start")
-
         executor = ThreadPoolExecutor()
+        taskqueue_stub = TaskQueueServiceStub(channel)
+
+        handler = Handler()  # Load taskqueue handler
+
+        execute_lifecycle_method(name=LifeCycleMethod.OnStart)
+
         print(f"Worker[{self.worker_index}] ready")
         while True:
             task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)
@@ -253,13 +253,10 @@ class TaskQueueWorker:
                 time.sleep(TASK_POLLING_INTERVAL)
                 continue
 
-            context = FunctionContext.new(
-                config=config, task_id=task.id, on_start_value=on_start_value
-            )
-
             async def _run_task():
                 with StdoutJsonInterceptor(task_id=task.id):
                     print(f"Running task <{task.id}>")
+
                     monitor_task = loop.create_task(
                         self._monitor_task(
                             config.stub_id, config.container_id, taskqueue_stub, task
@@ -271,11 +268,14 @@ class TaskQueueWorker:
                     try:
                         args = task.args or []
                         kwargs = task.kwargs or {}
-                        kwargs["context"] = context
 
-                        # TODO: figure out if we can determine if they accept a var named context
+                        context = FunctionContext.new(
+                            config=config,
+                            task_id=task.id,
+                        )
+
                         result = await loop.run_in_executor(
-                            executor, lambda: handler(*args, **kwargs)
+                            executor, lambda: handler(context, *args, **kwargs)
                         )
                         result = cloudpickle.dumps(result)
                     except BaseException as exc:
