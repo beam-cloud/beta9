@@ -52,9 +52,6 @@ class RunnerAbstraction(BaseAbstraction):
         if image is None:
             image = Image()
 
-        if on_start is not None:
-            self._map_callable_to_attr(attr="on_start", func=on_start)
-
         self.image: Image = image
         self.image_available: bool = False
         self.files_synced: bool = False
@@ -64,17 +61,20 @@ class RunnerAbstraction(BaseAbstraction):
         self.image_id: str = ""
         self.stub_id: str = ""
         self.handler: str = ""
+        self.on_start: str = ""
         self.cpu = cpu
         self.memory = memory
         self.gpu = gpu
         self.volumes = volumes or []
-
         self.concurrency = concurrency
         self.keep_warm_seconds = keep_warm_seconds
         self.max_pending_tasks = max_pending_tasks
         self.max_containers = max_containers
         self.retries = retries
         self.timeout = timeout
+
+        if on_start is not None:
+            self._map_callable_to_attr(attr="on_start", func=on_start)
 
         self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
