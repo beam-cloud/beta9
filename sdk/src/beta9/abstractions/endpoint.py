@@ -31,7 +31,6 @@ class Endpoint(RunnerAbstraction):
         keep_warm_seconds: int = 300,
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
-        callback_url: Optional[str] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -45,7 +44,6 @@ class Endpoint(RunnerAbstraction):
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
             on_start=on_start,
-            callback_url=callback_url,
         )
 
         self.endpoint_stub: EndpointServiceStub = EndpointServiceStub(self.channel)

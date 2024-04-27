@@ -308,7 +308,7 @@ class TaskQueueWorker:
                         if not complete_task_response.ok:
                             raise RunnerException("Unable to end task")
 
-                        await handler.send_callback(context)
+                        await handler.send_callback(context, result)
 
                         print(f"Task completed <{task.id}>")
                         monitor_task.cancel()

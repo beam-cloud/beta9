@@ -137,21 +137,16 @@ class FunctionHandler:
         if self.pass_context:
             kwargs["context"] = context
 
-        result = self.handler(*args, **kwargs)
+        return self.handler(*args, **kwargs)
 
-        if context.callback_url != "" and context.callback_url is not None:
-            print("SENDING CALLBACK URL: ", context.callback_url)
-            self.send_callback()
-
-        return result
-
-    async def send_callback(self, context: FunctionContext):
+    async def send_callback(self, context: FunctionContext, payload: Any):
         if context.callback_url == "" or context.callback_url is None:
             return
 
-        r: SignPayloadResponse = self.gateway_stub.sign_payload(
+        r: SignPayloadResponse = await self.gateway_stub.sign_payload(
             SignPayloadRequest(payload=bytes([0, 2]))
         )
+
         print("SIGNED PAYLOAD:", r)
 
 
