@@ -128,8 +128,7 @@ class FunctionHandler:
     Helper class for loading user entry point functions
     """
 
-    def __init__(self, *, gateway_stub: GatewayServiceStub) -> None:
-        self.gateway_stub: GatewayServiceStub = gateway_stub
+    def __init__(self) -> None:
         self.pass_context: bool = False
         self.handler: Union[Callable, None] = None
         self._load()
