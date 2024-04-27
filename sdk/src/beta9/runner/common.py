@@ -5,9 +5,7 @@ import logging
 import os
 import sys
 import time
-import traceback
 from dataclasses import dataclass
-from json import JSONEncoder
 from typing import Any, Callable, Optional, Union
 
 import requests
@@ -171,7 +169,7 @@ def execute_lifecycle_method(*, name: str) -> Union[Any, None]:
 
 
 async def send_callback(
-    *, gateway_stub: GatewayServiceStub, context: FunctionContext, payload: Any
+    *, gateway_stub: GatewayServiceStub, context: FunctionContext, payload: Any, task_status: str
 ) -> None:
     if context.callback_url == "" or context.callback_url is None:
         return
@@ -181,16 +179,11 @@ async def send_callback(
 
     # Serialize callback payload to correct format
     use_json = True
+    body = {"data": payload}
     if isinstance(payload, Response):
         body = {"data": payload.body}
         headers = payload.headers
         use_json = False
-    else:
-        try:
-            body = {"data": JSONEncoder().default(payload)}
-        except TypeError:
-            logger.error(f"Error serializing callback payload: {traceback.format_exc()}")
-            return
 
     # Sign callback payload
     sign_payload_resp: SignPayloadResponse = await gateway_stub.sign_payload(
@@ -202,9 +195,9 @@ async def send_callback(
     headers = {
         **headers,
         "X-Task-ID": str(context.task_id),
-        "X-Task-Status": "COMPLETE",
+        "X-Task-Status": task_status,
         "X-Task-Signature": sign_payload_resp.signature,
-        "X-Task-Timestamp": sign_payload_resp.timestamp,
+        "X-Task-Timestamp": str(sign_payload_resp.timestamp),
     }
 
     try:

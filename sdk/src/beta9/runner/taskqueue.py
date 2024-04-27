@@ -216,7 +216,12 @@ class TaskQueueWorker:
                     if response.cancelled:
                         print(f"Task cancelled: {task.id}")
 
-                        await send_callback(gateway_stub=gateway_stub, context=context, payload={})
+                        await send_callback(
+                            gateway_stub=gateway_stub,
+                            context=context,
+                            payload={},
+                            task_status=TaskStatus.Cancelled,
+                        )
                         os._exit(TaskExitCode.Cancelled)
 
                     if response.complete:
@@ -225,7 +230,12 @@ class TaskQueueWorker:
                     if response.timed_out:
                         print(f"Task timed out: {task.id}")
 
-                        await send_callback(gateway_stub=gateway_stub, context=context, payload={})
+                        await send_callback(
+                            gateway_stub=gateway_stub,
+                            context=context,
+                            payload={},
+                            task_status=TaskStatus.Timeout,
+                        )
                         os._exit(TaskExitCode.Timeout)
 
                     retry = 0
@@ -330,7 +340,10 @@ class TaskQueueWorker:
                         print(f"Task completed <{task.id}>")
 
                         await send_callback(
-                            gateway_stub=gateway_stub, context=context, payload=result
+                            gateway_stub=gateway_stub,
+                            context=context,
+                            payload=result,
+                            task_status=task_status,
                         )  # Send callback to callback_url, if defined
 
             loop.run_until_complete(_run_task())

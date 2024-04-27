@@ -71,7 +71,12 @@ async def _monitor_task(
                 if response.cancelled:
                     print(f"Task cancelled: {task_id}")
 
-                    await send_callback(gateway_stub=gateway_stub, context=context, payload={})
+                    await send_callback(
+                        gateway_stub=gateway_stub,
+                        context=context,
+                        payload={},
+                        task_status=TaskStatus.Cancelled,
+                    )
                     os._exit(TaskExitCode.Cancelled)
 
                 if response.complete:
@@ -80,7 +85,12 @@ async def _monitor_task(
                 if response.timed_out:
                     print(f"Task timed out: {task_id}")
 
-                    await send_callback(gateway_stub=gateway_stub, context=context, payload={})
+                    await send_callback(
+                        gateway_stub=gateway_stub,
+                        context=context,
+                        payload={},
+                        task_status=TaskStatus.Timeout,
+                    )
                     os._exit(TaskExitCode.Timeout)
 
                 retry = 0
@@ -197,7 +207,9 @@ def main(channel: Channel):
         monitor_task.cancel()
 
         run_sync(
-            send_callback(gateway_stub=gateway_stub, context=context, payload=result)
+            send_callback(
+                gateway_stub=gateway_stub, context=context, payload=result, task_status=task_status
+            )
         )  # Send callback to callback_url, if defined
 
         if task_status == TaskStatus.Error:

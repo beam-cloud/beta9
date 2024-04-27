@@ -12,6 +12,7 @@ class TaskStatus(str, Enum):
     Running = "RUNNING"
     Cancelled = "CANCELLED"
     Retry = "RETRY"
+    Timeout = "TIMEOUT"
 
 
 class TaskExitCode:
