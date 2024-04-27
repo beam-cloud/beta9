@@ -49,5 +49,5 @@ func (g *endpointGroup) endpointRequest(ctx echo.Context) error {
 		stubId = deployment.Stub.ExternalId
 	}
 
-	return g.es.forwardRequest(ctx, stubId)
+	return g.es.forwardRequest(ctx, cc.AuthInfo, stubId)
 }

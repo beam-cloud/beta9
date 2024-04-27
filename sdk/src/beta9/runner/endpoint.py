@@ -202,9 +202,9 @@ class EndpointManager:
                 **kwargs,
             )
         except BaseException:
-            self.logger.exception("Unhandled exception")
-            error = traceback.format_exc()
-            response_body = {"error": traceback.format_exc()}
+            exception = traceback.format_exc()
+            print(exception)
+            response_body = {"error": exception}
 
         return response_body, error
 
