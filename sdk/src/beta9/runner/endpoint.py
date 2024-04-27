@@ -153,11 +153,14 @@ class EndpointManager:
         @self.app.post("/")
         async def function(request: Request, task_status: str = Depends(task_lifecycle)):
             task_id = request.headers.get("X-TASK-ID")
+            task_signature = request.headers.get("X-TASK-SIGNATURE")
             payload = await request.json()
 
             status_code = HTTPStatus.OK
             with StdoutJsonInterceptor(task_id=task_id):
-                result, err = self._call_function(task_id=task_id, payload=payload)
+                result, err = self._call_function(
+                    task_id=task_id, task_signature=task_signature, payload=payload
+                )
                 if err:
                     task_status = TaskStatus.Error
 
@@ -179,7 +182,9 @@ class EndpointManager:
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 
-    def _call_function(self, task_id: str, payload: dict) -> Tuple[Response, Any]:
+    def _call_function(
+        self, task_id: str, task_signature: str, payload: dict
+    ) -> Tuple[Response, Any]:
         error = None
         response_body = {}
 
@@ -192,7 +197,10 @@ class EndpointManager:
             kwargs = {}
 
         context = FunctionContext.new(
-            config=cfg, task_id=task_id, on_start_value=self.on_start_value
+            config=cfg,
+            task_id=task_id,
+            task_signature=task_signature,
+            on_start_value=self.on_start_value,
         )
 
         try:

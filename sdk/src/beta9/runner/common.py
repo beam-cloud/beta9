@@ -75,6 +75,7 @@ class FunctionContext:
     stub_id: Optional[str] = None
     stub_type: Optional[str] = None
     task_id: Optional[str] = None
+    task_signature: Optional[str] = None
     timeout: Optional[int] = None
     on_start_value: Optional[Any] = None
     bind_port: int = 0
@@ -82,7 +83,12 @@ class FunctionContext:
 
     @classmethod
     def new(
-        cls, *, config: Config, task_id: str, on_start_value: Optional[Any] = None
+        cls,
+        *,
+        config: Config,
+        task_id: str,
+        task_signature: str,
+        on_start_value: Optional[Any] = None,
     ) -> "FunctionContext":
         """
         Create a new instance of FunctionContext, to be passed directly into a function handler
@@ -93,6 +99,7 @@ class FunctionContext:
             stub_type=config.stub_type,
             python_version=config.python_version,
             task_id=task_id,
+            task_signature=task_signature,
             bind_port=config.bind_port,
             timeout=config.timeout,
             on_start_value=on_start_value,

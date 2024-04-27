@@ -147,6 +147,7 @@ class Task(NamedTuple):
     id: str = ""
     args: Any = ()
     kwargs: Any = ()
+    signature: str = ""
 
 
 class TaskQueueWorker:
@@ -174,7 +175,12 @@ class TaskQueueWorker:
                 return None
 
             task = json.loads(r.task_msg)
-            return Task(id=task["task_id"], args=task["args"], kwargs=task["kwargs"])
+            return Task(
+                id=task["task_id"],
+                args=task["args"],
+                kwargs=task["kwargs"],
+                signature=task["signature"],
+            )
         except (grpclib.exceptions.StreamTerminatedError, OSError):
             return None
 
@@ -272,6 +278,7 @@ class TaskQueueWorker:
                         context = FunctionContext.new(
                             config=config,
                             task_id=task.id,
+                            task_signature=task.signature,
                             on_start_value=on_start_value,
                         )
 
