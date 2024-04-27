@@ -13,7 +13,7 @@ from beta9 import function
 
 @function(
     cpu=0.25,
-    gpu="A40",
+    gpu="L4",
 )
 def square(i: int):
     return i**2

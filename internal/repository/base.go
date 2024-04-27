@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/beam-cloud/beta9/internal/repository/common"
 	"github.com/beam-cloud/beta9/internal/types"
 )
 
@@ -36,10 +37,10 @@ type ContainerRepository interface {
 	GetContainerAddress(containerId string) (string, error)
 	UpdateContainerStatus(string, types.ContainerStatus, time.Duration) error
 	DeleteContainerState(*types.ContainerRequest) error
-	SetContainerWorkerHostname(containerId string, addr string) error
-	GetContainerWorkerHostname(containerId string) (string, error)
-	GetActiveContainersByPrefix(patternPrefix string) ([]types.ContainerState, error)
-	GetFailedContainerCountByPrefix(patternPrefix string) (int, error)
+	SetWorkerAddress(containerId string, addr string) error
+	GetWorkerAddress(containerId string) (string, error)
+	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
+	GetFailedContainerCountByStubId(stubId string) (int, error)
 }
 
 type BackendRepository interface {
@@ -49,25 +50,34 @@ type BackendRepository interface {
 	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error)
 	GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error)
 	GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error)
+	UpdateObjectSizeByExternalId(ctx context.Context, externalId string, size int) error
+	DeleteObjectByExternalId(ctx context.Context, externalId string) error
 	CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error)
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error)
 	RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error)
 	ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error)
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
 	GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error)
-	CreateTask(ctx context.Context, containerId string, workspaceId, stubId uint) (*types.Task, error)
+	CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error)
 	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error)
 	DeleteTask(ctx context.Context, externalId string) error
 	ListTasks(ctx context.Context) ([]types.Task, error)
 	ListTasksWithRelated(ctx context.Context, filters types.TaskFilter) ([]types.TaskWithRelated, error)
+	ListTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error)
+	AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error)
+	GetTaskCountPerDeployment(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountPerDeployment, error)
 	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool) (types.Stub, error)
 	GetStubByExternalId(ctx context.Context, externalId string) (*types.StubWithRelated, error)
+	GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
 	GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
+	ListVolumesWithRelated(ctx context.Context, workspaceId uint) ([]types.VolumeWithRelated, error)
 	ListDeployments(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error)
+	ListDeploymentsPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error)
 	GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string) (*types.Deployment, error)
 	GetDeploymentByExternalId(ctx context.Context, workspaceId uint, deploymentExternalId string) (*types.DeploymentWithRelated, error)
 	GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint, stubType string) (*types.DeploymentWithRelated, error)
 	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error)
+	ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error)
 }
 
 type WorkerPoolRepository interface {
@@ -75,6 +85,16 @@ type WorkerPoolRepository interface {
 	GetPools() ([]types.WorkerPoolConfig, error)
 	SetPool(name string, pool types.WorkerPoolConfig) error
 	RemovePool(name string) error
+}
+
+type TaskRepository interface {
+	SetTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error
+	DeleteTaskState(ctx context.Context, workspaceName, stubId, taskId string) error
+	GetTasksInFlight(ctx context.Context) ([]*types.TaskMessage, error)
+	ClaimTask(ctx context.Context, workspaceName, stubId, taskId, containerId string) error
+	IsClaimed(ctx context.Context, workspaceName, stubId, taskId string) (bool, error)
+	TasksClaimed(ctx context.Context, workspaceName, stubId string) (int, error)
+	TasksInFlight(ctx context.Context, workspaceName, stubId string) (int, error)
 }
 
 type ProviderRepository interface {

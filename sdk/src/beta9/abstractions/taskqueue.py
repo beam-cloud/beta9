@@ -1,17 +1,25 @@
 import json
 import os
-from typing import Any, Callable, Union
+from typing import Any, Callable, Optional, Union
 
-from beta9 import terminal
-from beta9.abstractions.base.runner import (
+from .. import terminal
+from ..abstractions.base.runner import (
     TASKQUEUE_DEPLOYMENT_STUB_TYPE,
+    TASKQUEUE_SERVE_STUB_TYPE,
     TASKQUEUE_STUB_TYPE,
     RunnerAbstraction,
 )
-from beta9.abstractions.image import Image
-from beta9.clients.gateway import DeployStubResponse
-from beta9.clients.taskqueue import TaskQueuePutResponse, TaskQueueServiceStub
-from beta9.config import GatewayConfig, get_gateway_config
+from ..abstractions.image import Image
+from ..clients.gateway import DeployStubRequest, DeployStubResponse
+from ..clients.taskqueue import (
+    StartTaskQueueServeRequest,
+    StopTaskQueueServeRequest,
+    TaskQueuePutRequest,
+    TaskQueuePutResponse,
+    TaskQueueServiceStub,
+)
+from ..config import GatewayConfig, get_gateway_config
+from ..env import is_local
 
 
 class TaskQueue(RunnerAbstraction):
@@ -55,6 +63,9 @@ class TaskQueue(RunnerAbstraction):
             The maximum number of tasks that can be pending in the queue. If the number of
             pending tasks exceeds this value, the task queue will stop accepting new tasks.
             Default is 100.
+        on_start (Optional[Callable]):
+            An optional function to run once (per process) when the container starts. Can be used for downloading data,
+            loading models, or anything else computationally expensive.
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -81,7 +92,8 @@ class TaskQueue(RunnerAbstraction):
         max_containers: int = 1,
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
-    ) -> "TaskQueue":
+        on_start: Optional[Callable] = None,
+    ) -> None:
         super().__init__(
             cpu=cpu,
             memory=memory,
@@ -93,6 +105,7 @@ class TaskQueue(RunnerAbstraction):
             retries=retries,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
+            on_start=on_start,
         )
 
         self.taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(self.channel)
@@ -107,8 +120,7 @@ class _CallableWrapper:
         self.parent: TaskQueue = parent
 
     def __call__(self, *args, **kwargs) -> Any:
-        container_id = os.getenv("CONTAINER_ID")
-        if container_id is not None:
+        if not is_local():
             return self.local(*args, **kwargs)
 
         raise NotImplementedError(
@@ -127,7 +139,9 @@ class _CallableWrapper:
 
         terminal.header("Deploying task queue")
         deploy_response: DeployStubResponse = self.parent.run_sync(
-            self.parent.gateway_stub.deploy_stub(stub_id=self.parent.stub_id, name=name)
+            self.parent.gateway_stub.deploy_stub(
+                DeployStubRequest(stub_id=self.parent.stub_id, name=name)
+            )
         )
 
         if deploy_response.ok:
@@ -141,6 +155,53 @@ class _CallableWrapper:
 
         return deploy_response.ok
 
+    def serve(self):
+        if not self.parent.prepare_runtime(
+            func=self.func, stub_type=TASKQUEUE_SERVE_STUB_TYPE, force_create_stub=True
+        ):
+            return False
+
+        try:
+            with terminal.progress("Serving taskqueue..."):
+                return self.parent.run_sync(
+                    self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
+                )
+        except KeyboardInterrupt:
+            response = terminal.prompt(
+                text="Would you like to stop the container? (y/n)", default="y"
+            )
+            if response == "y":
+                terminal.header("Stopping serve container")
+                self.parent.run_sync(
+                    self.parent.taskqueue_stub.stop_task_queue_serve(
+                        StopTaskQueueServeRequest(stub_id=self.parent.stub_id)
+                    )
+                )
+
+        terminal.print("Goodbye 👋")
+
+    async def _serve(self, *, dir: str, object_id: str):
+        sync_task = self.parent.loop.create_task(
+            self.parent.sync_dir_to_workspace(dir=dir, object_id=object_id)
+        )
+        try:
+            async for r in self.parent.taskqueue_stub.start_task_queue_serve(
+                StartTaskQueueServeRequest(
+                    stub_id=self.parent.stub_id,
+                )
+            ):
+                if r.output != "":
+                    terminal.detail(r.output.strip())
+
+                if r.done or r.exit_code != 0:
+                    last_response = r
+                    break
+
+            if last_response is None or not last_response.done or last_response.exit_code != 0:
+                terminal.error("Serve container failed ☠️")
+        finally:
+            sync_task.cancel()
+
     def put(self, *args, **kwargs) -> bool:
         if not self.parent.prepare_runtime(
             func=self.func,
@@ -153,7 +214,9 @@ class _CallableWrapper:
 
         r: TaskQueuePutResponse = self.parent.run_sync(
             self.parent.taskqueue_stub.task_queue_put(
-                stub_id=self.parent.stub_id, payload=json_payload.encode("utf-8")
+                TaskQueuePutRequest(
+                    stub_id=self.parent.stub_id, payload=json_payload.encode("utf-8")
+                )
             )
         )
         if not r.ok:

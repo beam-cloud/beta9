@@ -42,15 +42,16 @@ Features:
 - Distribute workloads across multiple cloud providers
 - Easily deploy task queues and functions using simple Python abstractions
 
+
 We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale.
 
 # Get started
 
-### Beam Cloud (Recommended)
+## Beam Cloud (Recommended)
 
 The fastest way and most reliable way to get started with Beam is by signing up for free to [Beam Cloud](https://beam.cloud). Your first 10 hours of usage are free, and afterwards you pay based on usage.
 
-### Open-source deploy (Advanced)
+## Open-source deploy (Advanced)
 
 #### Setting up the server
 
@@ -86,7 +87,7 @@ After you've setup the server and SDK, check out the SDK readme [here](sdk/READM
 from beta9 import function
 
 
-@function(cpu=8, gpu="A100-40")
+@function(cpu=8)
 def square(i: int):
     return i**2
 
@@ -111,13 +112,13 @@ Beta9 is designed for launching remote serverless containers very quickly. There
 
 ![demo gif](sdk/docs/demo.gif)
 
-## Contributing
+## Contributing 
 
 We welcome contributions, big or small! These are the most helpful things for us:
 
-- Rank features in our roadmap
-- Open a PR
-- Submit a [feature request](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=issue--feature-request.md&title=) or [bug report](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=issue--bug-report.md&title=)
+* Rank features in our roadmap
+* Open a PR
+* Submit a [feature request](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) or [bug report](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=bug-report.md&title=)
 
 ## Philosophy
 
@@ -137,11 +138,11 @@ This repo is available under the Apache license. If you'd like to use the cloud 
 
 If you need support, you can reach out through any of these channels:
 
-- [Slack](https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g) \(Chat live with our engineering team\)
-- [GitHub issues](https://github.com/beam-cloud/beta9/issues) \(Bug reports, feature requests, and anything roadmap related)
+- [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-2f16bwiiq-oP8weCLWNrf_9lJZIDf0Fg) \(Chat live with our engineering team\)
+- [GitHub issues](https://github.com/beam-cloud//issues) \(Bug reports, feature requests, and anything roadmap related)
 - [Twitter](https://twitter.com/beam_cloud) \(Updates on releases)
 
-### Thanks to our contributors
+## Thanks to our contributors
 
 <a href="https://github.com/slai-labs/get-beam/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=slai-labs/get-beam" />

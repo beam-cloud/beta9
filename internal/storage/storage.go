@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"log"
+	"syscall"
 
 	"github.com/beam-cloud/beta9/internal/types"
 )
@@ -16,6 +17,17 @@ type Storage interface {
 	Mount(localPath string) error
 	Format(fsName string) error
 	Unmount(localPath string) error
+}
+
+// isMounted uses stat to check if the specified mount point is available
+func isMounted(mountPoint string) bool {
+	var stat syscall.Stat_t
+	err := syscall.Stat(mountPoint, &stat)
+	if err != nil {
+		return false
+	}
+
+	return stat.Ino == 1
 }
 
 func NewStorage(config types.StorageConfig) (Storage, error) {

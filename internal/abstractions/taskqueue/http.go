@@ -5,31 +5,27 @@ import (
 	"strconv"
 
 	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/internal/task"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/labstack/echo/v4"
 )
 
 type taskQueueGroup struct {
-	routerGroup *echo.Group
-	tq          *RedisTaskQueue
+	routeGroup *echo.Group
+	tq         *RedisTaskQueue
 }
 
 func registerTaskQueueRoutes(g *echo.Group, tq *RedisTaskQueue) *taskQueueGroup {
-	group := &taskQueueGroup{routerGroup: g, tq: tq}
+	group := &taskQueueGroup{routeGroup: g, tq: tq}
 
 	g.POST("/id/:stubId", group.TaskQueuePut)
+	g.POST("/id/:stubId/", group.TaskQueuePut)
 	g.POST("/:deploymentName/v:version", group.TaskQueuePut)
 
 	return group
 }
 
 func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
-	/*
-		 TODO: support three different unmarshalling strategies
-		 	- explicit args/kwargs (nested under {"args", "kwargs"})
-			- just kwargs (key/value)
-			- just args (in list)
-	*/
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	stubId := ctx.Param("stubId")
@@ -54,15 +50,13 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 		stubId = deployment.Stub.ExternalId
 	}
 
-	var payload TaskPayload
-
-	if err := ctx.Bind(&payload); err != nil {
-		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error": "invalid request payload",
-		})
+	payload, err := task.SerializeHttpPayload(ctx)
+	if err != nil {
+		return err
 	}
 
-	taskId, err := g.tq.put(ctx.Request().Context(), cc.AuthInfo, stubId, &payload)
+	workspaceName := cc.AuthInfo.Workspace.Name
+	taskId, err := g.tq.put(ctx.Request().Context(), workspaceName, stubId, payload)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": err.Error(),

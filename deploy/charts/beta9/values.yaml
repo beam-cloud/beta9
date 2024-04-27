@@ -62,7 +62,7 @@ service:
         port: 9090
         targetPort: 9090
         protocol: TCP
-    type: LoadBalancer
+    type: ClusterIP
 
 ingress:
   gateway:

@@ -6,15 +6,14 @@ import (
 	"time"
 
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/gofrs/uuid"
 )
 
 type Workspace struct {
-	Id         uint      `db:"id" json:"id"`
+	Id         uint      `db:"id" json:"id,omitempty"`
 	ExternalId string    `db:"external_id" json:"external_id"`
 	Name       string    `db:"name" json:"name"`
-	CreatedAt  time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
+	CreatedAt  time.Time `db:"created_at" json:"created_at,omitempty"`
+	UpdatedAt  time.Time `db:"updated_at" json:"updated_at,omitempty"`
 }
 
 const (
@@ -37,11 +36,18 @@ type Token struct {
 }
 
 type Volume struct {
-	Id          uint      `db:"id"`
-	ExternalId  string    `db:"external_id"`
-	Name        string    `db:"name"`
-	WorkspaceId uint      `db:"workspace_id"` // Foreign key to Workspace
-	CreatedAt   time.Time `db:"created_at"`
+	Id          uint      `db:"id" json:"id"`
+	ExternalId  string    `db:"external_id" json:"external_id"`
+	Name        string    `db:"name" json:"name"`
+	Size        uint64    `json:"size"`                           // Populated by volume abstraction
+	WorkspaceId uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
+}
+
+type VolumeWithRelated struct {
+	Volume
+	Workspace Workspace `db:"workspace" json:"workspace"`
 }
 
 type Deployment struct {
@@ -93,66 +99,24 @@ const (
 	TaskStatusRetry     TaskStatus = "RETRY"
 )
 
-var DefaultTaskPolicy = TaskPolicy{
-	MaxRetries: 3,
-	Timeout:    3600,
-}
-
-type TaskPolicy struct {
-	MaxRetries uint `json:"max_retries"`
-	Timeout    int  `json:"timeout"`
-}
-
-// TaskMessage represents a JSON serializable message
-// to be added to the task queue
-type TaskMessage struct {
-	ID      string                 `json:"id"`
-	Args    []interface{}          `json:"args"`
-	Kwargs  map[string]interface{} `json:"kwargs"`
-	Expires *time.Time             `json:"expires"`
-}
-
-func (tm *TaskMessage) Reset() {
-	tm.ID = uuid.Must(uuid.NewV4()).String()
-	tm.Args = nil
-	tm.Kwargs = nil
-}
-
-// Encode returns a binary representation of the TaskMessage
-func (tm *TaskMessage) Encode() ([]byte, error) {
-	if tm.Args == nil {
-		tm.Args = make([]interface{}, 0)
-	}
-
-	encodedData, err := json.Marshal(tm)
-	if err != nil {
-		return nil, err
-	}
-
-	return encodedData, err
-}
-
-// Decode initializes the TaskMessage fields from a byte array
-func (tm *TaskMessage) Decode(encodedData []byte) error {
-	err := json.Unmarshal(encodedData, tm)
-	if err != nil {
-		return err
-	}
-
-	return nil
+type TaskParams struct {
+	TaskId      string
+	ContainerId string
+	StubId      uint
+	WorkspaceId uint
 }
 
 type Task struct {
-	Id          uint         `db:"id" json:"id"`
-	ExternalId  string       `db:"external_id" json:"external_id"`
-	Status      TaskStatus   `db:"status" json:"status"`
-	ContainerId string       `db:"container_id" json:"container_id"`
-	StartedAt   sql.NullTime `db:"started_at" json:"started_at"`
-	EndedAt     sql.NullTime `db:"ended_at" json:"ended_at"`
-	WorkspaceId uint         `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
-	StubId      uint         `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
-	CreatedAt   time.Time    `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time    `db:"updated_at" json:"updated_at"`
+	Id          uint         `db:"id" json:"id,omitempty"`
+	ExternalId  string       `db:"external_id" json:"external_id,omitempty"`
+	Status      TaskStatus   `db:"status" json:"status,omitempty"`
+	ContainerId string       `db:"container_id" json:"container_id,omitempty"`
+	StartedAt   sql.NullTime `db:"started_at" json:"started_at,omitempty"`
+	EndedAt     sql.NullTime `db:"ended_at" json:"ended_at,omitempty"`
+	WorkspaceId uint         `db:"workspace_id" json:"workspace_id,omitempty"` // Foreign key to Workspace
+	StubId      uint         `db:"stub_id" json:"stub_id,omitempty"`           // Foreign key to Stub
+	CreatedAt   time.Time    `db:"created_at" json:"created_at,omitempty"`
+	UpdatedAt   time.Time    `db:"updated_at" json:"updated_at,omitempty"`
 }
 
 type TaskWithRelated struct {
@@ -161,9 +125,21 @@ type TaskWithRelated struct {
 	Stub      Stub      `db:"stub" json:"stub"`
 }
 
+type TaskCountPerDeployment struct {
+	DeploymentName string `db:"deployment_name" json:"deployment_name"`
+	TaskCount      uint   `db:"task_count" json:"task_count"`
+}
+
+type TaskCountByTime struct {
+	Time         time.Time       `db:"time" json:"time"`
+	Count        uint            `count:"count" json:"count"`
+	StatusCounts json.RawMessage `db:"status_counts" json:"status_counts"`
+}
+
 type StubConfigV1 struct {
 	Runtime         Runtime      `json:"runtime"`
 	Handler         string       `json:"handler"`
+	OnStart         string       `json:"on_start"`
 	PythonVersion   string       `json:"python_version"`
 	KeepWarmSeconds uint         `json:"keep_warm_seconds"`
 	MaxPendingTasks uint         `json:"max_pending_tasks"`
@@ -178,10 +154,13 @@ type StubConfigV1 struct {
 const (
 	StubTypeFunction            string = "function"
 	StubTypeFunctionDeployment  string = "function/deployment"
+	StubTypeFunctionServe       string = "function/serve"
 	StubTypeTaskQueue           string = "taskqueue"
 	StubTypeTaskQueueDeployment string = "taskqueue/deployment"
+	StubTypeTaskQueueServe      string = "taskqueue/serve"
 	StubTypeEndpoint            string = "endpoint"
 	StubTypeEndpointDeployment  string = "endpoint/deployment"
+	StubTypeEndpointServe       string = "endpoint/serve"
 )
 
 type Stub struct {

@@ -5,6 +5,7 @@ go 1.21
 toolchain go1.21.8
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/alicebob/miniredis/v2 v2.30.5
 	github.com/asecurityteam/rolling v0.0.0-20230418204413-b4052899307d
@@ -16,7 +17,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.48.1
 	github.com/beam-cloud/blobcache v0.0.0-20240111193326-cae10a611c3f
-	github.com/beam-cloud/clip v0.0.0-20240220210835-036152bc50ee
+	github.com/beam-cloud/clip v0.0.0-20240418200512-cdc1e65d102a
 	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
 	github.com/bsm/redislock v0.9.4
 	github.com/cloudevents/sdk-go/v2 v2.15.1
@@ -193,6 +194,7 @@ require (
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	github.com/yuin/gopher-lua v1.1.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	go.uber.org/zap v1.26.0 // indirect
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13 // indirect
 	go4.org/netipx v0.0.0-20230824141953-6213f710f925 // indirect
 	golang.org/x/crypto v0.19.0 // indirect
@@ -220,3 +222,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 )
+
+replace inet.af/wf => github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6

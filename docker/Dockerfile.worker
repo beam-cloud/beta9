@@ -49,7 +49,7 @@ FROM golang AS nvidia-container-toolkit
 
 WORKDIR /workspace
 
-RUN apt update && apt install -y build-essential
+RUN apt-get update && apt-get install -y build-essential
 
 RUN <<EOT
 git clone -b np/update --single-branch https://github.com/beam-cloud/nvidia-container-toolkit.git .
@@ -63,13 +63,6 @@ EOT
 FROM golang AS worker
 
 WORKDIR /workspace
-
-# Install mountpoint for s3
-RUN apt-get install -y fuse libfuse-dev cmake clang git pkg-config
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-RUN git clone --recurse-submodules https://github.com/awslabs/mountpoint-s3.git
-RUN cd mountpoint-s3 && cargo build --release && cp target/release/mount-s3 /usr/bin/
 
 COPY go.mod go.sum ./
 RUN go mod download
@@ -95,10 +88,17 @@ RUN apt-get update && \
     curl -fsSL https://nvidia.github.io/nvidia-container-runtime/ubuntu20.04/nvidia-container-runtime.list | tee /etc/apt/sources.list.d/nvidia-container-runtime.list && \
     apt-get update
 
-RUN curl -sSL https://d.juicefs.com/install | sh -
+RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends criu nvidia-container-toolkit-base nvidia-container-toolkit
-
+RUN apt-get install -y libfuse2 && \
+    export ARCH="$(dpkg --print-architecture)" && \
+    if [ "$ARCH" = "amd64" ]; then \
+        ARCH="x86_64"; \
+    fi && \
+    curl -sSf -o mountpoint.deb https://s3.amazonaws.com/mountpoint-s3-release/1.5.0/${ARCH}/mount-s3-1.5.0-${ARCH}.deb && \
+    dpkg -i mountpoint.deb && \
+    rm -vf mountpoint.deb
 
 RUN apt-get remove -y curl gpg && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
@@ -109,7 +109,6 @@ COPY --from=skopeo /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=skopeo /workspace/default-policy.json /etc/containers/policy.json
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
-COPY --from=worker /usr/bin/mount-s3 /usr/bin/mount-s3
 COPY ./sdk/src/beta9 /workspace/sdk
 
 VOLUME "/usr/lib/x86_64-linux-gnu"

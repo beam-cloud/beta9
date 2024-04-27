@@ -70,5 +70,10 @@ func getIPFromEnv(varName string) (string, error) {
 		return "", errors.New("failed to parse ip address")
 	}
 
+	// If the parsed IP is an IPv6 address, encapsulate in brackets
+	if ip.To4() == nil {
+		return fmt.Sprintf("[%s]", ip.String()), nil
+	}
+
 	return ip.String(), nil
 }

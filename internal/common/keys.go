@@ -5,17 +5,18 @@ import (
 )
 
 var (
-	schedulerPrefix              string = "scheduler:"
-	schedulerContainerRequests   string = "scheduler:container_requests"
-	schedulerWorkerLock          string = "scheduler:worker:lock:%s"
-	schedulerWorkerRequests      string = "scheduler:worker:requests:%s"
-	schedulerWorkerState         string = "scheduler:worker:state:%s"
-	schedulerContainerConfig     string = "scheduler:container:config:%s"
-	schedulerContainerState      string = "scheduler:container:state:%s"
-	schedulerContainerHost       string = "scheduler:container:host:%s"
-	schedulerWorkerContainerHost string = "scheduler:container:worker_host:%s"
-	schedulerContainerLock       string = "scheduler:container:lock:%s"
-	schedulerContainerExitCode   string = "scheduler:container:exit_code:%s"
+	schedulerPrefix            string = "scheduler:"
+	schedulerContainerRequests string = "scheduler:container_requests"
+	schedulerWorkerLock        string = "scheduler:worker:lock:%s"
+	schedulerWorkerRequests    string = "scheduler:worker:requests:%s"
+	schedulerWorkerState       string = "scheduler:worker:state:%s"
+	schedulerContainerConfig   string = "scheduler:container:config:%s"
+	schedulerContainerState    string = "scheduler:container:state:%s"
+	schedulerContainerAddress  string = "scheduler:container:container_addr:%s"
+	schedulerContainerIndex    string = "scheduler:container:index:%s"
+	schedulerWorkerAddress     string = "scheduler:container:worker_addr:%s"
+	schedulerContainerLock     string = "scheduler:container:lock:%s"
+	schedulerContainerExitCode string = "scheduler:container:exit_code:%s"
 )
 
 var (
@@ -30,6 +31,15 @@ var (
 	workerImageLock              string = "worker:%s:image:%s:lock"
 	workerContainerRequest       string = "worker:%s:container:%s:request"
 	workerContainerResourceUsage string = "worker:%s:container:%s:resource_usage"
+)
+
+var (
+	taskPrefix      string = "task"
+	taskIndex       string = "task:index"
+	taskIndexByStub string = "task:%s:%s:stub_index"
+	taskClaimIndex  string = "task:%s:%s:claim_index"
+	taskEntry       string = "task:%s:%s:%s"
+	taskClaim       string = "task:%s:%s:%s:claim"
 )
 
 var (
@@ -96,12 +106,16 @@ func (rk *redisKeys) SchedulerContainerConfig(containerId string) string {
 	return fmt.Sprintf(schedulerContainerConfig, containerId)
 }
 
-func (rk *redisKeys) SchedulerContainerHost(containerId string) string {
-	return fmt.Sprintf(schedulerContainerHost, containerId)
+func (rk *redisKeys) SchedulerContainerIndex(stubId string) string {
+	return fmt.Sprintf(schedulerContainerIndex, stubId)
 }
 
-func (rk *redisKeys) SchedulerWorkerContainerHost(containerId string) string {
-	return fmt.Sprintf(schedulerWorkerContainerHost, containerId)
+func (rk *redisKeys) SchedulerContainerAddress(containerId string) string {
+	return fmt.Sprintf(schedulerContainerAddress, containerId)
+}
+
+func (rk *redisKeys) SchedulerWorkerAddress(containerId string) string {
+	return fmt.Sprintf(schedulerWorkerAddress, containerId)
 }
 
 func (rk *redisKeys) SchedulerContainerExitCode(containerId string) string {
@@ -140,6 +154,31 @@ func (rk *redisKeys) WorkerContainerResourceUsage(workerId string, containerId s
 
 func (rk *redisKeys) WorkerImageLock(workerId string, imageId string) string {
 	return fmt.Sprintf(workerImageLock, workerId, imageId)
+}
+
+// Task keys
+func (rk *redisKeys) TaskPrefix() string {
+	return taskPrefix
+}
+
+func (rk *redisKeys) TaskIndex() string {
+	return taskIndex
+}
+
+func (rk *redisKeys) TaskIndexByStub(workspaceName, stubId string) string {
+	return fmt.Sprintf(taskIndexByStub, workspaceName, stubId)
+}
+
+func (rk *redisKeys) TaskClaimIndex(workspaceName, stubId string) string {
+	return fmt.Sprintf(taskClaimIndex, workspaceName, stubId)
+}
+
+func (rk *redisKeys) TaskEntry(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskEntry, workspaceName, stubId, taskId)
+}
+
+func (rk *redisKeys) TaskClaim(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskClaim, workspaceName, stubId, taskId)
 }
 
 // Workspace keys

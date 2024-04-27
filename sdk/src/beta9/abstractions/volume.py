@@ -1,10 +1,10 @@
-from beta9.abstractions.base import BaseAbstraction
-from beta9.clients.gateway import Volume as VolumeConfig
-from beta9.clients.volume import VolumeServiceStub
+from ..abstractions.base import BaseAbstraction
+from ..clients.gateway import Volume as VolumeConfig
+from ..clients.volume import GetOrCreateVolumeRequest, GetOrCreateVolumeResponse, VolumeServiceStub
 
 
 class Volume(BaseAbstraction):
-    def __init__(self, name: str, mount_path: str) -> "Volume":
+    def __init__(self, name: str, mount_path: str) -> None:
         """
         Creates a Volume instance.
 
@@ -34,11 +34,14 @@ class Volume(BaseAbstraction):
         self.stub: VolumeServiceStub = VolumeServiceStub(self.channel)
 
     def get_or_create(self) -> bool:
-        resp = self.run_sync(self.stub.get_or_create_volume(name=self.name))
+        resp: GetOrCreateVolumeResponse
+        resp = self.run_sync(
+            self.stub.get_or_create_volume(GetOrCreateVolumeRequest(name=self.name))
+        )
 
         if resp.ok:
             self.ready = True
-            self.volume_id = resp.volume_id
+            self.volume_id = resp.volume.id
             return True
 
         return False

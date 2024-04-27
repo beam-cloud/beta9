@@ -3,49 +3,61 @@ import os
 import signal
 import subprocess
 import sys
+from typing import Union
 
 from grpclib.client import Channel
 
-from beta9.aio import run_sync
-from beta9.clients.gateway import GatewayServiceStub
-from beta9.config import with_runner_context
-from beta9.runner.common import config
-from beta9.type import TaskStatus
-from beta9.logging import StdoutJsonInterceptor
+from ..aio import run_sync
+from ..clients.gateway import EndTaskRequest, GatewayServiceStub, StartTaskRequest
+from ..config import with_runner_context
+from ..logging import StdoutJsonInterceptor
+from ..runner.common import config
+from ..type import TaskStatus
+
 
 class ContainerManager:
     def __init__(self, cmd: str) -> None:
-        self.process = None
+        self.process: Union[subprocess.Popen, None] = None
         self.pid: int = os.getpid()
         self.exit_code: int = 0
-        self.task_id = os.getenv("TASK_ID")
-        self.killed = False
+        self.task_id: str = os.getenv("TASK_ID")
+        self.killed: bool = False
 
         signal.signal(signal.SIGTERM, self.shutdown)
-    
+
     @with_runner_context
     def start(self, channel: Channel):
         async def _run():
             with StdoutJsonInterceptor(task_id=self.task_id):
                 stub = GatewayServiceStub(channel)
                 await stub.start_task(
-                    task_id=self.task_id,
-                    container_id=config.container_id,
+                    StartTaskRequest(
+                        task_id=self.task_id,
+                        container_id=config.container_id,
+                    )
                 )
-                    
-                self.process = subprocess.Popen(["/bin/bash", "-c", cmd], shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ)
-                
+
+                self.process = subprocess.Popen(
+                    ["/bin/bash", "-c", cmd],
+                    shell=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    env=os.environ,
+                )
+
                 while self.process.poll() is None:
                     line = self.process.stdout.readline()
                     if not line:
                         continue
                     print(line.strip().decode("utf-8"))
-                
+
                 if not self.killed:
                     await stub.end_task(
-                        task_id=self.task_id,
-                        container_id=config.container_id,
-                        task_status=TaskStatus.Complete,
+                        EndTaskRequest(
+                            task_id=self.task_id,
+                            container_id=config.container_id,
+                            task_status=TaskStatus.Complete,
+                        )
                     )
 
         run_sync(_run())

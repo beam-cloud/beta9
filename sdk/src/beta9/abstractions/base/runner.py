@@ -1,20 +1,34 @@
+import asyncio
 import inspect
 import os
+from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
 
-from beta9.abstractions.base import BaseAbstraction
-from beta9.abstractions.image import Image, ImageBuildResult
-from beta9.abstractions.volume import Volume
-from beta9.clients.gateway import GatewayServiceStub, GetOrCreateStubResponse
-from beta9.sync import FileSyncer
+from watchdog.observers import Observer
+
+from ... import terminal
+from ...abstractions.base import BaseAbstraction
+from ...abstractions.image import Image, ImageBuildResult
+from ...abstractions.volume import Volume
+from ...clients.gateway import (
+    GatewayServiceStub,
+    GetOrCreateStubRequest,
+    GetOrCreateStubResponse,
+    ReplaceObjectContentOperation,
+    ReplaceObjectContentRequest,
+)
+from ...sync import FileSyncer, SyncEventHandler
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
 TASKQUEUE_STUB_TYPE = "taskqueue"
-WEBSERVER_STUB_TYPE = "endpoint"
+ENDPOINT_STUB_TYPE = "endpoint"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
+TASKQUEUE_SERVE_STUB_TYPE = "taskqueue/serve"
+ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
+FUNCTION_SERVE_STUB_TYPE = "function/serve"
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -31,6 +45,7 @@ class RunnerAbstraction(BaseAbstraction):
         retries: int = 3,
         timeout: int = 3600,
         volumes: Optional[List[Volume]] = None,
+        on_start: Optional[Callable] = None,
     ) -> None:
         super().__init__()
 
@@ -46,17 +61,20 @@ class RunnerAbstraction(BaseAbstraction):
         self.image_id: str = ""
         self.stub_id: str = ""
         self.handler: str = ""
+        self.on_start: str = ""
         self.cpu = cpu
         self.memory = memory
         self.gpu = gpu
         self.volumes = volumes or []
-
         self.concurrency = concurrency
         self.keep_warm_seconds = keep_warm_seconds
         self.max_pending_tasks = max_pending_tasks
         self.max_containers = max_containers
         self.retries = retries
         self.timeout = timeout
+
+        if on_start is not None:
+            self._map_callable_to_attr(attr="on_start", func=on_start)
 
         self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
@@ -98,8 +116,12 @@ class RunnerAbstraction(BaseAbstraction):
         else:
             raise TypeError("CPU must be a float or a string.")
 
-    def _load_handler(self, func: Callable) -> None:
-        if self.handler or func is None:
+    def _map_callable_to_attr(self, *, attr: str, func: Callable):
+        """
+        Determine the module and function name of a callable function, and cache on the class.
+        This is used for passing callables to stub config.
+        """
+        if getattr(self, attr):
             return
 
         module = inspect.getmodule(func)  # Determine module / function name
@@ -110,7 +132,47 @@ class RunnerAbstraction(BaseAbstraction):
             module_name = "__main__"
 
         function_name = func.__name__
-        self.handler = f"{module_name}:{function_name}"
+        setattr(self, attr, f"{module_name}:{function_name}")
+
+    async def _object_iterator(self, *, dir: str, object_id: str, file_update_queue: Queue):
+        while True:
+            try:
+                operation, path = file_update_queue.get_nowait()
+
+                if operation == ReplaceObjectContentOperation.WRITE:
+                    with open(path, "rb") as f:
+                        yield ReplaceObjectContentRequest(
+                            object_id=object_id,
+                            path=os.path.relpath(path, start=dir),
+                            data=f.read(),
+                            op=ReplaceObjectContentOperation.WRITE,
+                        )
+
+                elif operation == ReplaceObjectContentOperation.DELETE:
+                    yield ReplaceObjectContentRequest(
+                        object_id=object_id,
+                        path=os.path.relpath(path, start=dir),
+                        op=ReplaceObjectContentOperation.DELETE,
+                    )
+
+                file_update_queue.task_done()
+            except Empty:
+                await asyncio.sleep(0.1)
+
+    async def sync_dir_to_workspace(self, *, dir: str, object_id: str) -> None:
+        file_update_queue = Queue()
+        event_handler = SyncEventHandler(file_update_queue)
+
+        observer = Observer()
+        observer.schedule(event_handler, dir, recursive=True)
+        observer.start()
+
+        terminal.detail(f"Watching {dir} for changes...")
+        return await self.gateway_stub.replace_object_content(
+            replace_object_content_request_iterator=self._object_iterator(
+                dir=dir, object_id=object_id, file_update_queue=file_update_queue
+            )
+        )
 
     def prepare_runtime(
         self,
@@ -121,7 +183,7 @@ class RunnerAbstraction(BaseAbstraction):
         name: Optional[str] = None,
     ) -> bool:
         if func is not None:
-            self._load_handler(func)
+            self._map_callable_to_attr(attr="handler", func=func)
 
         stub_name = f"{stub_type}/{self.handler}" if self.handler else stub_type
 
@@ -158,23 +220,26 @@ class RunnerAbstraction(BaseAbstraction):
         if not self.stub_created:
             stub_response: GetOrCreateStubResponse = self.run_sync(
                 self.gateway_stub.get_or_create_stub(
-                    object_id=self.object_id,
-                    image_id=self.image_id,
-                    stub_type=stub_type,
-                    name=stub_name,
-                    python_version=self.image.python_version,
-                    cpu=self.cpu,
-                    memory=self.memory,
-                    gpu=self.gpu,
-                    handler=self.handler,
-                    retries=self.retries,
-                    timeout=self.timeout,
-                    keep_warm_seconds=self.keep_warm_seconds,
-                    concurrency=self.concurrency,
-                    max_containers=self.max_containers,
-                    max_pending_tasks=self.max_pending_tasks,
-                    volumes=[v.export() for v in self.volumes],
-                    force_create=force_create_stub,
+                    GetOrCreateStubRequest(
+                        object_id=self.object_id,
+                        image_id=self.image_id,
+                        stub_type=stub_type,
+                        name=stub_name,
+                        python_version=self.image.python_version,
+                        cpu=self.cpu,
+                        memory=self.memory,
+                        gpu=self.gpu,
+                        handler=self.handler,
+                        on_start=self.on_start,
+                        retries=self.retries,
+                        timeout=self.timeout,
+                        keep_warm_seconds=self.keep_warm_seconds,
+                        concurrency=self.concurrency,
+                        max_containers=self.max_containers,
+                        max_pending_tasks=self.max_pending_tasks,
+                        volumes=[v.export() for v in self.volumes],
+                        force_create=force_create_stub,
+                    )
                 )
             )
 

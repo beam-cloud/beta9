@@ -21,7 +21,7 @@ FROM base AS release
 WORKDIR /workspace
 
 RUN curl -fsSL https://tailscale.com/install.sh | sh
-RUN apt autoclean
+RUN apt-get autoclean
 
 COPY --from=build /usr/local/bin/proxy /usr/local/bin/
 

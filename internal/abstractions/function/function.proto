@@ -11,6 +11,8 @@ service FunctionService {
       returns (FunctionGetArgsResponse) {}
   rpc FunctionSetResult(FunctionSetResultRequest)
       returns (FunctionSetResultResponse) {}
+  rpc FunctionMonitor(FunctionMonitorRequest)
+      returns (stream FunctionMonitorResponse);
 }
 
 message FunctionInvokeRequest {
@@ -38,3 +40,16 @@ message FunctionSetResultRequest {
 }
 
 message FunctionSetResultResponse { bool ok = 1; }
+
+message FunctionMonitorRequest {
+  string task_id = 1;
+  string stub_id = 2;
+  string container_id = 3;
+}
+
+message FunctionMonitorResponse {
+  bool ok = 1;
+  bool cancelled = 2;
+  bool complete = 3;
+  bool timed_out = 4;
+}

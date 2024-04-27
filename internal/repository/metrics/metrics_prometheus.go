@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/repository"
@@ -14,7 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"golang.org/x/exp/maps"
+	maps "golang.org/x/exp/maps"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -69,45 +70,28 @@ func (r *PrometheusMetricsRepository) Init(source string) error {
 }
 
 func (pr *PrometheusMetricsRepository) IncrementCounter(name string, metadata map[string]interface{}, value float64) error {
+	keys, values := pr.parseMetadata(metadata)
+
 	handler := pr.getCounterVec(
 		prometheus.CounterOpts{
 			Name: name,
 		},
-		maps.Keys(metadata),
+		keys,
 	)
-
-	values := make([]string, 0, len(metadata))
-	for _, val := range maps.Values(metadata) {
-		switch v := val.(type) {
-		case string:
-			values = append(values, v)
-		default:
-			values = append(values, fmt.Sprintf("%v", v))
-		}
-	}
 
 	handler.WithLabelValues(values...).Add(value)
 	return nil
 }
 
 func (pr *PrometheusMetricsRepository) SetGauge(name string, metadata map[string]interface{}, value float64) error {
+	keys, values := pr.parseMetadata(metadata)
+
 	handler := pr.getGaugeVec(
 		prometheus.GaugeOpts{
 			Name: name,
 		},
-		maps.Keys(metadata),
+		keys,
 	)
-
-	values := make([]string, 0, len(metadata))
-	for _, val := range maps.Values(metadata) {
-		switch v := val.(type) {
-		case string:
-			values = append(values, v)
-		case int, float64, bool:
-			values = append(values, fmt.Sprintf("%v", v))
-		default:
-		}
-	}
 
 	handler.WithLabelValues(values...).Set(value)
 	return nil
@@ -259,4 +243,23 @@ func (pr *PrometheusMetricsRepository) getHistogramVec(opts prometheus.Histogram
 
 	handler, _ := pr.histogramVecs.Get(metricName)
 	return handler
+}
+
+func (pr *PrometheusMetricsRepository) parseMetadata(metadata map[string]interface{}) (keys []string, values []string) {
+	keys = maps.Keys(metadata)
+	values = []string{}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		val := metadata[key]
+
+		switch v := val.(type) {
+		case string:
+			values = append(values, v)
+		default:
+			values = append(values, fmt.Sprintf("%v", v))
+		}
+	}
+
+	return keys, values
 }
