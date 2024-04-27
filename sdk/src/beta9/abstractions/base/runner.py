@@ -46,6 +46,7 @@ class RunnerAbstraction(BaseAbstraction):
         timeout: int = 3600,
         volumes: Optional[List[Volume]] = None,
         on_start: Optional[Callable] = None,
+        callback_url: Optional[str] = None,
     ) -> None:
         super().__init__()
 
@@ -62,6 +63,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.stub_id: str = ""
         self.handler: str = ""
         self.on_start: str = ""
+        self.callback_url = callback_url or ""
         self.cpu = cpu
         self.memory = memory
         self.gpu = gpu
@@ -231,6 +233,7 @@ class RunnerAbstraction(BaseAbstraction):
                         gpu=self.gpu,
                         handler=self.handler,
                         on_start=self.on_start,
+                        callback_url=self.callback_url,
                         retries=self.retries,
                         timeout=self.timeout,
                         keep_warm_seconds=self.keep_warm_seconds,

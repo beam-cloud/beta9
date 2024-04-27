@@ -148,7 +148,7 @@ def main(channel: Channel):
             if not get_args_resp.ok:
                 raise InvalidFunctionArgumentsException
 
-            handler = FunctionHandler()
+            handler = FunctionHandler(gateway_stub=gateway_stub)
             context = FunctionContext.new(config=config, task_id=task_id)
 
             payload: dict = _load_args(get_args_resp.args)

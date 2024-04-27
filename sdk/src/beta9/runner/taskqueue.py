@@ -17,6 +17,7 @@ from grpclib.client import Channel
 from grpclib.exceptions import StreamTerminatedError
 
 from ..aio import run_sync
+from ..clients.gateway import GatewayServiceStub
 from ..clients.taskqueue import (
     TaskQueueCompleteRequest,
     TaskQueueCompleteResponse,
@@ -147,7 +148,6 @@ class Task(NamedTuple):
     id: str = ""
     args: Any = ()
     kwargs: Any = ()
-    signature: str = ""
 
 
 class TaskQueueWorker:
@@ -179,7 +179,6 @@ class TaskQueueWorker:
                 id=task["task_id"],
                 args=task["args"],
                 kwargs=task["kwargs"],
-                signature=task["signature"],
             )
         except (grpclib.exceptions.StreamTerminatedError, OSError):
             return None
@@ -247,9 +246,10 @@ class TaskQueueWorker:
         loop = asyncio.get_event_loop()
         executor = ThreadPoolExecutor()
         taskqueue_stub = TaskQueueServiceStub(channel)
+        gateway_stub = GatewayServiceStub(channel)
 
         # Load handler and execute on_start method
-        handler = FunctionHandler()
+        handler = FunctionHandler(gateway_stub=gateway_stub)
         on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
 
         print(f"Worker[{self.worker_index}] ready")
@@ -278,13 +278,13 @@ class TaskQueueWorker:
                         context = FunctionContext.new(
                             config=config,
                             task_id=task.id,
-                            task_signature=task.signature,
                             on_start_value=on_start_value,
                         )
 
                         result = await loop.run_in_executor(
                             executor, lambda: handler(context, *args, **kwargs)
                         )
+
                         result = cloudpickle.dumps(result)
                     except BaseException as exc:
                         print(traceback.format_exc())
@@ -307,6 +307,8 @@ class TaskQueueWorker:
 
                         if not complete_task_response.ok:
                             raise RunnerException("Unable to end task")
+
+                        await handler.send_callback(context)
 
                         print(f"Task completed <{task.id}>")
                         monitor_task.cancel()

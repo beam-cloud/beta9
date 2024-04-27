@@ -67,6 +67,7 @@ class Function(RunnerAbstraction):
         retries: int = 3,
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
+        callback_url: Optional[str] = "",
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -76,6 +77,7 @@ class Function(RunnerAbstraction):
             volumes=volumes,
             timeout=timeout,
             retries=retries,
+            callback_url=callback_url,
         )
 
         self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)

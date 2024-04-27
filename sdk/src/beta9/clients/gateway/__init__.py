@@ -46,6 +46,19 @@ class AuthorizeResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class SignPayloadRequest(betterproto.Message):
+    payload: bytes = betterproto.bytes_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class SignPayloadResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    signature: str = betterproto.string_field(2)
+    timestamp: int = betterproto.int64_field(3)
+    error_msg: str = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
 class ObjectMetadata(betterproto.Message):
     name: str = betterproto.string_field(1)
     size: int = betterproto.int64_field(2)
@@ -194,6 +207,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     volumes: List["Volume"] = betterproto.message_field(16)
     force_create: bool = betterproto.bool_field(17)
     on_start: str = betterproto.string_field(18)
+    callback_url: str = betterproto.string_field(19)
 
 
 @dataclass(eq=False, repr=False)
@@ -228,6 +242,23 @@ class GatewayServiceStub(betterproto.ServiceStub):
             "/gateway.GatewayService/Authorize",
             authorize_request,
             AuthorizeResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
+    async def sign_payload(
+        self,
+        sign_payload_request: "SignPayloadRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "SignPayloadResponse":
+        return await self._unary_unary(
+            "/gateway.GatewayService/SignPayload",
+            sign_payload_request,
+            SignPayloadResponse,
             timeout=timeout,
             deadline=deadline,
             metadata=metadata,
@@ -418,6 +449,11 @@ class GatewayServiceBase(ServiceBase):
     ) -> "AuthorizeResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
+    async def sign_payload(
+        self, sign_payload_request: "SignPayloadRequest"
+    ) -> "SignPayloadResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
     async def head_object(
         self, head_object_request: "HeadObjectRequest"
     ) -> "HeadObjectResponse":
@@ -474,6 +510,13 @@ class GatewayServiceBase(ServiceBase):
     ) -> None:
         request = await stream.recv_message()
         response = await self.authorize(request)
+        await stream.send_message(response)
+
+    async def __rpc_sign_payload(
+        self, stream: "grpclib.server.Stream[SignPayloadRequest, SignPayloadResponse]"
+    ) -> None:
+        request = await stream.recv_message()
+        response = await self.sign_payload(request)
         await stream.send_message(response)
 
     async def __rpc_head_object(
@@ -555,6 +598,12 @@ class GatewayServiceBase(ServiceBase):
                 grpclib.const.Cardinality.UNARY_UNARY,
                 AuthorizeRequest,
                 AuthorizeResponse,
+            ),
+            "/gateway.GatewayService/SignPayload": grpclib.const.Handler(
+                self.__rpc_sign_payload,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                SignPayloadRequest,
+                SignPayloadResponse,
             ),
             "/gateway.GatewayService/HeadObject": grpclib.const.Handler(
                 self.__rpc_head_object,

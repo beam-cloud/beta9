@@ -2,9 +2,6 @@ package task
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"sync"
@@ -53,7 +50,6 @@ func (d *Dispatcher) getTaskMessage() *types.TaskMessage {
 	msg.Args = make([]interface{}, 0)
 	msg.Kwargs = make(map[string]interface{})
 	msg.Executor = ""
-	msg.Signature = ""
 	msg.Timestamp = time.Now().Unix()
 	return msg
 }
@@ -76,15 +72,6 @@ func (d *Dispatcher) SendAndExecute(ctx context.Context, executor string, authIn
 	return task, task.Execute(ctx)
 }
 
-func (d *Dispatcher) sign(tm *types.TaskMessage, secretKey string) error {
-	data := fmt.Sprintf("%s:%s:%d", tm.TaskId, tm.StubId, tm.Timestamp)
-	h := hmac.New(sha256.New, []byte(secretKey))
-	h.Write([]byte(data))
-	signature := h.Sum(nil)
-	tm.Signature = hex.EncodeToString(signature)
-	return nil
-}
-
 func (d *Dispatcher) Send(ctx context.Context, executor string, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload, policy types.TaskPolicy) (types.TaskInterface, error) {
 	taskMessage := d.getTaskMessage()
 	taskMessage.Executor = executor
@@ -94,14 +81,6 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, authInfo *auth.A
 	taskMessage.Kwargs = payload.Kwargs
 	taskMessage.Policy = policy
 	taskMessage.Timestamp = time.Now().Unix()
-
-	// Sign task message
-	if authInfo.Workspace.SigningKey != nil && *authInfo.Workspace.SigningKey != "" {
-		err := d.sign(taskMessage, *authInfo.Workspace.SigningKey)
-		if err != nil {
-			return nil, err
-		}
-	}
 
 	taskFactory, exists := d.executors.Get(executor)
 	if !exists {
@@ -208,10 +187,6 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 
 					taskMessage.Retries += 1
 					taskMessage.Timestamp = time.Now().Unix()
-					err = d.sign(taskMessage, "somesecretkey")
-					if err != nil {
-						continue
-					}
 
 					msg, err := taskMessage.Encode()
 					if err != nil {

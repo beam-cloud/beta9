@@ -280,9 +280,8 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
-	httpReq.Header.Add("X-TASK-ID", req.taskMessage.TaskId)           // Add task ID to header
-	httpReq.Header.Add("X-TASK-SIGNATURE", req.taskMessage.Signature) // Add task signature to header
-	go rb.heartBeat(req, c.id)                                        // Send heartbeat via redis for duration of request
+	httpReq.Header.Add("X-TASK-ID", req.taskMessage.TaskId) // Add task ID to header
+	go rb.heartBeat(req, c.id)                              // Send heartbeat via redis for duration of request
 
 	resp, err := rb.httpClient.Do(httpReq)
 	if err != nil {

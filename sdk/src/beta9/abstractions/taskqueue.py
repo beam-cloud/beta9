@@ -93,6 +93,7 @@ class TaskQueue(RunnerAbstraction):
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
+        callback_url: Optional[str] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -106,6 +107,7 @@ class TaskQueue(RunnerAbstraction):
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
             on_start=on_start,
+            callback_url=callback_url,
         )
 
         self.taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(self.channel)

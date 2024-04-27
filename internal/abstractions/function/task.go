@@ -124,6 +124,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 			fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
 			fmt.Sprintf("BETA9_TOKEN=%s", token.Key),
 			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
+			fmt.Sprintf("CALLBACK_URL=%s", stubConfig.CallbackUrl),
 		},
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,

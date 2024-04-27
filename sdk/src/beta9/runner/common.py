@@ -5,6 +5,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 
+from ..clients.gateway import GatewayServiceStub, SignPayloadRequest, SignPayloadResponse
 from ..exceptions import RunnerException
 
 USER_CODE_VOLUME = "/mnt/code"
@@ -22,6 +23,7 @@ class Config:
     python_version: str
     handler: str
     on_start: Optional[str]
+    callback_url: Optional[str]
     task_id: Optional[str]
     bind_port: int
 
@@ -36,6 +38,7 @@ class Config:
         python_version = os.getenv("PYTHON_VERSION")
         handler = os.getenv("HANDLER")
         on_start = os.getenv("ON_START")
+        callback_url = os.getenv("CALLBACK_URL")
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
@@ -56,6 +59,7 @@ class Config:
             python_version=python_version,
             handler=handler,
             on_start=on_start,
+            callback_url=callback_url,
             task_id=task_id,
             bind_port=bind_port,
             timeout=timeout,
@@ -74,8 +78,8 @@ class FunctionContext:
     container_id: Optional[str] = None
     stub_id: Optional[str] = None
     stub_type: Optional[str] = None
+    callback_url: Optional[str] = None
     task_id: Optional[str] = None
-    task_signature: Optional[str] = None
     timeout: Optional[int] = None
     on_start_value: Optional[Any] = None
     bind_port: int = 0
@@ -87,7 +91,6 @@ class FunctionContext:
         *,
         config: Config,
         task_id: str,
-        task_signature: str,
         on_start_value: Optional[Any] = None,
     ) -> "FunctionContext":
         """
@@ -97,9 +100,9 @@ class FunctionContext:
             container_id=config.container_id,
             stub_id=config.stub_id,
             stub_type=config.stub_type,
+            callback_url=config.callback_url,
             python_version=config.python_version,
             task_id=task_id,
-            task_signature=task_signature,
             bind_port=config.bind_port,
             timeout=config.timeout,
             on_start_value=on_start_value,
@@ -111,7 +114,8 @@ class FunctionHandler:
     Helper class for loading user entry point functions
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, gateway_stub: GatewayServiceStub) -> None:
+        self.gateway_stub: GatewayServiceStub = gateway_stub
         self.pass_context: bool = False
         self.handler: Union[Callable, None] = None
         self._load()
@@ -133,7 +137,22 @@ class FunctionHandler:
         if self.pass_context:
             kwargs["context"] = context
 
-        return self.handler(*args, **kwargs)
+        result = self.handler(*args, **kwargs)
+
+        if context.callback_url != "" and context.callback_url is not None:
+            print("SENDING CALLBACK URL: ", context.callback_url)
+            self.send_callback()
+
+        return result
+
+    async def send_callback(self, context: FunctionContext):
+        if context.callback_url == "" or context.callback_url is None:
+            return
+
+        r: SignPayloadResponse = self.gateway_stub.sign_payload(
+            SignPayloadRequest(payload=bytes([0, 2]))
+        )
+        print("SIGNED PAYLOAD:", r)
 
 
 def execute_lifecycle_method(*, name: str) -> Union[Any, None]:

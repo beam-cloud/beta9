@@ -57,7 +57,6 @@ type TaskMessage struct {
 	Policy        TaskPolicy             `json:"policy" redis:"policy"`
 	Retries       uint                   `json:"retries" redis:"retries"`
 	Timestamp     int64                  `json:"timestamp" redis:"timestamp"`
-	Signature     string                 `json:"signature" redis:"signature"`
 }
 
 func (tm *TaskMessage) Reset() {
@@ -67,7 +66,6 @@ func (tm *TaskMessage) Reset() {
 	tm.Args = nil
 	tm.Kwargs = nil
 	tm.Timestamp = time.Now().Unix()
-	tm.Signature = ""
 	tm.Policy = DefaultTaskPolicy
 	tm.Retries = 0
 }

@@ -39,6 +39,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 				fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
 				fmt.Sprintf("HANDLER=%s", i.StubConfig.Handler),
 				fmt.Sprintf("ON_START=%s", i.StubConfig.OnStart),
+				fmt.Sprintf("CALLBACK_URL=%s", i.StubConfig.CallbackUrl),
 				fmt.Sprintf("STUB_ID=%s", i.Stub.ExternalId),
 				fmt.Sprintf("STUB_TYPE=%s", i.Stub.Type),
 				fmt.Sprintf("CONCURRENCY=%d", i.StubConfig.Concurrency),
