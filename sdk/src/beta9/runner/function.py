@@ -187,8 +187,11 @@ def main(channel: Channel):
         if not end_task_response.ok:
             raise RunnerException("Unable to end task")
 
-        run_sync(handler.send_callback(context, result))
         monitor_task.cancel()
+
+        run_sync(
+            handler.send_callback(context, result)
+        )  # Send callback to callback_url, if defined
 
         if task_status == TaskStatus.Error:
             raise error.with_traceback(error.__traceback__)
