@@ -54,7 +54,7 @@ func (d *Dispatcher) getTaskMessage() *types.TaskMessage {
 	msg.Kwargs = make(map[string]interface{})
 	msg.Executor = ""
 	msg.Signature = ""
-	msg.RequestedAt = time.Now()
+	msg.Timestamp = time.Now().Unix()
 	return msg
 }
 
@@ -77,7 +77,7 @@ func (d *Dispatcher) SendAndExecute(ctx context.Context, executor string, authIn
 }
 
 func (d *Dispatcher) sign(tm *types.TaskMessage, secretKey string) error {
-	data := fmt.Sprintf("%s:%s:%v", tm.TaskId, tm.StubId, tm.RequestedAt)
+	data := fmt.Sprintf("%s:%s:%d", tm.TaskId, tm.StubId, tm.Timestamp)
 	h := hmac.New(sha256.New, []byte(secretKey))
 	h.Write([]byte(data))
 	signature := h.Sum(nil)
@@ -93,7 +93,7 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, authInfo *auth.A
 	taskMessage.Args = payload.Args
 	taskMessage.Kwargs = payload.Kwargs
 	taskMessage.Policy = policy
-	taskMessage.RequestedAt = time.Now()
+	taskMessage.Timestamp = time.Now().Unix()
 
 	// Sign task message
 	if authInfo.Workspace.SigningKey != nil && *authInfo.Workspace.SigningKey != "" {
@@ -207,6 +207,11 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 						taskMessage.WorkspaceName, taskMessage.TaskId, taskMessage.StubId)
 
 					taskMessage.Retries += 1
+					taskMessage.Timestamp = time.Now().Unix()
+					err = d.sign(taskMessage, "somesecretkey")
+					if err != nil {
+						continue
+					}
 
 					msg, err := taskMessage.Encode()
 					if err != nil {

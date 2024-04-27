@@ -56,7 +56,7 @@ type TaskMessage struct {
 	Kwargs        map[string]interface{} `json:"kwargs" redis:"kwargs"`
 	Policy        TaskPolicy             `json:"policy" redis:"policy"`
 	Retries       uint                   `json:"retries" redis:"retries"`
-	RequestedAt   time.Time              `json:"requested_at" redis:"requested_at"`
+	Timestamp     int64                  `json:"timestamp" redis:"timestamp"`
 	Signature     string                 `json:"signature" redis:"signature"`
 }
 
@@ -66,7 +66,7 @@ func (tm *TaskMessage) Reset() {
 	tm.StubId = ""
 	tm.Args = nil
 	tm.Kwargs = nil
-	tm.RequestedAt = time.Now()
+	tm.Timestamp = time.Now().Unix()
 	tm.Signature = ""
 	tm.Policy = DefaultTaskPolicy
 	tm.Retries = 0
