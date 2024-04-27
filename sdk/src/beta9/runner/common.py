@@ -1,19 +1,25 @@
 import importlib
 import inspect
 import json
+import logging
 import os
 import sys
+import time
 import traceback
 from dataclasses import dataclass
 from json import JSONEncoder
 from typing import Any, Callable, Optional, Union
 
+import requests
 from starlette.responses import Response
 
 from ..clients.gateway import GatewayServiceStub, SignPayloadRequest, SignPayloadResponse
 from ..exceptions import RunnerException
 
 USER_CODE_VOLUME = "/mnt/code"
+
+
+logger = logging.getLogger()
 
 
 @dataclass
@@ -114,15 +120,6 @@ class FunctionContext:
         )
 
 
-class CallbackPayloadEncoder(JSONEncoder):
-    """JSON encoder to handle non-serializable objects"""
-
-    def default(self, obj):
-        if isinstance(obj, Response):
-            return obj.body
-        return super().default(obj)
-
-
 class FunctionHandler:
     """
     Helper class for loading user entry point functions
@@ -163,7 +160,7 @@ def execute_lifecycle_method(*, name: str) -> Union[Any, None]:
     if func == "" or func is None:
         return None
 
-    print(f"Running {name} func: {func}")
+    logger.info(f"Running {name} func: {func}")
     try:
         module, func = func.split(":")
         target_module = importlib.import_module(module)
@@ -179,15 +176,42 @@ async def send_callback(
     if context.callback_url == "" or context.callback_url is None:
         return
 
-    # Serialize the callback payload into JSON
-    try:
-        serialized_payload = json.dumps({"data": payload}, cls=CallbackPayloadEncoder)
-    except TypeError:
-        print(f"Error serializing callback payload: {traceback.format_exc()}")
-        return
+    body = {}
+    headers = {}
+
+    use_json = True
+    if isinstance(payload, Response):
+        body = {"data": payload.body}
+        headers = payload.headers
+        use_json = False
+    else:
+        try:
+            body = {"data": JSONEncoder().default(payload)}
+        except TypeError:
+            logger.error(f"Error serializing callback payload: {traceback.format_exc()}")
+            return
 
     r: SignPayloadResponse = await gateway_stub.sign_payload(
-        SignPayloadRequest(payload=bytes(serialized_payload, "utf-8"))
+        SignPayloadRequest(payload=bytes(json.dumps(body), "utf-8"))
     )
 
-    print("SIGNED PAYLOAD:", r)
+    logger.info(f"Sending data to callback: {context.callback_url}")
+    headers = {}
+    headers = {
+        **headers,
+        "X-Task-ID": str(context.task_id),
+        "X-Task-Status": "COMPLETE",
+        "X-Task-Signature": r.signature,
+        "X-Task-Timestamp": r.timestamp,
+    }
+
+    try:
+        start = time.time()
+        if use_json:
+            requests.post(context.callback_url, json=body, headers=headers)
+        else:
+            requests.post(context.callback_url, data=body, headers=headers)
+
+        logger.info(f"Callback request took {time.time() - start} seconds")
+    except BaseException:
+        logger.exception("Unable to send callback")
