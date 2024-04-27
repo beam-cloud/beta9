@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Event, Process, set_start_method
 from typing import Any, List, NamedTuple, Union
 
-import cloudpickle
 import grpc
 import grpclib
 from grpclib.client import Channel
@@ -30,7 +29,13 @@ from ..clients.taskqueue import (
 from ..config import with_runner_context
 from ..exceptions import RunnerException
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, FunctionHandler, config, execute_lifecycle_method
+from ..runner.common import (
+    FunctionContext,
+    FunctionHandler,
+    config,
+    execute_lifecycle_method,
+    send_callback,
+)
 from ..type import LifeCycleMethod, TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
@@ -184,7 +189,13 @@ class TaskQueueWorker:
             return None
 
     async def _monitor_task(
-        self, stub_id: str, container_id: str, taskqueue_stub: TaskQueueServiceStub, task: Task
+        self,
+        *,
+        stub_id: str,
+        container_id: str,
+        task: Task,
+        taskqueue_stub: TaskQueueServiceStub,
+        gateway_stub: GatewayServiceStub,
     ) -> None:
         initial_backoff = 5
         max_retries = 5
@@ -249,7 +260,7 @@ class TaskQueueWorker:
         gateway_stub = GatewayServiceStub(channel)
 
         # Load handler and execute on_start method
-        handler = FunctionHandler(gateway_stub=gateway_stub)
+        handler = FunctionHandler()
         on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
 
         print(f"Worker[{self.worker_index}] ready")
@@ -265,7 +276,11 @@ class TaskQueueWorker:
 
                     monitor_task = loop.create_task(
                         self._monitor_task(
-                            config.stub_id, config.container_id, taskqueue_stub, task
+                            stub_id=config.stub_id,
+                            container_id=config.container_id,
+                            task=task,
+                            taskqueue_stub=taskqueue_stub,
+                            gateway_stub=gateway_stub,
                         ),
                     )
 
@@ -284,11 +299,8 @@ class TaskQueueWorker:
                         result = await loop.run_in_executor(
                             executor, lambda: handler(context, *args, **kwargs)
                         )
-
-                        result = cloudpickle.dumps(result)
-                    except BaseException as exc:
+                    except BaseException:
                         print(traceback.format_exc())
-                        result = cloudpickle.dumps(exc)
                         task_status = TaskStatus.Error
                     finally:
                         complete_task_response: TaskQueueCompleteResponse = (
@@ -311,8 +323,8 @@ class TaskQueueWorker:
                         monitor_task.cancel()
                         print(f"Task completed <{task.id}>")
 
-                        await handler.send_callback(
-                            context, result
+                        await send_callback(
+                            gateway_stub=gateway_stub, context=context, payload=result
                         )  # Send callback to callback_url, if defined
 
             loop.run_until_complete(_run_task())

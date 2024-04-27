@@ -29,7 +29,7 @@ from ..clients.gateway import (
 from ..config import with_runner_context
 from ..exceptions import InvalidFunctionArgumentsException, RunnerException
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, FunctionHandler, config
+from ..runner.common import FunctionContext, FunctionHandler, config, send_callback
 from ..type import TaskExitCode, TaskStatus
 
 
@@ -46,10 +46,12 @@ def _load_args(args: bytes) -> dict:
 
 async def _monitor_task(
     *,
+    context: FunctionContext,
     stub_id: str,
     task_id: str,
     container_id: str,
     function_stub: FunctionServiceStub,
+    gateway_stub: GatewayServiceStub,
 ) -> None:
     initial_backoff = 5
     max_retries = 5
@@ -68,6 +70,8 @@ async def _monitor_task(
                 response: FunctionMonitorResponse
                 if response.cancelled:
                     print(f"Task cancelled: {task_id}")
+
+                    await send_callback(gateway_stub=gateway_stub, context=context, payload={})
                     os._exit(TaskExitCode.Cancelled)
 
                 if response.complete:
@@ -75,6 +79,8 @@ async def _monitor_task(
 
                 if response.timed_out:
                     print(f"Task timed out: {task_id}")
+
+                    await send_callback(gateway_stub=gateway_stub, context=context, payload={})
                     os._exit(TaskExitCode.Timeout)
 
                 retry = 0
@@ -128,12 +134,15 @@ def main(channel: Channel):
             raise RunnerException("Unable to start task")
 
         # Kick off monitoring task
+        context = FunctionContext.new(config=config, task_id=task_id)
         monitor_task = loop.create_task(
             _monitor_task(
+                context=context,
                 stub_id=config.stub_id,
                 task_id=task_id,
                 container_id=config.container_id,
                 function_stub=function_stub,
+                gateway_stub=gateway_stub,
             ),
         )
 
@@ -148,9 +157,7 @@ def main(channel: Channel):
             if not get_args_resp.ok:
                 raise InvalidFunctionArgumentsException
 
-            handler = FunctionHandler(gateway_stub=gateway_stub)
-            context = FunctionContext.new(config=config, task_id=task_id)
-
+            handler = FunctionHandler()
             payload: dict = _load_args(get_args_resp.args)
             args = payload.get("args") or []
             kwargs = payload.get("kwargs") or {}
@@ -160,10 +167,10 @@ def main(channel: Channel):
             result = error = exc
             task_status = TaskStatus.Error
         finally:
-            result = cloudpickle.dumps(result)
+            pickled_result = cloudpickle.dumps(result)
             set_result_resp: FunctionSetResultResponse = run_sync(
                 function_stub.function_set_result(
-                    FunctionSetResultRequest(task_id=task_id, result=result)
+                    FunctionSetResultRequest(task_id=task_id, result=pickled_result)
                 ),
             )
             if not set_result_resp.ok:
@@ -190,7 +197,7 @@ def main(channel: Channel):
         monitor_task.cancel()
 
         run_sync(
-            handler.send_callback(context, result)
+            send_callback(gateway_stub=gateway_stub, context=context, payload=result)
         )  # Send callback to callback_url, if defined
 
         if task_status == TaskStatus.Error:

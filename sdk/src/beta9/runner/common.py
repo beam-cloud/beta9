@@ -1,9 +1,14 @@
 import importlib
 import inspect
+import json
 import os
 import sys
+import traceback
 from dataclasses import dataclass
+from json import JSONEncoder
 from typing import Any, Callable, Optional, Union
+
+from starlette.responses import Response
 
 from ..clients.gateway import GatewayServiceStub, SignPayloadRequest, SignPayloadResponse
 from ..exceptions import RunnerException
@@ -109,6 +114,15 @@ class FunctionContext:
         )
 
 
+class CallbackPayloadEncoder(JSONEncoder):
+    """JSON encoder to handle non-serializable objects"""
+
+    def default(self, obj):
+        if isinstance(obj, Response):
+            return obj.body
+        return super().default(obj)
+
+
 class FunctionHandler:
     """
     Helper class for loading user entry point functions
@@ -139,16 +153,6 @@ class FunctionHandler:
 
         return self.handler(*args, **kwargs)
 
-    async def send_callback(self, context: FunctionContext, payload: Any):
-        if context.callback_url == "" or context.callback_url is None:
-            return
-
-        r: SignPayloadResponse = await self.gateway_stub.sign_payload(
-            SignPayloadRequest(payload=bytes([0, 2]))
-        )
-
-        print("SIGNED PAYLOAD:", r)
-
 
 def execute_lifecycle_method(*, name: str) -> Union[Any, None]:
     """Executes a container lifecycle method defined by the user and return it's value"""
@@ -168,3 +172,23 @@ def execute_lifecycle_method(*, name: str) -> Union[Any, None]:
         return method()
     except BaseException:
         raise RunnerException()
+
+
+async def send_callback(
+    *, gateway_stub: GatewayServiceStub, context: FunctionContext, payload: Any
+) -> None:
+    if context.callback_url == "" or context.callback_url is None:
+        return
+
+    # Serialize the callback payload into JSON
+    try:
+        serialized_payload = json.dumps({"data": payload}, cls=CallbackPayloadEncoder)
+    except TypeError:
+        print(f"Error serializing callback payload: {traceback.format_exc()}")
+        return
+
+    r: SignPayloadResponse = await gateway_stub.sign_payload(
+        SignPayloadRequest(payload=bytes(serialized_payload, "utf-8"))
+    )
+
+    print("SIGNED PAYLOAD:", r)

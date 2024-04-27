@@ -140,7 +140,7 @@ class EndpointManager:
         self.app = FastAPI(lifespan=self.lifespan)
 
         # Load handler and execute on_start method
-        self.handler: FunctionHandler = FunctionHandler(gateway_stub=self.app.state.gateway_stub)
+        self.handler: FunctionHandler = FunctionHandler()
         self.on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
 
         # Register signal handlers
