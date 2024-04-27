@@ -179,6 +179,7 @@ async def send_callback(
     body = {}
     headers = {}
 
+    # Serialize callback payload to correct format
     use_json = True
     if isinstance(payload, Response):
         body = {"data": payload.body}
@@ -191,7 +192,8 @@ async def send_callback(
             logger.error(f"Error serializing callback payload: {traceback.format_exc()}")
             return
 
-    r: SignPayloadResponse = await gateway_stub.sign_payload(
+    # Sign callback payload
+    sign_payload_resp: SignPayloadResponse = await gateway_stub.sign_payload(
         SignPayloadRequest(payload=bytes(json.dumps(body), "utf-8"))
     )
 
@@ -201,8 +203,8 @@ async def send_callback(
         **headers,
         "X-Task-ID": str(context.task_id),
         "X-Task-Status": "COMPLETE",
-        "X-Task-Signature": r.signature,
-        "X-Task-Timestamp": r.timestamp,
+        "X-Task-Signature": sign_payload_resp.signature,
+        "X-Task-Timestamp": sign_payload_resp.timestamp,
     }
 
     try:
