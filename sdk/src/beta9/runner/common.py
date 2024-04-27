@@ -18,6 +18,7 @@ USER_CODE_VOLUME = "/mnt/code"
 
 
 logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 
 @dataclass
@@ -195,7 +196,7 @@ async def send_callback(
     headers = {
         **headers,
         "X-Task-ID": str(context.task_id),
-        "X-Task-Status": task_status,
+        "X-Task-Status": str(task_status),
         "X-Task-Signature": sign_payload_resp.signature,
         "X-Task-Timestamp": str(sign_payload_resp.timestamp),
     }
