@@ -191,6 +191,7 @@ class TaskQueueWorker:
     async def _monitor_task(
         self,
         *,
+        context: FunctionContext,
         stub_id: str,
         container_id: str,
         task: Task,
@@ -214,6 +215,8 @@ class TaskQueueWorker:
                     response: TaskQueueMonitorResponse
                     if response.cancelled:
                         print(f"Task cancelled: {task.id}")
+
+                        await send_callback(gateway_stub=gateway_stub, context=context, payload={})
                         os._exit(TaskExitCode.Cancelled)
 
                     if response.complete:
@@ -221,6 +224,8 @@ class TaskQueueWorker:
 
                     if response.timed_out:
                         print(f"Task timed out: {task.id}")
+
+                        await send_callback(gateway_stub=gateway_stub, context=context, payload={})
                         os._exit(TaskExitCode.Timeout)
 
                     retry = 0
@@ -274,8 +279,15 @@ class TaskQueueWorker:
                 with StdoutJsonInterceptor(task_id=task.id):
                     print(f"Running task <{task.id}>")
 
+                    context = FunctionContext.new(
+                        config=config,
+                        task_id=task.id,
+                        on_start_value=on_start_value,
+                    )
+
                     monitor_task = loop.create_task(
                         self._monitor_task(
+                            context=context,
                             stub_id=config.stub_id,
                             container_id=config.container_id,
                             task=task,
@@ -289,12 +301,6 @@ class TaskQueueWorker:
                     try:
                         args = task.args or []
                         kwargs = task.kwargs or {}
-
-                        context = FunctionContext.new(
-                            config=config,
-                            task_id=task.id,
-                            on_start_value=on_start_value,
-                        )
 
                         result = await loop.run_in_executor(
                             executor, lambda: handler(context, *args, **kwargs)
