@@ -3,11 +3,8 @@ package types
 import "time"
 
 const (
-	WorkerLifecycleStarted string = "STARTED"
-	WorkerLifecycleStopped string = "STOPPED"
-
-	WorkerLifecycleStatsKey        string        = "beta9.worker.usage.spawner.lifecycle"
-	WorkerDurationStatsKey         string        = "beta9.worker.usage.spawner.duration"
+	WorkerLifecycleStarted         string        = "STARTED"
+	WorkerLifecycleStopped         string        = "STOPPED"
 	WorkerDurationEmissionInterval time.Duration = 30 * time.Second
 	WorkerUserCodeVolume           string        = "/mnt/code"
 )

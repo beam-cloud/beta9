@@ -21,6 +21,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		},
 		Handler:       in.Handler,
 		OnStart:       in.OnStart,
+		CallbackUrl:   in.CallbackUrl,
 		PythonVersion: in.PythonVersion,
 		TaskPolicy: types.TaskPolicy{
 			MaxRetries: uint(in.Retries),

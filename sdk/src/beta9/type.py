@@ -12,6 +12,10 @@ class TaskStatus(str, Enum):
     Running = "RUNNING"
     Cancelled = "CANCELLED"
     Retry = "RETRY"
+    Timeout = "TIMEOUT"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 class TaskExitCode:

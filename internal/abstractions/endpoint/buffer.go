@@ -21,10 +21,10 @@ import (
 )
 
 type request struct {
-	ctx     echo.Context
-	payload *types.TaskPayload
-	taskId  string
-	done    chan bool
+	ctx         echo.Context
+	payload     *types.TaskPayload
+	taskMessage *types.TaskMessage
+	done        chan bool
 }
 
 type container struct {
@@ -82,13 +82,13 @@ func NewRequestBuffer(
 	return b
 }
 
-func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPayload, taskId string) error {
+func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPayload, taskMessage *types.TaskMessage) error {
 	done := make(chan bool)
 	rb.buffer.Push(request{
-		ctx:     ctx,
-		done:    done,
-		payload: payload,
-		taskId:  taskId,
+		ctx:         ctx,
+		done:        done,
+		payload:     payload,
+		taskMessage: taskMessage,
 	})
 
 	rb.length.Add(1)
@@ -280,8 +280,8 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
-	httpReq.Header.Add("X-TASK-ID", req.taskId) // Add task ID to header
-	go rb.heartBeat(req, c.id)                  // Send heartbeat via redis for duration of request
+	httpReq.Header.Add("X-TASK-ID", req.taskMessage.TaskId) // Add task ID to header
+	go rb.heartBeat(req, c.id)                              // Send heartbeat via redis for duration of request
 
 	resp, err := rb.httpClient.Do(httpReq)
 	if err != nil {
@@ -313,13 +313,13 @@ func (rb *RequestBuffer) heartBeat(req request, containerId string) {
 	ticker := time.NewTicker(endpointRequestHeartbeatInterval)
 	defer ticker.Stop()
 
-	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskId), containerId, endpointRequestHeartbeatInterval)
+	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskMessage.TaskId), containerId, endpointRequestHeartbeatInterval)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskId), containerId, endpointRequestHeartbeatInterval)
+			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskMessage.TaskId), containerId, endpointRequestHeartbeatInterval)
 		}
 	}
 }

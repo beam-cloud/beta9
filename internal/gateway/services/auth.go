@@ -51,3 +51,27 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 		WorkspaceId: workspace.ExternalId,
 	}, nil
 }
+
+func (gws *GatewayService) SignPayload(ctx context.Context, in *pb.SignPayloadRequest) (*pb.SignPayloadResponse, error) {
+	authInfo, authFound := auth.AuthInfoFromContext(ctx)
+	if !authFound {
+		return &pb.SignPayloadResponse{
+			Ok:       false,
+			ErrorMsg: "Invalid token",
+		}, nil
+	}
+
+	if authInfo.Workspace.SigningKey == nil || *authInfo.Workspace.SigningKey == "" {
+		return &pb.SignPayloadResponse{
+			Ok:       false,
+			ErrorMsg: "Invalid signing key",
+		}, nil
+	}
+
+	sig := auth.SignPayload(in.Payload, *authInfo.Workspace.SigningKey)
+	return &pb.SignPayloadResponse{
+		Ok:        true,
+		Signature: sig.Key,
+		Timestamp: sig.Timestamp,
+	}, nil
+}

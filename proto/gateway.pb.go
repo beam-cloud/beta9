@@ -176,6 +176,124 @@ func (x *AuthorizeResponse) GetErrorMsg() string {
 	return ""
 }
 
+type SignPayloadRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Payload []byte `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`
+}
+
+func (x *SignPayloadRequest) Reset() {
+	*x = SignPayloadRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_gateway_proto_msgTypes[2]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *SignPayloadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignPayloadRequest) ProtoMessage() {}
+
+func (x *SignPayloadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[2]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignPayloadRequest.ProtoReflect.Descriptor instead.
+func (*SignPayloadRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *SignPayloadRequest) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+type SignPayloadResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Ok        bool   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Signature string `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
+	Timestamp int64  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	ErrorMsg  string `protobuf:"bytes,4,opt,name=error_msg,json=errorMsg,proto3" json:"error_msg,omitempty"`
+}
+
+func (x *SignPayloadResponse) Reset() {
+	*x = SignPayloadResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_gateway_proto_msgTypes[3]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *SignPayloadResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignPayloadResponse) ProtoMessage() {}
+
+func (x *SignPayloadResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[3]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignPayloadResponse.ProtoReflect.Descriptor instead.
+func (*SignPayloadResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *SignPayloadResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *SignPayloadResponse) GetSignature() string {
+	if x != nil {
+		return x.Signature
+	}
+	return ""
+}
+
+func (x *SignPayloadResponse) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *SignPayloadResponse) GetErrorMsg() string {
+	if x != nil {
+		return x.ErrorMsg
+	}
+	return ""
+}
+
 type ObjectMetadata struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -188,7 +306,7 @@ type ObjectMetadata struct {
 func (x *ObjectMetadata) Reset() {
 	*x = ObjectMetadata{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[2]
+		mi := &file_gateway_proto_msgTypes[4]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -201,7 +319,7 @@ func (x *ObjectMetadata) String() string {
 func (*ObjectMetadata) ProtoMessage() {}
 
 func (x *ObjectMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[2]
+	mi := &file_gateway_proto_msgTypes[4]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -214,7 +332,7 @@ func (x *ObjectMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObjectMetadata.ProtoReflect.Descriptor instead.
 func (*ObjectMetadata) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{2}
+	return file_gateway_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ObjectMetadata) GetName() string {
@@ -242,7 +360,7 @@ type HeadObjectRequest struct {
 func (x *HeadObjectRequest) Reset() {
 	*x = HeadObjectRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[3]
+		mi := &file_gateway_proto_msgTypes[5]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -255,7 +373,7 @@ func (x *HeadObjectRequest) String() string {
 func (*HeadObjectRequest) ProtoMessage() {}
 
 func (x *HeadObjectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[3]
+	mi := &file_gateway_proto_msgTypes[5]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -268,7 +386,7 @@ func (x *HeadObjectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeadObjectRequest.ProtoReflect.Descriptor instead.
 func (*HeadObjectRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{3}
+	return file_gateway_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *HeadObjectRequest) GetHash() string {
@@ -293,7 +411,7 @@ type HeadObjectResponse struct {
 func (x *HeadObjectResponse) Reset() {
 	*x = HeadObjectResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[4]
+		mi := &file_gateway_proto_msgTypes[6]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -306,7 +424,7 @@ func (x *HeadObjectResponse) String() string {
 func (*HeadObjectResponse) ProtoMessage() {}
 
 func (x *HeadObjectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[4]
+	mi := &file_gateway_proto_msgTypes[6]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -319,7 +437,7 @@ func (x *HeadObjectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeadObjectResponse.ProtoReflect.Descriptor instead.
 func (*HeadObjectResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{4}
+	return file_gateway_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *HeadObjectResponse) GetOk() bool {
@@ -371,7 +489,7 @@ type PutObjectRequest struct {
 func (x *PutObjectRequest) Reset() {
 	*x = PutObjectRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[5]
+		mi := &file_gateway_proto_msgTypes[7]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -384,7 +502,7 @@ func (x *PutObjectRequest) String() string {
 func (*PutObjectRequest) ProtoMessage() {}
 
 func (x *PutObjectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[5]
+	mi := &file_gateway_proto_msgTypes[7]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -397,7 +515,7 @@ func (x *PutObjectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutObjectRequest.ProtoReflect.Descriptor instead.
 func (*PutObjectRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{5}
+	return file_gateway_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *PutObjectRequest) GetObjectContent() []byte {
@@ -441,7 +559,7 @@ type PutObjectResponse struct {
 func (x *PutObjectResponse) Reset() {
 	*x = PutObjectResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[6]
+		mi := &file_gateway_proto_msgTypes[8]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -454,7 +572,7 @@ func (x *PutObjectResponse) String() string {
 func (*PutObjectResponse) ProtoMessage() {}
 
 func (x *PutObjectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[6]
+	mi := &file_gateway_proto_msgTypes[8]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -467,7 +585,7 @@ func (x *PutObjectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutObjectResponse.ProtoReflect.Descriptor instead.
 func (*PutObjectResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{6}
+	return file_gateway_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *PutObjectResponse) GetOk() bool {
@@ -505,7 +623,7 @@ type ReplaceObjectContentRequest struct {
 func (x *ReplaceObjectContentRequest) Reset() {
 	*x = ReplaceObjectContentRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[7]
+		mi := &file_gateway_proto_msgTypes[9]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -518,7 +636,7 @@ func (x *ReplaceObjectContentRequest) String() string {
 func (*ReplaceObjectContentRequest) ProtoMessage() {}
 
 func (x *ReplaceObjectContentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[7]
+	mi := &file_gateway_proto_msgTypes[9]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -531,7 +649,7 @@ func (x *ReplaceObjectContentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplaceObjectContentRequest.ProtoReflect.Descriptor instead.
 func (*ReplaceObjectContentRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{7}
+	return file_gateway_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ReplaceObjectContentRequest) GetObjectId() string {
@@ -573,7 +691,7 @@ type ReplaceObjectContentResponse struct {
 func (x *ReplaceObjectContentResponse) Reset() {
 	*x = ReplaceObjectContentResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[8]
+		mi := &file_gateway_proto_msgTypes[10]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -586,7 +704,7 @@ func (x *ReplaceObjectContentResponse) String() string {
 func (*ReplaceObjectContentResponse) ProtoMessage() {}
 
 func (x *ReplaceObjectContentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[8]
+	mi := &file_gateway_proto_msgTypes[10]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -599,7 +717,7 @@ func (x *ReplaceObjectContentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplaceObjectContentResponse.ProtoReflect.Descriptor instead.
 func (*ReplaceObjectContentResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{8}
+	return file_gateway_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ReplaceObjectContentResponse) GetOk() bool {
@@ -622,7 +740,7 @@ type StartTaskRequest struct {
 func (x *StartTaskRequest) Reset() {
 	*x = StartTaskRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[9]
+		mi := &file_gateway_proto_msgTypes[11]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -635,7 +753,7 @@ func (x *StartTaskRequest) String() string {
 func (*StartTaskRequest) ProtoMessage() {}
 
 func (x *StartTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[9]
+	mi := &file_gateway_proto_msgTypes[11]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -648,7 +766,7 @@ func (x *StartTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartTaskRequest.ProtoReflect.Descriptor instead.
 func (*StartTaskRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{9}
+	return file_gateway_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *StartTaskRequest) GetTaskId() string {
@@ -676,7 +794,7 @@ type StartTaskResponse struct {
 func (x *StartTaskResponse) Reset() {
 	*x = StartTaskResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[10]
+		mi := &file_gateway_proto_msgTypes[12]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -689,7 +807,7 @@ func (x *StartTaskResponse) String() string {
 func (*StartTaskResponse) ProtoMessage() {}
 
 func (x *StartTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[10]
+	mi := &file_gateway_proto_msgTypes[12]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -702,7 +820,7 @@ func (x *StartTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartTaskResponse.ProtoReflect.Descriptor instead.
 func (*StartTaskResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{10}
+	return file_gateway_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *StartTaskResponse) GetOk() bool {
@@ -728,7 +846,7 @@ type EndTaskRequest struct {
 func (x *EndTaskRequest) Reset() {
 	*x = EndTaskRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[11]
+		mi := &file_gateway_proto_msgTypes[13]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -741,7 +859,7 @@ func (x *EndTaskRequest) String() string {
 func (*EndTaskRequest) ProtoMessage() {}
 
 func (x *EndTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[11]
+	mi := &file_gateway_proto_msgTypes[13]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -754,7 +872,7 @@ func (x *EndTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndTaskRequest.ProtoReflect.Descriptor instead.
 func (*EndTaskRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{11}
+	return file_gateway_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *EndTaskRequest) GetTaskId() string {
@@ -810,7 +928,7 @@ type EndTaskResponse struct {
 func (x *EndTaskResponse) Reset() {
 	*x = EndTaskResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[12]
+		mi := &file_gateway_proto_msgTypes[14]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -823,7 +941,7 @@ func (x *EndTaskResponse) String() string {
 func (*EndTaskResponse) ProtoMessage() {}
 
 func (x *EndTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[12]
+	mi := &file_gateway_proto_msgTypes[14]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -836,7 +954,7 @@ func (x *EndTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndTaskResponse.ProtoReflect.Descriptor instead.
 func (*EndTaskResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{12}
+	return file_gateway_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *EndTaskResponse) GetOk() bool {
@@ -857,7 +975,7 @@ type StringList struct {
 func (x *StringList) Reset() {
 	*x = StringList{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[13]
+		mi := &file_gateway_proto_msgTypes[15]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -870,7 +988,7 @@ func (x *StringList) String() string {
 func (*StringList) ProtoMessage() {}
 
 func (x *StringList) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[13]
+	mi := &file_gateway_proto_msgTypes[15]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -883,7 +1001,7 @@ func (x *StringList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StringList.ProtoReflect.Descriptor instead.
 func (*StringList) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{13}
+	return file_gateway_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *StringList) GetValues() []string {
@@ -905,7 +1023,7 @@ type ListTasksRequest struct {
 func (x *ListTasksRequest) Reset() {
 	*x = ListTasksRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[14]
+		mi := &file_gateway_proto_msgTypes[16]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -918,7 +1036,7 @@ func (x *ListTasksRequest) String() string {
 func (*ListTasksRequest) ProtoMessage() {}
 
 func (x *ListTasksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[14]
+	mi := &file_gateway_proto_msgTypes[16]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -931,7 +1049,7 @@ func (x *ListTasksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTasksRequest.ProtoReflect.Descriptor instead.
 func (*ListTasksRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{14}
+	return file_gateway_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ListTasksRequest) GetFilters() map[string]*StringList {
@@ -969,7 +1087,7 @@ type Task struct {
 func (x *Task) Reset() {
 	*x = Task{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[15]
+		mi := &file_gateway_proto_msgTypes[17]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -982,7 +1100,7 @@ func (x *Task) String() string {
 func (*Task) ProtoMessage() {}
 
 func (x *Task) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[15]
+	mi := &file_gateway_proto_msgTypes[17]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -995,7 +1113,7 @@ func (x *Task) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Task.ProtoReflect.Descriptor instead.
 func (*Task) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{15}
+	return file_gateway_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Task) GetId() string {
@@ -1089,7 +1207,7 @@ type ListTasksResponse struct {
 func (x *ListTasksResponse) Reset() {
 	*x = ListTasksResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[16]
+		mi := &file_gateway_proto_msgTypes[18]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1102,7 +1220,7 @@ func (x *ListTasksResponse) String() string {
 func (*ListTasksResponse) ProtoMessage() {}
 
 func (x *ListTasksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[16]
+	mi := &file_gateway_proto_msgTypes[18]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1115,7 +1233,7 @@ func (x *ListTasksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTasksResponse.ProtoReflect.Descriptor instead.
 func (*ListTasksResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{16}
+	return file_gateway_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ListTasksResponse) GetOk() bool {
@@ -1157,7 +1275,7 @@ type StopTaskRequest struct {
 func (x *StopTaskRequest) Reset() {
 	*x = StopTaskRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[17]
+		mi := &file_gateway_proto_msgTypes[19]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1170,7 +1288,7 @@ func (x *StopTaskRequest) String() string {
 func (*StopTaskRequest) ProtoMessage() {}
 
 func (x *StopTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[17]
+	mi := &file_gateway_proto_msgTypes[19]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1183,7 +1301,7 @@ func (x *StopTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopTaskRequest.ProtoReflect.Descriptor instead.
 func (*StopTaskRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{17}
+	return file_gateway_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *StopTaskRequest) GetTaskId() string {
@@ -1205,7 +1323,7 @@ type StopTaskResponse struct {
 func (x *StopTaskResponse) Reset() {
 	*x = StopTaskResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[18]
+		mi := &file_gateway_proto_msgTypes[20]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1218,7 +1336,7 @@ func (x *StopTaskResponse) String() string {
 func (*StopTaskResponse) ProtoMessage() {}
 
 func (x *StopTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[18]
+	mi := &file_gateway_proto_msgTypes[20]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1231,7 +1349,7 @@ func (x *StopTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopTaskResponse.ProtoReflect.Descriptor instead.
 func (*StopTaskResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{18}
+	return file_gateway_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *StopTaskResponse) GetOk() bool {
@@ -1260,7 +1378,7 @@ type Volume struct {
 func (x *Volume) Reset() {
 	*x = Volume{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[19]
+		mi := &file_gateway_proto_msgTypes[21]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1273,7 +1391,7 @@ func (x *Volume) String() string {
 func (*Volume) ProtoMessage() {}
 
 func (x *Volume) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[19]
+	mi := &file_gateway_proto_msgTypes[21]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1286,7 +1404,7 @@ func (x *Volume) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Volume.ProtoReflect.Descriptor instead.
 func (*Volume) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{19}
+	return file_gateway_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *Volume) GetId() string {
@@ -1326,12 +1444,13 @@ type GetOrCreateStubRequest struct {
 	Volumes         []*Volume `protobuf:"bytes,16,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	ForceCreate     bool      `protobuf:"varint,17,opt,name=force_create,json=forceCreate,proto3" json:"force_create,omitempty"`
 	OnStart         string    `protobuf:"bytes,18,opt,name=on_start,json=onStart,proto3" json:"on_start,omitempty"`
+	CallbackUrl     string    `protobuf:"bytes,19,opt,name=callback_url,json=callbackUrl,proto3" json:"callback_url,omitempty"`
 }
 
 func (x *GetOrCreateStubRequest) Reset() {
 	*x = GetOrCreateStubRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[20]
+		mi := &file_gateway_proto_msgTypes[22]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1344,7 +1463,7 @@ func (x *GetOrCreateStubRequest) String() string {
 func (*GetOrCreateStubRequest) ProtoMessage() {}
 
 func (x *GetOrCreateStubRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[20]
+	mi := &file_gateway_proto_msgTypes[22]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1357,7 +1476,7 @@ func (x *GetOrCreateStubRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrCreateStubRequest.ProtoReflect.Descriptor instead.
 func (*GetOrCreateStubRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{20}
+	return file_gateway_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GetOrCreateStubRequest) GetObjectId() string {
@@ -1486,6 +1605,13 @@ func (x *GetOrCreateStubRequest) GetOnStart() string {
 	return ""
 }
 
+func (x *GetOrCreateStubRequest) GetCallbackUrl() string {
+	if x != nil {
+		return x.CallbackUrl
+	}
+	return ""
+}
+
 type GetOrCreateStubResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -1498,7 +1624,7 @@ type GetOrCreateStubResponse struct {
 func (x *GetOrCreateStubResponse) Reset() {
 	*x = GetOrCreateStubResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[21]
+		mi := &file_gateway_proto_msgTypes[23]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1511,7 +1637,7 @@ func (x *GetOrCreateStubResponse) String() string {
 func (*GetOrCreateStubResponse) ProtoMessage() {}
 
 func (x *GetOrCreateStubResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[21]
+	mi := &file_gateway_proto_msgTypes[23]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1524,7 +1650,7 @@ func (x *GetOrCreateStubResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrCreateStubResponse.ProtoReflect.Descriptor instead.
 func (*GetOrCreateStubResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{21}
+	return file_gateway_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *GetOrCreateStubResponse) GetOk() bool {
@@ -1553,7 +1679,7 @@ type DeployStubRequest struct {
 func (x *DeployStubRequest) Reset() {
 	*x = DeployStubRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[22]
+		mi := &file_gateway_proto_msgTypes[24]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1566,7 +1692,7 @@ func (x *DeployStubRequest) String() string {
 func (*DeployStubRequest) ProtoMessage() {}
 
 func (x *DeployStubRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[22]
+	mi := &file_gateway_proto_msgTypes[24]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1579,7 +1705,7 @@ func (x *DeployStubRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployStubRequest.ProtoReflect.Descriptor instead.
 func (*DeployStubRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{22}
+	return file_gateway_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *DeployStubRequest) GetStubId() string {
@@ -1609,7 +1735,7 @@ type DeployStubResponse struct {
 func (x *DeployStubResponse) Reset() {
 	*x = DeployStubResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[23]
+		mi := &file_gateway_proto_msgTypes[25]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1622,7 +1748,7 @@ func (x *DeployStubResponse) String() string {
 func (*DeployStubResponse) ProtoMessage() {}
 
 func (x *DeployStubResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[23]
+	mi := &file_gateway_proto_msgTypes[25]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1635,7 +1761,7 @@ func (x *DeployStubResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployStubResponse.ProtoReflect.Descriptor instead.
 func (*DeployStubResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{23}
+	return file_gateway_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *DeployStubResponse) GetOk() bool {
@@ -1674,6 +1800,17 @@ var file_gateway_proto_rawDesc = []byte{
 	0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x1b, 0x0a, 0x09, 0x6e, 0x65, 0x77, 0x5f, 0x74, 0x6f,
 	0x6b, 0x65, 0x6e, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x6e, 0x65, 0x77, 0x54, 0x6f,
 	0x6b, 0x65, 0x6e, 0x12, 0x1b, 0x0a, 0x09, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67,
+	0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67,
+	0x22, 0x2e, 0x0a, 0x12, 0x53, 0x69, 0x67, 0x6e, 0x50, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x18, 0x0a, 0x07, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61,
+	0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x07, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
+	0x22, 0x7e, 0x0a, 0x13, 0x53, 0x69, 0x67, 0x6e, 0x50, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x1c, 0x0a, 0x09, 0x73, 0x69, 0x67, 0x6e, 0x61,
+	0x74, 0x75, 0x72, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x73, 0x69, 0x67, 0x6e,
+	0x61, 0x74, 0x75, 0x72, 0x65, 0x12, 0x1c, 0x0a, 0x09, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61,
+	0x6d, 0x70, 0x18, 0x03, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74,
+	0x61, 0x6d, 0x70, 0x12, 0x1b, 0x0a, 0x09, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67,
 	0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67,
 	0x22, 0x38, 0x0a, 0x0e, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x4d, 0x65, 0x74, 0x61, 0x64, 0x61,
 	0x74, 0x61, 0x12, 0x12, 0x0a, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09,
@@ -1806,7 +1943,7 @@ var file_gateway_proto_rawDesc = []byte{
 	0x72, 0x4d, 0x73, 0x67, 0x22, 0x37, 0x0a, 0x06, 0x56, 0x6f, 0x6c, 0x75, 0x6d, 0x65, 0x12, 0x0e,
 	0x0a, 0x02, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x02, 0x69, 0x64, 0x12, 0x1d,
 	0x0a, 0x0a, 0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x5f, 0x70, 0x61, 0x74, 0x68, 0x18, 0x02, 0x20, 0x01,
-	0x28, 0x09, 0x52, 0x09, 0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x50, 0x61, 0x74, 0x68, 0x22, 0xbc, 0x04,
+	0x28, 0x09, 0x52, 0x09, 0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x50, 0x61, 0x74, 0x68, 0x22, 0xdf, 0x04,
 	0x0a, 0x16, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x53, 0x74, 0x75,
 	0x62, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x6f, 0x62, 0x6a, 0x65,
 	0x63, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x6f, 0x62, 0x6a,
@@ -1842,80 +1979,87 @@ var file_gateway_proto_rawDesc = []byte{
 	0x0a, 0x0c, 0x66, 0x6f, 0x72, 0x63, 0x65, 0x5f, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x18, 0x11,
 	0x20, 0x01, 0x28, 0x08, 0x52, 0x0b, 0x66, 0x6f, 0x72, 0x63, 0x65, 0x43, 0x72, 0x65, 0x61, 0x74,
 	0x65, 0x12, 0x19, 0x0a, 0x08, 0x6f, 0x6e, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x18, 0x12, 0x20,
-	0x01, 0x28, 0x09, 0x52, 0x07, 0x6f, 0x6e, 0x53, 0x74, 0x61, 0x72, 0x74, 0x22, 0x42, 0x0a, 0x17,
-	0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x53, 0x74, 0x75, 0x62, 0x52,
-	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20,
-	0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07, 0x73, 0x74, 0x75, 0x62, 0x5f,
-	0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x73, 0x74, 0x75, 0x62, 0x49, 0x64,
-	0x22, 0x40, 0x0a, 0x11, 0x44, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53, 0x74, 0x75, 0x62, 0x52, 0x65,
-	0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x17, 0x0a, 0x07, 0x73, 0x74, 0x75, 0x62, 0x5f, 0x69, 0x64,
-	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x73, 0x74, 0x75, 0x62, 0x49, 0x64, 0x12, 0x12,
-	0x0a, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6e, 0x61,
-	0x6d, 0x65, 0x22, 0x63, 0x0a, 0x12, 0x44, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53, 0x74, 0x75, 0x62,
-	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01,
-	0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x23, 0x0a, 0x0d, 0x64, 0x65, 0x70, 0x6c,
-	0x6f, 0x79, 0x6d, 0x65, 0x6e, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x0c, 0x64, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x6d, 0x65, 0x6e, 0x74, 0x49, 0x64, 0x12, 0x18, 0x0a,
-	0x07, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x07,
-	0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x2a, 0x36, 0x0a, 0x1d, 0x52, 0x65, 0x70, 0x6c, 0x61,
-	0x63, 0x65, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x4f,
-	0x70, 0x65, 0x72, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x09, 0x0a, 0x05, 0x57, 0x52, 0x49, 0x54,
-	0x45, 0x10, 0x00, 0x12, 0x0a, 0x0a, 0x06, 0x44, 0x45, 0x4c, 0x45, 0x54, 0x45, 0x10, 0x01, 0x32,
-	0xc0, 0x06, 0x0a, 0x0e, 0x47, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x53, 0x65, 0x72, 0x76, 0x69,
-	0x63, 0x65, 0x12, 0x44, 0x0a, 0x09, 0x41, 0x75, 0x74, 0x68, 0x6f, 0x72, 0x69, 0x7a, 0x65, 0x12,
-	0x19, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x41, 0x75, 0x74, 0x68, 0x6f, 0x72,
-	0x69, 0x7a, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x67, 0x61, 0x74,
-	0x65, 0x77, 0x61, 0x79, 0x2e, 0x41, 0x75, 0x74, 0x68, 0x6f, 0x72, 0x69, 0x7a, 0x65, 0x52, 0x65,
-	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x47, 0x0a, 0x0a, 0x48, 0x65, 0x61, 0x64,
-	0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x12, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79,
-	0x2e, 0x48, 0x65, 0x61, 0x64, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65,
-	0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x48, 0x65, 0x61,
-	0x64, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22,
-	0x00, 0x12, 0x44, 0x0a, 0x09, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x12, 0x19,
-	0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65,
-	0x63, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65,
-	0x77, 0x61, 0x79, 0x2e, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x73,
-	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x4c, 0x0a, 0x0f, 0x50, 0x75, 0x74, 0x4f, 0x62,
-	0x6a, 0x65, 0x63, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x12, 0x19, 0x2e, 0x67, 0x61, 0x74,
-	0x65, 0x77, 0x61, 0x79, 0x2e, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65,
-	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e,
-	0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
-	0x65, 0x22, 0x00, 0x28, 0x01, 0x12, 0x67, 0x0a, 0x14, 0x52, 0x65, 0x70, 0x6c, 0x61, 0x63, 0x65,
-	0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x12, 0x24, 0x2e,
-	0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x52, 0x65, 0x70, 0x6c, 0x61, 0x63, 0x65, 0x4f,
-	0x62, 0x6a, 0x65, 0x63, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x71, 0x75,
-	0x65, 0x73, 0x74, 0x1a, 0x25, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x52, 0x65,
+	0x01, 0x28, 0x09, 0x52, 0x07, 0x6f, 0x6e, 0x53, 0x74, 0x61, 0x72, 0x74, 0x12, 0x21, 0x0a, 0x0c,
+	0x63, 0x61, 0x6c, 0x6c, 0x62, 0x61, 0x63, 0x6b, 0x5f, 0x75, 0x72, 0x6c, 0x18, 0x13, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x0b, 0x63, 0x61, 0x6c, 0x6c, 0x62, 0x61, 0x63, 0x6b, 0x55, 0x72, 0x6c, 0x22,
+	0x42, 0x0a, 0x17, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x53, 0x74,
+	0x75, 0x62, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07, 0x73, 0x74,
+	0x75, 0x62, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x73, 0x74, 0x75,
+	0x62, 0x49, 0x64, 0x22, 0x40, 0x0a, 0x11, 0x44, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53, 0x74, 0x75,
+	0x62, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x17, 0x0a, 0x07, 0x73, 0x74, 0x75, 0x62,
+	0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x73, 0x74, 0x75, 0x62, 0x49,
+	0x64, 0x12, 0x12, 0x0a, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x04, 0x6e, 0x61, 0x6d, 0x65, 0x22, 0x63, 0x0a, 0x12, 0x44, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53,
+	0x74, 0x75, 0x62, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f,
+	0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x23, 0x0a, 0x0d, 0x64,
+	0x65, 0x70, 0x6c, 0x6f, 0x79, 0x6d, 0x65, 0x6e, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x0c, 0x64, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x6d, 0x65, 0x6e, 0x74, 0x49, 0x64,
+	0x12, 0x18, 0x0a, 0x07, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x18, 0x03, 0x20, 0x01, 0x28,
+	0x0d, 0x52, 0x07, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x2a, 0x36, 0x0a, 0x1d, 0x52, 0x65,
 	0x70, 0x6c, 0x61, 0x63, 0x65, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x65,
-	0x6e, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x28, 0x01, 0x12, 0x42,
-	0x0a, 0x09, 0x53, 0x74, 0x61, 0x72, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x12, 0x19, 0x2e, 0x67, 0x61,
-	0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x53, 0x74, 0x61, 0x72, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x52,
-	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79,
-	0x2e, 0x53, 0x74, 0x61, 0x72, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
-	0x73, 0x65, 0x12, 0x3c, 0x0a, 0x07, 0x45, 0x6e, 0x64, 0x54, 0x61, 0x73, 0x6b, 0x12, 0x17, 0x2e,
-	0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x45, 0x6e, 0x64, 0x54, 0x61, 0x73, 0x6b, 0x52,
-	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79,
-	0x2e, 0x45, 0x6e, 0x64, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
-	0x12, 0x3f, 0x0a, 0x08, 0x53, 0x74, 0x6f, 0x70, 0x54, 0x61, 0x73, 0x6b, 0x12, 0x18, 0x2e, 0x67,
-	0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x53, 0x74, 0x6f, 0x70, 0x54, 0x61, 0x73, 0x6b, 0x52,
-	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79,
-	0x2e, 0x53, 0x74, 0x6f, 0x70, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
-	0x65, 0x12, 0x42, 0x0a, 0x09, 0x4c, 0x69, 0x73, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x73, 0x12, 0x19,
-	0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x54, 0x61, 0x73,
-	0x6b, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65,
-	0x77, 0x61, 0x79, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x73, 0x52, 0x65, 0x73,
-	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x54, 0x0a, 0x0f, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72,
-	0x65, 0x61, 0x74, 0x65, 0x53, 0x74, 0x75, 0x62, 0x12, 0x1f, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77,
+	0x6e, 0x74, 0x4f, 0x70, 0x65, 0x72, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x09, 0x0a, 0x05, 0x57,
+	0x52, 0x49, 0x54, 0x45, 0x10, 0x00, 0x12, 0x0a, 0x0a, 0x06, 0x44, 0x45, 0x4c, 0x45, 0x54, 0x45,
+	0x10, 0x01, 0x32, 0x8c, 0x07, 0x0a, 0x0e, 0x47, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x53, 0x65,
+	0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x44, 0x0a, 0x09, 0x41, 0x75, 0x74, 0x68, 0x6f, 0x72, 0x69,
+	0x7a, 0x65, 0x12, 0x19, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x41, 0x75, 0x74,
+	0x68, 0x6f, 0x72, 0x69, 0x7a, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e,
+	0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x41, 0x75, 0x74, 0x68, 0x6f, 0x72, 0x69, 0x7a,
+	0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x4a, 0x0a, 0x0b, 0x53,
+	0x69, 0x67, 0x6e, 0x50, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x12, 0x1b, 0x2e, 0x67, 0x61, 0x74,
+	0x65, 0x77, 0x61, 0x79, 0x2e, 0x53, 0x69, 0x67, 0x6e, 0x50, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
+	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1c, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61,
+	0x79, 0x2e, 0x53, 0x69, 0x67, 0x6e, 0x50, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x52, 0x65, 0x73,
+	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x47, 0x0a, 0x0a, 0x48, 0x65, 0x61, 0x64, 0x4f,
+	0x62, 0x6a, 0x65, 0x63, 0x74, 0x12, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e,
+	0x48, 0x65, 0x61, 0x64, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
+	0x74, 0x1a, 0x1b, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x48, 0x65, 0x61, 0x64,
+	0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00,
+	0x12, 0x44, 0x0a, 0x09, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x12, 0x19, 0x2e,
+	0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63,
+	0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77,
+	0x61, 0x79, 0x2e, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x4c, 0x0a, 0x0f, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a,
+	0x65, 0x63, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x12, 0x19, 0x2e, 0x67, 0x61, 0x74, 0x65,
+	0x77, 0x61, 0x79, 0x2e, 0x50, 0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x50,
+	0x75, 0x74, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x22, 0x00, 0x28, 0x01, 0x12, 0x67, 0x0a, 0x14, 0x52, 0x65, 0x70, 0x6c, 0x61, 0x63, 0x65, 0x4f,
+	0x62, 0x6a, 0x65, 0x63, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x12, 0x24, 0x2e, 0x67,
+	0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x52, 0x65, 0x70, 0x6c, 0x61, 0x63, 0x65, 0x4f, 0x62,
+	0x6a, 0x65, 0x63, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65,
+	0x73, 0x74, 0x1a, 0x25, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x52, 0x65, 0x70,
+	0x6c, 0x61, 0x63, 0x65, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x65, 0x6e,
+	0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x28, 0x01, 0x12, 0x42, 0x0a,
+	0x09, 0x53, 0x74, 0x61, 0x72, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x12, 0x19, 0x2e, 0x67, 0x61, 0x74,
+	0x65, 0x77, 0x61, 0x79, 0x2e, 0x53, 0x74, 0x61, 0x72, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e,
+	0x53, 0x74, 0x61, 0x72, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
+	0x65, 0x12, 0x3c, 0x0a, 0x07, 0x45, 0x6e, 0x64, 0x54, 0x61, 0x73, 0x6b, 0x12, 0x17, 0x2e, 0x67,
+	0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x45, 0x6e, 0x64, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e,
+	0x45, 0x6e, 0x64, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
+	0x3f, 0x0a, 0x08, 0x53, 0x74, 0x6f, 0x70, 0x54, 0x61, 0x73, 0x6b, 0x12, 0x18, 0x2e, 0x67, 0x61,
+	0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x53, 0x74, 0x6f, 0x70, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e,
+	0x53, 0x74, 0x6f, 0x70, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x12, 0x42, 0x0a, 0x09, 0x4c, 0x69, 0x73, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x73, 0x12, 0x19, 0x2e,
+	0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x54, 0x61, 0x73, 0x6b,
+	0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77,
+	0x61, 0x79, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x73, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x54, 0x0a, 0x0f, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65,
+	0x61, 0x74, 0x65, 0x53, 0x74, 0x75, 0x62, 0x12, 0x1f, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61,
+	0x79, 0x2e, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x53, 0x74, 0x75,
+	0x62, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x20, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77,
 	0x61, 0x79, 0x2e, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x53, 0x74,
-	0x75, 0x62, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x20, 0x2e, 0x67, 0x61, 0x74, 0x65,
-	0x77, 0x61, 0x79, 0x2e, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x53,
-	0x74, 0x75, 0x62, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x45, 0x0a, 0x0a, 0x44,
-	0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53, 0x74, 0x75, 0x62, 0x12, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65,
-	0x77, 0x61, 0x79, 0x2e, 0x44, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53, 0x74, 0x75, 0x62, 0x52, 0x65,
-	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e,
-	0x44, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53, 0x74, 0x75, 0x62, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
-	0x73, 0x65, 0x42, 0x23, 0x5a, 0x21, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d,
-	0x2f, 0x62, 0x65, 0x61, 0x6d, 0x2d, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x74, 0x61,
-	0x39, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x75, 0x62, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x45, 0x0a, 0x0a, 0x44, 0x65,
+	0x70, 0x6c, 0x6f, 0x79, 0x53, 0x74, 0x75, 0x62, 0x12, 0x1a, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77,
+	0x61, 0x79, 0x2e, 0x44, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53, 0x74, 0x75, 0x62, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x44,
+	0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53, 0x74, 0x75, 0x62, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
+	0x65, 0x42, 0x23, 0x5a, 0x21, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f,
+	0x62, 0x65, 0x61, 0x6d, 0x2d, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x74, 0x61, 0x39,
+	0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -1931,72 +2075,76 @@ func file_gateway_proto_rawDescGZIP() []byte {
 }
 
 var file_gateway_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_gateway_proto_goTypes = []interface{}{
 	(ReplaceObjectContentOperation)(0),   // 0: gateway.ReplaceObjectContentOperation
 	(*AuthorizeRequest)(nil),             // 1: gateway.AuthorizeRequest
 	(*AuthorizeResponse)(nil),            // 2: gateway.AuthorizeResponse
-	(*ObjectMetadata)(nil),               // 3: gateway.ObjectMetadata
-	(*HeadObjectRequest)(nil),            // 4: gateway.HeadObjectRequest
-	(*HeadObjectResponse)(nil),           // 5: gateway.HeadObjectResponse
-	(*PutObjectRequest)(nil),             // 6: gateway.PutObjectRequest
-	(*PutObjectResponse)(nil),            // 7: gateway.PutObjectResponse
-	(*ReplaceObjectContentRequest)(nil),  // 8: gateway.ReplaceObjectContentRequest
-	(*ReplaceObjectContentResponse)(nil), // 9: gateway.ReplaceObjectContentResponse
-	(*StartTaskRequest)(nil),             // 10: gateway.StartTaskRequest
-	(*StartTaskResponse)(nil),            // 11: gateway.StartTaskResponse
-	(*EndTaskRequest)(nil),               // 12: gateway.EndTaskRequest
-	(*EndTaskResponse)(nil),              // 13: gateway.EndTaskResponse
-	(*StringList)(nil),                   // 14: gateway.StringList
-	(*ListTasksRequest)(nil),             // 15: gateway.ListTasksRequest
-	(*Task)(nil),                         // 16: gateway.Task
-	(*ListTasksResponse)(nil),            // 17: gateway.ListTasksResponse
-	(*StopTaskRequest)(nil),              // 18: gateway.StopTaskRequest
-	(*StopTaskResponse)(nil),             // 19: gateway.StopTaskResponse
-	(*Volume)(nil),                       // 20: gateway.Volume
-	(*GetOrCreateStubRequest)(nil),       // 21: gateway.GetOrCreateStubRequest
-	(*GetOrCreateStubResponse)(nil),      // 22: gateway.GetOrCreateStubResponse
-	(*DeployStubRequest)(nil),            // 23: gateway.DeployStubRequest
-	(*DeployStubResponse)(nil),           // 24: gateway.DeployStubResponse
-	nil,                                  // 25: gateway.ListTasksRequest.FiltersEntry
-	(*timestamppb.Timestamp)(nil),        // 26: google.protobuf.Timestamp
+	(*SignPayloadRequest)(nil),           // 3: gateway.SignPayloadRequest
+	(*SignPayloadResponse)(nil),          // 4: gateway.SignPayloadResponse
+	(*ObjectMetadata)(nil),               // 5: gateway.ObjectMetadata
+	(*HeadObjectRequest)(nil),            // 6: gateway.HeadObjectRequest
+	(*HeadObjectResponse)(nil),           // 7: gateway.HeadObjectResponse
+	(*PutObjectRequest)(nil),             // 8: gateway.PutObjectRequest
+	(*PutObjectResponse)(nil),            // 9: gateway.PutObjectResponse
+	(*ReplaceObjectContentRequest)(nil),  // 10: gateway.ReplaceObjectContentRequest
+	(*ReplaceObjectContentResponse)(nil), // 11: gateway.ReplaceObjectContentResponse
+	(*StartTaskRequest)(nil),             // 12: gateway.StartTaskRequest
+	(*StartTaskResponse)(nil),            // 13: gateway.StartTaskResponse
+	(*EndTaskRequest)(nil),               // 14: gateway.EndTaskRequest
+	(*EndTaskResponse)(nil),              // 15: gateway.EndTaskResponse
+	(*StringList)(nil),                   // 16: gateway.StringList
+	(*ListTasksRequest)(nil),             // 17: gateway.ListTasksRequest
+	(*Task)(nil),                         // 18: gateway.Task
+	(*ListTasksResponse)(nil),            // 19: gateway.ListTasksResponse
+	(*StopTaskRequest)(nil),              // 20: gateway.StopTaskRequest
+	(*StopTaskResponse)(nil),             // 21: gateway.StopTaskResponse
+	(*Volume)(nil),                       // 22: gateway.Volume
+	(*GetOrCreateStubRequest)(nil),       // 23: gateway.GetOrCreateStubRequest
+	(*GetOrCreateStubResponse)(nil),      // 24: gateway.GetOrCreateStubResponse
+	(*DeployStubRequest)(nil),            // 25: gateway.DeployStubRequest
+	(*DeployStubResponse)(nil),           // 26: gateway.DeployStubResponse
+	nil,                                  // 27: gateway.ListTasksRequest.FiltersEntry
+	(*timestamppb.Timestamp)(nil),        // 28: google.protobuf.Timestamp
 }
 var file_gateway_proto_depIdxs = []int32{
-	3,  // 0: gateway.HeadObjectResponse.object_metadata:type_name -> gateway.ObjectMetadata
-	3,  // 1: gateway.PutObjectRequest.object_metadata:type_name -> gateway.ObjectMetadata
+	5,  // 0: gateway.HeadObjectResponse.object_metadata:type_name -> gateway.ObjectMetadata
+	5,  // 1: gateway.PutObjectRequest.object_metadata:type_name -> gateway.ObjectMetadata
 	0,  // 2: gateway.ReplaceObjectContentRequest.op:type_name -> gateway.ReplaceObjectContentOperation
-	25, // 3: gateway.ListTasksRequest.filters:type_name -> gateway.ListTasksRequest.FiltersEntry
-	26, // 4: gateway.Task.started_at:type_name -> google.protobuf.Timestamp
-	26, // 5: gateway.Task.ended_at:type_name -> google.protobuf.Timestamp
-	26, // 6: gateway.Task.created_at:type_name -> google.protobuf.Timestamp
-	26, // 7: gateway.Task.updated_at:type_name -> google.protobuf.Timestamp
-	16, // 8: gateway.ListTasksResponse.tasks:type_name -> gateway.Task
-	20, // 9: gateway.GetOrCreateStubRequest.volumes:type_name -> gateway.Volume
-	14, // 10: gateway.ListTasksRequest.FiltersEntry.value:type_name -> gateway.StringList
+	27, // 3: gateway.ListTasksRequest.filters:type_name -> gateway.ListTasksRequest.FiltersEntry
+	28, // 4: gateway.Task.started_at:type_name -> google.protobuf.Timestamp
+	28, // 5: gateway.Task.ended_at:type_name -> google.protobuf.Timestamp
+	28, // 6: gateway.Task.created_at:type_name -> google.protobuf.Timestamp
+	28, // 7: gateway.Task.updated_at:type_name -> google.protobuf.Timestamp
+	18, // 8: gateway.ListTasksResponse.tasks:type_name -> gateway.Task
+	22, // 9: gateway.GetOrCreateStubRequest.volumes:type_name -> gateway.Volume
+	16, // 10: gateway.ListTasksRequest.FiltersEntry.value:type_name -> gateway.StringList
 	1,  // 11: gateway.GatewayService.Authorize:input_type -> gateway.AuthorizeRequest
-	4,  // 12: gateway.GatewayService.HeadObject:input_type -> gateway.HeadObjectRequest
-	6,  // 13: gateway.GatewayService.PutObject:input_type -> gateway.PutObjectRequest
-	6,  // 14: gateway.GatewayService.PutObjectStream:input_type -> gateway.PutObjectRequest
-	8,  // 15: gateway.GatewayService.ReplaceObjectContent:input_type -> gateway.ReplaceObjectContentRequest
-	10, // 16: gateway.GatewayService.StartTask:input_type -> gateway.StartTaskRequest
-	12, // 17: gateway.GatewayService.EndTask:input_type -> gateway.EndTaskRequest
-	18, // 18: gateway.GatewayService.StopTask:input_type -> gateway.StopTaskRequest
-	15, // 19: gateway.GatewayService.ListTasks:input_type -> gateway.ListTasksRequest
-	21, // 20: gateway.GatewayService.GetOrCreateStub:input_type -> gateway.GetOrCreateStubRequest
-	23, // 21: gateway.GatewayService.DeployStub:input_type -> gateway.DeployStubRequest
-	2,  // 22: gateway.GatewayService.Authorize:output_type -> gateway.AuthorizeResponse
-	5,  // 23: gateway.GatewayService.HeadObject:output_type -> gateway.HeadObjectResponse
-	7,  // 24: gateway.GatewayService.PutObject:output_type -> gateway.PutObjectResponse
-	7,  // 25: gateway.GatewayService.PutObjectStream:output_type -> gateway.PutObjectResponse
-	9,  // 26: gateway.GatewayService.ReplaceObjectContent:output_type -> gateway.ReplaceObjectContentResponse
-	11, // 27: gateway.GatewayService.StartTask:output_type -> gateway.StartTaskResponse
-	13, // 28: gateway.GatewayService.EndTask:output_type -> gateway.EndTaskResponse
-	19, // 29: gateway.GatewayService.StopTask:output_type -> gateway.StopTaskResponse
-	17, // 30: gateway.GatewayService.ListTasks:output_type -> gateway.ListTasksResponse
-	22, // 31: gateway.GatewayService.GetOrCreateStub:output_type -> gateway.GetOrCreateStubResponse
-	24, // 32: gateway.GatewayService.DeployStub:output_type -> gateway.DeployStubResponse
-	22, // [22:33] is the sub-list for method output_type
-	11, // [11:22] is the sub-list for method input_type
+	3,  // 12: gateway.GatewayService.SignPayload:input_type -> gateway.SignPayloadRequest
+	6,  // 13: gateway.GatewayService.HeadObject:input_type -> gateway.HeadObjectRequest
+	8,  // 14: gateway.GatewayService.PutObject:input_type -> gateway.PutObjectRequest
+	8,  // 15: gateway.GatewayService.PutObjectStream:input_type -> gateway.PutObjectRequest
+	10, // 16: gateway.GatewayService.ReplaceObjectContent:input_type -> gateway.ReplaceObjectContentRequest
+	12, // 17: gateway.GatewayService.StartTask:input_type -> gateway.StartTaskRequest
+	14, // 18: gateway.GatewayService.EndTask:input_type -> gateway.EndTaskRequest
+	20, // 19: gateway.GatewayService.StopTask:input_type -> gateway.StopTaskRequest
+	17, // 20: gateway.GatewayService.ListTasks:input_type -> gateway.ListTasksRequest
+	23, // 21: gateway.GatewayService.GetOrCreateStub:input_type -> gateway.GetOrCreateStubRequest
+	25, // 22: gateway.GatewayService.DeployStub:input_type -> gateway.DeployStubRequest
+	2,  // 23: gateway.GatewayService.Authorize:output_type -> gateway.AuthorizeResponse
+	4,  // 24: gateway.GatewayService.SignPayload:output_type -> gateway.SignPayloadResponse
+	7,  // 25: gateway.GatewayService.HeadObject:output_type -> gateway.HeadObjectResponse
+	9,  // 26: gateway.GatewayService.PutObject:output_type -> gateway.PutObjectResponse
+	9,  // 27: gateway.GatewayService.PutObjectStream:output_type -> gateway.PutObjectResponse
+	11, // 28: gateway.GatewayService.ReplaceObjectContent:output_type -> gateway.ReplaceObjectContentResponse
+	13, // 29: gateway.GatewayService.StartTask:output_type -> gateway.StartTaskResponse
+	15, // 30: gateway.GatewayService.EndTask:output_type -> gateway.EndTaskResponse
+	21, // 31: gateway.GatewayService.StopTask:output_type -> gateway.StopTaskResponse
+	19, // 32: gateway.GatewayService.ListTasks:output_type -> gateway.ListTasksResponse
+	24, // 33: gateway.GatewayService.GetOrCreateStub:output_type -> gateway.GetOrCreateStubResponse
+	26, // 34: gateway.GatewayService.DeployStub:output_type -> gateway.DeployStubResponse
+	23, // [23:35] is the sub-list for method output_type
+	11, // [11:23] is the sub-list for method input_type
 	11, // [11:11] is the sub-list for extension type_name
 	11, // [11:11] is the sub-list for extension extendee
 	0,  // [0:11] is the sub-list for field type_name
@@ -2033,7 +2181,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[2].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ObjectMetadata); i {
+			switch v := v.(*SignPayloadRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2045,7 +2193,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[3].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*HeadObjectRequest); i {
+			switch v := v.(*SignPayloadResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2057,7 +2205,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[4].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*HeadObjectResponse); i {
+			switch v := v.(*ObjectMetadata); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2069,7 +2217,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[5].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*PutObjectRequest); i {
+			switch v := v.(*HeadObjectRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2081,7 +2229,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[6].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*PutObjectResponse); i {
+			switch v := v.(*HeadObjectResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2093,7 +2241,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[7].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ReplaceObjectContentRequest); i {
+			switch v := v.(*PutObjectRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2105,7 +2253,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[8].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ReplaceObjectContentResponse); i {
+			switch v := v.(*PutObjectResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2117,7 +2265,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[9].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StartTaskRequest); i {
+			switch v := v.(*ReplaceObjectContentRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2129,7 +2277,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[10].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StartTaskResponse); i {
+			switch v := v.(*ReplaceObjectContentResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2141,7 +2289,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[11].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EndTaskRequest); i {
+			switch v := v.(*StartTaskRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2153,7 +2301,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[12].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EndTaskResponse); i {
+			switch v := v.(*StartTaskResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2165,7 +2313,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[13].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StringList); i {
+			switch v := v.(*EndTaskRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2177,7 +2325,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[14].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListTasksRequest); i {
+			switch v := v.(*EndTaskResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2189,7 +2337,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[15].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Task); i {
+			switch v := v.(*StringList); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2201,7 +2349,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[16].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListTasksResponse); i {
+			switch v := v.(*ListTasksRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2213,7 +2361,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[17].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StopTaskRequest); i {
+			switch v := v.(*Task); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2225,7 +2373,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[18].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StopTaskResponse); i {
+			switch v := v.(*ListTasksResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2237,7 +2385,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[19].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Volume); i {
+			switch v := v.(*StopTaskRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2249,7 +2397,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[20].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetOrCreateStubRequest); i {
+			switch v := v.(*StopTaskResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2261,7 +2409,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[21].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetOrCreateStubResponse); i {
+			switch v := v.(*Volume); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2273,7 +2421,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[22].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeployStubRequest); i {
+			switch v := v.(*GetOrCreateStubRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2285,6 +2433,30 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[23].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetOrCreateStubResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_gateway_proto_msgTypes[24].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*DeployStubRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_gateway_proto_msgTypes[25].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*DeployStubResponse); i {
 			case 0:
 				return &v.state
@@ -2303,7 +2475,7 @@ func file_gateway_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_gateway_proto_rawDesc,
 			NumEnums:      1,
-			NumMessages:   25,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
