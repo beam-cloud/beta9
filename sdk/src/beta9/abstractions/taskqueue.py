@@ -66,6 +66,8 @@ class TaskQueue(RunnerAbstraction):
         on_start (Optional[Callable]):
             An optional function to run once (per process) when the container starts. Can be used for downloading data,
             loading models, or anything else computationally expensive.
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
     Example:
         ```python
         from beta9 import task_queue, Image
