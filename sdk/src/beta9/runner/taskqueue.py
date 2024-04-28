@@ -10,13 +10,13 @@ from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Event, Process, set_start_method
 from typing import Any, List, NamedTuple, Union
 
-import cloudpickle
 import grpc
 import grpclib
 from grpclib.client import Channel
 from grpclib.exceptions import StreamTerminatedError
 
 from ..aio import run_sync
+from ..clients.gateway import GatewayServiceStub
 from ..clients.taskqueue import (
     TaskQueueCompleteRequest,
     TaskQueueCompleteResponse,
@@ -29,7 +29,13 @@ from ..clients.taskqueue import (
 from ..config import with_runner_context
 from ..exceptions import RunnerException
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, FunctionHandler, config, execute_lifecycle_method
+from ..runner.common import (
+    FunctionContext,
+    FunctionHandler,
+    config,
+    execute_lifecycle_method,
+    send_callback,
+)
 from ..type import LifeCycleMethod, TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
@@ -174,12 +180,23 @@ class TaskQueueWorker:
                 return None
 
             task = json.loads(r.task_msg)
-            return Task(id=task["task_id"], args=task["args"], kwargs=task["kwargs"])
+            return Task(
+                id=task["task_id"],
+                args=task["args"],
+                kwargs=task["kwargs"],
+            )
         except (grpclib.exceptions.StreamTerminatedError, OSError):
             return None
 
     async def _monitor_task(
-        self, stub_id: str, container_id: str, taskqueue_stub: TaskQueueServiceStub, task: Task
+        self,
+        *,
+        context: FunctionContext,
+        stub_id: str,
+        container_id: str,
+        task: Task,
+        taskqueue_stub: TaskQueueServiceStub,
+        gateway_stub: GatewayServiceStub,
     ) -> None:
         initial_backoff = 5
         max_retries = 5
@@ -198,6 +215,13 @@ class TaskQueueWorker:
                     response: TaskQueueMonitorResponse
                     if response.cancelled:
                         print(f"Task cancelled: {task.id}")
+
+                        await send_callback(
+                            gateway_stub=gateway_stub,
+                            context=context,
+                            payload={},
+                            task_status=TaskStatus.Cancelled,
+                        )
                         os._exit(TaskExitCode.Cancelled)
 
                     if response.complete:
@@ -205,6 +229,13 @@ class TaskQueueWorker:
 
                     if response.timed_out:
                         print(f"Task timed out: {task.id}")
+
+                        await send_callback(
+                            gateway_stub=gateway_stub,
+                            context=context,
+                            payload={},
+                            task_status=TaskStatus.Timeout,
+                        )
                         os._exit(TaskExitCode.Timeout)
 
                     retry = 0
@@ -241,6 +272,7 @@ class TaskQueueWorker:
         loop = asyncio.get_event_loop()
         executor = ThreadPoolExecutor()
         taskqueue_stub = TaskQueueServiceStub(channel)
+        gateway_stub = GatewayServiceStub(channel)
 
         # Load handler and execute on_start method
         handler = FunctionHandler()
@@ -257,9 +289,20 @@ class TaskQueueWorker:
                 with StdoutJsonInterceptor(task_id=task.id):
                     print(f"Running task <{task.id}>")
 
+                    context = FunctionContext.new(
+                        config=config,
+                        task_id=task.id,
+                        on_start_value=on_start_value,
+                    )
+
                     monitor_task = loop.create_task(
                         self._monitor_task(
-                            config.stub_id, config.container_id, taskqueue_stub, task
+                            context=context,
+                            stub_id=config.stub_id,
+                            container_id=config.container_id,
+                            task=task,
+                            taskqueue_stub=taskqueue_stub,
+                            gateway_stub=gateway_stub,
                         ),
                     )
 
@@ -269,19 +312,11 @@ class TaskQueueWorker:
                         args = task.args or []
                         kwargs = task.kwargs or {}
 
-                        context = FunctionContext.new(
-                            config=config,
-                            task_id=task.id,
-                            on_start_value=on_start_value,
-                        )
-
                         result = await loop.run_in_executor(
                             executor, lambda: handler(context, *args, **kwargs)
                         )
-                        result = cloudpickle.dumps(result)
-                    except BaseException as exc:
+                    except BaseException:
                         print(traceback.format_exc())
-                        result = cloudpickle.dumps(exc)
                         task_status = TaskStatus.Error
                     finally:
                         complete_task_response: TaskQueueCompleteResponse = (
@@ -301,8 +336,15 @@ class TaskQueueWorker:
                         if not complete_task_response.ok:
                             raise RunnerException("Unable to end task")
 
-                        print(f"Task completed <{task.id}>")
                         monitor_task.cancel()
+                        print(f"Task completed <{task.id}>")
+
+                        await send_callback(
+                            gateway_stub=gateway_stub,
+                            context=context,
+                            payload=result,
+                            task_status=task_status,
+                        )  # Send callback to callback_url, if defined
 
             loop.run_until_complete(_run_task())
 

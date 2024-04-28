@@ -192,7 +192,9 @@ class EndpointManager:
             kwargs = {}
 
         context = FunctionContext.new(
-            config=cfg, task_id=task_id, on_start_value=self.on_start_value
+            config=cfg,
+            task_id=task_id,
+            on_start_value=self.on_start_value,
         )
 
         try:
@@ -202,9 +204,9 @@ class EndpointManager:
                 **kwargs,
             )
         except BaseException:
-            self.logger.exception("Unhandled exception")
-            error = traceback.format_exc()
-            response_body = {"error": traceback.format_exc()}
+            exception = traceback.format_exc()
+            print(exception)
+            response_body = {"error": exception}
 
         return response_body, error
 

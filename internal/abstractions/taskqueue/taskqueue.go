@@ -147,7 +147,7 @@ func (tq *RedisTaskQueue) getStubConfig(stubId string) (*types.StubConfigV1, err
 	return config, nil
 }
 
-func (tq *RedisTaskQueue) put(ctx context.Context, workspaceName, stubId string, payload *types.TaskPayload) (string, error) {
+func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (string, error) {
 	stubConfig, err := tq.getStubConfig(stubId)
 	if err != nil {
 		return "", err
@@ -156,7 +156,7 @@ func (tq *RedisTaskQueue) put(ctx context.Context, workspaceName, stubId string,
 	policy := stubConfig.TaskPolicy
 	policy.Expires = time.Now().Add(time.Duration(taskQueueDefaultTaskExpiration) * time.Second)
 
-	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), workspaceName, stubId, payload, policy)
+	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), authInfo, stubId, payload, policy)
 	if err != nil {
 		return "", err
 	}
@@ -176,9 +176,7 @@ func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 		}, nil
 	}
 
-	workspaceName := authInfo.Workspace.Name
-
-	taskId, err := tq.put(ctx, workspaceName, in.StubId, &payload)
+	taskId, err := tq.put(ctx, authInfo, in.StubId, &payload)
 	return &pb.TaskQueuePutResponse{
 		Ok:     err == nil,
 		TaskId: taskId,

@@ -7,6 +7,7 @@ package gateway;
 
 service GatewayService {
   rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse) {}
+  rpc SignPayload(SignPayloadRequest) returns (SignPayloadResponse) {}
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
   rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
@@ -26,6 +27,15 @@ message AuthorizeResponse {
   bool ok = 1;
   string workspace_id = 2;
   string new_token = 3;
+  string error_msg = 4;
+}
+
+message SignPayloadRequest { bytes payload = 1; }
+
+message SignPayloadResponse {
+  bool ok = 1;
+  string signature = 2;
+  int64 timestamp = 3;
   string error_msg = 4;
 }
 
@@ -149,6 +159,7 @@ message GetOrCreateStubRequest {
   repeated Volume volumes = 16;
   bool force_create = 17;
   string on_start = 18;
+  string callback_url = 19;
 }
 
 message GetOrCreateStubResponse {
