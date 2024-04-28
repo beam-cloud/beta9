@@ -17,11 +17,8 @@ type Signature struct {
 func SignPayload(payload []byte, secretKey string) Signature {
 	base64Payload := base64.StdEncoding.EncodeToString(payload)
 
-	// Get current Unix timestamp
 	currentTime := time.Now().Unix()
-
-	// Concatenate base64 payload with timestamp
-	dataToSign := fmt.Sprintf("%s:%d", base64Payload, currentTime)
+	dataToSign := fmt.Sprintf("%s:%d", base64Payload, currentTime) // Concatenate base64 payload with timestamp
 
 	// Initialize HMAC with SHA256 and secret key
 	h := hmac.New(sha256.New, []byte(secretKey))
