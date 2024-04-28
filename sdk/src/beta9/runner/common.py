@@ -168,6 +168,9 @@ def execute_lifecycle_method(*, name: str) -> Union[Any, None]:
 async def send_callback(
     *, gateway_stub: GatewayServiceStub, context: FunctionContext, payload: Any, task_status: str
 ) -> None:
+    """
+    Send a signed callback request to an external host defined by the user
+    """
     if context.callback_url == "" or context.callback_url is None:
         return
 
