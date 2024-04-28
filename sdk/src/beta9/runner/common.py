@@ -1,10 +1,10 @@
 import importlib
 import inspect
 import json
-import logging
 import os
 import sys
 import time
+import traceback
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 
@@ -15,10 +15,6 @@ from ..clients.gateway import GatewayServiceStub, SignPayloadRequest, SignPayloa
 from ..exceptions import RunnerException
 
 USER_CODE_VOLUME = "/mnt/code"
-
-
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
 
 
 @dataclass
@@ -159,7 +155,7 @@ def execute_lifecycle_method(*, name: str) -> Union[Any, None]:
     if func == "" or func is None:
         return None
 
-    logger.info(f"Running {name} func: {func}")
+    print(f"Running {name} func: {func}")
     try:
         module, func = func.split(":")
         target_module = importlib.import_module(module)
@@ -191,7 +187,7 @@ async def send_callback(
         SignPayloadRequest(payload=bytes(json.dumps(body), "utf-8"))
     )
 
-    logger.info(f"Sending data to callback: {context.callback_url}")
+    print(f"Sending data to callback: {context.callback_url}")
     headers = {}
     headers = {
         **headers,
@@ -208,6 +204,6 @@ async def send_callback(
         else:
             requests.post(context.callback_url, data=body, headers=headers)
 
-        logger.info(f"Callback request took {time.time() - start} seconds")
+        print(f"Callback request took {time.time() - start} seconds")
     except BaseException:
-        logger.exception("Unable to send callback")
+        print(f"Unable to send callback: {traceback.format_exc()}")
