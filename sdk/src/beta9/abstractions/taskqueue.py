@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
@@ -10,6 +10,7 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
+from ..abstractions.volume import Volume
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..clients.taskqueue import (
     StartTaskQueueServeRequest,
@@ -68,6 +69,8 @@ class TaskQueue(RunnerAbstraction):
             loading models, or anything else computationally expensive.
         callback_url (Optional[str]):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        volumes (Optional[List[Volume]]):
+            A list of storage volumes to be associated with the taskqueue. Default is [].
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -96,6 +99,7 @@ class TaskQueue(RunnerAbstraction):
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         callback_url: Optional[str] = None,
+        volumes: Optional[List[Volume]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -110,6 +114,7 @@ class TaskQueue(RunnerAbstraction):
             max_pending_tasks=max_pending_tasks,
             on_start=on_start,
             callback_url=callback_url,
+            volumes=volumes,
         )
 
         self.taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(self.channel)
