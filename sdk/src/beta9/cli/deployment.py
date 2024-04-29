@@ -5,16 +5,16 @@ from pathlib import Path
 
 import click
 
-from beta9.cli.extraclick import ClickCommonGroup, ClickManagementGroup
-
 from .. import terminal
-from .contexts import ServiceClient, get_gateway_service
+from ..abstractions import base
+from ..cli import extraclick
+from ..service import ServiceClient
+from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
 @click.group(cls=ClickCommonGroup)
-@click.pass_context
-def common(ctx: click.Context):
-    ctx.obj = ctx.with_resource(ServiceClient())
+def common(**_):
+    pass
 
 
 @common.command(
@@ -27,9 +27,9 @@ def common(ctx: click.Context):
     epilog="""
       Examples:
 
-        beta9 deploy --name my-app app.py:handler
+        {cli_name} deploy --name my-app app.py:handler
 
-        beta9 deploy -n my-app-2 app.py:my_func
+        {cli_name} deploy -n my-app-2 app.py:my_func
         \b
     """,
 )
@@ -45,8 +45,9 @@ def common(ctx: click.Context):
     nargs=1,
     required=True,
 )
+@extraclick.pass_service_client
 @click.pass_context
-def deploy(ctx: click.Context, name: str, entrypoint: str):
+def deploy(ctx: click.Context, service: ServiceClient, name: str, entrypoint: str):
     ctx.invoke(create_deployment, name=name, entrypoint=entrypoint)
 
 
@@ -55,9 +56,8 @@ def deploy(ctx: click.Context, name: str, entrypoint: str):
     help="Manage deployments.",
     cls=ClickManagementGroup,
 )
-@click.pass_context
-def management(ctx: click.Context):
-    ctx.obj = ctx.with_resource(get_gateway_service())
+def management():
+    pass
 
 
 @management.command(
@@ -66,7 +66,7 @@ def management(ctx: click.Context):
     epilog="""
       Examples:
 
-        beta9 deploy --name my-app --entrypoint app.py:handler
+        {cli_name} deploy --name my-app --entrypoint app.py:handler
         \b
     """,
 )
@@ -82,7 +82,8 @@ def management(ctx: click.Context):
     help='The name the entrypoint e.g. "file:function".',
     required=True,
 )
-def create_deployment(name: str, entrypoint: str):
+@extraclick.pass_service_client
+def create_deployment(service: ServiceClient, name: str, entrypoint: str):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
@@ -95,11 +96,13 @@ def create_deployment(name: str, entrypoint: str):
     if not func_name:
         terminal.error(f"Unable to parse function '{func_name}'")
 
+    # Set global channel before importing module
+    base.set_channel(service.channel)
     module = importlib.import_module(module_name)
 
-    func = getattr(module, func_name, None)
-    if func is None:
+    user_func = getattr(module, func_name, None)
+    if user_func is None:
         terminal.error(f"Unable to find function '{func_name}'")
 
-    if not func.deploy(name=name):
+    if not user_func.deploy(name=name):  # type:ignore
         terminal.error("Deployment failed ☠️")

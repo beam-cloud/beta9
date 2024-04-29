@@ -14,7 +14,6 @@ from ..clients.endpoint import (
     StopEndpointServeRequest,
 )
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
-from ..config import GatewayConfig, get_gateway_config
 from ..env import is_local
 
 
@@ -80,12 +79,11 @@ class _CallableWrapper:
         )
 
         if deploy_response.ok:
-            gateway_config: GatewayConfig = get_gateway_config()
-            gateway_url = f"{gateway_config.gateway_host}:{gateway_config.http_port}"
+            base_url = "https://app.beam.cloud"
 
             terminal.header("Deployed 🎉")
             terminal.detail(
-                f"Call your deployment at: {gateway_url}/endpoint/{name}/v{deploy_response.version}"
+                f"Call your deployment at: {base_url}/endpoint/{name}/v{deploy_response.version}"
             )
 
         return deploy_response.ok

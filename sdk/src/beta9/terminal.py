@@ -1,7 +1,7 @@
 import datetime
 import sys
 from contextlib import contextmanager
-from typing import Any, Sequence, Tuple
+from typing import Any, Optional, Sequence, Tuple
 
 from rich.console import Console
 from rich.markup import escape
@@ -24,10 +24,11 @@ def print_json(data: Any, **kwargs: Any) -> None:
     _console.print_json(data=data, indent=2, default=lambda o: str(o), **kwargs)
 
 
-def prompt(*, text: str, default: Any) -> Any:
-    prompt_text = f"=> {text} [{default}]: "
-    _console.print(Text(prompt_text, style="bold blue"), end="")
-    user_input = input().strip()
+def prompt(
+    *, text: str, default: Optional[Any] = None, markup: bool = False, password: bool = False
+) -> Any:
+    prompt_text = f"{text} [{default}]: " if default is not None else f"{text}: "
+    user_input = _console.input(prompt_text, markup=markup, password=password).strip()
     return user_input if user_input else default
 
 
@@ -70,7 +71,7 @@ def progress_open(file, mode, **kwargs):
     if "description" in options:
         options["description"] = escape(f"[{options['description']}]")
 
-    return _progress_open(file, mode, **options)
+    return _progress_open(file, mode, **options)  # type:ignore
 
 
 def humanize_date(d: datetime.datetime) -> str:

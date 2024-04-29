@@ -1,236 +1,162 @@
 import configparser
-import functools
+import ipaddress
 import os
-import sys
-import traceback
-from contextlib import contextmanager
-from typing import Any, Callable, NamedTuple, Optional, Type, Union, cast
-
-from grpclib.client import Channel, Stream, _MetadataLike
-from grpclib.const import Cardinality
-from grpclib.metadata import Deadline
-from multidict import MultiDict
-from rich import prompt
+import socket
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Mapping, Optional, Tuple, Union
 
 from . import terminal
-from .aio import run_sync
-from .clients.gateway import AuthorizeRequest, AuthorizeResponse, GatewayServiceStub
-from .exceptions import RunnerException
 
-DEFAULT_CONFIG_FILE_PATH = "~/.beta9/creds"
-DEFAULT_PROFILE_NAME = "default"
+DEFAULT_CONTEXT_NAME = "default"
 DEFAULT_GATEWAY_HOST = "0.0.0.0"
-DEFAULT_GATEWAY_PORT = "1993"
-DEFAULT_HTTP_PORT = "1994"
+DEFAULT_GATEWAY_PORT = 1993
+DEFAULT_GATEWAY_HTTP_PORT = 1994
+DEFAULT_CONFIG_FILE_PATH = Path("~/.beta9/config.ini").expanduser()
+
+if config_path := os.getenv("CONFIG_PATH"):
+    if os.path.exists(config_path):
+        DEFAULT_CONFIG_FILE_PATH = Path(config_path)
 
 
-class GatewayConfig(NamedTuple):
-    name: str = DEFAULT_PROFILE_NAME
-    gateway_host: str = DEFAULT_GATEWAY_HOST
-    gateway_port: str = DEFAULT_GATEWAY_PORT
-    http_port: str = DEFAULT_HTTP_PORT
+@dataclass
+class ConfigContext:
     token: Optional[str] = None
+    gateway_host: Optional[str] = None
+    gateway_port: Optional[int] = None
+    gateway_http_port: Optional[int] = None
+
+    def use_ssl(self) -> bool:
+        if self.gateway_port in [443, "443"]:
+            return True
+        return False
+
+    def to_dict(self) -> dict:
+        return {k: ("" if not v else v) for k, v in asdict(self).items()}
 
 
-class AuthenticatedChannel(Channel):
-    def __init__(self, *args, token: Optional[str] = None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._token = token
+def load_config(
+    path: Union[str, Path] = DEFAULT_CONFIG_FILE_PATH,
+) -> dict[str, ConfigContext]:
+    path = Path(path)
+    if not path.exists():
+        return {}
 
-    def request(
-        self,
-        name: str,
-        cardinality: Cardinality,
-        request_type: Type,
-        reply_type: Type,
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional[Deadline] = None,
-        metadata: Optional[_MetadataLike] = None,
-    ) -> Stream:
-        if self._token:
-            metadata = cast(MultiDict, MultiDict(metadata or ()))
-            metadata["authorization"] = f"Bearer {self._token}"
+    parser = configparser.ConfigParser(default_section=DEFAULT_CONTEXT_NAME)
+    parser.read(path)
 
-        return super().request(
-            name,
-            cardinality,
-            request_type,
-            reply_type,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
+    return {k: ConfigContext(**v) for k, v in parser.items()}  # type:ignore
 
 
-def load_config_from_file() -> GatewayConfig:
-    config_path = os.path.expanduser(DEFAULT_CONFIG_FILE_PATH)
-    config = configparser.ConfigParser()
+def save_config(
+    contexts: Mapping,
+    path: Union[Path, str] = DEFAULT_CONFIG_FILE_PATH,
+) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-    if not os.path.exists(config_path):
-        return GatewayConfig()
+    parser = configparser.ConfigParser(default_section=DEFAULT_CONTEXT_NAME)
+    parser.read_dict({k: v.to_dict() for k, v in contexts.items()})
 
-    config.read(config_path)
-
-    gateway_host = config.get(DEFAULT_PROFILE_NAME, "gateway_host", fallback=DEFAULT_GATEWAY_HOST)
-    gateway_port = config.get(DEFAULT_PROFILE_NAME, "gateway_port", fallback=DEFAULT_GATEWAY_PORT)
-    http_port = config.get(DEFAULT_PROFILE_NAME, "http_port", fallback=DEFAULT_HTTP_PORT)
-    token = config.get(DEFAULT_PROFILE_NAME, "token", fallback=None)
-
-    return GatewayConfig(DEFAULT_PROFILE_NAME, gateway_host, gateway_port, http_port, token)
+    with open(path, "w") as file:
+        parser.write(file)
 
 
-def save_config_to_file(*, config: GatewayConfig, name: str) -> None:
-    config_path = os.path.expanduser(DEFAULT_CONFIG_FILE_PATH)
-    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+def is_config_empty(
+    path: Union[Path, str] = DEFAULT_CONFIG_FILE_PATH,
+) -> bool:
+    path = Path(path)
+    if path.exists():
+        return False
 
-    if not name:
-        name = DEFAULT_PROFILE_NAME
+    parser = configparser.ConfigParser()
+    parser.read(path)
+    if any(v.get("gateway_host") for v in parser.values()):
+        return False
 
-    config_parser = configparser.ConfigParser()
-    config_parser.read(config_path)
-
-    if config_parser.has_section(name):
-        if not prompt.Confirm.ask(f"Configuration for {name} already exists. Overwrite?"):
-            return
-    else:
-        config_parser.add_section(name)
-
-    config_parser.set(name, "gateway_host", config.gateway_host)
-    config_parser.set(name, "gateway_port", config.gateway_port)
-    config_parser.set(name, "http_port", config.http_port)
-    config_parser.set(name, "token", config.token or "")
-
-    with open(config_path, "w") as file:
-        config_parser.write(file)
+    return True
 
 
-def get_gateway_config() -> GatewayConfig:
-    gateway_host = os.getenv("BETA9_GATEWAY_HOST", None)
-    gateway_port = os.getenv("BETA9_GATEWAY_PORT", None)
-    http_port = os.getenv("BETA9_HTTP_PORT", None)
-    token = os.getenv("BETA9_TOKEN", None)
+def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
+    config = load_config()
+    if name in config:
+        return config[name]
 
-    if gateway_host and gateway_port and token:
-        return GatewayConfig(
-            gateway_host=gateway_host, gateway_port=gateway_port, http_port=http_port, token=token
-        )
-
-    return load_config_from_file()
-
-
-def configure_gateway_credentials(
-    config: GatewayConfig,
-    *,
-    name: Optional[str] = None,
-    gateway_host: Optional[str] = None,
-    gateway_port: Optional[str] = None,
-    token: Optional[str] = None,
-) -> GatewayConfig:
-    terminal.header("Welcome to Beta9! Let's get started 📡")
-
-    name = name or terminal.prompt(text="Profile name", default=DEFAULT_PROFILE_NAME)
-    gateway_host = gateway_host or terminal.prompt(
-        text="Gateway host", default=DEFAULT_GATEWAY_HOST
-    )
-    gateway_port = gateway_port or terminal.prompt(
-        text="Gateway port", default=DEFAULT_GATEWAY_PORT
-    )
-    http_port = terminal.prompt(text="HTTP port", default=DEFAULT_HTTP_PORT)
-    token = token or terminal.prompt(text="Token", default=None)
-
-    config = config._replace(
-        name=name,
-        gateway_host=gateway_host,
-        gateway_port=gateway_port,
-        http_port=http_port,
-        token=token,
-    )
-    terminal.header("Configuring gateway")
-
+    terminal.header(f"Context '{name}' does not exist. Let's try setting it up.")
+    _, config = prompt_for_config_context(name=name)
     return config
 
 
-def get_gateway_channel() -> Channel:
-    if os.getenv("CI"):
-        return Channel(host="localhost", port=50051, ssl=False)
-
-    config: GatewayConfig = get_gateway_config()
-    channel: Union[AuthenticatedChannel, None] = None
-
-    if not config.token:
-        config = configure_gateway_credentials(
-            config,
-            name=config.name,
-            gateway_host=config.gateway_host,
-            gateway_port=config.gateway_port,
-        )
-
-        channel = AuthenticatedChannel(
-            host=config.gateway_host,
-            port=int(config.gateway_port),
-            ssl=True if config.gateway_port == "443" else False,
-            token=config.token,
-        )
-
-        terminal.header("Authorizing with gateway")
-
-        gateway_stub = GatewayServiceStub(channel=channel)
-        auth_response: AuthorizeResponse = run_sync(gateway_stub.authorize(AuthorizeRequest()))
-        if not auth_response.ok:
-            channel.close()
-            terminal.error(f"Unable to authorize with gateway: {auth_response.error_msg}")
-
-        terminal.header("Authorized 🎉")
-
-        token = config.token
-        if not token:
-            token = auth_response.new_token
-
-        config = config._replace(
-            gateway_host=config.gateway_host, gateway_port=config.gateway_port, token=token
-        )
-        save_config_to_file(config=config, name=config.name)
-
-        channel.close()  # Close unauthenticated channel
-
-    channel = AuthenticatedChannel(
-        host=config.gateway_host,
-        port=int(config.gateway_port),
-        ssl=True if config.gateway_port == "443" else False,
-        token=config.token,
-    )
-    return channel
-
-
-@contextmanager
-def runner_context():
-    exit_code = 0
+def prompt_for_config_context(
+    name: Optional[str] = None,
+    token: Optional[str] = None,
+    gateway_host: Optional[str] = None,
+    gateway_port: Optional[int] = None,
+    gateway_http_port: Optional[int] = None,
+) -> Tuple[str, ConfigContext]:
+    contexts = load_config()
 
     try:
-        channel: Channel = get_gateway_channel()
-        yield channel
-    except RunnerException as exc:
-        exit_code = exc.code
-        raise
-    except SystemExit as exc:
-        exit_code = exc.code
-        raise
-    except BaseException:
-        exit_code = 1
-    finally:
-        if channel := locals().get("channel", None):
-            channel.close()
+        if name in contexts:
+            text = f"Context '{name}' already exists. Overwrite?"
+            if terminal.prompt(text=text, default="n").lower() in ["n", "no"]:
+                return name, contexts[name]
 
-        if exit_code != 0:
-            print(traceback.format_exc())
-            sys.exit(exit_code)
+        while not name:
+            name = terminal.prompt(text="Context Name", default=DEFAULT_CONTEXT_NAME)
+
+        while not gateway_host:
+            gateway_host = terminal.prompt(text="Gateway Host", default=DEFAULT_GATEWAY_HOST)
+            gateway_host = gateway_host if validate_ip_or_dns(gateway_host) else ""
+
+        while not gateway_port:
+            gateway_port = terminal.prompt(text="Gateway Port", default=DEFAULT_GATEWAY_PORT)
+            gateway_port = gateway_port if validate_port(gateway_port) else 0
+
+        while not gateway_http_port:
+            gateway_http_port = terminal.prompt(
+                text="Gateway HTTP Port", default=DEFAULT_GATEWAY_HTTP_PORT
+            )
+            gateway_http_port = gateway_http_port if validate_port(gateway_http_port) else 0
+
+        token = terminal.prompt(text="Token", default=None, password=True)
+
+    except (KeyboardInterrupt, EOFError):
+        os._exit(1)
+
+    contexts[name] = ConfigContext(
+        token=token,
+        gateway_host=gateway_host,
+        gateway_port=gateway_port,
+        gateway_http_port=gateway_http_port,
+    )
+
+    save_config(contexts)
+
+    return name, contexts[name]
 
 
-def with_runner_context(func: Callable) -> Callable:
-    @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        with runner_context() as c:
-            return func(*args, **kwargs, channel=c)
+def validate_ip_or_dns(value) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        pass
 
-    return wrapper
+    try:
+        socket.gethostbyname(value)
+        return True
+    except socket.error:
+        pass
+
+    return False
+
+
+def validate_port(value: Any) -> bool:
+    try:
+        if int(value) > 0:
+            return True
+    except ValueError:
+        pass
+
+    return False
