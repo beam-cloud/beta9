@@ -108,7 +108,7 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 
 	query := `
 	INSERT INTO workspace (name, external_id, signing_key)
-	VALUES ($1, $2)
+	VALUES ($1, $2, $3)
 	RETURNING id, name, external_id, signing_key, created_at, updated_at;
 	`
 
