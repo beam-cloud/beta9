@@ -20,6 +20,7 @@ from .clients.gateway import (
     PutObjectResponse,
     ReplaceObjectContentOperation,
 )
+from .env import is_local
 
 CHUNK_SIZE = 1024 * 1024 * 4
 IGNORE_FILE_NAME = ".beta9ignore"
@@ -57,6 +58,9 @@ class FileSyncer:
         return self.root_dir / IGNORE_FILE_NAME
 
     def _init_ignore_file(self) -> None:
+        if not is_local():
+            return
+
         if self.ignore_file_path.exists():
             return
 
@@ -65,6 +69,9 @@ class FileSyncer:
             f.writelines(IGNORE_FILE_CONTENTS)
 
     def _read_ignore_file(self) -> list:
+        if not is_local():
+            return
+
         terminal.detail(f"Reading {IGNORE_FILE_NAME} file")
 
         patterns = []

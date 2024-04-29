@@ -20,6 +20,7 @@ from ..clients.taskqueue import (
     TaskQueueServiceStub,
 )
 from ..config import GatewayConfig, get_gateway_config
+from ..env import is_local
 
 
 class TaskQueue(RunnerAbstraction):
@@ -96,6 +97,8 @@ class TaskQueue(RunnerAbstraction):
         max_containers: int = 1,
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
+        on_start: Optional[Callable] = None,
+        callback_url: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
     ) -> None:
         super().__init__(
@@ -109,6 +112,8 @@ class TaskQueue(RunnerAbstraction):
             retries=retries,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
+            on_start=on_start,
+            callback_url=callback_url,
             volumes=volumes,
         )
 
@@ -124,8 +129,7 @@ class _CallableWrapper:
         self.parent: TaskQueue = parent
 
     def __call__(self, *args, **kwargs) -> Any:
-        container_id = os.getenv("CONTAINER_ID")
-        if container_id is not None:
+        if not is_local():
             return self.local(*args, **kwargs)
 
         raise NotImplementedError(

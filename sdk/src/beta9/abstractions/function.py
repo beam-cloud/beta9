@@ -1,5 +1,4 @@
 import asyncio
-import os
 from typing import Any, Callable, Iterator, List, Optional, Sequence, Union
 
 import cloudpickle
@@ -19,6 +18,7 @@ from ..clients.function import (
 )
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..config import GatewayConfig, get_gateway_config
+from ..env import is_local
 from ..sync import FileSyncer
 
 
@@ -70,9 +70,10 @@ class Function(RunnerAbstraction):
         cpu: Union[int, float, str] = 1.0,
         memory: int = 128,
         gpu: str = "",
+        image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,
-        image: Image = Image(),
+        callback_url: Optional[str] = "",
         volumes: Optional[List[Volume]] = None,
     ) -> None:
         super().__init__(
@@ -82,6 +83,7 @@ class Function(RunnerAbstraction):
             image=image,
             timeout=timeout,
             retries=retries,
+            callback_url=callback_url,
             volumes=volumes,
         )
 
@@ -98,8 +100,7 @@ class _CallableWrapper:
         self.parent: Function = parent
 
     def __call__(self, *args, **kwargs) -> Any:
-        container_id = os.getenv("CONTAINER_ID")
-        if container_id:
+        if not is_local():
             return self.local(*args, **kwargs)
 
         if not self.parent.prepare_runtime(

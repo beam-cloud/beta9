@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -49,6 +50,7 @@ func (d *Dispatcher) getTaskMessage() *types.TaskMessage {
 	msg.Args = make([]interface{}, 0)
 	msg.Kwargs = make(map[string]interface{})
 	msg.Executor = ""
+	msg.Timestamp = time.Now().Unix()
 	return msg
 }
 
@@ -61,8 +63,8 @@ func (d *Dispatcher) Register(executor string, taskFactory func(ctx context.Cont
 	d.executors.Set(executor, taskFactory)
 }
 
-func (d *Dispatcher) SendAndExecute(ctx context.Context, executor string, workspaceName, stubId string, payload *types.TaskPayload, policy types.TaskPolicy) (types.TaskInterface, error) {
-	task, err := d.Send(ctx, executor, workspaceName, stubId, payload, policy)
+func (d *Dispatcher) SendAndExecute(ctx context.Context, executor string, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload, policy types.TaskPolicy) (types.TaskInterface, error) {
+	task, err := d.Send(ctx, executor, authInfo, stubId, payload, policy)
 	if err != nil {
 		return nil, err
 	}
@@ -70,14 +72,15 @@ func (d *Dispatcher) SendAndExecute(ctx context.Context, executor string, worksp
 	return task, task.Execute(ctx)
 }
 
-func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, stubId string, payload *types.TaskPayload, policy types.TaskPolicy) (types.TaskInterface, error) {
+func (d *Dispatcher) Send(ctx context.Context, executor string, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload, policy types.TaskPolicy) (types.TaskInterface, error) {
 	taskMessage := d.getTaskMessage()
 	taskMessage.Executor = executor
-	taskMessage.WorkspaceName = workspaceName
+	taskMessage.WorkspaceName = authInfo.Workspace.Name
 	taskMessage.StubId = stubId
 	taskMessage.Args = payload.Args
 	taskMessage.Kwargs = payload.Kwargs
 	taskMessage.Policy = policy
+	taskMessage.Timestamp = time.Now().Unix()
 
 	taskFactory, exists := d.executors.Get(executor)
 	if !exists {
@@ -97,7 +100,7 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, workspaceName, s
 
 	taskId := task.Metadata().TaskId
 
-	err = d.taskRepo.SetTaskState(ctx, workspaceName, stubId, taskId, msg)
+	err = d.taskRepo.SetTaskState(ctx, authInfo.Workspace.Name, stubId, taskId, msg)
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +186,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 						taskMessage.WorkspaceName, taskMessage.TaskId, taskMessage.StubId)
 
 					taskMessage.Retries += 1
+					taskMessage.Timestamp = time.Now().Unix()
 
 					msg, err := taskMessage.Encode()
 					if err != nil {
