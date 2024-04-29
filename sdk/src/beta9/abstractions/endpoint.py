@@ -1,5 +1,5 @@
 import os
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
@@ -8,6 +8,7 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
+from ..abstractions.volume import Volume
 from ..clients.endpoint import (
     EndpointServiceStub,
     StartEndpointServeRequest,
@@ -31,6 +32,7 @@ class Endpoint(RunnerAbstraction):
         keep_warm_seconds: int = 300,
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
+        volumes: Optional[List[Volume]] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -44,6 +46,7 @@ class Endpoint(RunnerAbstraction):
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
             on_start=on_start,
+            volumes=volumes,
         )
 
         self.endpoint_stub: EndpointServiceStub = EndpointServiceStub(self.channel)
