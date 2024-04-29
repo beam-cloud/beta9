@@ -20,6 +20,7 @@ from ..clients.taskqueue import (
     TaskQueueServiceStub,
 )
 from ..config import GatewayConfig, get_gateway_config
+from ..env import is_local
 
 
 class TaskQueue(RunnerAbstraction):
@@ -65,6 +66,13 @@ class TaskQueue(RunnerAbstraction):
             The maximum number of tasks that can be pending in the queue. If the number of
             pending tasks exceeds this value, the task queue will stop accepting new tasks.
             Default is 100.
+        on_start (Optional[Callable]):
+            An optional function to run once (per process) when the container starts. Can be used for downloading data,
+            loading models, or anything else computationally expensive.
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        volumes (Optional[List[Volume]]):
+            A list of storage volumes to be associated with the taskqueue. Default is [].
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -91,6 +99,8 @@ class TaskQueue(RunnerAbstraction):
         max_containers: int = 1,
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
+        on_start: Optional[Callable] = None,
+        callback_url: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
     ) -> None:
         super().__init__(
@@ -104,6 +114,8 @@ class TaskQueue(RunnerAbstraction):
             retries=retries,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
+            on_start=on_start,
+            callback_url=callback_url,
             volumes=volumes,
         )
 
@@ -119,8 +131,7 @@ class _CallableWrapper:
         self.parent: TaskQueue = parent
 
     def __call__(self, *args, **kwargs) -> Any:
-        container_id = os.getenv("CONTAINER_ID")
-        if container_id is not None:
+        if not is_local():
             return self.local(*args, **kwargs)
 
         raise NotImplementedError(

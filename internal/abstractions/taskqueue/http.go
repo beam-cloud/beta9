@@ -19,6 +19,7 @@ func registerTaskQueueRoutes(g *echo.Group, tq *RedisTaskQueue) *taskQueueGroup 
 	group := &taskQueueGroup{routeGroup: g, tq: tq}
 
 	g.POST("/id/:stubId", group.TaskQueuePut)
+	g.POST("/id/:stubId/", group.TaskQueuePut)
 	g.POST("/:deploymentName/v:version", group.TaskQueuePut)
 
 	return group
@@ -54,8 +55,7 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 		return err
 	}
 
-	workspaceName := cc.AuthInfo.Workspace.Name
-	taskId, err := g.tq.put(ctx.Request().Context(), workspaceName, stubId, payload)
+	taskId, err := g.tq.put(ctx.Request().Context(), cc.AuthInfo, stubId, payload)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": err.Error(),

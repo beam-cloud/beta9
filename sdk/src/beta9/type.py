@@ -1,6 +1,10 @@
 from enum import Enum
 
 
+class LifeCycleMethod(str, Enum):
+    OnStart = "on_start"
+
+
 class TaskStatus(str, Enum):
     Complete = "COMPLETE"
     Error = "ERROR"
@@ -8,6 +12,10 @@ class TaskStatus(str, Enum):
     Running = "RUNNING"
     Cancelled = "CANCELLED"
     Retry = "RETRY"
+    Timeout = "TIMEOUT"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 class TaskExitCode:

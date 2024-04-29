@@ -33,7 +33,7 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 	return instance.buffer.ForwardRequest(echoCtx, &types.TaskPayload{
 		Args:   t.msg.Args,
 		Kwargs: t.msg.Kwargs,
-	}, t.msg.TaskId)
+	}, t.msg)
 }
 
 func (t *EndpointTask) Retry(ctx context.Context) error {
