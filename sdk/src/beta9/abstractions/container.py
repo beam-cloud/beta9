@@ -37,13 +37,14 @@ class Container(RunnerAbstraction):
 
     Example usage:
         ```
-        from beta9.abstractions.image import Image
-        from beta9.abstractions.volume import Volume
+        from beta9 import Image, Container
 
-        image = Image(name="python", tag="3.8")
-        container = Container(cpu=2, memory=512, image=image))
-        exit_code = container.run(["python", "-c", "\"print('Hello, World!')\""])
-        print(exit_code)
+
+        def run_container():
+            image = Image()
+            container = Container(cpu=2, memory=512, image=image)
+            exit_code = container.run((["python", "-c", "\"print('Hello, World!')\""]))
+            print(exit_code)
         ```
     """
 
