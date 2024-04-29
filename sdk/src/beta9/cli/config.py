@@ -1,42 +1,28 @@
 import click
 
-from .. import terminal
-from ..config import (
-    configure_gateway_credentials,
-    load_config_from_file,
-    save_config_to_file,
-)
+from ..config import prompt_for_config_context
 from .extraclick import ClickManagementGroup
 
 
 @click.group(
     name="config",
-    help="Manage configuration.",
+    help="Manage configuration contexts.",
     cls=ClickManagementGroup,
 )
 def management():
     pass
 
 
-@management.command()
-@click.option("--name", default=None)
-@click.option("--token", default=None)
-@click.option("--gateway-host", default=None)
-@click.option("--gateway-port", default=None)
-def setup(name: str, token: str, gateway_host: str, gateway_port: str):
-    config = load_config_from_file()
+@management.command(name="list")
+def list_contexts():
+    pass
 
-    config = configure_gateway_credentials(
-        config,
-        name=name,
-        gateway_host=gateway_host,
-        gateway_port=gateway_port,
-        token=token,
-    )
 
-    save_config_to_file(
-        config=config,
-        name=name,
-    )
-
-    terminal.success("Successfully configured Beta9!")
+@management.command(name="create")
+@click.option("--name", type=click.STRING, required=True)
+@click.option("--token", type=click.STRING)
+@click.option("--gateway-host", type=click.STRING)
+@click.option("--gateway-port", type=click.INT)
+@click.option("--gateway-http-port", type=click.INT)
+def create_context(**kwargs):
+    prompt_for_config_context(**kwargs)

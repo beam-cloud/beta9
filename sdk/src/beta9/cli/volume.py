@@ -6,6 +6,7 @@ import click
 from rich.table import Column, Table, box
 
 from .. import aio, terminal
+from ..channel import ServiceClient
 from ..clients.volume import (
     CopyPathRequest,
     CopyPathResponse,
@@ -18,14 +19,13 @@ from ..clients.volume import (
     ListVolumesResponse,
 )
 from ..terminal import pluralize
-from .contexts import ServiceClient
+from . import extraclick
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
 @click.group(cls=ClickCommonGroup)
-@click.pass_context
-def common(ctx: click.Context):
-    ctx.obj = ctx.with_resource(ServiceClient())
+def common(**_):
+    pass
 
 
 @common.command(
@@ -44,13 +44,13 @@ def common(ctx: click.Context):
     Examples:
 
       # List files in the volume named myvol, in the directory named subdir/
-      beta9 ls myvol/subdir
+      {cli_name} ls myvol/subdir
 
       # List files ending in .txt in the directory named subdir
-      beta9 ls myvol/subdir/\\*.txt
+      {cli_name} ls myvol/subdir/\\*.txt
 
       # Same as above, but with single quotes to avoid escaping
-      beta9 ls 'myvol/subdir/*.txt'
+      {cli_name} ls 'myvol/subdir/*.txt'
       \b
     """,
 )
@@ -66,19 +66,18 @@ def common(ctx: click.Context):
     show_default=True,
     help="Show mode, modified date, size, and name of file.",
 )
-@click.pass_obj
-def ls(service: ServiceClient, remote_path: str, long_format: bool) -> None:
-    with terminal.progress("Working..."):
-        req = ListPathRequest(path=remote_path, long_format=long_format)
-        res: ListPathResponse = aio.run_sync(service.volume.list_path(req))
+@extraclick.pass_service_client
+def ls(service: ServiceClient, remote_path: str, long_format: bool):
+    req = ListPathRequest(path=remote_path, long_format=long_format)
+    res: ListPathResponse = aio.run_sync(service.volume.list_path(req))
 
-        if not res.ok:
-            terminal.error(f"{remote_path} ({res.err_msg})")
+    if not res.ok:
+        terminal.error(f"{remote_path} ({res.err_msg})")
 
-        num_list, suffix = pluralize(res.paths)
-        terminal.header(f"{remote_path} (found {num_list} object{suffix})")
-        for p in res.paths:
-            terminal.print(p, highlight=False, markup=False)
+    num_list, suffix = pluralize(res.paths)
+    terminal.header(f"{remote_path} (found {num_list} object{suffix})")
+    for p in res.paths:
+        terminal.print(p, highlight=False, markup=False)
 
 
 @common.command(
@@ -97,21 +96,21 @@ def ls(service: ServiceClient, remote_path: str, long_format: bool) -> None:
     Examples:
 
       # Copy contents to a remote volume
-      beta9 cp mydir myvol/subdir
-      beta9 cp myfile.txt myvol/subdir
+      {cli_name} cp mydir myvol/subdir
+      {cli_name} cp myfile.txt myvol/subdir
 
       # Use a question mark to match a single character in a path
-      beta9 cp 'mydir/?/data?.json' myvol/sub/path
+      {cli_name} cp 'mydir/?/data?.json' myvol/sub/path
 
       # Use an asterisk to match all characters in a path
-      beta9 cp 'mydir/*/*.json' myvol/data
+      {cli_name} cp 'mydir/*/*.json' myvol/data
 
       # Use a sequence to match a specific set of characters in a path
-      beta9 cp 'mydir/[a-c]/data[0-1].json' myvol/data
+      {cli_name} cp 'mydir/[a-c]/data[0-1].json' myvol/data
 
       # Escape special characters if you don't want to single quote your local path
-      beta9 cp mydir/\\[a-c\\]/data[0-1].json' myvol/data
-      beta9 cp mydir/\\?/data\\?.json myvol/sub/path
+      {cli_name} cp mydir/\\[a-c\\]/data[0-1].json' myvol/data
+      {cli_name} cp mydir/\\?/data\\?.json myvol/sub/path
       \b
     """,
 )
@@ -125,8 +124,8 @@ def ls(service: ServiceClient, remote_path: str, long_format: bool) -> None:
     type=click.STRING,
     required=True,
 )
-@click.pass_obj
-def cp(service: ServiceClient, local_path: str, remote_path: str) -> None:
+@extraclick.pass_service_client
+def cp(service: ServiceClient, local_path: str, remote_path: str):
     local_path = str(Path(local_path).resolve())
     files_to_upload = []
 
@@ -186,16 +185,16 @@ def read_with_progress(
     Examples:
 
       # Remove the directory
-      beta9 rm myvol/subdir
+      {cli_name} rm myvol/subdir
 
       # Remove files ending in .json
-      beta9 rm myvol/\\*.json
+      {cli_name} rm myvol/\\*.json
 
       # Remove files with letters a - c in their names
-      beta9 rm myvol/\\[a-c\\].json
+      {cli_name} rm myvol/\\[a-c\\].json
 
       # Remove files, use single quotes to avoid escaping
-      beta9 rm 'myvol/?/[i-j][e-g]/*.txt'
+      {cli_name} rm 'myvol/?/[i-j][e-g]/*.txt'
       \b
     """,
 )
@@ -204,8 +203,8 @@ def read_with_progress(
     type=click.STRING,
     required=True,
 )
-@click.pass_obj
-def rm(service: ServiceClient, remote_path: str) -> None:
+@extraclick.pass_service_client
+def rm(service: ServiceClient, remote_path: str):
     req = DeletePathRequest(path=remote_path)
     res = aio.run_sync(service.volume.delete_path(req))
 
@@ -223,16 +222,15 @@ def rm(service: ServiceClient, remote_path: str) -> None:
     help="Manage volumes.",
     cls=ClickManagementGroup,
 )
-@click.pass_context
-def management(ctx: click.Context):
-    ctx.obj = ctx.with_resource(ServiceClient())
+def management():
+    pass
 
 
 @management.command(
     name="list",
     help="List available volumes.",
 )
-@click.pass_obj
+@extraclick.pass_service_client
 def list_volumes(service: ServiceClient):
     res: ListVolumesResponse
     res = aio.run_sync(service.volume.list_volumes(ListVolumesRequest()))
@@ -275,7 +273,7 @@ def list_volumes(service: ServiceClient):
     type=click.STRING,
     required=True,
 )
-@click.pass_obj
+@extraclick.pass_service_client
 def create_volume(service: ServiceClient, name: str):
     res: GetOrCreateVolumeResponse
     res = aio.run_sync(service.volume.get_or_create_volume(GetOrCreateVolumeRequest(name=name)))

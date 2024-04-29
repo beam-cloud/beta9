@@ -17,12 +17,12 @@ from uvicorn.workers import UvicornWorker
 from ..abstractions.base.runner import (
     ENDPOINT_SERVE_STUB_TYPE,
 )
+from ..channel import with_runner_context
 from ..clients.gateway import (
     EndTaskRequest,
     GatewayServiceStub,
     StartTaskRequest,
 )
-from ..config import with_runner_context
 from ..logging import StdoutJsonInterceptor
 from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_method
 from ..runner.common import config as cfg

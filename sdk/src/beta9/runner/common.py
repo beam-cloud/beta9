@@ -125,7 +125,7 @@ class FunctionHandler:
         self.handler: Union[Callable, None] = None
         self._load()
 
-    def _load(self) -> Callable:
+    def _load(self):
         if sys.path[0] != USER_CODE_VOLUME:
             sys.path.insert(0, USER_CODE_VOLUME)
 

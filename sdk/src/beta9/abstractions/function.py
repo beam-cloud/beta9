@@ -17,7 +17,6 @@ from ..clients.function import (
     FunctionServiceStub,
 )
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
-from ..config import GatewayConfig, get_gateway_config
 from ..env import is_local
 from ..sync import FileSyncer
 
@@ -87,11 +86,17 @@ class Function(RunnerAbstraction):
             volumes=volumes,
         )
 
-        self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
+        self._function_stub: Optional[FunctionServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
 
     def __call__(self, func):
         return _CallableWrapper(func, self)
+
+    @property
+    def function_stub(self) -> FunctionServiceStub:
+        if not self._function_stub:
+            self._function_stub = FunctionServiceStub(self.channel)
+        return self._function_stub
 
 
 class _CallableWrapper:
@@ -163,12 +168,11 @@ class _CallableWrapper:
         )
 
         if deploy_response.ok:
-            gateway_config: GatewayConfig = get_gateway_config()
-            gateway_url = f"{gateway_config.gateway_host}:{gateway_config.gateway_port}"
+            base_url = "https://app.beam.cloud"
 
             terminal.header("Deployed 🎉")
             terminal.detail(
-                f"Call your deployment at: {gateway_url}/api/v1/function/{name}/v{deploy_response.version}"
+                f"Call your deployment at: {base_url}/api/v1/function/{name}/v{deploy_response.version}"
             )
 
         return deploy_response.ok

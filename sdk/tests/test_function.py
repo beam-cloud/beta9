@@ -1,7 +1,8 @@
-from unittest import TestCase
-from unittest.mock import MagicMock
+from unittest import TestCase, mock
+from unittest.mock import MagicMock, PropertyMock
 
 import cloudpickle
+
 from beta9 import Image
 from beta9.abstractions.function import Function
 from beta9.clients.function import FunctionInvokeResponse
@@ -46,52 +47,62 @@ class TestTaskQueue(TestCase):
         self.assertEqual(resp, 1)
 
     def test_function_invoke(self):
-        @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))
-        def test_func(*args, **kwargs):
+        def test_func():
             return 1998
 
-        pickled_value = cloudpickle.dumps(1998)
+        with mock.patch(
+            "beta9.abstractions.function.Function.function_stub",
+            new_callable=PropertyMock,
+            return_value=MagicMock(),
+        ):
+            func = Function(cpu=1, memory=128, image=Image(python_version="python3.8"))
+            func = func(test_func)
 
-        test_func.parent.function_stub = MagicMock()
-        test_func.parent.syncer = MagicMock()
+            func.parent.syncer = MagicMock()
+            func.parent.prepare_runtime = MagicMock(return_value=True)
 
-        test_func.parent.function_stub.function_invoke.return_value = AsyncIterator(
-            [FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value)]
-        )
+            func.parent.function_stub.function_invoke.return_value = AsyncIterator(
+                [FunctionInvokeResponse(done=True, exit_code=0, result=cloudpickle.dumps(1998))]
+            )
+            self.assertEqual(func(), 1998)
 
-        test_func.parent.prepare_runtime = MagicMock(return_value=True)
-
-        self.assertEqual(test_func(), 1998)
-
-        test_func.parent.function_stub.function_invoke.return_value = AsyncIterator(
-            [FunctionInvokeResponse(done=False, exit_code=1, result=b"")]
-        )
-
-        self.assertRaises(SystemExit, test_func)
+            func.parent.function_stub.function_invoke.return_value = AsyncIterator(
+                [FunctionInvokeResponse(done=False, exit_code=1, result=b"")]
+            )
+            self.assertRaises(SystemExit, func)
 
     def test_map(self):
-        @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))
-        def test_func(*args, **kwargs):
-            return 1998
+        # @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))
+        # def test_func(*args, **kwargs):
+        #     return 1998
 
-        pickled_value = cloudpickle.dumps(1998)
+        with mock.patch(
+            "beta9.abstractions.function.Function.function_stub",
+            new_callable=PropertyMock,
+            return_value=MagicMock(),
+        ):
 
-        test_func.parent.function_stub = MagicMock()
-        test_func.parent.syncer = MagicMock()
+            @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))
+            def test_func(*args, **kwargs):
+                return 1998
 
-        # Since the return value is a reference to this same aysnc iterator, everytime it
-        # it will iterate to the next value. This iterator in testing is persisted across
-        # multiple calls to the function, so we can simulate multiple responses.
-        # (ONLY HAPPENS DURING TESTING)
-        test_func.parent.function_stub.function_invoke.return_value = AsyncIterator(
-            [
-                FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
-                FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
-                FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
-            ]
-        )
+            pickled_value = cloudpickle.dumps(1998)
 
-        test_func.parent.prepare_runtime = MagicMock(return_value=True)
+            test_func.parent.syncer = MagicMock()
 
-        for val in test_func.map([1, 2, 3]):
-            self.assertEqual(val, 1998)
+            # Since the return value is a reference to this same aysnc iterator, everytime it
+            # it will iterate to the next value. This iterator in testing is persisted across
+            # multiple calls to the function, so we can simulate multiple responses.
+            # (ONLY HAPPENS DURING TESTING)
+            test_func.parent.function_stub.function_invoke.return_value = AsyncIterator(
+                [
+                    FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
+                    FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
+                    FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
+                ]
+            )
+
+            test_func.parent.prepare_runtime = MagicMock(return_value=True)
+
+            for val in test_func.map([1, 2, 3]):
+                self.assertEqual(val, 1998)

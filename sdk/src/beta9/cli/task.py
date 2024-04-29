@@ -5,15 +5,15 @@ from betterproto import Casing
 from rich.table import Column, Table, box
 
 from .. import aio, terminal
+from ..channel import ServiceClient
 from ..clients.gateway import (
-    GatewayServiceStub,
     ListTasksRequest,
     ListTasksResponse,
     StopTaskRequest,
     StopTaskResponse,
     StringList,
 )
-from .contexts import ServiceClient
+from . import extraclick
 from .extraclick import ClickManagementGroup
 
 
@@ -22,9 +22,8 @@ from .extraclick import ClickManagementGroup
     help="Manage tasks.",
     cls=ClickManagementGroup,
 )
-@click.pass_context
-def management(ctx: click.Context):
-    ctx.obj = ctx.with_resource(ServiceClient())
+def management():
+    pass
 
 
 def parse_filter_values(
@@ -53,14 +52,17 @@ def parse_filter_values(
     name="list",
     help="List all tasks.",
     epilog="""
-    # List the first 10 tasks
-    beta9 task list --limit 10
+    Examples:
 
-    # List tasks with status 'running' or 'pending' and stub-id 'function/test:handler'
-    beta9 task list --filter status=running,pending --filter stub-id=function/test:handler
+      # List the first 10 tasks
+      {cli_name} task list --limit 10
 
-    # List tasks and output in JSON format
-    beta9 task list --format json
+      # List tasks with status 'running' or 'pending' and stub-id 'function/test:handler'
+      {cli_name} task list --filter status=running,pending --filter stub-id=function/test:handler
+
+      # List tasks and output in JSON format
+      {cli_name} task list --format json
+      \b
     """,
 )
 @click.option(
@@ -82,7 +84,7 @@ def parse_filter_values(
     callback=parse_filter_values,
     help="Filters tasks. Add this option for each field you want to filter on.",
 )
-@click.pass_obj
+@extraclick.pass_service_client
 def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str, StringList]):
     res: ListTasksResponse
     res = aio.run_sync(service.gateway.list_tasks(ListTasksRequest(filters=filter, limit=limit)))
@@ -91,7 +93,7 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
         terminal.error(res.err_msg)
 
     if format == "json":
-        tasks = [task.to_dict(casing=Casing.SNAKE) for task in res.tasks]
+        tasks = [task.to_dict(casing=Casing.SNAKE) for task in res.tasks]  # type:ignore
         terminal.print_json(tasks)
         return
 
@@ -134,9 +136,10 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
     "--task-id",
     help="The task to stop.",
 )
-@click.pass_obj
-def stop_task(service: GatewayServiceStub, task_id: str):
-    res: StopTaskResponse = aio.run_sync(service.stop_task(StopTaskRequest(task_id=task_id)))
+@extraclick.pass_service_client
+def stop_task(service: ServiceClient, task_id: str):
+    res: StopTaskResponse
+    res = aio.run_sync(service.gateway.stop_task(StopTaskRequest(task_id=task_id)))
 
     if res.ok:
         terminal.detail(f"Stopped task {task_id}", dim=False)
