@@ -19,7 +19,6 @@ from ..clients.taskqueue import (
     TaskQueuePutResponse,
     TaskQueueServiceStub,
 )
-from ..config import GatewayConfig, get_gateway_config
 from ..env import is_local
 
 
@@ -116,8 +115,13 @@ class TaskQueue(RunnerAbstraction):
             callback_url=callback_url,
             volumes=volumes,
         )
+        self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
 
-        self.taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(self.channel)
+    @property
+    def taskqueue_stub(self) -> TaskQueueServiceStub:
+        if not self._taskqueue_stub:
+            self._taskqueue_stub = TaskQueueServiceStub(self.channel)
+        return self._taskqueue_stub
 
     def __call__(self, func):
         return _CallableWrapper(func, self)
@@ -154,12 +158,11 @@ class _CallableWrapper:
         )
 
         if deploy_response.ok:
-            gateway_config: GatewayConfig = get_gateway_config()
-            gateway_url = f"{gateway_config.gateway_host}:{gateway_config.gateway_port}"
+            base_url = "https://app.beam.cloud"
 
             terminal.header("Deployed 🎉")
             terminal.detail(
-                f"Call your deployment at: {gateway_url}/api/v1/taskqueue/{name}/v{deploy_response.version}"
+                f"Call your deployment at: {base_url}/api/v1/taskqueue/{name}/v{deploy_response.version}"
             )
 
         return deploy_response.ok

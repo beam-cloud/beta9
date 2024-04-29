@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 import cloudpickle
 
@@ -57,15 +57,21 @@ class SimpleQueue(BaseAbstraction):
         super().__init__()
 
         self.name: str = name
-        self.stub: SimpleQueueServiceStub = SimpleQueueServiceStub(self.channel)
+        self._stub: Optional[SimpleQueueServiceStub] = None
         self.max_size: int = max_size
+
+    @property
+    def stub(self) -> SimpleQueueServiceStub:
+        if not self._stub:
+            self._stub = SimpleQueueServiceStub(self.channel)
+        return self._stub
 
     def __len__(self):
         r = self.run_sync(self.stub.simple_queue_size(SimpleQueueRequest(name=self.name)))
         return r.size if r.ok else 0
 
     def __del__(self):
-        self.channel.close()
+        super().__del__()
 
     def put(self, value: Any) -> bool:
         r: SimpleQueuePutResponse = self.run_sync(

@@ -1,6 +1,6 @@
 import os
-from unittest import TestCase
-from unittest.mock import MagicMock
+from unittest import TestCase, mock
+from unittest.mock import MagicMock, PropertyMock
 
 from beta9 import Image
 from beta9.abstractions.taskqueue import TaskQueue
@@ -30,41 +30,51 @@ class TestTaskQueue(TestCase):
         self.assertEqual(resp, 1)
 
     def test_put(self):
-        @TaskQueue(cpu=1, memory=128, image=Image(python_version="python3.8"))
-        def test_func():
-            return 1
+        with mock.patch(
+            "beta9.abstractions.taskqueue.TaskQueue.taskqueue_stub",
+            new_callable=PropertyMock,
+            return_value=MagicMock(),
+        ):
 
-        test_func.parent.taskqueue_stub = MagicMock()
-        test_func.parent.taskqueue_stub.task_queue_put = mock_coroutine_with_result(
-            TaskQueuePutResponse(ok=True, task_id="1234")
-        )
-        test_func.parent.prepare_runtime = MagicMock(return_value=True)
+            @TaskQueue(cpu=1, memory=128, image=Image(python_version="python3.8"))
+            def test_func():
+                return 1
 
-        test_func.put()
+            test_func.parent.taskqueue_stub.task_queue_put = mock_coroutine_with_result(
+                TaskQueuePutResponse(ok=True, task_id="1234")
+            )
+            test_func.parent.prepare_runtime = MagicMock(return_value=True)
 
-        test_func.parent.taskqueue_stub.task_queue_put = mock_coroutine_with_result(
-            TaskQueuePutResponse(ok=False, task_id="")
-        )
+            test_func.put()
 
-        self.assertRaises(SystemExit, test_func.put)
+            test_func.parent.taskqueue_stub.task_queue_put = mock_coroutine_with_result(
+                TaskQueuePutResponse(ok=False, task_id="")
+            )
+
+            self.assertRaises(SystemExit, test_func.put)
 
     def test__call__(self):
-        @TaskQueue(cpu=1, memory=128, image=Image(python_version="python3.8"))
-        def test_func():
-            return 1
+        with mock.patch(
+            "beta9.abstractions.taskqueue.TaskQueue.taskqueue_stub",
+            new_callable=PropertyMock,
+            return_value=MagicMock(),
+        ):
 
-        test_func.parent.taskqueue_stub = MagicMock()
-        test_func.parent.taskqueue_stub.task_queue_put = mock_coroutine_with_result(
-            TaskQueuePutResponse(ok=True, task_id="1234")
-        )
+            @TaskQueue(cpu=1, memory=128, image=Image(python_version="python3.8"))
+            def test_func():
+                return 1
 
-        test_func.parent.prepare_runtime = MagicMock(return_value=True)
+            test_func.parent.taskqueue_stub.task_queue_put = mock_coroutine_with_result(
+                TaskQueuePutResponse(ok=True, task_id="1234")
+            )
 
-        self.assertRaises(
-            NotImplementedError,
-            test_func,
-        )
+            test_func.parent.prepare_runtime = MagicMock(return_value=True)
 
-        # Test calling in container
-        os.environ["CONTAINER_ID"] = "1234"
-        self.assertEqual(test_func(), 1)
+            self.assertRaises(
+                NotImplementedError,
+                test_func,
+            )
+
+            # Test calling in container
+            os.environ["CONTAINER_ID"] = "1234"
+            self.assertEqual(test_func(), 1)

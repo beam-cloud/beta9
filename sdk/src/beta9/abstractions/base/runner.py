@@ -78,8 +78,14 @@ class RunnerAbstraction(BaseAbstraction):
         if on_start is not None:
             self._map_callable_to_attr(attr="on_start", func=on_start)
 
-        self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
+        self._gateway_stub: Optional[GatewayServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
+
+    @property
+    def gateway_stub(self) -> GatewayServiceStub:
+        if not self._gateway_stub:
+            self._gateway_stub = GatewayServiceStub(self.channel)
+        return self._gateway_stub
 
     def _parse_cpu_to_millicores(self, cpu: Union[float, str]) -> int:
         """

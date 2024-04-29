@@ -62,7 +62,13 @@ class Image(BaseAbstraction):
         self.commands = commands
         self.base_image = base_image
         self.base_image_creds = None
-        self.stub: ImageServiceStub = ImageServiceStub(self.channel)
+        self._stub: Optional[ImageServiceStub] = None
+
+    @property
+    def stub(self) -> ImageServiceStub:
+        if not self._stub:
+            self._stub = ImageServiceStub(self.channel)
+        return self._stub
 
     def exists(self) -> Tuple[bool, ImageBuildResult]:
         r: VerifyImageBuildResponse = self.run_sync(

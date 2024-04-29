@@ -2,6 +2,7 @@ from unittest import TestCase
 from unittest.mock import MagicMock
 
 import cloudpickle
+
 from beta9.abstractions.queue import SimpleQueue, SimpleQueueInternalServerError
 from beta9.clients.simplequeue import (
     SimpleQueueEmptyResponse,
@@ -24,14 +25,14 @@ class TestSimpleQueue(TestCase):
         mock_stub.simple_queue_put = mock_coroutine_with_result(SimpleQueuePutResponse(ok=True))
 
         queue = SimpleQueue(name="test")
-        queue.stub = mock_stub
+        queue._stub = mock_stub
 
         self.assertTrue(queue.put("test"))
 
         mock_stub.simple_queue_put = mock_coroutine_with_result(SimpleQueuePutResponse(ok=False))
 
         queue = SimpleQueue(name="test")
-        queue.stub = mock_stub
+        queue._stub = mock_stub
 
         self.assertRaises(SimpleQueueInternalServerError, queue.put, "test")
 
@@ -45,7 +46,7 @@ class TestSimpleQueue(TestCase):
         )
 
         queue = SimpleQueue(name="test")
-        queue.stub = mock_stub
+        queue._stub = mock_stub
 
         self.assertEqual(queue.pop(), "test")
 
@@ -54,7 +55,7 @@ class TestSimpleQueue(TestCase):
         )
 
         queue = SimpleQueue(name="test")
-        queue.stub = mock_stub
+        queue._stub = mock_stub
 
         self.assertRaises(SimpleQueueInternalServerError, queue.pop)
 
@@ -68,7 +69,7 @@ class TestSimpleQueue(TestCase):
         )
 
         queue = SimpleQueue(name="test")
-        queue.stub = mock_stub
+        queue._stub = mock_stub
 
         self.assertEqual(queue.peek(), "test")
 
@@ -77,7 +78,7 @@ class TestSimpleQueue(TestCase):
         )
 
         queue = SimpleQueue(name="test")
-        queue.stub = mock_stub
+        queue._stub = mock_stub
 
         self.assertRaises(SimpleQueueInternalServerError, queue.peek)
 
@@ -89,7 +90,7 @@ class TestSimpleQueue(TestCase):
         )
 
         queue = SimpleQueue(name="test")
-        queue.stub = mock_stub
+        queue._stub = mock_stub
 
         self.assertTrue(queue.empty())
 
@@ -98,7 +99,7 @@ class TestSimpleQueue(TestCase):
         )
 
         queue = SimpleQueue(name="test")
-        queue.stub = mock_stub
+        queue._stub = mock_stub
 
         self.assertRaises(SimpleQueueInternalServerError, queue.empty)
 
@@ -110,7 +111,7 @@ class TestSimpleQueue(TestCase):
         )
 
         queue = SimpleQueue(name="test")
-        queue.stub = mock_stub
+        queue._stub = mock_stub
 
         self.assertEqual(len(queue), 1)
 
@@ -119,6 +120,6 @@ class TestSimpleQueue(TestCase):
         )
 
         queue = SimpleQueue(name="test")
-        queue.stub = mock_stub
+        queue._stub = mock_stub
 
         self.assertEqual(len(queue), 0)
