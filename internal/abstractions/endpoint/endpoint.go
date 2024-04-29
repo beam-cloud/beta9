@@ -186,7 +186,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(es.ctx, &abstractions.AutoscaledInstanceConfig{
 		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
 		Rdb:                 es.rdb,
-		Stub:                &stub.Stub,
+		Stub:                stub,
 		StubConfig:          stubConfig,
 		Object:              &stub.Object,
 		Workspace:           &stub.Workspace,
