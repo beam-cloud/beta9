@@ -65,7 +65,7 @@ def get_channel(config: Optional[ConfigContext] = None) -> Channel:
         channel = AuthenticatedChannel(
             host=config.gateway_host,
             port=config.gateway_port,
-            ssl=True if config.gateway_port == 443 else False,
+            ssl=config.use_ssl(),
             token=config.token,
         )
 
@@ -86,7 +86,7 @@ def get_channel(config: Optional[ConfigContext] = None) -> Channel:
     return AuthenticatedChannel(
         host=config.gateway_host,
         port=config.gateway_port,
-        ssl=True if config.gateway_port == 443 else False,
+        ssl=config.use_ssl(),
         token=config.token,
     )
 

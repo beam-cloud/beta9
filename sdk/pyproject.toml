@@ -31,6 +31,8 @@ pytest-env = "^1.1.3"
 attrs = "^23.2.0"
 docstring-parser = "^0.16"
 ruff = "^0.4.2"
+gunicorn = "^22.0.0"
+requests = "^2.31.0"
 
 [tool.poetry.scripts]
 beta9 = "beta9.cli.main:cli"

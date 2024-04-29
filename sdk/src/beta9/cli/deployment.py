@@ -6,9 +6,8 @@ from pathlib import Path
 import click
 
 from .. import terminal
-from ..abstractions import base
+from ..channel import ServiceClient
 from ..cli import extraclick
-from ..service import ServiceClient
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
@@ -96,8 +95,6 @@ def create_deployment(service: ServiceClient, name: str, entrypoint: str):
     if not func_name:
         terminal.error(f"Unable to parse function '{func_name}'")
 
-    # Set global channel before importing module
-    base.set_channel(service.channel)
     module = importlib.import_module(module_name)
 
     user_func = getattr(module, func_name, None)

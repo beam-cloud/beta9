@@ -5,11 +5,11 @@ from typing import Any, Coroutine, Optional
 
 from grpclib.client import Channel
 
+from ...channel import get_channel as _get_channel
 from ...config import (
     ConfigContext,
     get_config_context,
 )
-from ...service import get_channel as _get_channel
 
 # Global channel
 _channel: Optional[Channel] = None
@@ -68,8 +68,5 @@ class BaseAbstraction(ABC):
         return self.loop.run_until_complete(coroutine)
 
     def __del__(self) -> None:
-        try:
-            if _channel:
-                _channel.close()
-        except AttributeError:
-            pass
+        if _channel:
+            _channel.close()

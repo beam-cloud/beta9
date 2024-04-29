@@ -10,6 +10,7 @@ from grpclib.client import Channel
 from grpclib.exceptions import StreamTerminatedError
 
 from ..aio import run_sync
+from ..channel import with_runner_context
 from ..clients.function import (
     FunctionGetArgsRequest,
     FunctionGetArgsResponse,
@@ -26,7 +27,6 @@ from ..clients.gateway import (
     StartTaskRequest,
     StartTaskResponse,
 )
-from ..config import with_runner_context
 from ..exceptions import InvalidFunctionArgumentsException, RunnerException
 from ..logging import StdoutJsonInterceptor
 from ..runner.common import FunctionContext, FunctionHandler, config, send_callback

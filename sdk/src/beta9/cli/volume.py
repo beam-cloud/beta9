@@ -6,6 +6,7 @@ import click
 from rich.table import Column, Table, box
 
 from .. import aio, terminal
+from ..channel import ServiceClient
 from ..clients.volume import (
     CopyPathRequest,
     CopyPathResponse,
@@ -17,7 +18,6 @@ from ..clients.volume import (
     ListVolumesRequest,
     ListVolumesResponse,
 )
-from ..service import ServiceClient
 from ..terminal import pluralize
 from . import extraclick
 from .extraclick import ClickCommonGroup, ClickManagementGroup

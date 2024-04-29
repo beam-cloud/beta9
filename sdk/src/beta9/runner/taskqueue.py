@@ -16,6 +16,7 @@ from grpclib.client import Channel
 from grpclib.exceptions import StreamTerminatedError
 
 from ..aio import run_sync
+from ..channel import with_runner_context
 from ..clients.gateway import GatewayServiceStub
 from ..clients.taskqueue import (
     TaskQueueCompleteRequest,
@@ -26,7 +27,6 @@ from ..clients.taskqueue import (
     TaskQueuePopResponse,
     TaskQueueServiceStub,
 )
-from ..config import with_runner_context
 from ..exceptions import RunnerException
 from ..logging import StdoutJsonInterceptor
 from ..runner.common import (

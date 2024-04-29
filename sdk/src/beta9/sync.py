@@ -70,7 +70,7 @@ class FileSyncer:
 
     def _read_ignore_file(self) -> list:
         if not is_local():
-            return
+            return []
 
         terminal.detail(f"Reading {IGNORE_FILE_NAME} file")
 

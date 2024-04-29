@@ -5,6 +5,7 @@ from betterproto import Casing
 from rich.table import Column, Table, box
 
 from .. import aio, terminal
+from ..channel import ServiceClient
 from ..clients.gateway import (
     ListTasksRequest,
     ListTasksResponse,
@@ -12,7 +13,6 @@ from ..clients.gateway import (
     StopTaskResponse,
     StringList,
 )
-from ..service import ServiceClient
 from . import extraclick
 from .extraclick import ClickManagementGroup
 

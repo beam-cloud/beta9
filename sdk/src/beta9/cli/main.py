@@ -4,9 +4,8 @@ from typing import Any, Optional
 
 import click
 
-from beta9.service import get_channel
-
 from .. import terminal
+from ..channel import get_channel
 from ..config import is_config_empty
 from . import config, deployment, task, volume
 from .extraclick import ClickCommonGroup, CommandGroupCollection

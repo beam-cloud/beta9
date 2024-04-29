@@ -6,8 +6,9 @@ from typing import Any, Callable, Optional
 
 import click
 
+from ..abstractions import base as base_abstraction
+from ..channel import ServiceClient
 from ..config import DEFAULT_CONTEXT_NAME, get_config_context
-from ..service import ServiceClient
 
 config_context_param = click.Option(
     param_decls=["-c", "--context"],
@@ -178,6 +179,8 @@ def pass_service_client(func: Callable):
         config = get_config_context(context or DEFAULT_CONTEXT_NAME)
 
         with ServiceClient(config) as client:
+            base_abstraction.set_channel(client.channel)
+
             return func(client, *args, **kwargs)
 
     return decorator
