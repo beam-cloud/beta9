@@ -39,8 +39,6 @@ class TaskQueue(RunnerAbstraction):
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
-        volumes (Optional[List[Volume]]):
-            A list of volumes to be mounted to the app. Default is None.
         timeout (Optional[int]):
             The maximum number of seconds a task can run before it times out.
             Default is 3600. Set it to -1 to disable the timeout.
@@ -65,6 +63,13 @@ class TaskQueue(RunnerAbstraction):
             The maximum number of tasks that can be pending in the queue. If the number of
             pending tasks exceeds this value, the task queue will stop accepting new tasks.
             Default is 100.
+        on_start (Optional[Callable]):
+            An optional function to run once (per process) when the container starts. Can be used for downloading data,
+            loading models, or anything else computationally expensive.
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        volumes (Optional[List[Volume]]):
+            A list of storage volumes to be associated with the taskqueue. Default is [].
     Example:
         ```python
         from beta9 import task_queue, Image

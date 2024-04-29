@@ -37,6 +37,15 @@ class Function(RunnerAbstraction):
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
+        timeout (Optional[int]):
+            The maximum number of seconds a task can run before it times out.
+            Default is 3600. Set it to -1 to disable the timeout.
+        retries (Optional[int]):
+            The maximum number of times a task will be retried if the container crashes. Default is 3.
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        volumes (Optional[List[Volume]]):
+            A list of storage volumes to be associated with the function. Default is [].
     Example:
         ```python
         from beta9 import function, Image
