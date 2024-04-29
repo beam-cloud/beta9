@@ -308,6 +308,8 @@ class TaskQueueWorker:
 
                     start_time = time.time()
                     task_status = TaskStatus.Complete
+                    result = None
+
                     try:
                         args = task.args or []
                         kwargs = task.kwargs or {}
@@ -342,7 +344,7 @@ class TaskQueueWorker:
                         await send_callback(
                             gateway_stub=gateway_stub,
                             context=context,
-                            payload=result,
+                            payload=result or {},
                             task_status=task_status,
                         )  # Send callback to callback_url, if defined
 

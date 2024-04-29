@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
-	"path"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
@@ -54,12 +53,11 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			StubId:      i.Stub.ExternalId,
 			WorkspaceId: i.Workspace.ExternalId,
 			EntryPoint:  i.EntryPoint,
-			Mounts: []types.Mount{
-				{
-					LocalPath: path.Join(types.DefaultExtractedObjectPath, i.Workspace.Name, i.Object.ExternalId),
-					MountPath: types.WorkerUserCodeVolume, ReadOnly: true,
-				},
-			},
+			Mounts: abstractions.ConfigureContainerRequestMounts(
+				i.Stub.Object.ExternalId,
+				i.Workspace.Name,
+				*i.buffer.stubConfig,
+			),
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers
