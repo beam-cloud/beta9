@@ -12,11 +12,6 @@ DEFAULT_CONTEXT_NAME = "default"
 DEFAULT_GATEWAY_HOST = "0.0.0.0"
 DEFAULT_GATEWAY_PORT = 1993
 DEFAULT_GATEWAY_HTTP_PORT = 1994
-DEFAULT_CONFIG_FILE_PATH = Path("~/.beta9/config.ini").expanduser()
-
-if config_path := os.getenv("CONFIG_PATH"):
-    if os.path.exists(config_path):
-        DEFAULT_CONFIG_FILE_PATH = Path(config_path)
 
 
 @dataclass
@@ -35,9 +30,31 @@ class ConfigContext:
         return {k: ("" if not v else v) for k, v in asdict(self).items()}
 
 
-def load_config(
-    path: Union[str, Path] = DEFAULT_CONFIG_FILE_PATH,
-) -> dict[str, ConfigContext]:
+def get_config_path(base_dir: str = "~/.beta9") -> Path:
+    """
+    Gets the path of the config.
+
+    Can be overridden by setting the CONFIG_PATH environment variable.
+
+    Args:
+        base_dir: Base path of the config file. Defaults to "~/.beta9".
+
+    Returns:
+        A Path object.
+    """
+    path = Path(f"{base_dir}/config.ini").expanduser()
+
+    if config_path := os.getenv("CONFIG_PATH"):
+        if os.path.exists(config_path):
+            return Path(config_path).expanduser()
+
+    return path
+
+
+def load_config(path: Optional[Union[str, Path]] = None) -> dict[str, ConfigContext]:
+    if path is None:
+        path = get_config_path()
+
     path = Path(path)
     if not path.exists():
         return {}
@@ -48,10 +65,10 @@ def load_config(
     return {k: ConfigContext(**v) for k, v in parser.items()}  # type:ignore
 
 
-def save_config(
-    contexts: Mapping,
-    path: Union[Path, str] = DEFAULT_CONFIG_FILE_PATH,
-) -> None:
+def save_config(contexts: Mapping, path: Optional[Union[Path, str]] = None) -> None:
+    if path is None:
+        path = get_config_path()
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -62,9 +79,10 @@ def save_config(
         parser.write(file)
 
 
-def is_config_empty(
-    path: Union[Path, str] = DEFAULT_CONFIG_FILE_PATH,
-) -> bool:
+def is_config_empty(path: Optional[Union[Path, str]] = None) -> bool:
+    if path is None:
+        path = get_config_path()
+
     path = Path(path)
     if path.exists():
         return False
