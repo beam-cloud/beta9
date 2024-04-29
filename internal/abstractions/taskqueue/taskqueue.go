@@ -481,7 +481,7 @@ func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...fun
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(tq.ctx, &abstractions.AutoscaledInstanceConfig{
 		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
 		Rdb:                 tq.rdb,
-		Stub:                &stub.Stub,
+		Stub:                stub,
 		StubConfig:          stubConfig,
 		Object:              &stub.Object,
 		Workspace:           &stub.Workspace,

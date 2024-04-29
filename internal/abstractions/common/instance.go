@@ -27,7 +27,7 @@ type AutoscaledInstanceState struct {
 type AutoscaledInstanceConfig struct {
 	Name                string
 	Workspace           *types.Workspace
-	Stub                *types.Stub
+	Stub                *types.StubWithRelated
 	StubConfig          *types.StubConfigV1
 	Object              *types.Object
 	Token               *types.Token
@@ -50,7 +50,7 @@ type AutoscaledInstance struct {
 
 	// DB objects
 	Workspace  *types.Workspace
-	Stub       *types.Stub
+	Stub       *types.StubWithRelated
 	StubConfig *types.StubConfigV1
 	Object     *types.Object
 	Token      *types.Token
