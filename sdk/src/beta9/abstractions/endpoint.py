@@ -185,7 +185,7 @@ class _CallableWrapper:
                 )
             ):
                 if r.output != "":
-                    terminal.detail(r.output.strip())
+                    terminal.detail(r.output, end="")
 
                 if r.done or r.exit_code != 0:
                     last_response = r
