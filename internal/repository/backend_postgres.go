@@ -833,7 +833,6 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters
 	var deployments []types.DeploymentWithRelated
 	err = c.client.SelectContext(ctx, &deployments, sql, args...)
 	if err != nil {
-		log.Println(err)
 		return nil, err
 	}
 
