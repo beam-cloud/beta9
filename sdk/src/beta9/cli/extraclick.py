@@ -1,5 +1,6 @@
 import functools
 import inspect
+import sys
 import textwrap
 from gettext import gettext
 from typing import Any, Callable, Optional
@@ -111,6 +112,7 @@ class CommandGroupCollection(click.CommandCollection):
                 group.invoke(ctx)
             else:
                 print(self.get_help(ctx))
+                sys.exit(1)
         else:
             super().invoke(ctx)
 
