@@ -103,7 +103,7 @@ class Image(BaseAbstraction):
                     existing_image_uri=self.base_image,
                 )
             ):
-                terminal.detail(r.msg)
+                terminal.detail(r.msg, end="")
 
                 if r.done:
                     last_response = r
