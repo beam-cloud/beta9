@@ -20,13 +20,16 @@ class StdoutJsonInterceptor(io.TextIOBase):
 
     def write(self, buf: str):
         try:
-            for line in buf.rstrip().splitlines():
+            for line in buf.splitlines():
+                if line == "":
+                    continue
+
                 log_record = {
-                    "message": line,
+                    "message": f"{line}\n",
                     **self.ctx,
                 }
 
-                self.stream.write(json.dumps(log_record) + "\n")
+                self.stream.write(json.dumps(log_record))
         except BaseException:
             self.stream.write(buf)
 
