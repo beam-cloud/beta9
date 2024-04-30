@@ -60,6 +60,19 @@ controllers:
                 port: 1994
         securityContext:
           privileged: true
+  proxy:
+    type: deployment
+    containers:
+      main:
+        command:
+        - /usr/local/bin/proxy
+        image:
+          repository: {{ .Values.images.proxy.repository }}
+          tag: "{{ .Values.images.proxy.tag | default .Chart.AppVersion }}"
+          pullPolicy: {{ .Values.images.proxy.pullPolicy | default "IfNotPresent" }}
+        securityContext:
+          privileged: true
+    hostNetwork: true
 service:
   gateway:
     controller: gateway
