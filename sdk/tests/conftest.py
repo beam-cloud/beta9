@@ -27,7 +27,6 @@ def write_test_config():
                 token = test-token
                 gateway_host = 0.0.0.0
                 gateway_port = 1993
-                gateway_http_port = 1994
                 """
             )
         )
