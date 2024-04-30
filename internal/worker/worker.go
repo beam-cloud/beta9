@@ -500,7 +500,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		ExitCode:   -1,
 		OutputWriter: common.NewOutputWriter(func(s string) {
 			outputChan <- common.OutputMsg{
-				Msg:     strings.TrimSuffix(string(s), "\n"),
+				Msg:     string(s),
 				Done:    false,
 				Success: false,
 			}
