@@ -416,8 +416,8 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
 	}
 
-	if filters.StubId != "" {
-		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
+	if len(filters.StubIds) > 0 {
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
 	}
 
 	if filters.StubType != "" {
@@ -486,9 +486,9 @@ func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Contex
 		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
 	}
 
-	if filters.StubId != "" {
+	if len(filters.StubIds) > 0 {
 		qb = qb.Join("stub s ON t.stub_id = s.id")
-		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
 	}
 
 	if filters.CreatedAtStart != "" {
@@ -533,9 +533,10 @@ func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Conte
 		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
 	}
 
-	if filters.StubId != "" {
+	if len(filters.StubIds) > 0 {
 		qb = qb.Join("stub s ON t.stub_id = s.id")
-		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubId})
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
+
 	}
 
 	if filters.CreatedAtStart != "" {
@@ -786,6 +787,10 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 	// Apply filters
 	qb = qb.Where(squirrel.Eq{"d.workspace_id": filters.WorkspaceID})
 
+	if len(filters.StubIds) > 0 {
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
+	}
+
 	if filters.StubType != "" {
 		qb = qb.Where(squirrel.Eq{"d.stub_type": filters.StubType})
 	}
@@ -828,6 +833,7 @@ func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters
 	var deployments []types.DeploymentWithRelated
 	err = c.client.SelectContext(ctx, &deployments, sql, args...)
 	if err != nil {
+		log.Println(err)
 		return nil, err
 	}
 
