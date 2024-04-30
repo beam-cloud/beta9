@@ -84,9 +84,11 @@ class RunnerAbstraction(BaseAbstraction):
     def _parse_memory(self, memory_str: str) -> int:
         """Parse memory str (with units) to megabytes."""
 
-        if memory_str.lower().endswith("mb"):
+        if memory_str.lower().endswith("mi"):
             return int(memory_str[:-2])
-        elif memory_str.lower().endswith("gb", "gi"):
+        elif memory_str.lower().endswith("gb"):
+            return int(memory_str[:-2]) * 1000
+        elif memory_str.lower().endswith("gi"):
             return int(memory_str[:-2]) * 1024
         else:
             raise ValueError("Unsupported memory format")
