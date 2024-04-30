@@ -21,7 +21,7 @@ class ConfigContext:
     gateway_port: Optional[int] = None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ConfigContext":
+    def from_dict(cls, data: Dict[str, Any]) -> "ConfigContext":
         return cls(**{k: v for k, v in data.items() if k in inspect.signature(cls).parameters})
 
     def to_dict(self) -> dict:
