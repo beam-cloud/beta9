@@ -79,7 +79,7 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 				instance.LogBuffer.Write([]byte(msg.Message))
 			}
 
-			if msg.TaskID != nil {
+			if msg.TaskID != nil && msg.Message != "" {
 				log.Printf("<%s>:<%s> - %s\n", containerId, *msg.TaskID, msg.Message)
 			} else if msg.Message != "" {
 				log.Printf("<%s> - %s\n", containerId, msg.Message)
