@@ -1,4 +1,5 @@
 import configparser
+import inspect
 import ipaddress
 import os
 import socket
@@ -11,7 +12,6 @@ from . import terminal
 DEFAULT_CONTEXT_NAME = "default"
 DEFAULT_GATEWAY_HOST = "0.0.0.0"
 DEFAULT_GATEWAY_PORT = 1993
-DEFAULT_GATEWAY_HTTP_PORT = 1994
 
 
 @dataclass
@@ -19,15 +19,18 @@ class ConfigContext:
     token: Optional[str] = None
     gateway_host: Optional[str] = None
     gateway_port: Optional[int] = None
-    gateway_http_port: Optional[int] = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ConfigContext":
+        return cls(**{k: v for k, v in data.items() if k in inspect.signature(cls).parameters})
+
+    def to_dict(self) -> dict:
+        return {k: ("" if not v else v) for k, v in asdict(self).items()}
 
     def use_ssl(self) -> bool:
         if self.gateway_port in [443, "443"]:
             return True
         return False
-
-    def to_dict(self) -> dict:
-        return {k: ("" if not v else v) for k, v in asdict(self).items()}
 
 
 def get_config_path(base_dir: str = "~/.beta9") -> Path:
@@ -62,10 +65,12 @@ def load_config(path: Optional[Union[str, Path]] = None) -> dict[str, ConfigCont
     parser = configparser.ConfigParser(default_section=DEFAULT_CONTEXT_NAME)
     parser.read(path)
 
-    return {k: ConfigContext(**v) for k, v in parser.items()}  # type:ignore
+    return {k: ConfigContext.from_dict(v) for k, v in parser.items()}  # type:ignore
 
 
-def save_config(contexts: Mapping, path: Optional[Union[Path, str]] = None) -> None:
+def save_config(
+    contexts: Mapping[str, ConfigContext], path: Optional[Union[Path, str]] = None
+) -> None:
     if path is None:
         path = get_config_path()
 
@@ -121,7 +126,6 @@ def prompt_for_config_context(
     token: Optional[str] = None,
     gateway_host: Optional[str] = None,
     gateway_port: Optional[int] = None,
-    gateway_http_port: Optional[int] = None,
 ) -> Tuple[str, ConfigContext]:
     contexts = load_config()
 
@@ -142,13 +146,7 @@ def prompt_for_config_context(
             gateway_port = terminal.prompt(text="Gateway Port", default=DEFAULT_GATEWAY_PORT)
             gateway_port = gateway_port if validate_port(gateway_port) else 0
 
-        while not gateway_http_port:
-            gateway_http_port = terminal.prompt(
-                text="Gateway HTTP Port", default=DEFAULT_GATEWAY_HTTP_PORT
-            )
-            gateway_http_port = gateway_http_port if validate_port(gateway_http_port) else 0
-
-        token = terminal.prompt(text="Token", default=None, password=True)
+        token = terminal.prompt(text="Token", default=None)
 
     except (KeyboardInterrupt, EOFError):
         os._exit(1)
@@ -157,7 +155,6 @@ def prompt_for_config_context(
         token=token,
         gateway_host=gateway_host,
         gateway_port=gateway_port,
-        gateway_http_port=gateway_http_port,
     )
 
     save_config(contexts)
