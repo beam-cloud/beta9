@@ -4,7 +4,7 @@ import os
 import socket
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, Mapping, Optional, Tuple, Union
 
 from . import terminal
 
@@ -51,7 +51,7 @@ def get_config_path(base_dir: str = "~/.beta9") -> Path:
     return path
 
 
-def load_config(path: Optional[Union[str, Path]] = None) -> dict[str, ConfigContext]:
+def load_config(path: Optional[Union[str, Path]] = None) -> Dict[str, ConfigContext]:
     if path is None:
         path = get_config_path()
 
