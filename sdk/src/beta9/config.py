@@ -100,6 +100,16 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
     if name in config:
         return config[name]
 
+    gateway_host = os.getenv("BETA9_GATEWAY_HOST", None)
+    gateway_port = os.getenv("BETA9_GATEWAY_PORT", None)
+    http_port = os.getenv("BETA9_HTTP_PORT", None)
+    token = os.getenv("BETA9_TOKEN", None)
+
+    if gateway_host and gateway_port and token:
+        return ConfigContext(
+            gateway_host=gateway_host, gateway_port=gateway_port, http_port=http_port, token=token
+        )
+
     terminal.header(f"Context '{name}' does not exist. Let's try setting it up.")
     _, config = prompt_for_config_context(name=name)
     return config
