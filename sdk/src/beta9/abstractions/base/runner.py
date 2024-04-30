@@ -86,12 +86,8 @@ class RunnerAbstraction(BaseAbstraction):
 
         if memory_str.lower().endswith("mb"):
             return int(memory_str[:-2])
-        elif memory_str.lower().endswith("gb"):
+        elif memory_str.lower().endswith("gb", "gi"):
             return int(memory_str[:-2]) * 1024
-        elif memory_str.lower().endswith("gi"):
-            return int(memory_str[:-2]) * 1024
-        elif memory_str.lower().endswith("mi"):
-            return int(memory_str[:-2])
         else:
             raise ValueError("Unsupported memory format")
 
