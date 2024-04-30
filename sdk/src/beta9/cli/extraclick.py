@@ -3,7 +3,7 @@ import inspect
 import sys
 import textwrap
 from gettext import gettext
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 import click
 
@@ -94,7 +94,7 @@ class CommandGroupCollection(click.CommandCollection):
         return self.add_source(cmd)
 
     @property
-    def sources_map(self) -> dict[str, click.Group]:
+    def sources_map(self) -> Dict[str, click.Group]:
         """
         A dictionary representation of {"command name": click_group}.
         """
