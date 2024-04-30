@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import time
+import traceback
 
 import cloudpickle
 import grpc
@@ -174,6 +175,7 @@ def main(channel: Channel):
 
             result = handler(context, *args, **kwargs)
         except BaseException as exc:
+            print(traceback.format_exc())
             result = error = exc
             task_status = TaskStatus.Error
         finally:
