@@ -26,7 +26,7 @@ class Endpoint(RunnerAbstraction):
     Parameters:
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
-        memory (int):
+        memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
             megabytes (e.g., 128 for 128 megabytes). Default is 128.
         gpu (Union[GpuType, str]):
@@ -80,7 +80,7 @@ class Endpoint(RunnerAbstraction):
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
-        memory: int = 128,
+        memory: Union[int, str] = 128,
         gpu: str = "",
         image: Image = Image(),
         timeout: int = 180,
