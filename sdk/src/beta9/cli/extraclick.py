@@ -109,6 +109,8 @@ class CommandGroupCollection(click.CommandCollection):
         if ctx.protected_args:
             if group := self.sources_map.get(ctx.protected_args[0]):
                 group.invoke(ctx)
+            else:
+                print(self.get_help(ctx))
         else:
             super().invoke(ctx)
 
