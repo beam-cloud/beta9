@@ -35,7 +35,7 @@ class RunnerAbstraction(BaseAbstraction):
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
-        memory: int = 128,
+        memory: Union[int, str] = 128,
         gpu: str = "",
         image: Image = Image(),
         concurrency: int = 1,
@@ -65,7 +65,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.on_start: str = ""
         self.callback_url = callback_url or ""
         self.cpu = cpu
-        self.memory = memory
+        self.memory = self._parse_memory(memory) if isinstance(memory, str) else memory
         self.gpu = gpu
         self.volumes = volumes or []
         self.concurrency = concurrency
@@ -80,6 +80,18 @@ class RunnerAbstraction(BaseAbstraction):
 
         self._gateway_stub: Optional[GatewayServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
+
+    def _parse_memory(self, memory_str: str) -> int:
+        """Parse memory str (with units) to megabytes."""
+
+        if memory_str.lower().endswith("mi"):
+            return int(memory_str[:-2])
+        elif memory_str.lower().endswith("gb"):
+            return int(memory_str[:-2]) * 1000
+        elif memory_str.lower().endswith("gi"):
+            return int(memory_str[:-2]) * 1024
+        else:
+            raise ValueError("Unsupported memory format")
 
     @property
     def gateway_stub(self) -> GatewayServiceStub:

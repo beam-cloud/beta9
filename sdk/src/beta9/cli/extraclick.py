@@ -1,5 +1,6 @@
 import functools
 import inspect
+import sys
 import textwrap
 from gettext import gettext
 from typing import Any, Callable, Optional
@@ -109,6 +110,9 @@ class CommandGroupCollection(click.CommandCollection):
         if ctx.protected_args:
             if group := self.sources_map.get(ctx.protected_args[0]):
                 group.invoke(ctx)
+            else:
+                print(self.get_help(ctx))
+                sys.exit(1)
         else:
             super().invoke(ctx)
 
