@@ -33,7 +33,7 @@ class TaskQueue(RunnerAbstraction):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
-            megabytes (e.g., 128 for 128 megabytes), or as a string with units (e.g. "1Gb"). Default is 128.
+            MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
         gpu (Union[GpuType, str]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
