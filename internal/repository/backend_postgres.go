@@ -794,7 +794,7 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 		if err := uuid.Validate(filters.Name); err == nil {
 			qb = qb.Where(squirrel.Eq{"d.external_id": filters.Name})
 		} else {
-			qb = qb.Where(squirrel.Eq{"d.name": filters.Name})
+			qb = qb.Where(squirrel.Like{"d.name": "%" + filters.Name + "%"})
 		}
 	}
 
