@@ -60,8 +60,14 @@ class Container(RunnerAbstraction):
         super().__init__(cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes)
 
         self.task_id = ""
-        self.container_stub = ContainerServiceStub(self.channel)
+        self._container_stub: Optional[ContainerServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
+
+    @property
+    def stub(self) -> ContainerServiceStub:
+        if not self._container_stub:
+            self._container_stub = ContainerServiceStub(self.channel)
+        return self._container_stub
 
     def run(self, command: List[str]) -> int:
         """Run a command in a container and return the exit code"""

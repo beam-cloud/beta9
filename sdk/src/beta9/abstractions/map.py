@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 import cloudpickle
 
@@ -57,7 +57,13 @@ class Map(BaseAbstraction):
         super().__init__()
 
         self.name: str = name
-        self.stub: MapServiceStub = MapServiceStub(self.channel)
+        self._stub: Optional[MapServiceStub] = None
+
+    @property
+    def stub(self) -> MapServiceStub:
+        if not self._stub:
+            self._stub = MapServiceStub(self.channel)
+        return self._stub
 
     def set(self, key: str, value: Any) -> bool:
         r: MapSetResponse = self.run_sync(
