@@ -124,7 +124,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 
 	// Create a new worker job
 	job, worker := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType, gpuCount)
-	worker.PoolId = PoolId(wpc.name)
+	worker.PoolName = wpc.name
 	worker.MachineId = machineId
 
 	// Create the job in the cluster

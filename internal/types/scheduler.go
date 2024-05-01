@@ -19,7 +19,7 @@ type Worker struct {
 	Memory          int64        `json:"memory" redis:"memory"`
 	Gpu             string       `json:"gpu" redis:"gpu"`
 	GpuCount        uint32       `json:"gpu_count" redis:"gpu_count"`
-	PoolId          string       `json:"pool_id" redis:"pool_id"`
+	PoolName        string       `json:"pool_name" redis:"pool_name"`
 	MachineId       string       `json:"machine_id" redis:"machine_id"`
 	ResourceVersion int64        `json:"resource_version" redis:"resource_version"`
 }
@@ -55,20 +55,21 @@ type ContainerState struct {
 }
 
 type ContainerRequest struct {
-	ContainerId string    `json:"container_id"`
-	EntryPoint  []string  `json:"entry_point"`
-	Env         []string  `json:"env"`
-	Cpu         int64     `json:"cpu"`
-	Memory      int64     `json:"memory"`
-	Gpu         string    `json:"gpu"`
-	GpuCount    uint32    `json:"gpu_count"`
-	SourceImage *string   `json:"source_image"`
-	ImageId     string    `json:"image_id"`
-	StubId      string    `json:"stub_id"`
-	WorkspaceId string    `json:"workspace_id"`
-	Timestamp   time.Time `json:"timestamp"`
-	Mounts      []Mount   `json:"mounts"`
-	RetryCount  int       `json:"retry_count"`
+	ContainerId  string    `json:"container_id"`
+	EntryPoint   []string  `json:"entry_point"`
+	Env          []string  `json:"env"`
+	Cpu          int64     `json:"cpu"`
+	Memory       int64     `json:"memory"`
+	Gpu          string    `json:"gpu"`
+	GpuCount     uint32    `json:"gpu_count"`
+	SourceImage  *string   `json:"source_image"`
+	ImageId      string    `json:"image_id"`
+	StubId       string    `json:"stub_id"`
+	WorkspaceId  string    `json:"workspace_id"`
+	Timestamp    time.Time `json:"timestamp"`
+	Mounts       []Mount   `json:"mounts"`
+	RetryCount   int       `json:"retry_count"`
+	PoolSelector string    `json:"pool_selector"`
 }
 
 const ContainerExitCodeTtlS int = 300

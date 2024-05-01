@@ -85,7 +85,7 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 		return nil, err
 	}
 
-	worker.PoolId = PoolId(wpc.name)
+	worker.PoolName = wpc.name
 
 	// Add the worker state
 	if err := wpc.workerRepo.AddWorker(worker); err != nil {
@@ -99,12 +99,12 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
-		"app":                     Beta9WorkerLabelValue,
-		Beta9WorkerLabelKey:       Beta9WorkerLabelValue,
-		Beta9WorkerLabelIDKey:     workerId,
-		Beta9WorkerLabelPoolIDKey: PoolId(wpc.name),
-		PrometheusPortKey:         fmt.Sprintf("%d", wpc.config.Monitoring.Prometheus.Port),
-		PrometheusScrapeKey:       strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
+		"app":                       Beta9WorkerLabelValue,
+		Beta9WorkerLabelKey:         Beta9WorkerLabelValue,
+		Beta9WorkerLabelIDKey:       workerId,
+		Beta9WorkerLabelPoolNameKey: wpc.name,
+		PrometheusPortKey:           fmt.Sprintf("%d", wpc.config.Monitoring.Prometheus.Port),
+		PrometheusScrapeKey:         strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
 	}
 
 	workerCpu := cpu
@@ -391,7 +391,7 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 	for range ticker.C {
 		jobSelector := strings.Join([]string{
 			fmt.Sprintf("%s=%s", Beta9WorkerLabelKey, Beta9WorkerLabelValue),
-			fmt.Sprintf("%s=%s", Beta9WorkerLabelPoolIDKey, PoolId(wpc.name)),
+			fmt.Sprintf("%s=%s", Beta9WorkerLabelPoolNameKey, wpc.name),
 		}, ",")
 
 		jobs, err := wpc.kubeClient.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{LabelSelector: jobSelector})

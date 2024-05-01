@@ -136,7 +136,9 @@ func (s *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolCo
 	var ok bool
 	var workerPool *WorkerPool
 
-	if request.Gpu == "" {
+	if request.PoolSelector != "" {
+		workerPool, ok = s.workerPoolManager.GetPool(request.PoolSelector)
+	} else if request.Gpu == "" {
 		workerPool, ok = s.workerPoolManager.GetPool("default")
 	} else {
 		workerPool, ok = s.workerPoolManager.GetPoolByGPU(request.Gpu)
@@ -213,6 +215,18 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	workers, err := s.workerRepo.GetAllWorkers()
 	if err != nil {
 		return nil, err
+	}
+
+	// Filter workers by pool selector if it is set in the request
+	if request.PoolSelector != "" {
+		filteredWorkers := []*types.Worker{}
+		for _, worker := range workers {
+			if worker.PoolName == request.PoolSelector {
+				filteredWorkers = append(filteredWorkers, worker)
+			}
+		}
+
+		workers = filteredWorkers
 	}
 
 	// Sort workers: available first, then pending

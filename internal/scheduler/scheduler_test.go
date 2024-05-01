@@ -37,7 +37,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		return nil, err
 	}
 
-	poolJson := []byte(`{"worker":{"pools":{"beta9-cpu":{},"beta9-a10g":{"gpuType": "A10G"},"beta9-t4":{"gpuType": "T4"}}}}}`)
+	poolJson := []byte(`{"worker":{"pools":{"beta9-build":{},"beta9-cpu":{},"beta9-a10g":{"gpuType": "A10G"},"beta9-t4":{"gpuType": "T4"}}}}}`)
 	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
@@ -160,6 +160,13 @@ func TestProcessRequests(t *testing.T) {
 			Memory:      2000,
 			Gpu:         "",
 		},
+		{
+			ContainerId:  uuid.New().String(),
+			Cpu:          1000,
+			Memory:       2000,
+			Gpu:          "",
+			PoolSelector: "beta9-build",
+		},
 	}
 
 	for _, req := range requests {
@@ -169,7 +176,7 @@ func TestProcessRequests(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, int64(3), wb.requestBacklog.Len())
+	assert.Equal(t, int64(4), wb.requestBacklog.Len())
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancel()
@@ -210,6 +217,12 @@ func TestGetController(t *testing.T) {
 		t4Controller, err := wb.getController(t4Request)
 		if err != nil || t4Controller.Name() != "beta9-t4" {
 			t.Errorf("Expected beta9-t4 controller, got %v, error: %v", t4Controller, err)
+		}
+
+		buildRequest := &types.ContainerRequest{PoolSelector: "beta9-build"}
+		buildController, err := wb.getController(buildRequest)
+		if err != nil || buildController.Name() != "beta9-build" {
+			t.Errorf("Expected beta9-build controller, got %v, error: %v", buildController, err)
 		}
 	})
 
@@ -311,6 +324,46 @@ func TestSelectCPUWorker(t *testing.T) {
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 
 	err = wb.scheduleRequest(worker, secondRequest)
+	assert.Nil(t, err)
+
+	updatedWorker, err := wb.workerRepo.GetWorkerById(newWorker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), updatedWorker.Cpu)
+	assert.Equal(t, int64(0), updatedWorker.Memory)
+	assert.Equal(t, "", updatedWorker.Gpu)
+	assert.Equal(t, types.WorkerStatusPending, updatedWorker.Status)
+}
+
+func TestSelectBuildWorker(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	assert.NotNil(t, wb)
+
+	newWorker := &types.Worker{
+		Status:   types.WorkerStatusPending,
+		Cpu:      2000,
+		Memory:   2000,
+		Gpu:      "",
+		PoolName: "beta9-build",
+	}
+
+	// Create a new worker
+	err = wb.workerRepo.AddWorker(newWorker)
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		Cpu:          2000,
+		Memory:       2000,
+		Gpu:          "",
+		PoolSelector: "beta9-build",
+	}
+
+	// Select a worker for the request
+	worker, err := wb.selectWorker(request)
+	assert.Nil(t, err)
+	assert.Equal(t, newWorker.Gpu, worker.Gpu)
+
+	err = wb.scheduleRequest(worker, request)
 	assert.Nil(t, err)
 
 	updatedWorker, err := wb.workerRepo.GetWorkerById(newWorker.Id)
