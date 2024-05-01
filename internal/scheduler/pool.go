@@ -1,32 +1,29 @@
 package scheduler
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-
 	"github.com/beam-cloud/beta9/internal/repository"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 )
 
 const (
-	Beta9WorkerLabelKey       string = "run.beam.cloud/role"
-	Beta9WorkerLabelValue     string = "worker"
-	Beta9WorkerJobPrefix      string = "worker"
-	Beta9WorkerLabelIDKey     string = "run.beam.cloud/worker-id"
-	Beta9WorkerLabelPoolIDKey string = "run.beam.cloud/worker-pool-id"
-	PrometheusPortKey         string = "prometheus.io/port"
-	PrometheusScrapeKey       string = "prometheus.io/scrape"
-	tmpVolumeName             string = "beta9-tmp"
-	logVolumeName             string = "beta9-logs"
-	imagesVolumeName          string = "beta9-images"
-	configVolumeName          string = "beta9-config"
-	configSecretName          string = "beta9-config"
-	configMountPath           string = "/etc/config"
-	defaultContainerName      string = "worker"
-	defaultWorkerEntrypoint   string = "/usr/local/bin/worker"
-	defaultWorkerLogPath      string = "/var/log/worker"
-	defaultImagesPath         string = "/images"
+	Beta9WorkerLabelKey         string = "run.beam.cloud/role"
+	Beta9WorkerLabelValue       string = "worker"
+	Beta9WorkerJobPrefix        string = "worker"
+	Beta9WorkerLabelIDKey       string = "run.beam.cloud/worker-id"
+	Beta9WorkerLabelPoolNameKey string = "run.beam.cloud/worker-pool-name"
+	PrometheusPortKey           string = "prometheus.io/port"
+	PrometheusScrapeKey         string = "prometheus.io/scrape"
+	tmpVolumeName               string = "beta9-tmp"
+	logVolumeName               string = "beta9-logs"
+	imagesVolumeName            string = "beta9-images"
+	configVolumeName            string = "beta9-config"
+	configSecretName            string = "beta9-config"
+	configMountPath             string = "/etc/config"
+	defaultContainerName        string = "worker"
+	defaultWorkerEntrypoint     string = "/usr/local/bin/worker"
+	defaultWorkerLogPath        string = "/var/log/worker"
+	defaultImagesPath           string = "/images"
 )
 
 type WorkerPoolController interface {
@@ -44,14 +41,6 @@ type WorkerPoolCapacity struct {
 	FreeCpu    int64
 	FreeMemory int64
 	FreeGpu    uint
-}
-
-func PoolId(name string) string {
-	hasher := sha256.New()
-	hasher.Write([]byte(name))
-	hash := hasher.Sum(nil)
-	poolId := hex.EncodeToString(hash[:8])
-	return poolId
 }
 
 func GenerateWorkerId() string {
@@ -74,7 +63,7 @@ func MonitorPoolSize(wpc WorkerPoolController, workerPool *types.WorkerPoolConfi
 }
 
 func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolController) (*WorkerPoolCapacity, error) {
-	workers, err := workerRepo.GetAllWorkersInPool(PoolId(wpc.Name()))
+	workers, err := workerRepo.GetAllWorkersInPool(wpc.Name())
 	if err != nil {
 		return nil, err
 	}

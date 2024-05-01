@@ -79,6 +79,7 @@ type ImageServiceConfig struct {
 	EnableTLS                      bool                  `key:"enableTLS" json:"enable_tls"`
 	BuildContainerCpu              int64                 `key:"buildContainerCpu" json:"build_container_cpu"`
 	BuildContainerMemory           int64                 `key:"buildContainerMemory" json:"build_container_memory"`
+	BuildContainerPoolSelector     string                `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
 	Runner                         RunnerConfig          `key:"runner" json:"runner"`
 }
 
@@ -155,12 +156,13 @@ var (
 )
 
 type WorkerPoolConfig struct {
-	GPUType    string                            `key:"gpuType" json:"gpu_type"`
-	Runtime    string                            `key:"runtime" json:"runtime"`
-	Mode       PoolMode                          `key:"mode" json:"mode"`
-	Provider   *MachineProvider                  `key:"provider" json:"provider"`
-	JobSpec    WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
-	PoolSizing WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
+	GPUType              string                            `key:"gpuType" json:"gpu_type"`
+	Runtime              string                            `key:"runtime" json:"runtime"`
+	Mode                 PoolMode                          `key:"mode" json:"mode"`
+	Provider             *MachineProvider                  `key:"provider" json:"provider"`
+	JobSpec              WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
+	PoolSizing           WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
+	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
 }
 
 type WorkerPoolJobSpecConfig struct {
