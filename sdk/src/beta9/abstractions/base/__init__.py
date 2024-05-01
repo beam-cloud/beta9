@@ -43,7 +43,6 @@ def set_channel(
         _channel = _get_channel(context)
         return
 
-    # TODO: when running python app.py, how can we use the config ~/.beam/config.ini
     context = get_config_context()
     _channel = _get_channel(context)
 
@@ -52,10 +51,8 @@ def get_channel() -> Channel:
     global _channel
 
     if not _channel:
-        print("setting channel")
         set_channel()
 
-    print("returning channel:", _channel)
     return _channel  # type: ignore
 
 
