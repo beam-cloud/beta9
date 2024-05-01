@@ -106,7 +106,13 @@ class Endpoint(RunnerAbstraction):
             volumes=volumes,
         )
 
-        self.endpoint_stub: EndpointServiceStub = EndpointServiceStub(self.channel)
+        self._endpoint_stub: Optional[EndpointServiceStub] = None
+
+    @property
+    def endpoint_stub(self) -> EndpointServiceStub:
+        if not self._endpoint_stub:
+            self._endpoint_stub = EndpointServiceStub(self.channel)
+        return self._endpoint_stub
 
     def __call__(self, func):
         return _CallableWrapper(func, self)
