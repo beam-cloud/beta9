@@ -22,7 +22,7 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-type MetalWorkerPoolController struct {
+type ExternalWorkerPoolController struct {
 	ctx            context.Context
 	name           string
 	config         types.AppConfig
@@ -36,7 +36,7 @@ type MetalWorkerPoolController struct {
 	providerRepo   repository.ProviderRepository
 }
 
-func NewMetalWorkerPoolController(
+func NewExternalWorkerPoolController(
 	ctx context.Context,
 	config types.AppConfig,
 	workerPoolName string,
@@ -62,7 +62,7 @@ func NewMetalWorkerPoolController(
 	}
 
 	workerPool := config.Worker.Pools[workerPoolName]
-	wpc := &MetalWorkerPoolController{
+	wpc := &ExternalWorkerPoolController{
 		ctx:            ctx,
 		name:           workerPoolName,
 		config:         config,
@@ -88,11 +88,11 @@ func NewMetalWorkerPoolController(
 	return wpc, nil
 }
 
-func (wpc *MetalWorkerPoolController) chooseMachine() {
+func (wpc *ExternalWorkerPoolController) chooseMachine() {
 
 }
 
-func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
 	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeWorker, false)
@@ -181,7 +181,7 @@ func (wpc *MetalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType
 	return worker, nil
 }
 
-func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*batchv1.Job, *types.Worker) {
+func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
 		"app":               Beta9WorkerLabelValue,
@@ -283,7 +283,7 @@ func (wpc *MetalWorkerPoolController) createWorkerJob(workerId, machineId string
 	}
 }
 
-func (wpc *MetalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) []corev1.EnvVar {
+func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) []corev1.EnvVar {
 	return []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
@@ -328,7 +328,7 @@ func (wpc *MetalWorkerPoolController) getWorkerEnvironment(workerId, machineId s
 	}
 }
 
-func (wpc *MetalWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
+func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	sharedMemoryLimit := resource.MustParse(fmt.Sprintf("%dMi", workerMemory/2))
 
@@ -380,7 +380,7 @@ func (wpc *MetalWorkerPoolController) getWorkerVolumes(workerMemory int64) []cor
 	}
 }
 
-func (wpc *MetalWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMount {
+func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMount {
 	return []corev1.VolumeMount{
 		{
 			Name:      tmpVolumeName,
@@ -409,7 +409,7 @@ func (wpc *MetalWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMou
 	}
 }
 
-func (wpc *MetalWorkerPoolController) getProxiedClient(hostname, token string) (*kubernetes.Clientset, error) {
+func (wpc *ExternalWorkerPoolController) getProxiedClient(hostname, token string) (*kubernetes.Clientset, error) {
 	// Create a custom transport to skip tls & use tsnet for dialing
 	transport := &http.Transport{
 		DialContext:     wpc.tailscale.Dial,
@@ -433,10 +433,10 @@ func (wpc *MetalWorkerPoolController) getProxiedClient(hostname, token string) (
 	return kubeClient, nil
 }
 
-func (wpc *MetalWorkerPoolController) Name() string {
+func (wpc *ExternalWorkerPoolController) Name() string {
 	return wpc.name
 }
 
-func (wpc *MetalWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
+func (wpc *ExternalWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
 	return freePoolCapacity(wpc.workerRepo, wpc)
 }
