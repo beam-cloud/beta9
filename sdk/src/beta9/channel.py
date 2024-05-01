@@ -22,6 +22,7 @@ from . import terminal
 from .aio import run_sync
 from .clients.gateway import AuthorizeRequest, AuthorizeResponse, GatewayServiceStub
 from .clients.volume import VolumeServiceStub
+from .config import DEFAULT_CONTEXT_NAME, CLISettings
 from .exceptions import RunnerException
 
 
@@ -56,39 +57,53 @@ class AuthenticatedChannel(Channel):
         )
 
 
-def get_channel(config: Optional[ConfigContext] = None) -> Channel:
+def get_channel(context: Optional[ConfigContext] = None) -> Channel:
     if os.getenv("CI"):
         return Channel(host="localhost", port=50051, ssl=False)
 
-    if not config:
-        name, config = prompt_for_config_context()
-        channel = AuthenticatedChannel(
-            host=config.gateway_host,
-            port=config.gateway_port,
-            ssl=config.use_ssl(),
-            token=config.token,
-        )
-
-        terminal.header("Authorizing with gateway")
-        with ServiceClient.with_channel(channel) as client:
-            res: AuthorizeResponse
-            res = run_sync(client.gateway.authorize(AuthorizeRequest()))
-            if not res.ok:
-                terminal.error(f"Unable to authorize with gateway: {res.error_msg}")
-
-            terminal.header("Authorized 🎉")
-
-        config.token = res.new_token
-        contexts = load_config()
-        contexts[name] = config
-        save_config(contexts)
+    if not context:
+        _, context = prompt_for_config_context()
 
     return AuthenticatedChannel(
-        host=config.gateway_host,
-        port=config.gateway_port,
-        ssl=config.use_ssl(),
-        token=config.token,
+        host=context.gateway_host,
+        port=context.gateway_port,
+        ssl=context.use_ssl(),
+        token=context.token,
     )
+
+
+def prompt_first_auth(settings: CLISettings) -> None:
+    name, context = prompt_for_config_context(
+        name=DEFAULT_CONTEXT_NAME,
+        gateway_host=settings.gateway_host,
+        gateway_port=settings.gateway_port,
+    )
+
+    channel = AuthenticatedChannel(
+        host=context.gateway_host,
+        port=context.gateway_port,
+        ssl=context.use_ssl(),
+        token=context.token,
+    )
+
+    terminal.header("Authorizing with gateway")
+    with ServiceClient.with_channel(channel) as client:
+        res: AuthorizeResponse
+        res = run_sync(client.gateway.authorize(AuthorizeRequest()))
+        if not res.ok:
+            terminal.error(f"Unable to authorize with gateway: {res.error_msg}")
+
+        terminal.header("Authorized 🎉")
+
+    # Set new token, if one was returned
+    context.token = res.new_token if res.new_token else context.token
+
+    # Load config, add new context
+    contexts = load_config(settings.config_path)
+    contexts[name] = context
+
+    # Write updated contexts to config
+    save_config(contexts, settings.config_path)
 
 
 @contextmanager
