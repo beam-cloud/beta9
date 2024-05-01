@@ -217,17 +217,18 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 		return nil, err
 	}
 
-	// Filter workers by pool selector if it is set in the request
-	if request.PoolSelector != "" {
-		filteredWorkers := []*types.Worker{}
-		for _, worker := range workers {
-			if worker.PoolName == request.PoolSelector {
-				filteredWorkers = append(filteredWorkers, worker)
-			}
+	// Filter workers by pool selector
+	filteredWorkers := []*types.Worker{}
+	for _, worker := range workers {
+		// If pool selector is specified, and the worker has that pool name, include the worker
+		if (request.PoolSelector != "" && worker.PoolName == request.PoolSelector) ||
+			// If pool selector is not specified, and worker does not require a pool selector, include the worker
+			(request.PoolSelector == "" && !worker.RequiresPoolSelector) {
+			filteredWorkers = append(filteredWorkers, worker)
 		}
-
-		workers = filteredWorkers
 	}
+
+	workers = filteredWorkers
 
 	// Sort workers: available first, then pending
 	sort.Slice(workers, func(i, j int) bool {

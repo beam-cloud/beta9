@@ -13,15 +13,16 @@ const (
 )
 
 type Worker struct {
-	Id              string       `json:"id" redis:"id"`
-	Status          WorkerStatus `json:"status" redis:"status"`
-	Cpu             int64        `json:"cpu" redis:"cpu"`
-	Memory          int64        `json:"memory" redis:"memory"`
-	Gpu             string       `json:"gpu" redis:"gpu"`
-	GpuCount        uint32       `json:"gpu_count" redis:"gpu_count"`
-	PoolName        string       `json:"pool_name" redis:"pool_name"`
-	MachineId       string       `json:"machine_id" redis:"machine_id"`
-	ResourceVersion int64        `json:"resource_version" redis:"resource_version"`
+	Id                   string       `json:"id" redis:"id"`
+	Status               WorkerStatus `json:"status" redis:"status"`
+	Cpu                  int64        `json:"cpu" redis:"cpu"`
+	Memory               int64        `json:"memory" redis:"memory"`
+	Gpu                  string       `json:"gpu" redis:"gpu"`
+	GpuCount             uint32       `json:"gpu_count" redis:"gpu_count"`
+	PoolName             string       `json:"pool_name" redis:"pool_name"`
+	MachineId            string       `json:"machine_id" redis:"machine_id"`
+	ResourceVersion      int64        `json:"resource_version" redis:"resource_version"`
+	RequiresPoolSelector bool         `json:"requires_pool_selector" redis:"requires_pool_selector"`
 }
 
 type CapacityUpdateType int

@@ -86,6 +86,7 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 	}
 
 	worker.PoolName = wpc.name
+	worker.RequiresPoolSelector = wpc.workerPool.RequiresPoolSelector
 
 	// Add the worker state
 	if err := wpc.workerRepo.AddWorker(worker); err != nil {

@@ -334,17 +334,92 @@ func TestSelectCPUWorker(t *testing.T) {
 	assert.Equal(t, types.WorkerStatusPending, updatedWorker.Status)
 }
 
+func TestRequiresPoolSelectorWorker(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	assert.NotNil(t, wb)
+
+	newWorkerWithRequiresPoolSelector := &types.Worker{
+		Id:                   "worker1",
+		Status:               types.WorkerStatusAvailable,
+		Cpu:                  2000,
+		Memory:               2000,
+		Gpu:                  "",
+		RequiresPoolSelector: true,
+		PoolName:             "cpu",
+	}
+
+	newWorkerWithoutRequiresPoolSelector := &types.Worker{
+		Id:       "worker2",
+		Status:   types.WorkerStatusAvailable,
+		Cpu:      2000,
+		Memory:   2000,
+		Gpu:      "",
+		PoolName: "cpu2",
+	}
+
+	// Create a new worker with the correct pool selector
+	err = wb.workerRepo.AddWorker(newWorkerWithRequiresPoolSelector)
+	assert.Nil(t, err)
+
+	firstRequest := &types.ContainerRequest{
+		Cpu:          1000,
+		Memory:       1000,
+		Gpu:          "",
+		PoolSelector: "cpu",
+	}
+
+	// Select a worker for the request, this one should succeed since it has a pool selector
+	worker, err := wb.selectWorker(firstRequest)
+	assert.Nil(t, err)
+	assert.Equal(t, newWorkerWithRequiresPoolSelector.Id, worker.Id)
+
+	err = wb.scheduleRequest(worker, firstRequest)
+	assert.Nil(t, err)
+
+	// Try creating another worker, which has no pool selector
+	secondRequest := &types.ContainerRequest{
+		Cpu:    1000,
+		Memory: 1000,
+		Gpu:    "",
+	}
+
+	// Select a worker for the request, this one should fail since it has no pool selector
+	_, err = wb.selectWorker(secondRequest)
+	_, ok := err.(*types.ErrNoSuitableWorkerFound)
+	assert.True(t, ok)
+
+	// Create a new worker without a pool selector
+	err = wb.workerRepo.AddWorker(newWorkerWithoutRequiresPoolSelector)
+	assert.Nil(t, err)
+
+	// Select a worker for the request, this one should fail since it has no pool selector
+	worker, err = wb.selectWorker(secondRequest)
+	assert.Nil(t, err)
+
+	assert.Equal(t, worker.Id, newWorkerWithoutRequiresPoolSelector.Id)
+
+	updatedWorker, err := wb.workerRepo.GetWorkerById(newWorkerWithRequiresPoolSelector.Id)
+	assert.Nil(t, err)
+
+	assert.Equal(t, int64(1000), updatedWorker.Cpu)
+	assert.Equal(t, int64(1000), updatedWorker.Memory)
+	assert.Equal(t, "", updatedWorker.Gpu)
+	assert.Equal(t, types.WorkerStatusAvailable, updatedWorker.Status)
+}
+
 func TestSelectBuildWorker(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 
 	newWorker := &types.Worker{
-		Status:   types.WorkerStatusPending,
-		Cpu:      2000,
-		Memory:   2000,
-		Gpu:      "",
-		PoolName: "beta9-build",
+		Status:               types.WorkerStatusPending,
+		Cpu:                  2000,
+		Memory:               2000,
+		Gpu:                  "",
+		PoolName:             "beta9-build",
+		RequiresPoolSelector: true,
 	}
 
 	// Create a new worker
