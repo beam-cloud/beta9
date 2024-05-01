@@ -24,3 +24,5 @@ test
 **/nvidia-device-plugin.yaml.skip
 manifests/**/charts/**
 build.sh
+.coverage
+.htmlcov

@@ -2,6 +2,7 @@ from unittest import TestCase
 from unittest.mock import MagicMock
 
 import cloudpickle
+
 from beta9.abstractions.map import Map
 from beta9.clients.map import (
     MapCountResponse,

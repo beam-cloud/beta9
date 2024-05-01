@@ -40,6 +40,10 @@ class Volume(BaseAbstraction):
             self._stub = VolumeServiceStub(self.channel)
         return self._stub
 
+    @stub.setter
+    def stub(self, value: VolumeServiceStub):
+        self._stub = value
+
     def get_or_create(self) -> bool:
         resp: GetOrCreateVolumeResponse
         resp = self.run_sync(

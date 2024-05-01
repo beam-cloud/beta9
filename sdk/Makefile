@@ -8,9 +8,9 @@ docs:
 
 tests:
 	poetry run pytest -s
+	open .htmlcov/index.html
 
 format:
-	poetry run black .
 	poetry run ruff check .
 
 publish:
