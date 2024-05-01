@@ -121,6 +121,7 @@ func (es *HttpEndpointService) endpointTaskFactory(ctx context.Context, msg type
 // Forward request to endpoint
 func (es *HttpEndpointService) forwardRequest(
 	ctx echo.Context,
+	authInfo *auth.AuthInfo,
 	stubId string,
 ) error {
 	payload, err := task.SerializeHttpPayload(ctx)
@@ -133,7 +134,7 @@ func (es *HttpEndpointService) forwardRequest(
 		return err
 	}
 
-	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), instance.Workspace.Name, stubId, payload, types.TaskPolicy{
+	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), authInfo, stubId, payload, types.TaskPolicy{
 		MaxRetries: 0,
 		Timeout:    instance.StubConfig.TaskPolicy.Timeout,
 		Expires:    time.Now().Add(time.Duration(endpointRequestTimeoutS) * time.Second),
@@ -185,7 +186,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(es.ctx, &abstractions.AutoscaledInstanceConfig{
 		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
 		Rdb:                 es.rdb,
-		Stub:                &stub.Stub,
+		Stub:                stub,
 		StubConfig:          stubConfig,
 		Object:              &stub.Object,
 		Workspace:           &stub.Workspace,

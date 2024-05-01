@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import time
+import traceback
 
 import cloudpickle
 import grpc
@@ -10,6 +11,7 @@ from grpclib.client import Channel
 from grpclib.exceptions import StreamTerminatedError
 
 from ..aio import run_sync
+from ..channel import with_runner_context
 from ..clients.function import (
     FunctionGetArgsRequest,
     FunctionGetArgsResponse,
@@ -26,10 +28,9 @@ from ..clients.gateway import (
     StartTaskRequest,
     StartTaskResponse,
 )
-from ..config import with_runner_context
 from ..exceptions import InvalidFunctionArgumentsException, RunnerException
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import config, load_handler
+from ..runner.common import FunctionContext, FunctionHandler, config, send_callback
 from ..type import TaskExitCode, TaskStatus
 
 
@@ -46,10 +47,12 @@ def _load_args(args: bytes) -> dict:
 
 async def _monitor_task(
     *,
+    context: FunctionContext,
     stub_id: str,
     task_id: str,
     container_id: str,
     function_stub: FunctionServiceStub,
+    gateway_stub: GatewayServiceStub,
 ) -> None:
     initial_backoff = 5
     max_retries = 5
@@ -68,6 +71,13 @@ async def _monitor_task(
                 response: FunctionMonitorResponse
                 if response.cancelled:
                     print(f"Task cancelled: {task_id}")
+
+                    await send_callback(
+                        gateway_stub=gateway_stub,
+                        context=context,
+                        payload={},
+                        task_status=TaskStatus.Cancelled,
+                    )
                     os._exit(TaskExitCode.Cancelled)
 
                 if response.complete:
@@ -75,6 +85,13 @@ async def _monitor_task(
 
                 if response.timed_out:
                     print(f"Task timed out: {task_id}")
+
+                    await send_callback(
+                        gateway_stub=gateway_stub,
+                        context=context,
+                        payload={},
+                        task_status=TaskStatus.Timeout,
+                    )
                     os._exit(TaskExitCode.Timeout)
 
                 retry = 0
@@ -128,12 +145,15 @@ def main(channel: Channel):
             raise RunnerException("Unable to start task")
 
         # Kick off monitoring task
+        context = FunctionContext.new(config=config, task_id=task_id)
         monitor_task = loop.create_task(
             _monitor_task(
+                context=context,
                 stub_id=config.stub_id,
-                task_id=config.task_id,
+                task_id=task_id,
                 container_id=config.container_id,
                 function_stub=function_stub,
+                gateway_stub=gateway_stub,
             ),
         )
 
@@ -148,20 +168,21 @@ def main(channel: Channel):
             if not get_args_resp.ok:
                 raise InvalidFunctionArgumentsException
 
-            handler = load_handler()
-
+            handler = FunctionHandler()
             payload: dict = _load_args(get_args_resp.args)
             args = payload.get("args") or []
             kwargs = payload.get("kwargs") or {}
-            result = handler(*args, **kwargs)
+
+            result = handler(context, *args, **kwargs)
         except BaseException as exc:
+            print(traceback.format_exc())
             result = error = exc
             task_status = TaskStatus.Error
         finally:
-            result = cloudpickle.dumps(result)
+            pickled_result = cloudpickle.dumps(result)
             set_result_resp: FunctionSetResultResponse = run_sync(
                 function_stub.function_set_result(
-                    FunctionSetResultRequest(task_id=task_id, result=result)
+                    FunctionSetResultRequest(task_id=task_id, result=pickled_result)
                 ),
             )
             if not set_result_resp.ok:
@@ -186,6 +207,12 @@ def main(channel: Channel):
             raise RunnerException("Unable to end task")
 
         monitor_task.cancel()
+
+        run_sync(
+            send_callback(
+                gateway_stub=gateway_stub, context=context, payload=result, task_status=task_status
+            )
+        )  # Send callback to callback_url, if defined
 
         if task_status == TaskStatus.Error:
             raise error.with_traceback(error.__traceback__)

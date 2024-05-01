@@ -99,14 +99,21 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 		return types.Workspace{}, err
 	}
 
+	// Generate a secure signing key for tasks
+	signingKeyBytes := make([]byte, 32) // 256 bits
+	if _, err := rand.Read(signingKeyBytes); err != nil {
+		return types.Workspace{}, err
+	}
+	signingKey := "sk_" + base64.StdEncoding.EncodeToString(signingKeyBytes)
+
 	query := `
-	INSERT INTO workspace (name, external_id)
-	VALUES ($1, $2)
-	RETURNING id, name, external_id, created_at, updated_at;
+	INSERT INTO workspace (name, external_id, signing_key)
+	VALUES ($1, $2, $3)
+	RETURNING id, name, external_id, signing_key, created_at, updated_at;
 	`
 
 	var context types.Workspace
-	if err := r.client.GetContext(ctx, &context, query, name, externalId); err != nil {
+	if err := r.client.GetContext(ctx, &context, query, name, externalId, signingKey); err != nil {
 		return types.Workspace{}, err
 	}
 
@@ -159,7 +166,7 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId
 func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error) {
 	query := `
 	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.token_type, t.reusable, t.workspace_id,
-	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.created_at "workspace.created_at", w.updated_at "workspace.updated_at"
+	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.signing_key "workspace.signing_key", w.created_at "workspace.created_at", w.updated_at "workspace.updated_at"
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
 	WHERE t.key = $1 AND t.active = TRUE;
@@ -399,7 +406,7 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 
 func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters types.TaskFilter) squirrel.SelectBuilder {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\"",
+		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\", s.type AS \"stub.type\"",
 	).From("task t").
 		Join("workspace w ON t.workspace_id = w.id").
 		Join("stub s ON t.stub_id = s.id").OrderBy("t.id DESC")
@@ -787,7 +794,7 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 		if err := uuid.Validate(filters.Name); err == nil {
 			qb = qb.Where(squirrel.Eq{"d.external_id": filters.Name})
 		} else {
-			qb = qb.Where(squirrel.Eq{"d.name": filters.Name})
+			qb = qb.Where(squirrel.Like{"d.name": "%" + filters.Name + "%"})
 		}
 	}
 

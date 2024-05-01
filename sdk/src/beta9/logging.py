@@ -1,6 +1,7 @@
 import io
-import sys
 import json
+import sys
+
 
 class StdoutJsonInterceptor(io.TextIOBase):
     def __init__(self, stream=sys.__stdout__, **ctx):
@@ -19,13 +20,16 @@ class StdoutJsonInterceptor(io.TextIOBase):
 
     def write(self, buf: str):
         try:
-            for line in buf.rstrip().splitlines():
+            for line in buf.splitlines():
+                if line == "":
+                    continue
+
                 log_record = {
-                    "message": line,
+                    "message": f"{line}\n",
                     **self.ctx,
                 }
 
-                self.stream.write(json.dumps(log_record) + "\n")
+                self.stream.write(json.dumps(log_record))
         except BaseException:
             self.stream.write(buf)
 
@@ -34,4 +38,3 @@ class StdoutJsonInterceptor(io.TextIOBase):
 
     def fileno(self) -> int:
         return -1
-    

@@ -4,7 +4,7 @@ import signal
 import traceback
 from contextlib import asynccontextmanager
 from http import HTTPStatus
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -17,16 +17,16 @@ from uvicorn.workers import UvicornWorker
 from ..abstractions.base.runner import (
     ENDPOINT_SERVE_STUB_TYPE,
 )
+from ..channel import with_runner_context
 from ..clients.gateway import (
     EndTaskRequest,
     GatewayServiceStub,
     StartTaskRequest,
 )
-from ..config import with_runner_context
 from ..logging import StdoutJsonInterceptor
+from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_method
 from ..runner.common import config as cfg
-from ..runner.common import load_handler
-from ..type import TaskStatus
+from ..type import LifeCycleMethod, TaskStatus
 
 
 class EndpointFilter(logging.Filter):
@@ -138,15 +138,16 @@ class EndpointManager:
         self.pid: int = os.getpid()
         self.exit_code: int = 0
         self.app = FastAPI(lifespan=self.lifespan)
-        self.handler: Callable = load_handler().func  # The function exists under the decorator
-        self.context = {}  # TODO: implement context loader
+
+        # Load handler and execute on_start method
+        self.handler: FunctionHandler = FunctionHandler()
+        self.on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
 
         # Register signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)
 
         @self.app.get("/health")
         async def health():
-            # TODO: wait for loader to complete before returning a 200
             return Response(status_code=HTTPStatus.OK)
 
         @self.app.post("/")
@@ -156,7 +157,7 @@ class EndpointManager:
 
             status_code = HTTPStatus.OK
             with StdoutJsonInterceptor(task_id=task_id):
-                result, err = self._call_function(payload)
+                result, err = self._call_function(task_id=task_id, payload=payload)
                 if err:
                     task_status = TaskStatus.Error
 
@@ -178,7 +179,7 @@ class EndpointManager:
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 
-    def _call_function(self, payload: dict) -> Tuple[Response, Any]:
+    def _call_function(self, task_id: str, payload: dict) -> Tuple[Response, Any]:
         error = None
         response_body = {}
 
@@ -190,12 +191,22 @@ class EndpointManager:
         if kwargs is None:
             kwargs = {}
 
+        context = FunctionContext.new(
+            config=cfg,
+            task_id=task_id,
+            on_start_value=self.on_start_value,
+        )
+
         try:
-            response_body = self.handler(*args, **kwargs)
+            response_body = self.handler(
+                context,
+                *args,
+                **kwargs,
+            )
         except BaseException:
-            self.logger.exception("Unhandled exception")
-            error = traceback.format_exc()
-            response_body = {"errors": [traceback.format_exc()]}
+            exception = traceback.format_exc()
+            print(exception)
+            response_body = {"error": exception}
 
         return response_body, error
 

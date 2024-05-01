@@ -19,6 +19,7 @@ func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGro
 
 	g.POST("/id/:stubId", group.endpointRequest)
 	g.POST("/id/:stubId/", group.endpointRequest)
+	g.POST("/id/:stubId", group.endpointRequest)
 	g.POST("/:deploymentName/v:version", group.endpointRequest)
 
 	return group
@@ -49,5 +50,5 @@ func (g *endpointGroup) endpointRequest(ctx echo.Context) error {
 		stubId = deployment.Stub.ExternalId
 	}
 
-	return g.es.forwardRequest(ctx, stubId)
+	return g.es.forwardRequest(ctx, cc.AuthInfo, stubId)
 }

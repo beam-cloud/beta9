@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Callable, Union
+from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
@@ -10,6 +10,7 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
+from ..abstractions.volume import Volume
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..clients.taskqueue import (
     StartTaskQueueServeRequest,
@@ -18,7 +19,7 @@ from ..clients.taskqueue import (
     TaskQueuePutResponse,
     TaskQueueServiceStub,
 )
-from ..config import GatewayConfig, get_gateway_config
+from ..env import is_local
 
 
 class TaskQueue(RunnerAbstraction):
@@ -30,9 +31,9 @@ class TaskQueue(RunnerAbstraction):
     Parameters:
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
-        memory (int):
+        memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
-            megabytes (e.g., 128 for 128 megabytes). Default is 128.
+            MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
         gpu (Union[GpuType, str]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
@@ -62,6 +63,13 @@ class TaskQueue(RunnerAbstraction):
             The maximum number of tasks that can be pending in the queue. If the number of
             pending tasks exceeds this value, the task queue will stop accepting new tasks.
             Default is 100.
+        on_start (Optional[Callable]):
+            An optional function to run once (per process) when the container starts. Can be used for downloading data,
+            loading models, or anything else computationally expensive.
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        volumes (Optional[List[Volume]]):
+            A list of storage volumes to be associated with the taskqueue. Default is [].
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -79,7 +87,7 @@ class TaskQueue(RunnerAbstraction):
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
-        memory: int = 128,
+        memory: Union[int, str] = 128,
         gpu: str = "",
         image: Image = Image(),
         timeout: int = 3600,
@@ -88,6 +96,9 @@ class TaskQueue(RunnerAbstraction):
         max_containers: int = 1,
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
+        on_start: Optional[Callable] = None,
+        callback_url: Optional[str] = None,
+        volumes: Optional[List[Volume]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -100,9 +111,17 @@ class TaskQueue(RunnerAbstraction):
             retries=retries,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
+            on_start=on_start,
+            callback_url=callback_url,
+            volumes=volumes,
         )
+        self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
 
-        self.taskqueue_stub: TaskQueueServiceStub = TaskQueueServiceStub(self.channel)
+    @property
+    def taskqueue_stub(self) -> TaskQueueServiceStub:
+        if not self._taskqueue_stub:
+            self._taskqueue_stub = TaskQueueServiceStub(self.channel)
+        return self._taskqueue_stub
 
     def __call__(self, func):
         return _CallableWrapper(func, self)
@@ -114,8 +133,7 @@ class _CallableWrapper:
         self.parent: TaskQueue = parent
 
     def __call__(self, *args, **kwargs) -> Any:
-        container_id = os.getenv("CONTAINER_ID")
-        if container_id is not None:
+        if not is_local():
             return self.local(*args, **kwargs)
 
         raise NotImplementedError(
@@ -140,12 +158,11 @@ class _CallableWrapper:
         )
 
         if deploy_response.ok:
-            gateway_config: GatewayConfig = get_gateway_config()
-            gateway_url = f"{gateway_config.gateway_host}:{gateway_config.gateway_port}"
+            base_url = "https://app.beam.cloud"
 
             terminal.header("Deployed 🎉")
             terminal.detail(
-                f"Call your deployment at: {gateway_url}/api/v1/taskqueue/{name}/v{deploy_response.version}"
+                f"Call your deployment at: {base_url}/api/v1/taskqueue/{name}/v{deploy_response.version}"
             )
 
         return deploy_response.ok
@@ -186,7 +203,7 @@ class _CallableWrapper:
                 )
             ):
                 if r.output != "":
-                    terminal.detail(r.output.strip())
+                    terminal.detail(r.output, end="")
 
                 if r.done or r.exit_code != 0:
                     last_response = r

@@ -1,9 +1,7 @@
 from beta9 import function
 
 
-@function(
-    cpu=0.25,
-)
+@function(cpu=8, gpu="A100-40")
 def square(i: int):
     return i**2
 

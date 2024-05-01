@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion7
 
 const (
 	GatewayService_Authorize_FullMethodName            = "/gateway.GatewayService/Authorize"
+	GatewayService_SignPayload_FullMethodName          = "/gateway.GatewayService/SignPayload"
 	GatewayService_HeadObject_FullMethodName           = "/gateway.GatewayService/HeadObject"
 	GatewayService_PutObject_FullMethodName            = "/gateway.GatewayService/PutObject"
 	GatewayService_PutObjectStream_FullMethodName      = "/gateway.GatewayService/PutObjectStream"
@@ -37,6 +38,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type GatewayServiceClient interface {
 	Authorize(ctx context.Context, in *AuthorizeRequest, opts ...grpc.CallOption) (*AuthorizeResponse, error)
+	SignPayload(ctx context.Context, in *SignPayloadRequest, opts ...grpc.CallOption) (*SignPayloadResponse, error)
 	HeadObject(ctx context.Context, in *HeadObjectRequest, opts ...grpc.CallOption) (*HeadObjectResponse, error)
 	PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error)
 	PutObjectStream(ctx context.Context, opts ...grpc.CallOption) (GatewayService_PutObjectStreamClient, error)
@@ -60,6 +62,15 @@ func NewGatewayServiceClient(cc grpc.ClientConnInterface) GatewayServiceClient {
 func (c *gatewayServiceClient) Authorize(ctx context.Context, in *AuthorizeRequest, opts ...grpc.CallOption) (*AuthorizeResponse, error) {
 	out := new(AuthorizeResponse)
 	err := c.cc.Invoke(ctx, GatewayService_Authorize_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) SignPayload(ctx context.Context, in *SignPayloadRequest, opts ...grpc.CallOption) (*SignPayloadResponse, error) {
+	out := new(SignPayloadResponse)
+	err := c.cc.Invoke(ctx, GatewayService_SignPayload_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +222,7 @@ func (c *gatewayServiceClient) DeployStub(ctx context.Context, in *DeployStubReq
 // for forward compatibility
 type GatewayServiceServer interface {
 	Authorize(context.Context, *AuthorizeRequest) (*AuthorizeResponse, error)
+	SignPayload(context.Context, *SignPayloadRequest) (*SignPayloadResponse, error)
 	HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error)
 	PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error)
 	PutObjectStream(GatewayService_PutObjectStreamServer) error
@@ -230,6 +242,9 @@ type UnimplementedGatewayServiceServer struct {
 
 func (UnimplementedGatewayServiceServer) Authorize(context.Context, *AuthorizeRequest) (*AuthorizeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Authorize not implemented")
+}
+func (UnimplementedGatewayServiceServer) SignPayload(context.Context, *SignPayloadRequest) (*SignPayloadResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SignPayload not implemented")
 }
 func (UnimplementedGatewayServiceServer) HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method HeadObject not implemented")
@@ -288,6 +303,24 @@ func _GatewayService_Authorize_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GatewayServiceServer).Authorize(ctx, req.(*AuthorizeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_SignPayload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignPayloadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).SignPayload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_SignPayload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).SignPayload(ctx, req.(*SignPayloadRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -498,6 +531,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Authorize",
 			Handler:    _GatewayService_Authorize_Handler,
+		},
+		{
+			MethodName: "SignPayload",
+			Handler:    _GatewayService_SignPayload_Handler,
 		},
 		{
 			MethodName: "HeadObject",

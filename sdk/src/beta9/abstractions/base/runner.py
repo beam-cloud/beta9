@@ -22,7 +22,7 @@ from ...sync import FileSyncer, SyncEventHandler
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
 TASKQUEUE_STUB_TYPE = "taskqueue"
-WEBSERVER_STUB_TYPE = "endpoint"
+ENDPOINT_STUB_TYPE = "endpoint"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
@@ -35,7 +35,7 @@ class RunnerAbstraction(BaseAbstraction):
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
-        memory: int = 128,
+        memory: Union[int, str] = 128,
         gpu: str = "",
         image: Image = Image(),
         concurrency: int = 1,
@@ -45,6 +45,8 @@ class RunnerAbstraction(BaseAbstraction):
         retries: int = 3,
         timeout: int = 3600,
         volumes: Optional[List[Volume]] = None,
+        on_start: Optional[Callable] = None,
+        callback_url: Optional[str] = None,
     ) -> None:
         super().__init__()
 
@@ -60,11 +62,12 @@ class RunnerAbstraction(BaseAbstraction):
         self.image_id: str = ""
         self.stub_id: str = ""
         self.handler: str = ""
+        self.on_start: str = ""
+        self.callback_url = callback_url or ""
         self.cpu = cpu
-        self.memory = memory
+        self.memory = self._parse_memory(memory) if isinstance(memory, str) else memory
         self.gpu = gpu
         self.volumes = volumes or []
-
         self.concurrency = concurrency
         self.keep_warm_seconds = keep_warm_seconds
         self.max_pending_tasks = max_pending_tasks
@@ -72,8 +75,29 @@ class RunnerAbstraction(BaseAbstraction):
         self.retries = retries
         self.timeout = timeout
 
-        self.gateway_stub: GatewayServiceStub = GatewayServiceStub(self.channel)
+        if on_start is not None:
+            self._map_callable_to_attr(attr="on_start", func=on_start)
+
+        self._gateway_stub: Optional[GatewayServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
+
+    def _parse_memory(self, memory_str: str) -> int:
+        """Parse memory str (with units) to megabytes."""
+
+        if memory_str.lower().endswith("mi"):
+            return int(memory_str[:-2])
+        elif memory_str.lower().endswith("gb"):
+            return int(memory_str[:-2]) * 1000
+        elif memory_str.lower().endswith("gi"):
+            return int(memory_str[:-2]) * 1024
+        else:
+            raise ValueError("Unsupported memory format")
+
+    @property
+    def gateway_stub(self) -> GatewayServiceStub:
+        if not self._gateway_stub:
+            self._gateway_stub = GatewayServiceStub(self.channel)
+        return self._gateway_stub
 
     def _parse_cpu_to_millicores(self, cpu: Union[float, str]) -> int:
         """
@@ -112,8 +136,12 @@ class RunnerAbstraction(BaseAbstraction):
         else:
             raise TypeError("CPU must be a float or a string.")
 
-    def _load_handler(self, func: Callable) -> None:
-        if self.handler or func is None:
+    def _map_callable_to_attr(self, *, attr: str, func: Callable):
+        """
+        Determine the module and function name of a callable function, and cache on the class.
+        This is used for passing callables to stub config.
+        """
+        if getattr(self, attr):
             return
 
         module = inspect.getmodule(func)  # Determine module / function name
@@ -124,7 +152,7 @@ class RunnerAbstraction(BaseAbstraction):
             module_name = "__main__"
 
         function_name = func.__name__
-        self.handler = f"{module_name}:{function_name}"
+        setattr(self, attr, f"{module_name}:{function_name}")
 
     async def _object_iterator(self, *, dir: str, object_id: str, file_update_queue: Queue):
         while True:
@@ -175,7 +203,7 @@ class RunnerAbstraction(BaseAbstraction):
         name: Optional[str] = None,
     ) -> bool:
         if func is not None:
-            self._load_handler(func)
+            self._map_callable_to_attr(attr="handler", func=func)
 
         stub_name = f"{stub_type}/{self.handler}" if self.handler else stub_type
 
@@ -222,6 +250,8 @@ class RunnerAbstraction(BaseAbstraction):
                         memory=self.memory,
                         gpu=self.gpu,
                         handler=self.handler,
+                        on_start=self.on_start,
+                        callback_url=self.callback_url,
                         retries=self.retries,
                         timeout=self.timeout,
                         keep_warm_seconds=self.keep_warm_seconds,

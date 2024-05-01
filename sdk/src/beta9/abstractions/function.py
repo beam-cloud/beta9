@@ -1,5 +1,4 @@
 import asyncio
-import os
 from typing import Any, Callable, Iterator, List, Optional, Sequence, Union
 
 import cloudpickle
@@ -18,7 +17,7 @@ from ..clients.function import (
     FunctionServiceStub,
 )
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
-from ..config import GatewayConfig, get_gateway_config
+from ..env import is_local
 from ..sync import FileSyncer
 
 
@@ -29,14 +28,23 @@ class Function(RunnerAbstraction):
     Parameters:
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
-        memory (int):
+        memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
-            megabytes (e.g., 128 for 128 megabytes). Default is 128.
+            MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
         gpu (Union[GpuType, str]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
+        timeout (Optional[int]):
+            The maximum number of seconds a task can run before it times out.
+            Default is 3600. Set it to -1 to disable the timeout.
+        retries (Optional[int]):
+            The maximum number of times a task will be retried if the container crashes. Default is 3.
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        volumes (Optional[List[Volume]]):
+            A list of storage volumes to be associated with the function. Default is [].
     Example:
         ```python
         from beta9 import function, Image
@@ -53,19 +61,18 @@ class Function(RunnerAbstraction):
         # Each of these inputs will be routed to remote containers
         for result in function.map(["file1.mp4", "file2.mp4"]):
             print(result)
-
-
         ```
     """
 
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
-        memory: int = 128,
+        memory: Union[int, str] = 128,
         gpu: str = "",
+        image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,
-        image: Image = Image(),
+        callback_url: Optional[str] = "",
         volumes: Optional[List[Volume]] = None,
     ) -> None:
         super().__init__(
@@ -73,16 +80,23 @@ class Function(RunnerAbstraction):
             memory=memory,
             gpu=gpu,
             image=image,
-            volumes=volumes,
             timeout=timeout,
             retries=retries,
+            callback_url=callback_url,
+            volumes=volumes,
         )
 
-        self.function_stub: FunctionServiceStub = FunctionServiceStub(self.channel)
+        self._function_stub: Optional[FunctionServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
 
     def __call__(self, func):
         return _CallableWrapper(func, self)
+
+    @property
+    def function_stub(self) -> FunctionServiceStub:
+        if not self._function_stub:
+            self._function_stub = FunctionServiceStub(self.channel)
+        return self._function_stub
 
 
 class _CallableWrapper:
@@ -91,8 +105,7 @@ class _CallableWrapper:
         self.parent: Function = parent
 
     def __call__(self, *args, **kwargs) -> Any:
-        container_id = os.getenv("CONTAINER_ID")
-        if container_id:
+        if not is_local():
             return self.local(*args, **kwargs)
 
         if not self.parent.prepare_runtime(
@@ -122,7 +135,7 @@ class _CallableWrapper:
             )
         ):
             if r.output != "":
-                terminal.detail(r.output.strip())
+                terminal.detail(r.output, end="")
 
             if r.done or r.exit_code != 0:
                 last_response = r
@@ -155,12 +168,11 @@ class _CallableWrapper:
         )
 
         if deploy_response.ok:
-            gateway_config: GatewayConfig = get_gateway_config()
-            gateway_url = f"{gateway_config.gateway_host}:{gateway_config.gateway_port}"
+            base_url = "https://app.beam.cloud"
 
             terminal.header("Deployed 🎉")
             terminal.detail(
-                f"Call your deployment at: {gateway_url}/api/v1/function/{name}/v{deploy_response.version}"
+                f"Call your deployment at: {base_url}/api/v1/function/{name}/v{deploy_response.version}"
             )
 
         return deploy_response.ok

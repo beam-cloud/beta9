@@ -3,9 +3,6 @@ package types
 import "time"
 
 const (
-	WorkerLifecycleStarted string = "STARTED"
-	WorkerLifecycleStopped string = "STOPPED"
-
 	WorkerLifecycleStatsKey        string        = "beta9.worker.usage.spawner.lifecycle"
 	WorkerDurationStatsKey         string        = "beta9.worker.usage.spawner.duration"
 	WorkerUserCodeVolume           string        = "/mnt/code"

@@ -47,7 +47,7 @@ func (em *ContainerEventManager) handleContainerEvents(ctx context.Context) {
 				This portion "6f073820-3d2f-483c-8089-0a30862c3145" is the stub ID, and the final "80fd7e36"
 				is a UUID specific to this container.
 
-				Because we listening for keyspace notifications on a certain container prefix, actual events
+				Because we listen for keyspace notifications on a certain container prefix, actual events
 				come in like:
 
 					{Key:-6f073820-3d2f-483c-8089-0a30862c3145-80fd7e36 Operation:hset}

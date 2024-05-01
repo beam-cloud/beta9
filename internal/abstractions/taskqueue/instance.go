@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
-	"path"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
@@ -38,6 +37,8 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			Env: []string{
 				fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
 				fmt.Sprintf("HANDLER=%s", i.StubConfig.Handler),
+				fmt.Sprintf("ON_START=%s", i.StubConfig.OnStart),
+				fmt.Sprintf("CALLBACK_URL=%s", i.StubConfig.CallbackUrl),
 				fmt.Sprintf("STUB_ID=%s", i.Stub.ExternalId),
 				fmt.Sprintf("STUB_TYPE=%s", i.Stub.Type),
 				fmt.Sprintf("CONCURRENCY=%d", i.StubConfig.Concurrency),
@@ -51,12 +52,11 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			StubId:      i.Stub.ExternalId,
 			WorkspaceId: i.Workspace.ExternalId,
 			EntryPoint:  i.EntryPoint,
-			Mounts: []types.Mount{
-				{
-					LocalPath: path.Join(types.DefaultExtractedObjectPath, i.Workspace.Name, i.Object.ExternalId),
-					MountPath: types.WorkerUserCodeVolume, ReadOnly: true,
-				},
-			},
+			Mounts: abstractions.ConfigureContainerRequestMounts(
+				i.Stub.Object.ExternalId,
+				i.Workspace.Name,
+				*i.StubConfig,
+			),
 		}
 
 		err := i.Scheduler.Run(runRequest)

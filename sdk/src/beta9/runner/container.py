@@ -8,8 +8,8 @@ from typing import Union
 from grpclib.client import Channel
 
 from ..aio import run_sync
+from ..channel import with_runner_context
 from ..clients.gateway import EndTaskRequest, GatewayServiceStub, StartTaskRequest
-from ..config import with_runner_context
 from ..logging import StdoutJsonInterceptor
 from ..runner.common import config
 from ..type import TaskStatus

@@ -54,7 +54,7 @@ jobs:
           registry-type: public
           mask-password: 'true'
 
-      - name: Build and push container image to Amazon ECR
+      - name: Build and push gateway container image to Amazon ECR
         uses: docker/build-push-action@v5
         with:
           file: ./docker/Dockerfile.gateway
@@ -62,6 +62,17 @@ jobs:
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-gateway:${{ steps.set-version.outputs.app_version }}
             ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-gateway:latest
+          target: release
+          platforms: linux/amd64
+    
+      - name: Build and push proxy container image to Amazon ECR
+        uses: docker/build-push-action@v5
+        with:
+          file: ./docker/Dockerfile.proxy
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-proxy:${{ steps.set-version.outputs.app_version }}
+            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-proxy:latest
           target: release
           platforms: linux/amd64
 
