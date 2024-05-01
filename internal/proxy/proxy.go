@@ -15,17 +15,15 @@ import (
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
-	"github.com/beam-cloud/beta9/internal/scheduler"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 )
 
 type Proxy struct {
-	config            types.AppConfig
-	workerPoolManager *scheduler.WorkerPoolManager
-	tailscale         *network.Tailscale
-	services          []types.InternalService
-	tailscaleRepo     repository.TailscaleRepository
+	config        types.AppConfig
+	tailscale     *network.Tailscale
+	services      []types.InternalService
+	tailscaleRepo repository.TailscaleRepository
 }
 
 func NewProxy() (*Proxy, error) {
