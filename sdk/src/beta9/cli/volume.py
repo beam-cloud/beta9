@@ -267,9 +267,8 @@ def list_volumes(service: ServiceClient):
     name="create",
     help="Create a new volume.",
 )
-@click.option(
-    "--name",
-    "-n",
+@click.argument(
+    "name",
     type=click.STRING,
     required=True,
 )
@@ -303,5 +302,11 @@ def create_volume(service: ServiceClient, name: str):
     name="delete",
     help="Delete a volume.",
 )
-def delete_volume():
-    pass
+@click.argument(
+    "name",
+    type=click.STRING,
+    required=True,
+)
+@click.confirmation_option("--force")
+def delete_volume(name: str, force: bool):
+    terminal.error("Not implemented.")

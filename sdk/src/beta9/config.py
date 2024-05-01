@@ -1,17 +1,28 @@
 import configparser
+import functools
 import inspect
 import ipaddress
 import os
 import socket
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple, Union
+from typing import Any, Mapping, MutableMapping, Optional, Tuple, Union
 
 from . import terminal
 
+DEFAULT_CLI_NAME = "Beta9"
 DEFAULT_CONTEXT_NAME = "default"
 DEFAULT_GATEWAY_HOST = "0.0.0.0"
 DEFAULT_GATEWAY_PORT = 1993
+_SETTINGS: Optional["CLISettings"] = None
+
+
+@dataclass
+class CLISettings:
+    name: str = DEFAULT_CLI_NAME
+    gateway_host: str = DEFAULT_GATEWAY_HOST
+    gateway_port: int = DEFAULT_GATEWAY_PORT
+    config_path: Path = Path("~/.beta9/config.ini").expanduser()
 
 
 @dataclass
@@ -21,10 +32,10 @@ class ConfigContext:
     gateway_port: Optional[int] = None
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ConfigContext":
+    def from_dict(cls, data: Mapping[str, Any]) -> "ConfigContext":
         return cls(**{k: v for k, v in data.items() if k in inspect.signature(cls).parameters})
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> MutableMapping[str, Any]:
         return {k: ("" if not v else v) for k, v in asdict(self).items()}
 
     def use_ssl(self) -> bool:
@@ -33,30 +44,24 @@ class ConfigContext:
         return False
 
 
-def get_config_path(base_dir: str = "~/.beta9") -> Path:
-    """
-    Gets the path of the config.
+def set_settings(s: Optional[CLISettings] = None) -> None:
+    if s is None:
+        s = CLISettings()
 
-    Can be overridden by setting the CONFIG_PATH environment variable.
-
-    Args:
-        base_dir: Base path of the config file. Defaults to "~/.beta9".
-
-    Returns:
-        A Path object.
-    """
-    path = Path(f"{base_dir}/config.ini").expanduser()
-
-    if config_path := os.getenv("CONFIG_PATH"):
-        if os.path.exists(config_path):
-            return Path(config_path).expanduser()
-
-    return path
+    global _SETTINGS
+    _SETTINGS = s
 
 
-def load_config(path: Optional[Union[str, Path]] = None) -> Dict[str, ConfigContext]:
+def get_settings() -> CLISettings:
+    if not _SETTINGS:
+        set_settings()
+
+    return _SETTINGS  # type: ignore
+
+
+def load_config(path: Optional[Union[str, Path]] = None) -> MutableMapping[str, ConfigContext]:
     if path is None:
-        path = get_config_path()
+        path = get_settings().config_path
 
     path = Path(path)
     if not path.exists():
@@ -71,8 +76,11 @@ def load_config(path: Optional[Union[str, Path]] = None) -> Dict[str, ConfigCont
 def save_config(
     contexts: Mapping[str, ConfigContext], path: Optional[Union[Path, str]] = None
 ) -> None:
+    if not contexts:
+        return
+
     if path is None:
-        path = get_config_path()
+        path = get_settings().config_path
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,7 +94,7 @@ def save_config(
 
 def is_config_empty(path: Optional[Union[Path, str]] = None) -> bool:
     if path is None:
-        path = get_config_path()
+        path = get_settings().config_path
 
     path = Path(path)
     if path.exists():
@@ -127,39 +135,39 @@ def prompt_for_config_context(
     gateway_host: Optional[str] = None,
     gateway_port: Optional[int] = None,
 ) -> Tuple[str, ConfigContext]:
-    contexts = load_config()
+    settings = get_settings()
+
+    prompt_name = functools.partial(
+        terminal.prompt, text="Context Name", default=name or DEFAULT_CONTEXT_NAME
+    )
+    # TODO: validate host by talking to gateway?
+    prompt_gateway_host = functools.partial(
+        terminal.prompt, text="Gateway Host", default=gateway_host or settings.gateway_host
+    )
+    prompt_gateway_port = functools.partial(
+        terminal.prompt, text="Gateway Port", default=gateway_port or settings.gateway_port
+    )
 
     try:
-        if name in contexts:
-            text = f"Context '{name}' already exists. Overwrite?"
-            if terminal.prompt(text=text, default="n").lower() in ["n", "no"]:
-                return name, contexts[name]
+        while not (name := prompt_name()) or not isinstance(name, str):
+            pass
 
-        while not name:
-            name = terminal.prompt(text="Context Name", default=DEFAULT_CONTEXT_NAME)
+        while not (gateway_host := prompt_gateway_host()) or not validate_ip_or_dns(gateway_host):
+            pass
 
-        while not gateway_host:
-            gateway_host = terminal.prompt(text="Gateway Host", default=DEFAULT_GATEWAY_HOST)
-            gateway_host = gateway_host if validate_ip_or_dns(gateway_host) else ""
-
-        while not gateway_port:
-            gateway_port = terminal.prompt(text="Gateway Port", default=DEFAULT_GATEWAY_PORT)
-            gateway_port = gateway_port if validate_port(gateway_port) else 0
+        while not (gateway_port := prompt_gateway_port()) or not validate_port(gateway_port):
+            pass
 
         token = terminal.prompt(text="Token", default=None)
 
     except (KeyboardInterrupt, EOFError):
         os._exit(1)
 
-    contexts[name] = ConfigContext(
+    return name, ConfigContext(
         token=token,
         gateway_host=gateway_host,
         gateway_port=gateway_port,
     )
-
-    save_config(contexts)
-
-    return name, contexts[name]
 
 
 def validate_ip_or_dns(value) -> bool:
@@ -180,7 +188,7 @@ def validate_ip_or_dns(value) -> bool:
 
 def validate_port(value: Any) -> bool:
     try:
-        if int(value) > 0:
+        if 0 < int(value) <= 65535:
             return True
     except ValueError:
         pass

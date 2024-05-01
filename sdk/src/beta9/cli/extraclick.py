@@ -11,6 +11,12 @@ from ..abstractions import base as base_abstraction
 from ..channel import ServiceClient
 from ..config import DEFAULT_CONTEXT_NAME, get_config_context
 
+CLICK_CONTEXT_SETTINGS = dict(
+    help_option_names=["-h", "--help"],
+    show_default=True,
+)
+
+
 config_context_param = click.Option(
     param_decls=["-c", "--context"],
     default=DEFAULT_CONTEXT_NAME,
