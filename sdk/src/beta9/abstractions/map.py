@@ -65,6 +65,10 @@ class Map(BaseAbstraction):
             self._stub = MapServiceStub(self.channel)
         return self._stub
 
+    @stub.setter
+    def stub(self, value: MapServiceStub):
+        self._stub = value
+
     def set(self, key: str, value: Any) -> bool:
         r: MapSetResponse = self.run_sync(
             self.stub.map_set(
