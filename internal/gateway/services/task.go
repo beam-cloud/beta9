@@ -86,8 +86,6 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 		switch clientField {
 		case "status":
 			taskFilter.Status = strings.Join(value.Values, ",")
-		case "stub-id":
-			taskFilter.StubId = value.Values[0]
 		}
 	}
 
