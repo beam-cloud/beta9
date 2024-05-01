@@ -24,6 +24,10 @@ class CLISettings:
     gateway_port: int = DEFAULT_GATEWAY_PORT
     config_path: Path = Path("~/.beta9/config.ini").expanduser()
 
+    def __post_init__(self, **kwargs):
+        if p := os.getenv("CONFIG_PATH"):
+            self.config_path = Path(p).expanduser()
+
 
 @dataclass
 class ConfigContext:
