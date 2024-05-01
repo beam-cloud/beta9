@@ -8,7 +8,7 @@ docs:
 
 tests:
 	poetry run pytest -s
-	open .htmlcov/index.html
+	# open .htmlcov/index.html
 
 format:
 	poetry run ruff check .
