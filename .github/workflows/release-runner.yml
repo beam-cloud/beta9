@@ -40,9 +40,8 @@ jobs:
           context: .
           file: ./docker/Dockerfile.runner
           push: true
-          tags:  ${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.python-version }}-${{ env.RUNNER_TAG }}
-          build-args: |
-            TARGET=${{ matrix.python-version }}
+          tags:  ${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.python-version }}-${{ env.RUNNER_TAG }},${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.python-version }}-latest
+          target: ${{ matrix.python-version }}
           load: false
           registry: ${{ steps.login-ecr.outputs.registry }}
           repository: ${{ steps.login-ecr.outputs.registry }}/beta9-runner
