@@ -34,7 +34,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		s.config.RedisURI,
 		localPath,
 		"-d",
-		// "--bucket", s.config.AWSS3Bucket,
+		"--bucket", s.config.AWSS3Bucket,
 		"--cache-size",
 		cacheSize,
 		"--no-bgjob",
