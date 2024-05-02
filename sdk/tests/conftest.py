@@ -1,6 +1,4 @@
 import os
-import tempfile
-import textwrap
 
 import pytest
 
@@ -15,22 +13,8 @@ def get_app_dirs():
     ]
 
 
-@pytest.fixture(scope="package", autouse=True)
+@pytest.fixture(scope="session", autouse=True)
 def write_test_config():
-    with tempfile.NamedTemporaryFile("w") as file:
-        os.environ["CONFIG_PATH"] = file.name
-
-        file.write(
-            textwrap.dedent(
-                """
-                [default]
-                token = test-token
-                gateway_host = 0.0.0.0
-                gateway_port = 1993
-                """
-            )
-        )
-
-        file.flush()
-
-        yield
+    os.environ["BETA9_GATEWAY_HOST"] = "0.0.0.0"
+    os.environ["BETA9_GATEWAY_PORT"] = "443"
+    os.environ["BETA9_TOKEN"] = "test-token"
