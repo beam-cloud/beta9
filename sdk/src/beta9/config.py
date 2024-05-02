@@ -14,15 +14,33 @@ DEFAULT_CLI_NAME = "Beta9"
 DEFAULT_CONTEXT_NAME = "default"
 DEFAULT_GATEWAY_HOST = "0.0.0.0"
 DEFAULT_GATEWAY_PORT = 1993
-_SETTINGS: Optional["CLISettings"] = None
+_SETTINGS: Optional["SDKSettings"] = None
+DEFAULT_ASCII_LOGO = """
+                 ,#@@&&&&&&&&&@&/
+              @&&&&&&&&&&&&&&&&&&&&@#
+               *@&&&&&&&&&&&&&&&&&&&&&@/
+         ##      /&&&&&&&&&&&&&@&&&&&&&&@,
+        @&&&&&.    (&&&&&&@/    &&&&&&&&&&/
+       &&&&&&&&&@*   %&@.      @& ,@&&&&&&&,
+      .@&&&&&&&&&&&&#        &&*  ,@&&&&&&&&
+      *&&&&&&&&&&&@,   %&@/@&*    @&&&&&&&&@
+      .@&&&&&&&&&*      *&@     .@&&&&&&&&&&
+       %&&&&&&&&     /@@*     .@&&&&&&&&&&@,
+        &&&&&&&/.#@&&.     .&&&    %&&&&&@,
+         /&&&&&&&@%*,,*#@&&(         ,@&&
+           /&&&&&&&&&&&&&&,
+              #@&&&&&&&&&&,
+                  ,(&@@&&&,
+"""
 
 
 @dataclass
-class CLISettings:
+class SDKSettings:
     name: str = DEFAULT_CLI_NAME
     gateway_host: str = DEFAULT_GATEWAY_HOST
     gateway_port: int = DEFAULT_GATEWAY_PORT
     config_path: Path = Path("~/.beta9/config.ini").expanduser()
+    ascii_logo: str = DEFAULT_ASCII_LOGO
 
     def __post_init__(self, **kwargs):
         if p := os.getenv("CONFIG_PATH"):
@@ -48,15 +66,15 @@ class ConfigContext:
         return False
 
 
-def set_settings(s: Optional[CLISettings] = None) -> None:
+def set_settings(s: Optional[SDKSettings] = None) -> None:
     if s is None:
-        s = CLISettings()
+        s = SDKSettings()
 
     global _SETTINGS
     _SETTINGS = s
 
 
-def get_settings() -> CLISettings:
+def get_settings() -> SDKSettings:
     if not _SETTINGS:
         set_settings()
 

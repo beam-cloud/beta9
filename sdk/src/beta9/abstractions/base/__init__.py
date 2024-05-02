@@ -9,7 +9,7 @@ from typing import Any, Coroutine, Optional
 from grpclib.client import Channel
 
 from ...channel import get_channel as _get_channel
-from ...config import CLISettings, ConfigContext, get_config_context, set_settings
+from ...config import ConfigContext, SDKSettings, get_config_context, set_settings
 
 # Global channel
 _channel: Optional[Channel] = None
@@ -79,7 +79,7 @@ class BaseAbstraction(ABC):
         if frame.code_context and any(
             substr in frame.code_context[0] for substr in ("import beam", "from beam")
         ):
-            settings = CLISettings(
+            settings = SDKSettings(
                 name="Beam",
                 gateway_host=os.getenv("GATEWAY_HOST", "gateway.stage.beam.cloud"),
                 gateway_port=int(os.getenv("GATEWAY_PORT", 443)),
