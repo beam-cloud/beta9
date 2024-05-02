@@ -22,7 +22,6 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 	}
 
 	g.POST("", group.CreateWorkspace)
-	g.POST("/", group.CreateWorkspace)
 
 	return group
 }

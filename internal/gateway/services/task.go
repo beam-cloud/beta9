@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -14,8 +15,10 @@ import (
 )
 
 func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskRequest) (*pb.StartTaskResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
 	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
-	if err != nil {
+	if err != nil || task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
 		return &pb.StartTaskResponse{
 			Ok: false,
 		}, nil
@@ -42,8 +45,10 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 }
 
 func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (*pb.EndTaskResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
 	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
-	if err != nil {
+	if err != nil || task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
 		return &pb.EndTaskResponse{
 			Ok: false,
 		}, nil
@@ -122,45 +127,47 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 	return response, nil
 }
 
-func (gws *GatewayService) StopTask(ctx context.Context, in *pb.StopTaskRequest) (*pb.StopTaskResponse, error) {
-	cc, _ := auth.
-	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
-	if err != nil {
-		return &pb.StopTaskResponse{
-			Ok:     false,
-			ErrMsg: "Failed to retrieve task",
-		}, nil
+func (gws *GatewayService) StopTask(ctx context.Context, authInfo *auth.AuthInfo, taskId string) error {
+	task, err := gws.backendRepo.GetTaskWithRelated(ctx, taskId)
+	if err != nil || task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		return errors.New("failed to retrieve task")
 	}
 
 	if task.Status.IsCompleted() {
-		return &pb.StopTaskResponse{Ok: true}, nil
+		return nil
 	}
 
-	err = gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, in.TaskId)
+	err = gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, taskId)
 	if err != nil {
-		return &pb.StopTaskResponse{
-			Ok:     false,
-			ErrMsg: "Failed to complete task",
-		}, nil
+		return errors.New("failed to complete task")
 	}
 
-	// gws.redisClient.Publish(ctx, common.RedisKeys.TaskCancel())
-
-	if err := gws.scheduler.Stop(task.ContainerId); err != nil {
-		return &pb.StopTaskResponse{
-			Ok:     false,
-			ErrMsg: "Failed to stop container",
-		}, nil
+	err = gws.redisClient.Publish(ctx, common.RedisKeys.TaskCancel(authInfo.Workspace.Name, task.Stub.ExternalId, task.ExternalId), task.ExternalId).Err()
+	if err != nil {
+		return errors.New("failed to cancel task")
 	}
 
 	task.Status = types.TaskStatusCancelled
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
-	if _, err := gws.backendRepo.UpdateTask(ctx, in.TaskId, task.Task); err != nil {
-		return &pb.StopTaskResponse{
-			Ok:     false,
-			ErrMsg: "Failed to update task",
-		}, nil
+	if _, err := gws.backendRepo.UpdateTask(ctx, taskId, task.Task); err != nil {
+		return errors.New("failed to update task")
 	}
 
-	return &pb.StopTaskResponse{Ok: true}, nil
+	return nil
+}
+
+func (gws *GatewayService) StopTasks(ctx context.Context, in *pb.StopTasksRequest) (*pb.StopTasksResponse, error) {
+	authInfo, authenticated := auth.AuthInfoFromContext(ctx)
+	if !authenticated {
+		return &pb.StopTasksResponse{Ok: false, ErrMsg: "Invalid token"}, nil
+	}
+
+	for _, taskId := range in.TaskIds {
+		err := gws.StopTask(ctx, authInfo, taskId)
+		if err != nil {
+			return &pb.StopTasksResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+	}
+
+	return &pb.StopTasksResponse{Ok: true}, nil
 }

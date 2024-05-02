@@ -136,6 +136,7 @@ func (g *Gateway) initHttp() error {
 	e.HideBanner = true
 	e.HidePort = true
 
+	e.Pre(middleware.RemoveTrailingSlash())
 	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
 		Skipper: func(c echo.Context) bool {
 			return c.Request().URL.Path == "/api/v1/health"

@@ -22,16 +22,10 @@ func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 	}
 
 	g.GET("/:workspaceId", group.ListTasksPaginated)
-	g.GET("/:workspaceId/", group.ListTasksPaginated)
-
 	g.GET("/:workspaceId/task-count-by-deployment", group.GetTaskCountByDeployment)
-	g.GET("/:workspaceId/task-count-by-deployment/", group.GetTaskCountByDeployment)
-
 	g.GET("/:workspaceId/aggregate-by-time-window", group.AggregateTasksByTimeWindow)
-	g.GET("/:workspaceId/aggregate-by-time-window/", group.AggregateTasksByTimeWindow)
-
 	g.GET("/:workspaceId/:taskId", group.RetrieveTask)
-	g.GET("/:workspaceId/:taskId/", group.RetrieveTask)
+	g.DELETE("/:workspaceId/stop-tasks", group.StopTasks)
 
 	return group
 }
@@ -102,6 +96,19 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 	} else {
 		return ctx.JSON(http.StatusOK, task)
 	}
+}
+
+func (g *TaskGroup) StopTasks(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return echo.NewHTTPError(http.StatusUnauthorized)
+	}
+
+	// taskIds := ctx.Param("taskIds")
+	// g.
+	// log.Println("task: ", task)
+
+	return nil
 }
 
 func (g *TaskGroup) authorize(ctx echo.Context) (*auth.HttpAuthContext, error) {
