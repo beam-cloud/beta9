@@ -127,17 +127,34 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 	return response, nil
 }
 
-func (gws *GatewayService) StopTask(ctx context.Context, authInfo *auth.AuthInfo, taskId string) error {
-	task, err := gws.backendRepo.GetTaskWithRelated(ctx, taskId)
-	if err != nil || task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
-		return errors.New("failed to retrieve task")
+func (gws *GatewayService) StopTasks(ctx context.Context, in *pb.StopTasksRequest) (*pb.StopTasksResponse, error) {
+	authInfo, authenticated := auth.AuthInfoFromContext(ctx)
+	if !authenticated {
+		return &pb.StopTasksResponse{Ok: false, ErrMsg: "Invalid token"}, nil
 	}
 
+	for _, taskId := range in.TaskIds {
+		task, err := gws.backendRepo.GetTaskWithRelated(ctx, taskId)
+		if err != nil || task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+			return &pb.StopTasksResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+
+		err = gws.stopTask(ctx, authInfo, task)
+		if err != nil {
+			return &pb.StopTasksResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+	}
+
+	return &pb.StopTasksResponse{Ok: true}, nil
+}
+
+// TODO: consolidate this logic with the stopTask function in /api/v1/task.go
+func (gws *GatewayService) stopTask(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated) error {
 	if task.Status.IsCompleted() {
 		return nil
 	}
 
-	err = gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, taskId)
+	err := gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId)
 	if err != nil {
 		return errors.New("failed to complete task")
 	}
@@ -149,25 +166,9 @@ func (gws *GatewayService) StopTask(ctx context.Context, authInfo *auth.AuthInfo
 
 	task.Status = types.TaskStatusCancelled
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
-	if _, err := gws.backendRepo.UpdateTask(ctx, taskId, task.Task); err != nil {
+	if _, err := gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
 		return errors.New("failed to update task")
 	}
 
 	return nil
-}
-
-func (gws *GatewayService) StopTasks(ctx context.Context, in *pb.StopTasksRequest) (*pb.StopTasksResponse, error) {
-	authInfo, authenticated := auth.AuthInfoFromContext(ctx)
-	if !authenticated {
-		return &pb.StopTasksResponse{Ok: false, ErrMsg: "Invalid token"}, nil
-	}
-
-	for _, taskId := range in.TaskIds {
-		err := gws.StopTask(ctx, authInfo, taskId)
-		if err != nil {
-			return &pb.StopTasksResponse{Ok: false, ErrMsg: err.Error()}, nil
-		}
-	}
-
-	return &pb.StopTasksResponse{Ok: true}, nil
 }

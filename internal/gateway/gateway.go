@@ -23,6 +23,7 @@ import (
 	dmap "github.com/beam-cloud/beta9/internal/abstractions/map"
 	simplequeue "github.com/beam-cloud/beta9/internal/abstractions/queue"
 	"github.com/beam-cloud/beta9/internal/abstractions/taskqueue"
+	apiv1 "github.com/beam-cloud/beta9/internal/api/v1"
 	"github.com/beam-cloud/beta9/internal/network"
 	metrics "github.com/beam-cloud/beta9/internal/repository/metrics"
 
@@ -30,7 +31,6 @@ import (
 	"golang.org/x/net/http2/h2c"
 
 	volume "github.com/beam-cloud/beta9/internal/abstractions/volume"
-	apiv1 "github.com/beam-cloud/beta9/internal/api/v1"
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/common"
 	gatewayservices "github.com/beam-cloud/beta9/internal/gateway/services"
@@ -43,16 +43,17 @@ import (
 
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
-	config         types.AppConfig
+	Config         types.AppConfig
 	httpServer     *http.Server
 	grpcServer     *grpc.Server
-	redisClient    *common.RedisClient
+	RedisClient    *common.RedisClient
 	TaskDispatcher *task.Dispatcher
 	TaskRepo       repository.TaskRepository
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
 	Tailscale      *network.Tailscale
+	GatewayService *gatewayservices.GatewayService
 	metricsRepo    repository.MetricsRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
@@ -91,7 +92,7 @@ func NewGateway() (*Gateway, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	gateway := &Gateway{
-		redisClient: redisClient,
+		RedisClient: redisClient,
 		ctx:         ctx,
 		cancelFunc:  cancel,
 		Storage:     storage,
@@ -118,7 +119,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	gateway.config = config
+	gateway.Config = config
 	gateway.Scheduler = scheduler
 	gateway.TaskRepo = taskRepo
 	gateway.ContainerRepo = containerRepo
@@ -146,7 +147,7 @@ func (g *Gateway) initHttp() error {
 
 	// Accept both HTTP/2 and HTTP/1
 	g.httpServer = &http.Server{
-		Addr:    fmt.Sprintf(":%v", g.config.GatewayService.HTTPPort),
+		Addr:    fmt.Sprintf(":%v", g.Config.GatewayService.HTTPPort),
 		Handler: h2c.NewHandler(e, &http2.Server{}),
 	}
 
@@ -154,13 +155,13 @@ func (g *Gateway) initHttp() error {
 	g.baseRouteGroup = e.Group(apiv1.HttpServerBaseRoute)
 	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
 
-	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.redisClient)
-	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.config)
-	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.config)
-	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.config)
-	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.BackendRepo, g.config)
-	apiv1.NewDeploymentGroup(g.baseRouteGroup.Group("/deployment", authMiddleware), g.BackendRepo, g.config)
-	apiv1.NewStubGroup(g.baseRouteGroup.Group("/stub", authMiddleware), g.BackendRepo, g.config)
+	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.RedisClient)
+	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.Config)
+	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.Config)
+	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.Config)
+	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.BackendRepo, g.TaskDispatcher, g.Config)
+	apiv1.NewDeploymentGroup(g.baseRouteGroup.Group("/deployment", authMiddleware), g.BackendRepo, g.Config)
+	apiv1.NewStubGroup(g.baseRouteGroup.Group("/stub", authMiddleware), g.BackendRepo, g.Config)
 
 	return nil
 }
@@ -171,8 +172,8 @@ func (g *Gateway) initGrpc() error {
 	serverOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(authInterceptor.Unary()),
 		grpc.StreamInterceptor(authInterceptor.Stream()),
-		grpc.MaxRecvMsgSize(g.config.GatewayService.MaxRecvMsgSize * 1024 * 1024),
-		grpc.MaxSendMsgSize(g.config.GatewayService.MaxSendMsgSize * 1024 * 1024),
+		grpc.MaxRecvMsgSize(g.Config.GatewayService.MaxRecvMsgSize * 1024 * 1024),
+		grpc.MaxSendMsgSize(g.Config.GatewayService.MaxSendMsgSize * 1024 * 1024),
 	}
 
 	g.grpcServer = grpc.NewServer(
@@ -184,14 +185,14 @@ func (g *Gateway) initGrpc() error {
 
 func (g *Gateway) registerServices() error {
 	// Register map service
-	rm, err := dmap.NewRedisMapService(g.redisClient)
+	rm, err := dmap.NewRedisMapService(g.RedisClient)
 	if err != nil {
 		return err
 	}
 	pb.RegisterMapServiceServer(g.grpcServer, rm)
 
 	// Register simple queue service
-	rq, err := simplequeue.NewRedisSimpleQueueService(g.redisClient)
+	rq, err := simplequeue.NewRedisSimpleQueueService(g.RedisClient)
 	if err != nil {
 		return err
 	}
@@ -199,7 +200,7 @@ func (g *Gateway) registerServices() error {
 
 	// Register image service
 	is, err := image.NewRuncImageService(g.ctx, image.ImageServiceOpts{
-		Config:        g.config,
+		Config:        g.Config,
 		ContainerRepo: g.ContainerRepo,
 		Scheduler:     g.Scheduler,
 		Tailscale:     g.Tailscale,
@@ -211,8 +212,8 @@ func (g *Gateway) registerServices() error {
 
 	// Register function service
 	fs, err := function.NewRuncFunctionService(g.ctx, function.FunctionServiceOpts{
-		Config:         g.config,
-		RedisClient:    g.redisClient,
+		Config:         g.Config,
+		RedisClient:    g.RedisClient,
 		BackendRepo:    g.BackendRepo,
 		TaskRepo:       g.TaskRepo,
 		ContainerRepo:  g.ContainerRepo,
@@ -228,8 +229,8 @@ func (g *Gateway) registerServices() error {
 
 	// Register task queue service
 	tq, err := taskqueue.NewRedisTaskQueueService(g.ctx, taskqueue.TaskQueueServiceOpts{
-		Config:         g.config,
-		RedisClient:    g.redisClient,
+		Config:         g.Config,
+		RedisClient:    g.RedisClient,
 		BackendRepo:    g.BackendRepo,
 		TaskRepo:       g.TaskRepo,
 		ContainerRepo:  g.ContainerRepo,
@@ -248,7 +249,7 @@ func (g *Gateway) registerServices() error {
 		ContainerRepo:  g.ContainerRepo,
 		BackendRepo:    g.BackendRepo,
 		TaskRepo:       g.TaskRepo,
-		RedisClient:    g.redisClient,
+		RedisClient:    g.RedisClient,
 		Scheduler:      g.Scheduler,
 		RouteGroup:     g.rootRouteGroup,
 		Tailscale:      g.Tailscale,
@@ -270,12 +271,12 @@ func (g *Gateway) registerServices() error {
 	cs, err := container.NewContainerService(
 		g.ctx,
 		container.ContainerServiceOpts{
-			Config:        g.config,
+			Config:        g.Config,
 			BackendRepo:   g.BackendRepo,
 			ContainerRepo: g.ContainerRepo,
 			Tailscale:     g.Tailscale,
 			Scheduler:     g.Scheduler,
-			RedisClient:   g.redisClient,
+			RedisClient:   g.RedisClient,
 		},
 	)
 	if err != nil {
@@ -292,18 +293,19 @@ func (g *Gateway) registerServices() error {
 
 	// Register gateway services
 	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction)
-	gws, err := gatewayservices.NewGatewayService(g.BackendRepo, s.Scheduler, g.TaskDispatcher, g.redisClient)
+	gws, err := gatewayservices.NewGatewayService(g.BackendRepo, s.Scheduler, g.TaskDispatcher, g.RedisClient)
 	if err != nil {
 		return err
 	}
 	pb.RegisterGatewayServiceServer(g.grpcServer, gws)
+	g.GatewayService = gws
 
 	return nil
 }
 
 // Gateway entry point
 func (g *Gateway) Start() error {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", g.config.GatewayService.GRPCPort))
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", g.Config.GatewayService.GRPCPort))
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
@@ -336,8 +338,8 @@ func (g *Gateway) Start() error {
 		}
 	}()
 
-	log.Println("Gateway http server running @", g.config.GatewayService.HTTPPort)
-	log.Println("Gateway grpc server running @", g.config.GatewayService.GRPCPort)
+	log.Println("Gateway http server running @", g.Config.GatewayService.HTTPPort)
+	log.Println("Gateway grpc server running @", g.Config.GatewayService.GRPCPort)
 
 	terminationSignal := make(chan os.Signal, 1)
 	defer close(terminationSignal)

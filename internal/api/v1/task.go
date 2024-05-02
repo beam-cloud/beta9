@@ -1,31 +1,41 @@
 package apiv1
 
 import (
+	"context"
+	"database/sql"
+	"errors"
 	"net/http"
+	"time"
 
 	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/repository"
+	"github.com/beam-cloud/beta9/internal/task"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/labstack/echo/v4"
 )
 
 type TaskGroup struct {
-	routerGroup *echo.Group
-	config      types.AppConfig
-	backendRepo repository.BackendRepository
+	routerGroup    *echo.Group
+	config         types.AppConfig
+	backendRepo    repository.BackendRepository
+	redisClient    *common.RedisClient
+	taskDispatcher *task.Dispatcher
 }
 
-func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, config types.AppConfig) *TaskGroup {
+func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, config types.AppConfig) *TaskGroup {
 	group := &TaskGroup{routerGroup: g,
-		backendRepo: backendRepo,
-		config:      config,
+		backendRepo:    backendRepo,
+		config:         config,
+		redisClient:    redisClient,
+		taskDispatcher: taskDispatcher,
 	}
 
 	g.GET("/:workspaceId", group.ListTasksPaginated)
 	g.GET("/:workspaceId/task-count-by-deployment", group.GetTaskCountByDeployment)
 	g.GET("/:workspaceId/aggregate-by-time-window", group.AggregateTasksByTimeWindow)
+	g.DELETE("/:workspaceId", group.StopTasks)
 	g.GET("/:workspaceId/:taskId", group.RetrieveTask)
-	g.DELETE("/:workspaceId/:taskIds", group.StopTasks)
 
 	return group
 }
@@ -98,15 +108,56 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 	}
 }
 
+type StopTasksRequest struct {
+	TaskIds types.StringSlice `query:"task_ids"`
+}
+
 func (g *TaskGroup) StopTasks(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
 		return echo.NewHTTPError(http.StatusUnauthorized)
 	}
 
-	// taskIds := ctx.Param("taskIds")
-	// g.
-	// log.Println("task: ", task)
+	var req StopTasksRequest
+	if err := ctx.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode task_ids parameter")
+	}
+
+	for _, taskId := range req.TaskIds {
+		task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId)
+		if err != nil {
+			continue
+		}
+
+		err = g.stopTask(ctx.Request().Context(), cc.AuthInfo, task)
+		if err != nil {
+			continue
+		}
+	}
+
+	return nil
+}
+
+func (g *TaskGroup) stopTask(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated) error {
+	if task.Status.IsCompleted() {
+		return nil
+	}
+
+	err := g.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId)
+	if err != nil {
+		return errors.New("failed to complete task")
+	}
+
+	err = g.redisClient.Publish(ctx, common.RedisKeys.TaskCancel(authInfo.Workspace.Name, task.Stub.ExternalId, task.ExternalId), task.ExternalId).Err()
+	if err != nil {
+		return errors.New("failed to cancel task")
+	}
+
+	task.Status = types.TaskStatusCancelled
+	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	if _, err := g.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
+		return errors.New("failed to update task")
+	}
 
 	return nil
 }
