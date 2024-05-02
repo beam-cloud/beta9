@@ -310,6 +310,31 @@ func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string,
 	return deleted, nil
 }
 
+func (vs *GlobalVolumeService) getFileFd(
+	ctx context.Context,
+	path string,
+	workspace *types.Workspace,
+) (*os.File, error) {
+	volumeName, volumePath := parseVolumeInput(path)
+	if volumeName == "" {
+		return nil, errors.New("must provide volume name")
+	}
+
+	// Check if the volume exists
+	volume, err := vs.backendRepo.GetVolume(ctx, workspace.Id, volumeName)
+	if err != nil {
+		return nil, errors.New("unable to find volume")
+	}
+
+	// Get paths and prevent access above parent directory
+	_, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
+	if err != nil {
+		return nil, err
+	}
+
+	return os.Open(fullVolumePath)
+}
+
 func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, workspace *types.Workspace) ([]FileInfo, error) {
 	// Parse the volume and path/pattern
 	volumeName, volumePath := parseVolumeInput(inputPath)
