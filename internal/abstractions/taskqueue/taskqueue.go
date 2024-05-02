@@ -354,7 +354,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				case <-timeoutChan:
 					err := timeoutCallback()
 					if err != nil {
-						log.Printf("error timing out task: %v", err)
+						log.Printf("task timeout err: %v", err)
 					}
 					timeoutFlag <- true
 					return
@@ -370,7 +370,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 
 				case err := <-errs:
 					if err != nil {
-						log.Printf("error with monitor task subscription: %v", err)
+						log.Printf("monitor task subscription err: %v", err)
 						break retry
 					}
 				}

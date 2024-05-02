@@ -264,7 +264,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 				case <-timeoutChan:
 					err := timeoutCallback()
 					if err != nil {
-						log.Printf("error timing out task: %v", err)
+						log.Printf("task timeout err: %v", err)
 					}
 					timeoutFlag <- true
 					return
@@ -280,7 +280,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 
 				case err := <-errs:
 					if err != nil {
-						log.Printf("error with monitor task subscription: %v", err)
+						log.Printf("monitor task subscription err: %v", err)
 						break retry
 					}
 				}
