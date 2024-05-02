@@ -66,6 +66,22 @@ valuesInline:
           format           json_lines
           json_date_format iso8601
       [OUTPUT]
+          Name                es
+          Match               worker-logs
+          Host                beam-dev.es.us-east-1.aws.found.io
+          Port                9243
+          HTTP_User           elastic
+          HTTP_Passwd         cJIOUBqz3wQKhyLevh9lEJLR
+          Logstash_Format     On
+          Logstash_Prefix     app-logs
+          Retry_Limit         False
+          Time_Key_Nanos      On
+          Suppress_Type_Name  On
+          Buffer_Size         False
+          Trace_Error         On
+          Replace_Dots        On
+          tls                 On
+      [OUTPUT]
           Name            s3
           Match           worker-logs
           bucket          ${AWS_S3_BUCKET_NAME}

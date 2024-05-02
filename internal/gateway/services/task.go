@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -122,6 +123,7 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 }
 
 func (gws *GatewayService) StopTask(ctx context.Context, in *pb.StopTaskRequest) (*pb.StopTaskResponse, error) {
+	cc, _ := auth.
 	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
 	if err != nil {
 		return &pb.StopTaskResponse{
@@ -141,6 +143,8 @@ func (gws *GatewayService) StopTask(ctx context.Context, in *pb.StopTaskRequest)
 			ErrMsg: "Failed to complete task",
 		}, nil
 	}
+
+	// gws.redisClient.Publish(ctx, common.RedisKeys.TaskCancel())
 
 	if err := gws.scheduler.Stop(task.ContainerId); err != nil {
 		return &pb.StopTaskResponse{

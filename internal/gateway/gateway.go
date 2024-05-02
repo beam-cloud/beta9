@@ -291,7 +291,7 @@ func (g *Gateway) registerServices() error {
 
 	// Register gateway services
 	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction)
-	gws, err := gatewayservices.NewGatewayService(g.BackendRepo, s.Scheduler, g.TaskDispatcher)
+	gws, err := gatewayservices.NewGatewayService(g.BackendRepo, s.Scheduler, g.TaskDispatcher, g.redisClient)
 	if err != nil {
 		return err
 	}

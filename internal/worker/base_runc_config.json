@@ -227,7 +227,7 @@
 			]
 		},
 		{
-			"destination": "/usr/local/lib/python3.9/dist-packages/beam",
+			"destination": "/usr/local/lib/python3.8/dist-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": [
