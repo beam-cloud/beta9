@@ -22,7 +22,7 @@ from . import terminal
 from .aio import run_sync
 from .clients.gateway import AuthorizeRequest, AuthorizeResponse, GatewayServiceStub
 from .clients.volume import VolumeServiceStub
-from .config import DEFAULT_CONTEXT_NAME, CLISettings
+from .config import DEFAULT_CONTEXT_NAME, SDKSettings
 from .exceptions import RunnerException
 
 
@@ -72,7 +72,10 @@ def get_channel(context: Optional[ConfigContext] = None) -> Channel:
     )
 
 
-def prompt_first_auth(settings: CLISettings) -> None:
+def prompt_first_auth(settings: SDKSettings) -> None:
+    terminal.header(f"Welcome to {settings.name.title()}! Let's get started 📡")
+    terminal.print(settings.ascii_logo, highlight=True)
+
     name, context = prompt_for_config_context(
         name=DEFAULT_CONTEXT_NAME,
         gateway_host=settings.gateway_host,
@@ -101,6 +104,7 @@ def prompt_first_auth(settings: CLISettings) -> None:
     # Load config, add new context
     contexts = load_config(settings.config_path)
     contexts[name] = context
+    contexts[DEFAULT_CONTEXT_NAME] = context
 
     # Write updated contexts to config
     save_config(contexts, settings.config_path)
