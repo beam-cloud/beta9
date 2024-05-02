@@ -135,7 +135,7 @@ func (g *TaskGroup) StopTasks(ctx echo.Context) error {
 		}
 	}
 
-	return nil
+	return ctx.JSON(http.StatusOK, map[string]interface{}{})
 }
 
 func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) error {
