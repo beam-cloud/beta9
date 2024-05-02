@@ -1,15 +1,15 @@
 import asyncio
+import inspect
+import os
 from abc import ABC
 from asyncio import AbstractEventLoop
+from pathlib import Path
 from typing import Any, Coroutine, Optional
 
 from grpclib.client import Channel
 
 from ...channel import get_channel as _get_channel
-from ...config import (
-    ConfigContext,
-    get_config_context,
-)
+from ...config import CLISettings, ConfigContext, get_config_context, set_settings
 
 # Global channel
 _channel: Optional[Channel] = None
@@ -66,6 +66,28 @@ class BaseAbstraction(ABC):
 
     def run_sync(self, coroutine: Coroutine) -> Any:
         return self.loop.run_until_complete(coroutine)
+
+    def __init_subclass__(cls, /, **kwargs):
+        """
+        Dynamically load settings depending on if this library is being used
+        by beta9 or beam. This is done by inspecting the first frame loaded
+        onto the stack.
+        """
+        frames = inspect.stack()
+        frame = frames[-1]
+
+        if frame.code_context and any(
+            substr in frame.code_context[0] for substr in ("import beam", "from beam")
+        ):
+            settings = CLISettings(
+                name="Beam",
+                gateway_host=os.getenv("GATEWAY_HOST", "gateway.stage.beam.cloud"),
+                gateway_port=int(os.getenv("GATEWAY_PORT", 443)),
+                config_path=Path("~/.beam/config.ini").expanduser(),
+            )
+            set_settings(settings)
+
+        super().__init_subclass__(**kwargs)
 
     def __del__(self) -> None:
         if _channel:
