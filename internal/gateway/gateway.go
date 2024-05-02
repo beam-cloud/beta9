@@ -53,7 +53,6 @@ type Gateway struct {
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
 	Tailscale      *network.Tailscale
-	GatewayService *gatewayservices.GatewayService
 	metricsRepo    repository.MetricsRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
@@ -298,7 +297,6 @@ func (g *Gateway) registerServices() error {
 		return err
 	}
 	pb.RegisterGatewayServiceServer(g.grpcServer, gws)
-	g.GatewayService = gws
 
 	return nil
 }
