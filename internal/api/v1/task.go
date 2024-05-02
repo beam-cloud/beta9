@@ -120,7 +120,7 @@ func (g *TaskGroup) StopTasks(ctx echo.Context) error {
 
 	var req StopTasksRequest
 	if err := ctx.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode task_ids parameter")
+		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode task ids")
 	}
 
 	for _, taskId := range req.TaskIds {
@@ -129,7 +129,7 @@ func (g *TaskGroup) StopTasks(ctx echo.Context) error {
 			continue
 		}
 
-		err = g.stopTask(ctx.Request().Context(), cc.AuthInfo, task)
+		err = g.stopTask(ctx.Request().Context(), task)
 		if err != nil {
 			continue
 		}
@@ -138,7 +138,7 @@ func (g *TaskGroup) StopTasks(ctx echo.Context) error {
 	return nil
 }
 
-func (g *TaskGroup) stopTask(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated) error {
+func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) error {
 	if task.Status.IsCompleted() {
 		return nil
 	}
@@ -148,7 +148,7 @@ func (g *TaskGroup) stopTask(ctx context.Context, authInfo *auth.AuthInfo, task 
 		return errors.New("failed to complete task")
 	}
 
-	err = g.redisClient.Publish(ctx, common.RedisKeys.TaskCancel(authInfo.Workspace.Name, task.Stub.ExternalId, task.ExternalId), task.ExternalId).Err()
+	err = g.redisClient.Publish(ctx, common.RedisKeys.TaskCancel(task.Workspace.Name, task.Stub.ExternalId, task.ExternalId), task.ExternalId).Err()
 	if err != nil {
 		return errors.New("failed to cancel task")
 	}
