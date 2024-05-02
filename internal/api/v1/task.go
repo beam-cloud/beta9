@@ -95,9 +95,9 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 }
 
 func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return echo.NewHTTPError(http.StatusUnauthorized)
+	_, err := g.authorize(ctx)
+	if err != nil {
+		return err
 	}
 
 	taskId := ctx.Param("taskId")
@@ -113,9 +113,9 @@ type StopTasksRequest struct {
 }
 
 func (g *TaskGroup) StopTasks(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return echo.NewHTTPError(http.StatusUnauthorized)
+	_, err := g.authorize(ctx)
+	if err != nil {
+		return err
 	}
 
 	var req StopTasksRequest
