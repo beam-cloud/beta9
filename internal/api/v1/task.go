@@ -25,7 +25,7 @@ func NewTaskGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 	g.GET("/:workspaceId/task-count-by-deployment", group.GetTaskCountByDeployment)
 	g.GET("/:workspaceId/aggregate-by-time-window", group.AggregateTasksByTimeWindow)
 	g.GET("/:workspaceId/:taskId", group.RetrieveTask)
-	g.DELETE("/:workspaceId/stop-tasks", group.StopTasks)
+	g.DELETE("/:workspaceId/:taskIds", group.StopTasks)
 
 	return group
 }
