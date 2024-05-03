@@ -117,7 +117,8 @@ Beta9 está diseñado para lanzar contenedores remotos sin servidor muy rápidam
 
 * Clasificar funciones en nuestra hoja de ruta
 * Abrir un PR
-* Envíe una [solicitud de función](https://github.com/beam-cloud/beta9/issues/new?assignes=&labels=&projects=&template=feature-request.md&title=) o [informe de error](https:/ /github.com/beam-cloud/beta9/issues/new?assignes=&labels=&projects=&template=bug-report.md&title=)
+* Envíe una [solicitud de función](https://github.com/beam-cloud/beta9/issues/new?assignes=&labels=&projects=&template=feature-request.md&title=)
+
 ## Filosofía
 
 Nuestra misión es simplificar la complejidad de la nube. Para hacer esto, hemos creado una abstracción basada en Python para lanzar contenedores sin servidor en GPU.

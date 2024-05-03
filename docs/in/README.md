@@ -119,8 +119,7 @@ def main():
 
 * हमारे रोडमैप में सुविधाओं को रैंक करें
 * एक पीआर खोलें
-* एक [फ़ीचर अनुरोध](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) या [बग रिपोर्ट](https:/) सबमिट करें /github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=bug-report.md&title=)
-## दर्शन
+* एक [फ़ीचर अनुरोध](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) 
 
 हमारा मिशन क्लाउड की जटिलता को सरल बनाना है। ऐसा करने के लिए, हमने GPU पर सर्वर रहित कंटेनर लॉन्च करने के लिए पायथन-पहला एब्स्ट्रैक्शन बनाया है।
 
