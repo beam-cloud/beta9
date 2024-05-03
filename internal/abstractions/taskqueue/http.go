@@ -52,7 +52,9 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 
 	payload, err := task.SerializeHttpPayload(ctx)
 	if err != nil {
-		return err
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 
 	taskId, err := g.tq.put(ctx.Request().Context(), cc.AuthInfo, stubId, payload)
