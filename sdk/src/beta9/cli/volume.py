@@ -59,8 +59,8 @@ def common(**_):
     required=True,
 )
 @extraclick.pass_service_client
-def ls(service: ServiceClient, remote_path: str, long_format: bool):
-    req = ListPathRequest(path=remote_path, long_format=long_format)
+def ls(service: ServiceClient, remote_path: str):
+    req = ListPathRequest(path=remote_path)
     res: ListPathResponse = aio.run_sync(service.volume.list_path(req))
 
     if not res.ok:

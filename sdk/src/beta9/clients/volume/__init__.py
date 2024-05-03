@@ -61,7 +61,6 @@ class PathInfo(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class ListPathRequest(betterproto.Message):
     path: str = betterproto.string_field(1)
-    long_format: bool = betterproto.bool_field(2)
 
 
 @dataclass(eq=False, repr=False)

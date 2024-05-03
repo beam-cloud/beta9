@@ -42,7 +42,6 @@ message PathInfo {
 
 message ListPathRequest {
   string path = 1;
-  bool long_format = 2;
 }
 
 message ListPathResponse {
