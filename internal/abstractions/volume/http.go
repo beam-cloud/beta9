@@ -17,14 +17,11 @@ func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup 
 	group := &volumeGroup{routeGroup: g, gvs: gvs}
 
 	g.GET("/:workspaceId", group.ListVolumes)
-	g.GET("/:workspaceId/", group.ListVolumes)
-
 	g.POST("/:workspaceId/:volumeName", group.CreateVolume)
-	g.POST("/:workspaceId/:volumeName/", group.CreateVolume)
 
-	g.GET("/:workspaceId/:volumeName/*", group.Ls)
-	g.DELETE("/:workspaceId/:volumeName/*", group.Rm)
-	g.PATCH("/:workspaceId/:volumeName/*", group.Mv)
+	g.GET("/:workspaceId/:volumePath*", group.Ls)
+	g.DELETE("/:workspaceId/:volumePath*", group.Rm)
+	g.PATCH("/:workspaceId/:volumePath*", group.Mv)
 
 	return group
 }
@@ -92,12 +89,10 @@ func (g *volumeGroup) Ls(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
-	volumeName := ctx.Param("volumeName")
-	path := ctx.Param("*")
-
+	volumePath := ctx.Param("volumePath*")
 	if paths, err := g.gvs.listPath(
 		ctx.Request().Context(),
-		volumeName+"/"+path,
+		volumePath,
 		&workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list path")
@@ -118,12 +113,10 @@ func (g *volumeGroup) Rm(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
-	volumeName := ctx.Param("volumeName")
-	path := ctx.Param("*")
-
+	volumePath := ctx.Param("volumePath*")
 	if _, err := g.gvs.deletePath(
 		ctx.Request().Context(),
-		volumeName+"/"+path,
+		volumePath,
 		&workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete path")
