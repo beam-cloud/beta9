@@ -21,7 +21,7 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 		config:      config,
 	}
 
-	g.GET("/", group.ListStubs)
+	g.GET("", group.ListStubs)
 
 	return group
 }

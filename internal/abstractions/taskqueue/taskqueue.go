@@ -319,7 +319,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 	}
 
 	// Listen for task cancellation events
-	channelKey := Keys.taskQueueTaskCancel(authInfo.Workspace.Name, req.StubId, task.ExternalId)
+	channelKey := common.RedisKeys.TaskCancel(authInfo.Workspace.Name, req.StubId, req.TaskId)
 	cancelFlag := make(chan bool, 1)
 	timeoutFlag := make(chan bool, 1)
 
@@ -354,7 +354,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				case <-timeoutChan:
 					err := timeoutCallback()
 					if err != nil {
-						log.Printf("error timing out task: %v", err)
+						log.Printf("task timeout err: %v", err)
 					}
 					timeoutFlag <- true
 					return
@@ -370,7 +370,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 
 				case err := <-errs:
 					if err != nil {
-						log.Printf("error with monitor task subscription: %v", err)
+						log.Printf("monitor task subscription err: %v", err)
 						break retry
 					}
 				}
@@ -538,7 +538,6 @@ var (
 	taskQueueInstanceLock        string = "taskqueue:%s:%s:instance_lock"
 	taskQueueTaskDuration        string = "taskqueue:%s:%s:task_duration"
 	taskQueueAverageTaskDuration string = "taskqueue:%s:%s:avg_task_duration"
-	taskQueueTaskCancel          string = "taskqueue:%s:%s:task:cancel:%s"
 	taskQueueTaskHeartbeat       string = "taskqueue:%s:%s:task:heartbeat:%s"
 	taskQueueProcessingLock      string = "taskqueue:%s:%s:processing_lock:%s"
 	taskQueueKeepWarmLock        string = "taskqueue:%s:%s:keep_warm_lock:%s"
@@ -559,10 +558,6 @@ func (k *keys) taskQueueServeLock(workspaceName, stubId string) string {
 
 func (k *keys) taskQueueList(workspaceName, stubId string) string {
 	return fmt.Sprintf(taskQueueList, workspaceName, stubId)
-}
-
-func (k *keys) taskQueueTaskCancel(workspaceName, stubId, taskId string) string {
-	return fmt.Sprintf(taskQueueTaskCancel, workspaceName, stubId, taskId)
 }
 
 func (k *keys) taskQueueTaskHeartbeat(workspaceName, stubId, taskId string) string {

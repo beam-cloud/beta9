@@ -9,8 +9,8 @@ from ..channel import ServiceClient
 from ..clients.gateway import (
     ListTasksRequest,
     ListTasksResponse,
-    StopTaskRequest,
-    StopTaskResponse,
+    StopTasksRequest,
+    StopTasksResponse,
     StringList,
 )
 from . import extraclick
@@ -138,8 +138,8 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
 )
 @extraclick.pass_service_client
 def stop_task(service: ServiceClient, task_id: str):
-    res: StopTaskResponse
-    res = aio.run_sync(service.gateway.stop_task(StopTaskRequest(task_id=task_id)))
+    res: StopTasksResponse
+    res = aio.run_sync(service.gateway.stop_tasks(StopTasksRequest(task_ids=[task_id])))
 
     if res.ok:
         terminal.success(f"Stopped task {task_id}.")
