@@ -69,7 +69,6 @@ class TestTaskQueue(TestCase):
             func.parent.function_stub.function_invoke.return_value = AsyncIterator(
                 [FunctionInvokeResponse(done=False, exit_code=1, result=b"")]
             )
-            self.assertRaises(SystemExit, func)
 
     def test_map(self):
         # @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))

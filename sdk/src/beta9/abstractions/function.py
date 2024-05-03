@@ -142,8 +142,8 @@ class _CallableWrapper:
                 break
 
         if last_response is None or not last_response.done or last_response.exit_code != 0:
-            terminal.error("Function failed ☠️")
-            return None
+            terminal.error(f"Function failed <{last_response.task_id}> ☠️", exit=False)
+            return
 
         terminal.header(f"Function complete <{last_response.task_id}>")
         return cloudpickle.loads(last_response.result)
