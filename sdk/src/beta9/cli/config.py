@@ -47,13 +47,22 @@ def list_contexts(config_path: Path):
         Column("Name"),
         Column("Host"),
         Column("Port"),
+        Column("Token"),
         box=box.SIMPLE,
     )
 
     for name, context in contexts.items():
         # Style default context
         style = Style(bold=True) if name == DEFAULT_CONTEXT_NAME else Style()
-        table.add_row(name, context.gateway_host, str(context.gateway_port), style=style)
+        table.add_row(
+            name,
+            context.gateway_host,
+            str(context.gateway_port),
+            str(context.token)[0:6] + "..."
+            if context.token and len(context.token) > 6
+            else context.token,
+            style=style,
+        )
 
     terminal.print(table)
 
