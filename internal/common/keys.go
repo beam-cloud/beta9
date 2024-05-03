@@ -40,6 +40,7 @@ var (
 	taskClaimIndex  string = "task:%s:%s:claim_index"
 	taskEntry       string = "task:%s:%s:%s"
 	taskClaim       string = "task:%s:%s:%s:claim"
+	taskCancel      string = "task:%s:%s:%s:cancel"
 )
 
 var (
@@ -163,6 +164,10 @@ func (rk *redisKeys) TaskPrefix() string {
 
 func (rk *redisKeys) TaskIndex() string {
 	return taskIndex
+}
+
+func (rk *redisKeys) TaskCancel(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskCancel, workspaceName, stubId, taskId)
 }
 
 func (rk *redisKeys) TaskIndexByStub(workspaceName, stubId string) string {

@@ -22,10 +22,7 @@ func NewDeploymentGroup(g *echo.Group, backendRepo repository.BackendRepository,
 	}
 
 	g.GET("/:workspaceId", group.ListDeployments)
-	g.GET("/:workspaceId/", group.ListDeployments)
-
 	g.GET("/:workspaceId/:deploymentId", group.RetrieveDeployment)
-	g.GET("/:workspaceId/:deploymentId/", group.RetrieveDeployment)
 
 	return group
 }
