@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/internal/abstractions/common"
@@ -126,7 +127,9 @@ func (es *HttpEndpointService) forwardRequest(
 ) error {
 	payload, err := task.SerializeHttpPayload(ctx)
 	if err != nil {
-		return err
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": err.Error(),
+		})
 	}
 
 	instance, err := es.getOrCreateEndpointInstance(stubId)
