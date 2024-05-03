@@ -58,14 +58,6 @@ def common(**_):
     "remote_path",
     required=True,
 )
-@click.option(
-    "--long-format",
-    "-l",
-    is_flag=True,
-    default=False,
-    show_default=True,
-    help="Show mode, modified date, size, and name of file.",
-)
 @extraclick.pass_service_client
 def ls(service: ServiceClient, remote_path: str, long_format: bool):
     req = ListPathRequest(path=remote_path, long_format=long_format)
