@@ -25,7 +25,7 @@
 
 ---
 
-[English](https://github.com/beam-cloud/beta9/README.md) | [简体中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/docs/kr/README.md)
+[English](https://github.com/beam-cloud/beta9/blob/master/README.md) | [简体中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/blob/master/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/blob/master/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/blob/master/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/blob/master/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/blob/master/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/blob/master/docs/kr/README.md)
 
 ---
 
@@ -41,7 +41,6 @@ Caratteristiche:
 - Esegui istantaneamente contenitori remoti, direttamente dal tuo interprete Python
 - Distribuire i carichi di lavoro tra più provider cloud
 - Distribuisci facilmente code e funzioni di attività utilizzando semplici astrazioni Python
-
 
 Utilizziamo beta9 internamente a [Beam](https://beam.cloud) per eseguire applicazioni IA per gli utenti su larga scala.
 
@@ -83,7 +82,7 @@ Dopo aver configurato il server e l'SDK, consulta il file Leggimi dell'SDK [qui]
 
 # App di esempio
 
-````python
+```python
 from beta9 import function
 
 
@@ -99,7 +98,7 @@ def main():
     # Esegui un contenitore remoto per ogni elemento nell'elenco
     for result in square.map(numbers):
         squared.append(result)
-````
+```
 
 ## Come funziona
 
@@ -116,9 +115,9 @@ Beta9 è progettata per avviare molto rapidamente contenitori serverless remoti.
 
 Diamo il benvenuto ai contributi, grandi o piccoli! Queste sono le cose più utili per noi:
 
-* Classifica le funzionalità nella nostra tabella di marcia
-* Apri un PR
-* Invia una [richiesta di funzionalità](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=)
+- Classifica le funzionalità nella nostra tabella di marcia
+- Apri un PR
+- Invia una [richiesta di funzionalità](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=)
 
 ## Filosofia
 
