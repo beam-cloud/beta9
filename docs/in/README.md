@@ -25,7 +25,7 @@
 
 ---
 
-[English](https://github.com/beam-cloud/beta9/README.md) | [简体中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/docs/kr/README.md)
+[English](https://github.com/beam-cloud/beta9/blob/master/README.md) | [简体中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/blob/master/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/blob/master/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/blob/master/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/blob/master/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/blob/master/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/blob/master/docs/kr/README.md)
 
 ---
 
@@ -41,7 +41,6 @@ Beta9 सीधे Python से दूरस्थ कंटेनर चला
 - तुरंत अपने पायथन दुभाषिया से दूरस्थ कंटेनर चलाएं
 - कई क्लाउड प्रदाताओं में कार्यभार वितरित करें
 - सरल पायथन एब्स्ट्रैक्शन का उपयोग करके कार्य कतारों और कार्यों को आसानी से तैनात करें
-
 
 हम बड़े पैमाने पर उपयोगकर्ताओं के लिए AI एप्लिकेशन चलाने के लिए [बीम](https://beam.cloud) पर आंतरिक रूप से बीटा9 का उपयोग करते हैं।
 
@@ -116,9 +115,9 @@ def main():
 
 हम योगदान का स्वागत करते हैं, चाहे बड़ा हो या छोटा! ये हमारे लिए सबसे उपयोगी चीजें हैं:
 
-* हमारे रोडमैप में सुविधाओं को रैंक करें
-* एक पीआर खोलें
-* एक [फ़ीचर अनुरोध](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) 
+- हमारे रोडमैप में सुविधाओं को रैंक करें
+- एक पीआर खोलें
+- एक [फ़ीचर अनुरोध](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=)
 
 हमारा मिशन क्लाउड की जटिलता को सरल बनाना है। ऐसा करने के लिए, हमने GPU पर सर्वर रहित कंटेनर लॉन्च करने के लिए पायथन-पहला एब्स्ट्रैक्शन बनाया है।
 

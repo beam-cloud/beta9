@@ -25,7 +25,7 @@
 
 ---
 
-[English](https://github.com/beam-cloud/beta9/README.md) | [简体中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/docs/kr/README.md)
+[English](https://github.com/beam-cloud/beta9/blob/master/README.md) | [简体中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/blob/master/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/blob/master/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/blob/master/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/blob/master/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/blob/master/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/blob/master/docs/kr/README.md)
 
 ---
 
@@ -41,7 +41,6 @@ Features:
 - Instantly run remote containers, right from your Python interpreter
 - Distribute workloads across multiple cloud providers
 - Easily deploy task queues and functions using simple Python abstractions
-
 
 We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale.
 
@@ -116,9 +115,9 @@ Beta9 is designed for launching remote serverless containers very quickly. There
 
 We welcome contributions, big or small! These are the most helpful things for us:
 
-* Rank features in our roadmap
-* Open a PR
-* Submit a [feature request](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) or [bug report](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=bug-report.md&title=)
+- Rank features in our roadmap
+- Open a PR
+- Submit a [feature request](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) or [bug report](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=bug-report.md&title=)
 
 ## Philosophy
 

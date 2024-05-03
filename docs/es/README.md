@@ -25,7 +25,7 @@
 
 ---
 
-[English](https://github.com/beam-cloud/beta9/README.md) | [简体中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/docs/kr/README.md)
+[English](https://github.com/beam-cloud/beta9/blob/master/README.md) | [简体中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/blob/master/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/blob/master/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/blob/master/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/blob/master/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/blob/master/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/blob/master/docs/kr/README.md)
 
 ---
 
@@ -115,9 +115,9 @@ Beta9 está diseñado para lanzar contenedores remotos sin servidor muy rápidam
 
 ¡Agradecemos las contribuciones, grandes o pequeñas! Estas son las cosas más útiles para nosotros:
 
-* Clasificar funciones en nuestra hoja de ruta
-* Abrir un PR
-* Envíe una [solicitud de función](https://github.com/beam-cloud/beta9/issues/new?assignes=&labels=&projects=&template=feature-request.md&title=)
+- Clasificar funciones en nuestra hoja de ruta
+- Abrir un PR
+- Envíe una [solicitud de función](https://github.com/beam-cloud/beta9/issues/new?assignes=&labels=&projects=&template=feature-request.md&title=)
 
 ## Filosofía
 

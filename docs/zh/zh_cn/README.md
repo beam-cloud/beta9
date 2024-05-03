@@ -25,7 +25,7 @@
 
 ---
 
-[English](https://github.com/beam-cloud/beta9/README.md) | [简体中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/docs/kr/README.md)
+[English](https://github.com/beam-cloud/beta9/blob/master/README.md) | [简体中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/blob/master/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/blob/master/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/blob/master/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/blob/master/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/blob/master/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/blob/master/docs/kr/README.md)
 
 ---
 
@@ -54,27 +54,27 @@ Beta9 是一个开源平台，用于直接从 Python 运行远程容器。 它�
 
 #### 设置服务器
 
-k3d用于本地开发。 您需要 Docker 和 Make 才能开始。
+k3d 用于本地开发。 您需要 Docker 和 Make 才能开始。
 
 要使用我们的全自动设置，请运行“setup”make 目标。
 
 > [!NOTE]
 > 这将覆盖您可能已经安装的一些工具。 查看 [setup.sh](bin/setup.sh) 以了解更多信息。
 
-````
+```
 make setup
-````
+```
 
 #### 设置 SDK
 
-SDK是用Python编写的。 您需要 Python 3.8 或更高版本。 使用 `setup-sdk` make 目标开始。
+SDK 是用 Python 编写的。 您需要 Python 3.8 或更高版本。 使用 `setup-sdk` make 目标开始。
 
 > [!NOTE]
 > 这将安装 Poetry 包管理器。
 
-````
+```
 make setup-sdk
-````
+```
 
 #### 使用 SDK
 
@@ -82,7 +82,7 @@ make setup-sdk
 
 # 示例应用程序
 
-````python
+```python
 from beta9 import function
 
 
@@ -98,14 +98,14 @@ def main():
      # 为列表中的每个项目运行远程容器
     for result in square.map(numbers):
         squared.append(result)
-````
+```
 
 ## 怎么运行的
 
 Beta9 旨在快速启动远程无服务器容器。 有几件事使这成为可能：
 
 - 由 S3/FUSE 支持的自定义延迟加载图像格式 (CLIP)
-- 快速的、基于redis的容器调度引擎
+- 快速的、基于 redis 的容器调度引擎
 - 用于缓存图像和文件的内容寻址存储
 - 自定义 runc 容器运行时
 
@@ -115,9 +115,9 @@ Beta9 旨在快速启动远程无服务器容器。 有几件事使这成为可�
 
 我们欢迎贡献，无论大小！ 这些是对我们最有帮助的事情：
 
-* 在我们的路线图中对功能进行排名
-* 开启 PR
-* 提交[功能请求](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) 或[错误报告](https:// /github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=bug-report.md&title=)
+- 在我们的路线图中对功能进行排名
+- 开启 PR
+- 提交[功能请求](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=)
 
 ## 哲学
 
