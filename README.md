@@ -25,7 +25,7 @@
 
 ---
 
-[English](https://github.com/beam-cloud/beta9/blob/master/README.md) | [简体中文](https://github.com/beam-cloud/beta9/blob/master/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/blob/master/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/blob/master/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/blob/master/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/blob/master/README.md) | [Italiano](https://github.com/beam-cloud/beta9/blob/master/README.md) | [Español](https://github.com/beam-cloud/beta9/blob/master/README.md) | [한국어](https://github.com/beam-cloud/beta9/blob/master/README.md)
+[English](https://github.com/beam-cloud/beta9/README.md) | [简体中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/docs/kr/README.md)
 
 ---
 
@@ -112,7 +112,7 @@ Beta9 is designed for launching remote serverless containers very quickly. There
 
 ![demo gif](sdk/docs/demo.gif)
 
-## Contributing 
+## Contributing
 
 We welcome contributions, big or small! These are the most helpful things for us:
 
@@ -139,7 +139,7 @@ This repo is available under the Apache license. If you'd like to use the cloud 
 If you need support, you can reach out through any of these channels:
 
 - [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-2f16bwiiq-oP8weCLWNrf_9lJZIDf0Fg) \(Chat live with our engineering team\)
-- [GitHub issues](https://github.com/beam-cloud//issues) \(Bug reports, feature requests, and anything roadmap related)
+- [GitHub issues](https://github.com/beam-cloud/issues) \(Bug reports, feature requests, and anything roadmap related)
 - [Twitter](https://twitter.com/beam_cloud) \(Updates on releases)
 
 ## Thanks to our contributors
