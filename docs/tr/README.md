@@ -25,7 +25,7 @@
 
 ---
 
-[English](https://github.com/beam-cloud/beta9/README.md) | [简体中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/docs/kr/README.md)
+[English](https://github.com/beam-cloud/beta9/blob/master/README.md) | [简体中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/blob/master/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/blob/master/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/blob/master/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/blob/master/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/blob/master/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/blob/master/docs/kr/README.md)
 
 ---
 
@@ -82,7 +82,7 @@ Sunucuyu ve SDK'yı kurduktan sonra, SDK benioku dosyasına [buradan](sdk/README
 
 # Örnek Uygulama
 
-````python
+```python
 from beta9 import function
 
 
@@ -98,7 +98,7 @@ def main():
     # Listedeki her öğe için uzak bir kapsayıcı çalıştır
     for result in square.map(numbers):
         squared.append(result)
-````
+```
 
 ## Nasıl çalışır
 
@@ -115,9 +115,9 @@ Beta9, uzak sunucusuz konteynerlerin çok hızlı bir şekilde başlatılması i
 
 Büyük veya küçük katkılarınızı bekliyoruz! Bunlar bizim için en yararlı şeyler:
 
-* Yol haritamızdaki özellikleri sıralayın
-* Bir PR açın
-* Bir [özellik isteği](https://github.com/beam-cloud/beta9/issues/new?signees=&labels=&projects=&template=feature-request.md&title=) veya [hata raporu](https:// /github.com/beam-cloud/beta9/issues/new?signees=&labels=&projects=&template=bug-report.md&title=)
+- Yol haritamızdaki özellikleri sıralayın
+- Bir PR açın
+- Bir [özellik isteği](https://github.com/beam-cloud/beta9/issues/new?signees=&labels=&projects=&template=feature-request.md&title=)
 
 ## Felsefe
 

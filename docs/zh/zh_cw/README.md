@@ -25,7 +25,7 @@
 
 ---
 
-[English](https://github.com/beam-cloud/beta9/README.md) | [简体中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/docs/kr/README.md)
+[English](https://github.com/beam-cloud/beta9/blob/master/README.md) | [简体中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/blob/master/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/blob/master/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/blob/master/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/blob/master/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/blob/master/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/blob/master/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/blob/master/docs/kr/README.md)
 
 ---
 
@@ -54,7 +54,7 @@ Beta9 是一個開源平台，用於直接從 Python 運行遠端容器。 它�
 
 #### 設定伺服器
 
-k3d用於本地開發。 您需要 Docker 和 Make 才能開始。
+k3d 用於本地開發。 您需要 Docker 和 Make 才能開始。
 
 要使用我們的全自動設置，請執行“setup”make 目標。
 
@@ -67,7 +67,7 @@ make setup
 
 #### 設定 SDK
 
-SDK是用Python寫的。 您需要 Python 3.8 或更高版本。 使用 `setup-sdk` make 目標開始。
+SDK 是用 Python 寫的。 您需要 Python 3.8 或更高版本。 使用 `setup-sdk` make 目標開始。
 
 > [!NOTE]
 > 這將安裝 Poetry 套件管理器。
@@ -82,7 +82,7 @@ make setup-sdk
 
 # 範例應用程式
 
-````python
+```python
 from beta9 import function
 
 
@@ -98,14 +98,14 @@ def main():
       # 為清單中的每個項目執行遠端容器
      for result in square.map(numbers):
          squared.append(result)
-````
+```
 
 ## 怎麼運作的
 
 Beta9 旨在快速啟動遠端無伺服器容器。 有幾件事使這一切成為可能：
 
 - 由 S3/FUSE 支援的自訂延遲載入影像格式 (CLIP)
-- 快速的、基於redis的容器調度引擎
+- 快速的、基於 redis 的容器調度引擎
 - 用於快取映像和檔案的內容尋址存儲
 - 自訂 runc 容器運行時
 
@@ -115,9 +115,9 @@ Beta9 旨在快速啟動遠端無伺服器容器。 有幾件事使這一切成�
 
 我們歡迎貢獻，無論大小！ 這些是對我們最有幫助的事：
 
-* 在我們的路線圖中對功能進行排名
-* 開啟 PR
-* 提交[功能請求](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) 或[錯誤報告](https:// /github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=bug-report.md&title=)
+- 在我們的路線圖中對功能進行排名
+- 開啟 PR
+- 提交[功能請求](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=)
 
 ## 哲學
 
