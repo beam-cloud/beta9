@@ -7,25 +7,25 @@
 
 ### **✨ Tiempo de ejecución de GPU serverless ultrarrápido ✨**
 
-<p align="centro">
-   <a href="https://docs.beam.cloud">
-     <img alt="Documentación" src="https://img.shields.io/badge/docs-quickstart-blue">
-   </a>
-   <a href="https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g">
-     <img alt="Únete a Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-blue?logo=slack">
-   </a>
-     <a href="https://twitter.com/beam_cloud">
-     <img alt="Twitter" src="https://img.shields.io/twitter/follow/beam_cloud.svg?style=social&logo=twitter">
-   </a>
-   <a href="https://github.com/beam-cloud/beta9/actions">
-     <img alt="Pruebas aprobadas" src="https://github.com/beam-cloud/beta9/actions/workflows/test.yml/badge.svg">
-   </a>
-   <img alt="Licencia" src="https://img.shields.io/badge/license-Apache--2.0-ff69b4"/>
+<p align="center">
+  <a href="https://docs.beam.cloud">
+    <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-blue">
+  </a>
+  <a href="https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g">
+    <img alt="Join Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-blue?logo=slack">
+  </a>
+    <a href="https://twitter.com/beam_cloud">
+    <img alt="Twitter" src="https://img.shields.io/twitter/follow/beam_cloud.svg?style=social&logo=twitter">
+  </a>
+  <a href="https://github.com/beam-cloud/beta9/actions">
+    <img alt="Tests Passing" src="https://github.com/beam-cloud/beta9/actions/workflows/test.yml/badge.svg">
+  </a>
+  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-ff69b4"/>
 </p>
 
 ---
 
-[Inglés](https://github.com/beam-cloud/beta9/blob/master/README.md) | [简体中文](https://github.com/beam-cloud/beta9/blob/master/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/blob/master/README.md) | [Turco](https://github.com/beam-cloud/beta9/blob/master/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/blob/master/README.md) | [Portugués (Brasil)](https://github.com/beam-cloud/beta9/blob/master/README.md) | [Italiano](https://github.com/beam-cloud/beta9/blob/master/README.md) | [English](https://github.com/beam-cloud/beta9/blob/master/README.md) | [한국어](https://github.com/beam-cloud/beta9/blob/master/README.md)
+[English](https://github.com/beam-cloud/beta9/README.md) | [简体中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/docs/kr/README.md)
 
 ---
 

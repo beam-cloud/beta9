@@ -7,7 +7,6 @@
 
 ### **✨ अल्ट्राफास्ट सर्वर रहित जीपीयू रनटाइम ✨**
 
-
 <p align="center">
   <a href="https://docs.beam.cloud">
     <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-blue">
@@ -26,7 +25,7 @@
 
 ---
 
-[अंग्रेजी](https://github.com/beam-cloud/beta9/blob/master/README.md) | [简体中文](https://github.com/beam-cloud/beta9/blob/master/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/blob/master/README.md) | [तुर्की](https://github.com/beam-cloud/beta9/blob/master/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/blob/master/README.md) | [पुर्तगाली (ब्राजील)](https://github.com/beam-cloud/beta9/blob/master/README.md) | [इटालियानो](https://github.com/beam-cloud/beta9/blob/master/README.md) | [Español](https://github.com/beam-cloud/beta9/blob/master/README.md) | [한국어](https://github.com/beam-cloud/beta9/blob/master/README.md)
+[English](https://github.com/beam-cloud/beta9/README.md) | [简体中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/docs/kr/README.md)
 
 ---
 

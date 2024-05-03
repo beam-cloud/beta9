@@ -25,7 +25,7 @@
 
 ---
 
-[英文](https://github.com/beam-cloud/beta9/blob/master/README.md) | [简体中文](https://github.com/beam-cloud/beta9/blob/master/README.md) | [繁体中文](https://github.com/beam-cloud/beta9/blob/master/README.md) | [土耳其](https://github.com/beam-cloud/beta9/blob/master/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/blob/master/README.md) | [葡萄牙语（巴西）](https://github.com/beam-cloud/beta9/blob/master/README.md) | [意大利语](https://github.com/beam-cloud/beta9/blob/master/README.md) | [西班牙语](https://github.com/beam-cloud/beta9/blob/master/README.md) | [한국어](https://github.com/beam-cloud/beta9/blob/master/README.md)
+[English](https://github.com/beam-cloud/beta9/README.md) | [简体中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cn/README.md) | [繁體中文](https://github.com/beam-cloud/beta9/docs/zh/zh_cw/README.md) | [Türkçe](https://github.com/beam-cloud/beta9/docs/tr/README.md) | [हिंदी](https://github.com/beam-cloud/beta9/docs/in/README.md) | [Português (Brasil)](https://github.com/beam-cloud/beta9/docs/pt/README.md) | [Italiano](https://github.com/beam-cloud/beta9/docs/it/README.md) | [Español](https://github.com/beam-cloud/beta9/docs/es/README.md) | [한국어](https://github.com/beam-cloud/beta9/docs/kr/README.md)
 
 ---
 
