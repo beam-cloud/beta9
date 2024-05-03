@@ -132,9 +132,9 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
     name="stop",
     help="Stop a task.",
 )
-@click.option(
-    "--task-id",
-    help="The task to stop.",
+@click.argument(
+    "task_id",
+    required=True,
 )
 @extraclick.pass_service_client
 def stop_task(service: ServiceClient, task_id: str):
@@ -142,6 +142,6 @@ def stop_task(service: ServiceClient, task_id: str):
     res = aio.run_sync(service.gateway.stop_tasks(StopTasksRequest(task_ids=[task_id])))
 
     if res.ok:
-        terminal.detail(f"Stopped task {task_id}", dim=False)
+        terminal.success(f"Stopped task {task_id}.")
     else:
-        terminal.error(f"{res.err_msg}\nFailed to stop task {task_id}")
+        terminal.error(f"{res.err_msg}\nFailed to stop task {task_id}.")
