@@ -5,7 +5,7 @@
 
 ---
 
-### **✨ Ultrafast Serverless GPU Runtime ✨**
+### **✨ Serverless GPU Container Runtime ✨**
 
 <p align="center">
   <a href="https://docs.beam.cloud">
@@ -44,6 +44,54 @@ Features:
 
 We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale.
 
+## Serverless Inference Endpoints
+
+```python
+from beam import Image, endpoint
+
+
+@endpoint(
+    cpu=1,
+    memory="16Gi",
+    gpu="T4",
+    image=Image(
+        python_packages=[
+            "vllm==0.4.1",
+        ],  # These dependencies will be installed in your remote container
+    ),
+)
+def predict():
+    from vllm import LLM
+
+    prompts = ["The future of AI is"]
+    llm = LLM(model="facebook/opt-125m")
+    output = llm.generate(prompts)[0]
+
+    return {"prediction": output.outputs[0].text}
+```
+
+## Cloud Storage Volumes
+
+```python
+from beam import function, Volume, Image
+
+
+CACHE_PATH = "./model_weights"
+
+
+@function(
+    gpu="A100-80",
+    # Attach cloud storage to your container
+    volumes=[Volume(name="model-weights", mount_path=CACHE_PATH)],
+    image=Image(python_packages="transformers"),
+)
+def load_model():
+    from transformers import AutoModel
+
+    # Load model from cloud storage
+    model = AutoModel.from_pretrained(CACHE_PATH)
+```
+
 # Get started
 
 ## Beam Cloud (Recommended)
@@ -79,26 +127,6 @@ make setup-sdk
 #### Using the SDK
 
 After you've setup the server and SDK, check out the SDK readme [here](sdk/README.md).
-
-# Example App
-
-```python
-from beta9 import function
-
-
-@function(cpu=8)
-def square(i: int):
-    return i**2
-
-
-def main():
-    numbers = list(range(10))
-    squared = []
-
-    # Run a remote container for every item in list
-    for result in square.map(numbers):
-        squared.append(result)
-```
 
 ## How it works
 
