@@ -117,7 +117,7 @@ Büyük veya küçük katkılarınızı bekliyoruz! Bunlar bizim için en yararl
 
 - Yol haritamızdaki özellikleri sıralayın
 - Bir PR açın
-- Bir [özellik isteği](https://github.com/beam-cloud/beta9/issues/new?signees=&labels=&projects=&template=feature-request.md&title=) veya [hata raporu](https:// /github.com/beam-cloud/beta9/issues/new?signees=&labels=&projects=&template=bug-report.md&title=)
+- Bir [özellik isteği](https://github.com/beam-cloud/beta9/issues/new?signees=&labels=&projects=&template=feature-request.md&title=)
 
 ## Felsefe
 

@@ -117,7 +117,7 @@ Beta9 旨在快速启动远程无服务器容器。 有几件事使这成为可�
 
 - 在我们的路线图中对功能进行排名
 - 开启 PR
-- 提交[功能请求](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) 或[错误报告](https:// /github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=bug-report.md&title=)
+- 提交[功能请求](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=)
 
 ## 哲学
 
