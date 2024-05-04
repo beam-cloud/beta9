@@ -146,11 +146,13 @@ class _CallableWrapper:
         )
 
         if deploy_response.ok:
-            base_url = "https://app.beam.cloud"
+            base_url = self.parent.settings.api_host
+            if not base_url.startswith(("http://", "https://")):
+                base_url = f"http://{base_url}"
 
             terminal.header("Deployed 🎉")
-            terminal.detail(
-                f"Call your deployment at: {base_url}/endpoint/{name}/v{deploy_response.version}"
+            self.parent.print_invocation_snippet(
+                invocation_url=f"{base_url}/endpoint/{name}/v{deploy_response.version}"
             )
 
         return deploy_response.ok
@@ -163,6 +165,14 @@ class _CallableWrapper:
 
         try:
             with terminal.progress("Serving endpoint..."):
+                base_url = self.parent.settings.api_host
+                if not base_url.startswith(("http://", "https://")):
+                    base_url = f"http://{base_url}"
+
+                self.parent.print_invocation_snippet(
+                    invocation_url=f"{base_url}/endpoint/id/{self.parent.stub_id}"
+                )
+
                 return self.parent.run_sync(
                     self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
                 )
