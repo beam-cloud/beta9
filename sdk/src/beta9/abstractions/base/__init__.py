@@ -6,8 +6,10 @@ from asyncio import AbstractEventLoop
 from pathlib import Path
 from typing import Any, Coroutine, Optional
 
+import grpclib
 from grpclib.client import Channel
 
+from ... import terminal
 from ...channel import get_channel as _get_channel
 from ...config import ConfigContext, SDKSettings, get_config_context, set_settings
 
@@ -65,7 +67,10 @@ class BaseAbstraction(ABC):
         return get_channel()
 
     def run_sync(self, coroutine: Coroutine) -> Any:
-        return self.loop.run_until_complete(coroutine)
+        try:
+            return self.loop.run_until_complete(coroutine)
+        except grpclib.exceptions.StreamTerminatedError:
+            terminal.error("Lost connection to gateway 🔌")
 
     def __init_subclass__(cls, /, **kwargs):
         """
