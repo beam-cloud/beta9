@@ -86,6 +86,7 @@ class BaseAbstraction(ABC):
         ):
             settings = SDKSettings(
                 name="Beam",
+                api_host=os.getenv("API_HOST", "api.beam.cloud"),
                 gateway_host=os.getenv("GATEWAY_HOST", "gateway.beam.cloud"),
                 gateway_port=int(os.getenv("GATEWAY_PORT", 443)),
                 config_path=Path("~/.beam/config.ini").expanduser(),
