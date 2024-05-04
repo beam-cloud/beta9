@@ -47,7 +47,7 @@ We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for
 ## Serverless Inference Endpoints
 
 ```python
-from beam import Image, endpoint
+from beta9 import Image, endpoint
 
 
 @endpoint(
@@ -73,7 +73,7 @@ def predict():
 ## Cloud Storage Volumes
 
 ```python
-from beam import function, Volume, Image
+from beta9 import function, Volume, Image
 
 
 CACHE_PATH = "./model_weights"
