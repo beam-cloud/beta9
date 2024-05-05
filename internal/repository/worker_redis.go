@@ -161,7 +161,6 @@ func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId string) error {
 }
 
 // getWorkers retrieves a list of worker objects from the Redis store that match a given pattern.
-// It uses the SCAN command to iterate over the keys in the Redis database, matching the pattern provided.
 // If useLock is set to true, a lock will be acquired for each worker and released after retrieval.
 // If you can afford to not have the most up-to-date worker information, you can set useLock to false.
 func (r *WorkerRedisRepository) getWorkers(useLock bool) ([]*types.Worker, error) {
