@@ -248,7 +248,7 @@ func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
 	return workers, nil
 }
 
-func (r *WorkerRedisRepository) GetAllWorkersInPool(poolId string) ([]*types.Worker, error) {
+func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
 	workers, err := r.getWorkers(false)
 	if err != nil {
 		return nil, err
@@ -256,7 +256,7 @@ func (r *WorkerRedisRepository) GetAllWorkersInPool(poolId string) ([]*types.Wor
 
 	poolWorkers := []*types.Worker{}
 	for _, w := range workers {
-		if w.PoolId == poolId {
+		if w.PoolName == poolName {
 			poolWorkers = append(poolWorkers, w)
 		}
 	}

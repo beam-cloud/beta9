@@ -58,26 +58,38 @@ def common(**_):
     "remote_path",
     required=True,
 )
-@click.option(
-    "--long-format",
-    "-l",
-    is_flag=True,
-    default=False,
-    show_default=True,
-    help="Show mode, modified date, size, and name of file.",
-)
 @extraclick.pass_service_client
-def ls(service: ServiceClient, remote_path: str, long_format: bool):
-    req = ListPathRequest(path=remote_path, long_format=long_format)
+def ls(service: ServiceClient, remote_path: str):
+    req = ListPathRequest(path=remote_path)
     res: ListPathResponse = aio.run_sync(service.volume.list_path(req))
 
     if not res.ok:
         terminal.error(f"{remote_path} ({res.err_msg})")
 
-    num_list, suffix = pluralize(res.paths)
-    terminal.header(f"{remote_path} (found {num_list} object{suffix})")
-    for p in res.paths:
-        terminal.print(p, highlight=False, markup=False)
+    table = Table(
+        Column("Name"),
+        Column("Size", justify="right"),
+        Column("Modified Time"),
+        Column("IsDir"),
+        box=box.SIMPLE,
+    )
+
+    total_size = 0
+    for p in res.path_infos:
+        total_size += p.size
+        table.add_row(
+            p.path,
+            terminal.humanize_memory(p.size),
+            terminal.humanize_date(p.mod_time),
+            "Yes" if p.is_dir else "No",
+        )
+
+    table.add_section()
+    table.add_row(
+        f"[bold]{len(res.path_infos)} items | {terminal.humanize_memory(total_size)} used"
+    )
+
+    terminal.print(table)
 
 
 @common.command(
@@ -240,7 +252,7 @@ def list_volumes(service: ServiceClient):
 
     table = Table(
         Column("Name"),
-        Column("Size"),
+        Column("Size", justify="right"),
         Column("Created At"),
         Column("Updated At"),
         Column("Workspace Name"),
@@ -267,9 +279,8 @@ def list_volumes(service: ServiceClient):
     name="create",
     help="Create a new volume.",
 )
-@click.option(
-    "--name",
-    "-n",
+@click.argument(
+    "name",
     type=click.STRING,
     required=True,
 )
@@ -303,5 +314,11 @@ def create_volume(service: ServiceClient, name: str):
     name="delete",
     help="Delete a volume.",
 )
-def delete_volume():
-    pass
+@click.argument(
+    "name",
+    type=click.STRING,
+    required=True,
+)
+@click.confirmation_option("--force")
+def delete_volume(name: str, force: bool):
+    terminal.error("Not implemented.")

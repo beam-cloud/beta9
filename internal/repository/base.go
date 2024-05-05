@@ -14,7 +14,7 @@ type WorkerRepository interface {
 	GetId() string
 	GetWorkerById(workerId string) (*types.Worker, error)
 	GetAllWorkers() ([]*types.Worker, error)
-	GetAllWorkersInPool(poolId string) ([]*types.Worker, error)
+	GetAllWorkersInPool(poolName string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId string) error
 	RemoveWorker(w *types.Worker) error

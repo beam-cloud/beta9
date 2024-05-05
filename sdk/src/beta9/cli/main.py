@@ -4,19 +4,12 @@ from typing import Any, Optional
 
 import click
 
-from .. import terminal
-from ..channel import get_channel
-from ..config import is_config_empty
-from . import config, deployment, task, volume
-from .extraclick import ClickCommonGroup, CommandGroupCollection
+from ..channel import prompt_first_auth
+from ..config import SDKSettings, is_config_empty, set_settings
+from . import config, deployment, serve, task, volume
+from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCollection
 
 click.formatting.FORCED_WIDTH = shutil.get_terminal_size().columns
-
-# Can be overwritten by doing `load_cli(context_settings={})`
-CLICK_CONTEXT_SETTINGS = dict(
-    help_option_names=["-h", "--help"],
-    show_default=True,
-)
 
 
 class CLI:
@@ -27,7 +20,14 @@ class CLI:
     click.Group and are named either "common" or "management".
     """
 
-    def __init__(self, context_settings: Optional[dict] = None) -> None:
+    def __init__(
+        self,
+        settings: Optional[SDKSettings] = None,
+        context_settings: Optional[dict] = None,
+    ) -> None:
+        self.settings = SDKSettings() if settings is None else settings
+        set_settings(self.settings)
+
         if context_settings is None:
             context_settings = CLICK_CONTEXT_SETTINGS
 
@@ -46,20 +46,25 @@ class CLI:
         if hasattr(module, "management"):
             self.management_group.add_command(module.management)
 
+    def check_config(self) -> None:
+        if is_config_empty(self.settings.config_path):
+            prompt_first_auth(self.settings)
+
 
 def load_cli(**kwargs: Any) -> CLI:
-    if is_config_empty():
-        terminal.header("Welcome to Beta9! Let's get started 📡")
-        get_channel().close()
-
     cli = CLI(**kwargs)
     cli.register(task)
     cli.register(deployment)
     cli.register(volume)
     cli.register(config)
+    cli.register(serve)
+
+    cli.check_config()
 
     return cli
 
 
-if __name__ == "beta9.cli.main":
+def start():
+    """Used as entrypoint in Poetry"""
     cli = load_cli()
+    cli()

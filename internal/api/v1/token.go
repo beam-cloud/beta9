@@ -21,14 +21,9 @@ func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, conf
 		config:      config,
 	}
 
-	g.POST("/:workspaceId/", group.CreateWorkspaceToken)
 	g.POST("/:workspaceId", group.CreateWorkspaceToken)
-
-	g.DELETE("/:workspaceId/", group.RevokeWorkspaceToken)
 	g.DELETE("/:workspaceId", group.RevokeWorkspaceToken)
-
 	g.GET("/:workspaceId", group.ListWorkspaceTokens)
-	g.GET("/:workspaceId/", group.ListWorkspaceTokens)
 
 	return group
 }

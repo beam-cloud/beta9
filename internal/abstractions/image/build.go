@@ -139,14 +139,15 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	err = b.scheduler.Run(&types.ContainerRequest{
-		ContainerId: containerId,
-		Env:         []string{},
-		Cpu:         cpu,
-		Memory:      memory,
-		ImageId:     baseImageId,
-		SourceImage: &sourceImage,
-		WorkspaceId: authInfo.Workspace.ExternalId,
-		EntryPoint:  []string{"tail", "-f", "/dev/null"},
+		ContainerId:  containerId,
+		Env:          []string{},
+		Cpu:          cpu,
+		Memory:       memory,
+		ImageId:      baseImageId,
+		SourceImage:  &sourceImage,
+		WorkspaceId:  authInfo.Workspace.ExternalId,
+		EntryPoint:   []string{"tail", "-f", "/dev/null"},
+		PoolSelector: b.config.ImageService.BuildContainerPoolSelector,
 	})
 	if err != nil {
 		return err

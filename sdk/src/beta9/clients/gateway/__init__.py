@@ -171,12 +171,12 @@ class ListTasksResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class StopTaskRequest(betterproto.Message):
-    task_id: str = betterproto.string_field(1)
+class StopTasksRequest(betterproto.Message):
+    task_ids: List[str] = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
-class StopTaskResponse(betterproto.Message):
+class StopTasksResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
 
@@ -373,18 +373,18 @@ class GatewayServiceStub(betterproto.ServiceStub):
             metadata=metadata,
         )
 
-    async def stop_task(
+    async def stop_tasks(
         self,
-        stop_task_request: "StopTaskRequest",
+        stop_tasks_request: "StopTasksRequest",
         *,
         timeout: Optional[float] = None,
         deadline: Optional["Deadline"] = None,
         metadata: Optional["MetadataLike"] = None
-    ) -> "StopTaskResponse":
+    ) -> "StopTasksResponse":
         return await self._unary_unary(
-            "/gateway.GatewayService/StopTask",
-            stop_task_request,
-            StopTaskResponse,
+            "/gateway.GatewayService/StopTasks",
+            stop_tasks_request,
+            StopTasksResponse,
             timeout=timeout,
             deadline=deadline,
             metadata=metadata,
@@ -485,9 +485,9 @@ class GatewayServiceBase(ServiceBase):
     async def end_task(self, end_task_request: "EndTaskRequest") -> "EndTaskResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
-    async def stop_task(
-        self, stop_task_request: "StopTaskRequest"
-    ) -> "StopTaskResponse":
+    async def stop_tasks(
+        self, stop_tasks_request: "StopTasksRequest"
+    ) -> "StopTasksResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
     async def list_tasks(
@@ -562,11 +562,11 @@ class GatewayServiceBase(ServiceBase):
         response = await self.end_task(request)
         await stream.send_message(response)
 
-    async def __rpc_stop_task(
-        self, stream: "grpclib.server.Stream[StopTaskRequest, StopTaskResponse]"
+    async def __rpc_stop_tasks(
+        self, stream: "grpclib.server.Stream[StopTasksRequest, StopTasksResponse]"
     ) -> None:
         request = await stream.recv_message()
-        response = await self.stop_task(request)
+        response = await self.stop_tasks(request)
         await stream.send_message(response)
 
     async def __rpc_list_tasks(
@@ -641,11 +641,11 @@ class GatewayServiceBase(ServiceBase):
                 EndTaskRequest,
                 EndTaskResponse,
             ),
-            "/gateway.GatewayService/StopTask": grpclib.const.Handler(
-                self.__rpc_stop_task,
+            "/gateway.GatewayService/StopTasks": grpclib.const.Handler(
+                self.__rpc_stop_tasks,
                 grpclib.const.Cardinality.UNARY_UNARY,
-                StopTaskRequest,
-                StopTaskResponse,
+                StopTasksRequest,
+                StopTasksResponse,
             ),
             "/gateway.GatewayService/ListTasks": grpclib.const.Handler(
                 self.__rpc_list_tasks,

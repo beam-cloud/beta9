@@ -17,6 +17,7 @@ from ...clients.gateway import (
     ReplaceObjectContentOperation,
     ReplaceObjectContentRequest,
 )
+from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...sync import FileSyncer, SyncEventHandler
 
 CONTAINER_STUB_TYPE = "container"
@@ -80,6 +81,20 @@ class RunnerAbstraction(BaseAbstraction):
 
         self._gateway_stub: Optional[GatewayServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
+        self.settings: SDKSettings = get_settings()
+        self.config_context: ConfigContext = get_config_context()
+
+    def print_invocation_snippet(self, invocation_url) -> None:
+        """Print curl request to call deployed container URL"""
+
+        terminal.header("Invocation details")
+        terminal.detail(f"""curl -X POST '{invocation_url}' \\
+-H 'Accept: */*' \\
+-H 'Accept-Encoding: gzip, deflate' \\
+-H 'Connection: keep-alive' \\
+-H 'Authorization: Bearer {self.config_context.token}' \\
+-H 'Content-Type: application/json' \\
+-d '{"{}"}'""")
 
     def _parse_memory(self, memory_str: str) -> int:
         """Parse memory str (with units) to megabytes."""
@@ -187,7 +202,7 @@ class RunnerAbstraction(BaseAbstraction):
         observer.schedule(event_handler, dir, recursive=True)
         observer.start()
 
-        terminal.detail(f"Watching {dir} for changes...")
+        terminal.header(f"Watching {dir} for changes...")
         return await self.gateway_stub.replace_object_content(
             replace_object_content_request_iterator=self._object_iterator(
                 dir=dir, object_id=object_id, file_update_queue=file_update_queue

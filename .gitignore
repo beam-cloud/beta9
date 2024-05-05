@@ -25,3 +25,5 @@ test
 manifests/**/charts/**
 build.sh
 oci*
+.coverage
+.htmlcov

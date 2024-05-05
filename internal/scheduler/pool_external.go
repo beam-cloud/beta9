@@ -163,8 +163,9 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 
 	// Create a new worker job
 	job, worker := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType, gpuCount)
-	worker.PoolId = PoolId(wpc.name)
+	worker.PoolName = wpc.name
 	worker.MachineId = machineId
+	worker.RequiresPoolSelector = wpc.workerPool.RequiresPoolSelector
 
 	// Create the job in the cluster
 	_, err = client.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(wpc.ctx, job, metav1.CreateOptions{})

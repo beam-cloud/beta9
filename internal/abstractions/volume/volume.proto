@@ -33,15 +33,21 @@ message GetOrCreateVolumeResponse {
   VolumeInstance volume = 3;
 }
 
+message PathInfo {
+  string path = 1;
+  uint64 size = 2;
+  google.protobuf.Timestamp mod_time = 3;
+  bool is_dir = 4;
+}
+
 message ListPathRequest {
   string path = 1;
-  bool long_format = 2;
 }
 
 message ListPathResponse {
   bool ok = 1;
   string err_msg = 2;
-  repeated string paths = 3;
+  repeated PathInfo path_infos = 3;
 }
 
 message DeletePathRequest {

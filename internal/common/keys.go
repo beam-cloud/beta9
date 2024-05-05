@@ -41,6 +41,7 @@ var (
 	taskClaimIndex  string = "task:%s:%s:claim_index"
 	taskEntry       string = "task:%s:%s:%s"
 	taskClaim       string = "task:%s:%s:%s:claim"
+	taskCancel      string = "task:%s:%s:%s:cancel"
 )
 
 var (
@@ -172,6 +173,10 @@ func (rk *redisKeys) TaskIndex() string {
 	return taskIndex
 }
 
+func (rk *redisKeys) TaskCancel(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskCancel, workspaceName, stubId, taskId)
+}
+
 func (rk *redisKeys) TaskIndexByStub(workspaceName, stubId string) string {
 	return fmt.Sprintf(taskIndexByStub, workspaceName, stubId)
 }
@@ -206,12 +211,12 @@ func (rk *redisKeys) WorkspaceActiveContainerLock(workspaceId string) string {
 }
 
 // WorkerPool keys
-func (rk *redisKeys) WorkerPoolLock(poolId string) string {
-	return fmt.Sprintf(workerPoolLock, poolId)
+func (rk *redisKeys) WorkerPoolLock(poolName string) string {
+	return fmt.Sprintf(workerPoolLock, poolName)
 }
 
-func (rk *redisKeys) WorkerPoolState(poolId string) string {
-	return fmt.Sprintf(workerPoolState, poolId)
+func (rk *redisKeys) WorkerPoolState(poolName string) string {
+	return fmt.Sprintf(workerPoolState, poolName)
 }
 
 // Tailscale keys
