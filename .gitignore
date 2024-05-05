@@ -27,3 +27,4 @@ build.sh
 oci*
 .coverage
 .htmlcov
+okteto.yaml

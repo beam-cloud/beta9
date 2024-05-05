@@ -25,6 +25,18 @@ func machineId() string {
 	return uuid.New().String()[:8]
 }
 
+type InstanceSpec struct {
+	Cpu      int64
+	Memory   int64
+	Gpu      string
+	GpuCount uint32
+}
+
+type Instance struct {
+	Type string
+	Spec InstanceSpec
+}
+
 type userDataConfig struct {
 	AuthKey           string
 	ControlURL        string
