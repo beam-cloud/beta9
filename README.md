@@ -5,7 +5,7 @@
 
 ---
 
-### **✨ Serverless GPU Container Runtime ✨**
+### **✨ The Open Source Serverless GPU Container Runtime ✨**
 
 <p align="center">
   <a href="https://docs.beam.cloud">
@@ -33,7 +33,7 @@
 
 # Beta9
 
-Beta9 is an open-source platform for running remote containers directly from Python. It supports GPU/CUDA acceleration, allows you to scale out arbitrary Python code to hundreds of machines, easily deploy functions and task queues, and distribute workloads across various cloud providers (including bare metal providers).
+Beta9 is an open source platform for running remote containers directly from Python. It supports GPU/CUDA acceleration, allows you to scale out arbitrary Python code to hundreds of machines, easily deploy functions and task queues, and distribute workloads across various cloud providers (including bare metal providers).
 
 Features:
 
@@ -70,6 +70,26 @@ def predict():
     return {"prediction": output.outputs[0].text}
 ```
 
+## Scale out jobs to 100s of parallel GPUs
+
+```python
+from beta9 import function
+
+
+@function(gpu="4090")
+def square(i: int):
+    return i**2
+
+
+def main():
+    numbers = list(range(100))
+    squared = []
+
+    # Run a remote GPU container for every item in list
+    for result in square.map(numbers):
+        squared.append(result)
+```
+
 ## Cloud Storage Volumes
 
 ```python
@@ -98,7 +118,7 @@ def load_model():
 
 The fastest way and most reliable way to get started with Beam is by signing up for free to [Beam Cloud](https://beam.cloud). Your first 10 hours of usage are free, and afterwards you pay based on usage.
 
-## Open-source deploy (Advanced)
+## Open source deploy (Advanced)
 
 #### Setting up the server
 
@@ -139,6 +159,23 @@ Beta9 is designed for launching remote serverless containers very quickly. There
 
 ![demo gif](sdk/docs/demo.gif)
 
+## Supported GPU Providers
+
+Beta9 can be installed on any of the providers below by adding a [New Provider](https://github.com/beam-cloud/beta9/tree/master/internal/providers) to the repo. 
+
+_Note: GPU availability below is subject to change. If you have updated data, please make a PR._
+
+| Provider     | 4090 | A6000 | L4  | T4  | A10G | A40 | A100-40 | A100-80 | H100 |
+| ------------ | ---- | ----- | --- | --- | ---- | --- | ------- | ------- | ---- |
+| AWS          | ❌   | ❌    | ✅  | ✅  | ✅   | ❌  | ❌      | ❌      | ❌   |
+| GCP          | ❌   | ❌    | ✅  | ✅  | ❌   | ❌  | ❌      | ✅      | ❌   |
+| Oracle       | ❌   | ❌    | ❌  | ❌  | ✅   | ❌  | ✅      | ✅      | ✅   |
+| CoreWeave    | ❌   | ✅    | ❌  | ❌  | ❌   | ✅  | ❌      | ✅      | ❌   |
+| Lambda Labs  | ❌   | ❌    | ❌  | ❌  | ❌   | ❌  | ❌      | ❌      | ✅   |
+| Crusoe Cloud | ❌   | ❌    | ❌  | ❌  | ❌   |     | ❌      | ✅      | ✅   |
+| Runpod       | ✅   | ✅    | ✅  | ❌  | ❌   | ✅  | ❌      | ❌      | ❌   |
+| Vast.ai      | ✅   | ✅    | ❌  | ❌  | ❌   | ✅  | ❌      | ❌      | ❌   |
+
 ## Contributing
 
 We welcome contributions, big or small! These are the most helpful things for us:
@@ -157,7 +194,7 @@ Beam is the alternative to setting up a Kubernetes cluster or spinning up a clou
 
 Beam gives you all the tools you need to run code on cloud GPUs, expose that code behind an API, and iterate quickly on your app.
 
-## Open-source vs. paid
+## Open source vs. paid
 
 This repo is available under the Apache license. If you'd like to use the cloud hosted version, you can visit our [pricing page](https://beam.cloud/pricing).
 
