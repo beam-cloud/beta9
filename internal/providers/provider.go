@@ -19,6 +19,7 @@ type Provider interface {
 	ProvisionMachine(ctx context.Context, poolName, token string, compute types.ProviderComputeRequest) (string, error)
 	TerminateMachine(ctx context.Context, poolName, machineId string) error
 	Reconcile(ctx context.Context, poolName string)
+	Name() string
 }
 
 func machineId() string {

@@ -18,6 +18,7 @@ import (
 )
 
 type EC2Provider struct {
+	name           string
 	client         *ec2.Client
 	clusterName    string
 	appConfig      types.AppConfig
@@ -38,6 +39,7 @@ func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderR
 	}
 
 	return &EC2Provider{
+		name:           "ec2",
 		client:         ec2.NewFromConfig(cfg),
 		clusterName:    appConfig.ClusterName,
 		appConfig:      appConfig,
@@ -46,6 +48,10 @@ func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderR
 		tailscale:      tailscale,
 		workerRepo:     workerRepo,
 	}, nil
+}
+
+func (p *EC2Provider) Name() string {
+	return p.name
 }
 
 func (p *EC2Provider) getAvailableInstances() ([]Instance, error) {
@@ -122,8 +128,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
-	log.Printf("Selected instance type <%s> for compute request: %+v\n", instance.Type, compute)
-
+	log.Printf("<provider %s>: Selected instance type <%s> for compute request: %+v\n", p.Name(), instance.Type, compute)
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String(p.providerConfig.AMI),
 		InstanceType: awsTypes.InstanceType(instance.Type),
@@ -256,7 +261,7 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 		case <-ticker.C:
 			machines, err := p.listMachines(ctx, poolName)
 			if err != nil {
-				log.Println("Error listing machines: ", err)
+				log.Printf("<provider %s>: unable to list machines - %v\n", p.Name(), err)
 				continue
 			}
 
@@ -295,11 +300,11 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 func (p *EC2Provider) removeMachine(ctx context.Context, poolName, machineId, instanceId string) {
 	err := p.TerminateMachine(ctx, poolName, instanceId)
 	if err != nil {
-		log.Printf("Unable to terminate machine <machineId: %s>: %+v\n", machineId, err)
+		log.Printf("<provider %s>: Unable to terminate machine <machineId: %s>: %+v\n", p.Name(), machineId, err)
 		return
 	}
 
-	log.Printf("Terminated machine <machineId: %s> due to inactivity\n", machineId)
+	log.Printf("<provider %s>: Terminated machine <machineId: %s> due to inactivity\n", p.Name(), machineId)
 }
 
 const ec2UserDataTemplate string = `#!/bin/bash

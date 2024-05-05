@@ -15,6 +15,7 @@ import (
 )
 
 type OCIProvider struct {
+	name           string
 	computeClient  core.ComputeClient
 	networkClient  core.VirtualNetworkClient
 	clusterName    string
@@ -47,6 +48,7 @@ func NewOCIProvider(appConfig types.AppConfig, providerRepo repository.ProviderR
 	}
 
 	return &OCIProvider{
+		name:           "oci",
 		computeClient:  computeClient,
 		networkClient:  networkClient,
 		clusterName:    appConfig.ClusterName,
@@ -63,6 +65,10 @@ func (p *OCIProvider) getAvailableInstances() ([]Instance, error) {
 		Type: "VM.GPU.A10.1",
 		Spec: InstanceSpec{Cpu: 15 * 1000, Memory: 240 * 1024, Gpu: "T4", GpuCount: 1},
 	}}, nil
+}
+
+func (p *OCIProvider) Name() string {
+	return p.name
 }
 
 func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token string, compute types.ProviderComputeRequest) (string, error) {
@@ -98,7 +104,7 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 
 	sshPublicKey := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCkOEyPxGVNmoqW10QxR4uc3le0CGMQhXfLXbMLBFrdaEwaKarYdHTRZjHmI21LtkiXqY2KEH6UJBpx2uUozMU+2ur+gnIW8Itsi6NAQkIkawAW4MvTxBi2++6PbvQxaL7QHZqigFFRV9n/lt0l2QfMcClE14azS+Sn+WwzzJKGCslDUa6OEnD3evJqCGncvwNxkIVfGyeJz2Wh1fZK18jIlFj4efNBVeqx0RyE+SBd1h31QsLpMm5vBvrMXjqA/FGfNgQe25TQ8gA7Rgu9NZkcIExlIt/NQl2jhA7oWmjti5+JbYSJfm7J+309MVf9b0YjouupICDhs2ZFG2XzdDUf ssh-key-2024-03-20"
 
-	log.Printf("Selected shape <%s> for compute request: %+v\n", instance.Type, compute)
+	log.Printf("<provider %s>: Selected shape <%s> for compute request: %+v\n", p.Name(), instance.Type, compute)
 	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
 	displayName := fmt.Sprintf("%s-%s-%s", p.clusterName, poolName, machineId)
 	launchDetails := core.LaunchInstanceDetails{
@@ -132,7 +138,7 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 	}
 
 	instanceId := *response.Instance.Id
-	log.Printf("Provisioned machine ID: %s\n", instanceId)
+	log.Printf("<provider %s>: Provisioned machine ID: %s\n", p.Name(), instanceId)
 
 	err = p.providerRepo.AddMachine(string(types.ProviderOCI), poolName, machineId, &types.ProviderMachineState{
 		Cpu:      instance.Spec.Cpu,
@@ -222,7 +228,7 @@ func (p *OCIProvider) Reconcile(ctx context.Context, poolName string) {
 		case <-ticker.C:
 			machines, err := p.listMachines(ctx, poolName)
 			if err != nil {
-				log.Println("Error listing machines: ", err)
+				log.Println("<provider %s>: Unable to list machines: ", p.Name(), err)
 				continue
 			}
 
