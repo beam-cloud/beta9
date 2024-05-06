@@ -40,7 +40,7 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 	f := logrus.New()
 	f.SetOutput(logFile)
 	f.SetFormatter(&logrus.JSONFormatter{
-		TimestampFormat: time.RFC3339Nano,
+		TimestampFormat: time.RFC3339,
 	})
 
 	instance, exists := r.containerInstances.Get(containerId)
