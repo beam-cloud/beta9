@@ -58,12 +58,11 @@ func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string)
 
 	for _, key := range keys {
 		keyParts := strings.Split(key, ":")
-		machineId := ""
 		if len(keyParts) == 0 {
 			continue
 		}
 
-		machineId = keyParts[len(keyParts)-1]
+		machineId := keyParts[len(keyParts)-1]
 
 		err := r.lock.Acquire(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 		if err != nil {
@@ -78,12 +77,7 @@ func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string)
 		}
 
 		r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
-
-		workerStateKeys, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.ProviderMachineWorkerIndex(machineId)).Result()
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
-		}
-		machines = append(machines, &types.ProviderMachine{State: machineState, WorkerKeys: workerStateKeys})
+		machines = append(machines, &types.ProviderMachine{State: machineState})
 	}
 
 	return machines, nil

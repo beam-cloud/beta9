@@ -15,8 +15,7 @@ type ProviderComputeRequest struct {
 }
 
 type ProviderMachine struct {
-	State      *ProviderMachineState
-	WorkerKeys []string
+	State *ProviderMachineState
 }
 
 type ProviderMachineState struct {

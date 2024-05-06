@@ -88,10 +88,6 @@ func NewExternalWorkerPoolController(
 	return wpc, nil
 }
 
-func (wpc *ExternalWorkerPoolController) chooseMachine() {
-
-}
-
 func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
@@ -100,38 +96,48 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 		return nil, err
 	}
 
-	machines, err := wpc.providerRepo.ListAllMachines(string(*wpc.providerName), wpc.name)
+	machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.Name(), wpc.name)
 	if err != nil {
 		return nil, err
 	}
 
+	// Attempt to schedule the worker on an existing machine first
 	for _, machine := range machines {
-		log.Printf("worker keys: %+v\n", machine.WorkerKeys)
+		worker := func() *types.Worker {
+			wpc.providerRepo.SetMachineLock(wpc.provider.Name(), wpc.name, machine.State.MachineId)
+			defer wpc.providerRepo.RemoveMachineLock(wpc.provider.Name(), wpc.name, machine.State.MachineId)
+
+			workers, err := wpc.workerRepo.GetAllWorkersOnMachine(machine.State.MachineId)
+			if err != nil || machine.State.Status != types.MachineStatusRegistered {
+				return nil
+			}
+
+			for _, worker := range workers {
+				machine.State.Cpu -= worker.Cpu
+				machine.State.Memory -= worker.Memory
+				machine.State.GpuCount -= worker.GpuCount
+			}
+
+			if machine.State.Cpu >= int64(cpu) && machine.State.Memory >= int64(memory) && machine.State.Gpu == gpuType && machine.State.GpuCount >= gpuCount {
+				log.Printf("Using existing machine <machineId: %s>, hostname: %s\n", machine.State.MachineId, machine.State.HostName)
+
+				worker, err := wpc.createWorkerOnMachine(workerId, machine.State.MachineId, machine.State)
+				if err != nil {
+					return nil
+				}
+
+				return worker
+			}
+
+			return nil
+		}()
+
+		if worker != nil {
+			return worker, nil
+		}
 	}
 
-	/*
-			 Let's think this through. We need to find out if any of the running machines in this pool
-			 Have the capacity to support this incoming worker.
-
-			 So we need to:
-			  - get all of the machines in the repo
-			  - get a list of all their workers
-			  - retrieve all their workers
-
-		     A worker is never gonna move from one machine to another (for now), so once we get a list of the workers
-			 we can guarantee that the worker is either on that node, occupying capacity, or its gone
-
-			 Because of the worker TTL, if the worker key is there, we can assume that capacity is unavailable on the node.
-			 So, I think what we can do here, is:
-			   - Get a list of every single worker across all of the machines (using the index)
-			   - Create a function that takes in a list of worker state keys, and retrieves all the workers based on that
-			   - Map those workers to each machine, and do the math to figure out the current machine capacity for each machine
-			   -
-
-	*/
-
-	log.Printf("existing machines: %+v\n", machines)
-
+	// Provision a new machine
 	machineId, err := wpc.provider.ProvisionMachine(wpc.ctx, wpc.name, token.Key, types.ProviderComputeRequest{
 		Cpu:      cpu,
 		Memory:   memory,
@@ -149,19 +155,28 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	defer wpc.providerRepo.RemoveMachineLock(string(*wpc.providerName), wpc.name, machineId)
 
 	log.Printf("Waiting for machine registration <machineId: %s>\n", machineId)
-	state, err := wpc.providerRepo.WaitForMachineRegistration(string(*wpc.providerName), wpc.name, machineId)
+	machineState, err := wpc.providerRepo.WaitForMachineRegistration(string(*wpc.providerName), wpc.name, machineId)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Printf("Machine registered <machineId: %s>, hostname: %s\n", machineId, state.HostName)
-	client, err := wpc.getProxiedClient(state.HostName, state.Token)
+	log.Printf("Machine registered <machineId: %s>, hostname: %s\n", machineId, machineState.HostName)
+	worker, err := wpc.createWorkerOnMachine(workerId, machineId, machineState)
+	if err != nil {
+		return nil, err
+	}
+
+	return worker, nil
+}
+
+func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState) (*types.Worker, error) {
+	client, err := wpc.getProxiedClient(machineState.HostName, machineState.Token)
 	if err != nil {
 		return nil, err
 	}
 
 	// Create a new worker job
-	job, worker := wpc.createWorkerJob(workerId, machineId, state.Cpu, state.Memory, state.Gpu, state.GpuCount)
+	job, worker := wpc.createWorkerJob(workerId, machineId, machineState.Cpu, machineState.Memory, machineState.Gpu, machineState.GpuCount)
 	worker.PoolName = wpc.name
 	worker.MachineId = machineId
 	worker.RequiresPoolSelector = wpc.workerPool.RequiresPoolSelector
