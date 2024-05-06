@@ -119,7 +119,6 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 			AssignPublicIp: common.Bool(true),
 			SubnetId:       common.String(p.providerConfig.SubnetId),
 		},
-
 		Metadata: map[string]string{
 			"user_data":           encodedUserData,
 			"ssh_authorized_keys": sshPublicKey,
@@ -228,7 +227,7 @@ func (p *OCIProvider) Reconcile(ctx context.Context, poolName string) {
 		case <-ticker.C:
 			machines, err := p.listMachines(ctx, poolName)
 			if err != nil {
-				log.Println("<provider %s>: Unable to list machines: ", p.Name(), err)
+				log.Printf("<provider %s>: unable to list machines - %v\n", p.Name(), err)
 				continue
 			}
 

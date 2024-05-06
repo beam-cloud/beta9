@@ -12,7 +12,6 @@ import (
 	"github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
-	redis "github.com/redis/go-redis/v9"
 )
 
 type WorkerRedisRepository struct {
@@ -172,7 +171,7 @@ func (r *WorkerRedisRepository) getWorkers(useLock bool) ([]*types.Worker, error
 	}
 
 	for _, key := range keys {
-		workerId := strings.Split(key, ":")[2]
+		workerId := strings.Split(key, ":")[3]
 
 		if useLock {
 			err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
@@ -274,7 +273,7 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 
 	// Retrieve current worker capacity
 	w, err := r.getWorkerFromKey(key)
-	if err != nil && err != redis.Nil {
+	if err != nil {
 		return fmt.Errorf("failed to get worker state <%v>: %v", key, err)
 	}
 

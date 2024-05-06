@@ -155,14 +155,13 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	}
 
 	log.Printf("Machine registered <machineId: %s>, hostname: %s\n", machineId, state.HostName)
-	log.Printf("State: %+v\n", state)
 	client, err := wpc.getProxiedClient(state.HostName, state.Token)
 	if err != nil {
 		return nil, err
 	}
 
 	// Create a new worker job
-	job, worker := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType, gpuCount)
+	job, worker := wpc.createWorkerJob(workerId, machineId, state.Cpu, state.Memory, state.Gpu, state.GpuCount)
 	worker.PoolName = wpc.name
 	worker.MachineId = machineId
 	worker.RequiresPoolSelector = wpc.workerPool.RequiresPoolSelector

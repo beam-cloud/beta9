@@ -220,6 +220,7 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	// Filter workers by pool selector
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
+		log.Printf("worker: %+v\n", worker)
 		// If pool selector is specified, and the worker has that pool name, include the worker
 		if (request.PoolSelector != "" && worker.PoolName == request.PoolSelector) ||
 			// If pool selector is not specified, and worker does not require a pool selector, include the worker

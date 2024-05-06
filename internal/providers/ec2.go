@@ -128,14 +128,17 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
+	roleArn := "arn:aws:iam::187248174200:instance-profile/beta-dev-k3s-instance-profile"
+
 	log.Printf("<provider %s>: Selected instance type <%s> for compute request: %+v\n", p.Name(), instance.Type, compute)
 	input := &ec2.RunInstancesInput{
-		ImageId:      aws.String(p.providerConfig.AMI),
-		InstanceType: awsTypes.InstanceType(instance.Type),
-		MinCount:     aws.Int32(1),
-		MaxCount:     aws.Int32(1),
-		UserData:     aws.String(base64.StdEncoding.EncodeToString([]byte(populatedUserData))),
-		SubnetId:     p.providerConfig.SubnetId,
+		ImageId:            aws.String(p.providerConfig.AMI),
+		InstanceType:       awsTypes.InstanceType(instance.Type),
+		MinCount:           aws.Int32(1),
+		MaxCount:           aws.Int32(1),
+		UserData:           aws.String(base64.StdEncoding.EncodeToString([]byte(populatedUserData))),
+		SubnetId:           p.providerConfig.SubnetId,
+		IamInstanceProfile: &awsTypes.IamInstanceProfileSpecification{Arn: &roleArn},
 	}
 
 	result, err := p.client.RunInstances(ctx, input)
@@ -279,6 +282,10 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 						return
 					}
 
+					/* TODO
+					- Get all the workers that exist in the worker
+
+					*/
 					// // See if there is a worker associated with this machine
 					// _, err = p.workerRepo.GetWorkerById(machine.WorkerId)
 					// if err != nil {
