@@ -37,6 +37,9 @@ func configureEchoLogger(e *echo.Echo, debug bool) {
 				}
 				return nil
 			},
+			Skipper: func(c echo.Context) bool {
+				return c.Request().URL.Path == "/api/v1/health"
+			},
 		}))
 	} else {
 		e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
