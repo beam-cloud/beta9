@@ -30,6 +30,7 @@ type EC2Provider struct {
 
 const (
 	ec2ReconcileInterval time.Duration = 5 * time.Second
+	ec2ProviderName      string        = "ec2"
 )
 
 func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*EC2Provider, error) {
@@ -39,7 +40,7 @@ func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderR
 	}
 
 	return &EC2Provider{
-		name:           "ec2",
+		name:           ec2ProviderName,
 		client:         ec2.NewFromConfig(cfg),
 		clusterName:    appConfig.ClusterName,
 		appConfig:      appConfig,
@@ -282,22 +283,15 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 						return
 					}
 
-					/* TODO
-					- Get all the workers that exist in the worker
+					workers, err := p.workerRepo.GetAllWorkersOnMachine(machineId)
+					if err != nil || len(workers) > 0 {
+						return
+					}
 
-					*/
-					// // See if there is a worker associated with this machine
-					// _, err = p.workerRepo.GetWorkerById(machine.WorkerId)
-					// if err != nil {
-					// 	_, ok := err.(*types.ErrWorkerNotFound)
-
-					// 	if ok {
-					// 		p.removeMachine(ctx, poolName, machineId, instanceId)
-					// 		return
-					// 	}
-
-					// 	return
-					// }
+					if len(workers) == 0 {
+						p.removeMachine(ctx, poolName, machineId, instanceId)
+						return
+					}
 				}()
 			}
 		}
@@ -312,6 +306,10 @@ func (p *EC2Provider) removeMachine(ctx context.Context, poolName, machineId, in
 	}
 
 	log.Printf("<provider %s>: Terminated machine <machineId: %s> due to inactivity\n", p.Name(), machineId)
+	err = p.providerRepo.RemoveMachine(ec2ProviderName, poolName, machineId)
+	if err != nil {
+		log.Printf("<provider %s>: Unable to remove machine state <machineId: %s>: %+v\n", p.Name(), machineId, err)
+	}
 }
 
 const ec2UserDataTemplate string = `#!/bin/bash

@@ -244,19 +244,6 @@ func (p *OCIProvider) Reconcile(ctx context.Context, poolName string) {
 						p.removeMachine(ctx, poolName, machineId, instanceId)
 						return
 					}
-
-					// // See if there is a worker associated with this machine
-					// _, err = p.workerRepo.GetWorkerById(machine.WorkerId)
-					// if err != nil {
-					// 	_, ok := err.(*types.ErrWorkerNotFound)
-
-					// 	if ok {
-					// 		p.removeMachine(ctx, poolName, machineId, instanceId)
-					// 		return
-					// 	}
-
-					// 	return
-					// }
 				}()
 			}
 		}
