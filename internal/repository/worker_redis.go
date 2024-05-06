@@ -113,15 +113,10 @@ func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
 }
 
 func (r *WorkerRedisRepository) WorkerKeepAlive(workerId string) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 3})
-	if err != nil {
-		return err
-	}
-	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
 	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
 
 	// Set TTL on state key
-	err = r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.WorkerStateTtlS)*time.Second).Err()
+	err := r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.WorkerStateTtlS)*time.Second).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set worker state ttl <%v>: %w", stateKey, err)
 	}
