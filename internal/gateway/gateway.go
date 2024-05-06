@@ -12,6 +12,7 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/abstractions/endpoint"
 	"github.com/beam-cloud/beta9/internal/task"
+	"github.com/rs/zerolog"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -131,17 +132,54 @@ func NewGateway() (*Gateway, error) {
 	return gateway, nil
 }
 
+func (g *Gateway) configureDebugLogger(e *echo.Echo) {
+	logger := zerolog.New(zerolog.ConsoleWriter{
+		Out:        os.Stdout,
+		TimeFormat: "2006-01-02T15:04:05",
+	}).With().Timestamp().Logger()
+
+	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		LogURI:       true,
+		LogStatus:    true,
+		LogRoutePath: true,
+		LogError:     true,
+		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
+			if v.Error != nil {
+				logger.Err(v.Error).
+					Str("method", c.Request().Method).
+					Str("URI", v.URI).
+					Int("status", v.Status).
+					Msg("")
+			} else {
+				logger.Info().
+					Str("method", c.Request().Method).
+					Str("URI", v.URI).
+					Int("status", v.Status).
+					Msg("")
+			}
+			return nil
+		},
+	}))
+}
+
 func (g *Gateway) initHttp() error {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
 
 	e.Pre(middleware.RemoveTrailingSlash())
-	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-		Skipper: func(c echo.Context) bool {
-			return c.Request().URL.Path == "/api/v1/health"
-		},
-	}))
+
+	// Configure logger
+	if g.Config.DebugMode {
+		g.configureDebugLogger(e)
+	} else {
+		e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
+			Skipper: func(c echo.Context) bool {
+				return c.Request().URL.Path == "/api/v1/health"
+			},
+		}))
+	}
+
 	e.Use(middleware.Recover())
 
 	// Accept both HTTP/2 and HTTP/1
