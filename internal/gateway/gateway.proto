@@ -15,7 +15,7 @@ service GatewayService {
       returns (ReplaceObjectContentResponse) {}
   rpc StartTask(StartTaskRequest) returns (StartTaskResponse);
   rpc EndTask(EndTaskRequest) returns (EndTaskResponse);
-  rpc StopTask(StopTaskRequest) returns (StopTaskResponse);
+  rpc StopTasks(StopTasksRequest) returns (StopTasksResponse);
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
   rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse);
   rpc DeployStub(DeployStubRequest) returns (DeployStubResponse);
@@ -128,9 +128,9 @@ message ListTasksResponse {
   int32 total = 4;
 }
 
-message StopTaskRequest { string task_id = 1; }
+message StopTasksRequest { repeated string task_ids = 1; }
 
-message StopTaskResponse {
+message StopTasksResponse {
   bool ok = 1;
   string err_msg = 2;
 }

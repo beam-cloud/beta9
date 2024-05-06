@@ -1,15 +1,17 @@
 import asyncio
+import inspect
+import os
 from abc import ABC
 from asyncio import AbstractEventLoop
+from pathlib import Path
 from typing import Any, Coroutine, Optional
 
+import grpclib
 from grpclib.client import Channel
 
+from ... import terminal
 from ...channel import get_channel as _get_channel
-from ...config import (
-    ConfigContext,
-    get_config_context,
-)
+from ...config import ConfigContext, SDKSettings, get_config_context, set_settings
 
 # Global channel
 _channel: Optional[Channel] = None
@@ -65,7 +67,33 @@ class BaseAbstraction(ABC):
         return get_channel()
 
     def run_sync(self, coroutine: Coroutine) -> Any:
-        return self.loop.run_until_complete(coroutine)
+        try:
+            return self.loop.run_until_complete(coroutine)
+        except grpclib.exceptions.StreamTerminatedError:
+            terminal.error("Lost connection to gateway 🔌")
+
+    def __init_subclass__(cls, /, **kwargs):
+        """
+        Dynamically load settings depending on if this library is being used
+        by beta9 or beam. This is done by inspecting the first frame loaded
+        onto the stack.
+        """
+        frames = inspect.stack()
+        frame = frames[-1]
+
+        if frame.code_context and any(
+            substr in frame.code_context[0] for substr in ("import beam", "from beam")
+        ):
+            settings = SDKSettings(
+                name="Beam",
+                api_host=os.getenv("API_HOST", "api.beam.cloud"),
+                gateway_host=os.getenv("GATEWAY_HOST", "gateway.beam.cloud"),
+                gateway_port=int(os.getenv("GATEWAY_PORT", 443)),
+                config_path=Path("~/.beam/config.ini").expanduser(),
+            )
+            set_settings(settings)
+
+        super().__init_subclass__(**kwargs)
 
     def __del__(self) -> None:
         if _channel:

@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 
 import click
+from rich.style import Style
 from rich.table import Column, Table, box
 
 from .. import terminal
@@ -46,14 +47,21 @@ def list_contexts(config_path: Path):
         Column("Name"),
         Column("Host"),
         Column("Port"),
+        Column("Token"),
         box=box.SIMPLE,
     )
 
     for name, context in contexts.items():
+        # Style default context
+        style = Style(bold=True) if name == DEFAULT_CONTEXT_NAME else Style()
         table.add_row(
             name,
             context.gateway_host,
             str(context.gateway_port),
+            str(context.token)[0:6] + "..."
+            if context.token and len(context.token) > 6
+            else context.token,
+            style=style,
         )
 
     terminal.print(table)
@@ -85,7 +93,7 @@ def delete_context(name: str, config_path: Path):
         del contexts[name]
 
     save_config(contexts=contexts, path=config_path)
-    terminal.print("Deleted context")
+    terminal.success(f"Deleted context {name}.")
 
 
 @management.command(
@@ -151,3 +159,5 @@ def select_context(name: str, config_path: Path):
         contexts[DEFAULT_CONTEXT_NAME] = contexts[name]
 
     save_config(contexts=contexts, path=config_path)
+
+    terminal.success(f"Default context updated with '{name}'.")

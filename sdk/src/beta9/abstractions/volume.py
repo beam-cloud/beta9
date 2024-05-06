@@ -1,3 +1,5 @@
+from typing import Optional
+
 from ..abstractions.base import BaseAbstraction
 from ..clients.gateway import Volume as VolumeConfig
 from ..clients.volume import GetOrCreateVolumeRequest, GetOrCreateVolumeResponse, VolumeServiceStub
@@ -30,8 +32,17 @@ class Volume(BaseAbstraction):
         self.ready = False
         self.volume_id = None
         self.mount_path = mount_path
+        self._stub: Optional[VolumeServiceStub] = None
 
-        self.stub: VolumeServiceStub = VolumeServiceStub(self.channel)
+    @property
+    def stub(self) -> VolumeServiceStub:
+        if not self._stub:
+            self._stub = VolumeServiceStub(self.channel)
+        return self._stub
+
+    @stub.setter
+    def stub(self, value: VolumeServiceStub):
+        self._stub = value
 
     def get_or_create(self) -> bool:
         resp: GetOrCreateVolumeResponse

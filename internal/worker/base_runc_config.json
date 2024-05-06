@@ -201,7 +201,33 @@
 			]
 		},
 		{
+			"destination": "/usr/local/lib/python3.8/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
 			"destination": "/usr/local/lib/python3.8/dist-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.9/dist-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": [
@@ -227,6 +253,19 @@
 			]
 		},
 		{
+			"destination": "/usr/local/lib/python3.10/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
 			"destination": "/usr/local/lib/python3.10/dist-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
@@ -240,7 +279,33 @@
 			]
 		},
 		{
+			"destination": "/usr/local/lib/python3.11/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
 			"destination": "/usr/local/lib/python3.11/dist-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.12/dist-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": [

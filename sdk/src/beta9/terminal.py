@@ -45,9 +45,11 @@ def warn(text: str) -> None:
     _console.print(Text(text, style="bold yellow"))
 
 
-def error(text: str) -> None:
+def error(text: str, exit: bool = True) -> None:
     _console.print(Text(text, style="bold red"))
-    sys.exit(1)
+
+    if exit:
+        sys.exit(1)
 
 
 def url(text: str) -> None:

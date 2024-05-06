@@ -164,12 +164,10 @@ func (g *volumeGroup) Ls(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
-	volumeName := ctx.Param("volumeName")
-	path := ctx.Param("*")
-
+	volumePath := ctx.Param("volumePath*")
 	if paths, err := g.gvs.listPath(
 		ctx.Request().Context(),
-		volumeName+"/"+path,
+		volumePath,
 		&workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list path")
@@ -190,12 +188,10 @@ func (g *volumeGroup) Rm(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
-	volumeName := ctx.Param("volumeName")
-	path := ctx.Param("*")
-
+	volumePath := ctx.Param("volumePath*")
 	if _, err := g.gvs.deletePath(
 		ctx.Request().Context(),
-		volumeName+"/"+path,
+		volumePath,
 		&workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete path")

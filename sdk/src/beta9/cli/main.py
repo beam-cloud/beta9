@@ -4,10 +4,9 @@ from typing import Any, Optional
 
 import click
 
-from .. import terminal
 from ..channel import prompt_first_auth
-from ..config import CLISettings, is_config_empty, set_settings
-from . import config, deployment, task, volume
+from ..config import SDKSettings, is_config_empty, set_settings
+from . import config, deployment, serve, task, volume
 from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCollection
 
 click.formatting.FORCED_WIDTH = shutil.get_terminal_size().columns
@@ -23,10 +22,10 @@ class CLI:
 
     def __init__(
         self,
-        settings: Optional[CLISettings] = None,
+        settings: Optional[SDKSettings] = None,
         context_settings: Optional[dict] = None,
     ) -> None:
-        self.settings = CLISettings() if settings is None else settings
+        self.settings = SDKSettings() if settings is None else settings
         set_settings(self.settings)
 
         if context_settings is None:
@@ -48,12 +47,7 @@ class CLI:
             self.management_group.add_command(module.management)
 
     def check_config(self) -> None:
-        name = self.settings.name
-        config_path = self.settings.config_path
-
-        if is_config_empty(config_path):
-            terminal.header(f"Welcome to {name.title()}! Let's get started 📡")
-
+        if is_config_empty(self.settings.config_path):
             prompt_first_auth(self.settings)
 
 
@@ -63,6 +57,7 @@ def load_cli(**kwargs: Any) -> CLI:
     cli.register(deployment)
     cli.register(volume)
     cli.register(config)
+    cli.register(serve)
 
     cli.check_config()
 

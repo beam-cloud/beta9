@@ -228,6 +228,9 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 		return nil
 	}
 
+	// Listen for task cancellation events
+	channelKey := common.RedisKeys.TaskCancel(authInfo.Workspace.Name, req.StubId, req.TaskId)
+	cancelFlag := make(chan bool, 1)
 	timeoutFlag := make(chan bool, 1)
 
 	var timeoutChan <-chan time.Time
@@ -252,19 +255,34 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 	}
 
 	go func() {
+	retry:
 		for {
+			messages, errs := fs.rdb.Subscribe(ctx, channelKey)
+
 			for {
 				select {
 				case <-timeoutChan:
 					err := timeoutCallback()
 					if err != nil {
-						log.Printf("error timing out task: %v", err)
+						log.Printf("task timeout err: %v", err)
 					}
 					timeoutFlag <- true
 					return
 
+				case msg := <-messages:
+					if msg != nil && task != nil && msg.Payload == task.ExternalId {
+						cancelFlag <- true
+						return
+					}
+
 				case <-ctx.Done():
 					return
+
+				case err := <-errs:
+					if err != nil {
+						log.Printf("monitor task subscription err: %v", err)
+						break retry
+					}
 				}
 			}
 		}
@@ -273,6 +291,15 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 	for {
 		select {
 		case <-stream.Context().Done():
+			return nil
+
+		case <-cancelFlag:
+			err := fs.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
+			if err != nil {
+				return err
+			}
+
+			stream.Send(&pb.FunctionMonitorResponse{Ok: true, Cancelled: true, Complete: false, TimedOut: false})
 			return nil
 
 		case <-timeoutFlag:

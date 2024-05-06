@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/repository"
@@ -116,15 +117,19 @@ func (vs *GlobalVolumeService) ListPath(ctx context.Context, in *pb.ListPathRequ
 		}, nil
 	}
 
-	// Temporarily return the paths as strings
-	stringPaths := make([]string, len(paths))
-	for i, p := range paths {
-		stringPaths[i] = p.Path
+	infos := make([]*pb.PathInfo, len(paths))
+	for i, info := range paths {
+		infos[i] = &pb.PathInfo{
+			Path:    info.Path,
+			Size:    info.Size,
+			ModTime: timestamppb.New(time.Unix(info.ModTime, 0)),
+			IsDir:   info.IsDir,
+		}
 	}
 
 	return &pb.ListPathResponse{
-		Ok:    true,
-		Paths: stringPaths,
+		Ok:        true,
+		PathInfos: infos,
 	}, nil
 }
 
@@ -369,9 +374,14 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 	files := make([]FileInfo, len(matches))
 	for i, p := range matches {
 		info, _ := os.Stat(p)
+		size := info.Size()
+		if info.IsDir() {
+			s, _ := CalculateDirSize(p)
+			size = int64(s)
+		}
 		files[i] = FileInfo{
 			Path:    strings.TrimPrefix(p, rootVolumePath+"/"),
-			Size:    uint64(info.Size()),
+			Size:    uint64(size),
 			ModTime: info.ModTime().Unix(),
 			IsDir:   info.IsDir(),
 		}
