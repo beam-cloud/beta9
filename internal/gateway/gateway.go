@@ -137,11 +137,7 @@ func (g *Gateway) initHttp() error {
 	e.HidePort = true
 
 	e.Pre(middleware.RemoveTrailingSlash())
-	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-		Skipper: func(c echo.Context) bool {
-			return c.Request().URL.Path == "/api/v1/health"
-		},
-	}))
+	configureEchoLogger(e, g.Config.DebugMode)
 	e.Use(middleware.Recover())
 
 	// Accept both HTTP/2 and HTTP/1
