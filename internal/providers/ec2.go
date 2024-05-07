@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -39,12 +38,14 @@ func NewEC2Provider(ctx context.Context, appConfig types.AppConfig, providerRepo
 	}
 
 	baseProvider := NewExternalProvider(ctx, &ExternalProviderConfig{
-		Name:         ec2ProviderName,
-		ClusterName:  appConfig.ClusterName,
-		AppConfig:    appConfig,
-		TailScale:    tailscale,
-		ProviderRepo: providerRepo,
-		WorkerRepo:   workerRepo,
+		Name:                 ec2ProviderName,
+		ClusterName:          appConfig.ClusterName,
+		AppConfig:            appConfig,
+		TailScale:            tailscale,
+		ProviderRepo:         providerRepo,
+		WorkerRepo:           workerRepo,
+		ListMachinesFunc:     ec2Provider.listMachines,
+		TerminateMachineFunc: ec2Provider.TerminateMachine,
 	})
 	ec2Provider.ExternalProvider = baseProvider
 
@@ -252,50 +253,6 @@ func (p *EC2Provider) listMachines(ctx context.Context, poolName string) (map[st
 	}
 
 	return machines, nil
-}
-
-func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
-	ticker := time.NewTicker(reconcileInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			machines, err := p.listMachines(ctx, poolName)
-			if err != nil {
-				log.Printf("<provider %s>: unable to list machines - %v\n", p.Name, err)
-				continue
-			}
-
-			for machineId, instanceId := range machines {
-				func() {
-					err := p.ProviderRepo.SetMachineLock(string(types.ProviderEC2), poolName, machineId)
-					if err != nil {
-						return
-					}
-					defer p.ProviderRepo.RemoveMachineLock(string(types.ProviderEC2), poolName, machineId)
-
-					_, err = p.ProviderRepo.GetMachine(string(types.ProviderEC2), poolName, machineId)
-					if err != nil {
-						p.TerminateMachine(ctx, poolName, instanceId, machineId)
-						return
-					}
-
-					workers, err := p.WorkerRepo.GetAllWorkersOnMachine(machineId)
-					if err != nil || len(workers) > 0 {
-						return
-					}
-
-					if len(workers) == 0 {
-						p.TerminateMachine(ctx, poolName, instanceId, machineId)
-						return
-					}
-				}()
-			}
-		}
-	}
 }
 
 const ec2UserDataTemplate string = `#!/bin/bash

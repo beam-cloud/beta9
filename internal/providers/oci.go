@@ -49,12 +49,14 @@ func NewOCIProvider(ctx context.Context, appConfig types.AppConfig, providerRepo
 	}
 
 	baseProvider := NewExternalProvider(ctx, &ExternalProviderConfig{
-		Name:         ec2ProviderName,
-		ClusterName:  appConfig.ClusterName,
-		AppConfig:    appConfig,
-		TailScale:    tailscale,
-		ProviderRepo: providerRepo,
-		WorkerRepo:   workerRepo,
+		Name:                 ec2ProviderName,
+		ClusterName:          appConfig.ClusterName,
+		AppConfig:            appConfig,
+		TailScale:            tailscale,
+		ProviderRepo:         providerRepo,
+		WorkerRepo:           workerRepo,
+		ListMachinesFunc:     ociProvider.listMachines,
+		TerminateMachineFunc: ociProvider.TerminateMachine,
 	})
 
 	ociProvider.ExternalProvider = baseProvider
