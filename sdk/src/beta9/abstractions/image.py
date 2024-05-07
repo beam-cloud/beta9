@@ -26,7 +26,7 @@ class Image(BaseAbstraction):
 
     def __init__(
         self,
-        python_version: Union[PythonVersion, str] = PythonVersion.Python38,
+        python_version: Union[PythonVersion, str] = PythonVersion.Python310,
         python_packages: Union[List[str], str] = [],
         commands: List[str] = [],
         base_image: Optional[str] = None,
