@@ -195,5 +195,11 @@ func (g *volumeGroup) Mv(ctx echo.Context) error {
 
 func (g *volumeGroup) authorize(ctx echo.Context) (*auth.HttpAuthContext, error) {
 	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	// Verify that the current user can access the workspace
+	if cc.AuthInfo.Workspace.ExternalId != ctx.Param("workspaceId") {
+		return nil, echo.NewHTTPError(http.StatusUnauthorized)
+	}
+
 	return cc, nil
 }
