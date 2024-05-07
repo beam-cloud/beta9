@@ -32,8 +32,7 @@ gateway:
   maxRecvMsgSize: 1024
   maxSendMsgSize: 1024
   cors:
-    allowOrigins:
-    - localhost:3000 # Frontend
+    allowOrigins: "*"
     allowHeaders: "*"
     allowMethods: "*"
 imageService:
