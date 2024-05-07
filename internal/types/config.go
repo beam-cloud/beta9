@@ -152,7 +152,6 @@ type PoolMode string
 var (
 	PoolModeLocal    PoolMode = "local"
 	PoolModeExternal PoolMode = "external"
-	PoolModeRemote   PoolMode = "remote"
 )
 
 type WorkerPoolConfig struct {
