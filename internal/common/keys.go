@@ -9,6 +9,7 @@ var (
 	schedulerContainerRequests string = "scheduler:container_requests"
 	schedulerWorkerLock        string = "scheduler:worker:lock:%s"
 	schedulerWorkerRequests    string = "scheduler:worker:requests:%s"
+	schedulerWorkerIndex       string = "scheduler:worker:worker_index"
 	schedulerWorkerState       string = "scheduler:worker:state:%s"
 	schedulerContainerConfig   string = "scheduler:container:config:%s"
 	schedulerContainerState    string = "scheduler:container:state:%s"
@@ -58,6 +59,7 @@ var (
 var (
 	providerPrefix       string = "provider"
 	providerMachineState string = "provider:machine:%s:%s:%s"
+	providerMachineIndex string = "provider:machine:%s:%s:machine_index"
 	providerMachineLock  string = "provider:machine:%s:%s:%s:lock"
 )
 
@@ -77,6 +79,10 @@ type redisKeys struct{}
 // Scheduler scheduling keys
 func (rk *redisKeys) SchedulerPrefix() string {
 	return schedulerPrefix
+}
+
+func (rk *redisKeys) SchedulerWorkerIndex() string {
+	return schedulerWorkerIndex
 }
 
 func (rk *redisKeys) SchedulerContainerRequests() string {
@@ -228,6 +234,10 @@ func (rk *redisKeys) ProviderPrefix() string {
 
 func (rk *redisKeys) ProviderMachineState(providerName, poolName, machineId string) string {
 	return fmt.Sprintf(providerMachineState, providerName, poolName, machineId)
+}
+
+func (rk *redisKeys) ProviderMachineIndex(providerName, poolName string) string {
+	return fmt.Sprintf(providerMachineIndex, providerName, poolName)
 }
 
 func (rk *redisKeys) ProviderMachineLock(providerName, poolName, machineId string) string {

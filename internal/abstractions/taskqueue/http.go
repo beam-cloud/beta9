@@ -7,6 +7,7 @@ import (
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/task"
 	"github.com/beam-cloud/beta9/internal/types"
+
 	"github.com/labstack/echo/v4"
 )
 
