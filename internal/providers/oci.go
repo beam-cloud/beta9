@@ -20,7 +20,7 @@ type OCIProvider struct {
 }
 
 const (
-	ociBootVolumeSizeInGB int64 = 250
+	ociBootVolumeSizeInGB int64 = 250 // TODO: make this configurable in OCIProviderConfig
 )
 
 func NewOCIProvider(ctx context.Context, appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*OCIProvider, error) {
