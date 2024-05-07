@@ -21,7 +21,7 @@ type OCIProvider struct {
 }
 
 const (
-	ociBootVolumeSizeInGB int64 = 1000
+	ociBootVolumeSizeInGB int64 = 250
 )
 
 func NewOCIProvider(ctx context.Context, appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*OCIProvider, error) {
@@ -65,7 +65,7 @@ func NewOCIProvider(ctx context.Context, appConfig types.AppConfig, providerRepo
 func (p *OCIProvider) getAvailableInstances() ([]Instance, error) {
 	return []Instance{{
 		Type: "VM.GPU.A10.1",
-		Spec: InstanceSpec{Cpu: 15 * 1000, Memory: 240 * 1024, Gpu: "T4", GpuCount: 1},
+		Spec: InstanceSpec{Cpu: 15 * 1000, Memory: 240 * 1024, Gpu: "A10G", GpuCount: 1},
 	}}, nil
 }
 

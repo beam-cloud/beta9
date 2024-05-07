@@ -68,20 +68,26 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 
 			for machineId, instanceId := range machines {
 				func() {
-					err := p.ProviderRepo.SetMachineLock(string(types.ProviderEC2), poolName, machineId)
+					err := p.ProviderRepo.SetMachineLock(p.Name, poolName, machineId)
 					if err != nil {
 						return
 					}
-					defer p.ProviderRepo.RemoveMachineLock(string(types.ProviderEC2), poolName, machineId)
+					defer p.ProviderRepo.RemoveMachineLock(p.Name, poolName, machineId)
 
-					_, err = p.ProviderRepo.GetMachine(string(types.ProviderEC2), poolName, machineId)
+					_, err = p.ProviderRepo.GetMachine(p.Name, poolName, machineId)
 					if err != nil {
+						log.Printf("<provider %s>: unable to retrieve machine <machineId: %s> - %v\n", p.Name, machineId, err)
 						p.TerminateMachineFunc(ctx, poolName, instanceId, machineId)
 						return
 					}
 
 					workers, err := p.WorkerRepo.GetAllWorkersOnMachine(machineId)
-					if err != nil || len(workers) > 0 {
+					if err != nil {
+						log.Printf("<provider %s>: unable to retrieve workers for machine <machineId: %s> - %v\n", p.Name, machineId, err)
+						return
+					}
+
+					if len(workers) > 0 {
 						return
 					}
 

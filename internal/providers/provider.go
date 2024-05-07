@@ -74,7 +74,7 @@ func selectInstance(availableInstances []Instance, requiredCpu int64, requiredMe
 		return spec.Cpu >= bufferedCpu && spec.Memory >= bufferedMemory && spec.Gpu == requiredGpuType && spec.GpuCount >= requiredGpuCount
 	}
 
-	// Find the smallest instance that meets or exceeds the requirements
+	// Find an smallest instance that meets or exceeds the requirements
 	var selectedInstance *Instance = nil
 	for _, instance := range availableInstances {
 		if meetsRequirements(instance.Spec) {
