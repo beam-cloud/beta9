@@ -15,9 +15,11 @@ type WorkerRepository interface {
 	GetWorkerById(workerId string) (*types.Worker, error)
 	GetAllWorkers() ([]*types.Worker, error)
 	GetAllWorkersInPool(poolName string) ([]*types.Worker, error)
+	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId string) error
 	RemoveWorker(w *types.Worker) error
+	SetWorkerKeepAlive(workerId string) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
 	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
 	GetNextContainerRequest(workerId string) (*types.ContainerRequest, error)
@@ -99,8 +101,11 @@ type TaskRepository interface {
 
 type ProviderRepository interface {
 	GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
+	AddMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error
+	RemoveMachine(providerName, poolName, machineId string) error
 	RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error
 	WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
+	ListAllMachines(providerName, poolName string) ([]*types.ProviderMachine, error)
 	SetMachineLock(providerName, poolName, machineId string) error
 	RemoveMachineLock(providerName, poolName, machineId string) error
 }

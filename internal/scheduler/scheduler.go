@@ -32,7 +32,7 @@ type Scheduler struct {
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.MetricsRepository, backendRepo repo.BackendRepository, tailscale *network.Tailscale) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
-	workerRepo := repo.NewWorkerRedisRepository(redisClient)
+	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 	providerRepo := repo.NewProviderRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
@@ -50,8 +50,8 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		switch pool.Mode {
 		case types.PoolModeLocal:
 			controller, err = NewLocalKubernetesWorkerPoolController(ctx, config, name, workerRepo)
-		case types.PoolModeMetal:
-			controller, err = NewMetalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, workerPoolRepo, providerRepo, tailscale, pool.Provider)
+		case types.PoolModeExternal:
+			controller, err = NewExternalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, workerPoolRepo, providerRepo, tailscale, pool.Provider)
 		default:
 			log.Printf("no valid controller found for pool <%s> with mode: %s\n", name, pool.Mode)
 			continue

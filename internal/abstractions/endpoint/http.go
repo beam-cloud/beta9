@@ -17,7 +17,6 @@ type endpointGroup struct {
 func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGroup {
 	group := &endpointGroup{routeGroup: g, es: es}
 
-	g.POST("/id/:stubId/", group.endpointRequest)
 	g.POST("/id/:stubId", group.endpointRequest)
 	g.POST("/:deploymentName/v:version", group.endpointRequest)
 

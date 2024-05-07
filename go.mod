@@ -37,6 +37,7 @@ require (
 	github.com/opencontainers/runtime-spec v1.1.0
 	github.com/opencontainers/umoci v0.4.7
 	github.com/openmeterio/openmeter v1.0.0-beta.47
+	github.com/oracle/oci-go-sdk v24.3.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/pressly/goose/v3 v3.17.0
 	github.com/prometheus/client_golang v1.19.0
