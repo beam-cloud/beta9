@@ -186,7 +186,6 @@ func (vs *GlobalVolumeService) DeletePath(ctx context.Context, in *pb.DeletePath
 }
 
 // Volume business logic
-
 func (vs *GlobalVolumeService) getOrCreateVolume(ctx context.Context, workspace *types.Workspace, volumeName string) (*types.Volume, error) {
 	volume, err := vs.backendRepo.GetOrCreateVolume(ctx, workspace.Id, volumeName)
 	if err != nil {
