@@ -138,6 +138,11 @@ func (g *Gateway) initHttp() error {
 
 	e.Pre(middleware.RemoveTrailingSlash())
 	configureEchoLogger(e, g.Config.DebugMode)
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: g.Config.GatewayService.CORS.AllowedOrigins,
+		AllowHeaders: g.Config.GatewayService.CORS.AllowedHeaders,
+		AllowMethods: g.Config.GatewayService.CORS.AllowedMethods,
+	}))
 	e.Use(middleware.Recover())
 
 	// Accept both HTTP/2 and HTTP/1

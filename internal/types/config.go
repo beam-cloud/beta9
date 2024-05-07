@@ -62,12 +62,19 @@ type PostgresConfig struct {
 	EnableTLS bool   `key:"enableTLS" json:"enable_tls"`
 }
 
+type CorsConfig struct {
+	AllowedOrigins []string `key:"allowOrigins" json:"allow_origins"`
+	AllowedMethods []string `key:"allowMethods" json:"allow_methods"`
+	AllowedHeaders []string `key:"allowHeaders" json:"allow_headers"`
+}
+
 type GatewayServiceConfig struct {
-	Host           string `key:"host" json:"host"`
-	HTTPPort       int    `key:"httpPort" json:"http_port"`
-	GRPCPort       int    `key:"grpcPort" json:"grpc_port"`
-	MaxRecvMsgSize int    `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
-	MaxSendMsgSize int    `key:"maxSendMsgSize" json:"max_send_msg_size"`
+	Host           string     `key:"host" json:"host"`
+	HTTPPort       int        `key:"httpPort" json:"http_port"`
+	GRPCPort       int        `key:"grpcPort" json:"grpc_port"`
+	MaxRecvMsgSize int        `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
+	MaxSendMsgSize int        `key:"maxSendMsgSize" json:"max_send_msg_size"`
+	CORS           CorsConfig `key:"cors" json:"cors"`
 }
 
 type ImageServiceConfig struct {

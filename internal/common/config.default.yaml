@@ -1,5 +1,5 @@
 clusterName: beta9
-debugMode: true
+debugMode: false
 database:
   postgres:
     host: postgresql.beta9
@@ -31,6 +31,11 @@ gateway:
   grpcPort: 1993
   maxRecvMsgSize: 1024
   maxSendMsgSize: 1024
+  cors:
+    allowOrigins:
+    - localhost:3000 # Frontend
+    allowHeaders: "*"
+    allowMethods: "*"
 imageService:
   cacheURL:
   localCacheEnabled: true

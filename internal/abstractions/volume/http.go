@@ -1,11 +1,11 @@
 package volume
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/internal/auth"
-	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/labstack/echo/v4"
 )
 
@@ -18,15 +18,13 @@ func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup 
 	group := &volumeGroup{routeGroup: g, gvs: gvs}
 
 	g.GET("/:workspaceId", group.ListVolumes)
-	g.GET("/:workspaceId/", group.ListVolumes)
 
 	g.POST("/:workspaceId/create/:volumeName", group.CreateVolume)
-	g.POST("/:workspaceId/create/:volumeName/", group.CreateVolume)
-	g.PUT("/:workspaceId/upload/:volumeName/*", group.UploadFile)
-	g.GET("/:workspaceId/download/:volumeName/*", group.DownloadFile)
-	g.GET("/:workspaceId/ls/:volumeName/*", group.Ls)
-	g.DELETE("/:workspaceId/rm/:volumeName/*", group.Rm)
-	g.PATCH("/:workspaceId/mv/:volumeName/*", group.Mv)
+	g.PUT("/:workspaceId/upload/:volumePath*", group.UploadFile)
+	g.GET("/:workspaceId/download/:volumePath*", group.DownloadFile)
+	g.GET("/:workspaceId/ls/:volumePath*", group.Ls)
+	g.DELETE("/:workspaceId/rm/:volumePath*", group.Rm)
+	g.PATCH("/:workspaceId/mv/:volumePath*", group.Mv)
 
 	return group
 }
@@ -86,15 +84,7 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
-	volumeName := ctx.Param("volumeName")
-	path := ctx.Param("*")
-
-	v, err := g.gvs.getOrCreateVolume(ctx.Request().Context(), &workspace, volumeName)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume name")
-	}
-
-	fullpath := v.Name + "/" + path
+	volumePath := ctx.Param("volumePath*")
 	stream := ctx.Request().Body
 	ch := make(chan CopyPathContent)
 
@@ -109,7 +99,7 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 			}
 
 			ch <- CopyPathContent{
-				Path:    fullpath,
+				Path:    volumePath,
 				Content: buf[:n],
 			}
 		}
@@ -120,13 +110,14 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 		ch,
 		&workspace,
 	); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to upload file")
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to upload file: %v", err))
 	} else {
 		return ctx.JSON(http.StatusOK, nil)
 	}
 }
 
 func (g *volumeGroup) DownloadFile(ctx echo.Context) error {
+
 	_, err := g.authorize(ctx)
 	if err != nil {
 		return err
@@ -138,15 +129,13 @@ func (g *volumeGroup) DownloadFile(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
-	volumeName := ctx.Param("volumeName")
-	path := ctx.Param("*")
-
+	volumePath := ctx.Param("volumePath*")
 	if f, err := g.gvs.getFileFd(
 		ctx.Request().Context(),
-		volumeName+"/"+path,
+		volumePath,
 		&workspace,
 	); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to download file")
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to download file %v", err))
 	} else {
 		return ctx.Stream(http.StatusOK, "application/octet-stream", f)
 	}
@@ -170,7 +159,7 @@ func (g *volumeGroup) Ls(ctx echo.Context) error {
 		volumePath,
 		&workspace,
 	); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list path")
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to list path: %v", err))
 	} else {
 		return ctx.JSON(http.StatusOK, paths)
 	}
@@ -206,8 +195,5 @@ func (g *volumeGroup) Mv(ctx echo.Context) error {
 
 func (g *volumeGroup) authorize(ctx echo.Context) (*auth.HttpAuthContext, error) {
 	cc, _ := ctx.(*auth.HttpAuthContext)
-	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return nil, echo.NewHTTPError(http.StatusUnauthorized)
-	}
 	return cc, nil
 }
