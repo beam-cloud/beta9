@@ -803,6 +803,14 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 		}
 	}
 
+	if filters.Active != nil {
+		qb = qb.Where(squirrel.Eq{"d.active": filters.Active})
+	}
+
+	if filters.Version > 0 {
+		qb = qb.Where(squirrel.Eq{"d.version": filters.Version})
+	}
+
 	if filters.Offset > 0 {
 		qb = qb.Offset(uint64(filters.Offset))
 	}
@@ -822,7 +830,7 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 	return qb
 }
 
-func (c *PostgresBackendRepository) ListDeployments(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+func (c *PostgresBackendRepository) ListDeploymentsWithRelated(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
 	qb := c.listDeploymentsQueryBuilder(filters)
 
 	sql, args, err := qb.ToSql()

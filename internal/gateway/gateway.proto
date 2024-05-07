@@ -19,6 +19,7 @@ service GatewayService {
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
   rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse);
   rpc DeployStub(DeployStubRequest) returns (DeployStubResponse);
+  rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
 }
 
 message AuthorizeRequest {}
@@ -176,4 +177,29 @@ message DeployStubResponse {
   bool ok = 1;
   string deployment_id = 2;
   uint32 version = 3;
+}
+
+message Deployment {
+  string id = 1;
+  string name = 2;
+  bool active = 3;
+  string stub_id = 4;
+  string stub_type = 5;
+  string stub_name = 6;
+  uint32 version = 7;
+  string workspace_id = 8;
+  string workspace_name = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+message ListDeploymentsRequest {
+  map<string, StringList> filters = 1;
+  uint32 limit = 2;
+}
+
+message ListDeploymentsResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Deployment deployments = 3;
 }

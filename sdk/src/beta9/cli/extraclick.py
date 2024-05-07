@@ -3,12 +3,15 @@ import inspect
 import sys
 import textwrap
 from gettext import gettext
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import click
 
 from ..abstractions import base as base_abstraction
 from ..channel import ServiceClient
+from ..clients.gateway import (
+    StringList,
+)
 from ..config import DEFAULT_CONTEXT_NAME, get_config_context
 
 CLICK_CONTEXT_SETTINGS = dict(
@@ -194,3 +197,26 @@ def pass_service_client(func: Callable):
             return func(client, *args, **kwargs)
 
     return decorator
+
+
+def filter_values_callback(
+    ctx: click.Context,
+    param: click.Option,
+    values: List[str],
+) -> Dict[str, StringList]:
+    filters: Dict[str, StringList] = {}
+
+    for value in values:
+        key, value = value.split("=")
+        value_list = value.split(",") if "," in value else [value]
+
+        if key == "status":
+            value_list = [v.upper() for v in value_list]
+
+        if not key or not value:
+            raise click.BadParameter("Filter must be in the format key=value")
+
+        filters[key] = StringList(values=value_list)
+
+    print(filters)
+    return filters
