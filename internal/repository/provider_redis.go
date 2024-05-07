@@ -142,6 +142,7 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 
 func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error {
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
+
 	err := r.rdb.HSet(context.TODO(),
 		stateKey, "machine_id", machineId, "status",
 		string(types.MachineStatusPending), "cpu", info.Cpu, "memory", info.Memory,
