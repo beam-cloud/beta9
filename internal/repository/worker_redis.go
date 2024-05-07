@@ -329,7 +329,6 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	// Update the worker capacity first
 	err = r.UpdateWorkerCapacity(worker, request, types.RemoveCapacity)
 	if err != nil {
-		log.Println(err)
 		return err
 	}
 
