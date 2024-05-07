@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/beam-cloud/beta9/internal/network"
 	"github.com/beam-cloud/beta9/internal/repository"
@@ -224,40 +223,6 @@ func (p *OCIProvider) listMachines(ctx context.Context, poolName string) (map[st
 	}
 
 	return machines, nil
-}
-
-func (p *OCIProvider) Reconcile(ctx context.Context, poolName string) {
-	ticker := time.NewTicker(reconcileInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			machines, err := p.listMachines(ctx, poolName)
-			if err != nil {
-				log.Printf("<provider %s>: unable to list machines - %v\n", p.Name, err)
-				continue
-			}
-
-			for machineId, instanceId := range machines {
-				func() {
-					err := p.ProviderRepo.SetMachineLock(string(types.ProviderEC2), poolName, machineId)
-					if err != nil {
-						return
-					}
-					defer p.ProviderRepo.RemoveMachineLock(string(types.ProviderEC2), poolName, machineId)
-
-					_, err = p.ProviderRepo.GetMachine(string(types.ProviderEC2), poolName, machineId)
-					if err != nil {
-						p.TerminateMachine(ctx, poolName, instanceId, machineId)
-						return
-					}
-				}()
-			}
-		}
-	}
 }
 
 const ociUserDataTemplate string = `#!/bin/bash
