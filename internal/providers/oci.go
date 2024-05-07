@@ -15,23 +15,18 @@ import (
 )
 
 type OCIProvider struct {
-	name           string
+	*ExternalProvider
 	computeClient  core.ComputeClient
 	networkClient  core.VirtualNetworkClient
-	clusterName    string
-	appConfig      types.AppConfig
-	providerRepo   repository.ProviderRepository
 	providerConfig types.OCIProviderConfig
-	tailscale      *network.Tailscale
-	workerRepo     repository.WorkerRepository
 }
 
 const (
-	ociReconcileInterval  time.Duration = 5 * time.Second
-	ociBootVolumeSizeInGB int64         = 1000
+	ociProviderName       string = "oci"
+	ociBootVolumeSizeInGB int64  = 1000
 )
 
-func NewOCIProvider(appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*OCIProvider, error) {
+func NewOCIProvider(ctx context.Context, appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*OCIProvider, error) {
 	configProvider := common.NewRawConfigurationProvider(appConfig.Providers.OCIConfig.Tenancy,
 		appConfig.Providers.OCIConfig.UserId, appConfig.Providers.OCIConfig.Region, appConfig.Providers.OCIConfig.FingerPrint,
 		appConfig.Providers.OCIConfig.PrivateKey, common.String(appConfig.Providers.OCIConfig.PrivateKeyPassword),
@@ -47,17 +42,24 @@ func NewOCIProvider(appConfig types.AppConfig, providerRepo repository.ProviderR
 		return nil, err
 	}
 
-	return &OCIProvider{
-		name:           "oci",
+	ociProvider := &OCIProvider{
 		computeClient:  computeClient,
 		networkClient:  networkClient,
-		clusterName:    appConfig.ClusterName,
-		appConfig:      appConfig,
-		providerRepo:   providerRepo,
 		providerConfig: appConfig.Providers.OCIConfig,
-		tailscale:      tailscale,
-		workerRepo:     workerRepo,
-	}, nil
+	}
+
+	baseProvider := NewExternalProvider(ctx, &ExternalProviderConfig{
+		Name:         ec2ProviderName,
+		ClusterName:  appConfig.ClusterName,
+		AppConfig:    appConfig,
+		TailScale:    tailscale,
+		ProviderRepo: providerRepo,
+		WorkerRepo:   workerRepo,
+	})
+
+	ociProvider.ExternalProvider = baseProvider
+
+	return ociProvider, nil
 }
 
 func (p *OCIProvider) getAvailableInstances() ([]Instance, error) {
@@ -65,10 +67,6 @@ func (p *OCIProvider) getAvailableInstances() ([]Instance, error) {
 		Type: "VM.GPU.A10.1",
 		Spec: InstanceSpec{Cpu: 15 * 1000, Memory: 240 * 1024, Gpu: "T4", GpuCount: 1},
 	}}, nil
-}
-
-func (p *OCIProvider) Name() string {
-	return p.name
 }
 
 func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token string, compute types.ProviderComputeRequest) (string, error) {
@@ -82,15 +80,15 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
-	gatewayHost, err := p.tailscale.GetHostnameForService("gateway-http")
+	gatewayHost, err := p.Tailscale.GetHostnameForService("gateway-http")
 	if err != nil {
 		return "", err
 	}
 
 	machineId := machineId()
 	populatedUserData, err := populateUserData(userDataConfig{
-		AuthKey:           p.appConfig.Tailscale.AuthKey,
-		ControlURL:        p.appConfig.Tailscale.ControlURL,
+		AuthKey:           p.AppConfig.Tailscale.AuthKey,
+		ControlURL:        p.AppConfig.Tailscale.ControlURL,
 		GatewayHost:       gatewayHost,
 		Beta9Token:        token,
 		K3sVersion:        k3sVersion,
@@ -102,11 +100,10 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
-	sshPublicKey := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCkOEyPxGVNmoqW10QxR4uc3le0CGMQhXfLXbMLBFrdaEwaKarYdHTRZjHmI21LtkiXqY2KEH6UJBpx2uUozMU+2ur+gnIW8Itsi6NAQkIkawAW4MvTxBi2++6PbvQxaL7QHZqigFFRV9n/lt0l2QfMcClE14azS+Sn+WwzzJKGCslDUa6OEnD3evJqCGncvwNxkIVfGyeJz2Wh1fZK18jIlFj4efNBVeqx0RyE+SBd1h31QsLpMm5vBvrMXjqA/FGfNgQe25TQ8gA7Rgu9NZkcIExlIt/NQl2jhA7oWmjti5+JbYSJfm7J+309MVf9b0YjouupICDhs2ZFG2XzdDUf ssh-key-2024-03-20"
+	log.Printf("<provider %s>: Selected shape <%s> for compute request: %+v\n", p.Name, instance.Type, compute)
 
-	log.Printf("<provider %s>: Selected shape <%s> for compute request: %+v\n", p.Name(), instance.Type, compute)
 	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
-	displayName := fmt.Sprintf("%s-%s-%s", p.clusterName, poolName, machineId)
+	displayName := fmt.Sprintf("%s-%s-%s", p.ClusterName, poolName, machineId)
 	launchDetails := core.LaunchInstanceDetails{
 		DisplayName:        common.String(displayName),
 		AvailabilityDomain: common.String(p.providerConfig.AvailabilityDomain),
@@ -120,8 +117,7 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 			SubnetId:       common.String(p.providerConfig.SubnetId),
 		},
 		Metadata: map[string]string{
-			"user_data":           encodedUserData,
-			"ssh_authorized_keys": sshPublicKey,
+			"user_data": encodedUserData,
 		},
 		SourceDetails: core.InstanceSourceViaImageDetails{
 			BootVolumeSizeInGBs: common.Int64(ociBootVolumeSizeInGB),
@@ -137,9 +133,10 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 	}
 
 	instanceId := *response.Instance.Id
-	log.Printf("<provider %s>: Provisioned machine ID: %s\n", p.Name(), instanceId)
 
-	err = p.providerRepo.AddMachine(string(types.ProviderOCI), poolName, machineId, &types.ProviderMachineState{
+	log.Printf("<provider %s>: Provisioned machine ID: %s\n", p.Name, instanceId)
+
+	err = p.ProviderRepo.AddMachine(string(types.ProviderOCI), poolName, machineId, &types.ProviderMachineState{
 		Cpu:      instance.Spec.Cpu,
 		Memory:   instance.Spec.Memory,
 		Gpu:      instance.Spec.Gpu,
@@ -152,7 +149,7 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 	return machineId, nil
 }
 
-func (p *OCIProvider) TerminateMachine(ctx context.Context, poolName, instanceId string) error {
+func (p *OCIProvider) TerminateMachine(ctx context.Context, poolName, instanceId, machineId string) error {
 	if instanceId == "" {
 		return fmt.Errorf("invalid instance ID")
 	}
@@ -162,12 +159,23 @@ func (p *OCIProvider) TerminateMachine(ctx context.Context, poolName, instanceId
 	}
 
 	_, err := p.computeClient.TerminateInstance(ctx, request)
-	return err
+	if err != nil {
+		return err
+	}
+
+	err = p.ProviderRepo.RemoveMachine(p.Name, poolName, machineId)
+	if err != nil {
+		log.Printf("<provider %s>: Unable to remove machine state <machineId: %s>: %+v\n", p.Name, machineId, err)
+		return err
+	}
+
+	log.Printf("<provider %s>: Terminated machine <machineId: %s> due to inactivity\n", p.Name, machineId)
+	return nil
 }
 
 func (p *OCIProvider) listMachines(ctx context.Context, poolName string) (map[string]string, error) {
 	tagFilters := map[string]string{
-		"tag.Beta9ClusterName": p.clusterName,
+		"tag.Beta9ClusterName": p.ClusterName,
 		"tag.Beta9PoolName":    poolName,
 	}
 
@@ -217,7 +225,7 @@ func (p *OCIProvider) listMachines(ctx context.Context, poolName string) (map[st
 }
 
 func (p *OCIProvider) Reconcile(ctx context.Context, poolName string) {
-	ticker := time.NewTicker(ociReconcileInterval)
+	ticker := time.NewTicker(reconcileInterval)
 	defer ticker.Stop()
 
 	for {
@@ -227,37 +235,27 @@ func (p *OCIProvider) Reconcile(ctx context.Context, poolName string) {
 		case <-ticker.C:
 			machines, err := p.listMachines(ctx, poolName)
 			if err != nil {
-				log.Printf("<provider %s>: unable to list machines - %v\n", p.Name(), err)
+				log.Printf("<provider %s>: unable to list machines - %v\n", p.Name, err)
 				continue
 			}
 
 			for machineId, instanceId := range machines {
 				func() {
-					err := p.providerRepo.SetMachineLock(string(types.ProviderEC2), poolName, machineId)
+					err := p.ProviderRepo.SetMachineLock(string(types.ProviderEC2), poolName, machineId)
 					if err != nil {
 						return
 					}
-					defer p.providerRepo.RemoveMachineLock(string(types.ProviderEC2), poolName, machineId)
+					defer p.ProviderRepo.RemoveMachineLock(string(types.ProviderEC2), poolName, machineId)
 
-					_, err = p.providerRepo.GetMachine(string(types.ProviderEC2), poolName, machineId)
+					_, err = p.ProviderRepo.GetMachine(string(types.ProviderEC2), poolName, machineId)
 					if err != nil {
-						p.removeMachine(ctx, poolName, machineId, instanceId)
+						p.TerminateMachine(ctx, poolName, instanceId, machineId)
 						return
 					}
 				}()
 			}
 		}
 	}
-}
-
-func (p *OCIProvider) removeMachine(ctx context.Context, poolName, machineId, instanceId string) {
-	err := p.TerminateMachine(ctx, poolName, instanceId)
-	if err != nil {
-		log.Printf("Unable to terminate machine <machineId: %s>: %+v\n", machineId, err)
-		return
-	}
-
-	log.Printf("Terminated machine <machineId: %s> due to inactivity\n", machineId)
 }
 
 const ociUserDataTemplate string = `#!/bin/bash

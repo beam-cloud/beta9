@@ -51,9 +51,9 @@ func NewExternalWorkerPoolController(
 
 	switch *providerName {
 	case types.ProviderEC2:
-		provider, err = providers.NewEC2Provider(config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewEC2Provider(ctx, config, providerRepo, workerRepo, tailscale)
 	case types.ProviderOCI:
-		provider, err = providers.NewOCIProvider(config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewOCIProvider(ctx, config, providerRepo, workerRepo, tailscale)
 	default:
 		return nil, errors.New("invalid provider name")
 	}
@@ -96,7 +96,7 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 		return nil, err
 	}
 
-	machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.Name(), wpc.name)
+	machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name)
 	if err != nil {
 		return nil, err
 	}
@@ -104,12 +104,12 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	// Attempt to schedule the worker on an existing machine first
 	for _, machine := range machines {
 		worker := func() *types.Worker {
-			err := wpc.providerRepo.SetMachineLock(wpc.provider.Name(), wpc.name, machine.State.MachineId)
+			err := wpc.providerRepo.SetMachineLock(wpc.provider.GetName(), wpc.name, machine.State.MachineId)
 			if err != nil {
 				return nil
 			}
 
-			defer wpc.providerRepo.RemoveMachineLock(wpc.provider.Name(), wpc.name, machine.State.MachineId)
+			defer wpc.providerRepo.RemoveMachineLock(wpc.provider.GetName(), wpc.name, machine.State.MachineId)
 
 			workers, err := wpc.workerRepo.GetAllWorkersOnMachine(machine.State.MachineId)
 			if err != nil || machine.State.Status != types.MachineStatusRegistered {

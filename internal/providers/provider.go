@@ -5,21 +5,23 @@ import (
 	"context"
 	"fmt"
 	"text/template"
+	"time"
 
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 )
 
 const (
-	instanceComputeBufferPercent float64 = 10.0
-	k3sVersion                   string  = "v1.28.5+k3s1"
+	instanceComputeBufferPercent float64       = 10.0
+	k3sVersion                   string        = "v1.28.5+k3s1"
+	reconcileInterval            time.Duration = 5 * time.Second
 )
 
 type Provider interface {
 	ProvisionMachine(ctx context.Context, poolName, token string, compute types.ProviderComputeRequest) (string, error)
-	TerminateMachine(ctx context.Context, poolName, machineId string) error
+	TerminateMachine(ctx context.Context, poolName, instanceId, machineId string) error
 	Reconcile(ctx context.Context, poolName string)
-	Name() string
+	GetName() string
 }
 
 func machineId() string {

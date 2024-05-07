@@ -18,41 +18,37 @@ import (
 )
 
 type EC2Provider struct {
-	name           string
+	*ExternalProvider
 	client         *ec2.Client
-	clusterName    string
-	appConfig      types.AppConfig
 	providerConfig types.EC2ProviderConfig
-	providerRepo   repository.ProviderRepository
-	tailscale      *network.Tailscale
-	workerRepo     repository.WorkerRepository
 }
 
 const (
-	ec2ReconcileInterval time.Duration = 5 * time.Second
-	ec2ProviderName      string        = "ec2"
+	ec2ProviderName string = "ec2"
 )
 
-func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*EC2Provider, error) {
+func NewEC2Provider(ctx context.Context, appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*EC2Provider, error) {
 	cfg, err := common.GetAWSConfig(appConfig.Providers.EC2Config.AWSAccessKey, appConfig.Providers.EC2Config.AWSSecretKey, appConfig.Providers.EC2Config.AWSRegion)
 	if err != nil {
 		return nil, err
 	}
 
-	return &EC2Provider{
-		name:           ec2ProviderName,
+	ec2Provider := &EC2Provider{
 		client:         ec2.NewFromConfig(cfg),
-		clusterName:    appConfig.ClusterName,
-		appConfig:      appConfig,
 		providerConfig: appConfig.Providers.EC2Config,
-		providerRepo:   providerRepo,
-		tailscale:      tailscale,
-		workerRepo:     workerRepo,
-	}, nil
-}
+	}
 
-func (p *EC2Provider) Name() string {
-	return p.name
+	baseProvider := NewExternalProvider(ctx, &ExternalProviderConfig{
+		Name:         ec2ProviderName,
+		ClusterName:  appConfig.ClusterName,
+		AppConfig:    appConfig,
+		TailScale:    tailscale,
+		ProviderRepo: providerRepo,
+		WorkerRepo:   workerRepo,
+	})
+	ec2Provider.ExternalProvider = baseProvider
+
+	return ec2Provider, nil
 }
 
 func (p *EC2Provider) getAvailableInstances() ([]Instance, error) {
@@ -109,15 +105,15 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 	}
 
 	// TODO: come up with a way to not hardcode the service name (possibly look up in config)
-	gatewayHost, err := p.tailscale.GetHostnameForService("gateway-http")
+	gatewayHost, err := p.Tailscale.GetHostnameForService("gateway-http")
 	if err != nil {
 		return "", err
 	}
 
 	machineId := machineId()
 	populatedUserData, err := populateUserData(userDataConfig{
-		AuthKey:           p.appConfig.Tailscale.AuthKey,
-		ControlURL:        p.appConfig.Tailscale.ControlURL,
+		AuthKey:           p.AppConfig.Tailscale.AuthKey,
+		ControlURL:        p.AppConfig.Tailscale.ControlURL,
 		GatewayHost:       gatewayHost,
 		Beta9Token:        token,
 		K3sVersion:        k3sVersion,
@@ -129,17 +125,14 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
-	roleArn := "arn:aws:iam::187248174200:instance-profile/beta-dev-k3s-instance-profile"
-
-	log.Printf("<provider %s>: Selected instance type <%s> for compute request: %+v\n", p.Name(), instance.Type, compute)
+	log.Printf("<provider %s>: Selected instance type <%s> for compute request: %+v\n", p.Name, instance.Type, compute)
 	input := &ec2.RunInstancesInput{
-		ImageId:            aws.String(p.providerConfig.AMI),
-		InstanceType:       awsTypes.InstanceType(instance.Type),
-		MinCount:           aws.Int32(1),
-		MaxCount:           aws.Int32(1),
-		UserData:           aws.String(base64.StdEncoding.EncodeToString([]byte(populatedUserData))),
-		SubnetId:           p.providerConfig.SubnetId,
-		IamInstanceProfile: &awsTypes.IamInstanceProfileSpecification{Arn: &roleArn},
+		ImageId:      aws.String(p.providerConfig.AMI),
+		InstanceType: awsTypes.InstanceType(instance.Type),
+		MinCount:     aws.Int32(1),
+		MaxCount:     aws.Int32(1),
+		UserData:     aws.String(base64.StdEncoding.EncodeToString([]byte(populatedUserData))),
+		SubnetId:     p.providerConfig.SubnetId,
 	}
 
 	result, err := p.client.RunInstances(ctx, input)
@@ -152,7 +145,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 	}
 
 	instanceId := *result.Instances[0].InstanceId
-	instanceName := fmt.Sprintf("%s-%s-%s", p.clusterName, poolName, machineId)
+	instanceName := fmt.Sprintf("%s-%s-%s", p.ClusterName, poolName, machineId)
 
 	_, err = p.client.CreateTags(ctx, &ec2.CreateTagsInput{
 		Resources: []string{instanceId},
@@ -163,7 +156,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 			},
 			{
 				Key:   aws.String("Beta9ClusterName"),
-				Value: aws.String(p.clusterName),
+				Value: aws.String(p.ClusterName),
 			},
 			{
 				Key:   aws.String("Beta9PoolName"),
@@ -180,7 +173,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", fmt.Errorf("failed to tag the instance: %w", err)
 	}
 
-	err = p.providerRepo.AddMachine(string(types.ProviderEC2), poolName, machineId, &types.ProviderMachineState{
+	err = p.ProviderRepo.AddMachine(string(types.ProviderEC2), poolName, machineId, &types.ProviderMachineState{
 		Cpu:      instance.Spec.Cpu,
 		Memory:   instance.Spec.Memory,
 		Gpu:      instance.Spec.Gpu,
@@ -193,7 +186,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 	return machineId, nil
 }
 
-func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, instanceId string) error {
+func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, instanceId, machineId string) error {
 	if instanceId == "" {
 		return errors.New("invalid instance ID")
 	}
@@ -207,6 +200,13 @@ func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, instanceId
 		return err
 	}
 
+	err = p.ProviderRepo.RemoveMachine(p.Name, poolName, machineId)
+	if err != nil {
+		log.Printf("<provider %s>: Unable to remove machine state <machineId: %s>: %+v\n", p.Name, machineId, err)
+		return err
+	}
+
+	log.Printf("<provider %s>: Terminated machine <machineId: %s> due to inactivity\n", p.Name, machineId)
 	return nil
 }
 
@@ -215,7 +215,7 @@ func (p *EC2Provider) listMachines(ctx context.Context, poolName string) (map[st
 		Filters: []awsTypes.Filter{
 			{
 				Name:   aws.String("tag:Beta9ClusterName"),
-				Values: []string{p.clusterName},
+				Values: []string{p.ClusterName},
 			},
 			{
 				Name:   aws.String("tag:Beta9PoolName"),
@@ -255,7 +255,7 @@ func (p *EC2Provider) listMachines(ctx context.Context, poolName string) (map[st
 }
 
 func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
-	ticker := time.NewTicker(ec2ReconcileInterval)
+	ticker := time.NewTicker(reconcileInterval)
 	defer ticker.Stop()
 
 	for {
@@ -265,50 +265,36 @@ func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
 		case <-ticker.C:
 			machines, err := p.listMachines(ctx, poolName)
 			if err != nil {
-				log.Printf("<provider %s>: unable to list machines - %v\n", p.Name(), err)
+				log.Printf("<provider %s>: unable to list machines - %v\n", p.Name, err)
 				continue
 			}
 
 			for machineId, instanceId := range machines {
 				func() {
-					err := p.providerRepo.SetMachineLock(string(types.ProviderEC2), poolName, machineId)
+					err := p.ProviderRepo.SetMachineLock(string(types.ProviderEC2), poolName, machineId)
 					if err != nil {
 						return
 					}
-					defer p.providerRepo.RemoveMachineLock(string(types.ProviderEC2), poolName, machineId)
+					defer p.ProviderRepo.RemoveMachineLock(string(types.ProviderEC2), poolName, machineId)
 
-					_, err = p.providerRepo.GetMachine(string(types.ProviderEC2), poolName, machineId)
+					_, err = p.ProviderRepo.GetMachine(string(types.ProviderEC2), poolName, machineId)
 					if err != nil {
-						p.removeMachine(ctx, poolName, machineId, instanceId)
+						p.TerminateMachine(ctx, poolName, instanceId, machineId)
 						return
 					}
 
-					workers, err := p.workerRepo.GetAllWorkersOnMachine(machineId)
+					workers, err := p.WorkerRepo.GetAllWorkersOnMachine(machineId)
 					if err != nil || len(workers) > 0 {
 						return
 					}
 
 					if len(workers) == 0 {
-						p.removeMachine(ctx, poolName, machineId, instanceId)
+						p.TerminateMachine(ctx, poolName, instanceId, machineId)
 						return
 					}
 				}()
 			}
 		}
-	}
-}
-
-func (p *EC2Provider) removeMachine(ctx context.Context, poolName, machineId, instanceId string) {
-	err := p.TerminateMachine(ctx, poolName, instanceId)
-	if err != nil {
-		log.Printf("<provider %s>: Unable to terminate machine <machineId: %s>: %+v\n", p.Name(), machineId, err)
-		return
-	}
-
-	log.Printf("<provider %s>: Terminated machine <machineId: %s> due to inactivity\n", p.Name(), machineId)
-	err = p.providerRepo.RemoveMachine(ec2ProviderName, poolName, machineId)
-	if err != nil {
-		log.Printf("<provider %s>: Unable to remove machine state <machineId: %s>: %+v\n", p.Name(), machineId, err)
 	}
 }
 
