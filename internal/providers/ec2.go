@@ -22,10 +22,6 @@ type EC2Provider struct {
 	providerConfig types.EC2ProviderConfig
 }
 
-const (
-	ec2ProviderName string = "ec2"
-)
-
 func NewEC2Provider(ctx context.Context, appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*EC2Provider, error) {
 	cfg, err := common.GetAWSConfig(appConfig.Providers.EC2Config.AWSAccessKey, appConfig.Providers.EC2Config.AWSSecretKey, appConfig.Providers.EC2Config.AWSRegion)
 	if err != nil {
@@ -38,7 +34,7 @@ func NewEC2Provider(ctx context.Context, appConfig types.AppConfig, providerRepo
 	}
 
 	baseProvider := NewExternalProvider(ctx, &ExternalProviderConfig{
-		Name:                 ec2ProviderName,
+		Name:                 string(types.ProviderEC2),
 		ClusterName:          appConfig.ClusterName,
 		AppConfig:            appConfig,
 		TailScale:            tailscale,

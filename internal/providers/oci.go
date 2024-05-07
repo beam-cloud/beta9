@@ -21,8 +21,7 @@ type OCIProvider struct {
 }
 
 const (
-	ociProviderName       string = "oci"
-	ociBootVolumeSizeInGB int64  = 1000
+	ociBootVolumeSizeInGB int64 = 1000
 )
 
 func NewOCIProvider(ctx context.Context, appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*OCIProvider, error) {
@@ -48,7 +47,7 @@ func NewOCIProvider(ctx context.Context, appConfig types.AppConfig, providerRepo
 	}
 
 	baseProvider := NewExternalProvider(ctx, &ExternalProviderConfig{
-		Name:                 ec2ProviderName,
+		Name:                 string(types.ProviderOCI),
 		ClusterName:          appConfig.ClusterName,
 		AppConfig:            appConfig,
 		TailScale:            tailscale,
