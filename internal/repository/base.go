@@ -101,9 +101,9 @@ type TaskRepository interface {
 
 type ProviderRepository interface {
 	GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
-	AddMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error
+	AddMachine(providerName, poolName, machineId string, machineInfo *types.ProviderMachineState) error
 	RemoveMachine(providerName, poolName, machineId string) error
-	RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error
+	RegisterMachine(providerName, poolName, machineId string, newMachineInfo *types.ProviderMachineState) error
 	WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
 	ListAllMachines(providerName, poolName string) ([]*types.ProviderMachine, error)
 	SetMachineLock(providerName, poolName, machineId string) error
