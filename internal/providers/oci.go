@@ -2,7 +2,6 @@ package providers
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"log"
 
@@ -86,7 +85,7 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 	}
 
 	machineId := machineId()
-	populatedUserData, err := populateUserData(userDataConfig{
+	cloudInitData, err := generateCloudInitData(userDataConfig{
 		AuthKey:           p.AppConfig.Tailscale.AuthKey,
 		ControlURL:        p.AppConfig.Tailscale.ControlURL,
 		GatewayHost:       gatewayHost,
@@ -102,7 +101,6 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 
 	log.Printf("<provider %s>: Selected shape <%s> for compute request: %+v\n", p.Name, instance.Type, compute)
 
-	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
 	displayName := fmt.Sprintf("%s-%s-%s", p.ClusterName, poolName, machineId)
 	launchDetails := core.LaunchInstanceDetails{
 		DisplayName:        common.String(displayName),
@@ -117,7 +115,7 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 			SubnetId:       common.String(p.providerConfig.SubnetId),
 		},
 		Metadata: map[string]string{
-			"user_data": encodedUserData,
+			"user_data": cloudInitData,
 		},
 		SourceDetails: core.InstanceSourceViaImageDetails{
 			BootVolumeSizeInGBs: common.Int64(ociBootVolumeSizeInGB),

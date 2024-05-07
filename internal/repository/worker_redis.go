@@ -95,7 +95,7 @@ func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
 	return nil
 }
 
-func (r *WorkerRedisRepository) WorkerKeepAlive(workerId string) error {
+func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string) error {
 	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
 
 	// Set TTL on state key

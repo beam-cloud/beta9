@@ -3,6 +3,7 @@ package providers
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"text/template"
 	"time"
@@ -51,7 +52,7 @@ type userDataConfig struct {
 	PoolName          string
 }
 
-func populateUserData(config userDataConfig, userDataTemplate string) (string, error) {
+func generateCloudInitData(config userDataConfig, userDataTemplate string) (string, error) {
 	t, err := template.New("userdata").Parse(userDataTemplate)
 	if err != nil {
 		return "", fmt.Errorf("error parsing user data template: %w", err)
@@ -62,7 +63,7 @@ func populateUserData(config userDataConfig, userDataTemplate string) (string, e
 		return "", fmt.Errorf("error executing user data template: %w", err)
 	}
 
-	return populatedTemplate.String(), nil
+	return base64.StdEncoding.EncodeToString(populatedTemplate.Bytes()), nil
 }
 
 func selectInstance(availableInstances []Instance, requiredCpu int64, requiredMemory int64, requiredGpuType string, requiredGpuCount uint32) (*Instance, error) {

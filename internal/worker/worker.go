@@ -744,7 +744,7 @@ func (s *Worker) keepalive() {
 	for {
 		select {
 		case <-ticker.C:
-			s.workerRepo.WorkerKeepAlive(s.workerId)
+			s.workerRepo.SetWorkerKeepAlive(s.workerId)
 		case <-s.ctx.Done():
 			return
 		}

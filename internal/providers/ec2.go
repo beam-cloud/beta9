@@ -2,7 +2,6 @@ package providers
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -108,7 +107,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 	}
 
 	machineId := machineId()
-	populatedUserData, err := populateUserData(userDataConfig{
+	cloudInitData, err := generateCloudInitData(userDataConfig{
 		AuthKey:           p.AppConfig.Tailscale.AuthKey,
 		ControlURL:        p.AppConfig.Tailscale.ControlURL,
 		GatewayHost:       gatewayHost,
@@ -128,7 +127,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		InstanceType: awsTypes.InstanceType(instance.Type),
 		MinCount:     aws.Int32(1),
 		MaxCount:     aws.Int32(1),
-		UserData:     aws.String(base64.StdEncoding.EncodeToString([]byte(populatedUserData))),
+		UserData:     aws.String(cloudInitData),
 		SubnetId:     p.providerConfig.SubnetId,
 	}
 
