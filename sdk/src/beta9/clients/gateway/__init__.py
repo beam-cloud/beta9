@@ -229,6 +229,36 @@ class DeployStubResponse(betterproto.Message):
     version: int = betterproto.uint32_field(3)
 
 
+@dataclass(eq=False, repr=False)
+class Deployment(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    name: str = betterproto.string_field(2)
+    active: bool = betterproto.bool_field(3)
+    stub_id: str = betterproto.string_field(4)
+    stub_type: str = betterproto.string_field(5)
+    stub_name: str = betterproto.string_field(6)
+    version: int = betterproto.uint32_field(7)
+    workspace_id: str = betterproto.string_field(8)
+    workspace_name: str = betterproto.string_field(9)
+    created_at: datetime = betterproto.message_field(10)
+    updated_at: datetime = betterproto.message_field(11)
+
+
+@dataclass(eq=False, repr=False)
+class ListDeploymentsRequest(betterproto.Message):
+    filters: Dict[str, "StringList"] = betterproto.map_field(
+        1, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
+    )
+    limit: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ListDeploymentsResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    deployments: List["Deployment"] = betterproto.message_field(3)
+
+
 class GatewayServiceStub(betterproto.ServiceStub):
     async def authorize(
         self,
@@ -441,6 +471,23 @@ class GatewayServiceStub(betterproto.ServiceStub):
             metadata=metadata,
         )
 
+    async def list_deployments(
+        self,
+        list_deployments_request: "ListDeploymentsRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "ListDeploymentsResponse":
+        return await self._unary_unary(
+            "/gateway.GatewayService/ListDeployments",
+            list_deployments_request,
+            ListDeploymentsResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
 
 class GatewayServiceBase(ServiceBase):
 
@@ -503,6 +550,11 @@ class GatewayServiceBase(ServiceBase):
     async def deploy_stub(
         self, deploy_stub_request: "DeployStubRequest"
     ) -> "DeployStubResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def list_deployments(
+        self, list_deployments_request: "ListDeploymentsRequest"
+    ) -> "ListDeploymentsResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
     async def __rpc_authorize(
@@ -591,6 +643,14 @@ class GatewayServiceBase(ServiceBase):
         response = await self.deploy_stub(request)
         await stream.send_message(response)
 
+    async def __rpc_list_deployments(
+        self,
+        stream: "grpclib.server.Stream[ListDeploymentsRequest, ListDeploymentsResponse]",
+    ) -> None:
+        request = await stream.recv_message()
+        response = await self.list_deployments(request)
+        await stream.send_message(response)
+
     def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
         return {
             "/gateway.GatewayService/Authorize": grpclib.const.Handler(
@@ -664,5 +724,11 @@ class GatewayServiceBase(ServiceBase):
                 grpclib.const.Cardinality.UNARY_UNARY,
                 DeployStubRequest,
                 DeployStubResponse,
+            ),
+            "/gateway.GatewayService/ListDeployments": grpclib.const.Handler(
+                self.__rpc_list_deployments,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                ListDeploymentsRequest,
+                ListDeploymentsResponse,
             ),
         }

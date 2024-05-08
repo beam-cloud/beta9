@@ -53,7 +53,7 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 			return ctx.JSON(http.StatusOK, deployments)
 		}
 	} else {
-		if deployments, err := g.backendRepo.ListDeployments(ctx.Request().Context(), filters); err != nil {
+		if deployments, err := g.backendRepo.ListDeploymentsWithRelated(ctx.Request().Context(), filters); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list deployments")
 		} else {
 			return ctx.JSON(http.StatusOK, deployments)
