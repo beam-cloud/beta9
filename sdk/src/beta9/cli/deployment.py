@@ -123,6 +123,7 @@ def create_deployment(service: ServiceClient, name: str, entrypoint: str):
 
       # List deployments that are not active
       {cli_name} deployment list --filter active=false
+      {cli_name} deployment list --filter active=no
 
       # List deployments and output in JSON format
       {cli_name} deployment list --format json
