@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/internal/common"
@@ -23,7 +24,7 @@ func NewProviderRedisRepository(rdb *common.RedisClient) ProviderRepository {
 }
 
 func (r *ProviderRedisRepository) GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error) {
-	ctx := context.TODO() // TODO: pass context as an argument to GetMachine
+	ctx := context.TODO()
 
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
 	res, err := r.rdb.HGetAll(ctx, stateKey).Result()
@@ -46,6 +47,57 @@ func (r *ProviderRedisRepository) GetMachine(providerName, poolName, machineId s
 	return state, nil
 }
 
+func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string) ([]*types.ProviderMachine, error) {
+	machines := []*types.ProviderMachine{}
+
+	// Get all machines from the machine index
+	keys, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.ProviderMachineIndex(providerName, poolName)).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve machine state keys: %v", err)
+	}
+
+	for _, key := range keys {
+		keyParts := strings.Split(key, ":")
+		if len(keyParts) == 0 {
+			continue
+		}
+
+		machineId := keyParts[len(keyParts)-1]
+
+		err := r.lock.Acquire(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+		if err != nil {
+			continue
+		}
+
+		machineState, err := r.getMachineFromKey(key)
+		if err != nil {
+			r.RemoveMachine(providerName, poolName, machineId)
+			r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
+			continue
+		}
+
+		r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
+		machines = append(machines, &types.ProviderMachine{State: machineState})
+	}
+
+	return machines, nil
+}
+
+func (r *ProviderRedisRepository) getMachineFromKey(key string) (*types.ProviderMachineState, error) {
+	machine := &types.ProviderMachineState{}
+
+	res, err := r.rdb.HGetAll(context.TODO(), key).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get worker <%s>: %v", key, err)
+	}
+
+	if err = common.ToStruct(res, machine); err != nil {
+		return nil, fmt.Errorf("failed to deserialize machine state <%v>: %v", key, err)
+	}
+
+	return machine, nil
+}
+
 func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -59,21 +111,13 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 		case <-ctx.Done():
 			return nil, fmt.Errorf("timeout waiting for machine registration for %s", machineId)
 		case <-ticker.C:
-			exists, err := r.rdb.Exists(ctx, stateKey).Result()
+			_, err := r.rdb.Exists(ctx, stateKey).Result()
 			if err != nil {
 				return nil, fmt.Errorf("error checking machine state existence for %s: %w", machineId, err)
 			}
 
-			if exists == 0 {
-				continue
-			}
-
 			res, err := r.rdb.HGetAll(ctx, stateKey).Result()
 			if err != nil {
-				if err == redis.Nil {
-					continue // Key does not exist yet, continue polling
-				}
-
 				return nil, fmt.Errorf("failed to get machine state for %s: %w", machineId, err)
 			}
 
@@ -86,14 +130,68 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 				return nil, fmt.Errorf("error parsing machine state for %s: %w", machineId, err)
 			}
 
+			if state.Status == types.MachineStatusPending {
+				// Still waiting for machine registration
+				continue
+			}
+
 			return state, nil
 		}
 	}
 }
 
-func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machineId string, info *types.ProviderMachineState) error {
+func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId string, machineInfo *types.ProviderMachineState) error {
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
-	err := r.rdb.HSet(context.TODO(), stateKey, "machine_id", machineId, "worker_id", info.WorkerId, "token", info.Token, "hostname", info.HostName).Err()
+
+	machineInfo.MachineId = machineId
+	machineInfo.Status = types.MachineStatusPending
+
+	err := r.rdb.HSet(context.TODO(),
+		stateKey, common.ToSlice(machineInfo)).Err()
+
+	if err != nil {
+		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
+	}
+
+	machineIndexKey := common.RedisKeys.ProviderMachineIndex(providerName, poolName)
+	err = r.rdb.SAdd(context.TODO(), machineIndexKey, stateKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to add machine state key to index <%v>: %w", machineIndexKey, err)
+	}
+
+	return nil
+}
+
+func (r *ProviderRedisRepository) RemoveMachine(providerName, poolName, machineId string) error {
+	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
+
+	machineIndexKey := common.RedisKeys.ProviderMachineIndex(providerName, poolName)
+	err := r.rdb.SRem(context.TODO(), machineIndexKey, stateKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to remove machine state key from index <%v>: %w", machineIndexKey, err)
+	}
+
+	err = r.rdb.Del(context.TODO(), stateKey).Err()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machineId string, newMachineInfo *types.ProviderMachineState) error {
+	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
+
+	machineInfo, err := r.getMachineFromKey(stateKey)
+	if err != nil {
+		return fmt.Errorf("failed to get machine state <%v>: %w", stateKey, err)
+	}
+
+	machineInfo.HostName = newMachineInfo.HostName
+	machineInfo.Token = newMachineInfo.Token
+	machineInfo.Status = types.MachineStatusRegistered
+
+	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineInfo)).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
 	}

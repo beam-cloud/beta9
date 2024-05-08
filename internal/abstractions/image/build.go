@@ -155,11 +155,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	hostname, err := b.containerRepo.GetWorkerAddress(containerId)
 	if err != nil {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container."}
 		return err
 	}
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container."}
 		return err
 	}
 

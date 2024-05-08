@@ -1,14 +1,10 @@
 package providers
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
-	"text/template"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -20,53 +16,42 @@ import (
 )
 
 type EC2Provider struct {
+	*ExternalProvider
 	client         *ec2.Client
-	clusterName    string
-	appConfig      types.AppConfig
 	providerConfig types.EC2ProviderConfig
-	providerRepo   repository.ProviderRepository
-	tailscale      *network.Tailscale
-	workerRepo     repository.WorkerRepository
 }
 
-const (
-	instanceComputeBufferPercent float64       = 10.0
-	k3sVersion                   string        = "v1.28.5+k3s1"
-	ec2ReconcileInterval         time.Duration = 5 * time.Second
-)
-
-func NewEC2Provider(appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*EC2Provider, error) {
-	cfg, err := common.GetAWSConfig(appConfig.Providers.EC2Config.AWSAccessKey, appConfig.Providers.EC2Config.AWSSecretKey, "")
+func NewEC2Provider(ctx context.Context, appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*EC2Provider, error) {
+	cfg, err := common.GetAWSConfig(appConfig.Providers.EC2Config.AWSAccessKey, appConfig.Providers.EC2Config.AWSSecretKey, appConfig.Providers.EC2Config.AWSRegion)
 	if err != nil {
 		return nil, err
 	}
 
-	return &EC2Provider{
+	ec2Provider := &EC2Provider{
 		client:         ec2.NewFromConfig(cfg),
-		clusterName:    appConfig.ClusterName,
-		appConfig:      appConfig,
 		providerConfig: appConfig.Providers.EC2Config,
-		providerRepo:   providerRepo,
-		tailscale:      tailscale,
-		workerRepo:     workerRepo,
-	}, nil
+	}
+
+	baseProvider := NewExternalProvider(ctx, &ExternalProviderConfig{
+		Name:                 string(types.ProviderEC2),
+		ClusterName:          appConfig.ClusterName,
+		AppConfig:            appConfig,
+		TailScale:            tailscale,
+		ProviderRepo:         providerRepo,
+		WorkerRepo:           workerRepo,
+		ListMachinesFunc:     ec2Provider.listMachines,
+		TerminateMachineFunc: ec2Provider.TerminateMachine,
+	})
+	ec2Provider.ExternalProvider = baseProvider
+
+	return ec2Provider, nil
 }
 
-type InstanceSpec struct {
-	Cpu      int64
-	Memory   int64
-	Gpu      string
-	GpuCount uint32
-}
-
-func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64, requiredGpuType string, requiredGpuCount uint32) (string, error) {
+func (p *EC2Provider) getAvailableInstances() ([]Instance, error) {
 	// TODO: make instance selection more dynamic / don't rely on hardcoded values
 	// We can load desired instances from the worker pool config, and then use the DescribeInstances
 	// api to return valid instance types
-	availableInstances := []struct {
-		Type string
-		Spec InstanceSpec
-	}{
+	return []Instance{
 		{"g4dn.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "T4", 1}},
 		{"g4dn.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "T4", 1}},
 		{"g4dn.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "T4", 1}},
@@ -81,6 +66,13 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 		{"g5.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "A10G", 1}},
 		{"g5.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "A10G", 1}},
 
+		{"m6i.large", InstanceSpec{2 * 1000, 8 * 1024, "", 0}},
+		{"m6i.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "", 0}},
+		{"m6i.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "", 0}},
+		{"m6i.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "", 0}},
+		{"m6i.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "", 0}},
+		{"m6i.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "", 0}},
+
 		{"g6.xlarge", InstanceSpec{4 * 1000, 16 * 1024, "G6", 1}},
 		{"g6.2xlarge", InstanceSpec{8 * 1000, 32 * 1024, "G6", 1}},
 		{"g6.4xlarge", InstanceSpec{16 * 1000, 64 * 1024, "G6", 1}},
@@ -94,68 +86,48 @@ func (p *EC2Provider) selectInstanceType(requiredCpu int64, requiredMemory int64
 		{"m7i.8xlarge", InstanceSpec{32 * 1000, 128 * 1024, "", 0}},
 		{"m7i.12xlarge", InstanceSpec{48 * 1000, 192 * 1024, "", 0}},
 		{"m7i.16xlarge", InstanceSpec{64 * 1000, 256 * 1024, "", 0}},
-	}
-
-	// Apply compute buffer
-	bufferedCpu := int64(float64(requiredCpu) * (1 + instanceComputeBufferPercent/100))
-	bufferedMemory := int64(float64(requiredMemory) * (1 + instanceComputeBufferPercent/100))
-
-	meetsRequirements := func(spec InstanceSpec) bool {
-		return spec.Cpu >= bufferedCpu && spec.Memory >= bufferedMemory && spec.Gpu == requiredGpuType && spec.GpuCount >= requiredGpuCount
-	}
-
-	// Find the smallest instance that meets or exceeds the requirements
-	var selectedInstance string
-	for _, instance := range availableInstances {
-		if meetsRequirements(instance.Spec) {
-			selectedInstance = instance.Type
-			break
-		}
-	}
-
-	if selectedInstance == "" {
-		return "", fmt.Errorf("no suitable instance type found for CPU=%d, Memory=%d, GPU=%s", requiredCpu, requiredMemory, requiredGpuType)
-	}
-
-	return selectedInstance, nil
+	}, nil
 }
 
-func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, token string, compute types.ProviderComputeRequest) (string, error) {
-	instanceType, err := p.selectInstanceType(compute.Cpu, compute.Memory, compute.Gpu, compute.GpuCount) // NOTE: CPU cores -> millicores, memory -> megabytes
+func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token string, compute types.ProviderComputeRequest) (string, error) {
+	availableInstances, err := p.getAvailableInstances()
+	if err != nil {
+		return "", err
+	}
+
+	instance, err := selectInstance(availableInstances, compute.Cpu, compute.Memory, compute.Gpu, compute.GpuCount) // NOTE: CPU cores -> millicores, memory -> megabytes
 	if err != nil {
 		return "", err
 	}
 
 	// TODO: come up with a way to not hardcode the service name (possibly look up in config)
-	gatewayHost, err := p.tailscale.GetHostnameForService("gateway-http")
+	gatewayHost, err := p.Tailscale.GetHostnameForService("gateway-http")
 	if err != nil {
 		return "", err
 	}
 
-	machineId := MachineId()
-	populatedUserData, err := populateUserData(userDataConfig{
-		AuthKey:           p.appConfig.Tailscale.AuthKey,
-		ControlURL:        p.appConfig.Tailscale.ControlURL,
+	machineId := machineId()
+	cloudInitData, err := generateCloudInitData(userDataConfig{
+		AuthKey:           p.AppConfig.Tailscale.AuthKey,
+		ControlURL:        p.AppConfig.Tailscale.ControlURL,
 		GatewayHost:       gatewayHost,
 		Beta9Token:        token,
 		K3sVersion:        k3sVersion,
 		DisableComponents: []string{"traefik"},
 		MachineId:         machineId,
-		WorkerId:          workerId,
 		PoolName:          poolName,
-	})
+	}, ec2UserDataTemplate)
 	if err != nil {
 		return "", err
 	}
 
-	log.Printf("Selected instance type <%s> for compute request: %+v\n", instanceType, compute)
-	encodedUserData := base64.StdEncoding.EncodeToString([]byte(populatedUserData))
+	log.Printf("<provider %s>: Selected instance type <%s> for compute request: %+v\n", p.Name, instance.Type, compute)
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String(p.providerConfig.AMI),
-		InstanceType: awsTypes.InstanceType(instanceType),
+		InstanceType: awsTypes.InstanceType(instance.Type),
 		MinCount:     aws.Int32(1),
 		MaxCount:     aws.Int32(1),
-		UserData:     aws.String(encodedUserData),
+		UserData:     aws.String(cloudInitData),
 		SubnetId:     p.providerConfig.SubnetId,
 	}
 
@@ -169,7 +141,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, 
 	}
 
 	instanceId := *result.Instances[0].InstanceId
-	instanceName := fmt.Sprintf("%s-%s-%s", p.clusterName, poolName, machineId)
+	instanceName := fmt.Sprintf("%s-%s-%s", p.ClusterName, poolName, machineId)
 
 	_, err = p.client.CreateTags(ctx, &ec2.CreateTagsInput{
 		Resources: []string{instanceId},
@@ -180,7 +152,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, 
 			},
 			{
 				Key:   aws.String("Beta9ClusterName"),
-				Value: aws.String(p.clusterName),
+				Value: aws.String(p.ClusterName),
 			},
 			{
 				Key:   aws.String("Beta9PoolName"),
@@ -190,10 +162,6 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, 
 				Key:   aws.String("Beta9MachineId"),
 				Value: aws.String(machineId),
 			},
-			{
-				Key:   aws.String("Beta9WorkerId"),
-				Value: aws.String(workerId),
-			},
 		},
 	})
 
@@ -201,10 +169,20 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, workerId, 
 		return "", fmt.Errorf("failed to tag the instance: %w", err)
 	}
 
+	err = p.ProviderRepo.AddMachine(string(types.ProviderEC2), poolName, machineId, &types.ProviderMachineState{
+		Cpu:      instance.Spec.Cpu,
+		Memory:   instance.Spec.Memory,
+		Gpu:      instance.Spec.Gpu,
+		GpuCount: instance.Spec.GpuCount,
+	})
+	if err != nil {
+		return "", err
+	}
+
 	return machineId, nil
 }
 
-func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, instanceId string) error {
+func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, instanceId, machineId string) error {
 	if instanceId == "" {
 		return errors.New("invalid instance ID")
 	}
@@ -218,15 +196,22 @@ func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, instanceId
 		return err
 	}
 
+	err = p.ProviderRepo.RemoveMachine(p.Name, poolName, machineId)
+	if err != nil {
+		log.Printf("<provider %s>: Unable to remove machine state <machineId: %s>: %+v\n", p.Name, machineId, err)
+		return err
+	}
+
+	log.Printf("<provider %s>: Terminated machine <machineId: %s> due to inactivity\n", p.Name, machineId)
 	return nil
 }
 
-func (p *EC2Provider) ListMachines(ctx context.Context, poolName string) (map[string]string, error) {
+func (p *EC2Provider) listMachines(ctx context.Context, poolName string) (map[string]string, error) {
 	input := &ec2.DescribeInstancesInput{
 		Filters: []awsTypes.Filter{
 			{
 				Name:   aws.String("tag:Beta9ClusterName"),
-				Values: []string{p.clusterName},
+				Values: []string{p.ClusterName},
 			},
 			{
 				Name:   aws.String("tag:Beta9PoolName"),
@@ -265,95 +250,10 @@ func (p *EC2Provider) ListMachines(ctx context.Context, poolName string) (map[st
 	return machines, nil
 }
 
-func (p *EC2Provider) Reconcile(ctx context.Context, poolName string) {
-	ticker := time.NewTicker(ec2ReconcileInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			machines, err := p.ListMachines(ctx, poolName)
-			if err != nil {
-				log.Println("Error listing machines: ", err)
-				continue
-			}
-
-			for machineId, instanceId := range machines {
-				func() {
-					err := p.providerRepo.SetMachineLock(string(types.ProviderEC2), poolName, machineId)
-					if err != nil {
-						return
-					}
-					defer p.providerRepo.RemoveMachineLock(string(types.ProviderEC2), poolName, machineId)
-
-					machine, err := p.providerRepo.GetMachine(string(types.ProviderEC2), poolName, machineId)
-					if err != nil {
-						p.removeMachine(ctx, poolName, machineId, instanceId)
-						return
-					}
-
-					// See if there is a worker associated with this machine
-					_, err = p.workerRepo.GetWorkerById(machine.WorkerId)
-					if err != nil {
-						_, ok := err.(*types.ErrWorkerNotFound)
-
-						if ok {
-							p.removeMachine(ctx, poolName, machineId, instanceId)
-							return
-						}
-
-						return
-					}
-				}()
-			}
-		}
-	}
-}
-
-func (p *EC2Provider) removeMachine(ctx context.Context, poolName, machineId, instanceId string) {
-	err := p.TerminateMachine(ctx, poolName, instanceId)
-	if err != nil {
-		log.Printf("Unable to terminate machine <machineId: %s>: %+v\n", machineId, err)
-		return
-	}
-
-	log.Printf("Terminated machine <machineId: %s> due to inactivity\n", machineId)
-}
-
-type userDataConfig struct {
-	AuthKey           string
-	ControlURL        string
-	GatewayHost       string
-	Beta9Token        string
-	K3sVersion        string
-	DisableComponents []string
-	MachineId         string
-	WorkerId          string
-	PoolName          string
-}
-
-func populateUserData(config userDataConfig) (string, error) {
-	t, err := template.New("userdata").Parse(userDataTemplate)
-	if err != nil {
-		return "", fmt.Errorf("error parsing user data template: %w", err)
-	}
-
-	var populatedTemplate bytes.Buffer
-	if err := t.Execute(&populatedTemplate, config); err != nil {
-		return "", fmt.Errorf("error executing user data template: %w", err)
-	}
-
-	return populatedTemplate.String(), nil
-}
-
-const userDataTemplate string = `
-#!/bin/bash
+const ec2UserDataTemplate string = `#!/bin/bash
 
 INSTALL_K3S_VERSION="{{.K3sVersion}}"
 MACHINE_ID="{{.MachineId}}"
-WORKER_ID="{{.WorkerId}}"
 BETA9_TOKEN="{{.Beta9Token}}"
 POOL_NAME="{{.PoolName}}"
 TAILSCALE_CONTROL_URL="{{.ControlURL}}"
@@ -462,10 +362,9 @@ HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
               --data "$(jq -n \
                         --arg token "$TOKEN" \
                         --arg machineId "$MACHINE_ID" \
-						--arg workerId "$WORKER_ID" \
                         --arg providerName "ec2" \
                         --arg poolName "$POOL_NAME" \
-                        '{token: $token, machine_id: $machineId, worker_id: $workerId, provider_name: $providerName, pool_name: $poolName}')" \
+                        '{token: $token, machine_id: $machineId, provider_name: $providerName, pool_name: $poolName}')" \
               "http://$GATEWAY_HOST/api/v1/machine/register")
 
 if [ $HTTP_STATUS -eq 200 ]; then

@@ -10,6 +10,7 @@ type WorkerStatus string
 const (
 	WorkerStatusAvailable WorkerStatus = "available"
 	WorkerStatusPending   WorkerStatus = "pending"
+	WorkerStateTtlS       int          = 60
 )
 
 type Worker struct {

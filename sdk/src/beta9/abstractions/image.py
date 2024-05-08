@@ -115,7 +115,7 @@ class Image(BaseAbstraction):
             last_response: BuildImageResponse = self.loop.run_until_complete(_build_async())
 
         if not last_response.success:
-            terminal.error("Build failed ❌")
+            terminal.error(f"Build failed: {last_response.msg} ❌")
             return ImageBuildResult(success=False)
 
         terminal.header("Build complete 🎉")
