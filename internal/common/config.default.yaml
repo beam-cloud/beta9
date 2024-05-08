@@ -27,10 +27,16 @@ storage:
     awsSecretKey: test
 gateway:
   host: beta9-gateway.beta9
-  httpPort: 1994
   grpcPort: 1993
   maxRecvMsgSize: 1024
   maxSendMsgSize: 1024
+  http:
+    port: 1994
+    enablePrettyLogs: true
+    cors:
+      allowOrigins: "*"
+      allowHeaders: "*"
+      allowMethods: "*"
 imageService:
   cacheURL:
   localCacheEnabled: true

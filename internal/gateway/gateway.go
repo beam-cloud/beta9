@@ -137,12 +137,17 @@ func (g *Gateway) initHttp() error {
 	e.HidePort = true
 
 	e.Pre(middleware.RemoveTrailingSlash())
-	configureEchoLogger(e, g.Config.DebugMode)
+	configureEchoLogger(e, g.Config.GatewayService.HTTP.EnablePrettyLogs)
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: g.Config.GatewayService.HTTP.CORS.AllowedOrigins,
+		AllowHeaders: g.Config.GatewayService.HTTP.CORS.AllowedHeaders,
+		AllowMethods: g.Config.GatewayService.HTTP.CORS.AllowedMethods,
+	}))
 	e.Use(middleware.Recover())
 
 	// Accept both HTTP/2 and HTTP/1
 	g.httpServer = &http.Server{
-		Addr:    fmt.Sprintf(":%v", g.Config.GatewayService.HTTPPort),
+		Addr:    fmt.Sprintf(":%v", g.Config.GatewayService.HTTP.Port),
 		Handler: h2c.NewHandler(e, &http2.Server{}),
 	}
 
@@ -332,7 +337,7 @@ func (g *Gateway) Start() error {
 		}
 	}()
 
-	log.Println("Gateway http server running @", g.Config.GatewayService.HTTPPort)
+	log.Println("Gateway http server running @", g.Config.GatewayService.HTTP.Port)
 	log.Println("Gateway grpc server running @", g.Config.GatewayService.GRPCPort)
 
 	terminationSignal := make(chan os.Signal, 1)
