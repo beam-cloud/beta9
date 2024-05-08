@@ -218,5 +218,4 @@ def filter_values_callback(
 
         filters[key] = StringList(values=value_list)
 
-    print(filters)
     return filters
