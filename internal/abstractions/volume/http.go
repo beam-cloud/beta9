@@ -14,6 +14,8 @@ type volumeGroup struct {
 	gvs        *GlobalVolumeService
 }
 
+var uploadBufferSize = 1024 * 1000 * 8 // 8 Mb
+
 func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup {
 	group := &volumeGroup{routeGroup: g, gvs: gvs}
 
@@ -92,7 +94,7 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 		defer close(ch)
 
 		for {
-			buf := make([]byte, 262144) // 256 * 1024 bytes
+			buf := make([]byte, uploadBufferSize) // 8 Mb
 			n, err := stream.Read(buf)
 			if err == io.EOF {
 				break
