@@ -22,6 +22,8 @@ type DeploymentFilter struct {
 	WorkspaceID    uint        `query:"workspace_id"`
 	StubType       string      `query:"stub_type"`
 	Name           string      `query:"name"`
+	Active         *bool       `query:"active"`
+	Version        uint        `query:"version"`
 	Cursor         string      `query:"cursor"`
 	CreatedAtStart string      `query:"created_at_start"`
 	CreatedAtEnd   string      `query:"created_at_end"`

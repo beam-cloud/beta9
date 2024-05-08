@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict
 
 import click
 from betterproto import Casing
@@ -24,28 +24,6 @@ from .extraclick import ClickManagementGroup
 )
 def management():
     pass
-
-
-def parse_filter_values(
-    ctx: click.Context,
-    param: click.Option,
-    values: List[str],
-) -> Dict[str, StringList]:
-    filters: Dict[str, StringList] = {}
-
-    for value in values:
-        key, value = value.split("=")
-        value_list = value.split(",") if "," in value else [value]
-
-        if key == "status":
-            value_list = [v.upper() for v in value_list]
-
-        if not key or not value:
-            raise click.BadParameter("Filter must be in the format key=value")
-
-        filters[key] = StringList(values=value_list)
-
-    return filters
 
 
 @management.command(
@@ -81,7 +59,7 @@ def parse_filter_values(
 @click.option(
     "--filter",
     multiple=True,
-    callback=parse_filter_values,
+    callback=extraclick.filter_values_callback,
     help="Filters tasks. Add this option for each field you want to filter on.",
 )
 @extraclick.pass_service_client
@@ -124,7 +102,7 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
         )
 
     table.add_section()
-    table.add_row(f"[bold]Total: {res.total}")
+    table.add_row(f"[bold]{res.total} items")
     terminal.print(table)
 
 
