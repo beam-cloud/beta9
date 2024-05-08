@@ -35,12 +35,20 @@ def management():
     help="Lists available contexts.",
 )
 @click.option(
+    "--show-token",
+    is_flag=True,
+    required=False,
+    default=False,
+    help="Display token.",
+)
+@click.option(
     "--config-path",
     type=click.Path(),
     required=False,
     callback=get_setting_callback,
+    help="Path to a config file.",
 )
-def list_contexts(config_path: Path):
+def list_contexts(show_token: bool, config_path: Path):
     contexts = load_config(config_path)
 
     table = Table(
@@ -58,7 +66,9 @@ def list_contexts(config_path: Path):
             name,
             context.gateway_host,
             str(context.gateway_port),
-            str(context.token)[0:6] + "..."
+            context.token
+            if show_token
+            else str(context.token)[0:6] + "..."
             if context.token and len(context.token) > 6
             else context.token,
             style=style,
@@ -81,6 +91,7 @@ def list_contexts(config_path: Path):
     type=click.Path(),
     required=False,
     callback=get_setting_callback,
+    help="Path to a config file.",
 )
 @click.confirmation_option("--force")
 def delete_context(name: str, config_path: Path):
@@ -117,6 +128,7 @@ def delete_context(name: str, config_path: Path):
     type=click.Path(),
     required=False,
     callback=get_setting_callback,
+    help="Path to a config file.",
 )
 def create_context(config_path: Path, **kwargs):
     contexts = load_config(config_path)
@@ -151,13 +163,15 @@ def create_context(config_path: Path, **kwargs):
     type=click.Path(),
     required=False,
     callback=get_setting_callback,
+    help="Path to a config file.",
 )
 def select_context(name: str, config_path: Path):
     contexts = load_config(config_path)
 
-    if name in contexts:
-        contexts[DEFAULT_CONTEXT_NAME] = contexts[name]
+    if name not in contexts:
+        terminal.error(f"Context '{name}' does not exist.")
 
+    contexts[DEFAULT_CONTEXT_NAME] = contexts[name]
     save_config(contexts=contexts, path=config_path)
 
     terminal.success(f"Default context updated with '{name}'.")
