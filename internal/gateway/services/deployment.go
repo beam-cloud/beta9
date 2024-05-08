@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/beam-cloud/beta9/internal/types"
@@ -29,8 +30,13 @@ func (gws *GatewayService) ListDeployments(ctx context.Context, in *pb.ListDeplo
 		case "name":
 			filter.Name = value.Values[0]
 		case "active":
-			val, err := strconv.ParseBool(value.Values[0])
-			if err == nil {
+			v := strings.ToLower(value.Values[0])
+
+			if v == "yes" || v == "y" {
+				filter.Active = ptr.To(true)
+			} else if v == "no" || v == "n" {
+				filter.Active = ptr.To(false)
+			} else if val, err := strconv.ParseBool(v); err == nil {
 				filter.Active = ptr.To(val)
 			}
 		case "version":
