@@ -92,7 +92,7 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 		defer close(ch)
 
 		for {
-			buf := make([]byte, 1024)
+			buf := make([]byte, 262144) // 256 * 1024 bytes
 			n, err := stream.Read(buf)
 			if err == io.EOF {
 				break
