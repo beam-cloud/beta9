@@ -155,9 +155,10 @@ def create_context(config_path: Path, **kwargs):
 def select_context(name: str, config_path: Path):
     contexts = load_config(config_path)
 
-    if name in contexts:
-        contexts[DEFAULT_CONTEXT_NAME] = contexts[name]
+    if name not in contexts:
+        terminal.error(f"Context '{name}' does not exist.")
 
+    contexts[DEFAULT_CONTEXT_NAME] = contexts[name]
     save_config(contexts=contexts, path=config_path)
 
     terminal.success(f"Default context updated with '{name}'.")
