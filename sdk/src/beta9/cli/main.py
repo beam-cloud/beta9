@@ -50,6 +50,26 @@ class CLI:
         if is_config_empty(self.settings.config_path):
             prompt_first_auth(self.settings)
 
+    def load_version(self, package_name: Optional[str] = None):
+        """
+        Adds a version parameter to the top-level command.
+
+        If an version parameter already exists, it'll be replaced
+        with a new one. Setting package_name tells thie CLI
+        to use your package's version instead of this one.
+
+        Args:
+            package_name: Name of Python package. Defaults to None.
+        """
+        option = click.version_option(package_name=package_name)
+
+        for i, param in enumerate(self.common_group.params):
+            if param.name == "version":
+                self.common_group.params.pop(i)
+                break
+
+        self.common_group = option(self.common_group)
+
 
 def load_cli(**kwargs: Any) -> CLI:
     cli = CLI(**kwargs)
@@ -60,6 +80,7 @@ def load_cli(**kwargs: Any) -> CLI:
     cli.register(serve)
 
     cli.check_config()
+    cli.load_version()
 
     return cli
 
