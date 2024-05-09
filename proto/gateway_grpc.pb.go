@@ -34,6 +34,8 @@ const (
 	GatewayService_ListDeployments_FullMethodName      = "/gateway.GatewayService/ListDeployments"
 	GatewayService_StopDeployment_FullMethodName       = "/gateway.GatewayService/StopDeployment"
 	GatewayService_ListPools_FullMethodName            = "/gateway.GatewayService/ListPools"
+	GatewayService_ListMachines_FullMethodName         = "/gateway.GatewayService/ListMachines"
+	GatewayService_CreateMachine_FullMethodName        = "/gateway.GatewayService/CreateMachine"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -61,6 +63,9 @@ type GatewayServiceClient interface {
 	StopDeployment(ctx context.Context, in *StopDeploymentRequest, opts ...grpc.CallOption) (*StopDeploymentResponse, error)
 	// Pools
 	ListPools(ctx context.Context, in *ListPoolsRequest, opts ...grpc.CallOption) (*ListPoolsResponse, error)
+	// Machines
+	ListMachines(ctx context.Context, in *ListMachinesRequest, opts ...grpc.CallOption) (*ListMachinesResponse, error)
+	CreateMachine(ctx context.Context, in *CreateMachineRequest, opts ...grpc.CallOption) (*CreateMachineResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -256,6 +261,24 @@ func (c *gatewayServiceClient) ListPools(ctx context.Context, in *ListPoolsReque
 	return out, nil
 }
 
+func (c *gatewayServiceClient) ListMachines(ctx context.Context, in *ListMachinesRequest, opts ...grpc.CallOption) (*ListMachinesResponse, error) {
+	out := new(ListMachinesResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListMachines_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) CreateMachine(ctx context.Context, in *CreateMachineRequest, opts ...grpc.CallOption) (*CreateMachineResponse, error) {
+	out := new(CreateMachineResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreateMachine_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
@@ -281,6 +304,9 @@ type GatewayServiceServer interface {
 	StopDeployment(context.Context, *StopDeploymentRequest) (*StopDeploymentResponse, error)
 	// Pools
 	ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error)
+	// Machines
+	ListMachines(context.Context, *ListMachinesRequest) (*ListMachinesResponse, error)
+	CreateMachine(context.Context, *CreateMachineRequest) (*CreateMachineResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -332,6 +358,12 @@ func (UnimplementedGatewayServiceServer) StopDeployment(context.Context, *StopDe
 }
 func (UnimplementedGatewayServiceServer) ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListPools not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListMachines(context.Context, *ListMachinesRequest) (*ListMachinesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListMachines not implemented")
+}
+func (UnimplementedGatewayServiceServer) CreateMachine(context.Context, *CreateMachineRequest) (*CreateMachineResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateMachine not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -632,6 +664,42 @@ func _GatewayService_ListPools_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_ListMachines_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListMachinesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListMachines(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListMachines_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListMachines(ctx, req.(*ListMachinesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_CreateMachine_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateMachineRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CreateMachine(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CreateMachine_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CreateMachine(ctx, req.(*CreateMachineRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -690,6 +758,14 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListPools",
 			Handler:    _GatewayService_ListPools_Handler,
+		},
+		{
+			MethodName: "ListMachines",
+			Handler:    _GatewayService_ListMachines_Handler,
+		},
+		{
+			MethodName: "CreateMachine",
+			Handler:    _GatewayService_CreateMachine_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

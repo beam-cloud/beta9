@@ -33,6 +33,10 @@ service GatewayService {
 
   // Pools
   rpc ListPools(ListPoolsRequest) returns (ListPoolsResponse);
+
+  // Machines
+  rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse);
+  rpc CreateMachine(CreateMachineRequest) returns (CreateMachineResponse);
 }
 
 message AuthorizeRequest {}
@@ -245,4 +249,25 @@ message ListPoolsResponse {
   bool ok = 1;
   string err_msg = 2;
   repeated Pool pools = 3;
+}
+
+message Machine {}
+
+message ListMachinesRequest {
+  map<string, StringList> filters = 1;
+  uint32 limit = 2;
+}
+
+message ListMachinesResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Machine machines = 3;
+}
+
+message CreateMachineRequest {}
+
+message CreateMachineResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  Machine machine = 3;
 }
