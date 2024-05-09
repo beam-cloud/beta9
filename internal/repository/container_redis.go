@@ -201,6 +201,8 @@ func (cr *ContainerRedisRepository) GetWorkerAddress(containerId string) (string
 	}
 }
 
+// GetActiveContainersByStubId gets active containers by stub ID.
+// stubId is the external ID.
 func (cr *ContainerRedisRepository) GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error) {
 	indexKey := common.RedisKeys.SchedulerContainerIndex(stubId)
 	keys, err := cr.rdb.SMembers(context.TODO(), indexKey).Result()

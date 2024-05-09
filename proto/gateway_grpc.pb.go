@@ -32,6 +32,7 @@ const (
 	GatewayService_GetOrCreateStub_FullMethodName      = "/gateway.GatewayService/GetOrCreateStub"
 	GatewayService_DeployStub_FullMethodName           = "/gateway.GatewayService/DeployStub"
 	GatewayService_ListDeployments_FullMethodName      = "/gateway.GatewayService/ListDeployments"
+	GatewayService_StopDeployment_FullMethodName       = "/gateway.GatewayService/StopDeployment"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -51,6 +52,7 @@ type GatewayServiceClient interface {
 	GetOrCreateStub(ctx context.Context, in *GetOrCreateStubRequest, opts ...grpc.CallOption) (*GetOrCreateStubResponse, error)
 	DeployStub(ctx context.Context, in *DeployStubRequest, opts ...grpc.CallOption) (*DeployStubResponse, error)
 	ListDeployments(ctx context.Context, in *ListDeploymentsRequest, opts ...grpc.CallOption) (*ListDeploymentsResponse, error)
+	StopDeployment(ctx context.Context, in *StopDeploymentRequest, opts ...grpc.CallOption) (*StopDeploymentResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -228,6 +230,15 @@ func (c *gatewayServiceClient) ListDeployments(ctx context.Context, in *ListDepl
 	return out, nil
 }
 
+func (c *gatewayServiceClient) StopDeployment(ctx context.Context, in *StopDeploymentRequest, opts ...grpc.CallOption) (*StopDeploymentResponse, error) {
+	out := new(StopDeploymentResponse)
+	err := c.cc.Invoke(ctx, GatewayService_StopDeployment_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
@@ -245,6 +256,7 @@ type GatewayServiceServer interface {
 	GetOrCreateStub(context.Context, *GetOrCreateStubRequest) (*GetOrCreateStubResponse, error)
 	DeployStub(context.Context, *DeployStubRequest) (*DeployStubResponse, error)
 	ListDeployments(context.Context, *ListDeploymentsRequest) (*ListDeploymentsResponse, error)
+	StopDeployment(context.Context, *StopDeploymentRequest) (*StopDeploymentResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -290,6 +302,9 @@ func (UnimplementedGatewayServiceServer) DeployStub(context.Context, *DeployStub
 }
 func (UnimplementedGatewayServiceServer) ListDeployments(context.Context, *ListDeploymentsRequest) (*ListDeploymentsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListDeployments not implemented")
+}
+func (UnimplementedGatewayServiceServer) StopDeployment(context.Context, *StopDeploymentRequest) (*StopDeploymentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StopDeployment not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -554,6 +569,24 @@ func _GatewayService_ListDeployments_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_StopDeployment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopDeploymentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).StopDeployment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_StopDeployment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).StopDeployment(ctx, req.(*StopDeploymentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -604,6 +637,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListDeployments",
 			Handler:    _GatewayService_ListDeployments_Handler,
+		},
+		{
+			MethodName: "StopDeployment",
+			Handler:    _GatewayService_StopDeployment_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

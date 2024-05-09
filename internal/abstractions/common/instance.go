@@ -182,8 +182,21 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	}
 
 	if state.FailedContainers >= types.FailedContainerThreshold {
-		log.Printf("<%s> reached failed container threshold, scaling to zero.", i.Name)
+		log.Printf("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
 		desiredContainers = 0
+	}
+
+	switch i.Stub.Type {
+	case types.StubTypeEndpointDeployment, types.StubTypeFunctionDeployment, types.StubTypeTaskQueueDeployment:
+		deployments, _ := i.BackendRepo.ListDeploymentsWithRelated(i.Ctx, types.DeploymentFilter{
+			StubIds:     []string{i.Stub.ExternalId},
+			WorkspaceID: i.Stub.Workspace.Id,
+		})
+
+		if len(deployments) == 1 && !deployments[0].Active {
+			log.Printf("<%s> is not active, scaling to zero.\n", i.Name)
+			desiredContainers = 0
+		}
 	}
 
 	noContainersRunning := (state.PendingContainers == 0) && (state.RunningContainers == 0) && (state.StoppingContainers == 0)

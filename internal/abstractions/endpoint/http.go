@@ -45,6 +45,12 @@ func (g *endpointGroup) endpointRequest(ctx echo.Context) error {
 			})
 		}
 
+		if !deployment.Active {
+			return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error": "deployment is not active",
+			})
+		}
+
 		stubId = deployment.Stub.ExternalId
 	}
 
