@@ -228,6 +228,12 @@ message Pool {
   string name = 2;
   bool active = 3;
   string gpu = 4;
+  string minFreeGpu = 5;
+  string minFreeCpu = 6;
+  string minFreeMemory = 7;
+  string defaultWorkerCpu = 8;
+  string defaultWorkerMemory = 9;
+  string defaultWorkerGpuCount = 10;
 }
 
 message ListPoolsRequest {

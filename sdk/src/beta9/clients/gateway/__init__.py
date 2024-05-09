@@ -275,6 +275,12 @@ class Pool(betterproto.Message):
     name: str = betterproto.string_field(2)
     active: bool = betterproto.bool_field(3)
     gpu: str = betterproto.string_field(4)
+    min_free_gpu: str = betterproto.string_field(5)
+    min_free_cpu: str = betterproto.string_field(6)
+    min_free_memory: str = betterproto.string_field(7)
+    default_worker_cpu: str = betterproto.string_field(8)
+    default_worker_memory: str = betterproto.string_field(9)
+    default_worker_gpu_count: str = betterproto.string_field(10)
 
 
 @dataclass(eq=False, repr=False)

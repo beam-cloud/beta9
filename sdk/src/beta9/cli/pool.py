@@ -1,6 +1,7 @@
 from typing import Dict
 
 import click
+from betterproto import Casing
 from rich.table import Column, Table, box
 
 from .. import aio, terminal
@@ -70,20 +71,29 @@ def list_pools(
     if not res.ok:
         terminal.error(res.err_msg)
 
-    # if format == "json":
-    #     deployments = [d.to_dict(casing=Casing.SNAKE) for d in res.deployments]  # type:ignore
-    #     terminal.print_json(deployments)
-    #     return
+    if format == "json":
+        pools = [d.to_dict(casing=Casing.SNAKE) for d in res.pools]  # type:ignore
+        terminal.print_json(pools)
+        return
 
     table = Table(
-        Column("ID"),
         Column("Name"),
+        Column("GPU"),
+        Column("Minimum Free GPU"),
+        Column("Minimim Free CPU"),
+        Column("Minimum Free Memory"),
+        Column("Default GPU Count (per worker)"),
         box=box.SIMPLE,
     )
 
     for pool in res.pools:
         table.add_row(
             pool.name,
+            pool.gpu,
+            pool.min_free_gpu or "0",
+            pool.min_free_cpu or "0",
+            pool.min_free_memory or "0",
+            pool.default_worker_gpu_count or "0",
         )
 
     table.add_section()
