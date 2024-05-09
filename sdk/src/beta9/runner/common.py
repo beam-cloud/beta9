@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import traceback
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 
@@ -125,15 +126,22 @@ class FunctionHandler:
         self.handler: Union[Callable, None] = None
         self._load()
 
+    @contextmanager
+    def importing_user_code(self):
+        os.environ["BETA9_IMPORTING_USER_CODE"] = "true"
+        yield
+        del os.environ["BETA9_IMPORTING_USER_CODE"]
+
     def _load(self):
         if sys.path[0] != USER_CODE_VOLUME:
             sys.path.insert(0, USER_CODE_VOLUME)
 
         try:
             module, func = config.handler.split(":")
-            os.environ["IMPORTING_USER_CODE"] = "true"
-            target_module = importlib.import_module(module)
-            del os.environ["IMPORTING_USER_CODE"]
+
+            with self.importing_user_code():
+                target_module = importlib.import_module(module)
+
             self.handler = getattr(target_module, func)
             sig = inspect.signature(self.handler.func)
             self.pass_context = "context" in sig.parameters

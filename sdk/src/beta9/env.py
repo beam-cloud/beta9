@@ -5,7 +5,7 @@ from typing import Callable
 
 def called_on_import() -> bool:
     """Check if we are currently in the process of importing the users code."""
-    return os.getenv("IMPORTING_USER_CODE", "false") == "true"
+    return os.getenv("BETA9_IMPORTING_USER_CODE", "false") == "true"
 
 
 def is_local() -> bool:
