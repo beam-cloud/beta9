@@ -21,6 +21,7 @@ const (
 	TokenTypeClusterAdmin string = "admin"
 	TokenTypeWorkspace    string = "workspace"
 	TokenTypeWorker       string = "worker"
+	TokenTypeMachine      string = "machine"
 )
 
 type Token struct {

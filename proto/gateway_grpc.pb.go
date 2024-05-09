@@ -33,26 +33,34 @@ const (
 	GatewayService_DeployStub_FullMethodName           = "/gateway.GatewayService/DeployStub"
 	GatewayService_ListDeployments_FullMethodName      = "/gateway.GatewayService/ListDeployments"
 	GatewayService_StopDeployment_FullMethodName       = "/gateway.GatewayService/StopDeployment"
+	GatewayService_ListPools_FullMethodName            = "/gateway.GatewayService/ListPools"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type GatewayServiceClient interface {
+	// Auth
 	Authorize(ctx context.Context, in *AuthorizeRequest, opts ...grpc.CallOption) (*AuthorizeResponse, error)
 	SignPayload(ctx context.Context, in *SignPayloadRequest, opts ...grpc.CallOption) (*SignPayloadResponse, error)
+	// Objects
 	HeadObject(ctx context.Context, in *HeadObjectRequest, opts ...grpc.CallOption) (*HeadObjectResponse, error)
 	PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error)
 	PutObjectStream(ctx context.Context, opts ...grpc.CallOption) (GatewayService_PutObjectStreamClient, error)
 	ReplaceObjectContent(ctx context.Context, opts ...grpc.CallOption) (GatewayService_ReplaceObjectContentClient, error)
+	// Tasks
 	StartTask(ctx context.Context, in *StartTaskRequest, opts ...grpc.CallOption) (*StartTaskResponse, error)
 	EndTask(ctx context.Context, in *EndTaskRequest, opts ...grpc.CallOption) (*EndTaskResponse, error)
 	StopTasks(ctx context.Context, in *StopTasksRequest, opts ...grpc.CallOption) (*StopTasksResponse, error)
 	ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error)
+	// Stubs
 	GetOrCreateStub(ctx context.Context, in *GetOrCreateStubRequest, opts ...grpc.CallOption) (*GetOrCreateStubResponse, error)
 	DeployStub(ctx context.Context, in *DeployStubRequest, opts ...grpc.CallOption) (*DeployStubResponse, error)
+	// Deployments
 	ListDeployments(ctx context.Context, in *ListDeploymentsRequest, opts ...grpc.CallOption) (*ListDeploymentsResponse, error)
 	StopDeployment(ctx context.Context, in *StopDeploymentRequest, opts ...grpc.CallOption) (*StopDeploymentResponse, error)
+	// Pools
+	ListPools(ctx context.Context, in *ListPoolsRequest, opts ...grpc.CallOption) (*ListPoolsResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -239,24 +247,40 @@ func (c *gatewayServiceClient) StopDeployment(ctx context.Context, in *StopDeplo
 	return out, nil
 }
 
+func (c *gatewayServiceClient) ListPools(ctx context.Context, in *ListPoolsRequest, opts ...grpc.CallOption) (*ListPoolsResponse, error) {
+	out := new(ListPoolsResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListPools_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
 type GatewayServiceServer interface {
+	// Auth
 	Authorize(context.Context, *AuthorizeRequest) (*AuthorizeResponse, error)
 	SignPayload(context.Context, *SignPayloadRequest) (*SignPayloadResponse, error)
+	// Objects
 	HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error)
 	PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error)
 	PutObjectStream(GatewayService_PutObjectStreamServer) error
 	ReplaceObjectContent(GatewayService_ReplaceObjectContentServer) error
+	// Tasks
 	StartTask(context.Context, *StartTaskRequest) (*StartTaskResponse, error)
 	EndTask(context.Context, *EndTaskRequest) (*EndTaskResponse, error)
 	StopTasks(context.Context, *StopTasksRequest) (*StopTasksResponse, error)
 	ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error)
+	// Stubs
 	GetOrCreateStub(context.Context, *GetOrCreateStubRequest) (*GetOrCreateStubResponse, error)
 	DeployStub(context.Context, *DeployStubRequest) (*DeployStubResponse, error)
+	// Deployments
 	ListDeployments(context.Context, *ListDeploymentsRequest) (*ListDeploymentsResponse, error)
 	StopDeployment(context.Context, *StopDeploymentRequest) (*StopDeploymentResponse, error)
+	// Pools
+	ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -305,6 +329,9 @@ func (UnimplementedGatewayServiceServer) ListDeployments(context.Context, *ListD
 }
 func (UnimplementedGatewayServiceServer) StopDeployment(context.Context, *StopDeploymentRequest) (*StopDeploymentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StopDeployment not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPools not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -587,6 +614,24 @@ func _GatewayService_StopDeployment_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_ListPools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPoolsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListPools(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListPools_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListPools(ctx, req.(*ListPoolsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -641,6 +686,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StopDeployment",
 			Handler:    _GatewayService_StopDeployment_Handler,
+		},
+		{
+			MethodName: "ListPools",
+			Handler:    _GatewayService_ListPools_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

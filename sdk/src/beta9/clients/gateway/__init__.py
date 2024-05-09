@@ -108,7 +108,7 @@ class ReplaceObjectContentResponse(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class StartTaskRequest(betterproto.Message):
-    """Task queue messages"""
+    """Task messages"""
 
     task_id: str = betterproto.string_field(1)
     container_id: str = betterproto.string_field(2)
@@ -268,6 +268,28 @@ class StopDeploymentRequest(betterproto.Message):
 class StopDeploymentResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class Pool(betterproto.Message):
+    name: str = betterproto.string_field(2)
+    active: bool = betterproto.bool_field(3)
+    gpu: str = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class ListPoolsRequest(betterproto.Message):
+    filters: Dict[str, "StringList"] = betterproto.map_field(
+        1, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
+    )
+    limit: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ListPoolsResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    pools: List["Pool"] = betterproto.message_field(3)
 
 
 class GatewayServiceStub(betterproto.ServiceStub):
@@ -516,6 +538,23 @@ class GatewayServiceStub(betterproto.ServiceStub):
             metadata=metadata,
         )
 
+    async def list_pools(
+        self,
+        list_pools_request: "ListPoolsRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "ListPoolsResponse":
+        return await self._unary_unary(
+            "/gateway.GatewayService/ListPools",
+            list_pools_request,
+            ListPoolsResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
 
 class GatewayServiceBase(ServiceBase):
 
@@ -588,6 +627,11 @@ class GatewayServiceBase(ServiceBase):
     async def stop_deployment(
         self, stop_deployment_request: "StopDeploymentRequest"
     ) -> "StopDeploymentResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def list_pools(
+        self, list_pools_request: "ListPoolsRequest"
+    ) -> "ListPoolsResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
     async def __rpc_authorize(
@@ -692,6 +736,13 @@ class GatewayServiceBase(ServiceBase):
         response = await self.stop_deployment(request)
         await stream.send_message(response)
 
+    async def __rpc_list_pools(
+        self, stream: "grpclib.server.Stream[ListPoolsRequest, ListPoolsResponse]"
+    ) -> None:
+        request = await stream.recv_message()
+        response = await self.list_pools(request)
+        await stream.send_message(response)
+
     def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
         return {
             "/gateway.GatewayService/Authorize": grpclib.const.Handler(
@@ -777,5 +828,11 @@ class GatewayServiceBase(ServiceBase):
                 grpclib.const.Cardinality.UNARY_UNARY,
                 StopDeploymentRequest,
                 StopDeploymentResponse,
+            ),
+            "/gateway.GatewayService/ListPools": grpclib.const.Handler(
+                self.__rpc_list_pools,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                ListPoolsRequest,
+                ListPoolsResponse,
             ),
         }

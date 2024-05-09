@@ -6,21 +6,33 @@ import "google/protobuf/timestamp.proto";
 package gateway;
 
 service GatewayService {
+  // Auth
   rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse) {}
   rpc SignPayload(SignPayloadRequest) returns (SignPayloadResponse) {}
+
+  // Objects
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
   rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
   rpc ReplaceObjectContent(stream ReplaceObjectContentRequest)
       returns (ReplaceObjectContentResponse) {}
+
+  // Tasks
   rpc StartTask(StartTaskRequest) returns (StartTaskResponse);
   rpc EndTask(EndTaskRequest) returns (EndTaskResponse);
   rpc StopTasks(StopTasksRequest) returns (StopTasksResponse);
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+
+  // Stubs
   rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse);
   rpc DeployStub(DeployStubRequest) returns (DeployStubResponse);
+
+  // Deployments
   rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
   rpc StopDeployment(StopDeploymentRequest) returns (StopDeploymentResponse);
+
+  // Pools
+  rpc ListPools(ListPoolsRequest) returns (ListPoolsResponse);
 }
 
 message AuthorizeRequest {}
@@ -83,7 +95,7 @@ message ReplaceObjectContentRequest {
 
 message ReplaceObjectContentResponse { bool ok = 1; }
 
-// Task queue messages
+// Task messages
 message StartTaskRequest {
   string task_id = 1;
   string container_id = 2;
@@ -205,11 +217,26 @@ message ListDeploymentsResponse {
   repeated Deployment deployments = 3;
 }
 
-message StopDeploymentRequest {
-  string id = 1;
-}
+message StopDeploymentRequest { string id = 1; }
 
 message StopDeploymentResponse {
   bool ok = 1;
   string err_msg = 2;
+}
+
+message Pool {
+  string name = 2;
+  bool active = 3;
+  string gpu = 4;
+}
+
+message ListPoolsRequest {
+  map<string, StringList> filters = 1;
+  uint32 limit = 2;
+}
+
+message ListPoolsResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Pool pools = 3;
 }
