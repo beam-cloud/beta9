@@ -44,8 +44,8 @@ type Event struct {
 }
 
 const (
-	EventTypeStopDeployment EventType = "STOP_DEPLOYMENT"
 	EventTypeStopContainer  EventType = "STOP_CONTAINER"
+	EventTypeReloadInstance EventType = "RELOAD_INSTANCE"
 )
 
 // Send an event over the bus

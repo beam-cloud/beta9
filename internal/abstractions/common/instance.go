@@ -47,6 +47,7 @@ type AutoscaledInstance struct {
 	Name       string
 	Rdb        *common.RedisClient
 	Lock       *common.RedisLock
+	IsActive   bool
 
 	// DB objects
 	Workspace  *types.Workspace
@@ -84,6 +85,7 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		Lock:                lock,
 		Ctx:                 ctx,
 		CancelFunc:          cancelFunc,
+		IsActive:            true,
 		Name:                cfg.Name,
 		Workspace:           cfg.Workspace,
 		Stub:                cfg.Stub,
@@ -103,6 +105,24 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 	}
 
 	return instance, nil
+}
+
+// Reload updates state that should be changed on the instance.
+// If a stub has a deployment associated with it, we update the IsActive field.
+func (i *AutoscaledInstance) Reload() error {
+	deployments, err := i.BackendRepo.ListDeploymentsWithRelated(i.Ctx, types.DeploymentFilter{
+		StubIds:     []string{i.Stub.ExternalId},
+		WorkspaceID: i.Stub.Workspace.Id,
+	})
+	if err != nil || len(deployments) == 0 {
+		return err
+	}
+
+	if len(deployments) == 1 && !deployments[0].Active {
+		i.IsActive = false
+	}
+
+	return nil
 }
 
 func (i *AutoscaledInstance) WaitForContainer(ctx context.Context, duration time.Duration) (*types.ContainerState, error) {
@@ -186,17 +206,8 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		desiredContainers = 0
 	}
 
-	switch i.Stub.Type {
-	case types.StubTypeEndpointDeployment, types.StubTypeFunctionDeployment, types.StubTypeTaskQueueDeployment:
-		deployments, _ := i.BackendRepo.ListDeploymentsWithRelated(i.Ctx, types.DeploymentFilter{
-			StubIds:     []string{i.Stub.ExternalId},
-			WorkspaceID: i.Stub.Workspace.Id,
-		})
-
-		if len(deployments) == 1 && !deployments[0].Active {
-			log.Printf("<%s> is not active, scaling to zero.\n", i.Name)
-			desiredContainers = 0
-		}
+	if !i.IsActive {
+		desiredContainers = 0
 	}
 
 	noContainersRunning := (state.PendingContainers == 0) && (state.RunningContainers == 0) && (state.StoppingContainers == 0)

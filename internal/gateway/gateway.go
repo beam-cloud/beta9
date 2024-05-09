@@ -245,7 +245,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterTaskQueueServiceServer(g.grpcServer, tq)
 
 	// Register endpoint service
-	ws, err := endpoint.NewEndpointService(g.ctx, endpoint.EndpointServiceOpts{
+	ws, err := endpoint.NewHTTPEndpointService(g.ctx, endpoint.EndpointServiceOpts{
 		ContainerRepo:  g.ContainerRepo,
 		BackendRepo:    g.BackendRepo,
 		TaskRepo:       g.TaskRepo,

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/internal/auth"
+	common "github.com/beam-cloud/beta9/internal/common"
 	"github.com/beam-cloud/beta9/internal/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -92,14 +93,10 @@ func (gws *GatewayService) StopDeployment(ctx context.Context, in *pb.StopDeploy
 
 	// Stop active containers
 	containers, err := gws.containerRepo.GetActiveContainersByStubId(deploymentWithRelated.Stub.ExternalId)
-	if err != nil {
-		return &pb.StopDeploymentResponse{
-			Ok:     false,
-			ErrMsg: "Unable to get active containers",
-		}, nil
-	}
-	for _, container := range containers {
-		gws.scheduler.Stop(container.ContainerId)
+	if err == nil {
+		for _, container := range containers {
+			gws.scheduler.Stop(container.ContainerId)
+		}
 	}
 
 	// Disable deployment
@@ -111,6 +108,13 @@ func (gws *GatewayService) StopDeployment(ctx context.Context, in *pb.StopDeploy
 			ErrMsg: "Unable to update deployment",
 		}, nil
 	}
+
+	// Publish reload instance event
+	eventBus := common.NewEventBus(gws.redisClient)
+	eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
+		"stub_id":   deploymentWithRelated.Stub.ExternalId,
+		"stub_type": deploymentWithRelated.StubType,
+	}})
 
 	return &pb.StopDeploymentResponse{
 		Ok: true,
