@@ -10,15 +10,17 @@ import (
 
 type GatewayService struct {
 	backendRepo    repository.BackendRepository
+	containerRepo  repository.ContainerRepository
 	scheduler      *scheduler.Scheduler
 	taskDispatcher *task.Dispatcher
 	redisClient    *common.RedisClient
 	pb.UnimplementedGatewayServiceServer
 }
 
-func NewGatewayService(backendRepo repository.BackendRepository, scheduler *scheduler.Scheduler, taskDispatcher *task.Dispatcher, redisClient *common.RedisClient) (*GatewayService, error) {
+func NewGatewayService(backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, scheduler *scheduler.Scheduler, taskDispatcher *task.Dispatcher, redisClient *common.RedisClient) (*GatewayService, error) {
 	return &GatewayService{
 		backendRepo:    backendRepo,
+		containerRepo:  containerRepo,
 		scheduler:      scheduler,
 		taskDispatcher: taskDispatcher,
 		redisClient:    redisClient,

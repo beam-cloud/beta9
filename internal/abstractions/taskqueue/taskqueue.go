@@ -108,6 +108,29 @@ func NewRedisTaskQueueService(
 	}
 	eventManager.Listen(ctx)
 
+	eventBus := common.NewEventBus(
+		opts.RedisClient,
+		common.EventBusSubscriber{Type: common.EventTypeReloadInstance, Callback: func(e *common.Event) bool {
+			stubId := e.Args["stub_id"].(string)
+			stubType := e.Args["stub_type"].(string)
+
+			if stubType != types.StubTypeTaskQueueDeployment {
+				// Assume the callback succeeded to avoid retries
+				return true
+			}
+
+			instance, err := tq.getOrCreateQueueInstance(stubId)
+			if err != nil {
+				return false
+			}
+
+			instance.Reload()
+
+			return true
+		}},
+	)
+	go eventBus.ReceiveEvents(ctx)
+
 	// Register task dispatcher
 	tq.taskDispatcher.Register(string(types.ExecutorTaskQueue), tq.taskQueueTaskFactory)
 

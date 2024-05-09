@@ -259,6 +259,17 @@ class ListDeploymentsResponse(betterproto.Message):
     deployments: List["Deployment"] = betterproto.message_field(3)
 
 
+@dataclass(eq=False, repr=False)
+class StopDeploymentRequest(betterproto.Message):
+    id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class StopDeploymentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
 class GatewayServiceStub(betterproto.ServiceStub):
     async def authorize(
         self,
@@ -488,6 +499,23 @@ class GatewayServiceStub(betterproto.ServiceStub):
             metadata=metadata,
         )
 
+    async def stop_deployment(
+        self,
+        stop_deployment_request: "StopDeploymentRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "StopDeploymentResponse":
+        return await self._unary_unary(
+            "/gateway.GatewayService/StopDeployment",
+            stop_deployment_request,
+            StopDeploymentResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
 
 class GatewayServiceBase(ServiceBase):
 
@@ -555,6 +583,11 @@ class GatewayServiceBase(ServiceBase):
     async def list_deployments(
         self, list_deployments_request: "ListDeploymentsRequest"
     ) -> "ListDeploymentsResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def stop_deployment(
+        self, stop_deployment_request: "StopDeploymentRequest"
+    ) -> "StopDeploymentResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
     async def __rpc_authorize(
@@ -651,6 +684,14 @@ class GatewayServiceBase(ServiceBase):
         response = await self.list_deployments(request)
         await stream.send_message(response)
 
+    async def __rpc_stop_deployment(
+        self,
+        stream: "grpclib.server.Stream[StopDeploymentRequest, StopDeploymentResponse]",
+    ) -> None:
+        request = await stream.recv_message()
+        response = await self.stop_deployment(request)
+        await stream.send_message(response)
+
     def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
         return {
             "/gateway.GatewayService/Authorize": grpclib.const.Handler(
@@ -730,5 +771,11 @@ class GatewayServiceBase(ServiceBase):
                 grpclib.const.Cardinality.UNARY_UNARY,
                 ListDeploymentsRequest,
                 ListDeploymentsResponse,
+            ),
+            "/gateway.GatewayService/StopDeployment": grpclib.const.Handler(
+                self.__rpc_stop_deployment,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                StopDeploymentRequest,
+                StopDeploymentResponse,
             ),
         }

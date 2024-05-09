@@ -245,7 +245,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterTaskQueueServiceServer(g.grpcServer, tq)
 
 	// Register endpoint service
-	ws, err := endpoint.NewEndpointService(g.ctx, endpoint.EndpointServiceOpts{
+	ws, err := endpoint.NewHTTPEndpointService(g.ctx, endpoint.EndpointServiceOpts{
 		ContainerRepo:  g.ContainerRepo,
 		BackendRepo:    g.BackendRepo,
 		TaskRepo:       g.TaskRepo,
@@ -293,7 +293,7 @@ func (g *Gateway) registerServices() error {
 
 	// Register gateway services
 	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction)
-	gws, err := gatewayservices.NewGatewayService(g.BackendRepo, s.Scheduler, g.TaskDispatcher, g.RedisClient)
+	gws, err := gatewayservices.NewGatewayService(g.BackendRepo, g.ContainerRepo, s.Scheduler, g.TaskDispatcher, g.RedisClient)
 	if err != nil {
 		return err
 	}

@@ -20,6 +20,7 @@ service GatewayService {
   rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse);
   rpc DeployStub(DeployStubRequest) returns (DeployStubResponse);
   rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
+  rpc StopDeployment(StopDeploymentRequest) returns (StopDeploymentResponse);
 }
 
 message AuthorizeRequest {}
@@ -202,4 +203,13 @@ message ListDeploymentsResponse {
   bool ok = 1;
   string err_msg = 2;
   repeated Deployment deployments = 3;
+}
+
+message StopDeploymentRequest {
+  string id = 1;
+}
+
+message StopDeploymentResponse {
+  bool ok = 1;
+  string err_msg = 2;
 }

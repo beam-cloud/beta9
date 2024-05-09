@@ -899,3 +899,23 @@ func (c *PostgresBackendRepository) ListStubs(ctx context.Context, filters types
 
 	return stubs, nil
 }
+
+func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error) {
+	query := `
+	UPDATE deployment
+	SET name = $3, active = $4, version = $5, updated_at = CURRENT_TIMESTAMP
+	WHERE id = $1 OR external_id = $2
+	RETURNING id, external_id, name, active, version, workspace_id, stub_id, stub_type, created_at, updated_at;
+	`
+
+	var updated types.Deployment
+	if err := r.client.GetContext(
+		ctx, &updated, query,
+		deployment.Id, deployment.ExternalId,
+		deployment.Name, deployment.Active, deployment.Version,
+	); err != nil {
+		return &updated, err
+	}
+
+	return &updated, nil
+}

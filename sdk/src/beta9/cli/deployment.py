@@ -2,7 +2,7 @@ import importlib
 import os
 import sys
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 import click
 from betterproto import Casing
@@ -11,7 +11,13 @@ from rich.table import Column, Table, box
 from .. import aio, terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
-from ..clients.gateway import ListDeploymentsRequest, ListDeploymentsResponse, StringList
+from ..clients.gateway import (
+    ListDeploymentsRequest,
+    ListDeploymentsResponse,
+    StopDeploymentRequest,
+    StopDeploymentResponse,
+    StringList,
+)
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
@@ -194,3 +200,36 @@ def list_deployments(
     table.add_section()
     table.add_row(f"[bold]{len(res.deployments)} items")
     terminal.print(table)
+
+
+@management.command(
+    name="stop",
+    help="Stop deployments.",
+    epilog="""
+    Examples:
+
+      # Stop a deployment
+      {cli_name} deployment stop 5bd2e248-6d7c-417b-ac7b-0b92aa0a5572
+
+      # Stop multiple deployments
+      {cli_name} deployment stop 5bd2e248-6d7c-417b-ac7b-0b92aa0a5572 7b968ad5-c001-4df3-ba05-e99895aa9596
+      \b
+    """,
+)
+@click.argument(
+    "deployment_ids",
+    nargs=-1,
+    type=click.STRING,
+    required=True,
+)
+@extraclick.pass_service_client
+def stop_deployments(service: ServiceClient, deployment_ids: List[str]):
+    for id in deployment_ids:
+        res: StopDeploymentResponse
+        res = aio.run_sync(service.gateway.stop_deployment(StopDeploymentRequest(id)))
+
+        if not res.ok:
+            terminal.error(res.err_msg, exit=False)
+            continue
+
+        terminal.print(f"Stopped {id}")

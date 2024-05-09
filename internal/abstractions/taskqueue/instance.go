@@ -111,6 +111,12 @@ func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
 			continue
 		}
 
+		// When deployment is stopped, all containers should be stopped even if they have keep warm
+		if !i.IsActive {
+			keys = append(keys, container.ContainerId)
+			continue
+		}
+
 		// Skip containers with keep warm locks
 		keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.taskQueueKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
 		if err != nil && err != redis.Nil {
