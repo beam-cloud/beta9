@@ -42,6 +42,7 @@ imageService:
   localCacheEnabled: true
   registryStore: local
   registryCredentialProvider: docker
+  buildContainerPoolSelector: build
   registries:
     docker:
       username: beamcloud
@@ -74,6 +75,18 @@ worker:
         minFreeCpu: 1000m
         minFreeGpu: 0
         minFreeMemory: 1Gi
+    build:
+      mode: local
+      requiresPoolSelector: true
+      jobSpec:
+        nodeSelector: {}
+      poolSizing:
+        defaultWorkerCpu: 8000m
+        defaultWorkerGpuType: ""
+        defaultWorkerMemory: 32Gi
+        minFreeCpu: 8000m
+        minFreeGpu: 0
+        minFreeMemory: 32Gi
     # example gpu worker pool
     # nvidia:
     #   gpuType: A40

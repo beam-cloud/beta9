@@ -131,7 +131,9 @@ class FunctionHandler:
 
         try:
             module, func = config.handler.split(":")
+            os.environ["IMPORTING_USER_CODE"] = "true"
             target_module = importlib.import_module(module)
+            del os.environ["IMPORTING_USER_CODE"]
             self.handler = getattr(target_module, func)
             sig = inspect.signature(self.handler.func)
             self.pass_context = "context" in sig.parameters

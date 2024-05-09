@@ -18,6 +18,7 @@ from ...clients.gateway import (
     ReplaceObjectContentRequest,
 )
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
+from ...env import called_on_import
 from ...sync import FileSyncer, SyncEventHandler
 
 CONTAINER_STUB_TYPE = "container"
@@ -217,6 +218,9 @@ class RunnerAbstraction(BaseAbstraction):
         force_create_stub: bool = False,
         name: Optional[str] = None,
     ) -> bool:
+        if called_on_import():
+            return False
+
         if func is not None:
             self._map_callable_to_attr(attr="handler", func=func)
 
