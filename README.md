@@ -96,7 +96,7 @@ def main():
 ### Run async tasks in a queue
 
 ```python
-from beam import task_queue, Image
+from beta9 import task_queue, Image
 
 
 @task_queue(
