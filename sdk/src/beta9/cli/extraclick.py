@@ -1,5 +1,6 @@
 import functools
 import inspect
+import os
 import sys
 import textwrap
 from gettext import gettext
@@ -225,6 +226,7 @@ def filter_values_callback(
 class RemotePath(PurePosixPath):
     supported_prefixes: ClassVar[List[str]] = [
         "vol",  # beta9
+        "volume",  # beta9
         "s3",  # aws
         "gs",  # google
         "oci",  # oracle
@@ -241,6 +243,13 @@ class RemotePath(PurePosixPath):
         if value not in self.supported_prefixes:
             raise ValueError("Unsupported path prefix")
         self._prefix = value
+
+    def find_credentials(self):
+        if self.prefix == "s3":
+            access_key = os.getenv("AWS_ACCESS_KEY_ID", None)
+            secret_key = os.getenv("AWS_SECRET_ACCESS_KEY", None)
+            session_token = os.getenv("AWS_SESSION_TOKEN", None)
+            return access_key, secret_key, session_token
 
 
 def validate_path_callback(ctx: click.Context, param: click.Parameter, value: str):

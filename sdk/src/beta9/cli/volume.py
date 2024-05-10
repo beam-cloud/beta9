@@ -189,16 +189,18 @@ def cp(service: ServiceClient, local_path: str, remote_path: str):
     callback=extraclick.validate_path_callback,
 )
 @extraclick.pass_service_client
-def copy(service: ServiceClient, source: Union[Path, RemotePath], target: str):
+def copy(service: ServiceClient, source: Union[Path, RemotePath], target: Union[Path, RemotePath]):
     print("source path:", source)
     if isinstance(source, RemotePath):
         print("source prefix:", source.prefix)
+        print("source secret:", source.find_credentials())
 
     print()
 
     print("target path:", target)
     if isinstance(target, RemotePath):
-        print("source prefix:", target.prefix)
+        print("target prefix:", target.prefix)
+        print("target secret:", target.find_credentials())
 
 
 def read_with_progress(
