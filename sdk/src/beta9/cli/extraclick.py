@@ -3,7 +3,8 @@ import inspect
 import sys
 import textwrap
 from gettext import gettext
-from typing import Any, Callable, Dict, List, Optional
+from pathlib import Path, PurePath, PurePosixPath
+from typing import Any, Callable, ClassVar, Dict, List, Optional
 
 import click
 
@@ -219,3 +220,52 @@ def filter_values_callback(
         filters[key] = StringList(values=value_list)
 
     return filters
+
+
+class RemotePath(PurePosixPath):
+    supported_prefixes: ClassVar[List[str]] = [
+        "vol",  # beta9
+        "s3",  # aws
+        "gs",  # google
+        "oci",  # oracle
+        "az",  # azure
+        "cos",  # ibm
+    ]
+
+    @property
+    def prefix(self) -> str:
+        return self._prefix
+
+    @prefix.setter
+    def prefix(self, value: str) -> None:
+        if value not in self.supported_prefixes:
+            raise ValueError("Unsupported path prefix")
+        self._prefix = value
+
+
+def validate_path_callback(ctx: click.Context, param: click.Parameter, value: str):
+    path: PurePath
+    parts = value.split("://", 1)
+
+    if len(parts) < 1:
+        raise click.BadParameter("Value not provided", ctx, param)
+    if len(parts) == 1:
+        path = Path(parts[0])
+    elif len(parts) == 2:
+        path = RemotePath(parts[1])
+        try:
+            path.prefix = parts[0]
+        except ValueError:
+            raise click.BadParameter(
+                f"Prefix must be one of {'://, '.join(RemotePath.supported_prefixes)}://.",
+                ctx,
+                param,
+            )
+    else:
+        raise click.BadParameter(
+            "Well this is embarrassing. We don't know how you got here.",
+            ctx,
+            param,
+        )
+
+    return path
