@@ -309,6 +309,7 @@ class TaskQueueWorker:
                     start_time = time.time()
                     task_status = TaskStatus.Complete
                     result = None
+                    duration = None
 
                     try:
                         args = task.args or []
@@ -321,12 +322,13 @@ class TaskQueueWorker:
                         print(traceback.format_exc())
                         task_status = TaskStatus.Error
                     finally:
+                        duration = time.time() - start_time
                         complete_task_response: TaskQueueCompleteResponse = (
                             await taskqueue_stub.task_queue_complete(
                                 TaskQueueCompleteRequest(
                                     task_id=task.id,
                                     stub_id=config.stub_id,
-                                    task_duration=time.time() - start_time,
+                                    task_duration=duration,
                                     task_status=task_status,
                                     container_id=config.container_id,
                                     container_hostname=config.container_hostname,
@@ -339,7 +341,7 @@ class TaskQueueWorker:
                             raise RunnerException("Unable to end task")
 
                         monitor_task.cancel()
-                        print(f"Task completed <{task.id}>")
+                        print(f"Task completed <{task.id}>, took {duration}s")
 
                         await send_callback(
                             gateway_stub=gateway_stub,

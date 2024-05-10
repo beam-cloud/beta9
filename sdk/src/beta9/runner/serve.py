@@ -34,7 +34,7 @@ class SyncEventHandler(FileSystemEventHandler):
         self._trigger_reload(event)
 
     def _trigger_reload(self, event):
-        if not event.is_directory:
+        if not event.is_directory and event.src_path.endswith(".py"):
             self.restart_callback()
 
 

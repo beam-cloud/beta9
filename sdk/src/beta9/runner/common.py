@@ -165,12 +165,17 @@ def execute_lifecycle_method(*, name: str) -> Union[Any, None]:
     if func == "" or func is None:
         return None
 
+    start_time = time.time()
     print(f"Running {name} func: {func}")
     try:
         module, func = func.split(":")
         target_module = importlib.import_module(module)
         method = getattr(target_module, func)
-        return method()
+        result = method()
+        duration = time.time() - start_time
+
+        print(f"{name} func complete, took: {duration}s")
+        return result
     except BaseException:
         raise RunnerException()
 
