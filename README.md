@@ -38,7 +38,8 @@ Features:
 
 - Scale out workloads to thousands of GPU (or CPU) containers
 - Ultrafast cold-start for custom ML models
-- Instantly run remote containers, right from your Python interpreter
+- Automatic scaling up and down to zero
+- Flexible distributed storage for storing models and function outputs
 - Distribute workloads across multiple cloud providers
 - Easily deploy task queues and functions using simple Python abstractions
 
