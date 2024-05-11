@@ -1,6 +1,6 @@
 <div align="center">
 <p align="center">
-<img alt="Logo" src="https://github.com/beam-cloud/beta9/assets/10925686/a23019e2-3a34-4efa-9ac7-033c83f528cf"/ width="20%">
+<img alt="Logo" src="static/beam-logo.jpeg" width="20%">
 </p>
 
 ---
@@ -20,7 +20,6 @@
   <a href="https://github.com/beam-cloud/beta9/actions">
     <img alt="Tests Passing" src="https://github.com/beam-cloud/beta9/actions/workflows/test.yml/badge.svg">
   </a>
-  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-ff69b4"/>
 </p>
 
 ---
@@ -73,7 +72,7 @@ def predict():
     return {"prediction": output.outputs[0].text}
 ```
 
-### Scale out jobs to hundreds of containers in parallel
+### Fan-Out Workloads to Hundreds of Containers
 
 ```python
 from beta9 import function
@@ -93,7 +92,7 @@ def main():
         squared.append(result)
 ```
 
-### Run async tasks in a queue
+### Enqueue Async Jobs
 
 ```python
 from beta9 import task_queue, Image
