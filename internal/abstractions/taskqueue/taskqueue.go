@@ -530,10 +530,9 @@ func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...fun
 	}
 
 	if instance.Autoscaler == nil {
-		switch instance.Stub.Type {
-		case types.StubTypeTaskQueueDeployment, types.StubTypeTaskQueue:
+		if stub.Type.IsDeployment() || stub.Type == types.StubType(types.StubTypeTaskQueue) {
 			instance.Autoscaler = abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueScaleFunc)
-		case types.StubTypeTaskQueueServe:
+		} else if stub.Type.IsServe() {
 			instance.Autoscaler = abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueServeScaleFunc)
 		}
 	}

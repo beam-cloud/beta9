@@ -42,12 +42,13 @@ type AutoscaledInstanceConfig struct {
 }
 
 type AutoscaledInstance struct {
-	Ctx        context.Context
-	CancelFunc context.CancelFunc
-	Name       string
-	Rdb        *common.RedisClient
-	Lock       *common.RedisLock
-	IsActive   bool
+	Ctx                      context.Context
+	CancelFunc               context.CancelFunc
+	Name                     string
+	Rdb                      *common.RedisClient
+	Lock                     *common.RedisLock
+	IsActive                 bool
+	FailedContainerThreshold int
 
 	// DB objects
 	Workspace  *types.Workspace
@@ -81,27 +82,33 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 	ctx, cancelFunc := context.WithCancel(ctx)
 	lock := common.NewRedisLock(cfg.Rdb)
 
+	failedContainerThreshold := types.FailedContainerThreshold
+	if cfg.Stub.Type.IsDeployment() {
+		failedContainerThreshold = types.FailedDeploymentContainerThreshold
+	}
+
 	instance := &AutoscaledInstance{
-		Lock:                lock,
-		Ctx:                 ctx,
-		CancelFunc:          cancelFunc,
-		IsActive:            true,
-		Name:                cfg.Name,
-		Workspace:           cfg.Workspace,
-		Stub:                cfg.Stub,
-		StubConfig:          cfg.StubConfig,
-		Object:              cfg.Object,
-		Token:               cfg.Token,
-		Scheduler:           cfg.Scheduler,
-		Rdb:                 cfg.Rdb,
-		ContainerRepo:       cfg.ContainerRepo,
-		BackendRepo:         cfg.BackendRepo,
-		TaskRepo:            cfg.TaskRepo,
-		Containers:          make(map[string]bool),
-		ContainerEventChan:  make(chan types.ContainerEvent, 1),
-		ScaleEventChan:      make(chan int, 1),
-		StartContainersFunc: cfg.StartContainersFunc,
-		StopContainersFunc:  cfg.StopContainersFunc,
+		Lock:                     lock,
+		Ctx:                      ctx,
+		CancelFunc:               cancelFunc,
+		IsActive:                 true,
+		Name:                     cfg.Name,
+		Workspace:                cfg.Workspace,
+		Stub:                     cfg.Stub,
+		StubConfig:               cfg.StubConfig,
+		Object:                   cfg.Object,
+		Token:                    cfg.Token,
+		Scheduler:                cfg.Scheduler,
+		Rdb:                      cfg.Rdb,
+		ContainerRepo:            cfg.ContainerRepo,
+		BackendRepo:              cfg.BackendRepo,
+		TaskRepo:                 cfg.TaskRepo,
+		Containers:               make(map[string]bool),
+		ContainerEventChan:       make(chan types.ContainerEvent, 1),
+		ScaleEventChan:           make(chan int, 1),
+		StartContainersFunc:      cfg.StartContainersFunc,
+		StopContainersFunc:       cfg.StopContainersFunc,
+		FailedContainerThreshold: failedContainerThreshold,
 	}
 
 	return instance, nil
@@ -201,7 +208,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		return err
 	}
 
-	if state.FailedContainers >= types.FailedContainerThreshold {
+	if state.FailedContainers >= i.FailedContainerThreshold {
 		log.Printf("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
 		desiredContainers = 0
 	}
