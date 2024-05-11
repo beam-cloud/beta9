@@ -49,6 +49,8 @@ We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for
 
 ### Serverless Inference Endpoints
 
+#### Decorate Any Python Function
+
 ```python
 from beta9 import Image, endpoint
 
@@ -71,6 +73,22 @@ def predict():
     output = llm.generate(prompts)[0]
 
     return {"prediction": output.outputs[0].text}
+```
+
+#### Deploy It to the Cloud
+
+```bash
+$ beta9 deploy inference.py:predict --name llm-inference
+
+=> Building image
+=> Using cached image
+=> Deploying endpoint
+=> Deployed 🎉
+=> Invocation details
+
+curl -X POST 'https://app.beam.cloud/endpoint/multiply-numbers/v1' \
+-H 'Authorization: Bearer [YOUR_AUTH_TOKEN]' \
+-d '{}'
 ```
 
 ### Fan-Out Workloads to Hundreds of Containers
@@ -114,7 +132,7 @@ def multiply(x):
 multiply.put(x=10)
 ```
 
-## How it works
+## How It Works
 
 Beta9 is designed for launching remote serverless containers quickly. There are a few things that make this possible:
 
@@ -125,19 +143,19 @@ Beta9 is designed for launching remote serverless containers quickly. There are 
 
 ![demo gif](sdk/docs/demo.gif)
 
-# Get started
+# Get Started
 
 ## Beam Cloud (Recommended)
 
 The fastest and most reliable way to get started is by signing up for our managed service, [Beam Cloud](https://beam.cloud). Your first 10 hours of usage are free, and afterwards you pay based on usage.
 
-## Open-source deploy (Advanced)
+## Open-Source Deploy (Advanced)
 
 You can run Beta9 locally, or in an existing Kubernetes cluster using our [Helm chart](https://github.com/beam-cloud/beta9/tree/main/deploy/charts/beta9).
 
 ### Local Development
 
-#### Setting up the server
+#### Setting Up the Server
 
 k3d is used for local development. You'll need Docker and Make to get started.
 
@@ -146,18 +164,18 @@ To use our fully automated setup, run the `setup` make target.
 > [!NOTE]
 > This will overwrite some of the tools you may already have installed. Review the [setup.sh](bin/setup.sh) to learn more.
 
-```
+```bash
 make setup
 ```
 
-#### Setting up the SDK
+#### Setting Up the SDK
 
 The SDK is written in Python. You'll need Python 3.8 or higher. Use the `setup-sdk` make target to get started.
 
 > [!NOTE]
 > This will install the Poetry package manager.
 
-```
+```bash
 make setup-sdk
 ```
 
@@ -181,7 +199,7 @@ If you need support, you can reach out through any of these channels:
 - [GitHub issues](https://github.com/beam-cloud/issues) \(Bug reports, feature requests, and anything roadmap related)
 - [Twitter](https://twitter.com/beam_cloud) \(Updates on releases and stuff)
 
-## Thanks to our contributors
+## Thanks to Our Contributors
 
 <a href="https://github.com/slai-labs/get-beam/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=slai-labs/get-beam" />
