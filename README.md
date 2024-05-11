@@ -1,6 +1,6 @@
 <div align="center">
 <p align="center">
-<img alt="Logo" src="https://github.com/beam-cloud/beta9/assets/10925686/a23019e2-3a34-4efa-9ac7-033c83f528cf"/ width="20%">
+<img alt="Logo" src="static/beam-logo.jpeg" width="20%">
 </p>
 
 ---
@@ -9,10 +9,10 @@
 
 <p align="center">
   <a href="https://docs.beta9.beam.cloud">
-    <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-blue">
+    <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-purple">
   </a>
   <a href="https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g">
-    <img alt="Join Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-blue?logo=slack">
+    <img alt="Join Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-orange?logo=slack">
   </a>
     <a href="https://twitter.com/beam_cloud">
     <img alt="Twitter" src="https://img.shields.io/twitter/follow/beam_cloud.svg?style=social&logo=twitter">
@@ -20,7 +20,6 @@
   <a href="https://github.com/beam-cloud/beta9/actions">
     <img alt="Tests Passing" src="https://github.com/beam-cloud/beta9/actions/workflows/test.yml/badge.svg">
   </a>
-  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-ff69b4"/>
 </p>
 
 ---
@@ -39,7 +38,8 @@ Features:
 
 - Scale out workloads to thousands of GPU (or CPU) containers
 - Ultrafast cold-start for custom ML models
-- Instantly run remote containers, right from your Python interpreter
+- Automatic scaling up and down to zero
+- Flexible distributed storage for storing models and function outputs
 - Distribute workloads across multiple cloud providers
 - Easily deploy task queues and functions using simple Python abstractions
 
@@ -49,7 +49,9 @@ We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for
 
 ### Serverless Inference Endpoints
 
-```python
+#### Decorate Any Python Function
+
+```python 
 from beta9 import Image, endpoint
 
 
@@ -73,7 +75,23 @@ def predict():
     return {"prediction": output.outputs[0].text}
 ```
 
-### Scale out jobs to hundreds of containers in parallel
+#### Deploy It to the Cloud
+
+```bash
+$ beta9 deploy app.py:predict --name llm-inference
+
+=> Building image
+=> Using cached image
+=> Deploying endpoint
+=> Deployed 🎉
+=> Invocation details
+
+curl -X POST 'https://app.beam.cloud/endpoint/llm-inference/v1' \
+-H 'Authorization: Bearer [YOUR_AUTH_TOKEN]' \
+-d '{}'
+```
+
+### Fan-Out Workloads to Hundreds of Containers
 
 ```python
 from beta9 import function
@@ -93,7 +111,7 @@ def main():
         squared.append(result)
 ```
 
-### Run async tasks in a queue
+### Enqueue Async Jobs
 
 ```python
 from beta9 import task_queue, Image
@@ -114,7 +132,7 @@ def multiply(x):
 multiply.put(x=10)
 ```
 
-## How it works
+## How It Works
 
 Beta9 is designed for launching remote serverless containers quickly. There are a few things that make this possible:
 
@@ -125,19 +143,19 @@ Beta9 is designed for launching remote serverless containers quickly. There are 
 
 ![demo gif](sdk/docs/demo.gif)
 
-# Get started
+# Get Started
 
 ## Beam Cloud (Recommended)
 
 The fastest and most reliable way to get started is by signing up for our managed service, [Beam Cloud](https://beam.cloud). Your first 10 hours of usage are free, and afterwards you pay based on usage.
 
-## Open-source deploy (Advanced)
+## Open-Source Deploy (Advanced)
 
 You can run Beta9 locally, or in an existing Kubernetes cluster using our [Helm chart](https://github.com/beam-cloud/beta9/tree/main/deploy/charts/beta9).
 
 ### Local Development
 
-#### Setting up the server
+#### Setting Up the Server
 
 k3d is used for local development. You'll need Docker and Make to get started.
 
@@ -146,18 +164,18 @@ To use our fully automated setup, run the `setup` make target.
 > [!NOTE]
 > This will overwrite some of the tools you may already have installed. Review the [setup.sh](bin/setup.sh) to learn more.
 
-```
+```bash
 make setup
 ```
 
-#### Setting up the SDK
+#### Setting Up the SDK
 
 The SDK is written in Python. You'll need Python 3.8 or higher. Use the `setup-sdk` make target to get started.
 
 > [!NOTE]
 > This will install the Poetry package manager.
 
-```
+```bash
 make setup-sdk
 ```
 
@@ -181,7 +199,7 @@ If you need support, you can reach out through any of these channels:
 - [GitHub issues](https://github.com/beam-cloud/issues) \(Bug reports, feature requests, and anything roadmap related)
 - [Twitter](https://twitter.com/beam_cloud) \(Updates on releases and stuff)
 
-## Thanks to our contributors
+## Thanks to Our Contributors
 
 <a href="https://github.com/slai-labs/get-beam/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=slai-labs/get-beam" />
