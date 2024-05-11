@@ -51,7 +51,7 @@ We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for
 
 #### Decorate Any Python Function
 
-```python
+```python 
 from beta9 import Image, endpoint
 
 
@@ -78,7 +78,7 @@ def predict():
 #### Deploy It to the Cloud
 
 ```bash
-$ beta9 deploy inference.py:predict --name llm-inference
+$ beta9 deploy app.py:predict --name llm-inference
 
 => Building image
 => Using cached image
@@ -86,7 +86,7 @@ $ beta9 deploy inference.py:predict --name llm-inference
 => Deployed 🎉
 => Invocation details
 
-curl -X POST 'https://app.beam.cloud/endpoint/multiply-numbers/v1' \
+curl -X POST 'https://app.beam.cloud/endpoint/llm-inference/v1' \
 -H 'Authorization: Bearer [YOUR_AUTH_TOKEN]' \
 -d '{}'
 ```
