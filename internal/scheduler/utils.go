@@ -53,6 +53,8 @@ func ParseMemory(memory interface{}) (int64, error) {
 		memoryValue = value
 	case "Gi":
 		memoryValue = value * 1024
+	case "":
+		memoryValue = value
 	default:
 		return 0, errors.New("invalid memory unit")
 	}

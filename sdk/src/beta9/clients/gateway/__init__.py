@@ -108,7 +108,7 @@ class ReplaceObjectContentResponse(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class StartTaskRequest(betterproto.Message):
-    """Task queue messages"""
+    """Task messages"""
 
     task_id: str = betterproto.string_field(1)
     container_id: str = betterproto.string_field(2)
@@ -268,6 +268,66 @@ class StopDeploymentRequest(betterproto.Message):
 class StopDeploymentResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class Pool(betterproto.Message):
+    name: str = betterproto.string_field(2)
+    active: bool = betterproto.bool_field(3)
+    gpu: str = betterproto.string_field(4)
+    min_free_gpu: str = betterproto.string_field(5)
+    min_free_cpu: str = betterproto.string_field(6)
+    min_free_memory: str = betterproto.string_field(7)
+    default_worker_cpu: str = betterproto.string_field(8)
+    default_worker_memory: str = betterproto.string_field(9)
+    default_worker_gpu_count: str = betterproto.string_field(10)
+
+
+@dataclass(eq=False, repr=False)
+class ListPoolsRequest(betterproto.Message):
+    filters: Dict[str, "StringList"] = betterproto.map_field(
+        1, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
+    )
+    limit: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ListPoolsResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    pools: List["Pool"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class Machine(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class ListMachinesRequest(betterproto.Message):
+    filters: Dict[str, "StringList"] = betterproto.map_field(
+        1, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
+    )
+    limit: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ListMachinesResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    machines: List["Machine"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class CreateMachineRequest(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class CreateMachineResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    machine: "Machine" = betterproto.message_field(3)
 
 
 class GatewayServiceStub(betterproto.ServiceStub):
@@ -516,6 +576,57 @@ class GatewayServiceStub(betterproto.ServiceStub):
             metadata=metadata,
         )
 
+    async def list_pools(
+        self,
+        list_pools_request: "ListPoolsRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "ListPoolsResponse":
+        return await self._unary_unary(
+            "/gateway.GatewayService/ListPools",
+            list_pools_request,
+            ListPoolsResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
+    async def list_machines(
+        self,
+        list_machines_request: "ListMachinesRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "ListMachinesResponse":
+        return await self._unary_unary(
+            "/gateway.GatewayService/ListMachines",
+            list_machines_request,
+            ListMachinesResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
+    async def create_machine(
+        self,
+        create_machine_request: "CreateMachineRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "CreateMachineResponse":
+        return await self._unary_unary(
+            "/gateway.GatewayService/CreateMachine",
+            create_machine_request,
+            CreateMachineResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
 
 class GatewayServiceBase(ServiceBase):
 
@@ -588,6 +699,21 @@ class GatewayServiceBase(ServiceBase):
     async def stop_deployment(
         self, stop_deployment_request: "StopDeploymentRequest"
     ) -> "StopDeploymentResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def list_pools(
+        self, list_pools_request: "ListPoolsRequest"
+    ) -> "ListPoolsResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def list_machines(
+        self, list_machines_request: "ListMachinesRequest"
+    ) -> "ListMachinesResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def create_machine(
+        self, create_machine_request: "CreateMachineRequest"
+    ) -> "CreateMachineResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
     async def __rpc_authorize(
@@ -692,6 +818,28 @@ class GatewayServiceBase(ServiceBase):
         response = await self.stop_deployment(request)
         await stream.send_message(response)
 
+    async def __rpc_list_pools(
+        self, stream: "grpclib.server.Stream[ListPoolsRequest, ListPoolsResponse]"
+    ) -> None:
+        request = await stream.recv_message()
+        response = await self.list_pools(request)
+        await stream.send_message(response)
+
+    async def __rpc_list_machines(
+        self, stream: "grpclib.server.Stream[ListMachinesRequest, ListMachinesResponse]"
+    ) -> None:
+        request = await stream.recv_message()
+        response = await self.list_machines(request)
+        await stream.send_message(response)
+
+    async def __rpc_create_machine(
+        self,
+        stream: "grpclib.server.Stream[CreateMachineRequest, CreateMachineResponse]",
+    ) -> None:
+        request = await stream.recv_message()
+        response = await self.create_machine(request)
+        await stream.send_message(response)
+
     def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
         return {
             "/gateway.GatewayService/Authorize": grpclib.const.Handler(
@@ -777,5 +925,23 @@ class GatewayServiceBase(ServiceBase):
                 grpclib.const.Cardinality.UNARY_UNARY,
                 StopDeploymentRequest,
                 StopDeploymentResponse,
+            ),
+            "/gateway.GatewayService/ListPools": grpclib.const.Handler(
+                self.__rpc_list_pools,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                ListPoolsRequest,
+                ListPoolsResponse,
+            ),
+            "/gateway.GatewayService/ListMachines": grpclib.const.Handler(
+                self.__rpc_list_machines,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                ListMachinesRequest,
+                ListMachinesResponse,
+            ),
+            "/gateway.GatewayService/CreateMachine": grpclib.const.Handler(
+                self.__rpc_create_machine,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                CreateMachineRequest,
+                CreateMachineResponse,
             ),
         }

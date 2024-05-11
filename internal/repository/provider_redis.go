@@ -190,6 +190,8 @@ func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machin
 	machineInfo.HostName = newMachineInfo.HostName
 	machineInfo.Token = newMachineInfo.Token
 	machineInfo.Status = types.MachineStatusRegistered
+	machineInfo.Cpu = newMachineInfo.Cpu
+	machineInfo.Memory = newMachineInfo.Memory
 
 	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineInfo)).Err()
 	if err != nil {

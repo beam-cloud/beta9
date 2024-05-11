@@ -238,10 +238,9 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 	}
 
 	if instance.Autoscaler == nil {
-		switch instance.Stub.Type {
-		case types.StubTypeEndpointDeployment:
+		if stub.Type.IsDeployment() {
 			instance.Autoscaler = abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointDeploymentScaleFunc)
-		case types.StubTypeEndpointServe:
+		} else if stub.Type.IsServe() {
 			instance.Autoscaler = abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
 		}
 	}

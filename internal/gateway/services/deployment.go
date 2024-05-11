@@ -64,7 +64,7 @@ func (gws *GatewayService) ListDeployments(ctx context.Context, in *pb.ListDeplo
 			Active:        deployment.Active,
 			StubId:        deployment.Stub.ExternalId,
 			StubName:      deployment.Stub.Name,
-			StubType:      deployment.Stub.Type,
+			StubType:      string(deployment.Stub.Type),
 			Version:       uint32(deployment.Version),
 			WorkspaceId:   deployment.Workspace.ExternalId,
 			WorkspaceName: deployment.Workspace.Name,

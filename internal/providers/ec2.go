@@ -175,6 +175,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		Gpu:      instance.Spec.Gpu,
 		GpuCount: instance.Spec.GpuCount,
 	})
+
 	if err != nil {
 		return "", err
 	}
@@ -355,6 +356,10 @@ done
 
 TOKEN=$(kubectl get secret beta9-token -o jsonpath='{.data.token}' | base64 --decode)
 
+# Determine how much cpu/memory is available
+CPU_CORES=$(awk -v cores=$(grep -c ^processor /proc/cpuinfo) 'BEGIN{print cores * 1000}')
+MEMORY=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+
 # Register the node
 HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
               -H "Content-Type: application/json" \
@@ -362,9 +367,11 @@ HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
               --data "$(jq -n \
                         --arg token "$TOKEN" \
                         --arg machineId "$MACHINE_ID" \
+						--arg cpu "$CPU_CORES" \
+						--arg memory "$MEMORY" \
                         --arg providerName "ec2" \
                         --arg poolName "$POOL_NAME" \
-                        '{token: $token, machine_id: $machineId, provider_name: $providerName, pool_name: $poolName}')" \
+                        '{token: $token, machine_id: $machineId, cpu: $cpu, memory: $memory, provider_name: $providerName, pool_name: $poolName}')" \
               "http://$GATEWAY_HOST/api/v1/machine/register")
 
 if [ $HTTP_STATUS -eq 200 ]; then

@@ -3,6 +3,7 @@ package types
 import (
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"time"
 
 	pb "github.com/beam-cloud/beta9/proto"
@@ -21,6 +22,7 @@ const (
 	TokenTypeClusterAdmin string = "admin"
 	TokenTypeWorkspace    string = "workspace"
 	TokenTypeWorker       string = "worker"
+	TokenTypeMachine      string = "machine"
 )
 
 type Token struct {
@@ -164,11 +166,21 @@ const (
 	StubTypeEndpointServe       string = "endpoint/serve"
 )
 
+type StubType string
+
+func (t StubType) IsServe() bool {
+	return strings.HasSuffix(string(t), "/serve")
+}
+
+func (t StubType) IsDeployment() bool {
+	return strings.HasSuffix(string(t), "/deployment")
+}
+
 type Stub struct {
 	Id            uint      `db:"id" json:"id"`
 	ExternalId    string    `db:"external_id" json:"external_id"`
 	Name          string    `db:"name" json:"name"`
-	Type          string    `db:"type" json:"type"`
+	Type          StubType  `db:"type" json:"type"`
 	Config        string    `db:"config" json:"config"`
 	ConfigVersion uint      `db:"config_version" json:"config_version"`
 	ObjectId      uint      `db:"object_id" json:"object_id"`       // Foreign key to Object

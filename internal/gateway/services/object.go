@@ -39,7 +39,6 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 
 func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectRequest) (*pb.PutObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
 	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
 	os.MkdirAll(objectPath, 0644)
 

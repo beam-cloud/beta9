@@ -56,6 +56,12 @@ func TestParseMemory(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "valid memory not units",
+			memory:  "200",
+			want:    200,
+			wantErr: false,
+		},
+		{
 			name:    "valid memory Gi",
 			memory:  "2Gi",
 			want:    2048,
