@@ -9,10 +9,10 @@
 
 <p align="center">
   <a href="https://docs.beta9.beam.cloud">
-    <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-blue">
+    <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-purple">
   </a>
   <a href="https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g">
-    <img alt="Join Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-blue?logo=slack">
+    <img alt="Join Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-orange?logo=slack">
   </a>
     <a href="https://twitter.com/beam_cloud">
     <img alt="Twitter" src="https://img.shields.io/twitter/follow/beam_cloud.svg?style=social&logo=twitter">
