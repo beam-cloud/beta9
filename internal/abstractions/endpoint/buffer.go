@@ -304,6 +304,12 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
+	for key, values := range resp.Header {
+		for _, value := range values {
+			req.ctx.Response().Writer.Header().Add(key, value)
+		}
+	}
+
 	req.ctx.Response().Writer.WriteHeader(resp.StatusCode)
 	req.ctx.Response().Writer.Write(bytes)
 }
