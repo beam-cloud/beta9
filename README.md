@@ -96,8 +96,9 @@ curl -X POST 'https://app.beam.cloud/endpoint/llm-inference/v1' \
 ```python
 from beta9 import function
 
-
-@function(cpu=1, memory=128) # This decorator allows you to parallelize this function across multiple remote containers
+# This decorator allows you to parallelize this function
+# across multiple remote containers
+@function(cpu=1, memory=128)
 def square(i: int):
     return i**2
 
