@@ -20,7 +20,6 @@
    <a href="https://github.com/beam-cloud/beta9/actions">
      <img alt="Tests Passing" src="https://github.com/beam-cloud/beta9/actions/workflows/test.yml/badge.svg">
    </a>
-   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-ff69b4"/>
 </p>
 
 ---
@@ -128,10 +127,6 @@ Beta9 旨在快速啟動遠端無伺服器容器。 有幾件事使這一切成�
 Beam 是設定 Kubernetes 叢集或啟動雲端虛擬機器的替代方案。
 
 Beam 為您提供了在雲端 GPU 上運行程式碼、在 API 後面公開程式碼以及在應用程式上快速迭代所需的所有工具。
-
-## 開源與付費
-
-此儲存庫可在 Apache 許可證下使用。 如果您想使用雲端託管版本，可以造訪我們的[定價頁面](https://beam.cloud/pricing)。
 
 ## 社區與支持
 

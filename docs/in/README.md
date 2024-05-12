@@ -20,7 +20,6 @@
   <a href="https://github.com/beam-cloud/beta9/actions">
     <img alt="Tests Passing" src="https://github.com/beam-cloud/beta9/actions/workflows/test.yml/badge.svg">
   </a>
-  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-ff69b4"/>
 </p>
 
 ---

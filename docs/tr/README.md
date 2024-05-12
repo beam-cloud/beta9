@@ -20,7 +20,6 @@
   <a href="https://github.com/beam-cloud/beta9/actions">
     <img alt="Tests Passing" src="https://github.com/beam-cloud/beta9/actions/workflows/test.yml/badge.svg">
   </a>
-  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-ff69b4"/>
 </p>
 
 ---
@@ -128,10 +127,6 @@ Bizim görüşümüze göre mevcut bulut sağlayıcıları, geliştiricilerin h�
 Beam, bir Kubernetes kümesi kurmanın veya bir bulut sanal makinesini çalıştırmanın alternatifidir.
 
 Beam, bulut GPU'larda kod çalıştırmak, bu kodu bir API'nin arkasında kullanıma sunmak ve uygulamanızda hızlı bir şekilde yineleme yapmak için ihtiyacınız olan tüm araçları sağlar.
-
-## Açık kaynak ve ücretli
-
-Bu repo Apache lisansı altında mevcuttur. Bulutta barındırılan sürümü kullanmak istiyorsanız [fiyatlandırma sayfamızı](https://beam.cloud/pricing) ziyaret edebilirsiniz.
 
 ## Topluluk ve Destek
 

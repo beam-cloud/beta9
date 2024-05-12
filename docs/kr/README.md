@@ -20,7 +20,6 @@
   <a href="https://github.com/beam-cloud/beta9/actions">
     <img alt="Tests Passing" src="https://github.com/beam-cloud/beta9/actions/workflows/test.yml/badge.svg">
   </a>
-  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-ff69b4"/>
 </p>
 
 ---
@@ -128,10 +127,6 @@ Beta9은 원격 서버리스 컨테이너를 매우 빠르게 시작하도록 �
 Beam은 Kubernetes 클러스터를 설정하거나 클라우드 VM을 가동하는 대신 사용할 수 있습니다.
 
 Beam은 클라우드 GPU에서 코드를 실행하고, API 뒤에 해당 코드를 노출하고, 앱에서 빠르게 반복하는 데 필요한 모든 도구를 제공합니다.
-
-## 오픈소스 vs. 유료
-
-이 저장소는 Apache 라이센스에 따라 사용할 수 있습니다. 클라우드 호스팅 버전을 사용하려면 [가격 페이지](https://beam.cloud/pricing)를 방문하세요.
 
 ## 커뮤니티 및 지원
 
