@@ -137,7 +137,7 @@ multiply.put(x=10)
 
 Beta9 is designed for launching remote serverless containers quickly. There are a few things that make this possible:
 
-- A custom, lazy loading image format (CLIP) backed by S3/FUSE
+- A custom, lazy loading image format ([CLIP](https://github.com/beam-cloud/clip)) backed by S3/FUSE
 - A fast, redis-based container scheduling engine
 - Content-addressed storage for caching images and files
 - A custom runc container runtime
