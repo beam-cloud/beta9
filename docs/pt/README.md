@@ -20,7 +20,6 @@
   <a href="https://github.com/beam-cloud/beta9/actions">
     <img alt="Tests Passing" src="https://github.com/beam-cloud/beta9/actions/workflows/test.yml/badge.svg">
   </a>
-  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-ff69b4"/>
 </p>
 
 ---
@@ -128,10 +127,6 @@ Em nossa opinião, os provedores de nuvem existentes fornecem ferramentas que s�
 O Beam é a alternativa para configurar um cluster Kubernetes ou ativar uma VM na nuvem.
 
 O Beam oferece todas as ferramentas necessárias para executar código em GPUs em nuvem, expor esse código por trás de uma API e iterar rapidamente em seu aplicativo.
-
-## Código aberto vs. pago
-
-Este repositório está disponível sob a licença Apache. Se quiser usar a versão hospedada na nuvem, você pode visitar nossa [página de preços](https://beam.cloud/pricing).
 
 ## Suporte da comunidade
 
