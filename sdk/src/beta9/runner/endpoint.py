@@ -175,7 +175,7 @@ class EndpointManager:
         except BaseException:
             self.logger.exception("Response serialization failed")
             return JSONResponse(
-                {"errors": [traceback.format_exc()]},
+                {"error": traceback.format_exc()},
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 
