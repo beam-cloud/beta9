@@ -38,7 +38,7 @@ Features:
 
 - Scale out workloads to thousands of GPU (or CPU) containers
 - Ultrafast cold-start for custom ML models
-- Automatic scaling up and down to zero
+- Automatic scale to zero so you pay for only what you use
 - Flexible distributed storage for storing models and function outputs
 - Distribute workloads across multiple cloud providers
 - Easily deploy task queues and functions using simple Python abstractions
@@ -97,7 +97,7 @@ curl -X POST 'https://app.beam.cloud/endpoint/llm-inference/v1' \
 from beta9 import function
 
 
-@function()
+@function(cpu=1, memory=128) # This decorator allows you to parallelize this function across multiple remote containers
 def square(i: int):
     return i**2
 
