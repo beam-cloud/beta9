@@ -209,7 +209,6 @@
 				"rbind",
 				"rprivate",
 				"nosuid",
-				"noexec",
 				"nodev"
 			]
 		},
@@ -222,7 +221,6 @@
 				"rbind",
 				"rprivate",
 				"nosuid",
-				"noexec",
 				"nodev"
 			]
 		},
@@ -235,7 +233,6 @@
 				"rbind",
 				"rprivate",
 				"nosuid",
-				"noexec",
 				"nodev"
 			]
 		},
@@ -248,7 +245,6 @@
 				"rbind",
 				"rprivate",
 				"nosuid",
-				"noexec",
 				"nodev"
 			]
 		},
@@ -261,7 +257,6 @@
 				"rbind",
 				"rprivate",
 				"nosuid",
-				"noexec",
 				"nodev"
 			]
 		},
@@ -274,7 +269,6 @@
 				"rbind",
 				"rprivate",
 				"nosuid",
-				"noexec",
 				"nodev"
 			]
 		},
@@ -287,7 +281,6 @@
 				"rbind",
 				"rprivate",
 				"nosuid",
-				"noexec",
 				"nodev"
 			]
 		},
@@ -300,7 +293,6 @@
 				"rbind",
 				"rprivate",
 				"nosuid",
-				"noexec",
 				"nodev"
 			]
 		},
@@ -313,7 +305,6 @@
 				"rbind",
 				"rprivate",
 				"nosuid",
-				"noexec",
 				"nodev"
 			]
 		},
@@ -326,7 +317,6 @@
 				"rbind",
 				"rprivate",
 				"nosuid",
-				"noexec",
 				"nodev"
 			]
 		}
