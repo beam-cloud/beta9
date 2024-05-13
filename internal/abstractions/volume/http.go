@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 
 	"github.com/beam-cloud/beta9/internal/auth"
 	"github.com/labstack/echo/v4"
@@ -89,6 +90,10 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 	volumePath := ctx.Param("volumePath*")
 	stream := ctx.Request().Body
 	ch := make(chan CopyPathContent)
+	decodedVolumePath, err := url.QueryUnescape(volumePath)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
+	}
 
 	go func() {
 		defer close(ch)
@@ -101,7 +106,7 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 			}
 
 			ch <- CopyPathContent{
-				Path:    volumePath,
+				Path:    decodedVolumePath,
 				Content: buf[:n],
 			}
 		}
@@ -132,9 +137,14 @@ func (g *volumeGroup) DownloadFile(ctx echo.Context) error {
 	}
 
 	volumePath := ctx.Param("volumePath*")
+	decodedVolumePath, err := url.QueryUnescape(volumePath)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
+	}
+
 	if f, err := g.gvs.getFileFd(
 		ctx.Request().Context(),
-		volumePath,
+		decodedVolumePath,
 		&workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to download file %v", err))
@@ -156,9 +166,14 @@ func (g *volumeGroup) Ls(ctx echo.Context) error {
 	}
 
 	volumePath := ctx.Param("volumePath*")
+	decodedVolumePath, err := url.QueryUnescape(volumePath)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
+	}
+
 	if paths, err := g.gvs.listPath(
 		ctx.Request().Context(),
-		volumePath,
+		decodedVolumePath,
 		&workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to list path: %v", err))
@@ -180,9 +195,14 @@ func (g *volumeGroup) Rm(ctx echo.Context) error {
 	}
 
 	volumePath := ctx.Param("volumePath*")
+	decodedVolumePath, err := url.QueryUnescape(volumePath)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
+	}
+
 	if _, err := g.gvs.deletePath(
 		ctx.Request().Context(),
-		volumePath,
+		decodedVolumePath,
 		&workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete path")
