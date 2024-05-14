@@ -57,7 +57,7 @@ controllers:
         - |
           until nc -z redis-master.beta9 6379; do echo "Waiting on Redis..."; sleep 2; done;
           echo "All systems ready!"
-  
+
 persistence:
   images:
     enabled: true

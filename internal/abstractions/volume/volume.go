@@ -3,7 +3,6 @@ package volume
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -144,11 +143,8 @@ func (vs *GlobalVolumeService) CopyPathStream(stream pb.VolumeService_CopyPathSt
 
 		for {
 			request, err := stream.Recv()
-			if err == io.EOF {
-				break
-			}
 			if err != nil {
-				break
+				return
 			}
 
 			ch <- CopyPathContent{

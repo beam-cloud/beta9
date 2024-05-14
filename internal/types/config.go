@@ -75,11 +75,12 @@ type CORSConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host           string     `key:"host" json:"host"`
-	GRPCPort       int        `key:"grpcPort" json:"grpc_port"`
-	MaxRecvMsgSize int        `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
-	MaxSendMsgSize int        `key:"maxSendMsgSize" json:"max_send_msg_size"`
-	HTTP           HTTPConfig `key:"http" json:"http"`
+	Host            string        `key:"host" json:"host"`
+	GRPCPort        int           `key:"grpcPort" json:"grpc_port"`
+	MaxRecvMsgSize  int           `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
+	MaxSendMsgSize  int           `key:"maxSendMsgSize" json:"max_send_msg_size"`
+	HTTP            HTTPConfig    `key:"http" json:"http"`
+	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
 }
 
 type ImageServiceConfig struct {
@@ -270,6 +271,7 @@ type TailscaleConfig struct {
 }
 
 type ProxyConfig struct {
+	HTTPPort int               `key:"httpPort" json:"http_port"`
 	Services []InternalService `key:"services" json:"services"`
 }
 
