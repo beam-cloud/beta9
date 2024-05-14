@@ -30,6 +30,7 @@ gateway:
   grpcPort: 1993
   maxRecvMsgSize: 1024
   maxSendMsgSize: 1024
+  shutdownTimeout: 180s
   http:
     port: 1994
     enablePrettyLogs: true
@@ -131,6 +132,7 @@ tailscale:
   debug: false
   hostName: headscale.internal
 proxy:
+  httpPort: 1989
   services:
   - name: redis
     localPort: 6379

@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -198,6 +199,10 @@ func (s *Worker) Run() error {
 
 	go s.manageWorkerCapacity()
 	go s.processStopContainerEvents()
+	defer func() {
+		close(s.completedRequests)
+		close(s.stopContainerChan)
+	}()
 
 	lastContainerRequest := time.Now()
 	for {
@@ -239,7 +244,6 @@ func (s *Worker) Run() error {
 		time.Sleep(requestProcessingInterval)
 	}
 
-	log.Println("Shutting down...")
 	return s.shutdown()
 }
 
@@ -779,28 +783,32 @@ func (s *Worker) startup() error {
 }
 
 func (s *Worker) shutdown() error {
-	log.Printf("Worker spinning down.")
+	log.Println("Shutting down...")
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
+
+	var errs error
 
 	worker, err := s.workerRepo.GetWorkerById(s.workerId)
 	if err != nil {
-		return err
+		errs = errors.Join(errs, err)
 	}
-
-	s.cancel()
 
 	err = s.workerRepo.RemoveWorker(worker)
 	if err != nil {
-		return err
+		errs = errors.Join(errs, err)
 	}
+
+	s.cancel()
 
 	err = s.storage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
-		log.Printf("Failed to unmount storage: %v\n", err)
+		errs = errors.Join(errs, fmt.Errorf("failed to unmount storage: %v", err))
 	}
 
-	os.RemoveAll(s.imageMountPath)
+	err = os.RemoveAll(s.imageMountPath)
+	if err != nil {
+		errs = errors.Join(errs, err)
+	}
 
-	s.cancel()
-	return nil
+	return errs
 }

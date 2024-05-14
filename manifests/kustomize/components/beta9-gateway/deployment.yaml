@@ -22,6 +22,7 @@ spec:
         app.kubernetes.io/name: beta9
     spec:
       automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 185
       initContainers:
       - name: wait-on-backends
         image: busybox
@@ -81,6 +82,8 @@ metadata:
   namespace: beta9
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: beta9-proxy
@@ -89,6 +92,16 @@ spec:
       labels:
         app: beta9-proxy
     spec:
+      terminationGracePeriodSeconds: 185
+      initContainers:
+      - name: wait-on-backends
+        image: busybox
+        command:
+        - sh
+        - -c
+        - |
+          until nc -z redis-master.beta9 6379; do echo "Waiting on Redis..."; sleep 2; done;
+          echo "All systems ready!"
       containers:
       - name: proxy
         image: registry.localhost:5000/beta9-proxy:latest
@@ -96,6 +109,14 @@ spec:
         - /usr/local/bin/proxy
         securityContext:
           privileged: true
+        readinessProbe:
+          failureThreshold: 3
+          initialDelaySeconds: 3
+          periodSeconds: 3
+          timeoutSeconds: 2
+          httpGet:
+            path: /ready
+            port: 1989
         resources:
           requests:
             cpu: 1000m

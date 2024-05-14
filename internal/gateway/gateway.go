@@ -12,7 +12,6 @@ import (
 
 	"github.com/beam-cloud/beta9/internal/abstractions/endpoint"
 	"github.com/beam-cloud/beta9/internal/task"
-
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"google.golang.org/grpc"
@@ -304,10 +303,7 @@ func (g *Gateway) registerServices() error {
 
 // Gateway entry point
 func (g *Gateway) Start() error {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", g.Config.GatewayService.GRPCPort))
-	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
-	}
+	var err error
 
 	err = g.initGrpc()
 	if err != nil {
@@ -325,14 +321,23 @@ func (g *Gateway) Start() error {
 	}
 
 	go func() {
-		err := g.grpcServer.Serve(listener)
+		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", g.Config.GatewayService.GRPCPort))
 		if err != nil {
-			log.Printf("Failed to start grpc server: %v\n", err)
+			log.Fatalf("Failed to listen: %v", err)
+		}
+
+		if g.grpcServer.Serve(lis); err != nil {
+			log.Fatalf("Failed to start grpc server: %v\n", err)
 		}
 	}()
 
 	go func() {
-		if err := g.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", g.Config.GatewayService.HTTP.Port))
+		if err != nil {
+			log.Fatalf("Failed to listen: %v", err)
+		}
+
+		if err := g.httpServer.Serve(lis); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start http server: %v", err)
 		}
 	}()
@@ -347,6 +352,12 @@ func (g *Gateway) Start() error {
 
 	<-terminationSignal
 	log.Println("Termination signal received. Shutting down...")
+
+	ctx, cancel := context.WithTimeout(g.ctx, g.Config.GatewayService.ShutdownTimeout)
+	defer cancel()
+	g.httpServer.Shutdown(ctx)
+	g.grpcServer.GracefulStop()
+	g.cancelFunc()
 
 	return nil
 }

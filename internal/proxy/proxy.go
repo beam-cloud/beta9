@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -24,6 +25,8 @@ type Proxy struct {
 	tailscale     *network.Tailscale
 	services      []types.InternalService
 	tailscaleRepo repository.TailscaleRepository
+	activeConns   sync.WaitGroup
+	httpServer    *http.Server
 }
 
 func NewProxy() (*Proxy, error) {
@@ -33,7 +36,7 @@ func NewProxy() (*Proxy, error) {
 	}
 	config := configManager.GetConfig()
 
-	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Gateway"))
+	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Proxy"))
 	if err != nil {
 		return nil, err
 	}
@@ -52,11 +55,23 @@ func NewProxy() (*Proxy, error) {
 		)
 	}
 
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+	httpServer := &http.Server{Handler: mux}
+
 	return &Proxy{
 		config:        config,
 		services:      config.Proxy.Services,
 		tailscale:     tailscale,
 		tailscaleRepo: tailscaleRepo,
+		httpServer:    httpServer,
 	}, nil
 }
 
@@ -95,8 +110,13 @@ func (p *Proxy) Start() error {
 		p.startServiceProxy(service, listener, serviceId)
 	}
 
+	go p.startHttpServer()
+
 	<-terminationSignal
 	log.Println("Termination signal received. Shutting down...")
+
+	p.shutdown()
+
 	return nil
 }
 
@@ -138,6 +158,9 @@ func (p *Proxy) handleConnection(src net.Conn, destination string) {
 		return
 	}
 
+	p.activeConns.Add(1)
+	defer p.activeConns.Done()
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -156,4 +179,21 @@ func (p *Proxy) handleConnection(src net.Conn, destination string) {
 	}()
 
 	wg.Wait()
+}
+
+func (p *Proxy) startHttpServer() {
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", p.config.Proxy.HTTPPort))
+	if err != nil {
+		log.Fatalf("Failed to listen: %v", err)
+	}
+
+	if err := p.httpServer.Serve(lis); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("Failed to start http server: %v", err)
+	}
+}
+
+func (p *Proxy) shutdown() {
+	p.httpServer.Shutdown(context.Background())
+	log.Println("Waiting on active connections to finish ...")
+	p.activeConns.Wait()
 }
