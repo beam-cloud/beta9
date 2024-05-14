@@ -788,19 +788,18 @@ func (s *Worker) shutdown() error {
 
 	var errs error
 
-	worker, err := s.workerRepo.GetWorkerById(s.workerId)
-	if err != nil {
+	if worker, err := s.workerRepo.GetWorkerById(s.workerId); err != nil {
 		errs = errors.Join(errs, err)
-	}
-
-	err = s.workerRepo.RemoveWorker(worker)
-	if err != nil {
-		errs = errors.Join(errs, err)
+	} else if worker != nil {
+		err = s.workerRepo.RemoveWorker(worker)
+		if err != nil {
+			errs = errors.Join(errs, err)
+		}
 	}
 
 	s.cancel()
 
-	err = s.storage.Unmount(s.config.Storage.FilesystemPath)
+	err := s.storage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to unmount storage: %v", err))
 	}
