@@ -3,10 +3,9 @@ package apiv1
 import (
 	"net/http"
 
-	"github.com/apex/log"
-	"github.com/beam-cloud/beta9/internal/auth"
-	"github.com/beam-cloud/beta9/internal/repository"
-	"github.com/beam-cloud/beta9/internal/types"
+	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
 
@@ -50,8 +49,6 @@ func (c *ContainerGroup) ListContainersByWorkspaceId(ctx echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get containers")
 	}
-
-	log.Infof("container states: %v", containerStates)
 
 	return ctx.JSON(http.StatusOK, containerStates)
 }

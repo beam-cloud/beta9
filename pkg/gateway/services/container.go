@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/beam-cloud/beta9/internal/auth"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
