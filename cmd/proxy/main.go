@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/beam-cloud/beta9/internal/proxy"
+	"github.com/beam-cloud/beta9/pkg/proxy"
 )
 
 func main() {

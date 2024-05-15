@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/beam-cloud/beta9/internal/gateway"
+	"github.com/beam-cloud/beta9/pkg/gateway"
 )
 
 func main() {
