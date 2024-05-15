@@ -5,19 +5,20 @@ import (
 )
 
 var (
-	schedulerPrefix            string = "scheduler:"
-	schedulerContainerRequests string = "scheduler:container_requests"
-	schedulerWorkerLock        string = "scheduler:worker:lock:%s"
-	schedulerWorkerRequests    string = "scheduler:worker:requests:%s"
-	schedulerWorkerIndex       string = "scheduler:worker:worker_index"
-	schedulerWorkerState       string = "scheduler:worker:state:%s"
-	schedulerContainerConfig   string = "scheduler:container:config:%s"
-	schedulerContainerState    string = "scheduler:container:state:%s"
-	schedulerContainerAddress  string = "scheduler:container:container_addr:%s"
-	schedulerContainerIndex    string = "scheduler:container:index:%s"
-	schedulerWorkerAddress     string = "scheduler:container:worker_addr:%s"
-	schedulerContainerLock     string = "scheduler:container:lock:%s"
-	schedulerContainerExitCode string = "scheduler:container:exit_code:%s"
+	schedulerPrefix                  string = "scheduler:"
+	schedulerContainerRequests       string = "scheduler:container_requests"
+	schedulerWorkerLock              string = "scheduler:worker:lock:%s"
+	schedulerWorkerRequests          string = "scheduler:worker:requests:%s"
+	schedulerWorkerIndex             string = "scheduler:worker:worker_index"
+	schedulerWorkerState             string = "scheduler:worker:state:%s"
+	schedulerContainerConfig         string = "scheduler:container:config:%s"
+	schedulerContainerState          string = "scheduler:container:state:%s"
+	schedulerContainerAddress        string = "scheduler:container:container_addr:%s"
+	schedulerContainerIndex          string = "scheduler:container:index:%s"
+	schedulerContainerWorkspaceIndex string = "scheduler:container:workspace:index:%s"
+	schedulerWorkerAddress           string = "scheduler:container:worker_addr:%s"
+	schedulerContainerLock           string = "scheduler:container:lock:%s"
+	schedulerContainerExitCode       string = "scheduler:container:exit_code:%s"
 )
 
 var (
@@ -115,6 +116,10 @@ func (rk *redisKeys) SchedulerContainerConfig(containerId string) string {
 
 func (rk *redisKeys) SchedulerContainerIndex(stubId string) string {
 	return fmt.Sprintf(schedulerContainerIndex, stubId)
+}
+
+func (rk *redisKeys) SchedulerContainerWorkspaceIndex(workspaceId string) string {
+	return fmt.Sprintf(schedulerContainerWorkspaceIndex, workspaceId)
 }
 
 func (rk *redisKeys) SchedulerContainerAddress(containerId string) string {

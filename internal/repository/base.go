@@ -42,6 +42,7 @@ type ContainerRepository interface {
 	SetWorkerAddress(containerId string, addr string) error
 	GetWorkerAddress(containerId string) (string, error)
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
+	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	GetFailedContainerCountByStubId(stubId string) (int, error)
 }
 

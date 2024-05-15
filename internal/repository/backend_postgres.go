@@ -16,7 +16,6 @@ import (
 	"github.com/beam-cloud/beta9/internal/types"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
-	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
 )
@@ -885,14 +884,33 @@ func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, worksp
 	return &deployment, nil
 }
 
+func (c *PostgresBackendRepository) listStubsQueryBuilder(filters types.StubFilter) squirrel.SelectBuilder {
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+		"s.*",
+		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
+	).From("stub s").
+		Join("workspace w ON d.workspace_id = w.id")
+
+	// Apply filters
+	qb = qb.Where(squirrel.Eq{"s.workspace_id": filters.WorkspaceID})
+
+	if len(filters.StubIds) > 0 {
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
+	}
+
+	return qb
+}
+
 func (c *PostgresBackendRepository) ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error) {
-	query := `
-		SELECT s.*, w.external_id AS "workspace.external_id", w.name AS "workspace.name"
-		FROM stub s
-		JOIN workspace w ON s.workspace_id = w.id
-		WHERE s.external_id = ANY($1);`
+	qb := c.listStubsQueryBuilder(filters)
+
+	sql, args, err := qb.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
 	var stubs []types.StubWithRelated
-	err := c.client.SelectContext(ctx, &stubs, query, pq.Array(filters.StubIds))
+	err = c.client.SelectContext(ctx, &stubs, sql, args...)
 	if err != nil {
 		return nil, err
 	}
