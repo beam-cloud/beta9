@@ -276,7 +276,7 @@ message ListPoolsResponse {
 message Machine {}
 
 message ListMachinesRequest {
-  map<string, StringList> filters = 1;
+  string pool_name = 1;
   uint32 limit = 2;
 }
 

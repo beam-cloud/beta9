@@ -13,19 +13,31 @@ type GatewayService struct {
 	appConfig      types.AppConfig
 	backendRepo    repository.BackendRepository
 	containerRepo  repository.ContainerRepository
+	providerRepo   repository.ProviderRepository
 	scheduler      *scheduler.Scheduler
 	taskDispatcher *task.Dispatcher
 	redisClient    *common.RedisClient
 	pb.UnimplementedGatewayServiceServer
 }
 
-func NewGatewayService(appConfig types.AppConfig, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, scheduler *scheduler.Scheduler, taskDispatcher *task.Dispatcher, redisClient *common.RedisClient) (*GatewayService, error) {
+type GatewayServiceOpts struct {
+	Config         types.AppConfig
+	BackendRepo    repository.BackendRepository
+	ContainerRepo  repository.ContainerRepository
+	ProviderRepo   repository.ProviderRepository
+	Scheduler      *scheduler.Scheduler
+	TaskDispatcher *task.Dispatcher
+	RedisClient    *common.RedisClient
+}
+
+func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 	return &GatewayService{
-		appConfig:      appConfig,
-		backendRepo:    backendRepo,
-		containerRepo:  containerRepo,
-		scheduler:      scheduler,
-		taskDispatcher: taskDispatcher,
-		redisClient:    redisClient,
+		appConfig:      opts.Config,
+		backendRepo:    opts.BackendRepo,
+		containerRepo:  opts.ContainerRepo,
+		providerRepo:   opts.ProviderRepo,
+		scheduler:      opts.Scheduler,
+		taskDispatcher: opts.TaskDispatcher,
+		redisClient:    opts.RedisClient,
 	}, nil
 }

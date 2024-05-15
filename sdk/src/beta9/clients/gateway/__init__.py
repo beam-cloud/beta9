@@ -328,9 +328,7 @@ class Machine(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class ListMachinesRequest(betterproto.Message):
-    filters: Dict[str, "StringList"] = betterproto.map_field(
-        1, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
-    )
+    pool_name: str = betterproto.string_field(1)
     limit: int = betterproto.uint32_field(2)
 
 

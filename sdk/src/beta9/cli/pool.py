@@ -35,7 +35,7 @@ def management():
       {cli_name} pool list --limit 10
 
       # List pools and output in JSON format
-      {cli_name} deployment list --format json
+      {cli_name} pool list --format json
       \b
     """,
 )

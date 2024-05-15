@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"log"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -33,6 +34,8 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 			ErrMsg: "This action is not permitted",
 		}, nil
 	}
+
+	log.Println(gws.providerRepo.AddMachine("ec2", "mypool", "randomnewid", &types.ProviderMachineState{}))
 
 	return &pb.CreateMachineResponse{
 		Ok: true,

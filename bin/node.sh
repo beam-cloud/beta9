@@ -1,6 +1,6 @@
 #!/bin/bash
 
-INSTALL_K3S_VERSION="{{.K3sVersion}}"
+INSTALL_K3S_VERSION="v1.28.5+k3s1"
 PROVIDER_NAME=""
 MACHINE_ID="{{.MachineId}}"
 BETA9_TOKEN="{{.Beta9Token}}"
@@ -115,8 +115,8 @@ HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
               --data "$(jq -n \
                         --arg token "$TOKEN" \
                         --arg machineId "$MACHINE_ID" \
-						--arg cpu "$CPU_CORES" \
-						--arg memory "$MEMORY" \
+                        --arg cpu "$CPU_CORES" \
+                        --arg memory "$MEMORY" \
                         --arg providerName "$PROVIDER_NAME" \
                         --arg poolName "$POOL_NAME" \
                         '{token: $token, machine_id: $machineId, cpu: $cpu, memory: $memory, provider_name: $providerName, pool_name: $poolName}')" \
