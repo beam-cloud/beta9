@@ -20,7 +20,7 @@ WORKDIR /workspace
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all
 
-COPY ./internal/abstractions/image/base_requirements.txt /workspace/requirements.txt
+COPY ./pkg/abstractions/image/base_requirements.txt /workspace/requirements.txt
 
 RUN <<EOT
 set -eux
@@ -57,7 +57,7 @@ WORKDIR /workspace
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all
 
-COPY ./internal/abstractions/image/base_requirements.txt /workspace/requirements.txt
+COPY ./pkg/abstractions/image/base_requirements.txt /workspace/requirements.txt
 
 RUN <<EOT
 set -eux
@@ -94,7 +94,7 @@ WORKDIR /workspace
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all
 
-COPY ./internal/abstractions/image/base_requirements.txt /workspace/requirements.txt
+COPY ./pkg/abstractions/image/base_requirements.txt /workspace/requirements.txt
 
 RUN <<EOT
 set -eux
@@ -131,7 +131,7 @@ WORKDIR /workspace
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all
 
-COPY ./internal/abstractions/image/base_requirements.txt /workspace/requirements.txt
+COPY ./pkg/abstractions/image/base_requirements.txt /workspace/requirements.txt
 
 RUN <<EOT
 set -eux
@@ -168,7 +168,7 @@ WORKDIR /workspace
 ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all
 
-COPY ./internal/abstractions/image/base_requirements.txt /workspace/requirements.txt
+COPY ./pkg/abstractions/image/base_requirements.txt /workspace/requirements.txt
 
 RUN <<EOT
 set -eux
