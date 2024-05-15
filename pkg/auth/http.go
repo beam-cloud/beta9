@@ -1,9 +1,11 @@
 package auth
 
 import (
+	"net/http"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
 
@@ -32,5 +34,18 @@ func AuthMiddleware(backendRepo repository.BackendRepository) echo.MiddlewareFun
 			cc := &HttpAuthContext{c, authInfo}
 			return next(cc)
 		}
+	}
+}
+
+func WithWorkspaceAuth(callable func(ctx echo.Context) error) func(ctx echo.Context) error {
+	return func(ctx echo.Context) error {
+		workspaceId := ctx.Param("workspaceId")
+
+		cc, _ := ctx.(*HttpAuthContext)
+		if cc.AuthInfo.Workspace.ExternalId != workspaceId && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+			return echo.NewHTTPError(http.StatusUnauthorized)
+		}
+
+		return callable(ctx)
 	}
 }

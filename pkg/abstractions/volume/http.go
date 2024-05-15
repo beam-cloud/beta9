@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"net/url"
 
-	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/labstack/echo/v4"
 )
 
@@ -22,12 +22,12 @@ func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup 
 
 	g.GET("/:workspaceId", group.ListVolumes)
 
-	g.POST("/:workspaceId/create/:volumeName", apiv1.WithWorkspaceAuth(group.CreateVolume))
-	g.PUT("/:workspaceId/upload/:volumePath*", apiv1.WithWorkspaceAuth(group.UploadFile))
-	g.GET("/:workspaceId/download/:volumePath*", apiv1.WithWorkspaceAuth(group.DownloadFile))
-	g.GET("/:workspaceId/ls/:volumePath*", apiv1.WithWorkspaceAuth(group.Ls))
-	g.DELETE("/:workspaceId/rm/:volumePath*", apiv1.WithWorkspaceAuth(group.Rm))
-	g.PATCH("/:workspaceId/mv/:volumePath*", apiv1.WithWorkspaceAuth(group.Mv))
+	g.POST("/:workspaceId/create/:volumeName", auth.WithWorkspaceAuth(group.CreateVolume))
+	g.PUT("/:workspaceId/upload/:volumePath*", auth.WithWorkspaceAuth(group.UploadFile))
+	g.GET("/:workspaceId/download/:volumePath*", auth.WithWorkspaceAuth(group.DownloadFile))
+	g.GET("/:workspaceId/ls/:volumePath*", auth.WithWorkspaceAuth(group.Ls))
+	g.DELETE("/:workspaceId/rm/:volumePath*", auth.WithWorkspaceAuth(group.Rm))
+	g.PATCH("/:workspaceId/mv/:volumePath*", auth.WithWorkspaceAuth(group.Mv))
 
 	return group
 }

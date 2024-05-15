@@ -3,6 +3,7 @@ package apiv1
 import (
 	"net/http"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -20,7 +21,7 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 		config:      config,
 	}
 
-	g.GET("/:workspaceId", WithWorkspaceAuth(group.ListStubs))
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubs))
 
 	return group
 }

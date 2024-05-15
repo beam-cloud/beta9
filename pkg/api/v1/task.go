@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/task"
@@ -30,11 +31,11 @@ func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, backendRepo re
 		taskDispatcher: taskDispatcher,
 	}
 
-	g.GET("/:workspaceId", WithWorkspaceAuth(group.ListTasksPaginated))
-	g.GET("/:workspaceId/task-count-by-deployment", WithWorkspaceAuth(group.GetTaskCountByDeployment))
-	g.GET("/:workspaceId/aggregate-by-time-window", WithWorkspaceAuth(group.AggregateTasksByTimeWindow))
-	g.DELETE("/:workspaceId", WithWorkspaceAuth(group.StopTasks))
-	g.GET("/:workspaceId/:taskId", WithWorkspaceAuth(group.RetrieveTask))
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListTasksPaginated))
+	g.GET("/:workspaceId/task-count-by-deployment", auth.WithWorkspaceAuth(group.GetTaskCountByDeployment))
+	g.GET("/:workspaceId/aggregate-by-time-window", auth.WithWorkspaceAuth(group.AggregateTasksByTimeWindow))
+	g.DELETE("/:workspaceId", auth.WithWorkspaceAuth(group.StopTasks))
+	g.GET("/:workspaceId/:taskId", auth.WithWorkspaceAuth(group.RetrieveTask))
 
 	return group
 }
