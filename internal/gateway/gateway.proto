@@ -17,6 +17,9 @@ service GatewayService {
   rpc ReplaceObjectContent(stream ReplaceObjectContentRequest)
       returns (ReplaceObjectContentResponse) {}
 
+  // Containrs
+  rpc ListContainers(ListContainersRequest) returns (ListContainersResponse) {}
+
   // Tasks
   rpc StartTask(StartTaskRequest) returns (StartTaskResponse);
   rpc EndTask(EndTaskRequest) returns (EndTaskResponse);
@@ -98,6 +101,25 @@ message ReplaceObjectContentRequest {
 }
 
 message ReplaceObjectContentResponse { bool ok = 1; }
+
+// Container messages
+
+message Container {
+  string container_id = 1;
+  string stub_id = 2;
+  string status = 3;
+  google.protobuf.Timestamp scheduled_at = 4;
+  string workspace_id = 5;
+}
+
+message ListContainersRequest {
+}
+
+message ListContainersResponse {
+  repeated Container containers = 1;
+  bool ok = 2;
+  string error_msg = 3;
+}
 
 // Task messages
 message StartTaskRequest {

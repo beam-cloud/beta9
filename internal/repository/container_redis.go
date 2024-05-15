@@ -56,7 +56,14 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, info *
 	defer cr.lock.Release(common.RedisKeys.SchedulerContainerLock(containerId))
 
 	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
-	err = cr.rdb.HSet(context.TODO(), stateKey, "container_id", containerId, "status", string(info.Status), "scheduled_at", info.ScheduledAt).Err()
+	err = cr.rdb.HSet(
+		context.TODO(), stateKey,
+		"container_id", containerId,
+		"status", string(info.Status),
+		"scheduled_at", info.ScheduledAt,
+		"stub_id", info.StubId,
+		"workspace_id", info.WorkspaceId,
+	).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set container state <%v>: %w", stateKey, err)
 	}

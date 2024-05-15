@@ -98,7 +98,6 @@ class ImageServiceStub(betterproto.ServiceStub):
 
 
 class ImageServiceBase(ServiceBase):
-
     async def verify_image_build(
         self, verify_image_build_request: "VerifyImageBuildRequest"
     ) -> "VerifyImageBuildResponse":
