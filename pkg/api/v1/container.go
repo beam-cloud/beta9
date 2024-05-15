@@ -34,15 +34,11 @@ func NewContainerGroup(
 }
 
 func (c *ContainerGroup) ListContainersByWorkspaceId(ctx echo.Context) error {
-	_, err := c.authorize(ctx)
+	workspaceId := ctx.Param("workspaceId")
+
+	_, err := c.authorize(ctx, workspaceId)
 	if err != nil {
 		return err
-	}
-
-	workspaceId := ctx.Param("workspaceId")
-	_, err = c.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
 	containerStates, err := c.containerRepo.GetActiveContainersByWorkspaceId(workspaceId)
@@ -53,10 +49,11 @@ func (c *ContainerGroup) ListContainersByWorkspaceId(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, containerStates)
 }
 
-func (g *ContainerGroup) authorize(ctx echo.Context) (*auth.HttpAuthContext, error) {
+func (g *ContainerGroup) authorize(ctx echo.Context, workspaceId string) (*auth.HttpAuthContext, error) {
 	cc, _ := ctx.(*auth.HttpAuthContext)
-	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+	if cc.AuthInfo.Token.ExternalId != workspaceId {
 		return nil, echo.NewHTTPError(http.StatusUnauthorized)
 	}
+
 	return cc, nil
 }

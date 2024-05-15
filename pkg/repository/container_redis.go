@@ -80,7 +80,7 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, info *
 		return fmt.Errorf("failed to add container state key to index <%v>: %w", indexKey, err)
 	}
 
-	// Add another state key to workspace index (by stub id)
+	// Add container state key to index (by workspace id)
 	indexKey = common.RedisKeys.SchedulerContainerWorkspaceIndex(info.WorkspaceId)
 	err = cr.rdb.SAdd(context.TODO(), indexKey, stateKey).Err()
 	if err != nil {
@@ -215,7 +215,7 @@ func (cr *ContainerRedisRepository) GetWorkerAddress(containerId string) (string
 	}
 }
 
-func (cr *ContainerRedisRepository) listContainerKeysByIndexKeys(indexKey string, keys []string) ([]types.ContainerState, error) {
+func (cr *ContainerRedisRepository) listContainerStateByIndex(indexKey string, keys []string) ([]types.ContainerState, error) {
 	containerStates := make([]types.ContainerState, 0)
 
 	for _, key := range keys {

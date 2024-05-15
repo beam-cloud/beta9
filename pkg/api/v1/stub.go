@@ -1,7 +1,6 @@
 package apiv1
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -39,7 +38,6 @@ func (g *StubGroup) ListStubs(ctx echo.Context) error {
 	}
 
 	if stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), filters); err != nil {
-		log.Println(err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list stubs")
 	} else {
 		return ctx.JSON(http.StatusOK, stubs)
