@@ -3,7 +3,6 @@ package apiv1
 import (
 	"net/http"
 
-	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -28,32 +27,17 @@ func NewContainerGroup(
 		config:        config,
 	}
 
-	g.GET("/:workspaceId", group.ListContainersByWorkspaceId)
+	g.GET("/:workspaceId", WithWorkspaceAuth(group.ListContainersByWorkspaceId))
 
 	return group
 }
 
 func (c *ContainerGroup) ListContainersByWorkspaceId(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
-
-	_, err := c.authorize(ctx, workspaceId)
-	if err != nil {
-		return err
-	}
-
 	containerStates, err := c.containerRepo.GetActiveContainersByWorkspaceId(workspaceId)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get containers")
 	}
 
 	return ctx.JSON(http.StatusOK, containerStates)
-}
-
-func (g *ContainerGroup) authorize(ctx echo.Context, workspaceId string) (*auth.HttpAuthContext, error) {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	if cc.AuthInfo.Token.ExternalId != workspaceId {
-		return nil, echo.NewHTTPError(http.StatusUnauthorized)
-	}
-
-	return cc, nil
 }

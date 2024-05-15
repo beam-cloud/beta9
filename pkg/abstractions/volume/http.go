@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/beam-cloud/beta9/pkg/auth"
+	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/labstack/echo/v4"
 )
 
@@ -22,22 +22,17 @@ func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup 
 
 	g.GET("/:workspaceId", group.ListVolumes)
 
-	g.POST("/:workspaceId/create/:volumeName", group.CreateVolume)
-	g.PUT("/:workspaceId/upload/:volumePath*", group.UploadFile)
-	g.GET("/:workspaceId/download/:volumePath*", group.DownloadFile)
-	g.GET("/:workspaceId/ls/:volumePath*", group.Ls)
-	g.DELETE("/:workspaceId/rm/:volumePath*", group.Rm)
-	g.PATCH("/:workspaceId/mv/:volumePath*", group.Mv)
+	g.POST("/:workspaceId/create/:volumeName", apiv1.WithWorkspaceAuth(group.CreateVolume))
+	g.PUT("/:workspaceId/upload/:volumePath*", apiv1.WithWorkspaceAuth(group.UploadFile))
+	g.GET("/:workspaceId/download/:volumePath*", apiv1.WithWorkspaceAuth(group.DownloadFile))
+	g.GET("/:workspaceId/ls/:volumePath*", apiv1.WithWorkspaceAuth(group.Ls))
+	g.DELETE("/:workspaceId/rm/:volumePath*", apiv1.WithWorkspaceAuth(group.Rm))
+	g.PATCH("/:workspaceId/mv/:volumePath*", apiv1.WithWorkspaceAuth(group.Mv))
 
 	return group
 }
 
 func (g *volumeGroup) ListVolumes(ctx echo.Context) error {
-	_, err := g.authorize(ctx)
-	if err != nil {
-		return err
-	}
-
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
@@ -56,11 +51,6 @@ func (g *volumeGroup) DeleteVolume(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) CreateVolume(ctx echo.Context) error {
-	_, err := g.authorize(ctx)
-	if err != nil {
-		return err
-	}
-
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
@@ -76,11 +66,6 @@ func (g *volumeGroup) CreateVolume(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) UploadFile(ctx echo.Context) error {
-	_, err := g.authorize(ctx)
-	if err != nil {
-		return err
-	}
-
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
@@ -124,12 +109,6 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) DownloadFile(ctx echo.Context) error {
-
-	_, err := g.authorize(ctx)
-	if err != nil {
-		return err
-	}
-
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
@@ -154,11 +133,6 @@ func (g *volumeGroup) DownloadFile(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) Ls(ctx echo.Context) error {
-	_, err := g.authorize(ctx)
-	if err != nil {
-		return err
-	}
-
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
@@ -183,11 +157,6 @@ func (g *volumeGroup) Ls(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) Rm(ctx echo.Context) error {
-	_, err := g.authorize(ctx)
-	if err != nil {
-		return err
-	}
-
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
@@ -213,15 +182,4 @@ func (g *volumeGroup) Rm(ctx echo.Context) error {
 
 func (g *volumeGroup) Mv(ctx echo.Context) error {
 	return nil
-}
-
-func (g *volumeGroup) authorize(ctx echo.Context) (*auth.HttpAuthContext, error) {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-
-	// Verify that the current user can access the workspace
-	if cc.AuthInfo.Workspace.ExternalId != ctx.Param("workspaceId") {
-		return nil, echo.NewHTTPError(http.StatusUnauthorized)
-	}
-
-	return cc, nil
 }
