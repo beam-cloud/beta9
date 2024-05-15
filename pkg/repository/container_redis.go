@@ -264,7 +264,7 @@ func (cr *ContainerRedisRepository) GetActiveContainersByStubId(stubId string) (
 		return nil, fmt.Errorf("failed to retrieve container state keys: %v", err)
 	}
 
-	return cr.listContainerKeysByIndexKeys(indexKey, keys)
+	return cr.listContainerStateByIndex(indexKey, keys)
 }
 
 func (cr *ContainerRedisRepository) GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error) {
@@ -275,7 +275,7 @@ func (cr *ContainerRedisRepository) GetActiveContainersByWorkspaceId(workspaceId
 		return nil, fmt.Errorf("failed to retrieve container state keys: %v", err)
 	}
 
-	return cr.listContainerKeysByIndexKeys(indexKey, keys)
+	return cr.listContainerStateByIndex(indexKey, keys)
 }
 
 func (cr *ContainerRedisRepository) GetFailedContainerCountByStubId(stubId string) (int, error) {
