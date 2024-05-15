@@ -889,10 +889,12 @@ func (c *PostgresBackendRepository) listStubsQueryBuilder(filters types.StubFilt
 		"s.*",
 		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
 	).From("stub s").
-		Join("workspace w ON d.workspace_id = w.id")
+		Join("workspace w ON s.workspace_id = w.id")
 
 	// Apply filters
-	qb = qb.Where(squirrel.Eq{"s.workspace_id": filters.WorkspaceID})
+	if filters.WorkspaceID != "" {
+		qb = qb.Where(squirrel.Eq{"w.external_id": filters.WorkspaceID})
+	}
 
 	if len(filters.StubIds) > 0 {
 		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})

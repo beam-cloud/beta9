@@ -46,6 +46,6 @@ type TaskFilter struct {
 
 // Struct that includes the custom type
 type StubFilter struct {
-	WorkspaceID uint        `query:"workspace_id"`
+	WorkspaceID string      `query:"workspace_id"`
 	StubIds     StringSlice `query:"stub_ids"` // The query parameter name is "values"
 }
