@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/beam-cloud/beta9/internal/worker"
+	"github.com/beam-cloud/beta9/pkg/worker"
 )
 
 func main() {

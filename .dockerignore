@@ -1,6 +1,6 @@
 *
 !cmd
-!internal
+!pkg
 !proto
 !go.mod
 !go.sum
