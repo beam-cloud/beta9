@@ -5,7 +5,12 @@ from rich.table import Column, Table, box
 from .. import aio, terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
-from ..clients.gateway import ListMachinesRequest, ListMachinesResponse
+from ..clients.gateway import (
+    CreateMachineRequest,
+    CreateMachineResponse,
+    ListMachinesRequest,
+    ListMachinesResponse,
+)
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
@@ -84,3 +89,26 @@ def list_machines(
     table.add_section()
     table.add_row(f"[bold]{len(res.machines)} items")
     terminal.print(table)
+
+
+@management.command(
+    name="create",
+    help="Create a new machine.",
+    epilog="""
+      Examples:
+
+        {cli_name} machine create --pool ec2-t4
+        \b
+    """,
+)
+@click.option(
+    "--pool",
+    "-p",
+    help="The pool to select for the machine.",
+    required=True,
+)
+@extraclick.pass_service_client
+def create_machine(service: ServiceClient, pool: str):
+    res: CreateMachineResponse
+    res = aio.run_sync(service.gateway.create_machine(CreateMachineRequest(pool_name=pool)))
+    print(res)

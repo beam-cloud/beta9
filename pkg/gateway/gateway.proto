@@ -40,6 +40,7 @@ service GatewayService {
   // Machines
   rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse);
   rpc CreateMachine(CreateMachineRequest) returns (CreateMachineResponse);
+  rpc DeleteMachine(DeleteMachineRequest) returns (DeleteMachineResponse);
 }
 
 message AuthorizeRequest {}
@@ -286,10 +287,17 @@ message ListMachinesResponse {
   repeated Machine machines = 3;
 }
 
-message CreateMachineRequest {}
+message CreateMachineRequest { string pool_name = 1; }
 
 message CreateMachineResponse {
   bool ok = 1;
   string err_msg = 2;
   Machine machine = 3;
+}
+
+message DeleteMachineRequest { string machine_id = 1; }
+
+message DeleteMachineResponse {
+  bool ok = 1;
+  string err_msg = 2;
 }

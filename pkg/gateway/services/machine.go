@@ -35,6 +35,7 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 		}, nil
 	}
 
+	log.Println(gws.appConfig.Worker.Pools)
 	log.Println(gws.providerRepo.AddMachine("ec2", "mypool", "randomnewid", &types.ProviderMachineState{}))
 
 	return &pb.CreateMachineResponse{
