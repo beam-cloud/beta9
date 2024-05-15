@@ -68,7 +68,6 @@ class ContainerServiceStub(betterproto.ServiceStub):
 
 
 class ContainerServiceBase(ServiceBase):
-
     async def execute_command(
         self, command_execution_request: "CommandExecutionRequest"
     ) -> AsyncIterator["CommandExecutionResponse"]:

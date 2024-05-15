@@ -107,6 +107,27 @@ class ReplaceObjectContentResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class Container(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    stub_id: str = betterproto.string_field(2)
+    status: str = betterproto.string_field(3)
+    scheduled_at: datetime = betterproto.message_field(4)
+    workspace_id: str = betterproto.string_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class ListContainersRequest(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class ListContainersResponse(betterproto.Message):
+    containers: List["Container"] = betterproto.message_field(1)
+    ok: bool = betterproto.bool_field(2)
+    error_msg: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
 class StartTaskRequest(betterproto.Message):
     """Task messages"""
 
@@ -440,6 +461,23 @@ class GatewayServiceStub(betterproto.ServiceStub):
             metadata=metadata,
         )
 
+    async def list_containers(
+        self,
+        list_containers_request: "ListContainersRequest",
+        *,
+        timeout: Optional[float] = None,
+        deadline: Optional["Deadline"] = None,
+        metadata: Optional["MetadataLike"] = None
+    ) -> "ListContainersResponse":
+        return await self._unary_unary(
+            "/gateway.GatewayService/ListContainers",
+            list_containers_request,
+            ListContainersResponse,
+            timeout=timeout,
+            deadline=deadline,
+            metadata=metadata,
+        )
+
     async def start_task(
         self,
         start_task_request: "StartTaskRequest",
@@ -629,7 +667,6 @@ class GatewayServiceStub(betterproto.ServiceStub):
 
 
 class GatewayServiceBase(ServiceBase):
-
     async def authorize(
         self, authorize_request: "AuthorizeRequest"
     ) -> "AuthorizeResponse":
@@ -661,6 +698,11 @@ class GatewayServiceBase(ServiceBase):
             "ReplaceObjectContentRequest"
         ],
     ) -> "ReplaceObjectContentResponse":
+        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+
+    async def list_containers(
+        self, list_containers_request: "ListContainersRequest"
+    ) -> "ListContainersResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
     async def start_task(
@@ -757,6 +799,14 @@ class GatewayServiceBase(ServiceBase):
     ) -> None:
         request = stream.__aiter__()
         response = await self.replace_object_content(request)
+        await stream.send_message(response)
+
+    async def __rpc_list_containers(
+        self,
+        stream: "grpclib.server.Stream[ListContainersRequest, ListContainersResponse]",
+    ) -> None:
+        request = await stream.recv_message()
+        response = await self.list_containers(request)
         await stream.send_message(response)
 
     async def __rpc_start_task(
@@ -877,6 +927,12 @@ class GatewayServiceBase(ServiceBase):
                 grpclib.const.Cardinality.STREAM_UNARY,
                 ReplaceObjectContentRequest,
                 ReplaceObjectContentResponse,
+            ),
+            "/gateway.GatewayService/ListContainers": grpclib.const.Handler(
+                self.__rpc_list_containers,
+                grpclib.const.Cardinality.UNARY_UNARY,
+                ListContainersRequest,
+                ListContainersResponse,
             ),
             "/gateway.GatewayService/StartTask": grpclib.const.Handler(
                 self.__rpc_start_task,

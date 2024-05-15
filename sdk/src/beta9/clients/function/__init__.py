@@ -147,7 +147,6 @@ class FunctionServiceStub(betterproto.ServiceStub):
 
 
 class FunctionServiceBase(ServiceBase):
-
     async def function_invoke(
         self, function_invoke_request: "FunctionInvokeRequest"
     ) -> AsyncIterator["FunctionInvokeResponse"]:

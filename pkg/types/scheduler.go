@@ -54,6 +54,7 @@ type ContainerState struct {
 	StubId      string          `redis:"stub_id"`
 	Status      ContainerStatus `redis:"status"`
 	ScheduledAt int64           `redis:"scheduled_at"`
+	WorkspaceId string          `redis:"workspace_id"`
 }
 
 type ContainerRequest struct {

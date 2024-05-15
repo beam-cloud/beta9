@@ -56,7 +56,14 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, info *
 	defer cr.lock.Release(common.RedisKeys.SchedulerContainerLock(containerId))
 
 	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
-	err = cr.rdb.HSet(context.TODO(), stateKey, "container_id", containerId, "status", string(info.Status), "scheduled_at", info.ScheduledAt).Err()
+	err = cr.rdb.HSet(
+		context.TODO(), stateKey,
+		"container_id", containerId,
+		"status", string(info.Status),
+		"scheduled_at", info.ScheduledAt,
+		"stub_id", info.StubId,
+		"workspace_id", info.WorkspaceId,
+	).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set container state <%v>: %w", stateKey, err)
 	}
@@ -71,6 +78,13 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, info *
 	err = cr.rdb.SAdd(context.TODO(), indexKey, stateKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to add container state key to index <%v>: %w", indexKey, err)
+	}
+
+	// Add container state key to index (by workspace id)
+	indexKey = common.RedisKeys.SchedulerContainerWorkspaceIndex(info.WorkspaceId)
+	err = cr.rdb.SAdd(context.TODO(), indexKey, stateKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to add container state key to workspace index <%v>: %w", indexKey, err)
 	}
 
 	return nil
@@ -201,16 +215,9 @@ func (cr *ContainerRedisRepository) GetWorkerAddress(containerId string) (string
 	}
 }
 
-// GetActiveContainersByStubId gets active containers by stub ID.
-// stubId is the external ID.
-func (cr *ContainerRedisRepository) GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error) {
-	indexKey := common.RedisKeys.SchedulerContainerIndex(stubId)
-	keys, err := cr.rdb.SMembers(context.TODO(), indexKey).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve container state keys: %v", err)
-	}
+func (cr *ContainerRedisRepository) listContainerStateByIndex(indexKey string, keys []string) ([]types.ContainerState, error) {
+	containerStates := make([]types.ContainerState, 0)
 
-	var containerStates []types.ContainerState
 	for _, key := range keys {
 		exists, err := cr.rdb.Exists(context.TODO(), key).Result()
 		if err != nil {
@@ -248,6 +255,27 @@ func (cr *ContainerRedisRepository) GetActiveContainersByStubId(stubId string) (
 	}
 
 	return containerStates, nil
+}
+
+func (cr *ContainerRedisRepository) GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error) {
+	indexKey := common.RedisKeys.SchedulerContainerIndex(stubId)
+	keys, err := cr.rdb.SMembers(context.TODO(), indexKey).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve container state keys: %v", err)
+	}
+
+	return cr.listContainerStateByIndex(indexKey, keys)
+}
+
+func (cr *ContainerRedisRepository) GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error) {
+	indexKey := common.RedisKeys.SchedulerContainerWorkspaceIndex(workspaceId)
+	keys, err := cr.rdb.SMembers(context.TODO(), indexKey).Result()
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve container state keys: %v", err)
+	}
+
+	return cr.listContainerStateByIndex(indexKey, keys)
 }
 
 func (cr *ContainerRedisRepository) GetFailedContainerCountByStubId(stubId string) (int, error) {

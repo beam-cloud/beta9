@@ -167,7 +167,6 @@ class MapServiceStub(betterproto.ServiceStub):
 
 
 class MapServiceBase(ServiceBase):
-
     async def map_set(self, map_set_request: "MapSetRequest") -> "MapSetResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 

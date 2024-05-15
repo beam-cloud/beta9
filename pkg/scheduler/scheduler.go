@@ -100,6 +100,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		ContainerId: request.ContainerId,
 		StubId:      request.StubId,
 		Status:      types.ContainerStatusPending,
+		WorkspaceId: request.WorkspaceId,
 		ScheduledAt: time.Now().Unix(),
 	})
 	if err != nil {
