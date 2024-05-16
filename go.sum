@@ -96,6 +96,8 @@ github.com/beam-cloud/blobcache v0.0.0-20240512162245-f8b1aa1cad58 h1:b9Q6mxH5CM
 github.com/beam-cloud/blobcache v0.0.0-20240512162245-f8b1aa1cad58/go.mod h1:msZBPNo2uDlcvYA1+epdSRZVeN/89ML5BeiJy70bxjQ=
 github.com/beam-cloud/clip v0.0.0-20240418200512-cdc1e65d102a h1:/rk2XOxsca369nWjIeJaOkjpiqbjrOCrobjv5/4sj2I=
 github.com/beam-cloud/clip v0.0.0-20240418200512-cdc1e65d102a/go.mod h1:8jth5RLkwPUiLdqDNnajhMSqh/YIy37mhbvXhbqoTZc=
+github.com/beam-cloud/clip v0.0.0-20240516163541-45e3dd1b74df h1:gX4/QxYWVxM9BautIfWf1YFHsY3oVFLPvwLJmfSjNoQ=
+github.com/beam-cloud/clip v0.0.0-20240516163541-45e3dd1b74df/go.mod h1:fD+s/BBWbUDzbX772ydDsLXkvXKzt6y+mzdTVmsAd30=
 github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170 h1:KYVz18kobBGU8URM9Srn++2tcL9e0PcwYyH0Z4GYicM=
 github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
@@ -316,6 +318,7 @@ github.com/gorilla/websocket v1.5.1 h1:gmztn0JnHVt9JZquRuzLw3g4wouNVzKL15iLr/zn/
 github.com/gorilla/websocket v1.5.1/go.mod h1:x3kM2JMyaluk02fnUJpQuwD2dCS5NDG2ZHL0uE0tcaY=
 github.com/hanwen/go-fuse/v2 v2.3.0 h1:t5ivNIH2PK+zw4OBul/iJjsoG9K6kXo4nMDoBpciC8A=
 github.com/hanwen/go-fuse/v2 v2.3.0/go.mod h1:xKwi1cF7nXAOBCXujD5ie0ZKsxc8GGSA1rlMJc+8IJs=
+github.com/hanwen/go-fuse/v2 v2.5.1/go.mod h1:xKwi1cF7nXAOBCXujD5ie0ZKsxc8GGSA1rlMJc+8IJs=
 github.com/hdevalence/ed25519consensus v0.1.0 h1:jtBwzzcHuTmFrQN6xQZn6CQEO/V9f7HsjsjeEZ6auqU=
 github.com/hdevalence/ed25519consensus v0.1.0/go.mod h1:w3BHWjwJbFU29IRHL1Iqkw3sus+7FctEyM4RqDxYNzo=
 github.com/hpcloud/tail v1.0.0/go.mod h1:ab1qPbhIpdTxEkNHXyeSf5vhxWSCs/tWer42PpOxQnU=
