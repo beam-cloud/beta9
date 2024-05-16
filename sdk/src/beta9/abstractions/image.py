@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import List, NamedTuple, Optional, Tuple, Union
 
 from .. import terminal
@@ -57,8 +58,11 @@ class Image(BaseAbstraction):
         """
         super().__init__()
 
+        if isinstance(python_packages, str):
+            python_packages = self._load_requirements_file(python_packages)
+
         self.python_version = python_version
-        self.python_packages = python_packages
+        self.python_packages = self._sanitize_python_packages(python_packages)
         self.commands = commands
         self.base_image = base_image
         self.base_image_creds = None
@@ -69,6 +73,21 @@ class Image(BaseAbstraction):
         if not self._stub:
             self._stub = ImageServiceStub(self.channel)
         return self._stub
+
+    def _sanitize_python_packages(self, packages: List[str]) -> List[str]:
+        return [p.replace(" ", "") for p in packages]
+
+    def _load_requirements_file(self, path: str) -> List[str]:
+        requirements_file = Path(path)
+
+        if requirements_file.is_file():
+            with open(requirements_file, "r") as f:
+                contents = f.read()
+                lines = contents.split("\n")
+                lines = list(filter(lambda r: r != "", lines))
+                return lines
+        else:
+            raise FileNotFoundError
 
     def exists(self) -> Tuple[bool, ImageBuildResult]:
         r: VerifyImageBuildResponse = self.run_sync(
@@ -103,7 +122,8 @@ class Image(BaseAbstraction):
                     existing_image_uri=self.base_image,
                 )
             ):
-                terminal.detail(r.msg, end="")
+                if r.msg != "":
+                    terminal.detail(r.msg, end="")
 
                 if r.done:
                     last_response = r
