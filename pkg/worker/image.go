@@ -18,6 +18,7 @@ import (
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/beam-cloud/clip/pkg/storage"
+	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/moby/sys/mountinfo"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
@@ -61,19 +62,20 @@ func getImageMountPath(workerId string) string {
 }
 
 type ImageClient struct {
-	registry        *common.ImageRegistry
-	cacheClient     *CacheClient
-	imageCachePath  string
-	imageMountPath  string
-	imageBundlePath string
-	pullCommand     string
-	pDeathSignal    syscall.Signal
-	commandTimeout  int
-	debug           bool
-	creds           string
-	config          types.ImageServiceConfig
-	workerId        string
-	workerRepo      repository.WorkerRepository
+	registry           *common.ImageRegistry
+	cacheClient        *CacheClient
+	imageCachePath     string
+	imageMountPath     string
+	imageBundlePath    string
+	pullCommand        string
+	pDeathSignal       syscall.Signal
+	mountedFuseServers *common.SafeMap[*fuse.Server]
+	commandTimeout     int
+	debug              bool
+	creds              string
+	config             types.ImageServiceConfig
+	workerId           string
+	workerRepo         repository.WorkerRepository
 }
 
 func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
@@ -109,18 +111,19 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 	}
 
 	c := &ImageClient{
-		config:          config,
-		registry:        registry,
-		cacheClient:     cacheClient,
-		imageBundlePath: imageBundlePath,
-		imageCachePath:  getImageCachePath(),
-		imageMountPath:  getImageMountPath(workerId),
-		pullCommand:     imagePullCommand,
-		commandTimeout:  -1,
-		debug:           false,
-		creds:           "",
-		workerId:        workerId,
-		workerRepo:      workerRepo,
+		config:             config,
+		registry:           registry,
+		cacheClient:        cacheClient,
+		imageBundlePath:    imageBundlePath,
+		imageCachePath:     getImageCachePath(),
+		imageMountPath:     getImageMountPath(workerId),
+		pullCommand:        imagePullCommand,
+		commandTimeout:     -1,
+		debug:              false,
+		creds:              "",
+		workerId:           workerId,
+		workerRepo:         workerRepo,
+		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 	}
 
 	err = os.MkdirAll(c.imageBundlePath, os.ModePerm)
@@ -176,6 +179,12 @@ func (c *ImageClient) PullLazy(imageId string) error {
 		return nil
 	}
 
+	// Check if a fuse server exists for this imageId
+	_, mounted := c.mountedFuseServers.Get(imageId)
+	if mounted {
+		return nil
+	}
+
 	// Get lock on image mount
 	err = c.workerRepo.SetImagePullLock(c.workerId, imageId)
 	if err != nil {
@@ -183,7 +192,7 @@ func (c *ImageClient) PullLazy(imageId string) error {
 	}
 	defer c.workerRepo.RemoveImagePullLock(c.workerId, imageId)
 
-	startServer, _, err := clip.MountArchive(*mountOptions)
+	startServer, _, server, err := clip.MountArchive(*mountOptions)
 	if err != nil {
 		return err
 	}
@@ -192,6 +201,17 @@ func (c *ImageClient) PullLazy(imageId string) error {
 	if err != nil {
 		return err
 	}
+
+	c.mountedFuseServers.Set(imageId, server)
+	return nil
+}
+
+func (c *ImageClient) Cleanup() error {
+	c.mountedFuseServers.Range(func(imageId string, server *fuse.Server) bool {
+		log.Printf("Un-mounting image: %s\n", imageId)
+		server.Unmount()
+		return true // Continue iteration
+	})
 
 	return nil
 }

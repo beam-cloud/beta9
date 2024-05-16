@@ -429,6 +429,7 @@ func (s *Worker) terminateContainer(containerId string, request *types.Container
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, delay time.Duration, exitCode int) {
 	s.containerLock.Lock()
 
+	// De-allocate GPU devices so they are available for new containers
 	if request.Gpu != "" {
 		s.containerCudaManager.UnassignGpuDevices(containerId)
 	}
@@ -436,6 +437,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	s.completedRequests <- request
 	s.containerLock.Unlock()
 
+	// Set container exit code on instance
 	instance, exists := s.containerInstances.Get(containerId)
 	if exists {
 		instance.ExitCode = exitCode
@@ -802,6 +804,11 @@ func (s *Worker) shutdown() error {
 	err := s.storage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to unmount storage: %v", err))
+	}
+
+	err = s.imageClient.Cleanup()
+	if err != nil {
+		errs = errors.Join(errs, fmt.Errorf("failed to cleanup fuse mounts: %v", err))
 	}
 
 	err = os.RemoveAll(s.imageMountPath)
