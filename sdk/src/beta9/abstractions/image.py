@@ -87,7 +87,7 @@ class Image(BaseAbstraction):
                 lines = list(filter(lambda r: r != "", lines))
                 return lines
         else:
-            raise RuntimeError
+            raise FileNotFoundError
 
     def exists(self) -> Tuple[bool, ImageBuildResult]:
         r: VerifyImageBuildResponse = self.run_sync(
