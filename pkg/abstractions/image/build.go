@@ -107,6 +107,7 @@ type BaseImage struct {
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	packages := opts.PythonPackages
 	if opts.ExistingImageUri != "" {
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
@@ -117,7 +118,12 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	baseImageId, err := b.GetImageId(&BuildOpts{
 		BaseImageRegistry: opts.BaseImageRegistry,
 		BaseImageName:     opts.BaseImageName,
-		BaseImageTag:      opts.BaseImageTag})
+		BaseImageTag:      opts.BaseImageTag,
+		PythonVersion:     opts.PythonVersion,
+		PythonPackages:    packages,
+		Commands:          opts.Commands,
+		ExistingImageUri:  opts.ExistingImageUri,
+	})
 	if err != nil {
 		return err
 	}
@@ -164,8 +170,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	// TODO: replace placeholder service token
-	client, err := common.NewRunCClient(hostname, "", conn)
+	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
 	if err != nil {
 		return err
 	}
@@ -239,7 +244,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			return err
 		}
 	}
-
 	log.Printf("container <%v> build took %v\n", containerId, time.Since(startTime))
 
 	err = client.Archive(containerId, imageId)
@@ -274,11 +278,15 @@ func (b *Builder) extractPackageName(pkg string) string {
 }
 
 func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.OutputMsg) error {
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Checking custom base image: %s\n", opts.ExistingImageUri)}
+	if outputChan != nil {
+		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Using custom base image: %s\n", opts.ExistingImageUri)}
+	}
 
 	baseImage, err := b.extractImageNameAndTag(opts.ExistingImageUri)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
+		if outputChan != nil {
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+		}
 		return err
 	}
 
@@ -305,7 +313,9 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 
 	opts.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
 
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Custom base image is valid.\n"}
+	if outputChan != nil {
+		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Custom base image is valid.\n"}
+	}
 	return nil
 }
 

@@ -55,7 +55,7 @@ func NewRuncImageService(
 func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
 	var valid bool = true
 
-	imageId, err := is.builder.GetImageId(&BuildOpts{
+	opts := &BuildOpts{
 		BaseImageTag:      is.config.ImageService.Runner.Tags[in.PythonVersion],
 		BaseImageName:     is.config.ImageService.Runner.BaseImageName,
 		BaseImageRegistry: is.config.ImageService.Runner.BaseImageRegistry,
@@ -63,7 +63,14 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		PythonPackages:    in.PythonPackages,
 		Commands:          in.Commands,
 		ExistingImageUri:  in.ExistingImageUri,
-	})
+		ForceRebuild:      in.ForceRebuild,
+	}
+
+	if in.ExistingImageUri != "" {
+		is.builder.handleCustomBaseImage(opts, nil)
+	}
+
+	imageId, err := is.builder.GetImageId(opts)
 	if err != nil {
 		valid = false
 	}
