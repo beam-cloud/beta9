@@ -16,13 +16,14 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.48.1
 	github.com/beam-cloud/blobcache v0.0.0-20240512162245-f8b1aa1cad58
-	github.com/beam-cloud/clip v0.0.0-20240516163541-45e3dd1b74df
+	github.com/beam-cloud/clip v0.0.0-20240516191226-939bb7a25ea7
 	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
 	github.com/bsm/redislock v0.9.4
 	github.com/cloudevents/sdk-go/v2 v2.15.1
 	github.com/gofrs/uuid v4.4.0+incompatible
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.6.0
+	github.com/hanwen/go-fuse/v2 v2.5.1
 	github.com/jmoiron/sqlx v1.3.5
 	github.com/knadh/koanf/parsers/json v0.1.0
 	github.com/knadh/koanf/parsers/yaml v0.1.0
@@ -122,7 +123,6 @@ require (
 	github.com/google/nftables v0.1.1-0.20230115205135-9aa6fdf5a28c // indirect
 	github.com/gorilla/csrf v1.7.1 // indirect
 	github.com/gorilla/securecookie v1.1.1 // indirect
-	github.com/hanwen/go-fuse/v2 v2.5.1 // indirect
 	github.com/hdevalence/ed25519consensus v0.1.0 // indirect
 	github.com/illarion/gonotify v1.0.1 // indirect
 	github.com/insomniacslk/dhcp v0.0.0-20230908212754-65c27093e38a // indirect
