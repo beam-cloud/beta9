@@ -107,7 +107,6 @@ type BaseImage struct {
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	packages := opts.PythonPackages
 	if opts.ExistingImageUri != "" {
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
@@ -119,9 +118,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		BaseImageRegistry: opts.BaseImageRegistry,
 		BaseImageName:     opts.BaseImageName,
 		BaseImageTag:      opts.BaseImageTag,
-		PythonVersion:     opts.PythonVersion,
-		PythonPackages:    packages,
-		Commands:          opts.Commands,
 		ExistingImageUri:  opts.ExistingImageUri,
 	})
 	if err != nil {
@@ -371,6 +367,12 @@ func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 }
 
 func (b *Builder) generatePipInstallCommand(opts *BuildOpts) string {
-	packages := strings.Join(opts.PythonPackages, " ")
+	// Escape each package name individually
+	escapedPackages := make([]string, len(opts.PythonPackages))
+	for i, pkg := range opts.PythonPackages {
+		escapedPackages[i] = fmt.Sprintf("%q", pkg)
+	}
+
+	packages := strings.Join(escapedPackages, " ")
 	return fmt.Sprintf("%s -m pip install --root-user-action=ignore %s", opts.PythonVersion, packages)
 }
