@@ -6,11 +6,7 @@ import click
 
 from ..channel import prompt_first_auth
 from ..config import SDKSettings, is_config_empty, set_settings
-<<<<<<< HEAD
-from . import config, container, deployment, pool, serve, task, volume
-=======
-from . import config, deployment, machine, pool, serve, task, volume
->>>>>>> c7977f9 (add machine cmd)
+from . import config, container, deployment, machine, pool, serve, task, volume
 from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCollection
 
 click.formatting.FORCED_WIDTH = shutil.get_terminal_size().columns
