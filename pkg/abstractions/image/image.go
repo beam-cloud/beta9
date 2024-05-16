@@ -63,7 +63,6 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		PythonPackages:    in.PythonPackages,
 		Commands:          in.Commands,
 		ExistingImageUri:  in.ExistingImageUri,
-		ForceRebuild:      in.ForceRebuild,
 	}
 
 	if in.ExistingImageUri != "" {
