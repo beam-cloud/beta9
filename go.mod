@@ -43,6 +43,7 @@ require (
 	github.com/prometheus/client_golang v1.19.0
 	github.com/prometheus/procfs v0.12.0
 	github.com/redis/go-redis/v9 v9.5.1
+	github.com/rs/zerolog v1.32.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.9.0
 	github.com/tj/assert v0.0.3
@@ -169,7 +170,6 @@ require (
 	github.com/prometheus/client_model v0.6.0 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/rootless-containers/proto v0.1.0 // indirect
-	github.com/rs/zerolog v1.32.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/safchain/ethtool v0.3.0 // indirect
 	github.com/sethvargo/go-retry v0.2.4 // indirect
