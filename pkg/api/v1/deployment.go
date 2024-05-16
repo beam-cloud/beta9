@@ -21,18 +21,13 @@ func NewDeploymentGroup(g *echo.Group, backendRepo repository.BackendRepository,
 		config:      config,
 	}
 
-	g.GET("/:workspaceId", group.ListDeployments)
-	g.GET("/:workspaceId/:deploymentId", group.RetrieveDeployment)
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListDeployments))
+	g.GET("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.RetrieveDeployment))
 
 	return group
 }
 
 func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return echo.NewHTTPError(http.StatusUnauthorized)
-	}
-
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
@@ -63,11 +58,6 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 }
 
 func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return echo.NewHTTPError(http.StatusUnauthorized)
-	}
-
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {

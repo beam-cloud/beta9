@@ -31,21 +31,16 @@ func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, backendRepo re
 		taskDispatcher: taskDispatcher,
 	}
 
-	g.GET("/:workspaceId", group.ListTasksPaginated)
-	g.GET("/:workspaceId/task-count-by-deployment", group.GetTaskCountByDeployment)
-	g.GET("/:workspaceId/aggregate-by-time-window", group.AggregateTasksByTimeWindow)
-	g.DELETE("/:workspaceId", group.StopTasks)
-	g.GET("/:workspaceId/:taskId", group.RetrieveTask)
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListTasksPaginated))
+	g.GET("/:workspaceId/task-count-by-deployment", auth.WithWorkspaceAuth(group.GetTaskCountByDeployment))
+	g.GET("/:workspaceId/aggregate-by-time-window", auth.WithWorkspaceAuth(group.AggregateTasksByTimeWindow))
+	g.DELETE("/:workspaceId", auth.WithWorkspaceAuth(group.StopTasks))
+	g.GET("/:workspaceId/:taskId", auth.WithWorkspaceAuth(group.RetrieveTask))
 
 	return group
 }
 
 func (g *TaskGroup) GetTaskCountByDeployment(ctx echo.Context) error {
-	_, err := g.authorize(ctx)
-	if err != nil {
-		return err
-	}
-
 	filters, err := g.preprocessFilters(ctx)
 	if err != nil {
 		return err
@@ -59,11 +54,6 @@ func (g *TaskGroup) GetTaskCountByDeployment(ctx echo.Context) error {
 }
 
 func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
-	_, err := g.authorize(ctx)
-	if err != nil {
-		return err
-	}
-
 	filters, err := g.preprocessFilters(ctx)
 	if err != nil {
 		return err
@@ -77,11 +67,6 @@ func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
 }
 
 func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
-	_, err := g.authorize(ctx)
-	if err != nil {
-		return err
-	}
-
 	filters, err := g.preprocessFilters(ctx)
 	if err != nil {
 		return err
@@ -95,11 +80,6 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 }
 
 func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
-	_, err := g.authorize(ctx)
-	if err != nil {
-		return err
-	}
-
 	taskId := ctx.Param("taskId")
 	if task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve task")
@@ -113,11 +93,6 @@ type StopTasksRequest struct {
 }
 
 func (g *TaskGroup) StopTasks(ctx echo.Context) error {
-	_, err := g.authorize(ctx)
-	if err != nil {
-		return err
-	}
-
 	var req StopTasksRequest
 	if err := ctx.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode task ids")
@@ -160,14 +135,6 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 	}
 
 	return nil
-}
-
-func (g *TaskGroup) authorize(ctx echo.Context) (*auth.HttpAuthContext, error) {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return nil, echo.NewHTTPError(http.StatusUnauthorized)
-	}
-	return cc, nil
 }
 
 func (g *TaskGroup) preprocessFilters(ctx echo.Context) (*types.TaskFilter, error) {

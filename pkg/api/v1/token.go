@@ -21,21 +21,15 @@ func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, conf
 		config:      config,
 	}
 
-	g.POST("/:workspaceId", group.CreateWorkspaceToken)
-	g.DELETE("/:workspaceId", group.RevokeWorkspaceToken)
-	g.GET("/:workspaceId", group.ListWorkspaceTokens)
+	g.POST("/:workspaceId", auth.WithWorkspaceAuth(group.CreateWorkspaceToken))
+	g.DELETE("/:workspaceId", auth.WithWorkspaceAuth(group.RevokeWorkspaceToken))
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListWorkspaceTokens))
 
 	return group
 }
 
 func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid token")
-	}
-
 	workspaceId := ctx.Param("workspaceId")
-
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace")
@@ -64,11 +58,6 @@ func (g *TokenGroup) RevokeWorkspaceToken(ctx echo.Context) error {
 }
 
 func (g *TokenGroup) ListWorkspaceTokens(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized access")
-	}
-
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
