@@ -37,7 +37,7 @@ func AuthMiddleware(backendRepo repository.BackendRepository) echo.MiddlewareFun
 	}
 }
 
-func WithWorkspaceAuth(callable func(ctx echo.Context) error) func(ctx echo.Context) error {
+func WithWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
 	return func(ctx echo.Context) error {
 		workspaceId := ctx.Param("workspaceId")
 
@@ -46,6 +46,6 @@ func WithWorkspaceAuth(callable func(ctx echo.Context) error) func(ctx echo.Cont
 			return echo.NewHTTPError(http.StatusUnauthorized)
 		}
 
-		return callable(ctx)
+		return next(ctx)
 	}
 }

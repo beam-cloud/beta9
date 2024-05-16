@@ -1,11 +1,14 @@
 package repository
 
 import (
+	"log"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/jmoiron/sqlx"
 )
 
 func NewRedisClientForTest() (*common.RedisClient, error) {
@@ -33,4 +36,16 @@ func NewWorkerRedisRepositoryForTest(rdb *common.RedisClient) WorkerRepository {
 func NewContainerRedisRepositoryForTest(rdb *common.RedisClient) ContainerRepository {
 	lock := common.NewRedisLock(rdb)
 	return &ContainerRedisRepository{rdb: rdb, lock: lock}
+}
+
+func NewBackendPostgresRepositoryForTest() (BackendRepository, sqlmock.Sqlmock) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		log.Fatalf("error creating mock db: %v", err)
+	}
+	sqlxDB := sqlx.NewDb(mockDB, "sqlmock")
+
+	return &PostgresBackendRepository{
+		client: sqlxDB,
+	}, mock
 }
