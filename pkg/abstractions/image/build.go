@@ -61,7 +61,6 @@ func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, schedule
 }
 
 var (
-	requirementsFilename string = "requirements.txt"
 	//go:embed base_requirements.txt
 	basePythonRequirements string
 )
@@ -109,7 +108,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	if opts.ExistingImageUri != "" {
-		err := b.handleCustomBaseImage(ctx, opts, outputChan)
+		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
 			return err
 		}
@@ -155,13 +154,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	hostname, err := b.containerRepo.GetWorkerAddress(containerId)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container."}
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container."}
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 
@@ -173,7 +172,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	defer client.Kill(containerId) // Kill and remove container after the build completes
 
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Waiting for build container to start..."}
+	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Waiting for build container to start...\n"}
 	start := time.Now()
 	buildContainerRunning := false
 	for {
@@ -200,7 +199,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	if !buildContainerRunning {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to connect to build container."}
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to connect to build container.\n"}
 		return errors.New("container not running")
 	}
 
@@ -216,9 +215,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	startTime := time.Now()
 
 	// Detect if python3.x is installed in the container, if not install it
-	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	if _, err := client.Exec(containerId, checkPythonVersionCmd); err != nil {
-		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...", opts.PythonVersion)}
+	checkPythonVersionCmd := fmt.Sprintf("%s --versions", opts.PythonVersion)
+	if resp, err := client.Exec(containerId, checkPythonVersionCmd); err != nil || !resp.Ok {
+		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
 		installCmd := b.getPythonInstallCommand(opts.PythonVersion)
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
@@ -233,18 +232,19 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 			errMsg := ""
 			if err != nil {
-				errMsg = err.Error()
+				errMsg = err.Error() + "\n"
 			}
 
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: errMsg}
 			return err
 		}
 	}
+
 	log.Printf("container <%v> build took %v\n", containerId, time.Since(startTime))
 
 	err = client.Archive(containerId, imageId)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error()}
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
 		return err
 	}
 
@@ -273,8 +273,8 @@ func (b *Builder) extractPackageName(pkg string) string {
 	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
 }
 
-func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Downloading custom base image: %s", opts.ExistingImageUri)}
+func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.OutputMsg) error {
+	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Checking custom base image: %s\n", opts.ExistingImageUri)}
 
 	baseImage, err := b.extractImageNameAndTag(opts.ExistingImageUri)
 	if err != nil {
@@ -305,7 +305,7 @@ func (b *Builder) handleCustomBaseImage(ctx context.Context, opts *BuildOpts, ou
 
 	opts.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
 
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Custom base image downloaded."}
+	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Custom base image is valid.\n"}
 	return nil
 }
 
@@ -345,7 +345,7 @@ func (b *Builder) extractImageNameAndTag(imageURI string) (BaseImage, error) {
 }
 
 func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
-	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common curl git"
+	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common gcc curl git"
 	components := []string{
 		"python3-future",
 		pythonVersion,
