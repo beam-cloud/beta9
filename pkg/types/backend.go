@@ -10,12 +10,14 @@ import (
 )
 
 type Workspace struct {
-	Id         uint      `db:"id" json:"id,omitempty"`
-	ExternalId string    `db:"external_id" json:"external_id"`
-	Name       string    `db:"name" json:"name"`
-	CreatedAt  time.Time `db:"created_at" json:"created_at,omitempty"`
-	UpdatedAt  time.Time `db:"updated_at" json:"updated_at,omitempty"`
-	SigningKey *string   `db:"signing_key" json:"signing_key"`
+	Id                 uint              `db:"id" json:"id,omitempty"`
+	ExternalId         string            `db:"external_id" json:"external_id"`
+	Name               string            `db:"name" json:"name"`
+	CreatedAt          time.Time         `db:"created_at" json:"created_at,omitempty"`
+	UpdatedAt          time.Time         `db:"updated_at" json:"updated_at,omitempty"`
+	SigningKey         *string           `db:"signing_key" json:"signing_key"`
+	ConcurrencyLimitId *uint             `db:"concurrency_limit_id" json:"concurrency_limit_id,omitempty"`
+	ConcurrencyLimit   *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit"`
 }
 
 const (
@@ -241,4 +243,11 @@ type FilterFieldMapping struct {
 	ClientField   string
 	ClientValues  []string
 	DatabaseField string
+}
+
+type ConcurrencyLimit struct {
+	Id         uint   `db:"id" json:"id"`
+	ExternalId string `db:"external_id" json:"external_id"`
+	GPULimit   uint   `db:"gpu_limit" json:"gpu_limit"`
+	CPULimit   uint   `db:"cpu_limit" json:"cpu_limit"`
 }
