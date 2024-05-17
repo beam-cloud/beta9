@@ -78,6 +78,10 @@ def list_containers(ctx: click.Context, service: ServiceClient, format: str, col
 
         table_cols.append(Column(AVAILABLE_LIST_COLUMNS[col]))
 
+    if len(res.containers) == 0:
+        terminal.print("No containers found.")
+        return
+
     table = Table(
         *table_cols,
         box=box.SIMPLE,
