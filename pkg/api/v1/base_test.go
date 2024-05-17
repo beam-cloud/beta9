@@ -5,7 +5,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 )
 
-func addWorkspaceRowToQuery(mockHttpDetails *repository.MockHttpDetails) {
+func addWorkspaceRowQuery(mockHttpDetails *repository.MockHttpDetails) {
 	mockHttpDetails.Mock.ExpectQuery("SELECT (.+) FROM workspace").WillReturnRows(
 		sqlmock.NewRows(
 			[]string{

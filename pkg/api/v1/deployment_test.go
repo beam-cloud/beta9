@@ -65,7 +65,7 @@ func TestListDeployments(t *testing.T) {
 	testDetails.httpDetails.AddExpectedDBTokenSelect(testDetails.httpDetails.Mock, *testDetails.httpDetails.TokenForTest.Workspace, testDetails.httpDetails.TokenForTest)
 
 	// mock add expected db workspace select
-	addWorkspaceRowToQuery(testDetails.httpDetails)
+	addWorkspaceRowQuery(testDetails.httpDetails)
 	// mock add expected db deployment select
 	addDeploymentRowToQuery(testDetails.httpDetails)
 
@@ -91,7 +91,7 @@ func TestListDeployments(t *testing.T) {
 	testDetails.httpDetails.AddExpectedDBTokenSelect(testDetails.httpDetails.Mock, *testDetails.httpDetails.TokenForTest.Workspace, testDetails.httpDetails.TokenForTest)
 
 	// mock add expected db workspace select
-	addWorkspaceRowToQuery(testDetails.httpDetails)
+	addWorkspaceRowQuery(testDetails.httpDetails)
 	// mock add expected db deployment select
 	addDeploymentRowToQuery(testDetails.httpDetails)
 
@@ -121,7 +121,7 @@ func TestRetrieveDeployment(t *testing.T) {
 	testDetails.httpDetails.AddExpectedDBTokenSelect(testDetails.httpDetails.Mock, *testDetails.httpDetails.TokenForTest.Workspace, testDetails.httpDetails.TokenForTest)
 
 	// mock add expected db workspace select
-	addWorkspaceRowToQuery(testDetails.httpDetails)
+	addWorkspaceRowQuery(testDetails.httpDetails)
 	// mock add expected db deployment select
 	addDeploymentRowToQuery(testDetails.httpDetails)
 
