@@ -77,7 +77,7 @@ func (m *RedisMapService) MapKeys(ctx context.Context, in *pb.MapKeysRequest) (*
 
 	// Remove the prefix from each key
 	for i, key := range keys {
-		parts := strings.SplitAfter(key, ":")
+		parts := strings.Split(key, ":")
 		keys[i] = parts[len(parts)-1]
 	}
 
