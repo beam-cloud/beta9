@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Any, Dict, Optional, Tuple
 
+import nest_asyncio
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from grpclib.client import Channel
@@ -215,6 +216,8 @@ class EndpointManager:
 
 
 if __name__ == "__main__":
+    nest_asyncio.apply()
+
     options = {
         "bind": [f"[::]:{cfg.bind_port}"],
         "workers": cfg.concurrency,
