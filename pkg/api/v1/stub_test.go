@@ -41,7 +41,7 @@ func setupStubEchoGroup() MockStubTestDetails {
 	}
 }
 
-func addStubRowToQuery(mockHttpDetails *repository.MockHttpDetails) {
+func addStubRowSelectQuery(mockHttpDetails *repository.MockHttpDetails) {
 	mockHttpDetails.Mock.ExpectQuery("SELECT (.+) FROM stub").WillReturnRows(
 		sqlmock.NewRows(
 			[]string{
@@ -63,7 +63,7 @@ func TestListStubs(t *testing.T) {
 	// 1. Test with valid workspaceId
 	testDetails.httpDetails.AddExpectedDBTokenSelect(testDetails.httpDetails.Mock, *testDetails.httpDetails.TokenForTest.Workspace, testDetails.httpDetails.TokenForTest)
 
-	addStubRowToQuery(testDetails.httpDetails)
+	addStubRowSelectQuery(testDetails.httpDetails)
 
 	req := httptest.NewRequest(http.MethodGet, "/stub/"+testDetails.httpDetails.TokenForTest.Workspace.ExternalId, nil)
 	req.Header.Set("Authorization", "Bearer "+testDetails.httpDetails.TokenForTest.Key)

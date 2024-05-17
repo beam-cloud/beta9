@@ -43,7 +43,7 @@ func setupDeploymentEchoGroup() MockDeploymentTestDetails {
 	}
 }
 
-func addDeploymentRowToQuery(mockHttpDetails *repository.MockHttpDetails) {
+func addDeploymentRowSelectQuery(mockHttpDetails *repository.MockHttpDetails) {
 	mockHttpDetails.Mock.ExpectQuery("SELECT (.+) FROM deployment").WillReturnRows(
 		sqlmock.NewRows(
 			[]string{
@@ -65,9 +65,9 @@ func TestListDeployments(t *testing.T) {
 	testDetails.httpDetails.AddExpectedDBTokenSelect(testDetails.httpDetails.Mock, *testDetails.httpDetails.TokenForTest.Workspace, testDetails.httpDetails.TokenForTest)
 
 	// mock add expected db workspace select
-	addWorkspaceRowQuery(testDetails.httpDetails)
+	addWorkspaceRowSelectQuery(testDetails.httpDetails)
 	// mock add expected db deployment select
-	addDeploymentRowToQuery(testDetails.httpDetails)
+	addDeploymentRowSelectQuery(testDetails.httpDetails)
 
 	req := httptest.NewRequest(http.MethodGet, "/deployment/"+testDetails.httpDetails.TokenForTest.Workspace.ExternalId, nil)
 	req.Header.Set("Authorization", "Bearer "+testDetails.httpDetails.TokenForTest.Key)
@@ -91,9 +91,9 @@ func TestListDeployments(t *testing.T) {
 	testDetails.httpDetails.AddExpectedDBTokenSelect(testDetails.httpDetails.Mock, *testDetails.httpDetails.TokenForTest.Workspace, testDetails.httpDetails.TokenForTest)
 
 	// mock add expected db workspace select
-	addWorkspaceRowQuery(testDetails.httpDetails)
+	addWorkspaceRowSelectQuery(testDetails.httpDetails)
 	// mock add expected db deployment select
-	addDeploymentRowToQuery(testDetails.httpDetails)
+	addDeploymentRowSelectQuery(testDetails.httpDetails)
 
 	req = httptest.NewRequest(http.MethodGet, "/deployment/"+testDetails.httpDetails.TokenForTest.Workspace.ExternalId+"?pagination=true", nil)
 	req.Header.Set("Authorization", "Bearer "+testDetails.httpDetails.TokenForTest.Key)
@@ -121,9 +121,9 @@ func TestRetrieveDeployment(t *testing.T) {
 	testDetails.httpDetails.AddExpectedDBTokenSelect(testDetails.httpDetails.Mock, *testDetails.httpDetails.TokenForTest.Workspace, testDetails.httpDetails.TokenForTest)
 
 	// mock add expected db workspace select
-	addWorkspaceRowQuery(testDetails.httpDetails)
+	addWorkspaceRowSelectQuery(testDetails.httpDetails)
 	// mock add expected db deployment select
-	addDeploymentRowToQuery(testDetails.httpDetails)
+	addDeploymentRowSelectQuery(testDetails.httpDetails)
 
 	req := httptest.NewRequest(http.MethodGet, "/deployment/"+testDetails.httpDetails.TokenForTest.Workspace.ExternalId+"/1", nil)
 	req.Header.Set("Authorization", "Bearer "+testDetails.httpDetails.TokenForTest.Key)

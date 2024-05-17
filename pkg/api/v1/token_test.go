@@ -57,7 +57,7 @@ func TestListWorkspaceTokens(t *testing.T) {
 				// First query is for token select on the auth middleware
 				testDetails.httpDetails.AddExpectedDBTokenSelect(testDetails.httpDetails.Mock, *testDetails.httpDetails.TokenForTest.Workspace, testDetails.httpDetails.TokenForTest)
 				// Second query is for the workspace check inside the token list method
-				addWorkspaceRowQuery(testDetails.httpDetails)
+				addWorkspaceRowSelectQuery(testDetails.httpDetails)
 				// Third query is for the token list backend
 				testDetails.httpDetails.AddExpectedDBTokenSelect(testDetails.httpDetails.Mock, *testDetails.httpDetails.TokenForTest.Workspace, testDetails.httpDetails.TokenForTest)
 			},
@@ -66,7 +66,7 @@ func TestListWorkspaceTokens(t *testing.T) {
 			name: "Test error occurs in db",
 			prepares: func() {
 				testDetails.httpDetails.AddExpectedDBTokenSelect(testDetails.httpDetails.Mock, *testDetails.httpDetails.TokenForTest.Workspace, testDetails.httpDetails.TokenForTest)
-				addWorkspaceRowQuery(testDetails.httpDetails)
+				addWorkspaceRowSelectQuery(testDetails.httpDetails)
 				testDetails.httpDetails.Mock.ExpectQuery("SELECT (.+) FROM token").
 					WillReturnError(errors.New("invalid token"))
 			},
@@ -116,7 +116,7 @@ func TestCreateWorkspaceToken(t *testing.T) {
 			key:  "new-key",
 			prepares: func() {
 				testDetails.httpDetails.AddExpectedDBTokenSelect(testDetails.httpDetails.Mock, *testDetails.httpDetails.TokenForTest.Workspace, testDetails.httpDetails.TokenForTest)
-				addWorkspaceRowQuery(testDetails.httpDetails)
+				addWorkspaceRowSelectQuery(testDetails.httpDetails)
 				testDetails.httpDetails.Mock.ExpectQuery("INSERT INTO token").WillReturnRows(
 					sqlmock.NewRows([]string{"id", "key"}).AddRow(2, "new-key"),
 				)
@@ -128,7 +128,7 @@ func TestCreateWorkspaceToken(t *testing.T) {
 			key:  "",
 			prepares: func() {
 				testDetails.httpDetails.AddExpectedDBTokenSelect(testDetails.httpDetails.Mock, *testDetails.httpDetails.TokenForTest.Workspace, testDetails.httpDetails.TokenForTest)
-				addWorkspaceRowQuery(testDetails.httpDetails)
+				addWorkspaceRowSelectQuery(testDetails.httpDetails)
 				testDetails.httpDetails.Mock.ExpectExec("INSERT INTO token").
 					WillReturnError(errors.New("invalid token"))
 			},
