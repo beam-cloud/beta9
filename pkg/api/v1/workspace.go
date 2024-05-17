@@ -32,7 +32,7 @@ type CreateWorkspaceRequest struct {
 func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid token")
+		return echo.NewHTTPError(http.StatusForbidden, "Invalid token")
 	}
 
 	var request CreateWorkspaceRequest

@@ -4,79 +4,18 @@ import (
 	"errors"
 	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 )
 
-type MockDetails struct {
-	backendRepo  repository.BackendRepository
-	mock         sqlmock.Sqlmock
-	tokenForTest types.Token
-}
-
-func addTokenRow(
-	mock sqlmock.Sqlmock,
-	workspace types.Workspace,
-	token types.Token,
-) {
-	mock.ExpectQuery("SELECT (.+) FROM token").
-		WillReturnRows(
-			sqlmock.NewRows(
-				[]string{"id", "external_id", "key", "active", "reusable", "workspace_id", "workspace.external_id", "token_type", "created_at", "updated_at"},
-			).AddRow(
-				token.Id,
-				token.ExternalId,
-				token.Key,
-				token.Active,
-				token.Reusable,
-				token.WorkspaceId,
-				workspace.ExternalId,
-				token.TokenType,
-				token.CreatedAt,
-				token.UpdatedAt,
-			),
-		)
-}
-
-func mockBackendWithValidToken() MockDetails {
-	backendRepo, mock := repository.NewBackendPostgresRepositoryForTest()
-	workspaceForTest := types.Workspace{
-		Id:         1,
-		ExternalId: "test",
-		Name:       "test",
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-
-	tokenForTest := types.Token{
-		Id:          1,
-		ExternalId:  "test",
-		Key:         "test",
-		Active:      true,
-		Reusable:    true,
-		WorkspaceId: &workspaceForTest.Id,
-		Workspace:   &workspaceForTest,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}
-
-	return MockDetails{
-		backendRepo:  backendRepo,
-		mock:         mock,
-		tokenForTest: tokenForTest,
-	}
-}
-
 func TestAuthMiddleWare(t *testing.T) {
-	mockDetails := mockBackendWithValidToken()
+	md := repository.MockBackendWithValidToken()
 
 	e := echo.New()
-	e.Use(AuthMiddleware(mockDetails.backendRepo))
+	e.Use(AuthMiddleware(md.BackendRepo))
 
 	// 1. Test with valid token
 	e.GET("/", func(ctx echo.Context) error {
@@ -86,8 +25,8 @@ func TestAuthMiddleWare(t *testing.T) {
 		assert.NotNil(t, cc.AuthInfo.Token)
 		assert.NotNil(t, cc.AuthInfo.Workspace)
 		assert.NotNil(t, cc.AuthInfo.Workspace.ExternalId)
-		assert.Equal(t, cc.AuthInfo.Token.ExternalId, mockDetails.tokenForTest.ExternalId)
-		assert.Equal(t, cc.AuthInfo.Token.Key, mockDetails.tokenForTest.Key)
+		assert.Equal(t, cc.AuthInfo.Token.ExternalId, md.TokenForTest.ExternalId)
+		assert.Equal(t, cc.AuthInfo.Token.Key, md.TokenForTest.Key)
 
 		return ctx.String(200, "OK")
 	})
@@ -100,10 +39,10 @@ func TestAuthMiddleWare(t *testing.T) {
 	}{
 		{
 			name:           "Test with valid token",
-			tokenKey:       mockDetails.tokenForTest.Key,
+			tokenKey:       md.TokenForTest.Key,
 			expectedStatus: 200,
 			prepares: func() {
-				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, mockDetails.tokenForTest)
+				md.AddExpectedDBTokenSelect(md.Mock, *md.TokenForTest.Workspace, md.TokenForTest)
 			},
 		},
 		{
@@ -111,7 +50,7 @@ func TestAuthMiddleWare(t *testing.T) {
 			tokenKey:       "invalid",
 			expectedStatus: 401,
 			prepares: func() {
-				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
+				md.Mock.ExpectQuery("SELECT (.+) FROM token").
 					WillReturnError(errors.New("invalid token"))
 			},
 		},
@@ -120,7 +59,7 @@ func TestAuthMiddleWare(t *testing.T) {
 			tokenKey:       "",
 			expectedStatus: 401,
 			prepares: func() {
-				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
+				md.Mock.ExpectQuery("SELECT (.+) FROM token").
 					WillReturnError(errors.New("invalid token"))
 			},
 		},
@@ -143,9 +82,9 @@ func TestAuthMiddleWare(t *testing.T) {
 }
 
 func TestWithWorkspaceAuth(t *testing.T) {
-	mockDetails := mockBackendWithValidToken()
+	md := repository.MockBackendWithValidToken()
 	e := echo.New()
-	e.Use(AuthMiddleware(mockDetails.backendRepo))
+	e.Use(AuthMiddleware(md.BackendRepo))
 
 	e.GET("/:workspaceId", WithWorkspaceAuth(func(c echo.Context) error {
 		if c.(*HttpAuthContext).AuthInfo.Token.TokenType == types.TokenTypeClusterAdmin {
@@ -168,42 +107,42 @@ func TestWithWorkspaceAuth(t *testing.T) {
 	}{
 		{
 			name:           "Test with valid token and workspace",
-			tokenKey:       mockDetails.tokenForTest.Key,
-			workspaceId:    mockDetails.tokenForTest.Workspace.ExternalId,
+			tokenKey:       md.TokenForTest.Key,
+			workspaceId:    md.TokenForTest.Workspace.ExternalId,
 			expectedStatus: 200,
 			prepares: func() {
-				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, mockDetails.tokenForTest)
+				md.AddExpectedDBTokenSelect(md.Mock, *md.TokenForTest.Workspace, md.TokenForTest)
 			},
 		},
 		{
 			name:           "Test with valid token and correct workspace",
-			tokenKey:       mockDetails.tokenForTest.Key,
+			tokenKey:       md.TokenForTest.Key,
 			workspaceId:    "invalid",
 			expectedStatus: 401,
 			prepares: func() {
-				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, mockDetails.tokenForTest)
+				md.AddExpectedDBTokenSelect(md.Mock, *md.TokenForTest.Workspace, md.TokenForTest)
 			},
 		},
 		{
 			name:           "Test correct workspace with admin user override",
-			tokenKey:       mockDetails.tokenForTest.Key,
+			tokenKey:       md.TokenForTest.Key,
 			workspaceId:    "invalid",
 			expectedStatus: 200,
 			prepares: func() {
-				tokenForTest := mockDetails.tokenForTest
-				tokenForTest.TokenType = types.TokenTypeClusterAdmin
-				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, tokenForTest)
+				TokenForTest := md.TokenForTest
+				TokenForTest.TokenType = types.TokenTypeClusterAdmin
+				md.AddExpectedDBTokenSelect(md.Mock, *md.TokenForTest.Workspace, TokenForTest)
 			},
 		},
 		{
 			name:           "Test correct workspace and admin user override",
-			tokenKey:       mockDetails.tokenForTest.Key,
-			workspaceId:    mockDetails.tokenForTest.Workspace.ExternalId,
+			tokenKey:       md.TokenForTest.Key,
+			workspaceId:    md.TokenForTest.Workspace.ExternalId,
 			expectedStatus: 200,
 			prepares: func() {
-				tokenForTest := mockDetails.tokenForTest
-				tokenForTest.TokenType = types.TokenTypeClusterAdmin
-				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, tokenForTest)
+				TokenForTest := md.TokenForTest
+				TokenForTest.TokenType = types.TokenTypeClusterAdmin
+				md.AddExpectedDBTokenSelect(md.Mock, *md.TokenForTest.Workspace, TokenForTest)
 			},
 		},
 	}
