@@ -80,7 +80,7 @@ ENV DEBIAN_FRONTEND="noninteractive"
 WORKDIR /workspace
 
 RUN apt-get update && \
-    apt-get install -y curl gpg fuse libfuse-dev && \
+    apt-get install -y curl gpg && \
     curl -fsSL https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04/Release.key | gpg --dearmor -o /usr/share/keyrings/criu.gpg && \
     echo 'deb [signed-by=/usr/share/keyrings/criu.gpg] https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04 /' > /etc/apt/sources.list.d/criu.list && \
     curl -fsSL https://nvidia.github.io/nvidia-container-runtime/gpgkey | apt-key add - && \
@@ -91,14 +91,7 @@ RUN apt-get update && \
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends criu nvidia-container-toolkit-base nvidia-container-toolkit
-RUN apt-get install -y libfuse2 && \
-    export ARCH="$(dpkg --print-architecture)" && \
-    if [ "$ARCH" = "amd64" ]; then \
-        ARCH="x86_64"; \
-    fi && \
-    curl -sSf -o mountpoint.deb https://s3.amazonaws.com/mountpoint-s3-release/1.5.0/${ARCH}/mount-s3-1.5.0-${ARCH}.deb && \
-    dpkg -i mountpoint.deb && \
-    rm -vf mountpoint.deb
+RUN apt-get install -y fuse3 libfuse3-dev
 
 RUN apt-get remove -y curl gpg && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
