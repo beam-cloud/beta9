@@ -12,17 +12,13 @@ import (
 
 type RedisMapService struct {
 	pb.UnimplementedMapServiceServer
-	lock *common.RedisLock
 
 	rdb *common.RedisClient
 }
 
 func NewRedisMapService(rdb *common.RedisClient) (MapService, error) {
-	lock := common.NewRedisLock(rdb)
-
 	return &RedisMapService{
-		rdb:  rdb,
-		lock: lock,
+		rdb: rdb,
 	}, nil
 }
 
@@ -30,13 +26,7 @@ func NewRedisMapService(rdb *common.RedisClient) (MapService, error) {
 func (m *RedisMapService) MapSet(ctx context.Context, in *pb.MapSetRequest) (*pb.MapSetResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	err := m.lock.Acquire(ctx, Keys.MapEntryLock(authInfo.Workspace.Name, in.Name, in.Key), common.RedisLockOptions{TtlS: 10, Retries: 0})
-	if err != nil {
-		return &pb.MapSetResponse{Ok: false}, nil
-	}
-	defer m.lock.Release(Keys.MapEntryLock(authInfo.Workspace.Name, in.Name, in.Key))
-
-	err = m.rdb.Set(ctx, Keys.MapEntry(authInfo.Workspace.Name, in.Name, in.Key), in.Value, 0).Err()
+	err := m.rdb.Set(ctx, Keys.MapEntry(authInfo.Workspace.Name, in.Name, in.Key), in.Value, 0).Err()
 	if err != nil {
 		return &pb.MapSetResponse{Ok: false}, nil
 	}
@@ -85,9 +75,10 @@ func (m *RedisMapService) MapKeys(ctx context.Context, in *pb.MapKeysRequest) (*
 		return &pb.MapKeysResponse{Ok: false, Keys: []string{}}, err
 	}
 
-	// Remove the MapEntry prefix from each key
+	// Remove the prefix from each key
 	for i, key := range keys {
-		keys[i] = strings.TrimPrefix(key, fmt.Sprintf(mapEntry, in.Name, ""))
+		parts := strings.Split(key, ":")
+		keys[i] = parts[len(parts)-1]
 	}
 
 	return &pb.MapKeysResponse{Ok: true, Keys: keys}, nil
@@ -95,9 +86,8 @@ func (m *RedisMapService) MapKeys(ctx context.Context, in *pb.MapKeysRequest) (*
 
 // Redis keys
 var (
-	mapPrefix    string = "map"
-	mapEntry     string = "map:%s:%s:%s"
-	mapEntryLock string = "map:%s:%s:%s:lock"
+	mapPrefix string = "map"
+	mapEntry  string = "map:%s:%s:%s"
 )
 
 var Keys = &keys{}
@@ -109,9 +99,5 @@ func (k *keys) MapPrefix() string {
 }
 
 func (k *keys) MapEntry(workspaceName, name, key string) string {
-	return fmt.Sprintf(mapEntry, workspaceName, name, key)
-}
-
-func (k *keys) MapEntryLock(workspaceName, name, key string) string {
 	return fmt.Sprintf(mapEntry, workspaceName, name, key)
 }

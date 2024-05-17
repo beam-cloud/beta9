@@ -27,6 +27,7 @@ from ..logging import StdoutJsonInterceptor
 from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_method
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
+from ..vendor import nest_asyncio
 
 
 class EndpointFilter(logging.Filter):
@@ -215,6 +216,8 @@ class EndpointManager:
 
 
 if __name__ == "__main__":
+    nest_asyncio.apply()
+
     options = {
         "bind": [f"[::]:{cfg.bind_port}"],
         "workers": cfg.concurrency,
