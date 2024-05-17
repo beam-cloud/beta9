@@ -24,7 +24,6 @@ protobuf = "^4.25.1"
 fastapi = "^0.110.2"
 uvicorn = "^0.29.0"
 watchdog = "^4.0.0"
-nest-asyncio = "^1.6.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"

@@ -14,4 +14,3 @@ psutil==5.9.6
 cloudpickle==3.0.0
 rich==13.7.0
 watchdog==4.0.0
-nest-asyncio==1.6.0

@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Any, Dict, Optional, Tuple
 
-import nest_asyncio
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from grpclib.client import Channel
@@ -28,6 +27,7 @@ from ..logging import StdoutJsonInterceptor
 from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_method
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
+from ..vendor import nest_asyncio
 
 
 class EndpointFilter(logging.Filter):
