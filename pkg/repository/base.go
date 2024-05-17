@@ -82,7 +82,7 @@ type BackendRepository interface {
 	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error)
 	UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error)
 	ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error)
-	GetConcurrencyLimitByWorkspaceId(ctx context.Context, concurrenyLimitId uint) (*types.ConcurrencyLimit, error)
+	GetConcurrencyLimit(ctx context.Context, concurrenyLimitId uint) (*types.ConcurrencyLimit, error)
 	CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint, cpuLimit uint) (*types.ConcurrencyLimit, error)
 	UpdateConcurrencyLimit(ctx context.Context, concurrencyLimitId uint, gpuLimit uint, cpuLimit uint) (*types.ConcurrencyLimit, error)
 }

@@ -223,3 +223,55 @@ func TestWithWorkspaceAuth(t *testing.T) {
 	}
 
 }
+
+func TestWithClusterAdminAuth(t *testing.T) {
+	mockDetails := mockBackendWithValidToken()
+	e := echo.New()
+	e.Use(AuthMiddleware(mockDetails.backendRepo))
+
+	e.GET("/", WithClusterAdminAuth(func(c echo.Context) error {
+		assert.NotNil(t, c.(*HttpAuthContext).AuthInfo.Token)
+		assert.Equal(t, c.(*HttpAuthContext).AuthInfo.Token.TokenType, types.TokenTypeClusterAdmin)
+		return c.String(200, "OK")
+	}))
+
+	tests := []struct {
+		name           string
+		tokenKey       string
+		expectedStatus int
+		prepares       func()
+	}{
+		{
+			name:           "Test with valid token but not admin user",
+			tokenKey:       mockDetails.tokenForTest.Key,
+			expectedStatus: 401,
+			prepares: func() {
+				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, mockDetails.tokenForTest)
+			},
+		},
+		{
+			name:           "Test with valid token and admin user",
+			tokenKey:       mockDetails.tokenForTest.Key,
+			expectedStatus: 200,
+			prepares: func() {
+				tokenForTest := mockDetails.tokenForTest
+				tokenForTest.TokenType = types.TokenTypeClusterAdmin
+				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, tokenForTest)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.prepares()
+
+			req := httptest.NewRequest(echo.GET, "/", nil)
+			req.Header.Set("Authorization", tt.tokenKey)
+			rec := httptest.NewRecorder()
+
+			e.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.expectedStatus, rec.Code)
+		})
+	}
+}

@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -29,10 +30,18 @@ func NewConcurrencyLimitGroup(
 }
 
 func (c *ConcurrencyLimitGroup) GetConcurrencyLimitByWorkspaceId(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	workspace := cc.AuthInfo.Workspace
+	workspaceId := ctx.Param("workspaceId")
 
-	concurrencyLimit, err := c.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx.Request().Context(), *workspace.ConcurrencyLimitId)
+	workspace, err := c.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Workspace not found")
+	}
+
+	if workspace.ConcurrencyLimitId == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Concurrency limit not found")
+	}
+
+	concurrencyLimit, err := c.backendRepo.GetConcurrencyLimit(ctx.Request().Context(), *workspace.ConcurrencyLimitId)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get concurrency limit")
 	}
@@ -41,21 +50,20 @@ func (c *ConcurrencyLimitGroup) GetConcurrencyLimitByWorkspaceId(ctx echo.Contex
 }
 
 func (c *ConcurrencyLimitGroup) CreateOrUpdateConcurrencyLimit(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	workspace := cc.AuthInfo.Workspace
+	workspaceId := ctx.Param("workspaceId")
+
+	workspace, err := c.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Workspace not found")
+	}
 
 	data := new(types.ConcurrencyLimit)
 	if err := ctx.Bind(data); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode request body")
 	}
 
-	concurrencyLimit, err := c.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx.Request().Context(), *workspace.ConcurrencyLimitId)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get concurrency limit")
-	}
-
-	if concurrencyLimit != nil {
-		concurrencyLimit, err = c.backendRepo.UpdateConcurrencyLimit(ctx.Request().Context(), workspace.Id, data.GPULimit, data.CPULimit)
+	if workspace.ConcurrencyLimitId != nil {
+		concurrencyLimit, err := c.backendRepo.UpdateConcurrencyLimit(ctx.Request().Context(), *workspace.ConcurrencyLimitId, data.GPULimit, data.CPULimit)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update concurrency limit")
 		}
@@ -63,8 +71,11 @@ func (c *ConcurrencyLimitGroup) CreateOrUpdateConcurrencyLimit(ctx echo.Context)
 		return ctx.JSON(http.StatusOK, concurrencyLimit)
 	}
 
-	concurrencyLimit, err = c.backendRepo.CreateConcurrencyLimit(ctx.Request().Context(), *workspace.ConcurrencyLimitId, data.GPULimit, data.CPULimit)
+	log.Println("Creating new concurrency limit", data)
+
+	concurrencyLimit, err := c.backendRepo.CreateConcurrencyLimit(ctx.Request().Context(), workspace.Id, data.GPULimit, data.CPULimit)
 	if err != nil {
+		log.Println(err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create concurrency limit")
 	}
 
