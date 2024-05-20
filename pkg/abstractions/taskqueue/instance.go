@@ -56,6 +56,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 				i.Stub.Object.ExternalId,
 				i.Workspace.Name,
 				*i.StubConfig,
+				i.Stub.ExternalId,
 			),
 		}
 

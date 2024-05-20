@@ -27,10 +27,11 @@ storage:
     awsSecretKey: test
 gateway:
   host: beta9-gateway.beta9
-  grpcPort: 1993
-  maxRecvMsgSize: 1024
-  maxSendMsgSize: 1024
-  shutdownTimeout: 180s
+  externalURL: http://localhost.local
+  grpc:
+    port: 1993
+    maxRecvMsgSize: 1024
+    maxSendMsgSize: 1024
   http:
     port: 1994
     enablePrettyLogs: true
@@ -38,6 +39,7 @@ gateway:
       allowOrigins: "*"
       allowHeaders: "*"
       allowMethods: "*"
+  shutdownTimeout: 180s
 imageService:
   cacheURL:
   localCacheEnabled: true

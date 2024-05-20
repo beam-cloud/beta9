@@ -62,6 +62,12 @@ type PostgresConfig struct {
 	EnableTLS bool   `key:"enableTLS" json:"enable_tls"`
 }
 
+type GRPCConfig struct {
+	Port           int `key:"port" json:"port"`
+	MaxRecvMsgSize int `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
+	MaxSendMsgSize int `key:"maxSendMsgSize" json:"max_send_msg_size"`
+}
+
 type HTTPConfig struct {
 	EnablePrettyLogs bool       `key:"enablePrettyLogs" json:"enable_pretty_logs"`
 	CORS             CORSConfig `key:"cors" json:"cors"`
@@ -76,9 +82,8 @@ type CORSConfig struct {
 
 type GatewayServiceConfig struct {
 	Host            string        `key:"host" json:"host"`
-	GRPCPort        int           `key:"grpcPort" json:"grpc_port"`
-	MaxRecvMsgSize  int           `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
-	MaxSendMsgSize  int           `key:"maxSendMsgSize" json:"max_send_msg_size"`
+	ExternalURL     string        `key:"externalURL" json:"external_url"`
+	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
 	HTTP            HTTPConfig    `key:"http" json:"http"`
 	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
 }

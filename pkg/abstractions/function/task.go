@@ -110,6 +110,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		stub.Object.ExternalId,
 		stub.Workspace.Name,
 		stubConfig,
+		stub.ExternalId,
 	)
 
 	token, err := t.fs.backendRepo.RetrieveActiveToken(ctx, stub.Workspace.Id)

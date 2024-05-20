@@ -198,6 +198,7 @@ class VolumeServiceStub(betterproto.ServiceStub):
 
 
 class VolumeServiceBase(ServiceBase):
+
     async def get_or_create_volume(
         self, get_or_create_volume_request: "GetOrCreateVolumeRequest"
     ) -> "GetOrCreateVolumeResponse":

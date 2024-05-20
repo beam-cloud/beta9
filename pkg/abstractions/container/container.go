@@ -124,6 +124,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		stub.Object.ExternalId,
 		authInfo.Workspace.Name,
 		stubConfig,
+		stub.ExternalId,
 	)
 
 	err = cs.scheduler.Run(&types.ContainerRequest{
