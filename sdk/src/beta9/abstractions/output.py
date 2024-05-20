@@ -30,7 +30,7 @@ class Output(BaseAbstraction):
         super().__init__()
 
         if is_local():
-            raise Exception("cant run locally")
+            raise OutputCannotRunLocallyError
 
         self.task_id = thread_local.task_id
         if not self.task_id:
@@ -101,6 +101,10 @@ class Output(BaseAbstraction):
             raise OutputSignURLError(res.err_msg)
 
         return res.signed_url
+
+
+class OutputCannotRunLocallyError(Exception):
+    pass
 
 
 class OutputNotFoundError(Exception):
