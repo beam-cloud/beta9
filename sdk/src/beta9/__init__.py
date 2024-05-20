@@ -24,4 +24,5 @@ __all__ = [
     "env",
     "GpuType",
     "PythonVersion",
+    "Output",
 ]
