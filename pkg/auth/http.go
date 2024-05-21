@@ -49,3 +49,14 @@ func WithWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Context)
 		return next(ctx)
 	}
 }
+
+func WithClusterAdminAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
+	return func(ctx echo.Context) error {
+		cc, _ := ctx.(*HttpAuthContext)
+		if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+			return echo.NewHTTPError(http.StatusUnauthorized)
+		}
+
+		return next(ctx)
+	}
+}
