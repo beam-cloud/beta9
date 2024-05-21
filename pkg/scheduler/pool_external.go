@@ -219,11 +219,6 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		wpc.config.Worker.ImageTag,
 	)
 
-	pullPolicy := corev1.PullIfNotPresent
-	if wpc.config.Worker.ImageTag == "latest" {
-		pullPolicy = corev1.PullAlways
-	}
-
 	resources := corev1.ResourceRequirements{}
 	if workerGpuType != "" {
 		resources.Requests = corev1.ResourceList{
@@ -236,9 +231,8 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 
 	containers := []corev1.Container{
 		{
-			Name:            defaultContainerName,
-			Image:           workerImage,
-			ImagePullPolicy: pullPolicy,
+			Name:  defaultContainerName,
+			Image: workerImage,
 			Command: []string{
 				defaultWorkerEntrypoint,
 			},
