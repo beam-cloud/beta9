@@ -14,7 +14,6 @@ from starlette.responses import Response
 
 from ..clients.gateway import GatewayServiceStub, SignPayloadRequest, SignPayloadResponse
 from ..exceptions import RunnerException
-from .state import thread_local
 
 USER_CODE_VOLUME = "/mnt/code"
 
@@ -156,7 +155,7 @@ class FunctionHandler:
         if self.pass_context:
             kwargs["context"] = context
 
-        thread_local.task_id = context.task_id or ""
+        os.environ["TASK_ID"] = context.task_id or ""
 
         return self.handler(*args, **kwargs)
 
