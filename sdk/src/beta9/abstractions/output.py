@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Generator, NamedTuple, Optional, Union
@@ -15,28 +16,23 @@ from ..clients.output import (
     OutputStatResponse,
 )
 from ..env import is_local
-from ..runner.state import thread_local
 from ..sync import CHUNK_SIZE
 
 
-class Stat(NamedTuple):
-    mode: str  # protection bits
-    size: int  # size in bytes
-    atime: datetime  # accessed time
-    mtime: datetime  # modified time
-
-    def to_dict(self) -> Dict[str, Any]:
-        return self._asdict()
-
-
 class Output(BaseAbstraction):
+    """
+    A file that a task has created.
+
+    Use this to save a file you may want to save and share later.
+    """
+
     def __init__(self, *, path: Union[Path, str]) -> None:
         super().__init__()
 
         if is_local():
             raise OutputCannotRunLocallyError
 
-        self.task_id = thread_local.task_id
+        self.task_id = os.getenv("TASK_ID", "")
         if not self.task_id:
             raise OutputTaskIdError
 
@@ -69,7 +65,7 @@ class Output(BaseAbstraction):
 
         self.id = res.id
 
-    def stat(self) -> Stat:
+    def stat(self) -> "Stat":
         if not self.id:
             raise OutputNotSavedError
 
@@ -102,6 +98,16 @@ class Output(BaseAbstraction):
             raise OutputPublicURLError(res.err_msg)
 
         return res.public_url
+
+
+class Stat(NamedTuple):
+    mode: str  # protection bits
+    size: int  # size in bytes
+    atime: datetime  # accessed time
+    mtime: datetime  # modified time
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self._asdict()
 
 
 class OutputCannotRunLocallyError(Exception):
