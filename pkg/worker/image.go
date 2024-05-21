@@ -347,9 +347,10 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 				},
 			},
 		}, &clipCommon.S3StorageInfo{
-			Bucket: c.config.Registries.S3.BucketName,
-			Region: c.config.Registries.S3.Region,
-			Key:    fmt.Sprintf("%s.clip", imageId),
+			Bucket:   c.config.Registries.S3.BucketName,
+			Region:   c.config.Registries.S3.Region,
+			Endpoint: c.config.Registries.S3.Endpoint,
+			Key:      fmt.Sprintf("%s.clip", imageId),
 		})
 	case "local":
 		err = clip.CreateArchive(clip.CreateOptions{
