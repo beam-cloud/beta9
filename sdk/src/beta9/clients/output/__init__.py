@@ -59,7 +59,7 @@ class OutputStatResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class OutputSignUrlRequest(betterproto.Message):
+class OutputPublicUrlRequest(betterproto.Message):
     id: str = betterproto.string_field(1)
     task_id: str = betterproto.string_field(2)
     filename: str = betterproto.string_field(3)
@@ -67,10 +67,10 @@ class OutputSignUrlRequest(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class OutputSignUrlResponse(betterproto.Message):
+class OutputPublicUrlResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    signed_url: str = betterproto.string_field(3)
+    public_url: str = betterproto.string_field(3)
 
 
 class OutputServiceStub(betterproto.ServiceStub):
@@ -108,18 +108,18 @@ class OutputServiceStub(betterproto.ServiceStub):
             metadata=metadata,
         )
 
-    async def output_sign_url(
+    async def output_public_url(
         self,
-        output_sign_url_request: "OutputSignUrlRequest",
+        output_public_url_request: "OutputPublicUrlRequest",
         *,
         timeout: Optional[float] = None,
         deadline: Optional["Deadline"] = None,
         metadata: Optional["MetadataLike"] = None
-    ) -> "OutputSignUrlResponse":
+    ) -> "OutputPublicUrlResponse":
         return await self._unary_unary(
-            "/output.OutputService/OutputSignURL",
-            output_sign_url_request,
-            OutputSignUrlResponse,
+            "/output.OutputService/OutputPublicURL",
+            output_public_url_request,
+            OutputPublicUrlResponse,
             timeout=timeout,
             deadline=deadline,
             metadata=metadata,
@@ -138,9 +138,9 @@ class OutputServiceBase(ServiceBase):
     ) -> "OutputStatResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
-    async def output_sign_url(
-        self, output_sign_url_request: "OutputSignUrlRequest"
-    ) -> "OutputSignUrlResponse":
+    async def output_public_url(
+        self, output_public_url_request: "OutputPublicUrlRequest"
+    ) -> "OutputPublicUrlResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
     async def __rpc_output_save(
@@ -157,12 +157,12 @@ class OutputServiceBase(ServiceBase):
         response = await self.output_stat(request)
         await stream.send_message(response)
 
-    async def __rpc_output_sign_url(
+    async def __rpc_output_public_url(
         self,
-        stream: "grpclib.server.Stream[OutputSignUrlRequest, OutputSignUrlResponse]",
+        stream: "grpclib.server.Stream[OutputPublicUrlRequest, OutputPublicUrlResponse]",
     ) -> None:
         request = await stream.recv_message()
-        response = await self.output_sign_url(request)
+        response = await self.output_public_url(request)
         await stream.send_message(response)
 
     def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
@@ -179,10 +179,10 @@ class OutputServiceBase(ServiceBase):
                 OutputStatRequest,
                 OutputStatResponse,
             ),
-            "/output.OutputService/OutputSignURL": grpclib.const.Handler(
-                self.__rpc_output_sign_url,
+            "/output.OutputService/OutputPublicURL": grpclib.const.Handler(
+                self.__rpc_output_public_url,
                 grpclib.const.Cardinality.UNARY_UNARY,
-                OutputSignUrlRequest,
-                OutputSignUrlResponse,
+                OutputPublicUrlRequest,
+                OutputPublicUrlResponse,
             ),
         }

@@ -27,7 +27,7 @@ type OutputService interface {
 	pb.OutputServiceServer
 	OutputSave(ctx context.Context, in *pb.OutputSaveRequest) (*pb.OutputSaveResponse, error)
 	OutputStat(ctx context.Context, in *pb.OutputStatRequest) (*pb.OutputStatResponse, error)
-	OutputSignURL(ctx context.Context, in *pb.OutputSignURLRequest) (*pb.OutputSignURLResponse, error)
+	OutputPublicURL(ctx context.Context, in *pb.OutputPublicURLRequest) (*pb.OutputPublicURLResponse, error)
 }
 
 type OutputRedisService struct {
@@ -129,12 +129,12 @@ func (o *OutputRedisService) OutputStat(ctx context.Context, in *pb.OutputStatRe
 	}, nil
 }
 
-func (o *OutputRedisService) OutputSignURL(ctx context.Context, in *pb.OutputSignURLRequest) (*pb.OutputSignURLResponse, error) {
+func (o *OutputRedisService) OutputPublicURL(ctx context.Context, in *pb.OutputPublicURLRequest) (*pb.OutputPublicURLResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	tasks, err := o.backendRepo.ListTasksWithRelated(ctx, types.TaskFilter{TaskId: in.TaskId, WorkspaceID: authInfo.Workspace.Id})
 	if err != nil || len(tasks) != 1 {
-		return &pb.OutputSignURLResponse{
+		return &pb.OutputPublicURLResponse{
 			Ok:     false,
 			ErrMsg: "Unable to find task",
 		}, nil
@@ -144,32 +144,32 @@ func (o *OutputRedisService) OutputSignURL(ctx context.Context, in *pb.OutputSig
 	filename := filepath.Base(in.Filename)
 	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(authInfo.Workspace.Name), task.Stub.ExternalId, task.ExternalId, in.Id, filename)
 
-	err = o.rdb.Set(ctx, Keys.SignedURL(in.Id), fullPath, time.Duration(in.Expires)*time.Second).Err()
+	err = o.rdb.Set(ctx, Keys.PublicURL(in.Id), fullPath, time.Duration(in.Expires)*time.Second).Err()
 	if err != nil {
-		return &pb.OutputSignURLResponse{
+		return &pb.OutputPublicURLResponse{
 			Ok:     false,
 			ErrMsg: "Unable to generate URL",
 		}, nil
 	}
 
-	return &pb.OutputSignURLResponse{
+	return &pb.OutputPublicURLResponse{
 		Ok:        true,
-		SignedUrl: fmt.Sprintf("%v/output/%v", o.config.GatewayService.ExternalURL, in.Id),
+		PublicUrl: fmt.Sprintf("%v/output/%v", o.config.GatewayService.ExternalURL, in.Id),
 	}, nil
 }
 
 func (o *OutputRedisService) getURL(id string) (string, error) {
-	return o.rdb.Get(context.TODO(), Keys.SignedURL(id)).Result()
+	return o.rdb.Get(context.TODO(), Keys.PublicURL(id)).Result()
 }
 
 // Redis keys
 var (
 	Keys             = &keys{}
-	signedURL string = "output:%s"
+	publicURL string = "output:%s"
 )
 
 type keys struct{}
 
-func (k *keys) SignedURL(outputId string) string {
-	return fmt.Sprintf(signedURL, outputId)
+func (k *keys) PublicURL(outputId string) string {
+	return fmt.Sprintf(publicURL, outputId)
 }

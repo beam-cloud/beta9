@@ -8,7 +8,7 @@ package output;
 service OutputService {
   rpc OutputSave(OutputSaveRequest) returns (OutputSaveResponse) {}
   rpc OutputStat(OutputStatRequest) returns (OutputStatResponse) {}
-  rpc OutputSignURL(OutputSignURLRequest) returns (OutputSignURLResponse) {}
+  rpc OutputPublicURL(OutputPublicURLRequest) returns (OutputPublicURLResponse) {}
 }
 
 message OutputSaveRequest {
@@ -42,15 +42,15 @@ message OutputStatResponse {
   OutputStat stat = 3;
 }
 
-message OutputSignURLRequest {
+message OutputPublicURLRequest {
   string id = 1;
   string task_id = 2;
   string filename = 3;
   uint32 expires = 4;
 }
 
-message OutputSignURLResponse {
+message OutputPublicURLResponse {
   bool ok = 1;
   string err_msg = 2;
-  string signed_url = 3;
+  string public_url = 3;
 }

@@ -19,9 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	OutputService_OutputSave_FullMethodName    = "/output.OutputService/OutputSave"
-	OutputService_OutputStat_FullMethodName    = "/output.OutputService/OutputStat"
-	OutputService_OutputSignURL_FullMethodName = "/output.OutputService/OutputSignURL"
+	OutputService_OutputSave_FullMethodName      = "/output.OutputService/OutputSave"
+	OutputService_OutputStat_FullMethodName      = "/output.OutputService/OutputStat"
+	OutputService_OutputPublicURL_FullMethodName = "/output.OutputService/OutputPublicURL"
 )
 
 // OutputServiceClient is the client API for OutputService service.
@@ -30,7 +30,7 @@ const (
 type OutputServiceClient interface {
 	OutputSave(ctx context.Context, in *OutputSaveRequest, opts ...grpc.CallOption) (*OutputSaveResponse, error)
 	OutputStat(ctx context.Context, in *OutputStatRequest, opts ...grpc.CallOption) (*OutputStatResponse, error)
-	OutputSignURL(ctx context.Context, in *OutputSignURLRequest, opts ...grpc.CallOption) (*OutputSignURLResponse, error)
+	OutputPublicURL(ctx context.Context, in *OutputPublicURLRequest, opts ...grpc.CallOption) (*OutputPublicURLResponse, error)
 }
 
 type outputServiceClient struct {
@@ -59,9 +59,9 @@ func (c *outputServiceClient) OutputStat(ctx context.Context, in *OutputStatRequ
 	return out, nil
 }
 
-func (c *outputServiceClient) OutputSignURL(ctx context.Context, in *OutputSignURLRequest, opts ...grpc.CallOption) (*OutputSignURLResponse, error) {
-	out := new(OutputSignURLResponse)
-	err := c.cc.Invoke(ctx, OutputService_OutputSignURL_FullMethodName, in, out, opts...)
+func (c *outputServiceClient) OutputPublicURL(ctx context.Context, in *OutputPublicURLRequest, opts ...grpc.CallOption) (*OutputPublicURLResponse, error) {
+	out := new(OutputPublicURLResponse)
+	err := c.cc.Invoke(ctx, OutputService_OutputPublicURL_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (c *outputServiceClient) OutputSignURL(ctx context.Context, in *OutputSignU
 type OutputServiceServer interface {
 	OutputSave(context.Context, *OutputSaveRequest) (*OutputSaveResponse, error)
 	OutputStat(context.Context, *OutputStatRequest) (*OutputStatResponse, error)
-	OutputSignURL(context.Context, *OutputSignURLRequest) (*OutputSignURLResponse, error)
+	OutputPublicURL(context.Context, *OutputPublicURLRequest) (*OutputPublicURLResponse, error)
 	mustEmbedUnimplementedOutputServiceServer()
 }
 
@@ -88,8 +88,8 @@ func (UnimplementedOutputServiceServer) OutputSave(context.Context, *OutputSaveR
 func (UnimplementedOutputServiceServer) OutputStat(context.Context, *OutputStatRequest) (*OutputStatResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method OutputStat not implemented")
 }
-func (UnimplementedOutputServiceServer) OutputSignURL(context.Context, *OutputSignURLRequest) (*OutputSignURLResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method OutputSignURL not implemented")
+func (UnimplementedOutputServiceServer) OutputPublicURL(context.Context, *OutputPublicURLRequest) (*OutputPublicURLResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method OutputPublicURL not implemented")
 }
 func (UnimplementedOutputServiceServer) mustEmbedUnimplementedOutputServiceServer() {}
 
@@ -140,20 +140,20 @@ func _OutputService_OutputStat_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _OutputService_OutputSignURL_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(OutputSignURLRequest)
+func _OutputService_OutputPublicURL_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OutputPublicURLRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(OutputServiceServer).OutputSignURL(ctx, in)
+		return srv.(OutputServiceServer).OutputPublicURL(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: OutputService_OutputSignURL_FullMethodName,
+		FullMethod: OutputService_OutputPublicURL_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(OutputServiceServer).OutputSignURL(ctx, req.(*OutputSignURLRequest))
+		return srv.(OutputServiceServer).OutputPublicURL(ctx, req.(*OutputPublicURLRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -174,8 +174,8 @@ var OutputService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _OutputService_OutputStat_Handler,
 		},
 		{
-			MethodName: "OutputSignURL",
-			Handler:    _OutputService_OutputSignURL_Handler,
+			MethodName: "OutputPublicURL",
+			Handler:    _OutputService_OutputPublicURL_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

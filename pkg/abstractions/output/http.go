@@ -34,11 +34,11 @@ func (o *outputGroup) GetOutput(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error": "invalid output id",
 		})
-
 	}
+
 	file, err := os.Open(path)
 	if err != nil {
-		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "unable to read file",
 		})
 	}

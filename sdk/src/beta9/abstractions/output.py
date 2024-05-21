@@ -6,11 +6,11 @@ from betterproto import Casing
 
 from ..abstractions.base import BaseAbstraction
 from ..clients.output import (
+    OutputPublicUrlRequest,
+    OutputPublicUrlResponse,
     OutputSaveRequest,
     OutputSaveResponse,
     OutputServiceStub,
-    OutputSignUrlRequest,
-    OutputSignUrlResponse,
     OutputStatRequest,
     OutputStatResponse,
 )
@@ -84,23 +84,20 @@ class Output(BaseAbstraction):
         except (OutputNotSavedError, OutputNotFoundError):
             return False
 
-    def public_url(self, *a, **kw) -> str:
-        return self.signed_url(*a, **kw)
-
-    def signed_url(self, expires: int = 3600) -> str:
+    def public_url(self, expires: int = 3600) -> str:
         if not self.id:
             raise OutputNotSavedError
 
-        res: OutputSignUrlResponse
+        res: OutputPublicUrlResponse
         res = self.run_sync(
-            self.stub.output_sign_url(
-                OutputSignUrlRequest(self.id, self.task_id, self.path.name, expires)
+            self.stub.output_public_url(
+                OutputPublicUrlRequest(self.id, self.task_id, self.path.name, expires)
             )
         )
         if not res.ok:
-            raise OutputSignURLError(res.err_msg)
+            raise OutputPublicURLError(res.err_msg)
 
-        return res.signed_url
+        return res.public_url
 
 
 class OutputCannotRunLocallyError(Exception):
@@ -119,7 +116,7 @@ class OutputNotSavedError(Exception):
     pass
 
 
-class OutputSignURLError(Exception):
+class OutputPublicURLError(Exception):
     pass
 
 
