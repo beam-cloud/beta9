@@ -610,7 +610,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", s.config.GatewayService.Host),
-		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.GRPCPort),
+		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.GRPC.Port),
 		"PYTHONUNBUFFERED=1",
 	}
 	env = append(env, request.Env...)

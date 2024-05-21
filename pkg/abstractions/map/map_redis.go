@@ -86,17 +86,12 @@ func (m *RedisMapService) MapKeys(ctx context.Context, in *pb.MapKeysRequest) (*
 
 // Redis keys
 var (
-	mapPrefix string = "map"
-	mapEntry  string = "map:%s:%s:%s"
+	mapEntry string = "map:%s:%s:%s"
 )
 
 var Keys = &keys{}
 
 type keys struct{}
-
-func (k *keys) MapPrefix() string {
-	return mapPrefix
-}
 
 func (k *keys) MapEntry(workspaceName, name, key string) string {
 	return fmt.Sprintf(mapEntry, workspaceName, name, key)
