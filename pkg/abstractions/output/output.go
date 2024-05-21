@@ -204,7 +204,7 @@ func (o *OutputRedisService) setPublicURL(ctx context.Context, workspaceName, ta
 
 	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(workspaceName), task.Stub.ExternalId, task.ExternalId, outputId, filepath.Base(filename))
 
-	err = o.rdb.Set(ctx, Keys.PublicURL(outputId), fullPath, time.Duration(expires)*time.Second).Err()
+	err = o.rdb.Set(ctx, Keys.outputPublicURL(outputId), fullPath, time.Duration(expires)*time.Second).Err()
 	if err != nil {
 		return "", err
 	}
@@ -213,17 +213,17 @@ func (o *OutputRedisService) setPublicURL(ctx context.Context, workspaceName, ta
 }
 
 func (o *OutputRedisService) getPublicURL(id string) (string, error) {
-	return o.rdb.Get(context.TODO(), Keys.PublicURL(id)).Result()
+	return o.rdb.Get(context.TODO(), Keys.outputPublicURL(id)).Result()
 }
 
 // Redis keys
 var (
-	Keys             = &keys{}
-	publicURL string = "output:%s"
+	Keys                   = &keys{}
+	outputPublicURL string = "output:%s"
 )
 
 type keys struct{}
 
-func (k *keys) PublicURL(outputId string) string {
-	return fmt.Sprintf(publicURL, outputId)
+func (k *keys) outputPublicURL(outputId string) string {
+	return fmt.Sprintf(outputPublicURL, outputId)
 }
