@@ -154,7 +154,7 @@ func (o *OutputRedisService) OutputPublicURL(ctx context.Context, in *pb.OutputP
 
 	return &pb.OutputPublicURLResponse{
 		Ok:        true,
-		PublicUrl: fmt.Sprintf("%v/output/%v", o.config.GatewayService.ExternalURL, in.Id),
+		PublicUrl: fmt.Sprintf("%v/output/id/%v", o.config.GatewayService.ExternalURL, in.Id),
 	}, nil
 }
 
