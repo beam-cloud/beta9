@@ -1,7 +1,6 @@
 package apiv1
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -11,16 +10,19 @@ import (
 )
 
 type ConcurrencyLimitGroup struct {
-	routerGroup *echo.Group
-	backendRepo repository.BackendRepository
+	routerGroup   *echo.Group
+	backendRepo   repository.BackendRepository
+	containerRepo repository.ContainerRepository
 }
 
 func NewConcurrencyLimitGroup(
 	g *echo.Group,
 	backendRepo repository.BackendRepository,
+	containerRepo repository.ContainerRepository,
 ) *ConcurrencyLimitGroup {
 	group := &ConcurrencyLimitGroup{routerGroup: g,
-		backendRepo: backendRepo,
+		backendRepo:   backendRepo,
+		containerRepo: containerRepo,
 	}
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.GetConcurrencyLimitByWorkspaceId))
@@ -68,15 +70,22 @@ func (c *ConcurrencyLimitGroup) CreateOrUpdateConcurrencyLimit(ctx echo.Context)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update concurrency limit")
 		}
 
+		err = c.containerRepo.SetConcurrencyLimitByWorkspaceId(workspaceId, concurrencyLimit)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to recache concurrency limit")
+		}
+
 		return ctx.JSON(http.StatusOK, concurrencyLimit)
 	}
 
-	log.Println("Creating new concurrency limit", data)
-
 	concurrencyLimit, err := c.backendRepo.CreateConcurrencyLimit(ctx.Request().Context(), workspace.Id, data.GPULimit, data.CPULimit)
 	if err != nil {
-		log.Println(err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create concurrency limit")
+	}
+
+	err = c.containerRepo.SetConcurrencyLimitByWorkspaceId(workspaceId, concurrencyLimit)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to recache concurrency limit")
 	}
 
 	return ctx.JSON(http.StatusOK, concurrencyLimit)

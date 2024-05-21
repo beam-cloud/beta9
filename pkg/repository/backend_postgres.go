@@ -954,7 +954,7 @@ func (r *PostgresBackendRepository) GetConcurrencyLimit(ctx context.Context, con
 	return &limit, nil
 }
 
-func (r *PostgresBackendRepository) CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint, cpuLimit uint) (*types.ConcurrencyLimit, error) {
+func (r *PostgresBackendRepository) CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint32, cpuLimit uint32) (*types.ConcurrencyLimit, error) {
 	query := `
 	INSERT INTO concurrency_limit (gpu_limit, cpu_limit)
 	VALUES ($1, $2)
@@ -980,7 +980,7 @@ func (r *PostgresBackendRepository) CreateConcurrencyLimit(ctx context.Context, 
 	return &limit, nil
 }
 
-func (r *PostgresBackendRepository) UpdateConcurrencyLimit(ctx context.Context, concurrencyLimitId uint, gpuLimit uint, cpuLimit uint) (*types.ConcurrencyLimit, error) {
+func (r *PostgresBackendRepository) UpdateConcurrencyLimit(ctx context.Context, concurrencyLimitId uint, gpuLimit uint32, cpuLimit uint32) (*types.ConcurrencyLimit, error) {
 	query := `
 	UPDATE concurrency_limit
 	SET gpu_limit = $2, cpu_limit = $3, updated_at = CURRENT_TIMESTAMP
@@ -990,6 +990,18 @@ func (r *PostgresBackendRepository) UpdateConcurrencyLimit(ctx context.Context, 
 
 	var limit types.ConcurrencyLimit
 	if err := r.client.GetContext(ctx, &limit, query, concurrencyLimitId, gpuLimit, cpuLimit); err != nil {
+		return nil, err
+	}
+
+	return &limit, nil
+}
+
+func (r *PostgresBackendRepository) GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error) {
+	var limit types.ConcurrencyLimit
+
+	query := `SELECT cl.id, cl.gpu_limit, cl.cpu_limit, cl.created_at, cl.updated_at FROM concurrency_limit cl join workspace w on cl.id = w.concurrency_limit_id WHERE w.external_id = $1;`
+	err := r.client.GetContext(ctx, &limit, query, workspaceId)
+	if err != nil {
 		return nil, err
 	}
 

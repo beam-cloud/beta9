@@ -40,10 +40,15 @@ type ContainerRepository interface {
 	UpdateContainerStatus(string, types.ContainerStatus, time.Duration) error
 	DeleteContainerState(*types.ContainerRequest) error
 	SetWorkerAddress(containerId string, addr string) error
+	SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	GetWorkerAddress(containerId string) (string, error)
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	GetFailedContainerCountByStubId(stubId string) (int, error)
+
+	// Caching concurrency limit TODO: discuss if this should be here
+	GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error)
+	SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error
 }
 
 type BackendRepository interface {
@@ -83,8 +88,9 @@ type BackendRepository interface {
 	UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error)
 	ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error)
 	GetConcurrencyLimit(ctx context.Context, concurrenyLimitId uint) (*types.ConcurrencyLimit, error)
-	CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint, cpuLimit uint) (*types.ConcurrencyLimit, error)
-	UpdateConcurrencyLimit(ctx context.Context, concurrencyLimitId uint, gpuLimit uint, cpuLimit uint) (*types.ConcurrencyLimit, error)
+	GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error)
+	CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint32, cpuLimit uint32) (*types.ConcurrencyLimit, error)
+	UpdateConcurrencyLimit(ctx context.Context, concurrencyLimitId uint, gpuLimit uint32, cpuLimit uint32) (*types.ConcurrencyLimit, error)
 }
 
 type WorkerPoolRepository interface {
