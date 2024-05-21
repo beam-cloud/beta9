@@ -29,7 +29,7 @@ func (o *outputGroup) GetOutput(ctx echo.Context) error {
 		})
 	}
 
-	path, err := o.service.getURL(outputId)
+	path, err := o.service.getPublicURL(outputId)
 	if err != nil {
 		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error": "invalid output id",

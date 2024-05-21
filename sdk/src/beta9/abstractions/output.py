@@ -1,6 +1,6 @@
 from datetime import datetime
 from pathlib import Path
-from typing import NamedTuple, Optional, Union
+from typing import Any, Dict, Generator, NamedTuple, Optional, Union
 
 from betterproto import Casing
 
@@ -16,6 +16,7 @@ from ..clients.output import (
 )
 from ..env import is_local
 from ..runner.state import thread_local
+from ..sync import CHUNK_SIZE
 
 
 class Stat(NamedTuple):
@@ -23,6 +24,9 @@ class Stat(NamedTuple):
     size: int  # size in bytes
     atime: datetime  # accessed time
     mtime: datetime  # modified time
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self._asdict()
 
 
 class Output(BaseAbstraction):
@@ -54,12 +58,12 @@ class Output(BaseAbstraction):
         self._stub = value
 
     def save(self) -> None:
-        content = self.path.open(mode="rb").read()
+        def stream_request() -> Generator[OutputSaveRequest, None, None]:
+            with self.path.open(mode="rb") as file:
+                while chunk := file.read(CHUNK_SIZE):
+                    yield OutputSaveRequest(self.task_id, self.path.name, chunk)
 
-        res: OutputSaveResponse = self.run_sync(
-            self.stub.output_save(OutputSaveRequest(self.task_id, self.path.name, content))
-        )
-
+        res: OutputSaveResponse = self.run_sync(self.stub.output_save_stream(stream_request()))
         if not res.ok:
             raise OutputSaveError(res.err_msg)
 

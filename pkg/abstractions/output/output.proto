@@ -6,7 +6,7 @@ import "google/protobuf/timestamp.proto";
 package output;
 
 service OutputService {
-  rpc OutputSave(OutputSaveRequest) returns (OutputSaveResponse) {}
+  rpc OutputSaveStream(stream OutputSaveRequest) returns (OutputSaveResponse) {}
   rpc OutputStat(OutputStatRequest) returns (OutputStatResponse) {}
   rpc OutputPublicURL(OutputPublicURLRequest) returns (OutputPublicURLResponse) {}
 }

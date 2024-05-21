@@ -25,7 +25,7 @@ const (
 
 type OutputService interface {
 	pb.OutputServiceServer
-	OutputSave(ctx context.Context, in *pb.OutputSaveRequest) (*pb.OutputSaveResponse, error)
+	OutputSaveStream(stream pb.OutputService_OutputSaveStreamServer) error
 	OutputStat(ctx context.Context, in *pb.OutputStatRequest) (*pb.OutputStatResponse, error)
 	OutputPublicURL(ctx context.Context, in *pb.OutputPublicURLRequest) (*pb.OutputPublicURLResponse, error)
 }
@@ -50,79 +50,100 @@ func NewOutputRedisService(config types.AppConfig, redisClient *common.RedisClie
 	return outputService, nil
 }
 
-func (o *OutputRedisService) OutputSave(ctx context.Context, in *pb.OutputSaveRequest) (*pb.OutputSaveResponse, error) {
+type OutputSaveContent struct {
+	Filename string
+	TaskID   string
+	Content  []byte
+}
+
+func (o *OutputRedisService) OutputSaveStream(stream pb.OutputService_OutputSaveStreamServer) error {
+	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	task, err := o.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
+	ch := make(chan OutputSaveContent)
+
+	go func() {
+		defer close(ch)
+
+		for {
+			in, err := stream.Recv()
+			if err != nil {
+				return
+			}
+
+			ch <- OutputSaveContent{
+				Filename: in.Filename,
+				TaskID:   in.TaskId,
+				Content:  in.Content,
+			}
+		}
+	}()
+
+	id, err := o.writeToFile(ctx, ch, authInfo.Workspace.Name)
 	if err != nil {
-		return &pb.OutputSaveResponse{
-			Ok:     false,
-			ErrMsg: "Unable to find task",
-		}, nil
+		return stream.SendAndClose(&pb.OutputSaveResponse{})
 	}
 
-	outputId := uuid.New().String()
-	filename := filepath.Base(in.Filename)
-	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(authInfo.Workspace.Name), task.Stub.ExternalId, task.ExternalId, outputId, filename)
-
-	if err = os.MkdirAll(path.Dir(fullPath), 0755); err != nil {
-		return &pb.OutputSaveResponse{
-			Ok:     false,
-			ErrMsg: "Unable to create file",
-		}, nil
-	}
-
-	file, err := os.Create(fullPath)
-	if err != nil {
-		return &pb.OutputSaveResponse{
-			Ok:     false,
-			ErrMsg: "Unable to create file",
-		}, nil
-	}
-	defer file.Close()
-
-	if _, err := file.Write(in.Content); err != nil {
-		return &pb.OutputSaveResponse{
-			Ok:     false,
-			ErrMsg: "Unable to write file",
-		}, nil
-	}
-
-	return &pb.OutputSaveResponse{
+	return stream.SendAndClose(&pb.OutputSaveResponse{
 		Ok: true,
-		Id: outputId,
-	}, nil
+		Id: id,
+	})
+}
+
+func (o *OutputRedisService) writeToFile(ctx context.Context, contentCh <-chan OutputSaveContent, workspaceName string) (string, error) {
+	var file *os.File
+	var filePath string
+	outputId := uuid.New().String()
+
+	for content := range contentCh {
+		if file == nil {
+			task, err := o.backendRepo.GetTaskWithRelated(ctx, content.TaskID)
+			if err != nil {
+				return "", err
+			}
+
+			dirPath := path.Join(types.DefaultOutputsPath, workspaceName, task.Stub.ExternalId, task.ExternalId, outputId)
+			filePath = path.Join(dirPath, filepath.Base(content.Filename))
+
+			if err = os.MkdirAll(dirPath, 0755); err != nil {
+				return "", err
+			}
+
+			file, err = os.Create(filePath)
+			if err != nil {
+				os.RemoveAll(dirPath)
+				return "", err
+			}
+			defer file.Close()
+		}
+
+		if _, err := file.Write(content.Content); err != nil {
+			os.RemoveAll(filePath)
+			return "", err
+		}
+	}
+
+	return outputId, nil
 }
 
 func (o *OutputRedisService) OutputStat(ctx context.Context, in *pb.OutputStatRequest) (*pb.OutputStatResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	task, err := o.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
+	stat, err := o.statOutput(ctx, authInfo.Workspace.Name, in.TaskId, in.Id, in.Filename)
 	if err != nil {
 		return &pb.OutputStatResponse{
 			Ok:     false,
-			ErrMsg: "Unable to find task",
-		}, nil
-	}
-
-	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(authInfo.Workspace.Name), task.Stub.ExternalId, task.ExternalId, in.Id, filepath.Base(in.Filename))
-
-	var stat unix.Stat_t
-	err = unix.Stat(fullPath, &stat)
-	if err != nil {
-		return &pb.OutputStatResponse{
-			Ok:     false,
-			ErrMsg: "Unable to stat output",
+			ErrMsg: "Unable stat output",
 		}, nil
 	}
 
 	return &pb.OutputStatResponse{
 		Ok: true,
 		Stat: &pb.OutputStat{
-			Mode:  os.FileMode(stat.Mode).String(),
+			Mode:  stat.Mode,
 			Size:  stat.Size,
-			Atime: timestamppb.New(time.Unix(stat.Atim.Sec, stat.Atim.Nsec)),
-			Mtime: timestamppb.New(time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec)),
+			Atime: timestamppb.New(stat.Atime),
+			Mtime: timestamppb.New(stat.Mtime),
 		},
 	}, nil
 }
@@ -130,32 +151,68 @@ func (o *OutputRedisService) OutputStat(ctx context.Context, in *pb.OutputStatRe
 func (o *OutputRedisService) OutputPublicURL(ctx context.Context, in *pb.OutputPublicURLRequest) (*pb.OutputPublicURLResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	task, err := o.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
+	url, err := o.setPublicURL(ctx, authInfo.Workspace.Name, in.TaskId, in.Id, in.Filename, in.Expires)
 	if err != nil {
 		return &pb.OutputPublicURLResponse{
 			Ok:     false,
-			ErrMsg: "Unable to find task",
-		}, nil
-	}
-
-	filename := filepath.Base(in.Filename)
-	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(authInfo.Workspace.Name), task.Stub.ExternalId, task.ExternalId, in.Id, filename)
-
-	err = o.rdb.Set(ctx, Keys.PublicURL(in.Id), fullPath, time.Duration(in.Expires)*time.Second).Err()
-	if err != nil {
-		return &pb.OutputPublicURLResponse{
-			Ok:     false,
-			ErrMsg: "Unable to generate URL",
+			ErrMsg: "Unable to get public URL",
 		}, nil
 	}
 
 	return &pb.OutputPublicURLResponse{
 		Ok:        true,
-		PublicUrl: fmt.Sprintf("%v/output/id/%v", o.config.GatewayService.ExternalURL, in.Id),
+		PublicUrl: url,
 	}, nil
 }
 
-func (o *OutputRedisService) getURL(id string) (string, error) {
+// Output business logic
+
+type Stat struct {
+	Mode  string
+	Size  int64
+	Atime time.Time
+	Mtime time.Time
+}
+
+func (o *OutputRedisService) statOutput(ctx context.Context, workspaceName, taskId, outputId, filename string) (*Stat, error) {
+	task, err := o.backendRepo.GetTaskWithRelated(ctx, taskId)
+	if err != nil {
+		return nil, err
+	}
+
+	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(workspaceName), task.Stub.ExternalId, task.ExternalId, outputId, filepath.Base(filename))
+
+	var stat unix.Stat_t
+	err = unix.Stat(fullPath, &stat)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Stat{
+		Mode:  os.FileMode(stat.Mode).String(),
+		Size:  stat.Size,
+		Atime: time.Unix(stat.Atim.Sec, stat.Atim.Nsec),
+		Mtime: time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec),
+	}, nil
+}
+
+func (o *OutputRedisService) setPublicURL(ctx context.Context, workspaceName, taskId, outputId, filename string, expires uint32) (string, error) {
+	task, err := o.backendRepo.GetTaskWithRelated(ctx, taskId)
+	if err != nil {
+		return "", err
+	}
+
+	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(workspaceName), task.Stub.ExternalId, task.ExternalId, outputId, filepath.Base(filename))
+
+	err = o.rdb.Set(ctx, Keys.PublicURL(outputId), fullPath, time.Duration(expires)*time.Second).Err()
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%v/output/id/%v", o.config.GatewayService.ExternalURL, outputId), nil
+}
+
+func (o *OutputRedisService) getPublicURL(id string) (string, error) {
 	return o.rdb.Get(context.TODO(), Keys.PublicURL(id)).Result()
 }
 

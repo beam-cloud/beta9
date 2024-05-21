@@ -19,16 +19,16 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	OutputService_OutputSave_FullMethodName      = "/output.OutputService/OutputSave"
-	OutputService_OutputStat_FullMethodName      = "/output.OutputService/OutputStat"
-	OutputService_OutputPublicURL_FullMethodName = "/output.OutputService/OutputPublicURL"
+	OutputService_OutputSaveStream_FullMethodName = "/output.OutputService/OutputSaveStream"
+	OutputService_OutputStat_FullMethodName       = "/output.OutputService/OutputStat"
+	OutputService_OutputPublicURL_FullMethodName  = "/output.OutputService/OutputPublicURL"
 )
 
 // OutputServiceClient is the client API for OutputService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type OutputServiceClient interface {
-	OutputSave(ctx context.Context, in *OutputSaveRequest, opts ...grpc.CallOption) (*OutputSaveResponse, error)
+	OutputSaveStream(ctx context.Context, opts ...grpc.CallOption) (OutputService_OutputSaveStreamClient, error)
 	OutputStat(ctx context.Context, in *OutputStatRequest, opts ...grpc.CallOption) (*OutputStatResponse, error)
 	OutputPublicURL(ctx context.Context, in *OutputPublicURLRequest, opts ...grpc.CallOption) (*OutputPublicURLResponse, error)
 }
@@ -41,13 +41,38 @@ func NewOutputServiceClient(cc grpc.ClientConnInterface) OutputServiceClient {
 	return &outputServiceClient{cc}
 }
 
-func (c *outputServiceClient) OutputSave(ctx context.Context, in *OutputSaveRequest, opts ...grpc.CallOption) (*OutputSaveResponse, error) {
-	out := new(OutputSaveResponse)
-	err := c.cc.Invoke(ctx, OutputService_OutputSave_FullMethodName, in, out, opts...)
+func (c *outputServiceClient) OutputSaveStream(ctx context.Context, opts ...grpc.CallOption) (OutputService_OutputSaveStreamClient, error) {
+	stream, err := c.cc.NewStream(ctx, &OutputService_ServiceDesc.Streams[0], OutputService_OutputSaveStream_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &outputServiceOutputSaveStreamClient{stream}
+	return x, nil
+}
+
+type OutputService_OutputSaveStreamClient interface {
+	Send(*OutputSaveRequest) error
+	CloseAndRecv() (*OutputSaveResponse, error)
+	grpc.ClientStream
+}
+
+type outputServiceOutputSaveStreamClient struct {
+	grpc.ClientStream
+}
+
+func (x *outputServiceOutputSaveStreamClient) Send(m *OutputSaveRequest) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *outputServiceOutputSaveStreamClient) CloseAndRecv() (*OutputSaveResponse, error) {
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	m := new(OutputSaveResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (c *outputServiceClient) OutputStat(ctx context.Context, in *OutputStatRequest, opts ...grpc.CallOption) (*OutputStatResponse, error) {
@@ -72,7 +97,7 @@ func (c *outputServiceClient) OutputPublicURL(ctx context.Context, in *OutputPub
 // All implementations must embed UnimplementedOutputServiceServer
 // for forward compatibility
 type OutputServiceServer interface {
-	OutputSave(context.Context, *OutputSaveRequest) (*OutputSaveResponse, error)
+	OutputSaveStream(OutputService_OutputSaveStreamServer) error
 	OutputStat(context.Context, *OutputStatRequest) (*OutputStatResponse, error)
 	OutputPublicURL(context.Context, *OutputPublicURLRequest) (*OutputPublicURLResponse, error)
 	mustEmbedUnimplementedOutputServiceServer()
@@ -82,8 +107,8 @@ type OutputServiceServer interface {
 type UnimplementedOutputServiceServer struct {
 }
 
-func (UnimplementedOutputServiceServer) OutputSave(context.Context, *OutputSaveRequest) (*OutputSaveResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method OutputSave not implemented")
+func (UnimplementedOutputServiceServer) OutputSaveStream(OutputService_OutputSaveStreamServer) error {
+	return status.Errorf(codes.Unimplemented, "method OutputSaveStream not implemented")
 }
 func (UnimplementedOutputServiceServer) OutputStat(context.Context, *OutputStatRequest) (*OutputStatResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method OutputStat not implemented")
@@ -104,22 +129,30 @@ func RegisterOutputServiceServer(s grpc.ServiceRegistrar, srv OutputServiceServe
 	s.RegisterService(&OutputService_ServiceDesc, srv)
 }
 
-func _OutputService_OutputSave_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(OutputSaveRequest)
-	if err := dec(in); err != nil {
+func _OutputService_OutputSaveStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(OutputServiceServer).OutputSaveStream(&outputServiceOutputSaveStreamServer{stream})
+}
+
+type OutputService_OutputSaveStreamServer interface {
+	SendAndClose(*OutputSaveResponse) error
+	Recv() (*OutputSaveRequest, error)
+	grpc.ServerStream
+}
+
+type outputServiceOutputSaveStreamServer struct {
+	grpc.ServerStream
+}
+
+func (x *outputServiceOutputSaveStreamServer) SendAndClose(m *OutputSaveResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *outputServiceOutputSaveStreamServer) Recv() (*OutputSaveRequest, error) {
+	m := new(OutputSaveRequest)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
-	if interceptor == nil {
-		return srv.(OutputServiceServer).OutputSave(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: OutputService_OutputSave_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(OutputServiceServer).OutputSave(ctx, req.(*OutputSaveRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+	return m, nil
 }
 
 func _OutputService_OutputStat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -166,10 +199,6 @@ var OutputService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*OutputServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "OutputSave",
-			Handler:    _OutputService_OutputSave_Handler,
-		},
-		{
 			MethodName: "OutputStat",
 			Handler:    _OutputService_OutputStat_Handler,
 		},
@@ -178,6 +207,12 @@ var OutputService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _OutputService_OutputPublicURL_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "OutputSaveStream",
+			Handler:       _OutputService_OutputSaveStream_Handler,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "output.proto",
 }

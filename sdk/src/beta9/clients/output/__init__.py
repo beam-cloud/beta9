@@ -7,8 +7,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
+    AsyncIterable,
+    AsyncIterator,
     Dict,
+    Iterable,
     Optional,
+    Union,
 )
 
 import betterproto
@@ -74,17 +78,20 @@ class OutputPublicUrlResponse(betterproto.Message):
 
 
 class OutputServiceStub(betterproto.ServiceStub):
-    async def output_save(
+    async def output_save_stream(
         self,
-        output_save_request: "OutputSaveRequest",
+        output_save_request_iterator: Union[
+            AsyncIterable["OutputSaveRequest"], Iterable["OutputSaveRequest"]
+        ],
         *,
         timeout: Optional[float] = None,
         deadline: Optional["Deadline"] = None,
         metadata: Optional["MetadataLike"] = None
     ) -> "OutputSaveResponse":
-        return await self._unary_unary(
-            "/output.OutputService/OutputSave",
-            output_save_request,
+        return await self._stream_unary(
+            "/output.OutputService/OutputSaveStream",
+            output_save_request_iterator,
+            OutputSaveRequest,
             OutputSaveResponse,
             timeout=timeout,
             deadline=deadline,
@@ -128,8 +135,8 @@ class OutputServiceStub(betterproto.ServiceStub):
 
 class OutputServiceBase(ServiceBase):
 
-    async def output_save(
-        self, output_save_request: "OutputSaveRequest"
+    async def output_save_stream(
+        self, output_save_request_iterator: AsyncIterator["OutputSaveRequest"]
     ) -> "OutputSaveResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
@@ -143,11 +150,11 @@ class OutputServiceBase(ServiceBase):
     ) -> "OutputPublicUrlResponse":
         raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
 
-    async def __rpc_output_save(
+    async def __rpc_output_save_stream(
         self, stream: "grpclib.server.Stream[OutputSaveRequest, OutputSaveResponse]"
     ) -> None:
-        request = await stream.recv_message()
-        response = await self.output_save(request)
+        request = stream.__aiter__()
+        response = await self.output_save_stream(request)
         await stream.send_message(response)
 
     async def __rpc_output_stat(
@@ -167,9 +174,9 @@ class OutputServiceBase(ServiceBase):
 
     def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
         return {
-            "/output.OutputService/OutputSave": grpclib.const.Handler(
-                self.__rpc_output_save,
-                grpclib.const.Cardinality.UNARY_UNARY,
+            "/output.OutputService/OutputSaveStream": grpclib.const.Handler(
+                self.__rpc_output_save_stream,
+                grpclib.const.Cardinality.STREAM_UNARY,
                 OutputSaveRequest,
                 OutputSaveResponse,
             ),
