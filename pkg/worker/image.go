@@ -79,24 +79,6 @@ type ImageClient struct {
 }
 
 func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
-	var provider CredentialProvider // Configure image registry credentials
-
-	switch config.RegistryCredentialProviderName {
-	case "aws":
-		provider = &AWSCredentialProvider{
-			Region:    config.Registries.S3.Region,
-			AccessKey: config.Registries.S3.AccessKey,
-			SecretKey: config.Registries.S3.SecretKey,
-		}
-	case "docker":
-		provider = &DockerCredentialProvider{
-			Username: config.Registries.Docker.Username,
-			Password: config.Registries.Docker.Password,
-		}
-	default:
-		return nil, fmt.Errorf("invalid credential provider name: %s", config.RegistryCredentialProviderName)
-	}
-
 	registry, err := common.NewImageRegistry(config)
 	if err != nil {
 		return nil, err
@@ -127,15 +109,6 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 	}
 
 	err = os.MkdirAll(c.imageBundlePath, os.ModePerm)
-	if err != nil {
-		return nil, err
-	}
-
-	// TODO: refactor credentials logic for base image registries
-	// Right now, the aws credential provider is not actually being used
-	// because the base image is stored in a public registry
-	// We will probably need to adjust the config to make more sense here
-	_, err = provider.GetAuthString()
 	if err != nil {
 		return nil, err
 	}
