@@ -112,10 +112,11 @@ type DockerImageRegistryConfig struct {
 }
 
 type S3ImageRegistryConfig struct {
-	AWSS3Bucket  string `key:"awsS3Bucket" json:"aws_s3_bucket"`
-	AWSAccessKey string `key:"awsAccessKey" json:"aws_access_key"`
-	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`
-	AWSRegion    string `key:"awsRegion" json:"aws_region"`
+	BucketName string `key:"bucketName" json:"bucket_name"`
+	AccessKey  string `key:"accessKey" json:"access_key"`
+	SecretKey  string `key:"secretKey" json:"secret_key"`
+	Region     string `key:"region" json:"region"`
+	Endpoint   string `key:"endpoint" json:"endpoint"`
 }
 
 type RunnerConfig struct {

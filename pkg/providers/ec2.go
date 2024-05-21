@@ -22,7 +22,7 @@ type EC2Provider struct {
 }
 
 func NewEC2Provider(ctx context.Context, appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*EC2Provider, error) {
-	cfg, err := common.GetAWSConfig(appConfig.Providers.EC2Config.AWSAccessKey, appConfig.Providers.EC2Config.AWSSecretKey, appConfig.Providers.EC2Config.AWSRegion)
+	cfg, err := common.GetAWSConfig(appConfig.Providers.EC2Config.AWSAccessKey, appConfig.Providers.EC2Config.AWSSecretKey, appConfig.Providers.EC2Config.AWSRegion, "")
 	if err != nil {
 		return nil, err
 	}
