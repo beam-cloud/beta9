@@ -84,9 +84,9 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 	switch config.RegistryCredentialProviderName {
 	case "aws":
 		provider = &AWSCredentialProvider{
-			Region:    config.Registries.S3.AWSRegion,
-			AccessKey: config.Registries.S3.AWSAccessKey,
-			SecretKey: config.Registries.S3.AWSSecretKey,
+			Region:    config.Registries.S3.Region,
+			AccessKey: config.Registries.S3.AccessKey,
+			SecretKey: config.Registries.S3.SecretKey,
 		}
 	case "docker":
 		provider = &DockerCredentialProvider{
@@ -168,8 +168,8 @@ func (c *ImageClient) PullLazy(imageId string) error {
 		ContentCacheAvailable: c.cacheClient != nil,
 		Credentials: storage.ClipStorageCredentials{
 			S3: &storage.S3ClipStorageCredentials{
-				AccessKey: c.config.Registries.S3.AWSAccessKey,
-				SecretKey: c.config.Registries.S3.AWSSecretKey,
+				AccessKey: c.config.Registries.S3.AccessKey,
+				SecretKey: c.config.Registries.S3.SecretKey,
 			},
 		},
 	}
@@ -342,13 +342,13 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 			OutputPath: archivePath,
 			Credentials: storage.ClipStorageCredentials{
 				S3: &storage.S3ClipStorageCredentials{
-					AccessKey: c.config.Registries.S3.AWSAccessKey,
-					SecretKey: c.config.Registries.S3.AWSSecretKey,
+					AccessKey: c.config.Registries.S3.AccessKey,
+					SecretKey: c.config.Registries.S3.SecretKey,
 				},
 			},
 		}, &clipCommon.S3StorageInfo{
-			Bucket: c.config.Registries.S3.AWSS3Bucket,
-			Region: c.config.Registries.S3.AWSRegion,
+			Bucket: c.config.Registries.S3.BucketName,
+			Region: c.config.Registries.S3.Region,
 			Key:    fmt.Sprintf("%s.clip", imageId),
 		})
 	case "local":

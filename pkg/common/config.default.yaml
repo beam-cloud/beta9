@@ -51,10 +51,11 @@ imageService:
       username: beamcloud
       password:
     s3:
-      awsS3Bucket: beta9-images
-      awsRegion: us-east-1
-      awsAccessKey: test
-      awsSecretKey: test
+      bucketName: beta9-images
+      region: us-east-1
+      accessKey: test
+      secretKey: test
+      endpoint:
   runner:
     baseImageTag: latest
     baseImageName: beta9-runner
