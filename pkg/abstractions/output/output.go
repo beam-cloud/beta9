@@ -53,15 +53,14 @@ func NewOutputRedisService(config types.AppConfig, redisClient *common.RedisClie
 func (o *OutputRedisService) OutputSave(ctx context.Context, in *pb.OutputSaveRequest) (*pb.OutputSaveResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	tasks, err := o.backendRepo.ListTasksWithRelated(ctx, types.TaskFilter{TaskId: in.TaskId, WorkspaceID: authInfo.Workspace.Id})
-	if err != nil || len(tasks) != 1 {
+	task, err := o.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
+	if err != nil {
 		return &pb.OutputSaveResponse{
 			Ok:     false,
 			ErrMsg: "Unable to find task",
 		}, nil
 	}
 
-	task := tasks[0]
 	outputId := uuid.New().String()
 	filename := filepath.Base(in.Filename)
 	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(authInfo.Workspace.Name), task.Stub.ExternalId, task.ExternalId, outputId, filename)
@@ -98,15 +97,14 @@ func (o *OutputRedisService) OutputSave(ctx context.Context, in *pb.OutputSaveRe
 func (o *OutputRedisService) OutputStat(ctx context.Context, in *pb.OutputStatRequest) (*pb.OutputStatResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	tasks, err := o.backendRepo.ListTasksWithRelated(ctx, types.TaskFilter{TaskId: in.TaskId, WorkspaceID: authInfo.Workspace.Id})
-	if err != nil || len(tasks) != 1 {
+	task, err := o.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
+	if err != nil {
 		return &pb.OutputStatResponse{
 			Ok:     false,
 			ErrMsg: "Unable to find task",
 		}, nil
 	}
 
-	task := tasks[0]
 	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(authInfo.Workspace.Name), task.Stub.ExternalId, task.ExternalId, in.Id, filepath.Base(in.Filename))
 
 	var stat unix.Stat_t
@@ -132,15 +130,14 @@ func (o *OutputRedisService) OutputStat(ctx context.Context, in *pb.OutputStatRe
 func (o *OutputRedisService) OutputPublicURL(ctx context.Context, in *pb.OutputPublicURLRequest) (*pb.OutputPublicURLResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	tasks, err := o.backendRepo.ListTasksWithRelated(ctx, types.TaskFilter{TaskId: in.TaskId, WorkspaceID: authInfo.Workspace.Id})
-	if err != nil || len(tasks) != 1 {
+	task, err := o.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
+	if err != nil {
 		return &pb.OutputPublicURLResponse{
 			Ok:     false,
 			ErrMsg: "Unable to find task",
 		}, nil
 	}
 
-	task := tasks[0]
 	filename := filepath.Base(in.Filename)
 	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(authInfo.Workspace.Name), task.Stub.ExternalId, task.ExternalId, in.Id, filename)
 
