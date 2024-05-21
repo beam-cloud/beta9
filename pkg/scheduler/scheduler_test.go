@@ -16,6 +16,17 @@ import (
 	"github.com/tj/assert"
 )
 
+type BackendRepoForTest struct {
+	repo.BackendRepository
+}
+
+func (b *BackendRepoForTest) GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error) {
+	return &types.ConcurrencyLimit{
+		GPULimit: 0,
+		CPULimit: 10000,
+	}, nil
+}
+
 func NewSchedulerForTest() (*Scheduler, error) {
 	s, err := miniredis.Run()
 	if err != nil {
@@ -31,6 +42,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	workerRepo := repo.NewWorkerRedisRepositoryForTest(rdb)
 	containerRepo := repo.NewContainerRedisRepositoryForTest(rdb)
 	requestBacklog := NewRequestBacklogForTest(rdb)
+	backendRepo, _ := repo.NewBackendPostgresRepositoryForTest()
 
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
@@ -63,6 +75,9 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		containerRepo:     containerRepo,
 		schedulerMetrics:  schedulerMetrics,
 		eventRepo:         eventRepo,
+		backendRepo: &BackendRepoForTest{
+			BackendRepository: backendRepo,
+		},
 	}, nil
 }
 
