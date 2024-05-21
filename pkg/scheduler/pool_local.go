@@ -142,11 +142,6 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		wpc.config.Worker.ImageTag,
 	)
 
-	pullPolicy := corev1.PullIfNotPresent
-	if wpc.config.Worker.ImageTag == "latest" {
-		pullPolicy = corev1.PullAlways
-	}
-
 	resources := corev1.ResourceRequirements{}
 	if wpc.config.Worker.ResourcesEnforced {
 		resources.Requests = resourceRequests
@@ -155,9 +150,8 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 
 	containers := []corev1.Container{
 		{
-			Name:            defaultContainerName,
-			Image:           workerImage,
-			ImagePullPolicy: pullPolicy,
+			Name:  defaultContainerName,
+			Image: workerImage,
 			Command: []string{
 				defaultWorkerEntrypoint,
 			},

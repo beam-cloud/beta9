@@ -10,7 +10,9 @@ from .abstractions.taskqueue import TaskQueue as task_queue
 from .abstractions.volume import Volume
 from .type import GpuType, PythonVersion
 
+__version__ = "0.0.1"
 __all__ = [
+    "__version__",
     "Map",
     "Image",
     "Queue",
