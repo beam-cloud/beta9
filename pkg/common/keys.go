@@ -6,6 +6,7 @@ import (
 
 var (
 	schedulerPrefix                  string = "scheduler:"
+	schedulerPoolLock                string = "scheduler:pool:lock:%s"
 	schedulerContainerRequests       string = "scheduler:container_requests"
 	schedulerWorkerLock              string = "scheduler:worker:lock:%s"
 	schedulerWorkerRequests          string = "scheduler:worker:requests:%s"
@@ -88,6 +89,10 @@ func (rk *redisKeys) SchedulerWorkerIndex() string {
 
 func (rk *redisKeys) SchedulerContainerRequests() string {
 	return schedulerContainerRequests
+}
+
+func (rk *redisKeys) SchedulerPoolLock(poolName string) string {
+	return fmt.Sprintf(schedulerPoolLock, poolName)
 }
 
 func (rk *redisKeys) SchedulerWorkerLock(workerId string) string {

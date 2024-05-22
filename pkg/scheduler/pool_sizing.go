@@ -7,7 +7,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-const poolMonitoringInterval = 5 * time.Second
+const poolMonitoringInterval = 1 * time.Second
 
 type WorkerPoolSizer struct {
 	controller WorkerPoolController
