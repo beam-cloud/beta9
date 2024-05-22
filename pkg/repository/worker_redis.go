@@ -225,12 +225,6 @@ func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
 }
 
 func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerPoolLock(poolName), common.RedisLockOptions{TtlS: 10, Retries: 0})
-	if err != nil {
-		return nil, err
-	}
-	defer r.lock.Release(common.RedisKeys.SchedulerPoolLock(poolName))
-
 	workers, err := r.getWorkers(false)
 	if err != nil {
 		return nil, err

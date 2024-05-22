@@ -4,20 +4,23 @@ import (
 	"log"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 const poolMonitoringInterval = 1 * time.Second
 
 type WorkerPoolSizer struct {
-	controller WorkerPoolController
-	config     *types.WorkerPoolSizingConfig
+	controller     WorkerPoolController
+	config         *types.WorkerPoolSizingConfig
+	workerPoolRepo repository.WorkerPoolRepository
 }
 
-func NewWorkerPoolSizer(controller WorkerPoolController, poolSizingConfig *types.WorkerPoolSizingConfig) (*WorkerPoolSizer, error) {
+func NewWorkerPoolSizer(controller WorkerPoolController, poolSizingConfig *types.WorkerPoolSizingConfig, workerPoolRepo repository.WorkerPoolRepository) (*WorkerPoolSizer, error) {
 	return &WorkerPoolSizer{
-		controller: controller,
-		config:     poolSizingConfig,
+		controller:     controller,
+		config:         poolSizingConfig,
+		workerPoolRepo: workerPoolRepo,
 	}, nil
 }
 
@@ -26,13 +29,21 @@ func (s *WorkerPoolSizer) Start() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		freeCapacity, err := s.controller.FreeCapacity()
-		if err != nil {
-			log.Printf("<pool %s> Error getting free capacity: %v\n", s.controller.Name(), err)
-			continue
-		}
+		func() {
+			err := s.workerPoolRepo.SetPoolLock(s.controller.Name())
+			if err != nil {
+				return
+			}
+			defer s.workerPoolRepo.RemovePoolLock(s.controller.Name())
 
-		s.addWorkerIfNeeded(freeCapacity)
+			freeCapacity, err := s.controller.FreeCapacity()
+			if err != nil {
+				log.Printf("<pool %s> Error getting free capacity: %v\n", s.controller.Name(), err)
+				return
+			}
+
+			s.addWorkerIfNeeded(freeCapacity)
+		}()
 	}
 }
 

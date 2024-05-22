@@ -47,13 +47,13 @@ func GenerateWorkerId() string {
 	return uuid.New().String()[:8]
 }
 
-func MonitorPoolSize(wpc WorkerPoolController, workerPool *types.WorkerPoolConfig) error {
+func MonitorPoolSize(wpc WorkerPoolController, workerPool *types.WorkerPoolConfig, workerPoolRepo repository.WorkerPoolRepository) error {
 	config, err := ParsePoolSizingConfig(workerPool.PoolSizing)
 	if err != nil {
 		return err
 	}
 
-	poolSizer, err := NewWorkerPoolSizer(wpc, config)
+	poolSizer, err := NewWorkerPoolSizer(wpc, config, workerPoolRepo)
 	if err != nil {
 		return err
 	}
