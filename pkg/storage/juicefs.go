@@ -79,7 +79,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 
 func (s *JuiceFsStorage) Format(fsName string) error {
 	blockSize := strconv.FormatInt(s.config.BlockSize, 10)
-	if s.config.BlockSize < 0 {
+	if s.config.BlockSize <= 0 {
 		blockSize = "4096"
 	}
 
