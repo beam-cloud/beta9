@@ -83,7 +83,7 @@ class Container(RunnerAbstraction):
         terminal.header("Running command")
         last_response: Union[None, CommandExecutionResponse] = None
 
-        async for r in self.container_stub.execute_command(
+        async for r in self._container_stub.execute_command(
             CommandExecutionRequest(stub_id=self.stub_id, command=" ".join(command).encode())
         ):
             if r.task_id != "":
