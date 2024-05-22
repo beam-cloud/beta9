@@ -225,7 +225,7 @@ func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
 }
 
 func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
-	workers, err := r.getWorkers(true)
+	workers, err := r.getWorkers(false)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +241,7 @@ func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.W
 }
 
 func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error) {
-	workers, err := r.getWorkers(true)
+	workers, err := r.getWorkers(false)
 	if err != nil {
 		return nil, err
 	}
