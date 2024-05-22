@@ -23,4 +23,4 @@ assignees: ''
 
 
 
-#### Thank you for the feature request –- we really appreciate your insight.
+#### Thank you for the feature request!
