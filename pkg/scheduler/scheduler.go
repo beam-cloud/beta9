@@ -148,6 +148,7 @@ func (s *Scheduler) Stop(containerId string) error {
 		LockAndDelete: false,
 	})
 	if err != nil {
+		log.Printf("Could not stop container: %+v\n", err)
 		return err
 	}
 

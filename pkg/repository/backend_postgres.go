@@ -943,8 +943,6 @@ func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deploy
 func (r *PostgresBackendRepository) GetConcurrencyLimit(ctx context.Context, concurrencyLimitId uint) (*types.ConcurrencyLimit, error) {
 	var limit types.ConcurrencyLimit
 
-	log.Println("concurrencyLimitId: ", concurrencyLimitId)
-
 	query := `SELECT gpu_limit, cpu_limit, created_at, updated_at FROM concurrency_limit WHERE id = $1;`
 	err := r.client.GetContext(ctx, &limit, query, concurrencyLimitId)
 	if err != nil {

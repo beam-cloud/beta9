@@ -144,7 +144,6 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		Mounts:      mounts,
 	})
 	if err != nil {
-
 		return err
 	}
 
