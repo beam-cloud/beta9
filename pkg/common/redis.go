@@ -21,7 +21,6 @@ var (
 	ErrChannelClosed    = errors.New("redis: channel closed")
 	ErrConnectionIssue  = errors.New("redis: connection issue")
 	ErrUnknownRedisMode = errors.New("redis: unknown mode")
-	ErrLockNotReleased  = errors.New("redislock: lock not released")
 )
 
 type RedisClient struct {
@@ -272,10 +271,6 @@ func NewRedisLock(client *RedisClient, opts ...RedisLockOption) *RedisLock {
 func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptions) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
-	if _, ok := l.locks[key]; ok {
-		return ErrLockNotReleased
-	}
 
 	var retryStrategy redislock.RetryStrategy = nil
 	if opts.Retries > 0 {

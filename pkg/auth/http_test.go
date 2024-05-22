@@ -242,7 +242,7 @@ func TestWithClusterAdminAuth(t *testing.T) {
 		prepares       func()
 	}{
 		{
-			name:           "Test with valid token but not admin user",
+			name:           "Test with valid token",
 			tokenKey:       mockDetails.tokenForTest.Key,
 			expectedStatus: 401,
 			prepares: func() {
@@ -250,7 +250,7 @@ func TestWithClusterAdminAuth(t *testing.T) {
 			},
 		},
 		{
-			name:           "Test with valid token and admin user",
+			name:           "Test with admin token",
 			tokenKey:       mockDetails.tokenForTest.Key,
 			expectedStatus: 200,
 			prepares: func() {

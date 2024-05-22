@@ -29,6 +29,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	output "github.com/beam-cloud/beta9/pkg/abstractions/output"
 	volume "github.com/beam-cloud/beta9/pkg/abstractions/volume"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -173,8 +174,8 @@ func (g *Gateway) initGrpc() error {
 	serverOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(authInterceptor.Unary()),
 		grpc.StreamInterceptor(authInterceptor.Stream()),
-		grpc.MaxRecvMsgSize(g.Config.GatewayService.MaxRecvMsgSize * 1024 * 1024),
-		grpc.MaxSendMsgSize(g.Config.GatewayService.MaxSendMsgSize * 1024 * 1024),
+		grpc.MaxRecvMsgSize(g.Config.GatewayService.GRPC.MaxRecvMsgSize * 1024 * 1024),
+		grpc.MaxSendMsgSize(g.Config.GatewayService.GRPC.MaxSendMsgSize * 1024 * 1024),
 	}
 
 	g.grpcServer = grpc.NewServer(
@@ -285,6 +286,13 @@ func (g *Gateway) registerServices() error {
 	}
 	pb.RegisterContainerServiceServer(g.grpcServer, cs)
 
+	// Register output service
+	o, err := output.NewOutputRedisService(g.Config, g.RedisClient, g.BackendRepo, g.rootRouteGroup)
+	if err != nil {
+		return err
+	}
+	pb.RegisterOutputServiceServer(g.grpcServer, o)
+
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService(g.Scheduler)
 	if err != nil {
@@ -323,7 +331,7 @@ func (g *Gateway) Start() error {
 	}
 
 	go func() {
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", g.Config.GatewayService.GRPCPort))
+		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", g.Config.GatewayService.GRPC.Port))
 		if err != nil {
 			log.Fatalf("Failed to listen: %v", err)
 		}
@@ -345,7 +353,7 @@ func (g *Gateway) Start() error {
 	}()
 
 	log.Println("Gateway http server running @", g.Config.GatewayService.HTTP.Port)
-	log.Println("Gateway grpc server running @", g.Config.GatewayService.GRPCPort)
+	log.Println("Gateway grpc server running @", g.Config.GatewayService.GRPC.Port)
 
 	terminationSignal := make(chan os.Signal, 1)
 	defer close(terminationSignal)

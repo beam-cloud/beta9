@@ -123,7 +123,7 @@ class FunctionHandler:
 
     def __init__(self) -> None:
         self.pass_context: bool = False
-        self.handler: Union[Callable, None] = None
+        self.handler: Optional[Callable] = None
         self._load()
 
     @contextmanager
@@ -149,8 +149,13 @@ class FunctionHandler:
             raise RunnerException()
 
     def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+        if self.handler is None:
+            raise Exception("Handler not configured.")
+
         if self.pass_context:
             kwargs["context"] = context
+
+        os.environ["TASK_ID"] = context.task_id or ""
 
         return self.handler(*args, **kwargs)
 

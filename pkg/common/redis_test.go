@@ -39,7 +39,7 @@ func TestRedisLock(t *testing.T) {
 	// Test acquiring lock again without releasing
 	err = lock.Acquire(context.Background(), key, opts)
 	assert.Error(t, err)
-	assert.Equal(t, "redislock: lock not released", err.Error())
+	assert.Equal(t, "redislock: not obtained", err.Error())
 
 	// Test releasing lock
 	err = lock.Release(key)

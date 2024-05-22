@@ -62,6 +62,12 @@ type PostgresConfig struct {
 	EnableTLS bool   `key:"enableTLS" json:"enable_tls"`
 }
 
+type GRPCConfig struct {
+	Port           int `key:"port" json:"port"`
+	MaxRecvMsgSize int `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
+	MaxSendMsgSize int `key:"maxSendMsgSize" json:"max_send_msg_size"`
+}
+
 type HTTPConfig struct {
 	EnablePrettyLogs bool       `key:"enablePrettyLogs" json:"enable_pretty_logs"`
 	CORS             CORSConfig `key:"cors" json:"cors"`
@@ -76,9 +82,8 @@ type CORSConfig struct {
 
 type GatewayServiceConfig struct {
 	Host            string        `key:"host" json:"host"`
-	GRPCPort        int           `key:"grpcPort" json:"grpc_port"`
-	MaxRecvMsgSize  int           `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
-	MaxSendMsgSize  int           `key:"maxSendMsgSize" json:"max_send_msg_size"`
+	ExternalURL     string        `key:"externalURL" json:"external_url"`
+	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
 	HTTP            HTTPConfig    `key:"http" json:"http"`
 	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
 }
@@ -107,10 +112,11 @@ type DockerImageRegistryConfig struct {
 }
 
 type S3ImageRegistryConfig struct {
-	AWSS3Bucket  string `key:"awsS3Bucket" json:"aws_s3_bucket"`
-	AWSAccessKey string `key:"awsAccessKey" json:"aws_access_key"`
-	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`
-	AWSRegion    string `key:"awsRegion" json:"aws_region"`
+	BucketName string `key:"bucketName" json:"bucket_name"`
+	AccessKey  string `key:"accessKey" json:"access_key"`
+	SecretKey  string `key:"secretKey" json:"secret_key"`
+	Region     string `key:"region" json:"region"`
+	Endpoint   string `key:"endpoint" json:"endpoint"`
 }
 
 type RunnerConfig struct {

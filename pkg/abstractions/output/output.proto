@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beta9/proto";
+import "google/protobuf/timestamp.proto";
+
+package output;
+
+service OutputService {
+  rpc OutputSaveStream(stream OutputSaveRequest) returns (OutputSaveResponse) {}
+  rpc OutputStat(OutputStatRequest) returns (OutputStatResponse) {}
+  rpc OutputPublicURL(OutputPublicURLRequest) returns (OutputPublicURLResponse) {}
+}
+
+message OutputSaveRequest {
+  string task_id = 1;
+  string filename = 2;
+  bytes content = 3;
+}
+
+message OutputSaveResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string id = 3;
+}
+
+message OutputStatRequest {
+  string id = 1;
+  string task_id = 2;
+  string filename = 3;
+}
+
+message OutputStat {
+  string mode = 1;
+  int64 size = 2;
+  google.protobuf.Timestamp atime = 3;
+  google.protobuf.Timestamp mtime = 4;
+}
+
+message OutputStatResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  OutputStat stat = 3;
+}
+
+message OutputPublicURLRequest {
+  string id = 1;
+  string task_id = 2;
+  string filename = 3;
+  uint32 expires = 4;
+}
+
+message OutputPublicURLResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string public_url = 3;
+}

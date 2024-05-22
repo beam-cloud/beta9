@@ -79,24 +79,6 @@ type ImageClient struct {
 }
 
 func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
-	var provider CredentialProvider // Configure image registry credentials
-
-	switch config.RegistryCredentialProviderName {
-	case "aws":
-		provider = &AWSCredentialProvider{
-			Region:    config.Registries.S3.AWSRegion,
-			AccessKey: config.Registries.S3.AWSAccessKey,
-			SecretKey: config.Registries.S3.AWSSecretKey,
-		}
-	case "docker":
-		provider = &DockerCredentialProvider{
-			Username: config.Registries.Docker.Username,
-			Password: config.Registries.Docker.Password,
-		}
-	default:
-		return nil, fmt.Errorf("invalid credential provider name: %s", config.RegistryCredentialProviderName)
-	}
-
 	registry, err := common.NewImageRegistry(config)
 	if err != nil {
 		return nil, err
@@ -131,15 +113,6 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		return nil, err
 	}
 
-	// TODO: refactor credentials logic for base image registries
-	// Right now, the aws credential provider is not actually being used
-	// because the base image is stored in a public registry
-	// We will probably need to adjust the config to make more sense here
-	_, err = provider.GetAuthString()
-	if err != nil {
-		return nil, err
-	}
-
 	return c, nil
 }
 
@@ -168,8 +141,8 @@ func (c *ImageClient) PullLazy(imageId string) error {
 		ContentCacheAvailable: c.cacheClient != nil,
 		Credentials: storage.ClipStorageCredentials{
 			S3: &storage.S3ClipStorageCredentials{
-				AccessKey: c.config.Registries.S3.AWSAccessKey,
-				SecretKey: c.config.Registries.S3.AWSSecretKey,
+				AccessKey: c.config.Registries.S3.AccessKey,
+				SecretKey: c.config.Registries.S3.SecretKey,
 			},
 		},
 	}
@@ -342,14 +315,15 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 			OutputPath: archivePath,
 			Credentials: storage.ClipStorageCredentials{
 				S3: &storage.S3ClipStorageCredentials{
-					AccessKey: c.config.Registries.S3.AWSAccessKey,
-					SecretKey: c.config.Registries.S3.AWSSecretKey,
+					AccessKey: c.config.Registries.S3.AccessKey,
+					SecretKey: c.config.Registries.S3.SecretKey,
 				},
 			},
 		}, &clipCommon.S3StorageInfo{
-			Bucket: c.config.Registries.S3.AWSS3Bucket,
-			Region: c.config.Registries.S3.AWSRegion,
-			Key:    fmt.Sprintf("%s.clip", imageId),
+			Bucket:   c.config.Registries.S3.BucketName,
+			Region:   c.config.Registries.S3.Region,
+			Endpoint: c.config.Registries.S3.Endpoint,
+			Key:      fmt.Sprintf("%s.clip", imageId),
 		})
 	case "local":
 		err = clip.CreateArchive(clip.CreateOptions{

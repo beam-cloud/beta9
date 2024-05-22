@@ -334,7 +334,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "BETA9_GATEWAY_PORT",
-			Value: fmt.Sprint(wpc.config.GatewayService.GRPCPort),
+			Value: fmt.Sprint(wpc.config.GatewayService.GRPC.Port),
 		},
 		{
 			Name:  "POD_HOSTNAME",

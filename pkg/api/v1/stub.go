@@ -21,9 +21,27 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 		config:      config,
 	}
 
-	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubs))
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId)) // Allows workspace admins to list stubs specific to their workspace
+	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                        // Allows cluster admins to list all stubs
 
 	return group
+}
+
+func (g *StubGroup) ListStubsByWorkspaceId(ctx echo.Context) error {
+	workspaceID := ctx.Param("workspaceId")
+
+	var filters types.StubFilter
+	if err := ctx.Bind(&filters); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode query parameters")
+	}
+
+	filters.WorkspaceID = workspaceID
+
+	if stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), filters); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list stubs")
+	} else {
+		return ctx.JSON(http.StatusOK, stubs)
+	}
 }
 
 func (g *StubGroup) ListStubs(ctx echo.Context) error {

@@ -57,6 +57,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 				i.Stub.Object.ExternalId,
 				i.Workspace.Name,
 				*i.buffer.stubConfig,
+				i.Stub.ExternalId,
 			),
 		}
 

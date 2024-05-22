@@ -6,12 +6,17 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-func ConfigureContainerRequestMounts(stubObjectId string, workspaceName string, config types.StubConfigV1) []types.Mount {
+func ConfigureContainerRequestMounts(stubObjectId string, workspaceName string, config types.StubConfigV1, stubId string) []types.Mount {
 	mounts := []types.Mount{
 		{
 			LocalPath: path.Join(types.DefaultExtractedObjectPath, workspaceName, stubObjectId),
 			MountPath: types.WorkerUserCodeVolume,
 			ReadOnly:  true,
+		},
+		{
+			LocalPath: path.Join(types.DefaultOutputsPath, workspaceName, stubId),
+			MountPath: types.WorkerUserOutputVolume,
+			ReadOnly:  false,
 		},
 	}
 
