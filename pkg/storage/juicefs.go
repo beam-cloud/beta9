@@ -78,11 +78,17 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 }
 
 func (s *JuiceFsStorage) Format(fsName string) error {
+	blockSize := strconv.FormatInt(s.config.BlockSize, 10)
+	if s.config.BlockSize <= 0 {
+		blockSize = "4096"
+	}
+
 	cmd := exec.Command(
 		"juicefs",
 		"format",
 		"--storage", "s3",
 		"--bucket", s.config.AWSS3Bucket,
+		"--block-size", blockSize,
 		s.config.RedisURI,
 		fsName,
 		"--no-update",
