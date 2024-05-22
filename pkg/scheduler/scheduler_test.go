@@ -116,6 +116,14 @@ func TestRunContainer(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 
+	backendRepo, _ := repo.NewBackendPostgresRepositoryForTest()
+	wb.backendRepo = &BackendRepoConcurrencyLimitsForTest{
+		BackendRepository: backendRepo,
+	}
+
+	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).GPUConcurrencyLimit = 0
+	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).CPUConcurrencyLimit = 10000
+
 	// Schedule a container
 	err = wb.Run(&types.ContainerRequest{
 		ContainerId: "test-container",
@@ -140,6 +148,14 @@ func TestProcessRequests(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 
+	backendRepo, _ := repo.NewBackendPostgresRepositoryForTest()
+	wb.backendRepo = &BackendRepoConcurrencyLimitsForTest{
+		BackendRepository: backendRepo,
+	}
+
+	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).GPUConcurrencyLimit = 10
+	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).CPUConcurrencyLimit = 100000
+
 	// Prepare some requests to process.
 	requests := []*types.ContainerRequest{
 		{
@@ -147,12 +163,14 @@ func TestProcessRequests(t *testing.T) {
 			Cpu:         1000,
 			Memory:      2000,
 			Gpu:         "A10G",
+			GpuCount:    1,
 		},
 		{
 			ContainerId: uuid.New().String(),
 			Cpu:         1000,
 			Memory:      2000,
 			Gpu:         "T4",
+			GpuCount:    1,
 		},
 		{
 			ContainerId: uuid.New().String(),
