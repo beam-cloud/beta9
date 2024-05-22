@@ -154,6 +154,9 @@ class _CallableWrapper:
     def remote(self, *args, **kwargs) -> Any:
         return self(*args, **kwargs)
 
+    def serve(self):
+        terminal.error("Serve has not yet been implemented for functions.")
+
     def deploy(self, name: str) -> bool:
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=FUNCTION_DEPLOYMENT_STUB_TYPE, force_create_stub=True
