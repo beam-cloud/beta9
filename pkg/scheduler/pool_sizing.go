@@ -1,17 +1,15 @@
 package scheduler
 
 import (
-	"context"
 	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-const poolMonitoringInterval = 1 * time.Second
+const poolMonitoringInterval = 5 * time.Second
 
 type WorkerPoolSizer struct {
-	ctx        context.Context
 	controller WorkerPoolController
 	config     *types.WorkerPoolSizingConfig
 }
