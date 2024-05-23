@@ -29,7 +29,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 	cacheSize := strconv.FormatInt(s.config.CacheSize, 10)
 
 	prefetch := strconv.FormatInt(s.config.Prefetch, 10)
-	if s.config.BlockSize <= 0 {
+	if s.config.Prefetch <= 0 {
 		prefetch = "1"
 	}
 
