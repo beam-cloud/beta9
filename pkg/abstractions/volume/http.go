@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/apex/log"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/labstack/echo/v4"
@@ -91,7 +90,6 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 
 	go func() {
 		defer close(ch)
-		bytesRead := 0
 
 		for {
 			buf := make([]byte, uploadBufferSize) // 8 Mb
@@ -100,16 +98,11 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 				break
 			}
 
-			log.Infof("Read %d bytes", n)
-			bytesRead += n
-
 			ch <- CopyPathContent{
 				Path:    decodedVolumePath,
 				Content: buf[:n],
 			}
 		}
-
-		log.Infof("Read %d bytes in total", bytesRead)
 	}()
 
 	if err := g.gvs.copyPathStream(
