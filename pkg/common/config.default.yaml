@@ -27,6 +27,8 @@ storage:
     awsSecretKey: test
     blockSize: 4096
     cacheSize: 0
+    prefetch: 1
+    bufferSize: 300
 gateway:
   host: beta9-gateway.beta9
   externalURL: http://localhost:1994

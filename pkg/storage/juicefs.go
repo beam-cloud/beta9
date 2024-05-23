@@ -83,12 +83,24 @@ func (s *JuiceFsStorage) Format(fsName string) error {
 		blockSize = "4096"
 	}
 
+	prefetch := strconv.FormatInt(s.config.Prefetch, 10)
+	if s.config.BlockSize <= 0 {
+		prefetch = "1"
+	}
+
+	bufferSize := strconv.FormatInt(s.config.BufferSize, 10)
+	if s.config.BufferSize <= 0 {
+		prefetch = "300"
+	}
+
 	cmd := exec.Command(
 		"juicefs",
 		"format",
 		"--storage", "s3",
 		"--bucket", s.config.AWSS3Bucket,
 		"--block-size", blockSize,
+		"--prefetch", prefetch,
+		"--buffer-size", bufferSize,
 		s.config.RedisURI,
 		fsName,
 		"--no-update",
