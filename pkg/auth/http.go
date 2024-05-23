@@ -23,7 +23,7 @@ func AuthMiddleware(backendRepo repository.BackendRepository) echo.MiddlewareFun
 
 			token, workspace, err := backendRepo.AuthorizeToken(c.Request().Context(), tokenKey)
 			if err != nil {
-				next(c)
+				return next(c)
 			}
 
 			authInfo := &AuthInfo{

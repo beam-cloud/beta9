@@ -80,7 +80,13 @@ func TestAuthMiddleWare(t *testing.T) {
 
 	// 1. Test with valid token
 	e.GET("/", func(ctx echo.Context) error {
-		cc, _ := ctx.(*HttpAuthContext)
+		cc, ok := ctx.(*HttpAuthContext)
+		if !ok {
+			// All requests will by default allow pass through
+			// Thats why we need route specific auth wrappers
+			// Auth middleware functions as an auth parser
+			return ctx.String(401, "Unauthorized")
+		}
 
 		assert.NotNil(t, cc.AuthInfo)
 		assert.NotNil(t, cc.AuthInfo.Token)
@@ -206,6 +212,16 @@ func TestWithWorkspaceAuth(t *testing.T) {
 				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, tokenForTest)
 			},
 		},
+		{
+			name:           "Test with invalid token",
+			tokenKey:       "invalid",
+			workspaceId:    mockDetails.tokenForTest.Workspace.ExternalId,
+			expectedStatus: 401,
+			prepares: func() {
+				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
+					WillReturnError(errors.New("invalid token"))
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -257,6 +273,15 @@ func TestWithClusterAdminAuth(t *testing.T) {
 				tokenForTest := mockDetails.tokenForTest
 				tokenForTest.TokenType = types.TokenTypeClusterAdmin
 				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, tokenForTest)
+			},
+		},
+		{
+			name:           "Test with invalid token",
+			tokenKey:       "invalid",
+			expectedStatus: 401,
+			prepares: func() {
+				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
+					WillReturnError(errors.New("invalid token"))
 			},
 		},
 	}
