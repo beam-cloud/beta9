@@ -28,6 +28,16 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 
 	cacheSize := strconv.FormatInt(s.config.CacheSize, 10)
 
+	prefetch := strconv.FormatInt(s.config.Prefetch, 10)
+	if s.config.Prefetch <= 0 {
+		prefetch = "1"
+	}
+
+	bufferSize := strconv.FormatInt(s.config.BufferSize, 10)
+	if s.config.BufferSize <= 0 {
+		prefetch = "300"
+	}
+
 	s.mountCmd = exec.Command(
 		"juicefs",
 		"mount",
@@ -35,8 +45,9 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		localPath,
 		"-d",
 		"--bucket", s.config.AWSS3Bucket,
-		"--cache-size",
-		cacheSize,
+		"--cache-size", cacheSize,
+		"--prefetch", prefetch,
+		"--buffer-size", bufferSize,
 		"--no-bgjob",
 		"--no-usage-report",
 	)

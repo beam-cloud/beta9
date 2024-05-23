@@ -142,6 +142,8 @@ type JuiceFSConfig struct {
 	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`
 	CacheSize    int64  `key:"cacheSize" json:"cache_size"`
 	BlockSize    int64  `key:"blockSize" json:"block_size"`
+	Prefetch     int64  `key:"prefetch" json:"prefetch"`
+	BufferSize   int64  `key:"bufferSize" json:"buffer_size"`
 }
 
 type MountPointConfig struct {
