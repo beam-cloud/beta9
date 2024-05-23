@@ -4,7 +4,7 @@ dependencies:
   version: 2.5.0
 - name: beam-blobcache-chart
   repository: oci://public.ecr.aws/n4e0e1y0
-  version: 0.1.1
+  version: 0.1.2
 - name: redis
   repository: https://charts.bitnami.com/bitnami
   version: 18.9.1
@@ -29,5 +29,5 @@ dependencies:
 - name: fluent-bit
   repository: https://fluent.github.io/helm-charts
   version: 0.43.0
-digest: sha256:17271b1ca6c3380af46d27e5c547912200b4135e2a44de7defc3632926b83080
-generated: "2024-04-30T14:51:10.219492-04:00"
+digest: sha256:dc432b87ab30e7560e1993ac54acdbefa0ac733d7f1e398bde7b1c82571b96e2
+generated: "2024-05-23T16:01:54.154116-04:00"
