@@ -21,9 +21,13 @@ func AuthMiddleware(backendRepo repository.BackendRepository) echo.MiddlewareFun
 			authHeader := req.Header.Get("Authorization")
 			tokenKey := strings.TrimPrefix(authHeader, "Bearer ")
 
+			if authHeader == "" || tokenKey == "" {
+				return next(c)
+			}
+
 			token, workspace, err := backendRepo.AuthorizeToken(c.Request().Context(), tokenKey)
 			if err != nil {
-				return next(c)
+				return echo.NewHTTPError(http.StatusUnauthorized)
 			}
 
 			authInfo := &AuthInfo{

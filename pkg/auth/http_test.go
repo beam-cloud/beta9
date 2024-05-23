@@ -85,7 +85,7 @@ func TestAuthMiddleWare(t *testing.T) {
 			// All requests will by default allow pass through
 			// Thats why we need route specific auth wrappers
 			// Auth middleware functions as an auth parser
-			return ctx.String(401, "Unauthorized")
+			return ctx.String(200, "OK")
 		}
 
 		assert.NotNil(t, cc.AuthInfo)
@@ -122,13 +122,10 @@ func TestAuthMiddleWare(t *testing.T) {
 			},
 		},
 		{
-			name:           "Test with empty token",
+			name:           "Test with empty token. Should pass through",
 			tokenKey:       "",
-			expectedStatus: 401,
-			prepares: func() {
-				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
-					WillReturnError(errors.New("invalid token"))
-			},
+			expectedStatus: 200,
+			prepares:       func() {},
 		},
 	}
 
