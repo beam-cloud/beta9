@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"log"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -9,6 +10,8 @@ import (
 )
 
 func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeRequest) (*pb.AuthorizeResponse, error) {
+	log.Printf("Authorize request: %v", in)
+
 	authInfo, authFound := auth.AuthInfoFromContext(ctx)
 	if authFound {
 		return &pb.AuthorizeResponse{

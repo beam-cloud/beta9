@@ -49,6 +49,7 @@ type Gateway struct {
 	RedisClient    *common.RedisClient
 	TaskDispatcher *task.Dispatcher
 	TaskRepo       repository.TaskRepository
+	WorkspaceRepo  repository.WorkspaceRepository
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
@@ -110,6 +111,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
+	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)
@@ -121,6 +123,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.Config = config
 	gateway.Scheduler = scheduler
 	gateway.TaskRepo = taskRepo
+	gateway.WorkspaceRepo = workspaceRepo
 	gateway.ContainerRepo = containerRepo
 	gateway.ProviderRepo = providerRepo
 	gateway.BackendRepo = backendRepo
@@ -262,7 +265,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterEndpointServiceServer(g.grpcServer, ws)
 
 	// Register volume service
-	vs, err := volume.NewGlobalVolumeService(g.BackendRepo, g.rootRouteGroup)
+	vs, err := volume.NewGlobalVolumeService(g.BackendRepo, g.WorkspaceRepo, g.rootRouteGroup)
 	if err != nil {
 		return err
 	}

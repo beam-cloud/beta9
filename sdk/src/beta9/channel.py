@@ -59,6 +59,7 @@ class AuthenticatedChannel(Channel):
 
 def get_channel(context: Optional[ConfigContext] = None) -> Channel:
     if os.getenv("CI"):
+        print("Using insecure channel for CI")
         return Channel(host="localhost", port=50051, ssl=False)
 
     if not context:

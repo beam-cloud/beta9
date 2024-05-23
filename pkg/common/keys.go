@@ -55,6 +55,8 @@ var (
 	workspaceConcurrencyQuota     string = "workspace:concurrency_quota:%s"
 	workspaceActiveContainer      string = "workspace:container:active:%s:%s:%s"
 	workspaceActiveContainersLock string = "workspace:container:active:lock:%s"
+
+	workspaceVolumePathDownloadToken string = "workspace:volume_path_download_token:%s"
 )
 
 var (
@@ -212,6 +214,10 @@ func (rk *redisKeys) WorkspaceActiveContainer(workspaceId string, containerId st
 
 func (rk *redisKeys) WorkspaceActiveContainerLock(workspaceId string) string {
 	return fmt.Sprintf(workspaceActiveContainersLock, workspaceId)
+}
+
+func (rk *redisKeys) WorkspaceVolumePathDownloadToken(token string) string {
+	return fmt.Sprintf(workspaceVolumePathDownloadToken, token)
 }
 
 // WorkerPool keys

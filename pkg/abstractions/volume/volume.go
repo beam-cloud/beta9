@@ -39,14 +39,14 @@ type FileInfo struct {
 
 var volumeRoutePrefix string = "/volume"
 
-func NewGlobalVolumeService(backendRepo repository.BackendRepository, routeGroup *echo.Group) (VolumeService, error) {
+func NewGlobalVolumeService(backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, routeGroup *echo.Group) (VolumeService, error) {
 	gvs := &GlobalVolumeService{
 		backendRepo: backendRepo,
 	}
 
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(backendRepo)
-	registerVolumeRoutes(routeGroup.Group(volumeRoutePrefix, authMiddleware), gvs)
+	registerVolumeRoutes(routeGroup.Group(volumeRoutePrefix, authMiddleware), gvs, workspaceRepo)
 
 	return gvs, nil
 }
@@ -310,29 +310,29 @@ func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string,
 	return deleted, nil
 }
 
-func (vs *GlobalVolumeService) getFileFd(
+func (vs *GlobalVolumeService) getFilePath(
 	ctx context.Context,
 	path string,
 	workspace *types.Workspace,
-) (*os.File, error) {
+) (string, error) {
 	volumeName, volumePath := parseVolumeInput(path)
 	if volumeName == "" {
-		return nil, errors.New("must provide volume name")
+		return "", errors.New("must provide volume name")
 	}
 
 	// Check if the volume exists
 	volume, err := vs.backendRepo.GetVolume(ctx, workspace.Id, volumeName)
 	if err != nil {
-		return nil, errors.New("unable to find volume")
+		return "", errors.New("unable to find volume")
 	}
 
 	// Get paths and prevent access above parent directory
 	_, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	return os.Open(fullVolumePath)
+	return fullVolumePath, err
 }
 
 func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, workspace *types.Workspace) ([]FileInfo, error) {

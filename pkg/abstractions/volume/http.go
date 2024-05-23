@@ -6,24 +6,33 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/apex/log"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/labstack/echo/v4"
 )
 
 type volumeGroup struct {
-	routeGroup *echo.Group
-	gvs        *GlobalVolumeService
+	routeGroup    *echo.Group
+	gvs           *GlobalVolumeService
+	workspaceRepo repository.WorkspaceRepository
 }
 
 var uploadBufferSize = 1024 * 1000 * 8 // 8 Mb
 
-func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup {
-	group := &volumeGroup{routeGroup: g, gvs: gvs}
+func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService, workspaceRepo repository.WorkspaceRepository) *volumeGroup {
+	group := &volumeGroup{
+		routeGroup:    g,
+		gvs:           gvs,
+		workspaceRepo: workspaceRepo,
+	}
 
 	g.GET("/:workspaceId", group.ListVolumes)
 
 	g.POST("/:workspaceId/create/:volumeName", auth.WithWorkspaceAuth(group.CreateVolume))
 	g.PUT("/:workspaceId/upload/:volumePath*", auth.WithWorkspaceAuth(group.UploadFile))
+	g.GET("/:workspaceId/generate-download-token/:volumePath*", auth.WithWorkspaceAuth(group.GenerateDownloadToken))
+	g.GET("/:workspaceId/download-with-token/:volumePath*", group.DownloadFileWithToken)
 	g.GET("/:workspaceId/download/:volumePath*", auth.WithWorkspaceAuth(group.DownloadFile))
 	g.GET("/:workspaceId/ls/:volumePath*", auth.WithWorkspaceAuth(group.Ls))
 	g.DELETE("/:workspaceId/rm/:volumePath*", auth.WithWorkspaceAuth(group.Rm))
@@ -82,6 +91,7 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 
 	go func() {
 		defer close(ch)
+		bytesRead := 0
 
 		for {
 			buf := make([]byte, uploadBufferSize) // 8 Mb
@@ -90,11 +100,16 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 				break
 			}
 
+			log.Infof("Read %d bytes", n)
+			bytesRead += n
+
 			ch <- CopyPathContent{
 				Path:    decodedVolumePath,
 				Content: buf[:n],
 			}
 		}
+
+		log.Infof("Read %d bytes in total", bytesRead)
 	}()
 
 	if err := g.gvs.copyPathStream(
@@ -105,6 +120,39 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to upload file: %v", err))
 	} else {
 		return ctx.JSON(http.StatusOK, nil)
+	}
+}
+
+func (g *volumeGroup) DownloadFileWithToken(ctx echo.Context) error {
+	workspaceId := ctx.Param("workspaceId")
+	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+	}
+
+	volumePath := ctx.Param("volumePath*")
+	decodedVolumePath, err := url.QueryUnescape(volumePath)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
+	}
+
+	token := ctx.QueryParam("token")
+	if token == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid download token")
+	}
+
+	if err := g.workspaceRepo.ValidateWorkspaceVolumePathDownloadToken(workspaceId, decodedVolumePath, token); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid download token")
+	}
+
+	if path, err := g.gvs.getFilePath(
+		ctx.Request().Context(),
+		decodedVolumePath,
+		&workspace,
+	); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to download file %v", err))
+	} else {
+		return ctx.File(path)
 	}
 }
 
@@ -121,14 +169,14 @@ func (g *volumeGroup) DownloadFile(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
 	}
 
-	if f, err := g.gvs.getFileFd(
+	if path, err := g.gvs.getFilePath(
 		ctx.Request().Context(),
 		decodedVolumePath,
 		&workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to download file %v", err))
 	} else {
-		return ctx.Stream(http.StatusOK, "application/octet-stream", f)
+		return ctx.File(path)
 	}
 }
 
@@ -182,4 +230,20 @@ func (g *volumeGroup) Rm(ctx echo.Context) error {
 
 func (g *volumeGroup) Mv(ctx echo.Context) error {
 	return nil
+}
+
+func (g *volumeGroup) GenerateDownloadToken(ctx echo.Context) error {
+	workspaceId := ctx.Param("workspaceId")
+	volumePath := ctx.Param("volumePath*")
+	decodedVolumePath, err := url.QueryUnescape(volumePath)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
+	}
+
+	token, err := g.workspaceRepo.GenerateWorkspaceVolumePathDownloadToken(workspaceId, decodedVolumePath)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download token")
+	}
+
+	return ctx.JSON(http.StatusOK, token)
 }

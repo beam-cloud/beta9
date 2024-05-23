@@ -46,6 +46,11 @@ type ContainerRepository interface {
 	GetFailedContainerCountByStubId(stubId string) (int, error)
 }
 
+type WorkspaceRepository interface {
+	ValidateWorkspaceVolumePathDownloadToken(workspaceId string, volumePath string, token string) error
+	GenerateWorkspaceVolumePathDownloadToken(workspaceId string, volumePath string) (string, error)
+}
+
 type BackendRepository interface {
 	ListWorkspaces(ctx context.Context) ([]types.Workspace, error)
 	CreateWorkspace(ctx context.Context) (types.Workspace, error)
