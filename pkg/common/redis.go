@@ -252,12 +252,14 @@ type RedisLockOption func(*RedisLock)
 type RedisLock struct {
 	client *RedisClient
 	locks  map[string]*redislock.Lock
+	mu     sync.Mutex
 }
 
 func NewRedisLock(client *RedisClient, opts ...RedisLockOption) *RedisLock {
 	l := RedisLock{
 		client: client,
 		locks:  make(map[string]*redislock.Lock),
+		mu:     sync.Mutex{},
 	}
 
 	for _, opt := range opts {
@@ -268,26 +270,22 @@ func NewRedisLock(client *RedisClient, opts ...RedisLockOption) *RedisLock {
 }
 
 func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptions) error {
+	obtained := l.mu.TryLock()
+	if !obtained {
+		return errors.New("lock: mutex is locked")
+	}
+	defer l.mu.Unlock()
+
 	var retryStrategy redislock.RetryStrategy = nil
 	if opts.Retries > 0 {
 		retryStrategy = redislock.LimitRetry(redislock.LinearBackoff(100*time.Millisecond), opts.Retries)
 	}
 
-	var lock *redislock.Lock
-	var err error
-
-	lock, ok := l.locks[key]
-	if ok {
-		lock, err = lock.Obtain(ctx, key, time.Duration(opts.TtlS)*time.Second, &redislock.Options{
-			RetryStrategy: retryStrategy,
-		}) // Even if the key is deleted from the map, the value should still exist because of the reference here
-	} else {
-		lock, err = redislock.Obtain(ctx, l.client, key, time.Duration(opts.TtlS)*time.Second, &redislock.Options{
-			RetryStrategy: retryStrategy,
-		})
-		if err != nil && err != redislock.ErrNotObtained {
-			return err // unexpected error, return it
-		}
+	lock, err := redislock.Obtain(ctx, l.client, key, time.Duration(opts.TtlS)*time.Second, &redislock.Options{
+		RetryStrategy: retryStrategy,
+	})
+	if err != nil && err != redislock.ErrNotObtained {
+		return err // unexpected error, return it
 	}
 
 	if err == nil {
@@ -299,6 +297,12 @@ func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptio
 }
 
 func (l *RedisLock) Release(key string) error {
+	obtained := l.mu.TryLock()
+	if !obtained {
+		return errors.New("lock: mutex is locked")
+	}
+	defer l.mu.Unlock()
+
 	if lock, ok := l.locks[key]; ok {
 		lock.Release(context.TODO())
 		delete(l.locks, key)
