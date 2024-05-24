@@ -11,7 +11,7 @@ dependencies:
   version: 2.5.0
 - alias: blobcache
   name: beam-blobcache-chart
-  version: 0.1.1
+  version: 0.1.2
   repository: oci://public.ecr.aws/n4e0e1y0
   condition: blobcache.enabled
 - name: redis
