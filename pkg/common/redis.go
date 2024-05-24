@@ -252,7 +252,6 @@ type RedisLockOption func(*RedisLock)
 type RedisLock struct {
 	client *RedisClient
 	locks  map[string]*redislock.Lock
-	mu     sync.Mutex
 }
 
 func NewRedisLock(client *RedisClient, opts ...RedisLockOption) *RedisLock {
@@ -290,9 +289,6 @@ func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptio
 }
 
 func (l *RedisLock) Release(key string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	if lock, ok := l.locks[key]; ok {
 		lock.Release(context.TODO())
 		delete(l.locks, key)
