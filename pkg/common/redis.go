@@ -280,8 +280,7 @@ func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptio
 	if ok {
 		lock, err = lock.Obtain(ctx, key, time.Duration(opts.TtlS)*time.Second, &redislock.Options{
 			RetryStrategy: retryStrategy,
-		},
-		)
+		}) // Even if the key is deleted from the map, the value should still exist because of the reference here
 	} else {
 		lock, err = redislock.Obtain(ctx, l.client, key, time.Duration(opts.TtlS)*time.Second, &redislock.Options{
 			RetryStrategy: retryStrategy,
