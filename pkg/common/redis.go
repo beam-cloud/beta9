@@ -269,9 +269,6 @@ func NewRedisLock(client *RedisClient, opts ...RedisLockOption) *RedisLock {
 }
 
 func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptions) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	var retryStrategy redislock.RetryStrategy = nil
 	if opts.Retries > 0 {
 		retryStrategy = redislock.LimitRetry(redislock.LinearBackoff(100*time.Millisecond), opts.Retries)
