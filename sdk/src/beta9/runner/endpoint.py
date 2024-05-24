@@ -140,12 +140,12 @@ class EndpointManager:
         self.exit_code: int = 0
         self.app = FastAPI(lifespan=self.lifespan)
 
+        # Register signal handlers
+        signal.signal(signal.SIGTERM, self.shutdown)
+
         # Load handler and execute on_start method
         self.handler: FunctionHandler = FunctionHandler()
         self.on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
-
-        # Register signal handlers
-        signal.signal(signal.SIGTERM, self.shutdown)
 
         @self.app.get("/health")
         async def health():
