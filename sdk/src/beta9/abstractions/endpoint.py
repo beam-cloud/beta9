@@ -139,10 +139,8 @@ class _CallableWrapper:
             return False
 
         terminal.header("Deploying endpoint")
-        deploy_response: DeployStubResponse = self.parent.run_sync(
-            self.parent.gateway_stub.deploy_stub(
-                DeployStubRequest(stub_id=self.parent.stub_id, name=name)
-            )
+        deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
+            DeployStubRequest(stub_id=self.parent.stub_id, name=name)
         )
 
         if deploy_response.ok:
@@ -191,10 +189,8 @@ class _CallableWrapper:
 
         if response == "y":
             terminal.header("Stopping serve container")
-            self.parent.run_sync(
-                self.parent.endpoint_stub.stop_endpoint_serve(
-                    StopEndpointServeRequest(stub_id=self.parent.stub_id)
-                )
+            self.parent.endpoint_stub.stop_endpoint_serve(
+                StopEndpointServeRequest(stub_id=self.parent.stub_id)
             )
 
         terminal.print("Goodbye 👋")
@@ -204,7 +200,7 @@ class _CallableWrapper:
             self.parent.sync_dir_to_workspace(dir=dir, object_id=object_id)
         )
         try:
-            async for r in self.parent.endpoint_stub.start_endpoint_serve(
+            for r in self.parent.endpoint_stub.start_endpoint_serve(
                 StartEndpointServeRequest(
                     stub_id=self.parent.stub_id,
                 )

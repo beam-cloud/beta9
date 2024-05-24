@@ -8,15 +8,12 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Event, Process, set_start_method
+from multiprocessing.synchronize import Event as TEvent
 from typing import Any, List, NamedTuple, Union
 
 import grpc
-import grpclib
-from grpclib.client import Channel
-from grpclib.exceptions import StreamTerminatedError
 
-from ..aio import run_sync
-from ..channel import with_runner_context
+from ..channel import Channel, with_runner_context
 from ..clients.gateway import GatewayServiceStub
 from ..clients.taskqueue import (
     TaskQueueCompleteRequest,
@@ -57,7 +54,7 @@ class TaskQueueManager:
         self.task_worker_count: int = config.concurrency
         self.task_processes: List[Process] = []
         self.task_workers: List[TaskQueueWorker] = []
-        self.task_worker_startup_events: List[Event] = [
+        self.task_worker_startup_events: List[TEvent] = [
             Event() for _ in range(self.task_worker_count)
         ]
         self.task_worker_watchdog_threads: List[threading.Thread] = []
@@ -161,21 +158,20 @@ class TaskQueueWorker:
         *,
         worker_index: int,
         parent_pid: int,
-        worker_startup_event: Event,
+        worker_startup_event: TEvent,
     ) -> None:
         self.worker_index: int = worker_index
         self.parent_pid: int = parent_pid
-        self.worker_startup_event: Event = worker_startup_event
+        self.worker_startup_event: TEvent = worker_startup_event
 
     def _get_next_task(
         self, taskqueue_stub: TaskQueueServiceStub, stub_id: str, container_id: str
     ) -> Union[Task, None]:
         try:
-            r: TaskQueuePopResponse = run_sync(
-                taskqueue_stub.task_queue_pop(
-                    TaskQueuePopRequest(stub_id=stub_id, container_id=container_id)
-                )
+            r: TaskQueuePopResponse = taskqueue_stub.task_queue_pop(
+                TaskQueuePopRequest(stub_id=stub_id, container_id=container_id)
             )
+
             if not r.ok or not r.task_msg:
                 return None
 
@@ -185,7 +181,7 @@ class TaskQueueWorker:
                 args=task["args"],
                 kwargs=task["kwargs"],
             )
-        except (grpclib.exceptions.StreamTerminatedError, OSError):
+        except (grpc.RpcError, OSError):
             return None
 
     async def _monitor_task(
@@ -205,7 +201,7 @@ class TaskQueueWorker:
 
         while retry <= max_retries:
             try:
-                async for response in taskqueue_stub.task_queue_monitor(
+                for response in taskqueue_stub.task_queue_monitor(
                     TaskQueueMonitorRequest(
                         task_id=task.id,
                         stub_id=stub_id,
@@ -216,7 +212,7 @@ class TaskQueueWorker:
                     if response.cancelled:
                         print(f"Task cancelled: {task.id}")
 
-                        await send_callback(
+                        send_callback(
                             gateway_stub=gateway_stub,
                             context=context,
                             payload={},
@@ -230,7 +226,7 @@ class TaskQueueWorker:
                     if response.timed_out:
                         print(f"Task timed out: {task.id}")
 
-                        await send_callback(
+                        send_callback(
                             gateway_stub=gateway_stub,
                             context=context,
                             payload={},
@@ -246,9 +242,7 @@ class TaskQueueWorker:
                 break
 
             except (
-                grpc.aio.AioRpcError,
-                grpclib.exceptions.GRPCError,
-                StreamTerminatedError,
+                grpc.RpcError,
                 ConnectionRefusedError,
             ):
                 if retry == max_retries:
@@ -324,7 +318,7 @@ class TaskQueueWorker:
                     finally:
                         duration = time.time() - start_time
                         complete_task_response: TaskQueueCompleteResponse = (
-                            await taskqueue_stub.task_queue_complete(
+                            taskqueue_stub.task_queue_complete(
                                 TaskQueueCompleteRequest(
                                     task_id=task.id,
                                     stub_id=config.stub_id,
@@ -343,7 +337,7 @@ class TaskQueueWorker:
                         monitor_task.cancel()
                         print(f"Task completed <{task.id}>, took {duration}s")
 
-                        await send_callback(
+                        send_callback(
                             gateway_stub=gateway_stub,
                             context=context,
                             payload=result or {},

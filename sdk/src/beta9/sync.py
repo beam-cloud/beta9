@@ -1,4 +1,3 @@
-import asyncio
 import fnmatch
 import hashlib
 import os
@@ -52,7 +51,6 @@ class FileSyncer:
         gateway_stub: GatewayServiceStub,
         root_dir=".",
     ):
-        self.loop = asyncio.get_event_loop()
         self.root_dir = Path(root_dir).absolute()
         self.gateway_stub: GatewayServiceStub = gateway_stub
 
@@ -131,26 +129,21 @@ class FileSyncer:
         size = os.path.getsize(temp_zip_name)
         hash = self._calculate_sha256(temp_zip_name)
 
-        head_response: HeadObjectResponse = self.loop.run_until_complete(
-            self.gateway_stub.head_object(HeadObjectRequest(hash=hash))
+        head_response: HeadObjectResponse = self.gateway_stub.head_object(
+            HeadObjectRequest(hash=hash)
         )
+
         put_response: Optional[PutObjectResponse] = None
         if not head_response.exists:
             metadata = ObjectMetadata(name=hash, size=size)
 
+            def stream_requests():
+                with open(temp_zip_name, "rb") as file:
+                    while chunk := file.read(CHUNK_SIZE):
+                        yield PutObjectRequest(chunk, metadata, hash, False)
+
             with terminal.progress("Uploading"):
-
-                def stream_requests():
-                    with open(temp_zip_name, "rb") as file:
-                        while True:
-                            chunk = file.read(CHUNK_SIZE)
-                            if not chunk:
-                                break
-                            yield PutObjectRequest(chunk, metadata, hash, False)
-
-                put_response = self.loop.run_until_complete(
-                    self.gateway_stub.put_object_stream(stream_requests())
-                )
+                put_response = self.gateway_stub.put_object_stream(stream_requests())
 
         elif head_response.exists and head_response.ok:
             terminal.header("Files synced")

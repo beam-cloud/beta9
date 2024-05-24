@@ -11,19 +11,21 @@ from typing import (
     AsyncIterator,
     Dict,
     Iterable,
+    Iterator,
     List,
     Optional,
     Union,
 )
 
 import betterproto
-import grpclib
-from betterproto.grpc.grpclib_server import ServiceBase
+import grpc
+from betterproto.grpcstub.grpcio_client import SyncServiceStub
+from betterproto.grpcstub.grpclib_server import ServiceBase
 
 
 if TYPE_CHECKING:
     import grpclib.server
-    from betterproto.grpc.grpclib_client import MetadataLike
+    from betterproto.grpcstub.grpclib_client import MetadataLike
     from grpclib.metadata import Deadline
 
 
@@ -351,654 +353,162 @@ class CreateMachineResponse(betterproto.Message):
     machine: "Machine" = betterproto.message_field(3)
 
 
-class GatewayServiceStub(betterproto.ServiceStub):
-    async def authorize(
-        self,
-        authorize_request: "AuthorizeRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "AuthorizeResponse":
-        return await self._unary_unary(
+class GatewayServiceStub(SyncServiceStub):
+    def authorize(self, authorize_request: "AuthorizeRequest") -> "AuthorizeResponse":
+        return self._unary_unary(
             "/gateway.GatewayService/Authorize",
-            authorize_request,
+            AuthorizeRequest,
             AuthorizeResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
+        )(authorize_request)
 
-    async def sign_payload(
-        self,
-        sign_payload_request: "SignPayloadRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "SignPayloadResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/SignPayload",
-            sign_payload_request,
-            SignPayloadResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def head_object(
-        self,
-        head_object_request: "HeadObjectRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "HeadObjectResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/HeadObject",
-            head_object_request,
-            HeadObjectResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def put_object(
-        self,
-        put_object_request: "PutObjectRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "PutObjectResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/PutObject",
-            put_object_request,
-            PutObjectResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def put_object_stream(
-        self,
-        put_object_request_iterator: Union[
-            AsyncIterable["PutObjectRequest"], Iterable["PutObjectRequest"]
-        ],
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "PutObjectResponse":
-        return await self._stream_unary(
-            "/gateway.GatewayService/PutObjectStream",
-            put_object_request_iterator,
-            PutObjectRequest,
-            PutObjectResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def replace_object_content(
-        self,
-        replace_object_content_request_iterator: Union[
-            AsyncIterable["ReplaceObjectContentRequest"],
-            Iterable["ReplaceObjectContentRequest"],
-        ],
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "ReplaceObjectContentResponse":
-        return await self._stream_unary(
-            "/gateway.GatewayService/ReplaceObjectContent",
-            replace_object_content_request_iterator,
-            ReplaceObjectContentRequest,
-            ReplaceObjectContentResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def list_containers(
-        self,
-        list_containers_request: "ListContainersRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "ListContainersResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/ListContainers",
-            list_containers_request,
-            ListContainersResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def start_task(
-        self,
-        start_task_request: "StartTaskRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "StartTaskResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/StartTask",
-            start_task_request,
-            StartTaskResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def end_task(
-        self,
-        end_task_request: "EndTaskRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "EndTaskResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/EndTask",
-            end_task_request,
-            EndTaskResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def stop_tasks(
-        self,
-        stop_tasks_request: "StopTasksRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "StopTasksResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/StopTasks",
-            stop_tasks_request,
-            StopTasksResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def list_tasks(
-        self,
-        list_tasks_request: "ListTasksRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "ListTasksResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/ListTasks",
-            list_tasks_request,
-            ListTasksResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def get_or_create_stub(
-        self,
-        get_or_create_stub_request: "GetOrCreateStubRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "GetOrCreateStubResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/GetOrCreateStub",
-            get_or_create_stub_request,
-            GetOrCreateStubResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def deploy_stub(
-        self,
-        deploy_stub_request: "DeployStubRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "DeployStubResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/DeployStub",
-            deploy_stub_request,
-            DeployStubResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def list_deployments(
-        self,
-        list_deployments_request: "ListDeploymentsRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "ListDeploymentsResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/ListDeployments",
-            list_deployments_request,
-            ListDeploymentsResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def stop_deployment(
-        self,
-        stop_deployment_request: "StopDeploymentRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "StopDeploymentResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/StopDeployment",
-            stop_deployment_request,
-            StopDeploymentResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def list_pools(
-        self,
-        list_pools_request: "ListPoolsRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "ListPoolsResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/ListPools",
-            list_pools_request,
-            ListPoolsResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def list_machines(
-        self,
-        list_machines_request: "ListMachinesRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "ListMachinesResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/ListMachines",
-            list_machines_request,
-            ListMachinesResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def create_machine(
-        self,
-        create_machine_request: "CreateMachineRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "CreateMachineResponse":
-        return await self._unary_unary(
-            "/gateway.GatewayService/CreateMachine",
-            create_machine_request,
-            CreateMachineResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-
-class GatewayServiceBase(ServiceBase):
-
-    async def authorize(
-        self, authorize_request: "AuthorizeRequest"
-    ) -> "AuthorizeResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def sign_payload(
+    def sign_payload(
         self, sign_payload_request: "SignPayloadRequest"
     ) -> "SignPayloadResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+        return self._unary_unary(
+            "/gateway.GatewayService/SignPayload",
+            SignPayloadRequest,
+            SignPayloadResponse,
+        )(sign_payload_request)
 
-    async def head_object(
+    def head_object(
         self, head_object_request: "HeadObjectRequest"
     ) -> "HeadObjectResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+        return self._unary_unary(
+            "/gateway.GatewayService/HeadObject",
+            HeadObjectRequest,
+            HeadObjectResponse,
+        )(head_object_request)
 
-    async def put_object(
-        self, put_object_request: "PutObjectRequest"
+    def put_object(self, put_object_request: "PutObjectRequest") -> "PutObjectResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/PutObject",
+            PutObjectRequest,
+            PutObjectResponse,
+        )(put_object_request)
+
+    def put_object_stream(
+        self, put_object_request_iterator: Iterable["PutObjectRequest"]
     ) -> "PutObjectResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+        return (
+            self._stream_unary(
+                "/gateway.GatewayService/PutObjectStream",
+                PutObjectRequest,
+                PutObjectResponse,
+            )
+            .future(put_object_request_iterator)
+            .result()
+        )
 
-    async def put_object_stream(
-        self, put_object_request_iterator: AsyncIterator["PutObjectRequest"]
-    ) -> "PutObjectResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def replace_object_content(
+    def replace_object_content(
         self,
-        replace_object_content_request_iterator: AsyncIterator[
+        replace_object_content_request_iterator: Iterable[
             "ReplaceObjectContentRequest"
         ],
     ) -> "ReplaceObjectContentResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def list_containers(
-        self, list_containers_request: "ListContainersRequest"
-    ) -> "ListContainersResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def start_task(
-        self, start_task_request: "StartTaskRequest"
-    ) -> "StartTaskResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def end_task(self, end_task_request: "EndTaskRequest") -> "EndTaskResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def stop_tasks(
-        self, stop_tasks_request: "StopTasksRequest"
-    ) -> "StopTasksResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def list_tasks(
-        self, list_tasks_request: "ListTasksRequest"
-    ) -> "ListTasksResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def get_or_create_stub(
-        self, get_or_create_stub_request: "GetOrCreateStubRequest"
-    ) -> "GetOrCreateStubResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def deploy_stub(
-        self, deploy_stub_request: "DeployStubRequest"
-    ) -> "DeployStubResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def list_deployments(
-        self, list_deployments_request: "ListDeploymentsRequest"
-    ) -> "ListDeploymentsResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def stop_deployment(
-        self, stop_deployment_request: "StopDeploymentRequest"
-    ) -> "StopDeploymentResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def list_pools(
-        self, list_pools_request: "ListPoolsRequest"
-    ) -> "ListPoolsResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def list_machines(
-        self, list_machines_request: "ListMachinesRequest"
-    ) -> "ListMachinesResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def create_machine(
-        self, create_machine_request: "CreateMachineRequest"
-    ) -> "CreateMachineResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def __rpc_authorize(
-        self, stream: "grpclib.server.Stream[AuthorizeRequest, AuthorizeResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.authorize(request)
-        await stream.send_message(response)
-
-    async def __rpc_sign_payload(
-        self, stream: "grpclib.server.Stream[SignPayloadRequest, SignPayloadResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.sign_payload(request)
-        await stream.send_message(response)
-
-    async def __rpc_head_object(
-        self, stream: "grpclib.server.Stream[HeadObjectRequest, HeadObjectResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.head_object(request)
-        await stream.send_message(response)
-
-    async def __rpc_put_object(
-        self, stream: "grpclib.server.Stream[PutObjectRequest, PutObjectResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.put_object(request)
-        await stream.send_message(response)
-
-    async def __rpc_put_object_stream(
-        self, stream: "grpclib.server.Stream[PutObjectRequest, PutObjectResponse]"
-    ) -> None:
-        request = stream.__aiter__()
-        response = await self.put_object_stream(request)
-        await stream.send_message(response)
-
-    async def __rpc_replace_object_content(
-        self,
-        stream: "grpclib.server.Stream[ReplaceObjectContentRequest, ReplaceObjectContentResponse]",
-    ) -> None:
-        request = stream.__aiter__()
-        response = await self.replace_object_content(request)
-        await stream.send_message(response)
-
-    async def __rpc_list_containers(
-        self,
-        stream: "grpclib.server.Stream[ListContainersRequest, ListContainersResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.list_containers(request)
-        await stream.send_message(response)
-
-    async def __rpc_start_task(
-        self, stream: "grpclib.server.Stream[StartTaskRequest, StartTaskResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.start_task(request)
-        await stream.send_message(response)
-
-    async def __rpc_end_task(
-        self, stream: "grpclib.server.Stream[EndTaskRequest, EndTaskResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.end_task(request)
-        await stream.send_message(response)
-
-    async def __rpc_stop_tasks(
-        self, stream: "grpclib.server.Stream[StopTasksRequest, StopTasksResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.stop_tasks(request)
-        await stream.send_message(response)
-
-    async def __rpc_list_tasks(
-        self, stream: "grpclib.server.Stream[ListTasksRequest, ListTasksResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.list_tasks(request)
-        await stream.send_message(response)
-
-    async def __rpc_get_or_create_stub(
-        self,
-        stream: "grpclib.server.Stream[GetOrCreateStubRequest, GetOrCreateStubResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.get_or_create_stub(request)
-        await stream.send_message(response)
-
-    async def __rpc_deploy_stub(
-        self, stream: "grpclib.server.Stream[DeployStubRequest, DeployStubResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.deploy_stub(request)
-        await stream.send_message(response)
-
-    async def __rpc_list_deployments(
-        self,
-        stream: "grpclib.server.Stream[ListDeploymentsRequest, ListDeploymentsResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.list_deployments(request)
-        await stream.send_message(response)
-
-    async def __rpc_stop_deployment(
-        self,
-        stream: "grpclib.server.Stream[StopDeploymentRequest, StopDeploymentResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.stop_deployment(request)
-        await stream.send_message(response)
-
-    async def __rpc_list_pools(
-        self, stream: "grpclib.server.Stream[ListPoolsRequest, ListPoolsResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.list_pools(request)
-        await stream.send_message(response)
-
-    async def __rpc_list_machines(
-        self, stream: "grpclib.server.Stream[ListMachinesRequest, ListMachinesResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.list_machines(request)
-        await stream.send_message(response)
-
-    async def __rpc_create_machine(
-        self,
-        stream: "grpclib.server.Stream[CreateMachineRequest, CreateMachineResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.create_machine(request)
-        await stream.send_message(response)
-
-    def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
-        return {
-            "/gateway.GatewayService/Authorize": grpclib.const.Handler(
-                self.__rpc_authorize,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                AuthorizeRequest,
-                AuthorizeResponse,
-            ),
-            "/gateway.GatewayService/SignPayload": grpclib.const.Handler(
-                self.__rpc_sign_payload,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                SignPayloadRequest,
-                SignPayloadResponse,
-            ),
-            "/gateway.GatewayService/HeadObject": grpclib.const.Handler(
-                self.__rpc_head_object,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                HeadObjectRequest,
-                HeadObjectResponse,
-            ),
-            "/gateway.GatewayService/PutObject": grpclib.const.Handler(
-                self.__rpc_put_object,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                PutObjectRequest,
-                PutObjectResponse,
-            ),
-            "/gateway.GatewayService/PutObjectStream": grpclib.const.Handler(
-                self.__rpc_put_object_stream,
-                grpclib.const.Cardinality.STREAM_UNARY,
-                PutObjectRequest,
-                PutObjectResponse,
-            ),
-            "/gateway.GatewayService/ReplaceObjectContent": grpclib.const.Handler(
-                self.__rpc_replace_object_content,
-                grpclib.const.Cardinality.STREAM_UNARY,
+        return (
+            self._stream_unary(
+                "/gateway.GatewayService/ReplaceObjectContent",
                 ReplaceObjectContentRequest,
                 ReplaceObjectContentResponse,
-            ),
-            "/gateway.GatewayService/ListContainers": grpclib.const.Handler(
-                self.__rpc_list_containers,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                ListContainersRequest,
-                ListContainersResponse,
-            ),
-            "/gateway.GatewayService/StartTask": grpclib.const.Handler(
-                self.__rpc_start_task,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                StartTaskRequest,
-                StartTaskResponse,
-            ),
-            "/gateway.GatewayService/EndTask": grpclib.const.Handler(
-                self.__rpc_end_task,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                EndTaskRequest,
-                EndTaskResponse,
-            ),
-            "/gateway.GatewayService/StopTasks": grpclib.const.Handler(
-                self.__rpc_stop_tasks,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                StopTasksRequest,
-                StopTasksResponse,
-            ),
-            "/gateway.GatewayService/ListTasks": grpclib.const.Handler(
-                self.__rpc_list_tasks,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                ListTasksRequest,
-                ListTasksResponse,
-            ),
-            "/gateway.GatewayService/GetOrCreateStub": grpclib.const.Handler(
-                self.__rpc_get_or_create_stub,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                GetOrCreateStubRequest,
-                GetOrCreateStubResponse,
-            ),
-            "/gateway.GatewayService/DeployStub": grpclib.const.Handler(
-                self.__rpc_deploy_stub,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                DeployStubRequest,
-                DeployStubResponse,
-            ),
-            "/gateway.GatewayService/ListDeployments": grpclib.const.Handler(
-                self.__rpc_list_deployments,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                ListDeploymentsRequest,
-                ListDeploymentsResponse,
-            ),
-            "/gateway.GatewayService/StopDeployment": grpclib.const.Handler(
-                self.__rpc_stop_deployment,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                StopDeploymentRequest,
-                StopDeploymentResponse,
-            ),
-            "/gateway.GatewayService/ListPools": grpclib.const.Handler(
-                self.__rpc_list_pools,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                ListPoolsRequest,
-                ListPoolsResponse,
-            ),
-            "/gateway.GatewayService/ListMachines": grpclib.const.Handler(
-                self.__rpc_list_machines,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                ListMachinesRequest,
-                ListMachinesResponse,
-            ),
-            "/gateway.GatewayService/CreateMachine": grpclib.const.Handler(
-                self.__rpc_create_machine,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                CreateMachineRequest,
-                CreateMachineResponse,
-            ),
-        }
+            )
+            .future(replace_object_content_request_iterator)
+            .result()
+        )
+
+    def list_containers(
+        self, list_containers_request: "ListContainersRequest"
+    ) -> "ListContainersResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListContainers",
+            ListContainersRequest,
+            ListContainersResponse,
+        )(list_containers_request)
+
+    def start_task(self, start_task_request: "StartTaskRequest") -> "StartTaskResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/StartTask",
+            StartTaskRequest,
+            StartTaskResponse,
+        )(start_task_request)
+
+    def end_task(self, end_task_request: "EndTaskRequest") -> "EndTaskResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/EndTask",
+            EndTaskRequest,
+            EndTaskResponse,
+        )(end_task_request)
+
+    def stop_tasks(self, stop_tasks_request: "StopTasksRequest") -> "StopTasksResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/StopTasks",
+            StopTasksRequest,
+            StopTasksResponse,
+        )(stop_tasks_request)
+
+    def list_tasks(self, list_tasks_request: "ListTasksRequest") -> "ListTasksResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListTasks",
+            ListTasksRequest,
+            ListTasksResponse,
+        )(list_tasks_request)
+
+    def get_or_create_stub(
+        self, get_or_create_stub_request: "GetOrCreateStubRequest"
+    ) -> "GetOrCreateStubResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetOrCreateStub",
+            GetOrCreateStubRequest,
+            GetOrCreateStubResponse,
+        )(get_or_create_stub_request)
+
+    def deploy_stub(
+        self, deploy_stub_request: "DeployStubRequest"
+    ) -> "DeployStubResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DeployStub",
+            DeployStubRequest,
+            DeployStubResponse,
+        )(deploy_stub_request)
+
+    def list_deployments(
+        self, list_deployments_request: "ListDeploymentsRequest"
+    ) -> "ListDeploymentsResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListDeployments",
+            ListDeploymentsRequest,
+            ListDeploymentsResponse,
+        )(list_deployments_request)
+
+    def stop_deployment(
+        self, stop_deployment_request: "StopDeploymentRequest"
+    ) -> "StopDeploymentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/StopDeployment",
+            StopDeploymentRequest,
+            StopDeploymentResponse,
+        )(stop_deployment_request)
+
+    def list_pools(self, list_pools_request: "ListPoolsRequest") -> "ListPoolsResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListPools",
+            ListPoolsRequest,
+            ListPoolsResponse,
+        )(list_pools_request)
+
+    def list_machines(
+        self, list_machines_request: "ListMachinesRequest"
+    ) -> "ListMachinesResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListMachines",
+            ListMachinesRequest,
+            ListMachinesResponse,
+        )(list_machines_request)
+
+    def create_machine(
+        self, create_machine_request: "CreateMachineRequest"
+    ) -> "CreateMachineResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CreateMachine",
+            CreateMachineRequest,
+            CreateMachineResponse,
+        )(create_machine_request)

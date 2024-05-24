@@ -67,17 +67,15 @@ class SimpleQueue(BaseAbstraction):
         return self._stub
 
     def __len__(self):
-        r = self.run_sync(self.stub.simple_queue_size(SimpleQueueRequest(name=self.name)))
+        r = self.stub.simple_queue_size(SimpleQueueRequest(name=self.name))
         return r.size if r.ok else 0
 
     def __del__(self):
         super().__del__()
 
     def put(self, value: Any) -> bool:
-        r: SimpleQueuePutResponse = self.run_sync(
-            self.stub.simple_queue_put(
-                SimpleQueuePutRequest(name=self.name, value=cloudpickle.dumps(value))
-            )
+        r: SimpleQueuePutResponse = self.stub.simple_queue_put(
+            SimpleQueuePutRequest(name=self.name, value=cloudpickle.dumps(value))
         )
 
         if not r.ok:
@@ -86,9 +84,10 @@ class SimpleQueue(BaseAbstraction):
         return True
 
     def pop(self) -> Any:
-        r: SimpleQueuePopResponse = self.run_sync(
-            self.stub.simple_queue_pop(SimpleQueuePopRequest(name=self.name))
+        r: SimpleQueuePopResponse = self.stub.simple_queue_pop(
+            SimpleQueuePopRequest(name=self.name)
         )
+
         if not r.ok:
             raise SimpleQueueInternalServerError
 
@@ -98,18 +97,18 @@ class SimpleQueue(BaseAbstraction):
         return None
 
     def empty(self) -> bool:
-        r: SimpleQueueEmptyResponse = self.run_sync(
-            self.stub.simple_queue_empty(SimpleQueueRequest(name=self.name))
+        r: SimpleQueueEmptyResponse = self.stub.simple_queue_empty(
+            SimpleQueueRequest(name=self.name)
         )
+
         if not r.ok:
             raise SimpleQueueInternalServerError
 
         return r.empty if r.ok else True
 
     def peek(self) -> Any:
-        r: SimpleQueuePeekResponse = self.run_sync(
-            self.stub.simple_queue_peek(SimpleQueueRequest(name=self.name))
-        )
+        r: SimpleQueuePeekResponse = self.stub.simple_queue_peek(SimpleQueueRequest(name=self.name))
+
         if not r.ok:
             raise SimpleQueueInternalServerError
 

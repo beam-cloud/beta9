@@ -151,10 +151,8 @@ class _CallableWrapper:
             return False
 
         terminal.header("Deploying taskqueue")
-        deploy_response: DeployStubResponse = self.parent.run_sync(
-            self.parent.gateway_stub.deploy_stub(
-                DeployStubRequest(stub_id=self.parent.stub_id, name=name)
-            )
+        deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
+            DeployStubRequest(stub_id=self.parent.stub_id, name=name)
         )
 
         if deploy_response.ok:
@@ -203,10 +201,8 @@ class _CallableWrapper:
 
         if response == "y":
             terminal.header("Stopping serve container")
-            self.parent.run_sync(
-                self.parent.taskqueue_stub.stop_task_queue_serve(
-                    StopTaskQueueServeRequest(stub_id=self.parent.stub_id)
-                )
+            self.parent.taskqueue_stub.stop_task_queue_serve(
+                StopTaskQueueServeRequest(stub_id=self.parent.stub_id)
             )
 
         terminal.print("Goodbye 👋")
@@ -216,7 +212,7 @@ class _CallableWrapper:
             self.parent.sync_dir_to_workspace(dir=dir, object_id=object_id)
         )
         try:
-            async for r in self.parent.taskqueue_stub.start_task_queue_serve(
+            for r in self.parent.taskqueue_stub.start_task_queue_serve(
                 StartTaskQueueServeRequest(
                     stub_id=self.parent.stub_id,
                 )
@@ -243,13 +239,10 @@ class _CallableWrapper:
         payload = {"args": args, "kwargs": kwargs}
         json_payload = json.dumps(payload)
 
-        r: TaskQueuePutResponse = self.parent.run_sync(
-            self.parent.taskqueue_stub.task_queue_put(
-                TaskQueuePutRequest(
-                    stub_id=self.parent.stub_id, payload=json_payload.encode("utf-8")
-                )
-            )
+        r: TaskQueuePutResponse = self.parent.taskqueue_stub.task_queue_put(
+            TaskQueuePutRequest(stub_id=self.parent.stub_id, payload=json_payload.encode("utf-8"))
         )
+
         if not r.ok:
             terminal.error("Failed to enqueue task")
             return False

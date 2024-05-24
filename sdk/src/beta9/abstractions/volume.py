@@ -46,9 +46,7 @@ class Volume(BaseAbstraction):
 
     def get_or_create(self) -> bool:
         resp: GetOrCreateVolumeResponse
-        resp = self.run_sync(
-            self.stub.get_or_create_volume(GetOrCreateVolumeRequest(name=self.name))
-        )
+        resp = self.stub.get_or_create_volume(GetOrCreateVolumeRequest(name=self.name))
 
         if resp.ok:
             self.ready = True

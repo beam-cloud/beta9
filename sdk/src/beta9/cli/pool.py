@@ -4,7 +4,7 @@ import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
-from .. import aio, terminal
+from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import ListPoolsRequest, ListPoolsResponse, StringList
@@ -66,7 +66,7 @@ def list_pools(
     filter: Dict[str, StringList],
 ):
     res: ListPoolsResponse
-    res = aio.run_sync(service.gateway.list_pools(ListPoolsRequest(filter, limit)))
+    res = service.gateway.list_pools(ListPoolsRequest(filter, limit))
 
     if not res.ok:
         terminal.error(res.err_msg)

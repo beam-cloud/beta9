@@ -128,7 +128,7 @@ class _CallableWrapper:
         terminal.header(f"Running function: <{self.parent.handler}>")
         last_response: Optional[FunctionInvokeResponse] = None
 
-        async for r in self.parent.function_stub.function_invoke(
+        for r in self.parent.function_stub.function_invoke(
             FunctionInvokeRequest(
                 stub_id=self.parent.stub_id,
                 args=args,
@@ -164,10 +164,8 @@ class _CallableWrapper:
             return False
 
         terminal.header("Deploying function")
-        deploy_response: DeployStubResponse = self.parent.run_sync(
-            self.parent.gateway_stub.deploy_stub(
-                DeployStubRequest(stub_id=self.parent.stub_id, name=name)
-            )
+        deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
+            DeployStubRequest(stub_id=self.parent.stub_id, name=name)
         )
 
         if deploy_response.ok:

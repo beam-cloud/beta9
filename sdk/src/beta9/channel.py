@@ -2,16 +2,15 @@ import functools
 import os
 import sys
 import traceback
+from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from typing import Any, Callable, Optional, Type, cast
+from typing import Any, Callable, List, NewType, Optional, Tuple, cast
 
-from grpclib.client import Channel, Stream
-from grpclib.const import Cardinality
-from grpclib.metadata import Deadline, _MetadataLike
-from multidict import MultiDict
+import grpc
+from grpc import ChannelCredentials
+from grpc._interceptor import _Channel as InterceptorChannel
 
 from . import terminal
-from .aio import run_sync
 from .clients.gateway import AuthorizeRequest, AuthorizeResponse, GatewayServiceStub
 from .clients.volume import VolumeServiceStub
 from .config import (
@@ -26,48 +25,91 @@ from .config import (
 from .exceptions import RunnerException
 
 
-class AuthenticatedChannel(Channel):
-    def __init__(self, *args, token: Optional[str] = None, **kwargs):
-        super().__init__(*args, **kwargs)
+class Channel(InterceptorChannel):
+    def __init__(
+        self,
+        addr: str,
+        token: Optional[str] = None,
+        credentials: Optional[ChannelCredentials] = None,
+    ):
+        if credentials is not None:
+            channel = grpc.secure_channel(addr, credentials)
+        elif addr.endswith("443"):
+            channel = grpc.secure_channel(addr, grpc.ssl_channel_credentials())
+        else:
+            channel = grpc.insecure_channel(addr)
+
+        interceptor = AuthTokenInterceptor(token)
+
+        super().__init__(channel=channel, interceptor=interceptor)
+
+
+MetadataType = NewType("MetadataType", List[Tuple[Any, Any]])
+
+
+class ClientCallDetails(ABC):
+    @property
+    @abstractmethod
+    def metadata(self) -> MetadataType:
+        pass
+
+    @abstractmethod
+    def _replace(self, metadata: MetadataType) -> "ClientCallDetails":
+        pass
+
+
+class AuthTokenInterceptor(
+    grpc.UnaryUnaryClientInterceptor,
+    grpc.UnaryStreamClientInterceptor,
+    grpc.StreamUnaryClientInterceptor,
+    grpc.StreamStreamClientInterceptor,
+):
+    """A generic interceptor to add an authentication token to gRPC requests."""
+
+    def __init__(self, token: Optional[str] = None):
+        """Initialize the interceptor with an optional authentication token."""
         self._token = token
 
-    def request(
+    def _add_auth_metadata(
         self,
-        name: str,
-        cardinality: Cardinality,
-        request_type: Type,
-        reply_type: Type,
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional[Deadline] = None,
-        metadata: Optional[_MetadataLike] = None,
-    ) -> Stream:
+        client_call_details: ClientCallDetails,
+    ) -> ClientCallDetails:
+        """Add authentication metadata to the client call."""
         if self._token:
-            metadata = cast(MultiDict, MultiDict(metadata or ()))
-            metadata["authorization"] = f"Bearer {self._token}"
+            auth_headers = [("authorization", f"Bearer {self._token}")]
+            if client_call_details.metadata is not None:
+                new_metadata = client_call_details.metadata + auth_headers
+            else:
+                new_metadata = auth_headers
+        else:
+            new_metadata = client_call_details.metadata
 
-        return super().request(
-            name,
-            cardinality,
-            request_type,
-            reply_type,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
+        return client_call_details._replace(metadata=cast(MetadataType, new_metadata))
+
+    def intercept_call(self, continuation, client_call_details, request):
+        """Intercept all types of calls to add auth token."""
+        new_details = self._add_auth_metadata(client_call_details)
+        return continuation(new_details, request)
+
+    def intercept_call_stream(self, continuation, client_call_details, request_iterator):
+        return self.intercept_call(continuation, client_call_details, request=request_iterator)
+
+    # Implement the four necessary interceptor methods using intercept_call
+    intercept_unary_unary = intercept_call
+    intercept_unary_stream = intercept_call
+    intercept_stream_unary = intercept_call_stream
+    intercept_stream_stream = intercept_call_stream
 
 
 def get_channel(context: Optional[ConfigContext] = None) -> Channel:
     if os.getenv("CI"):
-        return Channel(host="localhost", port=50051, ssl=False)
+        return Channel("localhost:50051")
 
     if not context:
         _, context = prompt_for_config_context()
 
-    return AuthenticatedChannel(
-        host=context.gateway_host,
-        port=context.gateway_port,
-        ssl=context.use_ssl(),
+    return Channel(
+        addr=f"{context.gateway_host}:{context.gateway_port}",
         token=context.token,
     )
 
@@ -82,17 +124,15 @@ def prompt_first_auth(settings: SDKSettings) -> None:
         gateway_port=settings.gateway_port,
     )
 
-    channel = AuthenticatedChannel(
-        host=context.gateway_host,
-        port=context.gateway_port,
-        ssl=context.use_ssl(),
+    channel = Channel(
+        addr=f"{context.gateway_host}:{context.gateway_port}",
         token=context.token,
     )
 
     terminal.header("Authorizing with gateway")
     with ServiceClient.with_channel(channel) as client:
         res: AuthorizeResponse
-        res = run_sync(client.gateway.authorize(AuthorizeRequest()))
+        res = client.gateway.authorize(AuthorizeRequest())
         if not res.ok:
             terminal.error(f"Unable to authorize with gateway: {res.error_msg}")
 
@@ -127,9 +167,6 @@ def runner_context():
     except BaseException:
         exit_code = 1
     finally:
-        if channel := locals().get("channel", None):
-            channel.close()
-
         if exit_code != 0:
             print(traceback.format_exc())
             sys.exit(exit_code)
@@ -155,7 +192,8 @@ class ServiceClient:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.channel.close()
+        if self._channel:
+            self._channel.close()
 
     @classmethod
     def with_channel(cls, channel: Channel) -> "ServiceClient":
@@ -188,4 +226,5 @@ class ServiceClient:
         return self._volume
 
     def close(self) -> None:
-        self.channel.close()
+        if self._channel:
+            self._channel.close()

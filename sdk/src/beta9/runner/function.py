@@ -7,11 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import cloudpickle
 import grpc
-import grpclib
-from grpclib.client import Channel
-from grpclib.exceptions import StreamTerminatedError
 
-from ..channel import with_runner_context
+from ..channel import Channel, with_runner_context
 from ..clients.function import (
     FunctionGetArgsRequest,
     FunctionGetArgsResponse,
@@ -61,7 +58,7 @@ async def _monitor_task(
 
     while retry <= max_retries:
         try:
-            async for response in function_stub.function_monitor(
+            for response in function_stub.function_monitor(
                 FunctionMonitorRequest(
                     task_id=task_id,
                     stub_id=stub_id,
@@ -72,7 +69,7 @@ async def _monitor_task(
                 if response.cancelled:
                     print(f"Task cancelled: {task_id}")
 
-                    await send_callback(
+                    send_callback(
                         gateway_stub=gateway_stub,
                         context=context,
                         payload={},
@@ -86,7 +83,7 @@ async def _monitor_task(
                 if response.timed_out:
                     print(f"Task timed out: {task_id}")
 
-                    await send_callback(
+                    send_callback(
                         gateway_stub=gateway_stub,
                         context=context,
                         payload={},
@@ -102,9 +99,7 @@ async def _monitor_task(
             break
 
         except (
-            grpc.aio.AioRpcError,
-            grpclib.exceptions.GRPCError,
-            StreamTerminatedError,
+            grpc.RpcError,
             ConnectionRefusedError,
         ):
             if retry == max_retries:
@@ -140,7 +135,7 @@ def main(channel: Channel):
 
             # Start the task
             start_time = time.time()
-            start_task_response: StartTaskResponse = await gateway_stub.start_task(
+            start_task_response: StartTaskResponse = gateway_stub.start_task(
                 StartTaskRequest(task_id=task_id, container_id=container_id)
             )
 
@@ -165,7 +160,7 @@ def main(channel: Channel):
 
             # Invoke function
             try:
-                get_args_resp: FunctionGetArgsResponse = await function_stub.function_get_args(
+                get_args_resp: FunctionGetArgsResponse = function_stub.function_get_args(
                     FunctionGetArgsRequest(task_id=task_id)
                 )
 
@@ -186,10 +181,8 @@ def main(channel: Channel):
                 task_status = TaskStatus.Error
             finally:
                 pickled_result = cloudpickle.dumps(result)
-                set_result_resp: FunctionSetResultResponse = (
-                    await function_stub.function_set_result(
-                        FunctionSetResultRequest(task_id=task_id, result=pickled_result)
-                    )
+                set_result_resp: FunctionSetResultResponse = function_stub.function_set_result(
+                    FunctionSetResultRequest(task_id=task_id, result=pickled_result)
                 )
 
                 if not set_result_resp.ok:
@@ -198,7 +191,7 @@ def main(channel: Channel):
             task_duration = time.time() - start_time
 
             # End the task
-            end_task_response: EndTaskResponse = await gateway_stub.end_task(
+            end_task_response: EndTaskResponse = gateway_stub.end_task(
                 EndTaskRequest(
                     task_id=task_id,
                     task_duration=task_duration,
@@ -214,7 +207,7 @@ def main(channel: Channel):
 
             monitor_task.cancel()
 
-            await send_callback(
+            send_callback(
                 gateway_stub=gateway_stub,
                 context=context,
                 payload=result,

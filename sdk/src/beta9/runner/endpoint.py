@@ -8,7 +8,6 @@ from typing import Any, Dict, Optional, Tuple
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from grpclib.client import Channel
 from gunicorn.app.base import Arbiter, BaseApplication
 from starlette.applications import Starlette
 from starlette.types import ASGIApp
@@ -17,7 +16,7 @@ from uvicorn.workers import UvicornWorker
 from ..abstractions.base.runner import (
     ENDPOINT_SERVE_STUB_TYPE,
 )
-from ..channel import with_runner_context
+from ..channel import Channel, with_runner_context
 from ..clients.gateway import (
     EndTaskRequest,
     GatewayServiceStub,
@@ -27,7 +26,6 @@ from ..logging import StdoutJsonInterceptor
 from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_method
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
-from ..vendor import nest_asyncio
 
 
 class EndpointFilter(logging.Filter):
@@ -103,7 +101,7 @@ async def task_lifecycle(request: Request):
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Task ID missing")
 
     print(f"Received task <{task_id}>")
-    start_response = await request.app.state.gateway_stub.start_task(
+    start_response = request.app.state.gateway_stub.start_task(
         StartTaskRequest(task_id=task_id, container_id=cfg.container_id)
     )
     if not start_response.ok:
@@ -116,7 +114,7 @@ async def task_lifecycle(request: Request):
         yield task_status
         print(f"Task <{task_id}> finished")
     finally:
-        await request.app.state.gateway_stub.end_task(
+        request.app.state.gateway_stub.end_task(
             EndTaskRequest(
                 task_id=task_id,
                 container_id=cfg.container_id,
@@ -216,8 +214,6 @@ class EndpointManager:
 
 
 if __name__ == "__main__":
-    nest_asyncio.apply()
-
     options = {
         "bind": [f"[::]:{cfg.bind_port}"],
         "workers": cfg.concurrency,

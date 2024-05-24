@@ -5,10 +5,8 @@ import subprocess
 import sys
 from typing import Union
 
-from grpclib.client import Channel
-
 from ..aio import run_sync
-from ..channel import with_runner_context
+from ..channel import Channel, with_runner_context
 from ..clients.gateway import EndTaskRequest, GatewayServiceStub, StartTaskRequest
 from ..logging import StdoutJsonInterceptor
 from ..runner.common import config
@@ -30,7 +28,7 @@ class ContainerManager:
         async def _run():
             with StdoutJsonInterceptor(task_id=self.task_id):
                 stub = GatewayServiceStub(channel)
-                await stub.start_task(
+                stub.start_task(
                     StartTaskRequest(
                         task_id=self.task_id,
                         container_id=config.container_id,
@@ -52,7 +50,7 @@ class ContainerManager:
                     print(line.strip().decode("utf-8"))
 
                 if not self.killed:
-                    await stub.end_task(
+                    stub.end_task(
                         EndTaskRequest(
                             task_id=self.task_id,
                             container_id=config.container_id,

@@ -19,7 +19,7 @@ asgiref = "^3.8.1"
 cloudpickle = "^3.0.0"
 rich = "^13.7.0"
 click = "^8.1.7"
-betterproto = {version = "2.0.0b6", extras = ["compiler"]}
+betterproto = {path = "../../python-betterproto", extras = ["compiler"], develop = true}
 protobuf = "^4.25.1"
 fastapi = "^0.110.2"
 uvicorn = "^0.29.0"

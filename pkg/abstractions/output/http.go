@@ -2,7 +2,6 @@ package output
 
 import (
 	"net/http"
-	"os"
 
 	"github.com/labstack/echo/v4"
 )
@@ -36,17 +35,5 @@ func (o *outputGroup) GetOutput(ctx echo.Context) error {
 		})
 	}
 
-	file, err := os.Open(path)
-	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "unable to read file",
-		})
-	}
-	defer file.Close()
-
-	buffer := make([]byte, 512)
-	file.Read(buffer)
-	file.Seek(0, 0)
-
-	return ctx.Stream(http.StatusOK, http.DetectContentType(buffer), file)
+	return ctx.File(path)
 }

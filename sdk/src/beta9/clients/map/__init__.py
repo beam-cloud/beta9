@@ -12,13 +12,14 @@ from typing import (
 )
 
 import betterproto
-import grpclib
-from betterproto.grpc.grpclib_server import ServiceBase
+import grpc
+from betterproto.grpcstub.grpcio_client import SyncServiceStub
+from betterproto.grpcstub.grpclib_server import ServiceBase
 
 
 if TYPE_CHECKING:
     import grpclib.server
-    from betterproto.grpc.grpclib_client import MetadataLike
+    from betterproto.grpcstub.grpclib_client import MetadataLike
     from grpclib.metadata import Deadline
 
 
@@ -79,179 +80,38 @@ class MapKeysResponse(betterproto.Message):
     keys: List[str] = betterproto.string_field(2)
 
 
-class MapServiceStub(betterproto.ServiceStub):
-    async def map_set(
-        self,
-        map_set_request: "MapSetRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "MapSetResponse":
-        return await self._unary_unary(
+class MapServiceStub(SyncServiceStub):
+    def map_set(self, map_set_request: "MapSetRequest") -> "MapSetResponse":
+        return self._unary_unary(
             "/map.MapService/MapSet",
-            map_set_request,
+            MapSetRequest,
             MapSetResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
+        )(map_set_request)
 
-    async def map_get(
-        self,
-        map_get_request: "MapGetRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "MapGetResponse":
-        return await self._unary_unary(
+    def map_get(self, map_get_request: "MapGetRequest") -> "MapGetResponse":
+        return self._unary_unary(
             "/map.MapService/MapGet",
-            map_get_request,
+            MapGetRequest,
             MapGetResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
+        )(map_get_request)
 
-    async def map_delete(
-        self,
-        map_delete_request: "MapDeleteRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "MapDeleteResponse":
-        return await self._unary_unary(
+    def map_delete(self, map_delete_request: "MapDeleteRequest") -> "MapDeleteResponse":
+        return self._unary_unary(
             "/map.MapService/MapDelete",
-            map_delete_request,
+            MapDeleteRequest,
             MapDeleteResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
+        )(map_delete_request)
 
-    async def map_count(
-        self,
-        map_count_request: "MapCountRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "MapCountResponse":
-        return await self._unary_unary(
+    def map_count(self, map_count_request: "MapCountRequest") -> "MapCountResponse":
+        return self._unary_unary(
             "/map.MapService/MapCount",
-            map_count_request,
+            MapCountRequest,
             MapCountResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
+        )(map_count_request)
 
-    async def map_keys(
-        self,
-        map_keys_request: "MapKeysRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "MapKeysResponse":
-        return await self._unary_unary(
+    def map_keys(self, map_keys_request: "MapKeysRequest") -> "MapKeysResponse":
+        return self._unary_unary(
             "/map.MapService/MapKeys",
-            map_keys_request,
+            MapKeysRequest,
             MapKeysResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-
-class MapServiceBase(ServiceBase):
-
-    async def map_set(self, map_set_request: "MapSetRequest") -> "MapSetResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def map_get(self, map_get_request: "MapGetRequest") -> "MapGetResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def map_delete(
-        self, map_delete_request: "MapDeleteRequest"
-    ) -> "MapDeleteResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def map_count(
-        self, map_count_request: "MapCountRequest"
-    ) -> "MapCountResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def map_keys(self, map_keys_request: "MapKeysRequest") -> "MapKeysResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def __rpc_map_set(
-        self, stream: "grpclib.server.Stream[MapSetRequest, MapSetResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.map_set(request)
-        await stream.send_message(response)
-
-    async def __rpc_map_get(
-        self, stream: "grpclib.server.Stream[MapGetRequest, MapGetResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.map_get(request)
-        await stream.send_message(response)
-
-    async def __rpc_map_delete(
-        self, stream: "grpclib.server.Stream[MapDeleteRequest, MapDeleteResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.map_delete(request)
-        await stream.send_message(response)
-
-    async def __rpc_map_count(
-        self, stream: "grpclib.server.Stream[MapCountRequest, MapCountResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.map_count(request)
-        await stream.send_message(response)
-
-    async def __rpc_map_keys(
-        self, stream: "grpclib.server.Stream[MapKeysRequest, MapKeysResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.map_keys(request)
-        await stream.send_message(response)
-
-    def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
-        return {
-            "/map.MapService/MapSet": grpclib.const.Handler(
-                self.__rpc_map_set,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                MapSetRequest,
-                MapSetResponse,
-            ),
-            "/map.MapService/MapGet": grpclib.const.Handler(
-                self.__rpc_map_get,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                MapGetRequest,
-                MapGetResponse,
-            ),
-            "/map.MapService/MapDelete": grpclib.const.Handler(
-                self.__rpc_map_delete,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                MapDeleteRequest,
-                MapDeleteResponse,
-            ),
-            "/map.MapService/MapCount": grpclib.const.Handler(
-                self.__rpc_map_count,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                MapCountRequest,
-                MapCountResponse,
-            ),
-            "/map.MapService/MapKeys": grpclib.const.Handler(
-                self.__rpc_map_keys,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                MapKeysRequest,
-                MapKeysResponse,
-            ),
-        }
+        )(map_keys_request)
