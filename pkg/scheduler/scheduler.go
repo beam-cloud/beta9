@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"math"
@@ -119,6 +120,9 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 
 	if quota == nil {
 		quota, err = s.backendRepo.GetConcurrencyLimitByWorkspaceId(s.ctx, request.WorkspaceId)
+		if err != nil && err == sql.ErrNoRows {
+			return nil, nil // No quota set for this workspace
+		}
 		if err != nil {
 			return nil, err
 		}

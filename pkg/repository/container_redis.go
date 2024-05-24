@@ -9,7 +9,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/bsm/redislock"
 	redis "github.com/redis/go-redis/v9"
 )
 
@@ -351,40 +350,37 @@ func (c *ContainerRedisRepository) SetConcurrencyLimitByWorkspaceId(workspaceId 
 func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
 	// Acquire the concurrency limit lock for the workspace to prevent
 	// simultaneous requests from exceeding the quota
-	context := context.TODO()
-	retryStrategy := redislock.LimitRetry(redislock.ExponentialBackoff(30*time.Millisecond, 1*time.Second), 10)
-	lock, err := redislock.Obtain(context, c.rdb, common.RedisKeys.WorkspaceConcurrencyLimitLock(request.WorkspaceId), time.Duration(10)*time.Second, &redislock.Options{
-		RetryStrategy: retryStrategy,
-	})
-	if err != nil && err != redislock.ErrNotObtained {
-		return err
-	}
-
-	defer lock.Release(context)
-
-	containers, err := c.GetActiveContainersByWorkspaceId(request.WorkspaceId)
+	err := c.lock.Acquire(context.TODO(), common.RedisKeys.WorkspaceConcurrencyLimitLock(request.WorkspaceId), common.RedisLockOptions{TtlS: 10, Retries: 3})
 	if err != nil {
 		return err
 	}
+	defer c.lock.Release(common.RedisKeys.WorkspaceConcurrencyLimitLock(request.WorkspaceId))
 
-	totalGpuCount := 0
-	totalCpuCores := 0
-	totalMemory := int64(0)
-	for _, container := range containers {
-		totalGpuCount += int(container.GpuCount)
-		totalCpuCores += int(container.Cpu)
-		totalMemory += container.Memory
-	}
-
-	if totalGpuCount+int(request.GpuCount) > int(quota.GPULimit) {
-		return &types.ThrottledByConcurrencyLimitError{
-			Reason: "gpu quota exceeded",
+	if quota != nil { // If a quota is set, check if the request exceeds it
+		containers, err := c.GetActiveContainersByWorkspaceId(request.WorkspaceId)
+		if err != nil {
+			return err
 		}
-	}
 
-	if totalCpuCores+int(request.Cpu) > int(quota.CPULimit) {
-		return &types.ThrottledByConcurrencyLimitError{
-			Reason: "cpu quota exceeded",
+		totalGpuCount := 0
+		totalCpuCores := 0
+		totalMemory := int64(0)
+		for _, container := range containers {
+			totalGpuCount += int(container.GpuCount)
+			totalCpuCores += int(container.Cpu)
+			totalMemory += container.Memory
+		}
+
+		if totalGpuCount+int(request.GpuCount) > int(quota.GPULimit) {
+			return &types.ThrottledByConcurrencyLimitError{
+				Reason: "gpu quota exceeded",
+			}
+		}
+
+		if totalCpuCores+int(request.Cpu) > int(quota.CPULimit) {
+			return &types.ThrottledByConcurrencyLimitError{
+				Reason: "cpu quota exceeded",
+			}
 		}
 	}
 
