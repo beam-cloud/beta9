@@ -92,3 +92,16 @@ func (r *WorkerPoolRedisRepository) RemovePool(name string) error {
 
 	return r.rdb.Del(context.TODO(), common.RedisKeys.WorkerPoolState(name)).Err()
 }
+
+func (r *WorkerPoolRedisRepository) SetPoolLock(name string) error {
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerPoolLock(name), common.RedisLockOptions{TtlS: 10, Retries: 0})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *WorkerPoolRedisRepository) RemovePoolLock(name string) error {
+	return r.lock.Release(common.RedisKeys.WorkerPoolLock(name))
+}

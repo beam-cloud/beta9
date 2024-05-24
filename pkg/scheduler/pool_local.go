@@ -31,7 +31,7 @@ type LocalKubernetesWorkerPoolController struct {
 	workerRepo repository.WorkerRepository
 }
 
-func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository) (WorkerPoolController, error) {
+func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, workerPoolRepo repository.WorkerPoolRepository) (WorkerPoolController, error) {
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -53,7 +53,7 @@ func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.Ap
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, &workerPool)
+	err = MonitorPoolSize(wpc, &workerPool, workerPoolRepo)
 	if err != nil {
 		log.Printf("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
 	}
