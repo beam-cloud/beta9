@@ -9,6 +9,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/bsm/redislock"
 	redis "github.com/redis/go-redis/v9"
 )
 
@@ -350,11 +351,16 @@ func (c *ContainerRedisRepository) SetConcurrencyLimitByWorkspaceId(workspaceId 
 func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
 	// Acquire the concurrency limit lock for the workspace to prevent
 	// simultaneous requests from exceeding the quota
-	err := c.lock.Acquire(context.TODO(), common.RedisKeys.WorkspaceConcurrencyLimitLock(request.WorkspaceId), common.RedisLockOptions{TtlS: 10, Retries: 3})
-	if err != nil {
+	context := context.TODO()
+	retryStrategy := redislock.LimitRetry(redislock.ExponentialBackoff(30*time.Millisecond, 1*time.Second), 10)
+	lock, err := redislock.Obtain(context, c.rdb, common.RedisKeys.WorkspaceConcurrencyLimitLock(request.WorkspaceId), time.Duration(10)*time.Second, &redislock.Options{
+		RetryStrategy: retryStrategy,
+	})
+	if err != nil && err != redislock.ErrNotObtained {
 		return err
 	}
-	defer c.lock.Release(common.RedisKeys.WorkspaceConcurrencyLimitLock(request.WorkspaceId))
+
+	defer lock.Release(context)
 
 	if quota != nil { // If a quota is set, check if the request exceeds it
 		containers, err := c.GetActiveContainersByWorkspaceId(request.WorkspaceId)
