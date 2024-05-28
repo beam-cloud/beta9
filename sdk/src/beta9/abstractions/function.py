@@ -192,11 +192,8 @@ class _CallableWrapper:
         return args
 
     def _threaded_map(self, inputs: Sequence) -> Iterator[Any]:
-        max_workers = self.parent.concurrency * self.parent.max_containers
-        with concurrent.futures.ThreadPoolExecutor(max_workers) as pool:
-            futures = [
-                pool.submit(self._call_remote, args=self._format_args(args)) for args in inputs
-            ]
+        with concurrent.futures.ThreadPoolExecutor(len(inputs)) as pool:
+            futures = [pool.submit(self._call_remote, *self._format_args(args)) for args in inputs]
             for future in concurrent.futures.as_completed(futures):
                 yield future.result()
 
