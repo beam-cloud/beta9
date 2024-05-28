@@ -2,7 +2,7 @@ import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
-from .. import aio, terminal
+from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
@@ -69,9 +69,7 @@ def list_machines(
     pool: str,
 ):
     res: ListMachinesResponse
-    res = aio.run_sync(
-        service.gateway.list_machines(ListMachinesRequest(pool_name=pool, limit=limit))
-    )
+    res = service.gateway.list_machines(ListMachinesRequest(pool_name=pool, limit=limit))
 
     if not res.ok:
         terminal.error(res.err_msg)
@@ -125,7 +123,7 @@ def list_machines(
 @extraclick.pass_service_client
 def create_machine(service: ServiceClient, pool: str):
     res: CreateMachineResponse
-    res = aio.run_sync(service.gateway.create_machine(CreateMachineRequest(pool_name=pool)))
+    res = service.gateway.create_machine(CreateMachineRequest(pool_name=pool))
     if res.ok:
         terminal.header(
             f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
