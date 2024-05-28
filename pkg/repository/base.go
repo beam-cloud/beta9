@@ -48,8 +48,6 @@ type ContainerRepository interface {
 }
 
 type WorkspaceRepository interface {
-	ValidateWorkspaceVolumePathDownloadToken(workspaceId string, volumePath string, token string) error
-	GenerateWorkspaceVolumePathDownloadToken(workspaceId string, volumePath string) (string, error)
 	GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error)
 	SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error
 }

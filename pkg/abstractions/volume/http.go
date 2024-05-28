@@ -19,11 +19,10 @@ type volumeGroup struct {
 
 var uploadBufferSize = 1024 * 1000 * 8 // 8 Mb
 
-func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService, workspaceRepo repository.WorkspaceRepository) *volumeGroup {
+func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup {
 	group := &volumeGroup{
-		routeGroup:    g,
-		gvs:           gvs,
-		workspaceRepo: workspaceRepo,
+		routeGroup: g,
+		gvs:        gvs,
 	}
 
 	g.GET("/:workspaceId", group.ListVolumes)
@@ -134,7 +133,7 @@ func (g *volumeGroup) DownloadFileWithToken(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid download token")
 	}
 
-	if err := g.workspaceRepo.ValidateWorkspaceVolumePathDownloadToken(workspaceId, decodedVolumePath, token); err != nil {
+	if err := g.gvs.ValidateWorkspaceVolumePathDownloadToken(workspaceId, decodedVolumePath, token); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid download token")
 	}
 
@@ -233,7 +232,7 @@ func (g *volumeGroup) GenerateDownloadToken(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
 	}
 
-	token, err := g.workspaceRepo.GenerateWorkspaceVolumePathDownloadToken(workspaceId, decodedVolumePath)
+	token, err := g.gvs.GenerateWorkspaceVolumePathDownloadToken(workspaceId, decodedVolumePath)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download token")
 	}
