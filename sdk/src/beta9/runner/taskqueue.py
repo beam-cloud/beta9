@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import signal
@@ -6,7 +5,7 @@ import sys
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 from multiprocessing import Event, Process, set_start_method
 from multiprocessing.synchronize import Event as TEvent
 from typing import Any, List, NamedTuple, Union
@@ -249,11 +248,11 @@ class TaskQueueWorker:
                     print("Lost connection to task monitor, exiting")
                     os._exit(0)
 
-                await asyncio.sleep(backoff)
+                time.sleep(backoff)
                 backoff *= 2
                 retry += 1
 
-            except asyncio.exceptions.CancelledError:
+            except CancelledError:
                 return
 
             except BaseException:
@@ -263,8 +262,6 @@ class TaskQueueWorker:
     @with_runner_context
     def process_tasks(self, channel: Channel) -> None:
         self.worker_startup_event.set()
-        loop = asyncio.get_event_loop()
-        executor = ThreadPoolExecutor()
         taskqueue_stub = TaskQueueServiceStub(channel)
         gateway_stub = GatewayServiceStub(channel)
 
@@ -279,72 +276,66 @@ class TaskQueueWorker:
                 time.sleep(TASK_POLLING_INTERVAL)
                 continue
 
-            async def _run_task():
-                with StdoutJsonInterceptor(task_id=task.id):
-                    print(f"Running task <{task.id}>")
+            with StdoutJsonInterceptor(task_id=task.id), ThreadPoolExecutor() as thread_pool:
+                print(f"Running task <{task.id}>")
 
-                    context = FunctionContext.new(
-                        config=config,
-                        task_id=task.id,
-                        on_start_value=on_start_value,
-                    )
+                context = FunctionContext.new(
+                    config=config,
+                    task_id=task.id,
+                    on_start_value=on_start_value,
+                )
 
-                    monitor_task = loop.create_task(
-                        self._monitor_task(
-                            context=context,
-                            stub_id=config.stub_id,
-                            container_id=config.container_id,
-                            task=task,
-                            taskqueue_stub=taskqueue_stub,
-                            gateway_stub=gateway_stub,
-                        ),
-                    )
+                monitor_task = thread_pool.submit(
+                    self._monitor_task,
+                    context=context,
+                    stub_id=config.stub_id,
+                    container_id=config.container_id,
+                    task=task,
+                    taskqueue_stub=taskqueue_stub,
+                    gateway_stub=gateway_stub,
+                )
 
-                    start_time = time.time()
-                    task_status = TaskStatus.Complete
-                    result = None
-                    duration = None
+                start_time = time.time()
+                task_status = TaskStatus.Complete
+                result = None
+                duration = None
 
-                    try:
-                        args = task.args or []
-                        kwargs = task.kwargs or {}
+                try:
+                    args = task.args or []
+                    kwargs = task.kwargs or {}
 
-                        result = await loop.run_in_executor(
-                            executor, lambda: handler(context, *args, **kwargs)
-                        )
-                    except BaseException:
-                        print(traceback.format_exc())
-                        task_status = TaskStatus.Error
-                    finally:
-                        duration = time.time() - start_time
-                        complete_task_response: TaskQueueCompleteResponse = (
-                            taskqueue_stub.task_queue_complete(
-                                TaskQueueCompleteRequest(
-                                    task_id=task.id,
-                                    stub_id=config.stub_id,
-                                    task_duration=duration,
-                                    task_status=task_status,
-                                    container_id=config.container_id,
-                                    container_hostname=config.container_hostname,
-                                    keep_warm_seconds=config.keep_warm_seconds,
-                                )
+                    result = handler(context, *args, **kwargs)
+                except BaseException:
+                    print(traceback.format_exc())
+                    task_status = TaskStatus.Error
+                finally:
+                    duration = time.time() - start_time
+                    complete_task_response: TaskQueueCompleteResponse = (
+                        taskqueue_stub.task_queue_complete(
+                            TaskQueueCompleteRequest(
+                                task_id=task.id,
+                                stub_id=config.stub_id,
+                                task_duration=duration,
+                                task_status=task_status,
+                                container_id=config.container_id,
+                                container_hostname=config.container_hostname,
+                                keep_warm_seconds=config.keep_warm_seconds,
                             )
                         )
+                    )
 
-                        if not complete_task_response.ok:
-                            raise RunnerException("Unable to end task")
+                    if not complete_task_response.ok:
+                        raise RunnerException("Unable to end task")
 
-                        monitor_task.cancel()
-                        print(f"Task completed <{task.id}>, took {duration}s")
+                    monitor_task.cancel()
+                    print(f"Task completed <{task.id}>, took {duration}s")
 
-                        send_callback(
-                            gateway_stub=gateway_stub,
-                            context=context,
-                            payload=result or {},
-                            task_status=task_status,
-                        )  # Send callback to callback_url, if defined
-
-            loop.run_until_complete(_run_task())
+                    send_callback(
+                        gateway_stub=gateway_stub,
+                        context=context,
+                        payload=result or {},
+                        task_status=task_status,
+                    )  # Send callback to callback_url, if defined
 
 
 if __name__ == "__main__":
