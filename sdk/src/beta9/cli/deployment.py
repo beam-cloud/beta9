@@ -8,7 +8,7 @@ import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
-from .. import aio, terminal
+from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
@@ -163,7 +163,7 @@ def list_deployments(
     filter: Dict[str, StringList],
 ):
     res: ListDeploymentsResponse
-    res = aio.run_sync(service.gateway.list_deployments(ListDeploymentsRequest(filter, limit)))
+    res = service.gateway.list_deployments(ListDeploymentsRequest(filter, limit))
 
     if not res.ok:
         terminal.error(res.err_msg)
@@ -226,7 +226,7 @@ def list_deployments(
 def stop_deployments(service: ServiceClient, deployment_ids: List[str]):
     for id in deployment_ids:
         res: StopDeploymentResponse
-        res = aio.run_sync(service.gateway.stop_deployment(StopDeploymentRequest(id)))
+        res = service.gateway.stop_deployment(StopDeploymentRequest(id))
 
         if not res.ok:
             terminal.error(res.err_msg, exit=False)

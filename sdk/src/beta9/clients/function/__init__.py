@@ -8,17 +8,19 @@ from typing import (
     TYPE_CHECKING,
     AsyncIterator,
     Dict,
+    Iterator,
     Optional,
 )
 
 import betterproto
-import grpclib
-from betterproto.grpc.grpclib_server import ServiceBase
+import grpc
+from betterproto.grpcstub.grpcio_client import SyncServiceStub
+from betterproto.grpcstub.grpclib_server import ServiceBase
 
 
 if TYPE_CHECKING:
     import grpclib.server
-    from betterproto.grpc.grpclib_client import MetadataLike
+    from betterproto.grpcstub.grpclib_client import MetadataLike
     from grpclib.metadata import Deadline
 
 
@@ -74,164 +76,41 @@ class FunctionMonitorResponse(betterproto.Message):
     timed_out: bool = betterproto.bool_field(4)
 
 
-class FunctionServiceStub(betterproto.ServiceStub):
-    async def function_invoke(
-        self,
-        function_invoke_request: "FunctionInvokeRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> AsyncIterator["FunctionInvokeResponse"]:
-        async for response in self._unary_stream(
-            "/function.FunctionService/FunctionInvoke",
-            function_invoke_request,
-            FunctionInvokeResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        ):
-            yield response
-
-    async def function_get_args(
-        self,
-        function_get_args_request: "FunctionGetArgsRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "FunctionGetArgsResponse":
-        return await self._unary_unary(
-            "/function.FunctionService/FunctionGetArgs",
-            function_get_args_request,
-            FunctionGetArgsResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def function_set_result(
-        self,
-        function_set_result_request: "FunctionSetResultRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "FunctionSetResultResponse":
-        return await self._unary_unary(
-            "/function.FunctionService/FunctionSetResult",
-            function_set_result_request,
-            FunctionSetResultResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def function_monitor(
-        self,
-        function_monitor_request: "FunctionMonitorRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> AsyncIterator["FunctionMonitorResponse"]:
-        async for response in self._unary_stream(
-            "/function.FunctionService/FunctionMonitor",
-            function_monitor_request,
-            FunctionMonitorResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        ):
-            yield response
-
-
-class FunctionServiceBase(ServiceBase):
-
-    async def function_invoke(
+class FunctionServiceStub(SyncServiceStub):
+    def function_invoke(
         self, function_invoke_request: "FunctionInvokeRequest"
-    ) -> AsyncIterator["FunctionInvokeResponse"]:
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-        yield FunctionInvokeResponse()
+    ) -> Iterator["FunctionInvokeResponse"]:
+        for response in self._unary_stream(
+            "/function.FunctionService/FunctionInvoke",
+            FunctionInvokeRequest,
+            FunctionInvokeResponse,
+        )(function_invoke_request):
+            yield response
 
-    async def function_get_args(
+    def function_get_args(
         self, function_get_args_request: "FunctionGetArgsRequest"
     ) -> "FunctionGetArgsResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+        return self._unary_unary(
+            "/function.FunctionService/FunctionGetArgs",
+            FunctionGetArgsRequest,
+            FunctionGetArgsResponse,
+        )(function_get_args_request)
 
-    async def function_set_result(
+    def function_set_result(
         self, function_set_result_request: "FunctionSetResultRequest"
     ) -> "FunctionSetResultResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+        return self._unary_unary(
+            "/function.FunctionService/FunctionSetResult",
+            FunctionSetResultRequest,
+            FunctionSetResultResponse,
+        )(function_set_result_request)
 
-    async def function_monitor(
+    def function_monitor(
         self, function_monitor_request: "FunctionMonitorRequest"
-    ) -> AsyncIterator["FunctionMonitorResponse"]:
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-        yield FunctionMonitorResponse()
-
-    async def __rpc_function_invoke(
-        self,
-        stream: "grpclib.server.Stream[FunctionInvokeRequest, FunctionInvokeResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        await self._call_rpc_handler_server_stream(
-            self.function_invoke,
-            stream,
-            request,
-        )
-
-    async def __rpc_function_get_args(
-        self,
-        stream: "grpclib.server.Stream[FunctionGetArgsRequest, FunctionGetArgsResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.function_get_args(request)
-        await stream.send_message(response)
-
-    async def __rpc_function_set_result(
-        self,
-        stream: "grpclib.server.Stream[FunctionSetResultRequest, FunctionSetResultResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.function_set_result(request)
-        await stream.send_message(response)
-
-    async def __rpc_function_monitor(
-        self,
-        stream: "grpclib.server.Stream[FunctionMonitorRequest, FunctionMonitorResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        await self._call_rpc_handler_server_stream(
-            self.function_monitor,
-            stream,
-            request,
-        )
-
-    def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
-        return {
-            "/function.FunctionService/FunctionInvoke": grpclib.const.Handler(
-                self.__rpc_function_invoke,
-                grpclib.const.Cardinality.UNARY_STREAM,
-                FunctionInvokeRequest,
-                FunctionInvokeResponse,
-            ),
-            "/function.FunctionService/FunctionGetArgs": grpclib.const.Handler(
-                self.__rpc_function_get_args,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                FunctionGetArgsRequest,
-                FunctionGetArgsResponse,
-            ),
-            "/function.FunctionService/FunctionSetResult": grpclib.const.Handler(
-                self.__rpc_function_set_result,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                FunctionSetResultRequest,
-                FunctionSetResultResponse,
-            ),
-            "/function.FunctionService/FunctionMonitor": grpclib.const.Handler(
-                self.__rpc_function_monitor,
-                grpclib.const.Cardinality.UNARY_STREAM,
-                FunctionMonitorRequest,
-                FunctionMonitorResponse,
-            ),
-        }
+    ) -> Iterator["FunctionMonitorResponse"]:
+        for response in self._unary_stream(
+            "/function.FunctionService/FunctionMonitor",
+            FunctionMonitorRequest,
+            FunctionMonitorResponse,
+        )(function_monitor_request):
+            yield response

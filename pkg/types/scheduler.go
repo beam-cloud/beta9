@@ -55,6 +55,10 @@ type ContainerState struct {
 	Status      ContainerStatus `redis:"status"`
 	ScheduledAt int64           `redis:"scheduled_at"`
 	WorkspaceId string          `redis:"workspace_id"`
+	Gpu         string          `redis:"gpu"`
+	GpuCount    uint32          `redis:"gpu_count"`
+	Cpu         int64           `redis:"cpu"`
+	Memory      int64           `redis:"memory"`
 }
 
 type ContainerRequest struct {
@@ -137,10 +141,12 @@ func NewWorkerPoolSizingConfig() *WorkerPoolSizingConfig {
 	}
 }
 
-type ThrottledByConcurrencyLimitError struct{}
+type ThrottledByConcurrencyLimitError struct {
+	Reason string
+}
 
 func (e *ThrottledByConcurrencyLimitError) Error() string {
-	return "concurrency_limit_reached"
+	return "concurrency_limit_reached: " + e.Reason
 }
 
 type QuotaDoesNotExistError struct{}

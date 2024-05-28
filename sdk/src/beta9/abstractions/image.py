@@ -90,17 +90,16 @@ class Image(BaseAbstraction):
             raise FileNotFoundError
 
     def exists(self) -> Tuple[bool, ImageBuildResult]:
-        r: VerifyImageBuildResponse = self.run_sync(
-            self.stub.verify_image_build(
-                VerifyImageBuildRequest(
-                    python_packages=self.python_packages,
-                    python_version=self.python_version,
-                    commands=self.commands,
-                    force_rebuild=False,
-                    existing_image_uri=self.base_image,
-                )
+        r: VerifyImageBuildResponse = self.stub.verify_image_build(
+            VerifyImageBuildRequest(
+                python_packages=self.python_packages,
+                python_version=self.python_version,
+                commands=self.commands,
+                force_rebuild=False,
+                existing_image_uri=self.base_image,
             )
         )
+
         return (r.exists, ImageBuildResult(success=r.exists, image_id=r.image_id))
 
     def build(self) -> ImageBuildResult:
@@ -111,10 +110,9 @@ class Image(BaseAbstraction):
             terminal.header("Using cached image")
             return ImageBuildResult(success=True, image_id=exists_response.image_id)
 
-        async def _build_async() -> BuildImageResponse:
-            last_response = BuildImageResponse()
-
-            async for r in self.stub.build_image(
+        with terminal.progress("Working..."):
+            last_response = BuildImageResponse(success=False)
+            for r in self.stub.build_image(
                 BuildImageRequest(
                     python_packages=self.python_packages,
                     python_version=self.python_version,
@@ -128,11 +126,6 @@ class Image(BaseAbstraction):
                 if r.done:
                     last_response = r
                     break
-
-            return last_response
-
-        with terminal.progress("Working..."):
-            last_response: BuildImageResponse = self.loop.run_until_complete(_build_async())
 
         if not last_response.success:
             terminal.error(f"Build failed: {last_response.msg} ❌")

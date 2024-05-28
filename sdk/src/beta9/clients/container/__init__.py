@@ -8,17 +8,19 @@ from typing import (
     TYPE_CHECKING,
     AsyncIterator,
     Dict,
+    Iterator,
     Optional,
 )
 
 import betterproto
-import grpclib
-from betterproto.grpc.grpclib_server import ServiceBase
+import grpc
+from betterproto.grpcstub.grpcio_client import SyncServiceStub
+from betterproto.grpcstub.grpclib_server import ServiceBase
 
 
 if TYPE_CHECKING:
     import grpclib.server
-    from betterproto.grpc.grpclib_client import MetadataLike
+    from betterproto.grpcstub.grpclib_client import MetadataLike
     from grpclib.metadata import Deadline
 
 
@@ -47,51 +49,13 @@ class ContainerTaskStatusUpdateResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
-class ContainerServiceStub(betterproto.ServiceStub):
-    async def execute_command(
-        self,
-        command_execution_request: "CommandExecutionRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> AsyncIterator["CommandExecutionResponse"]:
-        async for response in self._unary_stream(
-            "/container.ContainerService/ExecuteCommand",
-            command_execution_request,
-            CommandExecutionResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        ):
-            yield response
-
-
-class ContainerServiceBase(ServiceBase):
-
-    async def execute_command(
+class ContainerServiceStub(SyncServiceStub):
+    def execute_command(
         self, command_execution_request: "CommandExecutionRequest"
-    ) -> AsyncIterator["CommandExecutionResponse"]:
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-        yield CommandExecutionResponse()
-
-    async def __rpc_execute_command(
-        self,
-        stream: "grpclib.server.Stream[CommandExecutionRequest, CommandExecutionResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        await self._call_rpc_handler_server_stream(
-            self.execute_command,
-            stream,
-            request,
-        )
-
-    def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
-        return {
-            "/container.ContainerService/ExecuteCommand": grpclib.const.Handler(
-                self.__rpc_execute_command,
-                grpclib.const.Cardinality.UNARY_STREAM,
-                CommandExecutionRequest,
-                CommandExecutionResponse,
-            ),
-        }
+    ) -> Iterator["CommandExecutionResponse"]:
+        for response in self._unary_stream(
+            "/container.ContainerService/ExecuteCommand",
+            CommandExecutionRequest,
+            CommandExecutionResponse,
+        )(command_execution_request):
+            yield response

@@ -57,6 +57,8 @@ var (
 	workspaceActiveContainersLock string = "workspace:container:active:lock:%s"
 
 	workspaceVolumePathDownloadToken string = "workspace:volume_path_download_token:%s"
+	workspaceConcurrencyLimit        string = "workspace:concurrency_limit:%s"
+	workspaceConcurrencyLimitLock    string = "workspace:concurrency_limit:lock:%s"
 )
 
 var (
@@ -204,16 +206,12 @@ func (rk *redisKeys) WorkspacePrefix() string {
 	return workspacePrefix
 }
 
-func (rk *redisKeys) WorkspaceConcurrencyQuota(workspaceId string) string {
-	return fmt.Sprintf(workspaceConcurrencyQuota, workspaceId)
+func (rk *redisKeys) WorkspaceConcurrencyLimit(workspaceId string) string {
+	return fmt.Sprintf(workspaceConcurrencyLimit, workspaceId)
 }
 
-func (rk *redisKeys) WorkspaceActiveContainer(workspaceId string, containerId string, gpuType string) string {
-	return fmt.Sprintf(workspaceActiveContainer, workspaceId, containerId, gpuType)
-}
-
-func (rk *redisKeys) WorkspaceActiveContainerLock(workspaceId string) string {
-	return fmt.Sprintf(workspaceActiveContainersLock, workspaceId)
+func (rk *redisKeys) WorkspaceConcurrencyLimitLock(workspaceId string) string {
+	return fmt.Sprintf(workspaceConcurrencyLimitLock, workspaceId)
 }
 
 func (rk *redisKeys) WorkspaceVolumePathDownloadToken(token string) string {

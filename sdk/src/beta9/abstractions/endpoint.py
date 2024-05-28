@@ -139,10 +139,8 @@ class _CallableWrapper:
             return False
 
         terminal.header("Deploying endpoint")
-        deploy_response: DeployStubResponse = self.parent.run_sync(
-            self.parent.gateway_stub.deploy_stub(
-                DeployStubRequest(stub_id=self.parent.stub_id, name=name)
-            )
+        deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
+            DeployStubRequest(stub_id=self.parent.stub_id, name=name)
         )
 
         if deploy_response.ok:
@@ -177,16 +175,23 @@ class _CallableWrapper:
                     self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
                 )
         except KeyboardInterrupt:
+            self._handle_serve_interrupt()
+
+    def _handle_serve_interrupt(self) -> None:
+        response = "y"
+
+        try:
             response = terminal.prompt(
                 text="Would you like to stop the container? (y/n)", default="y"
             )
-            if response == "y":
-                terminal.header("Stopping serve container")
-                self.parent.run_sync(
-                    self.parent.endpoint_stub.stop_endpoint_serve(
-                        StopEndpointServeRequest(stub_id=self.parent.stub_id)
-                    )
-                )
+        except KeyboardInterrupt:
+            pass
+
+        if response == "y":
+            terminal.header("Stopping serve container")
+            self.parent.endpoint_stub.stop_endpoint_serve(
+                StopEndpointServeRequest(stub_id=self.parent.stub_id)
+            )
 
         terminal.print("Goodbye 👋")
 
@@ -195,7 +200,7 @@ class _CallableWrapper:
             self.parent.sync_dir_to_workspace(dir=dir, object_id=object_id)
         )
         try:
-            async for r in self.parent.endpoint_stub.start_endpoint_serve(
+            for r in self.parent.endpoint_stub.start_endpoint_serve(
                 StartEndpointServeRequest(
                     stub_id=self.parent.stub_id,
                 )
@@ -208,6 +213,6 @@ class _CallableWrapper:
                     break
 
             if last_response is None or not last_response.done or last_response.exit_code != 0:
-                terminal.error("Serve container failed ☠️")
+                terminal.error("Serve container failed ❌")
         finally:
             sync_task.cancel()

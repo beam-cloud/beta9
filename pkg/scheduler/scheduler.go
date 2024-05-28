@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"math"
@@ -96,18 +97,43 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	go s.schedulerMetrics.CounterIncContainerRequested(request)
 	go s.eventRepo.PushContainerRequestedEvent(request)
 
-	err = s.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
-		ContainerId: request.ContainerId,
-		StubId:      request.StubId,
-		Status:      types.ContainerStatusPending,
-		WorkspaceId: request.WorkspaceId,
-		ScheduledAt: time.Now().Unix(),
-	})
+	quota, err := s.getConcurrencyLimit(request)
+	if err != nil {
+		return err
+	}
+
+	err = s.containerRepo.SetContainerStateWithConcurrencyLimit(quota, request)
 	if err != nil {
 		return err
 	}
 
 	return s.addRequestToBacklog(request)
+}
+
+func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types.ConcurrencyLimit, error) {
+	// First try to get the cached quota
+	var quota *types.ConcurrencyLimit
+	quota, err := s.containerRepo.GetConcurrencyLimitByWorkspaceId(request.WorkspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	if quota == nil {
+		quota, err = s.backendRepo.GetConcurrencyLimitByWorkspaceId(s.ctx, request.WorkspaceId)
+		if err != nil && err == sql.ErrNoRows {
+			return nil, nil // No quota set for this workspace
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		err = s.containerRepo.SetConcurrencyLimitByWorkspaceId(request.WorkspaceId, quota)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return quota, nil
 }
 
 func (s *Scheduler) Stop(containerId string) error {

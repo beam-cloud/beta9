@@ -123,6 +123,10 @@ class TaskQueue(RunnerAbstraction):
             self._taskqueue_stub = TaskQueueServiceStub(self.channel)
         return self._taskqueue_stub
 
+    @taskqueue_stub.setter
+    def taskqueue_stub(self, value: TaskQueueServiceStub) -> None:
+        self._taskqueue_stub = value
+
     def __call__(self, func):
         return _CallableWrapper(func, self)
 
@@ -151,10 +155,8 @@ class _CallableWrapper:
             return False
 
         terminal.header("Deploying taskqueue")
-        deploy_response: DeployStubResponse = self.parent.run_sync(
-            self.parent.gateway_stub.deploy_stub(
-                DeployStubRequest(stub_id=self.parent.stub_id, name=name)
-            )
+        deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
+            DeployStubRequest(stub_id=self.parent.stub_id, name=name)
         )
 
         if deploy_response.ok:
@@ -189,16 +191,23 @@ class _CallableWrapper:
                     self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
                 )
         except KeyboardInterrupt:
+            self._handle_serve_interrupt()
+
+    def _handle_serve_interrupt(self) -> None:
+        response = "y"
+
+        try:
             response = terminal.prompt(
                 text="Would you like to stop the container? (y/n)", default="y"
             )
-            if response == "y":
-                terminal.header("Stopping serve container")
-                self.parent.run_sync(
-                    self.parent.taskqueue_stub.stop_task_queue_serve(
-                        StopTaskQueueServeRequest(stub_id=self.parent.stub_id)
-                    )
-                )
+        except KeyboardInterrupt:
+            pass
+
+        if response == "y":
+            terminal.header("Stopping serve container")
+            self.parent.taskqueue_stub.stop_task_queue_serve(
+                StopTaskQueueServeRequest(stub_id=self.parent.stub_id)
+            )
 
         terminal.print("Goodbye 👋")
 
@@ -207,7 +216,7 @@ class _CallableWrapper:
             self.parent.sync_dir_to_workspace(dir=dir, object_id=object_id)
         )
         try:
-            async for r in self.parent.taskqueue_stub.start_task_queue_serve(
+            for r in self.parent.taskqueue_stub.start_task_queue_serve(
                 StartTaskQueueServeRequest(
                     stub_id=self.parent.stub_id,
                 )
@@ -220,7 +229,7 @@ class _CallableWrapper:
                     break
 
             if last_response is None or not last_response.done or last_response.exit_code != 0:
-                terminal.error("Serve container failed ☠️")
+                terminal.error("Serve container failed ❌")
         finally:
             sync_task.cancel()
 
@@ -234,13 +243,10 @@ class _CallableWrapper:
         payload = {"args": args, "kwargs": kwargs}
         json_payload = json.dumps(payload)
 
-        r: TaskQueuePutResponse = self.parent.run_sync(
-            self.parent.taskqueue_stub.task_queue_put(
-                TaskQueuePutRequest(
-                    stub_id=self.parent.stub_id, payload=json_payload.encode("utf-8")
-                )
-            )
+        r: TaskQueuePutResponse = self.parent.taskqueue_stub.task_queue_put(
+            TaskQueuePutRequest(stub_id=self.parent.stub_id, payload=json_payload.encode("utf-8"))
         )
+
         if not r.ok:
             terminal.error("Failed to enqueue task")
             return False

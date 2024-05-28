@@ -116,6 +116,14 @@ func TestRunContainer(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 
+	backendRepo, _ := repo.NewBackendPostgresRepositoryForTest()
+	wb.backendRepo = &BackendRepoConcurrencyLimitsForTest{
+		BackendRepository: backendRepo,
+	}
+
+	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).GPUConcurrencyLimit = 0
+	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).CPUConcurrencyLimit = 10000
+
 	// Schedule a container
 	err = wb.Run(&types.ContainerRequest{
 		ContainerId: "test-container",
@@ -140,6 +148,14 @@ func TestProcessRequests(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 
+	backendRepo, _ := repo.NewBackendPostgresRepositoryForTest()
+	wb.backendRepo = &BackendRepoConcurrencyLimitsForTest{
+		BackendRepository: backendRepo,
+	}
+
+	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).GPUConcurrencyLimit = 10
+	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).CPUConcurrencyLimit = 100000
+
 	// Prepare some requests to process.
 	requests := []*types.ContainerRequest{
 		{
@@ -147,12 +163,14 @@ func TestProcessRequests(t *testing.T) {
 			Cpu:         1000,
 			Memory:      2000,
 			Gpu:         "A10G",
+			GpuCount:    1,
 		},
 		{
 			ContainerId: uuid.New().String(),
 			Cpu:         1000,
 			Memory:      2000,
 			Gpu:         "T4",
+			GpuCount:    1,
 		},
 		{
 			ContainerId: uuid.New().String(),
@@ -447,4 +465,195 @@ func TestSelectBuildWorker(t *testing.T) {
 	assert.Equal(t, int64(0), updatedWorker.Memory)
 	assert.Equal(t, "", updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusPending, updatedWorker.Status)
+}
+
+type BackendRepoConcurrencyLimitsForTest struct {
+	repo.BackendRepository
+	GPUConcurrencyLimit uint32
+	CPUConcurrencyLimit uint32
+}
+
+func (b *BackendRepoConcurrencyLimitsForTest) GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error) {
+	return &types.ConcurrencyLimit{
+		GPULimit:     b.GPUConcurrencyLimit,
+		CPUCoreLimit: b.CPUConcurrencyLimit,
+	}, nil
+}
+
+func TestConcurrencyLimit(t *testing.T) {
+	tests := []struct {
+		name           string
+		gpuConcurrency uint32
+		cpuConcurrency uint32
+		requests       []*types.ContainerRequest
+		errorToMatch   error
+	}{
+		{
+			name:           "limits are 0",
+			gpuConcurrency: 0,
+			cpuConcurrency: 0,
+			requests: []*types.ContainerRequest{
+				{
+					ContainerId: uuid.New().String(),
+					Cpu:         1000,
+					Memory:      2000,
+				},
+			},
+			errorToMatch: &types.ThrottledByConcurrencyLimitError{
+				Reason: "cpu quota exceeded",
+			},
+		},
+		{
+			name:           "cpu requests are barely within limits",
+			gpuConcurrency: 0,
+			cpuConcurrency: 1000,
+			requests: []*types.ContainerRequest{
+				{
+					ContainerId: uuid.New().String(),
+					Cpu:         1000,
+				},
+			},
+			errorToMatch: nil,
+		},
+		{
+			name:           "cpu requests exceed limits",
+			gpuConcurrency: 0,
+			cpuConcurrency: 1000,
+			requests: []*types.ContainerRequest{
+				{
+					ContainerId: uuid.New().String(),
+					Cpu:         1000,
+				},
+				{
+					ContainerId: uuid.New().String(),
+					Cpu:         1,
+				},
+			},
+			errorToMatch: &types.ThrottledByConcurrencyLimitError{
+				Reason: "cpu quota exceeded",
+			},
+		},
+		{
+			name:           "gpu requests are barely within limits",
+			gpuConcurrency: 1,
+			cpuConcurrency: 0,
+			requests: []*types.ContainerRequest{
+				{
+					ContainerId: uuid.New().String(),
+					Gpu:         "A10G",
+					GpuCount:    1,
+				},
+			},
+			errorToMatch: nil,
+		},
+		{
+			name:           "gpu requests exceed limits",
+			gpuConcurrency: 1,
+			cpuConcurrency: 0,
+			requests: []*types.ContainerRequest{
+				{
+					ContainerId: uuid.New().String(),
+					Gpu:         "A10G",
+					GpuCount:    1,
+				},
+				{
+					ContainerId: uuid.New().String(),
+					Gpu:         "A10G",
+					GpuCount:    1,
+				},
+			},
+			errorToMatch: &types.ThrottledByConcurrencyLimitError{
+				Reason: "gpu quota exceeded",
+			},
+		},
+		{
+			name:           "gpu and cpu requests are barely within limits",
+			gpuConcurrency: 1,
+			cpuConcurrency: 1000,
+			requests: []*types.ContainerRequest{
+				{
+					ContainerId: uuid.New().String(),
+					Gpu:         "A10G",
+					GpuCount:    1,
+					Cpu:         1000,
+				},
+			},
+			errorToMatch: nil,
+		},
+		{
+			name:           "gpu and cpu requests exceed limits",
+			gpuConcurrency: 1,
+			cpuConcurrency: 1000,
+			requests: []*types.ContainerRequest{
+				{
+					ContainerId: uuid.New().String(),
+					Gpu:         "A10G",
+					GpuCount:    1,
+					Cpu:         1000,
+				},
+				{
+					ContainerId: uuid.New().String(),
+					Gpu:         "A10G",
+					GpuCount:    1,
+					Cpu:         1,
+				},
+			},
+			errorToMatch: &types.ThrottledByConcurrencyLimitError{
+				Reason: "gpu quota exceeded",
+			},
+		},
+	}
+
+	// Add a test with 100 containers
+	oneHundredContainersTest := []*types.ContainerRequest{}
+	for i := 0; i < 100; i++ {
+		oneHundredContainersTest = append(oneHundredContainersTest, &types.ContainerRequest{
+			ContainerId: uuid.New().String(),
+			Cpu:         1000,
+		})
+	}
+
+	tests = append(tests, []struct {
+		name           string
+		gpuConcurrency uint32
+		cpuConcurrency uint32
+		requests       []*types.ContainerRequest
+		errorToMatch   error
+	}{
+		{
+			name:           "cpu requests succeeds with 100 containers within limit",
+			gpuConcurrency: 0,
+			cpuConcurrency: 1000 * 100,
+			requests:       oneHundredContainersTest,
+			errorToMatch:   nil,
+		},
+	}...)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wb, err := NewSchedulerForTest()
+			assert.Nil(t, err)
+			assert.NotNil(t, wb)
+
+			backendRepo, _ := repo.NewBackendPostgresRepositoryForTest()
+			wb.backendRepo = &BackendRepoConcurrencyLimitsForTest{
+				BackendRepository: backendRepo,
+			}
+
+			wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).GPUConcurrencyLimit = test.gpuConcurrency
+			wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).CPUConcurrencyLimit = test.cpuConcurrency
+
+			var errToExpect error
+			for _, req := range test.requests {
+				errToExpect = wb.Run(req)
+				if errToExpect != nil {
+					break
+				}
+			}
+
+			if errToExpect != nil {
+				assert.Equal(t, test.errorToMatch, errToExpect)
+			}
+		})
+	}
 }

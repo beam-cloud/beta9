@@ -5,7 +5,7 @@ from typing import Iterable, Union
 import click
 from rich.table import Column, Table, box
 
-from .. import aio, terminal
+from .. import terminal
 from ..channel import ServiceClient
 from ..clients.volume import (
     CopyPathRequest,
@@ -60,8 +60,8 @@ def common(**_):
 )
 @extraclick.pass_service_client
 def ls(service: ServiceClient, remote_path: str):
-    req = ListPathRequest(path=remote_path)
-    res: ListPathResponse = aio.run_sync(service.volume.list_path(req))
+    res: ListPathResponse
+    res = service.volume.list_path(ListPathRequest(path=remote_path))
 
     if not res.ok:
         terminal.error(f"{remote_path} ({res.err_msg})")
@@ -161,7 +161,7 @@ def cp(service: ServiceClient, local_path: str, remote_path: str):
             CopyPathRequest(path=dst, content=chunk)
             for chunk in read_with_progress(file, desc_width=desc_width)
         )
-        res: CopyPathResponse = aio.run_sync(service.volume.copy_path_stream(req))
+        res: CopyPathResponse = service.volume.copy_path_stream(req)
 
         if not res.ok:
             terminal.error(f"{dst} ({res.err_msg})")
@@ -218,7 +218,7 @@ def read_with_progress(
 @extraclick.pass_service_client
 def rm(service: ServiceClient, remote_path: str):
     req = DeletePathRequest(path=remote_path)
-    res = aio.run_sync(service.volume.delete_path(req))
+    res = service.volume.delete_path(req)
 
     if not res.ok:
         terminal.error(f"{remote_path} ({res.err_msg})")
@@ -245,7 +245,7 @@ def management():
 @extraclick.pass_service_client
 def list_volumes(service: ServiceClient):
     res: ListVolumesResponse
-    res = aio.run_sync(service.volume.list_volumes(ListVolumesRequest()))
+    res = service.volume.list_volumes(ListVolumesRequest())
 
     if not res.ok:
         terminal.error(res.err_msg)
@@ -287,7 +287,7 @@ def list_volumes(service: ServiceClient):
 @extraclick.pass_service_client
 def create_volume(service: ServiceClient, name: str):
     res: GetOrCreateVolumeResponse
-    res = aio.run_sync(service.volume.get_or_create_volume(GetOrCreateVolumeRequest(name=name)))
+    res = service.volume.get_or_create_volume(GetOrCreateVolumeRequest(name=name))
 
     if not res.ok:
         terminal.print(res.volume)

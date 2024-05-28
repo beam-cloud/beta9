@@ -4,7 +4,7 @@ import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
-from .. import aio, terminal
+from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import ListContainersRequest
@@ -58,10 +58,10 @@ AVAILABLE_LIST_COLUMNS = {
 @extraclick.pass_service_client
 @click.pass_context
 def list_containers(ctx: click.Context, service: ServiceClient, format: str, columns: str):
-    res = aio.run_sync(service.gateway.list_containers(ListContainersRequest()))
+    res = service.gateway.list_containers(ListContainersRequest())
 
     if not res.ok:
-        terminal.error(res.err_msg)
+        terminal.error(res.error_msg)
 
     if format == "json":
         deployments = [c.to_dict(casing=Casing.SNAKE) for c in res.containers]  # type:ignore
