@@ -106,12 +106,13 @@ func NewGateway() (*Gateway, error) {
 		Ephemeral:  true,
 	}, tailscaleRepo)
 
-	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, metricsRepo, backendRepo, tailscale)
+	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
+
+	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, metricsRepo, backendRepo, workspaceRepo, tailscale)
 	if err != nil {
 		return nil, err
 	}
 
-	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)

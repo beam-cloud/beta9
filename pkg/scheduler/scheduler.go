@@ -26,12 +26,13 @@ type Scheduler struct {
 	workerPoolManager *WorkerPoolManager
 	requestBacklog    *RequestBacklog
 	containerRepo     repo.ContainerRepository
+	workspaceRepo     repo.WorkspaceRepository
 	eventRepo         repo.EventRepository
 	schedulerMetrics  SchedulerMetrics
 	eventBus          *common.EventBus
 }
 
-func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.MetricsRepository, backendRepo repo.BackendRepository, tailscale *network.Tailscale) (*Scheduler, error) {
+func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.MetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
@@ -76,6 +77,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		containerRepo:     containerRepo,
 		schedulerMetrics:  schedulerMetrics,
 		eventRepo:         eventRepo,
+		workspaceRepo:     workspaceRepo,
 	}, nil
 }
 
@@ -113,7 +115,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types.ConcurrencyLimit, error) {
 	// First try to get the cached quota
 	var quota *types.ConcurrencyLimit
-	quota, err := s.containerRepo.GetConcurrencyLimitByWorkspaceId(request.WorkspaceId)
+	quota, err := s.workspaceRepo.GetConcurrencyLimitByWorkspaceId(request.WorkspaceId)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +129,7 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 			return nil, err
 		}
 
-		err = s.containerRepo.SetConcurrencyLimitByWorkspaceId(request.WorkspaceId, quota)
+		err = s.workspaceRepo.SetConcurrencyLimitByWorkspaceId(request.WorkspaceId, quota)
 		if err != nil {
 			return nil, err
 		}

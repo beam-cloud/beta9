@@ -45,15 +45,13 @@ type ContainerRepository interface {
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	GetFailedContainerCountByStubId(stubId string) (int, error)
-
-	// Caching concurrency limit TODO: discuss if this should be here
-	GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error)
-	SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error
 }
 
 type WorkspaceRepository interface {
 	ValidateWorkspaceVolumePathDownloadToken(workspaceId string, volumePath string, token string) error
 	GenerateWorkspaceVolumePathDownloadToken(workspaceId string, volumePath string) (string, error)
+	GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error)
+	SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error
 }
 
 type BackendRepository interface {

@@ -51,10 +51,7 @@ var (
 )
 
 var (
-	workspacePrefix               string = "workspace"
-	workspaceConcurrencyQuota     string = "workspace:concurrency_quota:%s"
-	workspaceActiveContainer      string = "workspace:container:active:%s:%s:%s"
-	workspaceActiveContainersLock string = "workspace:container:active:lock:%s"
+	workspacePrefix string = "workspace"
 
 	workspaceVolumePathDownloadToken string = "workspace:volume_path_download_token:%s"
 	workspaceConcurrencyLimit        string = "workspace:concurrency_limit:%s"
