@@ -12,17 +12,17 @@ import (
 type ConcurrencyLimitGroup struct {
 	routerGroup   *echo.Group
 	backendRepo   repository.BackendRepository
-	containerRepo repository.ContainerRepository
+	workspaceRepo repository.WorkspaceRepository
 }
 
 func NewConcurrencyLimitGroup(
 	g *echo.Group,
 	backendRepo repository.BackendRepository,
-	containerRepo repository.ContainerRepository,
+	workspaceRepo repository.WorkspaceRepository,
 ) *ConcurrencyLimitGroup {
 	group := &ConcurrencyLimitGroup{routerGroup: g,
 		backendRepo:   backendRepo,
-		containerRepo: containerRepo,
+		workspaceRepo: workspaceRepo,
 	}
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.GetConcurrencyLimitByWorkspaceId))
@@ -70,7 +70,7 @@ func (c *ConcurrencyLimitGroup) CreateOrUpdateConcurrencyLimit(ctx echo.Context)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update concurrency limit")
 		}
 
-		err = c.containerRepo.SetConcurrencyLimitByWorkspaceId(workspaceId, concurrencyLimit)
+		err = c.workspaceRepo.SetConcurrencyLimitByWorkspaceId(workspaceId, concurrencyLimit)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to recache concurrency limit")
 		}
@@ -83,7 +83,7 @@ func (c *ConcurrencyLimitGroup) CreateOrUpdateConcurrencyLimit(ctx echo.Context)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create concurrency limit")
 	}
 
-	err = c.containerRepo.SetConcurrencyLimitByWorkspaceId(workspaceId, concurrencyLimit)
+	err = c.workspaceRepo.SetConcurrencyLimitByWorkspaceId(workspaceId, concurrencyLimit)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to recache concurrency limit")
 	}
