@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['py38', 'py39', 'py310', 'py311']
-    
+        python-version: ['py38', 'py39', 'py310', 'py311', 'py312']
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
