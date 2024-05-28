@@ -11,18 +11,20 @@ from typing import (
     AsyncIterator,
     Dict,
     Iterable,
+    Iterator,
     Optional,
     Union,
 )
 
 import betterproto
-import grpclib
-from betterproto.grpc.grpclib_server import ServiceBase
+import grpc
+from betterproto.grpcstub.grpcio_client import SyncServiceStub
+from betterproto.grpcstub.grpclib_server import ServiceBase
 
 
 if TYPE_CHECKING:
     import grpclib.server
-    from betterproto.grpc.grpclib_client import MetadataLike
+    from betterproto.grpcstub.grpclib_client import MetadataLike
     from grpclib.metadata import Deadline
 
 
@@ -77,119 +79,34 @@ class OutputPublicUrlResponse(betterproto.Message):
     public_url: str = betterproto.string_field(3)
 
 
-class OutputServiceStub(betterproto.ServiceStub):
-    async def output_save_stream(
-        self,
-        output_save_request_iterator: Union[
-            AsyncIterable["OutputSaveRequest"], Iterable["OutputSaveRequest"]
-        ],
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
+class OutputServiceStub(SyncServiceStub):
+    def output_save_stream(
+        self, output_save_request_iterator: Iterable["OutputSaveRequest"]
     ) -> "OutputSaveResponse":
-        return await self._stream_unary(
-            "/output.OutputService/OutputSaveStream",
-            output_save_request_iterator,
-            OutputSaveRequest,
-            OutputSaveResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def output_stat(
-        self,
-        output_stat_request: "OutputStatRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "OutputStatResponse":
-        return await self._unary_unary(
-            "/output.OutputService/OutputStat",
-            output_stat_request,
-            OutputStatResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def output_public_url(
-        self,
-        output_public_url_request: "OutputPublicUrlRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "OutputPublicUrlResponse":
-        return await self._unary_unary(
-            "/output.OutputService/OutputPublicURL",
-            output_public_url_request,
-            OutputPublicUrlResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-
-class OutputServiceBase(ServiceBase):
-
-    async def output_save_stream(
-        self, output_save_request_iterator: AsyncIterator["OutputSaveRequest"]
-    ) -> "OutputSaveResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def output_stat(
-        self, output_stat_request: "OutputStatRequest"
-    ) -> "OutputStatResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def output_public_url(
-        self, output_public_url_request: "OutputPublicUrlRequest"
-    ) -> "OutputPublicUrlResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def __rpc_output_save_stream(
-        self, stream: "grpclib.server.Stream[OutputSaveRequest, OutputSaveResponse]"
-    ) -> None:
-        request = stream.__aiter__()
-        response = await self.output_save_stream(request)
-        await stream.send_message(response)
-
-    async def __rpc_output_stat(
-        self, stream: "grpclib.server.Stream[OutputStatRequest, OutputStatResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.output_stat(request)
-        await stream.send_message(response)
-
-    async def __rpc_output_public_url(
-        self,
-        stream: "grpclib.server.Stream[OutputPublicUrlRequest, OutputPublicUrlResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.output_public_url(request)
-        await stream.send_message(response)
-
-    def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
-        return {
-            "/output.OutputService/OutputSaveStream": grpclib.const.Handler(
-                self.__rpc_output_save_stream,
-                grpclib.const.Cardinality.STREAM_UNARY,
+        return (
+            self._stream_unary(
+                "/output.OutputService/OutputSaveStream",
                 OutputSaveRequest,
                 OutputSaveResponse,
-            ),
-            "/output.OutputService/OutputStat": grpclib.const.Handler(
-                self.__rpc_output_stat,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                OutputStatRequest,
-                OutputStatResponse,
-            ),
-            "/output.OutputService/OutputPublicURL": grpclib.const.Handler(
-                self.__rpc_output_public_url,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                OutputPublicUrlRequest,
-                OutputPublicUrlResponse,
-            ),
-        }
+            )
+            .future(output_save_request_iterator)
+            .result()
+        )
+
+    def output_stat(
+        self, output_stat_request: "OutputStatRequest"
+    ) -> "OutputStatResponse":
+        return self._unary_unary(
+            "/output.OutputService/OutputStat",
+            OutputStatRequest,
+            OutputStatResponse,
+        )(output_stat_request)
+
+    def output_public_url(
+        self, output_public_url_request: "OutputPublicUrlRequest"
+    ) -> "OutputPublicUrlResponse":
+        return self._unary_unary(
+            "/output.OutputService/OutputPublicURL",
+            OutputPublicUrlRequest,
+            OutputPublicUrlResponse,
+        )(output_public_url_request)

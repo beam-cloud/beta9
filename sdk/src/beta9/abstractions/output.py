@@ -59,7 +59,7 @@ class Output(BaseAbstraction):
                 while chunk := file.read(CHUNK_SIZE):
                     yield OutputSaveRequest(self.task_id, self.path.name, chunk)
 
-        res: OutputSaveResponse = self.run_sync(self.stub.output_save_stream(stream_request()))
+        res: OutputSaveResponse = self.stub.output_save_stream(stream_request())
         if not res.ok:
             raise OutputSaveError(res.err_msg)
 
@@ -69,9 +69,10 @@ class Output(BaseAbstraction):
         if not self.id:
             raise OutputNotSavedError
 
-        res: OutputStatResponse = self.run_sync(
-            self.stub.output_stat(OutputStatRequest(self.id, self.task_id, self.path.name))
+        res: OutputStatResponse = self.stub.output_stat(
+            OutputStatRequest(self.id, self.task_id, self.path.name)
         )
+
         if not res.ok:
             raise OutputNotFoundError(res.err_msg)
 
@@ -89,11 +90,10 @@ class Output(BaseAbstraction):
             raise OutputNotSavedError
 
         res: OutputPublicUrlResponse
-        res = self.run_sync(
-            self.stub.output_public_url(
-                OutputPublicUrlRequest(self.id, self.task_id, self.path.name, expires)
-            )
+        res = self.stub.output_public_url(
+            OutputPublicUrlRequest(self.id, self.task_id, self.path.name, expires)
         )
+
         if not res.ok:
             raise OutputPublicURLError(res.err_msg)
 

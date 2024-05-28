@@ -185,7 +185,7 @@ def execute_lifecycle_method(*, name: str) -> Union[Any, None]:
         raise RunnerException()
 
 
-async def send_callback(
+def send_callback(
     *, gateway_stub: GatewayServiceStub, context: FunctionContext, payload: Any, task_status: str
 ) -> None:
     """
@@ -206,7 +206,7 @@ async def send_callback(
         use_json = False
 
     # Sign callback payload
-    sign_payload_resp: SignPayloadResponse = await gateway_stub.sign_payload(
+    sign_payload_resp: SignPayloadResponse = gateway_stub.sign_payload(
         SignPayloadRequest(payload=bytes(json.dumps(body), "utf-8"))
     )
 

@@ -8,20 +8,6 @@ from beta9.abstractions.function import Function
 from beta9.clients.function import FunctionInvokeResponse
 
 
-class AsyncIterator:
-    def __init__(self, seq):
-        self.iter = iter(seq)
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        try:
-            return next(self.iter)
-        except StopIteration:
-            raise StopAsyncIteration
-
-
 class TestTaskQueue(TestCase):
     def test_init(self):
         mock_stub = MagicMock()
@@ -31,7 +17,7 @@ class TestTaskQueue(TestCase):
             memory=128,
             image=Image(python_version="python3.8"),
         )
-        queue.stub = mock_stub
+        queue.function_stub = mock_stub
 
         self.assertEqual(queue.image.python_version, "python3.8")
         self.assertEqual(queue.cpu, 1)
@@ -61,20 +47,17 @@ class TestTaskQueue(TestCase):
             func.parent.syncer = MagicMock()
             func.parent.prepare_runtime = MagicMock(return_value=True)
 
-            func.parent.function_stub.function_invoke.return_value = AsyncIterator(
-                [FunctionInvokeResponse(done=True, exit_code=0, result=cloudpickle.dumps(1998))]
-            )
+            func.parent.function_stub.function_invoke.return_value = [
+                FunctionInvokeResponse(done=True, exit_code=0, result=cloudpickle.dumps(1998))
+            ]
+
             self.assertEqual(func(), 1998)
 
-            func.parent.function_stub.function_invoke.return_value = AsyncIterator(
-                [FunctionInvokeResponse(done=False, exit_code=1, result=b"")]
-            )
+            func.parent.function_stub.function_invoke.return_value = [
+                FunctionInvokeResponse(done=False, exit_code=1, result=b"")
+            ]
 
     def test_map(self):
-        # @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))
-        # def test_func(*args, **kwargs):
-        #     return 1998
-
         with mock.patch(
             "beta9.abstractions.function.Function.function_stub",
             new_callable=PropertyMock,
@@ -93,13 +76,11 @@ class TestTaskQueue(TestCase):
             # it will iterate to the next value. This iterator in testing is persisted across
             # multiple calls to the function, so we can simulate multiple responses.
             # (ONLY HAPPENS DURING TESTING)
-            test_func.parent.function_stub.function_invoke.return_value = AsyncIterator(
-                [
-                    FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
-                    FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
-                    FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
-                ]
-            )
+            test_func.parent.function_stub.function_invoke.return_value = [
+                FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
+                FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
+                FunctionInvokeResponse(done=True, exit_code=0, result=pickled_value),
+            ]
 
             test_func.parent.prepare_runtime = MagicMock(return_value=True)
 

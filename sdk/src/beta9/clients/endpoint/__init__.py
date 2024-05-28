@@ -8,17 +8,19 @@ from typing import (
     TYPE_CHECKING,
     AsyncIterator,
     Dict,
+    Iterator,
     Optional,
 )
 
 import betterproto
-import grpclib
-from betterproto.grpc.grpclib_server import ServiceBase
+import grpc
+from betterproto.grpcstub.grpcio_client import SyncServiceStub
+from betterproto.grpcstub.grpclib_server import ServiceBase
 
 
 if TYPE_CHECKING:
     import grpclib.server
-    from betterproto.grpc.grpclib_client import MetadataLike
+    from betterproto.grpcstub.grpclib_client import MetadataLike
     from grpclib.metadata import Deadline
 
 
@@ -44,87 +46,22 @@ class StopEndpointServeResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
-class EndpointServiceStub(betterproto.ServiceStub):
-    async def start_endpoint_serve(
-        self,
-        start_endpoint_serve_request: "StartEndpointServeRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> AsyncIterator["StartEndpointServeResponse"]:
-        async for response in self._unary_stream(
+class EndpointServiceStub(SyncServiceStub):
+    def start_endpoint_serve(
+        self, start_endpoint_serve_request: "StartEndpointServeRequest"
+    ) -> Iterator["StartEndpointServeResponse"]:
+        for response in self._unary_stream(
             "/endpoint.EndpointService/StartEndpointServe",
-            start_endpoint_serve_request,
+            StartEndpointServeRequest,
             StartEndpointServeResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        ):
+        )(start_endpoint_serve_request):
             yield response
 
-    async def stop_endpoint_serve(
-        self,
-        stop_endpoint_serve_request: "StopEndpointServeRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "StopEndpointServeResponse":
-        return await self._unary_unary(
-            "/endpoint.EndpointService/StopEndpointServe",
-            stop_endpoint_serve_request,
-            StopEndpointServeResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-
-class EndpointServiceBase(ServiceBase):
-
-    async def start_endpoint_serve(
-        self, start_endpoint_serve_request: "StartEndpointServeRequest"
-    ) -> AsyncIterator["StartEndpointServeResponse"]:
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-        yield StartEndpointServeResponse()
-
-    async def stop_endpoint_serve(
+    def stop_endpoint_serve(
         self, stop_endpoint_serve_request: "StopEndpointServeRequest"
     ) -> "StopEndpointServeResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def __rpc_start_endpoint_serve(
-        self,
-        stream: "grpclib.server.Stream[StartEndpointServeRequest, StartEndpointServeResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        await self._call_rpc_handler_server_stream(
-            self.start_endpoint_serve,
-            stream,
-            request,
-        )
-
-    async def __rpc_stop_endpoint_serve(
-        self,
-        stream: "grpclib.server.Stream[StopEndpointServeRequest, StopEndpointServeResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.stop_endpoint_serve(request)
-        await stream.send_message(response)
-
-    def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
-        return {
-            "/endpoint.EndpointService/StartEndpointServe": grpclib.const.Handler(
-                self.__rpc_start_endpoint_serve,
-                grpclib.const.Cardinality.UNARY_STREAM,
-                StartEndpointServeRequest,
-                StartEndpointServeResponse,
-            ),
-            "/endpoint.EndpointService/StopEndpointServe": grpclib.const.Handler(
-                self.__rpc_stop_endpoint_serve,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                StopEndpointServeRequest,
-                StopEndpointServeResponse,
-            ),
-        }
+        return self._unary_unary(
+            "/endpoint.EndpointService/StopEndpointServe",
+            StopEndpointServeRequest,
+            StopEndpointServeResponse,
+        )(stop_endpoint_serve_request)

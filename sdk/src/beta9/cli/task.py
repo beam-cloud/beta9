@@ -4,7 +4,7 @@ import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
-from .. import aio, terminal
+from .. import terminal
 from ..channel import ServiceClient
 from ..clients.gateway import (
     ListTasksRequest,
@@ -65,7 +65,7 @@ def management():
 @extraclick.pass_service_client
 def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str, StringList]):
     res: ListTasksResponse
-    res = aio.run_sync(service.gateway.list_tasks(ListTasksRequest(filters=filter, limit=limit)))
+    res = service.gateway.list_tasks(ListTasksRequest(filters=filter, limit=limit))
 
     if not res.ok:
         terminal.error(res.err_msg)
@@ -117,7 +117,7 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
 @extraclick.pass_service_client
 def stop_task(service: ServiceClient, task_id: str):
     res: StopTasksResponse
-    res = aio.run_sync(service.gateway.stop_tasks(StopTasksRequest(task_ids=[task_id])))
+    res = service.gateway.stop_tasks(StopTasksRequest(task_ids=[task_id]))
 
     if res.ok:
         terminal.success(f"Stopped task {task_id}.")

@@ -8,18 +8,20 @@ from typing import (
     TYPE_CHECKING,
     AsyncIterator,
     Dict,
+    Iterator,
     List,
     Optional,
 )
 
 import betterproto
-import grpclib
-from betterproto.grpc.grpclib_server import ServiceBase
+import grpc
+from betterproto.grpcstub.grpcio_client import SyncServiceStub
+from betterproto.grpcstub.grpclib_server import ServiceBase
 
 
 if TYPE_CHECKING:
     import grpclib.server
-    from betterproto.grpc.grpclib_client import MetadataLike
+    from betterproto.grpcstub.grpclib_client import MetadataLike
     from grpclib.metadata import Deadline
 
 
@@ -60,86 +62,22 @@ class BuildImageResponse(betterproto.Message):
     success: bool = betterproto.bool_field(4)
 
 
-class ImageServiceStub(betterproto.ServiceStub):
-    async def verify_image_build(
-        self,
-        verify_image_build_request: "VerifyImageBuildRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "VerifyImageBuildResponse":
-        return await self._unary_unary(
-            "/image.ImageService/VerifyImageBuild",
-            verify_image_build_request,
-            VerifyImageBuildResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def build_image(
-        self,
-        build_image_request: "BuildImageRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> AsyncIterator["BuildImageResponse"]:
-        async for response in self._unary_stream(
-            "/image.ImageService/BuildImage",
-            build_image_request,
-            BuildImageResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        ):
-            yield response
-
-
-class ImageServiceBase(ServiceBase):
-
-    async def verify_image_build(
+class ImageServiceStub(SyncServiceStub):
+    def verify_image_build(
         self, verify_image_build_request: "VerifyImageBuildRequest"
     ) -> "VerifyImageBuildResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+        return self._unary_unary(
+            "/image.ImageService/VerifyImageBuild",
+            VerifyImageBuildRequest,
+            VerifyImageBuildResponse,
+        )(verify_image_build_request)
 
-    async def build_image(
+    def build_image(
         self, build_image_request: "BuildImageRequest"
-    ) -> AsyncIterator["BuildImageResponse"]:
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-        yield BuildImageResponse()
-
-    async def __rpc_verify_image_build(
-        self,
-        stream: "grpclib.server.Stream[VerifyImageBuildRequest, VerifyImageBuildResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.verify_image_build(request)
-        await stream.send_message(response)
-
-    async def __rpc_build_image(
-        self, stream: "grpclib.server.Stream[BuildImageRequest, BuildImageResponse]"
-    ) -> None:
-        request = await stream.recv_message()
-        await self._call_rpc_handler_server_stream(
-            self.build_image,
-            stream,
-            request,
-        )
-
-    def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
-        return {
-            "/image.ImageService/VerifyImageBuild": grpclib.const.Handler(
-                self.__rpc_verify_image_build,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                VerifyImageBuildRequest,
-                VerifyImageBuildResponse,
-            ),
-            "/image.ImageService/BuildImage": grpclib.const.Handler(
-                self.__rpc_build_image,
-                grpclib.const.Cardinality.UNARY_STREAM,
-                BuildImageRequest,
-                BuildImageResponse,
-            ),
-        }
+    ) -> Iterator["BuildImageResponse"]:
+        for response in self._unary_stream(
+            "/image.ImageService/BuildImage",
+            BuildImageRequest,
+            BuildImageResponse,
+        )(build_image_request):
+            yield response

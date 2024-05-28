@@ -11,13 +11,14 @@ from typing import (
 )
 
 import betterproto
-import grpclib
-from betterproto.grpc.grpclib_server import ServiceBase
+import grpc
+from betterproto.grpcstub.grpcio_client import SyncServiceStub
+from betterproto.grpcstub.grpclib_server import ServiceBase
 
 
 if TYPE_CHECKING:
     import grpclib.server
-    from betterproto.grpc.grpclib_client import MetadataLike
+    from betterproto.grpcstub.grpclib_client import MetadataLike
     from grpclib.metadata import Deadline
 
 
@@ -67,190 +68,48 @@ class SimpleQueueRequest(betterproto.Message):
     name: str = betterproto.string_field(1)
 
 
-class SimpleQueueServiceStub(betterproto.ServiceStub):
-    async def simple_queue_put(
-        self,
-        simple_queue_put_request: "SimpleQueuePutRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "SimpleQueuePutResponse":
-        return await self._unary_unary(
-            "/simplequeue.SimpleQueueService/SimpleQueuePut",
-            simple_queue_put_request,
-            SimpleQueuePutResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def simple_queue_pop(
-        self,
-        simple_queue_pop_request: "SimpleQueuePopRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "SimpleQueuePopResponse":
-        return await self._unary_unary(
-            "/simplequeue.SimpleQueueService/SimpleQueuePop",
-            simple_queue_pop_request,
-            SimpleQueuePopResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def simple_queue_peek(
-        self,
-        simple_queue_request: "SimpleQueueRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "SimpleQueuePeekResponse":
-        return await self._unary_unary(
-            "/simplequeue.SimpleQueueService/SimpleQueuePeek",
-            simple_queue_request,
-            SimpleQueuePeekResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def simple_queue_empty(
-        self,
-        simple_queue_request: "SimpleQueueRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "SimpleQueueEmptyResponse":
-        return await self._unary_unary(
-            "/simplequeue.SimpleQueueService/SimpleQueueEmpty",
-            simple_queue_request,
-            SimpleQueueEmptyResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-    async def simple_queue_size(
-        self,
-        simple_queue_request: "SimpleQueueRequest",
-        *,
-        timeout: Optional[float] = None,
-        deadline: Optional["Deadline"] = None,
-        metadata: Optional["MetadataLike"] = None
-    ) -> "SimpleQueueSizeResponse":
-        return await self._unary_unary(
-            "/simplequeue.SimpleQueueService/SimpleQueueSize",
-            simple_queue_request,
-            SimpleQueueSizeResponse,
-            timeout=timeout,
-            deadline=deadline,
-            metadata=metadata,
-        )
-
-
-class SimpleQueueServiceBase(ServiceBase):
-
-    async def simple_queue_put(
+class SimpleQueueServiceStub(SyncServiceStub):
+    def simple_queue_put(
         self, simple_queue_put_request: "SimpleQueuePutRequest"
     ) -> "SimpleQueuePutResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+        return self._unary_unary(
+            "/simplequeue.SimpleQueueService/SimpleQueuePut",
+            SimpleQueuePutRequest,
+            SimpleQueuePutResponse,
+        )(simple_queue_put_request)
 
-    async def simple_queue_pop(
+    def simple_queue_pop(
         self, simple_queue_pop_request: "SimpleQueuePopRequest"
     ) -> "SimpleQueuePopResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+        return self._unary_unary(
+            "/simplequeue.SimpleQueueService/SimpleQueuePop",
+            SimpleQueuePopRequest,
+            SimpleQueuePopResponse,
+        )(simple_queue_pop_request)
 
-    async def simple_queue_peek(
+    def simple_queue_peek(
         self, simple_queue_request: "SimpleQueueRequest"
     ) -> "SimpleQueuePeekResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+        return self._unary_unary(
+            "/simplequeue.SimpleQueueService/SimpleQueuePeek",
+            SimpleQueueRequest,
+            SimpleQueuePeekResponse,
+        )(simple_queue_request)
 
-    async def simple_queue_empty(
+    def simple_queue_empty(
         self, simple_queue_request: "SimpleQueueRequest"
     ) -> "SimpleQueueEmptyResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
+        return self._unary_unary(
+            "/simplequeue.SimpleQueueService/SimpleQueueEmpty",
+            SimpleQueueRequest,
+            SimpleQueueEmptyResponse,
+        )(simple_queue_request)
 
-    async def simple_queue_size(
+    def simple_queue_size(
         self, simple_queue_request: "SimpleQueueRequest"
     ) -> "SimpleQueueSizeResponse":
-        raise grpclib.GRPCError(grpclib.const.Status.UNIMPLEMENTED)
-
-    async def __rpc_simple_queue_put(
-        self,
-        stream: "grpclib.server.Stream[SimpleQueuePutRequest, SimpleQueuePutResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.simple_queue_put(request)
-        await stream.send_message(response)
-
-    async def __rpc_simple_queue_pop(
-        self,
-        stream: "grpclib.server.Stream[SimpleQueuePopRequest, SimpleQueuePopResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.simple_queue_pop(request)
-        await stream.send_message(response)
-
-    async def __rpc_simple_queue_peek(
-        self,
-        stream: "grpclib.server.Stream[SimpleQueueRequest, SimpleQueuePeekResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.simple_queue_peek(request)
-        await stream.send_message(response)
-
-    async def __rpc_simple_queue_empty(
-        self,
-        stream: "grpclib.server.Stream[SimpleQueueRequest, SimpleQueueEmptyResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.simple_queue_empty(request)
-        await stream.send_message(response)
-
-    async def __rpc_simple_queue_size(
-        self,
-        stream: "grpclib.server.Stream[SimpleQueueRequest, SimpleQueueSizeResponse]",
-    ) -> None:
-        request = await stream.recv_message()
-        response = await self.simple_queue_size(request)
-        await stream.send_message(response)
-
-    def __mapping__(self) -> Dict[str, grpclib.const.Handler]:
-        return {
-            "/simplequeue.SimpleQueueService/SimpleQueuePut": grpclib.const.Handler(
-                self.__rpc_simple_queue_put,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                SimpleQueuePutRequest,
-                SimpleQueuePutResponse,
-            ),
-            "/simplequeue.SimpleQueueService/SimpleQueuePop": grpclib.const.Handler(
-                self.__rpc_simple_queue_pop,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                SimpleQueuePopRequest,
-                SimpleQueuePopResponse,
-            ),
-            "/simplequeue.SimpleQueueService/SimpleQueuePeek": grpclib.const.Handler(
-                self.__rpc_simple_queue_peek,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                SimpleQueueRequest,
-                SimpleQueuePeekResponse,
-            ),
-            "/simplequeue.SimpleQueueService/SimpleQueueEmpty": grpclib.const.Handler(
-                self.__rpc_simple_queue_empty,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                SimpleQueueRequest,
-                SimpleQueueEmptyResponse,
-            ),
-            "/simplequeue.SimpleQueueService/SimpleQueueSize": grpclib.const.Handler(
-                self.__rpc_simple_queue_size,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                SimpleQueueRequest,
-                SimpleQueueSizeResponse,
-            ),
-        }
+        return self._unary_unary(
+            "/simplequeue.SimpleQueueService/SimpleQueueSize",
+            SimpleQueueRequest,
+            SimpleQueueSizeResponse,
+        )(simple_queue_request)

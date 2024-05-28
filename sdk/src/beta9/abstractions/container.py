@@ -69,6 +69,10 @@ class Container(RunnerAbstraction):
             self._container_stub = ContainerServiceStub(self.channel)
         return self._container_stub
 
+    @stub.setter
+    def stub(self, value: ContainerServiceStub) -> None:
+        self._container_stub = value
+
     def run(self, command: List[str]) -> int:
         """Run a command in a container and return the exit code"""
         if not self.prepare_runtime(
@@ -77,13 +81,13 @@ class Container(RunnerAbstraction):
             return 1
 
         with terminal.progress("Working..."):
-            return self.run_sync(self._run_remote(command))
+            return self._run_remote(command)
 
-    async def _run_remote(self, command: List[str]) -> int:
+    def _run_remote(self, command: List[str]) -> int:
         terminal.header("Running command")
-        last_response: Union[None, CommandExecutionResponse] = None
+        last_response = CommandExecutionResponse(done=False)
 
-        async for r in self.container_stub.execute_command(
+        for r in self.stub.execute_command(
             CommandExecutionRequest(stub_id=self.stub_id, command=" ".join(command).encode())
         ):
             if r.task_id != "":
@@ -97,7 +101,7 @@ class Container(RunnerAbstraction):
                 break
 
         if not last_response.done or last_response.exit_code != 0:
-            terminal.warn(f"Command execution failed with exit code {last_response.exit_code} ☠️")
+            terminal.warn(f"Command execution failed with exit code {last_response.exit_code} ❌")
             return last_response.exit_code
 
         terminal.header("Command execution complete 🎉")
