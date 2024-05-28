@@ -94,6 +94,8 @@ github.com/beam-cloud/blobcache v0.0.0-20240512162245-f8b1aa1cad58 h1:b9Q6mxH5CM
 github.com/beam-cloud/blobcache v0.0.0-20240512162245-f8b1aa1cad58/go.mod h1:msZBPNo2uDlcvYA1+epdSRZVeN/89ML5BeiJy70bxjQ=
 github.com/beam-cloud/clip v0.0.0-20240524192925-3744760722a1 h1:IonKAjXFgiTHuzItFa0X+wBIXzhn5BfU8i2SkO0ZWBk=
 github.com/beam-cloud/clip v0.0.0-20240524192925-3744760722a1/go.mod h1:fD+s/BBWbUDzbX772ydDsLXkvXKzt6y+mzdTVmsAd30=
+github.com/beam-cloud/clip v0.0.0-20240528225814-65e4a3f35a1d h1:tfmOzW70o2laeuNsz8kXVWRdiSPYVs8D3A7EhwosrFI=
+github.com/beam-cloud/clip v0.0.0-20240528225814-65e4a3f35a1d/go.mod h1:fD+s/BBWbUDzbX772ydDsLXkvXKzt6y+mzdTVmsAd30=
 github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170 h1:KYVz18kobBGU8URM9Srn++2tcL9e0PcwYyH0Z4GYicM=
 github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
