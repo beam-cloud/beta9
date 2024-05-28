@@ -73,8 +73,6 @@ func (p *LambdaLabsProvider) listMachines(ctx context.Context, poolName string) 
 		return nil, err
 	}
 
-	log.Println("body: ", data)
-
 	// Extract the instance information
 	prefix := poolName + "-"
 	machines := make(map[string]string)

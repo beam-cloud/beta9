@@ -113,8 +113,7 @@ message Container {
   string workspace_id = 5;
 }
 
-message ListContainersRequest {
-}
+message ListContainersRequest {}
 
 message ListContainersResponse {
   repeated Container containers = 1;
@@ -274,7 +273,19 @@ message ListPoolsResponse {
   repeated Pool pools = 3;
 }
 
-message Machine {}
+message Machine {
+  string id = 1;
+  int64 cpu = 2;
+  int64 memory = 3;
+  string gpu = 4;
+  uint32 gpu_count = 5;
+  string status = 6;
+  string pool_name = 7;
+  string provider_name = 8;
+  string registration_token = 9;
+  string tailscale_url = 10;
+  string tailscale_auth = 11;
+}
 
 message ListMachinesRequest {
   string pool_name = 1;

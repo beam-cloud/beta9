@@ -153,10 +153,28 @@ func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId s
 		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
 	}
 
+	// Set TTL on state key
+	err = r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.MachinePendingExpirationS)*time.Second).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set machine state ttl <%v>: %w", stateKey, err)
+	}
+
 	machineIndexKey := common.RedisKeys.ProviderMachineIndex(providerName, poolName)
 	err = r.rdb.SAdd(context.TODO(), machineIndexKey, stateKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to add machine state key to index <%v>: %w", machineIndexKey, err)
+	}
+
+	return nil
+}
+
+func (r *ProviderRedisRepository) SetMachineKeepAlive(providerName, poolName, machineId string) error {
+	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
+
+	// Set TTL on state key
+	err := r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.MachineKeepaliveExpirationS)*time.Second).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set machine state ttl <%v>: %w", stateKey, err)
 	}
 
 	return nil
@@ -197,6 +215,13 @@ func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machin
 	if err != nil {
 		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
 	}
+
+	// Set TTL on state key
+	err = r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.MachineKeepaliveExpirationS)*time.Second).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set machine state ttl <%v>: %w", stateKey, err)
+	}
+
 	return nil
 }
 

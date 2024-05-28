@@ -25,7 +25,7 @@ type Provider interface {
 	GetName() string
 }
 
-func machineId() string {
+func MachineId() string {
 	return uuid.New().String()[:8]
 }
 

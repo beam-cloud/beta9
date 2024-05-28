@@ -84,7 +84,7 @@ func (p *OCIProvider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
-	machineId := machineId()
+	machineId := MachineId()
 	cloudInitData, err := generateCloudInitData(userDataConfig{
 		AuthKey:           p.AppConfig.Tailscale.AuthKey,
 		ControlURL:        p.AppConfig.Tailscale.ControlURL,
