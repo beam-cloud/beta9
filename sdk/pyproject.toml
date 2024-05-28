@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "beta9"
-version = "0.1.28"
+version = "0.1.29"
 description = ""
 authors = ["beam.cloud <support@beam.cloud>"]
 packages = [
@@ -19,11 +19,11 @@ asgiref = "^3.8.1"
 cloudpickle = "^3.0.0"
 rich = "^13.7.0"
 click = "^8.1.7"
-betterproto = {git = "https://github.com/beam-cloud/python-betterproto.git", rev = "5616f13"}
 protobuf = "^4.25.1"
 fastapi = "^0.110.2"
 uvicorn = "^0.29.0"
 watchdog = "^4.0.0"
+betterproto-beta9 = {version = "2.0.0b7", extras = ["compiler"]}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
