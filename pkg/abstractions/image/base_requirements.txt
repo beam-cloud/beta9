@@ -6,12 +6,11 @@ packaging==21.3
 MarkupSafe==2.0.0
 websockets==11.0.3
 pydantic==2.5.3
-betterproto==v2.0.0-beta6
-grpcio==1.57.0
+betterproto-beta9==2.0.0b7
+grpcio==1.60.0
 httpx==0.24.1
 bson==0.5.10
 psutil==5.9.6
 cloudpickle==3.0.0
 rich==13.7.0
 watchdog==4.0.0
-git+https://github.com/beam-cloud/python-betterproto@5616f13
