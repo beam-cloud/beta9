@@ -246,10 +246,10 @@ type FilterFieldMapping struct {
 }
 
 type ConcurrencyLimit struct {
-	Id         uint      `db:"id" json:"-" redis:"-"`
-	ExternalId string    `db:"external_id" json:"external_id,omitempty" redis:"external_id"`
-	GPULimit   uint32    `db:"gpu_limit" json:"gpu_limit" redis:"gpu_limit"`
-	CPULimit   uint32    `db:"cpu_limit" json:"cpu_limit" redis:"cpu_limit"`
-	CreatedAt  time.Time `db:"created_at" json:"created_at,omitempty" redis:"-"`
-	UpdatedAt  time.Time `db:"updated_at" json:"updated_at,omitempty" redis:"-"`
+	Id           uint      `db:"id" json:"-" redis:"-"`
+	ExternalId   string    `db:"external_id" json:"external_id,omitempty" redis:"external_id"`
+	GPULimit     uint32    `db:"gpu_limit" json:"gpu_limit" redis:"gpu_limit"`
+	CPUCoreLimit uint32    `db:"cpu_core_limit" json:"cpu_core_limit" redis:"cpu_core_limit"`
+	CreatedAt    time.Time `db:"created_at" json:"created_at,omitempty" redis:"-"`
+	UpdatedAt    time.Time `db:"updated_at" json:"updated_at,omitempty" redis:"-"`
 }

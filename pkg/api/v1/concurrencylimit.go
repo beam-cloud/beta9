@@ -65,7 +65,7 @@ func (c *ConcurrencyLimitGroup) CreateOrUpdateConcurrencyLimit(ctx echo.Context)
 	}
 
 	if workspace.ConcurrencyLimitId != nil {
-		concurrencyLimit, err := c.backendRepo.UpdateConcurrencyLimit(ctx.Request().Context(), *workspace.ConcurrencyLimitId, data.GPULimit, data.CPULimit)
+		concurrencyLimit, err := c.backendRepo.UpdateConcurrencyLimit(ctx.Request().Context(), *workspace.ConcurrencyLimitId, data.GPULimit, data.CPUCoreLimit)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update concurrency limit")
 		}
@@ -78,7 +78,7 @@ func (c *ConcurrencyLimitGroup) CreateOrUpdateConcurrencyLimit(ctx echo.Context)
 		return ctx.JSON(http.StatusOK, concurrencyLimit)
 	}
 
-	concurrencyLimit, err := c.backendRepo.CreateConcurrencyLimit(ctx.Request().Context(), workspace.Id, data.GPULimit, data.CPULimit)
+	concurrencyLimit, err := c.backendRepo.CreateConcurrencyLimit(ctx.Request().Context(), workspace.Id, data.GPULimit, data.CPUCoreLimit)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create concurrency limit")
 	}

@@ -383,7 +383,7 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 			}
 		}
 
-		if totalCpuCores+int(request.Cpu) > int(quota.CPULimit) {
+		if totalCpuCores+int(request.Cpu) > int(quota.CPUCoreLimit) {
 			return &types.ThrottledByConcurrencyLimitError{
 				Reason: "cpu quota exceeded",
 			}

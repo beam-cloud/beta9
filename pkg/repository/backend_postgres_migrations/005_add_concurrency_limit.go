@@ -14,7 +14,7 @@ func upCreateConcurrencyLimitTable(tx *sql.Tx) error {
 	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS concurrency_limit (
 		id SERIAL PRIMARY KEY,
 		external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
-		cpu_limit INT NOT NULL,
+		cpu_core_limit INT NOT NULL,
 		gpu_limit INT NOT NULL,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
