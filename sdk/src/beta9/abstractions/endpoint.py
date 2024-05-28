@@ -213,6 +213,6 @@ class _CallableWrapper:
                     break
 
             if last_response is None or not last_response.done or last_response.exit_code != 0:
-                terminal.error("Serve container failed ☠️")
+                terminal.error("Serve container failed ❌")
         finally:
             sync_task.cancel()

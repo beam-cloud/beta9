@@ -25,8 +25,7 @@ class TestContainer(TestCase):
         c = Container(
             cpu=1.0, memory=128, image=Image(python_version="python3.8", python_packages=["numpy"])
         )
-        mock_stub = MagicMock()
-        c.container_stub = mock_stub
+        c.stub = MagicMock()
 
         self.assertEqual(c.image.python_version, "python3.8")
         self.assertEqual(c.cpu, 1)
@@ -36,17 +35,17 @@ class TestContainer(TestCase):
         c = Container(
             cpu=1.0, memory=128, image=Image(python_version="python3.8", python_packages=["numpy"])
         )
-        mock_stub = MagicMock()
-        c.container_stub = mock_stub
+        c.stub = MagicMock()
+        c.gateway_stub = MagicMock()
         c.prepare_runtime = MagicMock(return_value=True)
         c.syncer = MagicMock()
 
-        mock_stub.execute_command = MagicMock(
-            return_value=AsyncIterator([CommandExecutionResponse(done=True, exit_code=0)])
+        c.stub.execute_command = MagicMock(
+            return_value=[CommandExecutionResponse(done=True, exit_code=0)]
         )
 
         ec = c.run(["ls"])
-        mock_stub.execute_command.assert_called_once_with(
+        c.stub.execute_command.assert_called_once_with(
             CommandExecutionRequest(stub_id=c.stub_id, command="ls".encode())
         )
         self.assertEqual(ec, 0)

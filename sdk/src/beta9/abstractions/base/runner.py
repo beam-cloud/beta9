@@ -116,6 +116,10 @@ class RunnerAbstraction(BaseAbstraction):
             self._gateway_stub = GatewayServiceStub(self.channel)
         return self._gateway_stub
 
+    @gateway_stub.setter
+    def gateway_stub(self, value) -> None:
+        self._gateway_stub = value
+
     def _parse_cpu_to_millicores(self, cpu: Union[float, str]) -> int:
         """
         Parse the cpu argument to an integer value in millicores.

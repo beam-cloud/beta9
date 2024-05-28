@@ -123,6 +123,10 @@ class TaskQueue(RunnerAbstraction):
             self._taskqueue_stub = TaskQueueServiceStub(self.channel)
         return self._taskqueue_stub
 
+    @taskqueue_stub.setter
+    def taskqueue_stub(self, value: TaskQueueServiceStub) -> None:
+        self._taskqueue_stub = value
+
     def __call__(self, func):
         return _CallableWrapper(func, self)
 
@@ -225,7 +229,7 @@ class _CallableWrapper:
                     break
 
             if last_response is None or not last_response.done or last_response.exit_code != 0:
-                terminal.error("Serve container failed ☠️")
+                terminal.error("Serve container failed ❌")
         finally:
             sync_task.cancel()
 

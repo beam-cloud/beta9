@@ -1,4 +1,4 @@
-import asyncio
+import concurrent.futures
 from typing import Any, Callable, Iterator, List, Optional, Sequence, Union
 
 import cloudpickle
@@ -98,6 +98,10 @@ class Function(RunnerAbstraction):
             self._function_stub = FunctionServiceStub(self.channel)
         return self._function_stub
 
+    @function_stub.setter
+    def function_stub(self, value: FunctionServiceStub) -> None:
+        self._function_stub = value
+
 
 class _CallableWrapper:
     def __init__(self, func: Callable, parent: Function) -> None:
@@ -115,9 +119,9 @@ class _CallableWrapper:
             return
 
         with terminal.progress("Working..."):
-            return self.parent.run_sync(self._call_remote(*args, **kwargs))
+            return self._call_remote(*args, **kwargs)
 
-    async def _call_remote(self, *args, **kwargs) -> Any:
+    def _call_remote(self, *args, **kwargs) -> Any:
         args = cloudpickle.dumps(
             {
                 "args": args,
@@ -142,7 +146,7 @@ class _CallableWrapper:
                 break
 
         if last_response is None or not last_response.done or last_response.exit_code != 0:
-            terminal.error(f"Function failed <{last_response.task_id}> ☠️", exit=False)
+            terminal.error(f"Function failed <{last_response.task_id}> ❌", exit=False)
             return
 
         terminal.header(f"Function complete <{last_response.task_id}>")
@@ -187,29 +191,20 @@ class _CallableWrapper:
             return [args]
         return args
 
-    def _gather_and_yield_results(self, inputs: Sequence) -> Iterator[Any]:
-        container_count = len(inputs)
-
-        async def _gather_async():
-            tasks = [
-                asyncio.create_task(self._call_remote(*self._format_args(args))) for args in inputs
+    def _threaded_map(self, inputs: Sequence) -> Iterator[Any]:
+        max_workers = self.parent.concurrency * self.parent.max_containers
+        with concurrent.futures.ThreadPoolExecutor(max_workers) as pool:
+            futures = [
+                pool.submit(fn=self._call_remote, args=self._format_args(args)) for args in inputs
             ]
-            for task in asyncio.as_completed(tasks):
-                yield await task
-
-        async_gen = _gather_async()
-        with terminal.progress(f"Running {container_count} containers..."):
-            while True:
-                try:
-                    yield self.parent.loop.run_until_complete(async_gen.__anext__())
-                except StopAsyncIteration:
-                    break
+            for future in concurrent.futures.as_completed(futures):
+                yield future.result()
 
     def map(self, inputs: Sequence[Any]) -> Iterator[Any]:
         if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=FUNCTION_STUB_TYPE,
         ):
-            terminal.error("Function failed to prepare runtime ☠️")
+            terminal.error("Function failed to prepare runtime ❌")
 
-        return self._gather_and_yield_results(inputs)
+        return self._threaded_map(inputs)
