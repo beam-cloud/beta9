@@ -9,6 +9,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/bsm/redislock"
 	redis "github.com/redis/go-redis/v9"
 )
 
@@ -49,8 +50,14 @@ func (cr *ContainerRedisRepository) GetContainerState(containerId string) (*type
 }
 
 func (cr *ContainerRedisRepository) SetContainerState(containerId string, info *types.ContainerState) error {
+	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+	if err != nil {
+		return err
+	}
+	defer cr.lock.Release(common.RedisKeys.SchedulerContainerLock(containerId))
+
 	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
-	err := cr.rdb.HSet(
+	err = cr.rdb.HSet(
 		context.TODO(), stateKey,
 		"container_id", containerId,
 		"status", string(info.Status),
@@ -344,11 +351,16 @@ func (c *ContainerRedisRepository) SetConcurrencyLimitByWorkspaceId(workspaceId 
 func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
 	// Acquire the concurrency limit lock for the workspace to prevent
 	// simultaneous requests from exceeding the quota
-	err := c.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(request.ContainerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
-	if err != nil {
+	context := context.TODO()
+	retryStrategy := redislock.LimitRetry(redislock.LinearBackoff(100*time.Millisecond), 10)
+	lock, err := redislock.Obtain(context, c.rdb, common.RedisKeys.WorkspaceConcurrencyLimitLock(request.WorkspaceId), time.Duration(10)*time.Second, &redislock.Options{
+		RetryStrategy: retryStrategy,
+	})
+	if err != nil && err != redislock.ErrNotObtained {
 		return err
 	}
-	defer c.lock.Release(common.RedisKeys.SchedulerContainerLock(request.ContainerId))
+
+	defer lock.Release(context)
 
 	if quota != nil { // If a quota is set, check if the request exceeds it
 		containers, err := c.GetActiveContainersByWorkspaceId(request.WorkspaceId)
