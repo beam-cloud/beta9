@@ -81,6 +81,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		Kwargs: t.msg.Kwargs,
 	})
 	if err != nil {
+
 		return err
 	}
 
@@ -118,6 +119,11 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		return err
 	}
 
+	gpuCount := 0
+	if stubConfig.Runtime.Gpu != "" {
+		gpuCount = 1
+	}
+
 	err = t.fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: t.containerId,
 		Env: []string{
@@ -130,7 +136,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
 		Gpu:         string(stubConfig.Runtime.Gpu),
-		GpuCount:    1,
+		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,
 		WorkspaceId: stub.Workspace.ExternalId,

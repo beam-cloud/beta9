@@ -52,9 +52,8 @@ var (
 
 var (
 	workspacePrefix               string = "workspace"
-	workspaceConcurrencyQuota     string = "workspace:concurrency_quota:%s"
-	workspaceActiveContainer      string = "workspace:container:active:%s:%s:%s"
-	workspaceActiveContainersLock string = "workspace:container:active:lock:%s"
+	workspaceConcurrencyLimit     string = "workspace:concurrency_limit:%s"
+	workspaceConcurrencyLimitLock string = "workspace:concurrency_limit:lock:%s"
 )
 
 var (
@@ -202,16 +201,12 @@ func (rk *redisKeys) WorkspacePrefix() string {
 	return workspacePrefix
 }
 
-func (rk *redisKeys) WorkspaceConcurrencyQuota(workspaceId string) string {
-	return fmt.Sprintf(workspaceConcurrencyQuota, workspaceId)
+func (rk *redisKeys) WorkspaceConcurrencyLimit(workspaceId string) string {
+	return fmt.Sprintf(workspaceConcurrencyLimit, workspaceId)
 }
 
-func (rk *redisKeys) WorkspaceActiveContainer(workspaceId string, containerId string, gpuType string) string {
-	return fmt.Sprintf(workspaceActiveContainer, workspaceId, containerId, gpuType)
-}
-
-func (rk *redisKeys) WorkspaceActiveContainerLock(workspaceId string) string {
-	return fmt.Sprintf(workspaceActiveContainersLock, workspaceId)
+func (rk *redisKeys) WorkspaceConcurrencyLimitLock(workspaceId string) string {
+	return fmt.Sprintf(workspaceConcurrencyLimitLock, workspaceId)
 }
 
 // WorkerPool keys

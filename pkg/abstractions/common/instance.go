@@ -12,6 +12,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+const IgnoreScalingEventInterval = 10 * time.Second
+
 type IAutoscaledInstance interface {
 	ConsumeScaleResult(*AutoscalerResult)
 	ConsumeContainerEvent(types.ContainerEvent)
@@ -166,6 +168,7 @@ func (i *AutoscaledInstance) ConsumeContainerEvent(event types.ContainerEvent) {
 
 func (i *AutoscaledInstance) Monitor() error {
 	go i.Autoscaler.Start(i.Ctx) // Start the autoscaler
+	ignoreScalingEventWindow := time.Now().Add(-IgnoreScalingEventInterval)
 
 	for {
 		select {
@@ -189,7 +192,18 @@ func (i *AutoscaledInstance) Monitor() error {
 			}
 
 		case desiredContainers := <-i.ScaleEventChan:
+			// Ignore scaling events if we're in the ignore window
+			if time.Now().Before(ignoreScalingEventWindow) {
+				continue
+			}
+
 			if err := i.HandleScalingEvent(desiredContainers); err != nil {
+				if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
+					if time.Now().After(ignoreScalingEventWindow) {
+						log.Printf("<%s> throttled by concurrency limit", i.Name)
+						ignoreScalingEventWindow = time.Now().Add(IgnoreScalingEventInterval)
+					}
+				}
 				continue
 			}
 		}
