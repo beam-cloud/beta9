@@ -195,7 +195,7 @@ class _CallableWrapper:
         max_workers = self.parent.concurrency * self.parent.max_containers
         with concurrent.futures.ThreadPoolExecutor(max_workers) as pool:
             futures = [
-                pool.submit(fn=self._call_remote, args=self._format_args(args)) for args in inputs
+                pool.submit(self._call_remote, args=self._format_args(args)) for args in inputs
             ]
             for future in concurrent.futures.as_completed(futures):
                 yield future.result()
