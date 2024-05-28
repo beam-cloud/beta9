@@ -93,9 +93,9 @@ rust-codec = ["betterproto-rust-codec (==0.1.1)"]
 
 [package.source]
 type = "git"
-url = "https://github.com/nickpetrovic/python-betterproto.git"
-reference = "grpcio-support"
-resolved_reference = "5fc040c16c608894077f1e505bb72c76192458ce"
+url = "https://github.com/beam-cloud/python-betterproto.git"
+reference = "5616f13"
+resolved_reference = "5616f134cfc6c9360a700b0ceffc53b7880a725e"
 
 [[package]]
 name = "certifi"
@@ -1145,4 +1145,4 @@ watchmedo = ["PyYAML (>=3.10)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.8"
-content-hash = "7dd40c01a651bba00e72db4ba6db276f8ee9ac8a6add31703a0417e55fb4e552"
+content-hash = "f2516876c772af57208b4ca13ba7231b46a68df06323fc1e54c8034cd4f8018c"

@@ -14,4 +14,4 @@ psutil==5.9.6
 cloudpickle==3.0.0
 rich==13.7.0
 watchdog==4.0.0
-git+https://github.com/nickpetrovic/python-betterproto@grpcio-support
+git+https://github.com/beam-cloud/python-betterproto@5616f13
