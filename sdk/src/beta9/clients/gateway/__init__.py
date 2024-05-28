@@ -323,7 +323,17 @@ class ListPoolsResponse(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class Machine(betterproto.Message):
-    pass
+    id: str = betterproto.string_field(1)
+    cpu: int = betterproto.int64_field(2)
+    memory: int = betterproto.int64_field(3)
+    gpu: str = betterproto.string_field(4)
+    gpu_count: int = betterproto.uint32_field(5)
+    status: str = betterproto.string_field(6)
+    pool_name: str = betterproto.string_field(7)
+    provider_name: str = betterproto.string_field(8)
+    registration_token: str = betterproto.string_field(9)
+    tailscale_url: str = betterproto.string_field(10)
+    tailscale_auth: str = betterproto.string_field(11)
 
 
 @dataclass(eq=False, repr=False)

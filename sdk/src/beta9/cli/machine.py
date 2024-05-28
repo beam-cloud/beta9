@@ -55,15 +55,22 @@ def management():
     show_default=True,
     help="Change the format of the output.",
 )
+@click.option(
+    "--pool",
+    "-p",
+    help="The pool to filter.",
+    required=False,
+)
 @extraclick.pass_service_client
 def list_machines(
     service: ServiceClient,
     limit: int,
     format: str,
+    pool: str,
 ):
     res: ListMachinesResponse
     res = aio.run_sync(
-        service.gateway.list_machines(ListMachinesRequest(pool_name="default", limit=limit))
+        service.gateway.list_machines(ListMachinesRequest(pool_name=pool, limit=limit))
     )
 
     if not res.ok:
@@ -75,15 +82,23 @@ def list_machines(
         return
 
     table = Table(
-        Column("Name"),
+        Column("ID"),
+        Column("CPU"),
+        Column("Memory"),
         Column("GPU"),
+        Column("Status"),
+        Column("Pool"),
         box=box.SIMPLE,
     )
 
     for machine in res.machines:
         table.add_row(
-            machine.name,
+            machine.id,
+            str(machine.cpu),
+            str(machine.memory),
             machine.gpu,
+            machine.status,
+            machine.pool_name,
         )
 
     table.add_section()
@@ -111,4 +126,19 @@ def list_machines(
 def create_machine(service: ServiceClient, pool: str):
     res: CreateMachineResponse
     res = aio.run_sync(service.gateway.create_machine(CreateMachineRequest(pool_name=pool)))
-    print(res)
+    if res.ok:
+        terminal.header(
+            f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
+        )
+        terminal.detail(
+            f"""sudo curl -L -o agent https://release.beam.cloud/agent && \\
+sudo chmod +x agent && \\
+sudo ./agent --token "{res.machine.registration_token}" --machine-id "{res.machine.id}" \\
+--tailscale-url "{res.machine.tailscale_url}" \\
+--tailscale-auth "{res.machine.tailscale_auth}" \\
+--pool-name "{res.machine.pool_name}" \\
+--provider-name "{res.machine.provider_name}" """
+        )
+
+    else:
+        terminal.error(f"Error: {res.err_msg}")
