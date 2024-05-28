@@ -2,6 +2,8 @@ package volume
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -28,6 +31,7 @@ type VolumeService interface {
 type GlobalVolumeService struct {
 	pb.UnimplementedVolumeServiceServer
 	backendRepo repository.BackendRepository
+	rdb         *common.RedisClient
 }
 
 type FileInfo struct {
@@ -37,11 +41,17 @@ type FileInfo struct {
 	IsDir   bool   `json:"is_dir"`
 }
 
+type VolumePathTokenData struct {
+	WorkspaceId string `redis:"workspace_id"`
+	VolumePath  string `redis:"volume_path"`
+}
+
 var volumeRoutePrefix string = "/volume"
 
-func NewGlobalVolumeService(backendRepo repository.BackendRepository, routeGroup *echo.Group) (VolumeService, error) {
+func NewGlobalVolumeService(backendRepo repository.BackendRepository, rdb *common.RedisClient, routeGroup *echo.Group) (VolumeService, error) {
 	gvs := &GlobalVolumeService{
 		backendRepo: backendRepo,
+		rdb:         rdb,
 	}
 
 	// Register HTTP routes
@@ -310,29 +320,29 @@ func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string,
 	return deleted, nil
 }
 
-func (vs *GlobalVolumeService) getFileFd(
+func (vs *GlobalVolumeService) getFilePath(
 	ctx context.Context,
 	path string,
 	workspace *types.Workspace,
-) (*os.File, error) {
+) (string, error) {
 	volumeName, volumePath := parseVolumeInput(path)
 	if volumeName == "" {
-		return nil, errors.New("must provide volume name")
+		return "", errors.New("must provide volume name")
 	}
 
 	// Check if the volume exists
 	volume, err := vs.backendRepo.GetVolume(ctx, workspace.Id, volumeName)
 	if err != nil {
-		return nil, errors.New("unable to find volume")
+		return "", errors.New("unable to find volume")
 	}
 
 	// Get paths and prevent access above parent directory
 	_, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	return os.Open(fullVolumePath)
+	return fullVolumePath, err
 }
 
 func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, workspace *types.Workspace) ([]FileInfo, error) {
@@ -422,4 +432,67 @@ func CalculateDirSize(path string) (uint64, error) {
 		return err
 	})
 	return size, err
+}
+
+func (gvs *GlobalVolumeService) ValidateWorkspaceVolumePathDownloadToken(workspaceId string, volumePath string, token string) error {
+	key := common.RedisKeys.WorkspaceVolumePathDownloadToken(token)
+
+	var data VolumePathTokenData
+	res, err := gvs.rdb.HGetAll(context.TODO(), key).Result()
+	if err != nil {
+		return err
+	}
+
+	if len(res) == 0 {
+		return errors.New("invalid token")
+	}
+
+	err = common.ToStruct(res, &data)
+	if err != nil {
+		return err
+	}
+
+	if data.WorkspaceId != workspaceId || data.VolumePath != volumePath {
+		return errors.New("invalid token")
+	}
+
+	return nil
+}
+
+func generateToken(length int) (string, error) {
+	b := make([]byte, length)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
+}
+
+const temporaryDownloadTokenLength = 32
+const temporaryDownloadTokenExpiry = 60 // 1 minute
+
+func (gvs *GlobalVolumeService) GenerateWorkspaceVolumePathDownloadToken(workspaceId string, volumePath string) (string, error) {
+	token, err := generateToken(temporaryDownloadTokenLength)
+	if err != nil {
+		return "", err
+	}
+
+	key := common.RedisKeys.WorkspaceVolumePathDownloadToken(token)
+
+	data := VolumePathTokenData{
+		WorkspaceId: workspaceId,
+		VolumePath:  volumePath,
+	}
+
+	err = gvs.rdb.HMSet(context.TODO(), key, common.ToSlice(data)...).Err()
+	if err != nil {
+		return "", err
+	}
+
+	err = gvs.rdb.Expire(context.TODO(), key, temporaryDownloadTokenExpiry*time.Second).Err()
+	if err != nil {
+		return "", err
+	}
+
+	return token, nil
 }

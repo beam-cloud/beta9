@@ -51,9 +51,11 @@ var (
 )
 
 var (
-	workspacePrefix               string = "workspace"
-	workspaceConcurrencyLimit     string = "workspace:concurrency_limit:%s"
-	workspaceConcurrencyLimitLock string = "workspace:concurrency_limit:lock:%s"
+	workspacePrefix string = "workspace"
+
+	workspaceVolumePathDownloadToken string = "workspace:volume_path_download_token:%s"
+	workspaceConcurrencyLimit        string = "workspace:concurrency_limit:%s"
+	workspaceConcurrencyLimitLock    string = "workspace:concurrency_limit:lock:%s"
 )
 
 var (
@@ -207,6 +209,10 @@ func (rk *redisKeys) WorkspaceConcurrencyLimit(workspaceId string) string {
 
 func (rk *redisKeys) WorkspaceConcurrencyLimitLock(workspaceId string) string {
 	return fmt.Sprintf(workspaceConcurrencyLimitLock, workspaceId)
+}
+
+func (rk *redisKeys) WorkspaceVolumePathDownloadToken(token string) string {
+	return fmt.Sprintf(workspaceVolumePathDownloadToken, token)
 }
 
 // WorkerPool keys

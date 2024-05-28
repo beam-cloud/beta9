@@ -30,6 +30,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	eventBus := common.NewEventBus(rdb)
 	workerRepo := repo.NewWorkerRedisRepositoryForTest(rdb)
 	containerRepo := repo.NewContainerRedisRepositoryForTest(rdb)
+	workspaceRepo := repo.NewWorkspaceRedisRepositoryForTest(rdb)
 	requestBacklog := NewRequestBacklogForTest(rdb)
 
 	configManager, err := common.NewConfigManager[types.AppConfig]()
@@ -63,6 +64,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		containerRepo:     containerRepo,
 		schedulerMetrics:  schedulerMetrics,
 		eventRepo:         eventRepo,
+		workspaceRepo:     workspaceRepo,
 	}, nil
 }
 

@@ -312,42 +312,6 @@ func (cr *ContainerRedisRepository) GetFailedContainerCountByStubId(stubId strin
 	return failedCount, nil
 }
 
-func (c *ContainerRedisRepository) GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error) {
-	key := common.RedisKeys.WorkspaceConcurrencyLimit(workspaceId)
-	res, err := c.rdb.HGetAll(context.Background(), key).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(res) == 0 {
-		return nil, nil
-	}
-
-	limit := &types.ConcurrencyLimit{}
-	if err = common.ToStruct(res, limit); err != nil {
-		return nil, err
-	}
-
-	return limit, nil
-}
-
-var cachedConcurrencyLimitTtl = 600
-
-func (c *ContainerRedisRepository) SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error {
-	key := common.RedisKeys.WorkspaceConcurrencyLimit(workspaceId)
-	err := c.rdb.HSet(context.Background(), key, common.ToSlice(limit)).Err()
-	if err != nil {
-		return err
-	}
-
-	err = c.rdb.Expire(context.Background(), key, time.Duration(cachedConcurrencyLimitTtl)*time.Second).Err()
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
 	// Acquire the concurrency limit lock for the workspace to prevent
 	// simultaneous requests from exceeding the quota

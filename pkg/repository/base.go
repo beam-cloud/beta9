@@ -45,8 +45,9 @@ type ContainerRepository interface {
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	GetFailedContainerCountByStubId(stubId string) (int, error)
+}
 
-	// Caching concurrency limit TODO: discuss if this should be here
+type WorkspaceRepository interface {
 	GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error)
 	SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error
 }

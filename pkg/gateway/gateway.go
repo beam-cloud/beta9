@@ -49,6 +49,7 @@ type Gateway struct {
 	RedisClient    *common.RedisClient
 	TaskDispatcher *task.Dispatcher
 	TaskRepo       repository.TaskRepository
+	WorkspaceRepo  repository.WorkspaceRepository
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
@@ -105,7 +106,9 @@ func NewGateway() (*Gateway, error) {
 		Ephemeral:  true,
 	}, tailscaleRepo)
 
-	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, metricsRepo, backendRepo, tailscale)
+	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
+
+	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, metricsRepo, backendRepo, workspaceRepo, tailscale)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +124,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.Config = config
 	gateway.Scheduler = scheduler
 	gateway.TaskRepo = taskRepo
+	gateway.WorkspaceRepo = workspaceRepo
 	gateway.ContainerRepo = containerRepo
 	gateway.ProviderRepo = providerRepo
 	gateway.BackendRepo = backendRepo
@@ -163,7 +167,7 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewDeploymentGroup(g.baseRouteGroup.Group("/deployment", authMiddleware), g.BackendRepo, g.Config)
 	apiv1.NewContainerGroup(g.baseRouteGroup.Group("/container", authMiddleware), g.BackendRepo, g.ContainerRepo, g.Config)
 	apiv1.NewStubGroup(g.baseRouteGroup.Group("/stub", authMiddleware), g.BackendRepo, g.Config)
-	apiv1.NewConcurrencyLimitGroup(g.baseRouteGroup.Group("/concurrency-limit", authMiddleware), g.BackendRepo, g.ContainerRepo)
+	apiv1.NewConcurrencyLimitGroup(g.baseRouteGroup.Group("/concurrency-limit", authMiddleware), g.BackendRepo, g.WorkspaceRepo)
 
 	return nil
 }
@@ -263,7 +267,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterEndpointServiceServer(g.grpcServer, ws)
 
 	// Register volume service
-	vs, err := volume.NewGlobalVolumeService(g.BackendRepo, g.rootRouteGroup)
+	vs, err := volume.NewGlobalVolumeService(g.BackendRepo, g.RedisClient, g.rootRouteGroup)
 	if err != nil {
 		return err
 	}
