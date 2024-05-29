@@ -53,7 +53,7 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid payload")
 	}
 
-	configByes, err := json.Marshal(g.config)
+	configBytes, err := json.Marshal(g.config)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to serialize config")
 	}
@@ -62,7 +62,7 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	// TODO: figure out a more elegant to override these fields without hardcoding service names
 	// possibly, use proxy config values
 	remoteConfig := types.AppConfig{}
-	if err = json.Unmarshal(configByes, &remoteConfig); err != nil {
+	if err = json.Unmarshal(configBytes, &remoteConfig); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to deserialize config")
 	}
 
