@@ -200,9 +200,7 @@ class RunnerAbstraction(BaseAbstraction):
             except Empty:
                 time.sleep(0.1)
 
-    async def sync_dir_to_workspace(
-        self, *, dir: str, object_id: str
-    ) -> ReplaceObjectContentResponse:
+    def sync_dir_to_workspace(self, *, dir: str, object_id: str) -> ReplaceObjectContentResponse:
         file_update_queue = Queue()
         event_handler = SyncEventHandler(file_update_queue)
 
