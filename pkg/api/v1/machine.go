@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -52,10 +53,18 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid payload")
 	}
 
+	configBytes, err := json.Marshal(g.config)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to serialize config")
+	}
+
 	// Overwrite certain config fields with tailscale hostnames
 	// TODO: figure out a more elegant to override these fields without hardcoding service names
 	// possibly, use proxy config values
-	remoteConfig := g.config
+	remoteConfig := types.AppConfig{}
+	if err = json.Unmarshal(configBytes, &remoteConfig); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to deserialize config")
+	}
 
 	redisHostname, err := g.tailscale.GetHostnameForService("redis")
 	if err != nil {
