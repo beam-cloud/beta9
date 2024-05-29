@@ -47,5 +47,5 @@ jobs:
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker:${{ steps.set-version.outputs.TAG_NAME }}
             ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker:latest
-          target: release
+          target: final
           platforms: linux/amd64
