@@ -24,6 +24,7 @@ const (
 	VolumeService_ListPath_FullMethodName          = "/volume.VolumeService/ListPath"
 	VolumeService_DeletePath_FullMethodName        = "/volume.VolumeService/DeletePath"
 	VolumeService_CopyPathStream_FullMethodName    = "/volume.VolumeService/CopyPathStream"
+	VolumeService_MovePath_FullMethodName          = "/volume.VolumeService/MovePath"
 )
 
 // VolumeServiceClient is the client API for VolumeService service.
@@ -35,6 +36,7 @@ type VolumeServiceClient interface {
 	ListPath(ctx context.Context, in *ListPathRequest, opts ...grpc.CallOption) (*ListPathResponse, error)
 	DeletePath(ctx context.Context, in *DeletePathRequest, opts ...grpc.CallOption) (*DeletePathResponse, error)
 	CopyPathStream(ctx context.Context, opts ...grpc.CallOption) (VolumeService_CopyPathStreamClient, error)
+	MovePath(ctx context.Context, in *MovePathRequest, opts ...grpc.CallOption) (*MovePathResponse, error)
 }
 
 type volumeServiceClient struct {
@@ -115,6 +117,15 @@ func (x *volumeServiceCopyPathStreamClient) CloseAndRecv() (*CopyPathResponse, e
 	return m, nil
 }
 
+func (c *volumeServiceClient) MovePath(ctx context.Context, in *MovePathRequest, opts ...grpc.CallOption) (*MovePathResponse, error) {
+	out := new(MovePathResponse)
+	err := c.cc.Invoke(ctx, VolumeService_MovePath_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VolumeServiceServer is the server API for VolumeService service.
 // All implementations must embed UnimplementedVolumeServiceServer
 // for forward compatibility
@@ -124,6 +135,7 @@ type VolumeServiceServer interface {
 	ListPath(context.Context, *ListPathRequest) (*ListPathResponse, error)
 	DeletePath(context.Context, *DeletePathRequest) (*DeletePathResponse, error)
 	CopyPathStream(VolumeService_CopyPathStreamServer) error
+	MovePath(context.Context, *MovePathRequest) (*MovePathResponse, error)
 	mustEmbedUnimplementedVolumeServiceServer()
 }
 
@@ -145,6 +157,9 @@ func (UnimplementedVolumeServiceServer) DeletePath(context.Context, *DeletePathR
 }
 func (UnimplementedVolumeServiceServer) CopyPathStream(VolumeService_CopyPathStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method CopyPathStream not implemented")
+}
+func (UnimplementedVolumeServiceServer) MovePath(context.Context, *MovePathRequest) (*MovePathResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MovePath not implemented")
 }
 func (UnimplementedVolumeServiceServer) mustEmbedUnimplementedVolumeServiceServer() {}
 
@@ -257,6 +272,24 @@ func (x *volumeServiceCopyPathStreamServer) Recv() (*CopyPathRequest, error) {
 	return m, nil
 }
 
+func _VolumeService_MovePath_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MovePathRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeServiceServer).MovePath(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeService_MovePath_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeServiceServer).MovePath(ctx, req.(*MovePathRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // VolumeService_ServiceDesc is the grpc.ServiceDesc for VolumeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -279,6 +312,10 @@ var VolumeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeletePath",
 			Handler:    _VolumeService_DeletePath_Handler,
+		},
+		{
+			MethodName: "MovePath",
+			Handler:    _VolumeService_MovePath_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

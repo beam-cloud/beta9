@@ -109,6 +109,19 @@ class ListVolumesResponse(betterproto.Message):
     volumes: List["VolumeInstance"] = betterproto.message_field(3)
 
 
+@dataclass(eq=False, repr=False)
+class MovePathRequest(betterproto.Message):
+    original_path: str = betterproto.string_field(1)
+    new_path: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class MovePathResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    new_path: str = betterproto.string_field(3)
+
+
 class VolumeServiceStub(SyncServiceStub):
     def get_or_create_volume(
         self, get_or_create_volume_request: "GetOrCreateVolumeRequest"
@@ -156,3 +169,10 @@ class VolumeServiceStub(SyncServiceStub):
             .future(copy_path_request_iterator)
             .result()
         )
+
+    def move_path(self, move_path_request: "MovePathRequest") -> "MovePathResponse":
+        return self._unary_unary(
+            "/volume.VolumeService/MovePath",
+            MovePathRequest,
+            MovePathResponse,
+        )(move_path_request)
