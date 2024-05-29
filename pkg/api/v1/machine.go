@@ -75,6 +75,7 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service: gateway-grpc")
 	}
 
+	remoteConfig.Database.Redis.EnableTLS = false
 	remoteConfig.Database.Redis.Addrs[0] = redisHostname
 	remoteConfig.GatewayService.Host = strings.Split(gatewayGrpcHostname, ":")[0]
 
