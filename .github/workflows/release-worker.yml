@@ -37,7 +37,7 @@ jobs:
       - name: Set version
         id: set-version
         run: |
-          echo "TAG_NAME=${GITHUB_REF_NAME#gateway-}" >> $GITHUB_OUTPUT
+          echo "TAG_NAME=${GITHUB_REF_NAME#worker-}" >> $GITHUB_OUTPUT
 
       - name: Build and push container image to Amazon ECR
         uses: docker/build-push-action@v5
