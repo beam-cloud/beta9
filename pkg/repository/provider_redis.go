@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -85,6 +86,15 @@ func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string)
 
 func (r *ProviderRedisRepository) getMachineFromKey(key string) (*types.ProviderMachineState, error) {
 	machine := &types.ProviderMachineState{}
+
+	exists, err := r.rdb.Exists(context.TODO(), key).Result()
+	if err != nil {
+		return nil, fmt.Errorf("error checking machine state existence for key %s: %w", key, err)
+	}
+
+	if exists == 0 {
+		return nil, errors.New("machine not found")
+	}
 
 	res, err := r.rdb.HGetAll(context.TODO(), key).Result()
 	if err != nil {
