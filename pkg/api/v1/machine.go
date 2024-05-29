@@ -63,7 +63,7 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	// possibly, use proxy config values
 	remoteConfig := types.AppConfig{}
 	if err = json.Unmarshal(configByes, &remoteConfig); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to serialize confi")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Unable to deserialize config")
 	}
 
 	redisHostname, err := g.tailscale.GetHostnameForService("redis")
