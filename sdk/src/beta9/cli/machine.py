@@ -172,6 +172,6 @@ def delete_machine(service: ServiceClient, machine_id: str, pool: str):
         DeleteMachineRequest(machine_id=machine_id, pool_name=pool)
     )
     if res.ok:
-        terminal.detail(f"Deleted machine: '{machine_id}'")
+        terminal.success(f"Deleted machine '{machine_id}' from pool '{pool}'")
     else:
         terminal.error(f"Error: {res.err_msg}")

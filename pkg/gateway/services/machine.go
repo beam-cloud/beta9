@@ -121,6 +121,7 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 	err = gws.providerRepo.AddMachine(string(*pool.Provider), in.PoolName, machineId, &types.ProviderMachineState{
 		PoolName:          in.PoolName,
 		RegistrationToken: token.Key,
+		Gpu:               pool.GPUType,
 	})
 	if err != nil {
 		return &pb.CreateMachineResponse{
