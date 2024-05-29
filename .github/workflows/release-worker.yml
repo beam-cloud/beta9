@@ -4,6 +4,10 @@ on:
   release:
     types: [created]
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   build_and_release_worker:
     if: startsWith(github.ref, 'refs/tags/worker-')
