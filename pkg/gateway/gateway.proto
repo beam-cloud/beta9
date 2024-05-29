@@ -285,6 +285,8 @@ message Machine {
   string registration_token = 9;
   string tailscale_url = 10;
   string tailscale_auth = 11;
+  string last_keepalive = 12;
+  string created = 13;
 }
 
 message ListMachinesRequest {

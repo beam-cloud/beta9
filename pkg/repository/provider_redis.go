@@ -155,6 +155,7 @@ func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId s
 
 	machineInfo.MachineId = machineId
 	machineInfo.Status = types.MachineStatusPending
+	machineInfo.Created = fmt.Sprintf("%d", time.Now().Unix())
 
 	err := r.rdb.HSet(context.TODO(),
 		stateKey, common.ToSlice(machineInfo)).Err()
@@ -181,12 +182,24 @@ func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId s
 func (r *ProviderRedisRepository) SetMachineKeepAlive(providerName, poolName, machineId string) error {
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
 
+	machineInfo, err := r.getMachineFromKey(stateKey)
+	if err != nil {
+		return fmt.Errorf("failed to get machine state <%v>: %w", stateKey, err)
+	}
+
+	// Update the LastKeepalive with the current Unix timestamp
+	machineInfo.LastKeepalive = fmt.Sprintf("%d", time.Now().Unix())
+
+	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineInfo)).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
+	}
+
 	// Set TTL on state key
-	err := r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.MachineKeepaliveExpirationS)*time.Second).Err()
+	err = r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.MachineKeepaliveExpirationS)*time.Second).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set machine state ttl <%v>: %w", stateKey, err)
 	}
-
 	return nil
 }
 

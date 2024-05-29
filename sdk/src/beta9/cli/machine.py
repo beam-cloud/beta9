@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import click
 from betterproto import Casing
 from rich.table import Column, Table, box
@@ -88,6 +90,8 @@ def list_machines(
         Column("GPU"),
         Column("Status"),
         Column("Pool"),
+        Column("Created"),
+        Column("Last Keepalive"),
         box=box.SIMPLE,
     )
 
@@ -99,6 +103,12 @@ def list_machines(
             machine.gpu,
             machine.status,
             machine.pool_name,
+            terminal.humanize_date(datetime.fromtimestamp(int(machine.created), tz=timezone.utc)),
+            terminal.humanize_date(
+                datetime.fromtimestamp(int(machine.last_keepalive), tz=timezone.utc)
+            )
+            if machine.last_keepalive != ""
+            else "Never",
         )
 
     table.add_section()

@@ -31,4 +31,6 @@ type ProviderMachineState struct {
 	Gpu               string        `json:"gpu" redis:"gpu"`
 	GpuCount          uint32        `json:"gpu_count" redis:"gpu_count"`
 	RegistrationToken string        `json:"registration_token" redis:"registration_token"`
+	LastKeepalive     string        `json:"last_keepalive" redis:"last_keepalive"`
+	Created           string        `json:"created" redis:"created"`
 }

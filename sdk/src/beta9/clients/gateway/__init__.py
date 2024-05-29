@@ -334,6 +334,8 @@ class Machine(betterproto.Message):
     registration_token: str = betterproto.string_field(9)
     tailscale_url: str = betterproto.string_field(10)
     tailscale_auth: str = betterproto.string_field(11)
+    last_keepalive: str = betterproto.string_field(12)
+    created: str = betterproto.string_field(13)
 
 
 @dataclass(eq=False, repr=False)

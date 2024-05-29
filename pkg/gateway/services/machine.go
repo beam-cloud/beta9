@@ -47,13 +47,15 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 
 		for _, machine := range machines {
 			formattedMachines = append(formattedMachines, &pb.Machine{
-				Id:       machine.State.MachineId,
-				Cpu:      machine.State.Cpu,
-				Memory:   machine.State.Memory,
-				Gpu:      machine.State.Gpu,
-				GpuCount: machine.State.GpuCount,
-				Status:   string(machine.State.Status),
-				PoolName: machine.State.PoolName,
+				Id:            machine.State.MachineId,
+				Cpu:           machine.State.Cpu,
+				Memory:        machine.State.Memory,
+				Gpu:           machine.State.Gpu,
+				GpuCount:      machine.State.GpuCount,
+				Status:        string(machine.State.Status),
+				PoolName:      machine.State.PoolName,
+				LastKeepalive: machine.State.LastKeepalive,
+				Created:       machine.State.Created,
 			})
 		}
 
@@ -73,13 +75,15 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 
 			for _, machine := range machines {
 				formattedMachines = append(formattedMachines, &pb.Machine{
-					Id:       machine.State.MachineId,
-					Cpu:      machine.State.Cpu,
-					Memory:   machine.State.Memory,
-					Gpu:      machine.State.Gpu,
-					GpuCount: machine.State.GpuCount,
-					Status:   string(machine.State.Status),
-					PoolName: machine.State.PoolName,
+					Id:            machine.State.MachineId,
+					Cpu:           machine.State.Cpu,
+					Memory:        machine.State.Memory,
+					Gpu:           machine.State.Gpu,
+					GpuCount:      machine.State.GpuCount,
+					Status:        string(machine.State.Status),
+					PoolName:      machine.State.PoolName,
+					LastKeepalive: machine.State.LastKeepalive,
+					Created:       machine.State.Created,
 				})
 			}
 		}
