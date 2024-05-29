@@ -323,14 +323,24 @@ class ListPoolsResponse(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class Machine(betterproto.Message):
-    pass
+    id: str = betterproto.string_field(1)
+    cpu: int = betterproto.int64_field(2)
+    memory: int = betterproto.int64_field(3)
+    gpu: str = betterproto.string_field(4)
+    gpu_count: int = betterproto.uint32_field(5)
+    status: str = betterproto.string_field(6)
+    pool_name: str = betterproto.string_field(7)
+    provider_name: str = betterproto.string_field(8)
+    registration_token: str = betterproto.string_field(9)
+    tailscale_url: str = betterproto.string_field(10)
+    tailscale_auth: str = betterproto.string_field(11)
+    last_keepalive: str = betterproto.string_field(12)
+    created: str = betterproto.string_field(13)
 
 
 @dataclass(eq=False, repr=False)
 class ListMachinesRequest(betterproto.Message):
-    filters: Dict[str, "StringList"] = betterproto.map_field(
-        1, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
-    )
+    pool_name: str = betterproto.string_field(1)
     limit: int = betterproto.uint32_field(2)
 
 
@@ -343,7 +353,7 @@ class ListMachinesResponse(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class CreateMachineRequest(betterproto.Message):
-    pass
+    pool_name: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
@@ -351,6 +361,18 @@ class CreateMachineResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     machine: "Machine" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteMachineRequest(betterproto.Message):
+    machine_id: str = betterproto.string_field(1)
+    pool_name: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteMachineResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
 
 
 class GatewayServiceStub(SyncServiceStub):
@@ -512,3 +534,12 @@ class GatewayServiceStub(SyncServiceStub):
             CreateMachineRequest,
             CreateMachineResponse,
         )(create_machine_request)
+
+    def delete_machine(
+        self, delete_machine_request: "DeleteMachineRequest"
+    ) -> "DeleteMachineResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DeleteMachine",
+            DeleteMachineRequest,
+            DeleteMachineResponse,
+        )(delete_machine_request)

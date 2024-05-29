@@ -40,6 +40,7 @@ service GatewayService {
   // Machines
   rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse);
   rpc CreateMachine(CreateMachineRequest) returns (CreateMachineResponse);
+  rpc DeleteMachine(DeleteMachineRequest) returns (DeleteMachineResponse);
 }
 
 message AuthorizeRequest {}
@@ -112,8 +113,7 @@ message Container {
   string workspace_id = 5;
 }
 
-message ListContainersRequest {
-}
+message ListContainersRequest {}
 
 message ListContainersResponse {
   repeated Container containers = 1;
@@ -273,10 +273,24 @@ message ListPoolsResponse {
   repeated Pool pools = 3;
 }
 
-message Machine {}
+message Machine {
+  string id = 1;
+  int64 cpu = 2;
+  int64 memory = 3;
+  string gpu = 4;
+  uint32 gpu_count = 5;
+  string status = 6;
+  string pool_name = 7;
+  string provider_name = 8;
+  string registration_token = 9;
+  string tailscale_url = 10;
+  string tailscale_auth = 11;
+  string last_keepalive = 12;
+  string created = 13;
+}
 
 message ListMachinesRequest {
-  map<string, StringList> filters = 1;
+  string pool_name = 1;
   uint32 limit = 2;
 }
 
@@ -286,10 +300,20 @@ message ListMachinesResponse {
   repeated Machine machines = 3;
 }
 
-message CreateMachineRequest {}
+message CreateMachineRequest { string pool_name = 1; }
 
 message CreateMachineResponse {
   bool ok = 1;
   string err_msg = 2;
   Machine machine = 3;
+}
+
+message DeleteMachineRequest {
+  string machine_id = 1;
+  string pool_name = 2;
+}
+
+message DeleteMachineResponse {
+  bool ok = 1;
+  string err_msg = 2;
 }

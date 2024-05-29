@@ -42,7 +42,10 @@ type RegisterMachineRequest struct {
 }
 
 func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
-	_, _ = ctx.(*auth.HttpAuthContext)
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if (cc.AuthInfo.Token.TokenType != types.TokenTypeMachine) && (cc.AuthInfo.Token.TokenType != types.TokenTypeWorker) {
+		return echo.NewHTTPError(http.StatusForbidden, "Invalid token")
+	}
 
 	var request RegisterMachineRequest
 	if err := ctx.Bind(&request); err != nil {
