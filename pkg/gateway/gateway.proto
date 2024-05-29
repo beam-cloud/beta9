@@ -306,7 +306,10 @@ message CreateMachineResponse {
   Machine machine = 3;
 }
 
-message DeleteMachineRequest { string machine_id = 1; }
+message DeleteMachineRequest {
+  string machine_id = 1;
+  string pool_name = 2;
+}
 
 message DeleteMachineResponse {
   bool ok = 1;

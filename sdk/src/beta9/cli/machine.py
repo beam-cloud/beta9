@@ -8,6 +8,8 @@ from ..cli import extraclick
 from ..clients.gateway import (
     CreateMachineRequest,
     CreateMachineResponse,
+    DeleteMachineRequest,
+    DeleteMachineResponse,
     ListMachinesRequest,
     ListMachinesResponse,
 )
@@ -138,5 +140,38 @@ sudo ./agent --token "{res.machine.registration_token}" --machine-id "{res.machi
 --provider-name "{res.machine.provider_name}" """
         )
 
+    else:
+        terminal.error(f"Error: {res.err_msg}")
+
+
+@management.command(
+    name="delete",
+    help="Delete a machine.",
+    epilog="""
+      Examples:
+ 
+        {cli_name} machine delete my-machine-id --pool ec2-t4
+        \b
+    """,
+)
+@click.argument(
+    "machine_id",
+    nargs=1,
+    required=True,
+)
+@click.option(
+    "--pool",
+    "-p",
+    help="The pool to select for the machine.",
+    required=True,
+)
+@extraclick.pass_service_client
+def delete_machine(service: ServiceClient, machine_id: str, pool: str):
+    res: DeleteMachineResponse
+    res = service.gateway.delete_machine(
+        DeleteMachineRequest(machine_id=machine_id, pool_name=pool)
+    )
+    if res.ok:
+        terminal.detail(f"Deleted machine: '{machine_id}'")
     else:
         terminal.error(f"Error: {res.err_msg}")

@@ -104,7 +104,7 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 	if !ok {
 		return &pb.CreateMachineResponse{
 			Ok:     false,
-			ErrMsg: "Invalid pool",
+			ErrMsg: "Invalid pool name",
 		}, nil
 	}
 
@@ -140,5 +140,35 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 			TailscaleUrl:      gws.appConfig.Tailscale.ControlURL,
 			TailscaleAuth:     gws.appConfig.Tailscale.AuthKey,
 		},
+	}, nil
+}
+
+func (gws *GatewayService) DeleteMachine(ctx context.Context, in *pb.DeleteMachineRequest) (*pb.DeleteMachineResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return &pb.DeleteMachineResponse{
+			Ok:     false,
+			ErrMsg: "This action is not permitted",
+		}, nil
+	}
+
+	pool, ok := gws.appConfig.Worker.Pools[in.PoolName]
+	if !ok {
+		return &pb.DeleteMachineResponse{
+			Ok:     false,
+			ErrMsg: "Invalid pool name",
+		}, nil
+	}
+
+	err := gws.providerRepo.RemoveMachine(string(*pool.Provider), in.PoolName, in.MachineId)
+	if err != nil {
+		return &pb.DeleteMachineResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("Unable to delete machine: %s", err.Error()),
+		}, nil
+	}
+
+	return &pb.DeleteMachineResponse{
+		Ok: true,
 	}, nil
 }

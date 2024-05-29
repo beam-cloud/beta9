@@ -364,6 +364,7 @@ class CreateMachineResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class DeleteMachineRequest(betterproto.Message):
     machine_id: str = betterproto.string_field(1)
+    pool_name: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
