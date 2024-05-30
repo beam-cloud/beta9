@@ -90,26 +90,10 @@ jobs:
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
 
-      - name: Set up Poetry
-        env:
-          ACTIONS_ALLOW_UNSECURE_COMMANDS: true
-        uses: snok/install-poetry@v1
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          version: 1.5.1
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          installer-parallel: true
-
-      - name: Load cached venv
-        id: cached-poetry-dependencies
-        uses: actions/cache@v3
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
-
-      - name: Install dependencies
-        run: cd sdk ; poetry install
-        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+          python-version: "3.11"
 
       - name: Cache Go modules
         uses: actions/cache@v3
@@ -121,6 +105,7 @@ jobs:
       
       - name: Install Protobuf Compilers
         run: |
+          python3 -m pip install -U betterproto-beta9
           sudo apt install protobuf-compiler
           sudo apt install golang-goprotobuf-dev
           go get google.golang.org/grpc/cmd/protoc-gen-go-grpc
