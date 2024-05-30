@@ -108,7 +108,7 @@ jobs:
           key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
 
       - name: Install dependencies
-        run: poetry install
+        run: cd sdk ; poetry install
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
 
       - name: Cache Go modules
