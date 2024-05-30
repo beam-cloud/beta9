@@ -108,6 +108,7 @@ jobs:
           python3 -m pip install -U "betterproto[compiler]"
           sudo apt install protobuf-compiler
           sudo apt install golang-goprotobuf-dev
+          go get google.golang.org/grpc/cmd/protoc-gen-go-grpc
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc
       
       - name: Verify Protobuf Codegen
