@@ -87,6 +87,9 @@ jobs:
         with:
           go-version: "1.21"
       
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+      
       - name: Cache Go modules
         uses: actions/cache@v3
         with:
