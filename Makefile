@@ -48,7 +48,10 @@ stop:
 	cd hack && okteto down --file okteto.yml
 
 protocol:
-	cd proto && ./gen.sh
+	./bin/gen_proto.sh
+
+verify-protocol:
+	./bin/verify_proto.sh
 
 test-pkg:
 	go test -v ./pkg/... -bench=./pkg/..
