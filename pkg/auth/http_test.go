@@ -148,6 +148,76 @@ func TestAuthMiddleWare(t *testing.T) {
 
 }
 
+func TestWithAuth(t *testing.T) {
+	mockDetails := mockBackendWithValidToken()
+	e := echo.New()
+	e.Use(AuthMiddleware(mockDetails.backendRepo))
+
+	e.GET("/", WithAuth(func(c echo.Context) error {
+		cc, ok := c.(*HttpAuthContext)
+		if !ok {
+			return c.String(200, "OK")
+		}
+
+		assert.NotNil(t, cc.AuthInfo)
+		assert.NotNil(t, cc.AuthInfo.Token)
+		assert.NotNil(t, cc.AuthInfo.Workspace)
+		assert.NotNil(t, cc.AuthInfo.Workspace.ExternalId)
+		assert.Equal(t, cc.AuthInfo.Token.ExternalId, mockDetails.tokenForTest.ExternalId)
+		assert.Equal(t, cc.AuthInfo.Token.Key, mockDetails.tokenForTest.Key)
+
+		return c.String(200, "OK")
+	}))
+
+	tests := []struct {
+		name           string
+		tokenKey       string
+		expectedStatus int
+		prepares       func()
+	}{
+		{
+			name:           "Test with valid token",
+			tokenKey:       mockDetails.tokenForTest.Key,
+			expectedStatus: 200,
+			prepares: func() {
+				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, mockDetails.tokenForTest)
+			},
+		},
+		{
+			name:           "Test with invalid token",
+			tokenKey:       "invalid",
+			expectedStatus: 401,
+			prepares: func() {
+				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
+					WillReturnError(errors.New("invalid token"))
+			},
+		},
+		{
+			name:           "Test with empty token. Should fail to authenticate",
+			tokenKey:       "",
+			expectedStatus: 401,
+			prepares:       func() {},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.prepares()
+
+			req := httptest.NewRequest(echo.GET, "/", nil)
+
+			if tt.tokenKey != "" {
+				req.Header.Set("Authorization", tt.tokenKey)
+			}
+			rec := httptest.NewRecorder()
+
+			e.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.expectedStatus, rec.Code)
+		})
+	}
+}
+
 func TestWithWorkspaceAuth(t *testing.T) {
 	mockDetails := mockBackendWithValidToken()
 	e := echo.New()
