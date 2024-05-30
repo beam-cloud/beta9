@@ -134,7 +134,10 @@ func TestAuthMiddleWare(t *testing.T) {
 			tt.prepares()
 
 			req := httptest.NewRequest(echo.GET, "/", nil)
-			req.Header.Set("Authorization", tt.tokenKey)
+
+			if tt.tokenKey != "" {
+				req.Header.Set("Authorization", tt.tokenKey)
+			}
 			rec := httptest.NewRecorder()
 
 			e.ServeHTTP(rec, req)
@@ -219,6 +222,15 @@ func TestWithWorkspaceAuth(t *testing.T) {
 					WillReturnError(errors.New("invalid token"))
 			},
 		},
+		{
+			name:        "Test no authorization header",
+			workspaceId: mockDetails.tokenForTest.Workspace.ExternalId,
+			prepares: func() {
+				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
+					WillReturnError(errors.New("invalid token"))
+			},
+			expectedStatus: 401,
+		},
 	}
 
 	for _, tt := range tests {
@@ -226,7 +238,10 @@ func TestWithWorkspaceAuth(t *testing.T) {
 			tt.prepares()
 
 			req := httptest.NewRequest(echo.GET, "/"+tt.workspaceId, nil)
-			req.Header.Set("Authorization", tt.tokenKey)
+
+			if tt.tokenKey != "" {
+				req.Header.Set("Authorization", tt.tokenKey)
+			}
 			rec := httptest.NewRecorder()
 
 			e.ServeHTTP(rec, req)
@@ -281,6 +296,14 @@ func TestWithClusterAdminAuth(t *testing.T) {
 					WillReturnError(errors.New("invalid token"))
 			},
 		},
+		{
+			name:           "Test no authorization header",
+			expectedStatus: 401,
+			prepares: func() {
+				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
+					WillReturnError(errors.New("invalid token"))
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -288,7 +311,10 @@ func TestWithClusterAdminAuth(t *testing.T) {
 			tt.prepares()
 
 			req := httptest.NewRequest(echo.GET, "/", nil)
-			req.Header.Set("Authorization", tt.tokenKey)
+
+			if tt.tokenKey != "" {
+				req.Header.Set("Authorization", tt.tokenKey)
+			}
 			rec := httptest.NewRecorder()
 
 			e.ServeHTTP(rec, req)
