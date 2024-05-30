@@ -89,7 +89,16 @@ jobs:
       
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
-      
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install Betterproto
+        run: |
+          python3 -m pip install betterproto
+
       - name: Cache Go modules
         uses: actions/cache@v3
         with:
