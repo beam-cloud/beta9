@@ -14,7 +14,7 @@ pushd "$tmpWorkDir"
 git add -A
 git commit -m init || true # maybe fail because nothing to commit 
 ./bin/gen_proto.sh
-diff=$(git diff --numstat | awk '{print $3}')
+diff=$(git --no-pager diff )
 popd
 if [ -z "$diff" ]; then
   echo "PASSED genproto-verification!"
