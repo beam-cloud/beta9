@@ -106,8 +106,8 @@ jobs:
       - name: Install Protobuf Compilers
         run: |
           python3 -m pip install -U "betterproto-beta9[compiler]" betterproto-beta9 grpcio
-          sudo apt install protobuf-compiler
-          sudo apt install golang-goprotobuf-dev
+          brew install protobuf
+          brew install protoc-gen-go
           go get google.golang.org/grpc/cmd/protoc-gen-go-grpc
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc
       

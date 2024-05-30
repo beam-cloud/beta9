@@ -21,8 +21,7 @@ if [ -z "$diff" ]; then
   exit 0
 fi
 echo "Failed genproto-verification!" >&2
-echo "* Found changed files:" "$diff" >&2
-echo $diff >&2
+printf "* Found changed files:\n%s\n" "$diff" >&2
 echo "* Please rerun genproto.sh after changing *.proto file" >&2
 echo "* Run ./scripts/gen_proto.sh" >&2
 exit 1
