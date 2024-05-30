@@ -6,6 +6,9 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+export GO_PATH=~/go
+export PATH=$PATH:/$GO_PATH/bin
+
 tmpWorkDir=$(mktemp -d -t 'twd.XXXXXX')
 mkdir "$tmpWorkDir/beta9"
 tmpWorkDir="$tmpWorkDir/beta9"
