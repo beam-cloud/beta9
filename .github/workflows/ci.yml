@@ -113,4 +113,5 @@ jobs:
         env:
           GO_PATH: ~/go
         run: |
+          export PATH="$PATH:$(go env GOPATH)/bin"
           make verify-protocol
