@@ -86,17 +86,15 @@ jobs:
         uses: actions/setup-go@v3
         with:
           go-version: "1.21"
-      
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
 
-      - name: Install Betterproto
+      - name: Install Protobuf Compilers
         run: |
+          go get -u github.com/golang/protobuf/protoc-gen-go
           python3 -m pip install -U "betterproto[compiler]"
 
       - name: Cache Go modules
