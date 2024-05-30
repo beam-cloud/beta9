@@ -320,5 +320,5 @@ def create_volume(service: ServiceClient, name: str):
     required=True,
 )
 @click.confirmation_option("--force")
-def delete_volume(name: str, force: bool):
+def delete_volume(name: str):
     terminal.error("Not implemented.")

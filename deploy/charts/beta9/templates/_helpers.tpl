@@ -60,6 +60,7 @@ controllers:
                 port: 1994
         securityContext:
           privileged: true
+    hostNetwork: true
   proxy:
     type: deployment
     containers:

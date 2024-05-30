@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
@@ -171,9 +172,8 @@ class _CallableWrapper:
                     invocation_url=f"{base_url}/endpoint/id/{self.parent.stub_id}"
                 )
 
-                return self.parent.run_sync(
-                    self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
-                )
+                return self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
+
         except KeyboardInterrupt:
             self._handle_serve_interrupt()
 
@@ -195,24 +195,24 @@ class _CallableWrapper:
 
         terminal.print("Goodbye 👋")
 
-    async def _serve(self, *, dir: str, object_id: str):
-        sync_task = self.parent.loop.create_task(
-            self.parent.sync_dir_to_workspace(dir=dir, object_id=object_id)
-        )
-        try:
-            for r in self.parent.endpoint_stub.start_endpoint_serve(
-                StartEndpointServeRequest(
-                    stub_id=self.parent.stub_id,
-                )
-            ):
-                if r.output != "":
-                    terminal.detail(r.output, end="")
+    def _serve(self, *, dir: str, object_id: str):
+        with ThreadPoolExecutor() as pool:
+            sync_task = pool.submit(self.parent.sync_dir_to_workspace, dir=dir, object_id=object_id)
 
-                if r.done or r.exit_code != 0:
-                    last_response = r
-                    break
+            try:
+                for r in self.parent.endpoint_stub.start_endpoint_serve(
+                    StartEndpointServeRequest(
+                        stub_id=self.parent.stub_id,
+                    )
+                ):
+                    if r.output != "":
+                        terminal.detail(r.output, end="")
 
-            if last_response is None or not last_response.done or last_response.exit_code != 0:
-                terminal.error("Serve container failed ❌")
-        finally:
-            sync_task.cancel()
+                    if r.done or r.exit_code != 0:
+                        last_response = r
+                        break
+
+                if last_response is None or not last_response.done or last_response.exit_code != 0:
+                    terminal.error("Serve container failed ❌")
+            finally:
+                sync_task.cancel()

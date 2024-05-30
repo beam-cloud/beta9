@@ -54,6 +54,8 @@ func NewExternalWorkerPoolController(
 		provider, err = providers.NewEC2Provider(ctx, config, providerRepo, workerRepo, tailscale)
 	case types.ProviderOCI:
 		provider, err = providers.NewOCIProvider(ctx, config, providerRepo, workerRepo, tailscale)
+	case types.ProviderLambdaLabs:
+		provider, err = providers.NewLambdaLabsProvider(ctx, config, providerRepo, workerRepo, tailscale)
 	default:
 		return nil, errors.New("invalid provider name")
 	}

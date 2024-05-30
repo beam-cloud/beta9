@@ -6,7 +6,7 @@ import click
 
 from ..channel import prompt_first_auth
 from ..config import SDKSettings, is_config_empty, set_settings
-from . import config, container, deployment, pool, serve, task, volume
+from . import config, container, deployment, machine, pool, serve, task, volume
 from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCollection
 
 click.formatting.FORCED_WIDTH = shutil.get_terminal_size().columns
@@ -80,6 +80,7 @@ def load_cli(**kwargs: Any) -> CLI:
     cli.register(serve)
     cli.register(pool)
     cli.register(container)
+    cli.register(machine)
 
     cli.check_config()
     cli.load_version()

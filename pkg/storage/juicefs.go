@@ -35,7 +35,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 
 	bufferSize := strconv.FormatInt(s.config.BufferSize, 10)
 	if s.config.BufferSize <= 0 {
-		prefetch = "300"
+		bufferSize = "300"
 	}
 
 	s.mountCmd = exec.Command(

@@ -37,6 +37,7 @@ const (
 	GatewayService_ListPools_FullMethodName            = "/gateway.GatewayService/ListPools"
 	GatewayService_ListMachines_FullMethodName         = "/gateway.GatewayService/ListMachines"
 	GatewayService_CreateMachine_FullMethodName        = "/gateway.GatewayService/CreateMachine"
+	GatewayService_DeleteMachine_FullMethodName        = "/gateway.GatewayService/DeleteMachine"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -69,6 +70,7 @@ type GatewayServiceClient interface {
 	// Machines
 	ListMachines(ctx context.Context, in *ListMachinesRequest, opts ...grpc.CallOption) (*ListMachinesResponse, error)
 	CreateMachine(ctx context.Context, in *CreateMachineRequest, opts ...grpc.CallOption) (*CreateMachineResponse, error)
+	DeleteMachine(ctx context.Context, in *DeleteMachineRequest, opts ...grpc.CallOption) (*DeleteMachineResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -291,6 +293,15 @@ func (c *gatewayServiceClient) CreateMachine(ctx context.Context, in *CreateMach
 	return out, nil
 }
 
+func (c *gatewayServiceClient) DeleteMachine(ctx context.Context, in *DeleteMachineRequest, opts ...grpc.CallOption) (*DeleteMachineResponse, error) {
+	out := new(DeleteMachineResponse)
+	err := c.cc.Invoke(ctx, GatewayService_DeleteMachine_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
@@ -321,6 +332,7 @@ type GatewayServiceServer interface {
 	// Machines
 	ListMachines(context.Context, *ListMachinesRequest) (*ListMachinesResponse, error)
 	CreateMachine(context.Context, *CreateMachineRequest) (*CreateMachineResponse, error)
+	DeleteMachine(context.Context, *DeleteMachineRequest) (*DeleteMachineResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -381,6 +393,9 @@ func (UnimplementedGatewayServiceServer) ListMachines(context.Context, *ListMach
 }
 func (UnimplementedGatewayServiceServer) CreateMachine(context.Context, *CreateMachineRequest) (*CreateMachineResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateMachine not implemented")
+}
+func (UnimplementedGatewayServiceServer) DeleteMachine(context.Context, *DeleteMachineRequest) (*DeleteMachineResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteMachine not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -735,6 +750,24 @@ func _GatewayService_CreateMachine_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_DeleteMachine_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteMachineRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).DeleteMachine(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_DeleteMachine_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).DeleteMachine(ctx, req.(*DeleteMachineRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -805,6 +838,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateMachine",
 			Handler:    _GatewayService_CreateMachine_Handler,
+		},
+		{
+			MethodName: "DeleteMachine",
+			Handler:    _GatewayService_DeleteMachine_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

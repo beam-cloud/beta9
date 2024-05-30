@@ -50,15 +50,15 @@ func (e *ContainerAlreadyScheduledError) Error() string {
 }
 
 type ContainerState struct {
-	ContainerId string          `redis:"container_id"`
-	StubId      string          `redis:"stub_id"`
-	Status      ContainerStatus `redis:"status"`
-	ScheduledAt int64           `redis:"scheduled_at"`
-	WorkspaceId string          `redis:"workspace_id"`
-	Gpu         string          `redis:"gpu"`
-	GpuCount    uint32          `redis:"gpu_count"`
-	Cpu         int64           `redis:"cpu"`
-	Memory      int64           `redis:"memory"`
+	ContainerId string          `redis:"container_id" json:"container_id"`
+	StubId      string          `redis:"stub_id" json:"stub_id"`
+	Status      ContainerStatus `redis:"status" json:"status"`
+	ScheduledAt int64           `redis:"scheduled_at" json:"scheduled_at"`
+	WorkspaceId string          `redis:"workspace_id" json:"workspace_id"`
+	Gpu         string          `redis:"gpu" json:"gpu"`
+	GpuCount    uint32          `redis:"gpu_count" json:"gpu_count"`
+	Cpu         int64           `redis:"cpu" json:"cpu"`
+	Memory      int64           `redis:"memory" json:"memory"`
 }
 
 type ContainerRequest struct {

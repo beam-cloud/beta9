@@ -48,7 +48,8 @@ stop:
 	cd hack && okteto down --file okteto.yml
 
 protocol:
-	./bin/gen_proto.sh
+	poetry install --directory ./sdk
+	poetry run --no-interaction --directory ./sdk bin/gen_proto.sh
 
 verify-protocol:
 	./bin/verify_proto.sh
