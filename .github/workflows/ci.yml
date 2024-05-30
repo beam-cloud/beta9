@@ -95,9 +95,9 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install BetterProto
+      - name: Install Betterproto
         run: |
-          python3 -m pip install betterproto
+          python3 -m pip install -U "betterproto[compiler]"
 
       - name: Cache Go modules
         uses: actions/cache@v3
