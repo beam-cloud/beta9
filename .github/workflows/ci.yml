@@ -110,6 +110,5 @@ jobs:
       - name: Verify Protobuf Codegen
         env:
           GO_PATH: ~/go
-          PATH: $PATH:/$GO_PATH/bin
         run: |
           make verify-protocol
