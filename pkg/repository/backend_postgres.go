@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
@@ -123,6 +125,18 @@ func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context
 	var workspace types.Workspace
 
 	query := `SELECT id, name, created_at, concurrency_limit_id FROM workspace WHERE external_id = $1;`
+	err := r.client.GetContext(ctx, &workspace, query, externalId)
+	if err != nil {
+		return types.Workspace{}, err
+	}
+
+	return workspace, nil
+}
+
+func (r *PostgresBackendRepository) GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalId string) (types.Workspace, error) {
+	var workspace types.Workspace
+
+	query := `SELECT id, name, created_at, concurrency_limit_id, signing_key FROM workspace WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &workspace, query, externalId)
 	if err != nil {
 		return types.Workspace{}, err
@@ -1004,4 +1018,165 @@ func (r *PostgresBackendRepository) GetConcurrencyLimitByWorkspaceId(ctx context
 	}
 
 	return &limit, nil
+}
+
+func encrypt(secretKey []byte, plaintext string) (string, error) {
+	aes, err := aes.NewCipher(secretKey)
+	if err != nil {
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(aes)
+	if err != nil {
+		return "", err
+	}
+
+	// We need a 12-byte nonce for GCM (modifiable if you use cipher.NewGCMWithNonceSize())
+	// A nonce should always be randomly generated for every encryption.
+	nonce := make([]byte, gcm.NonceSize())
+	_, err = rand.Read(nonce)
+	if err != nil {
+		return "", err
+	}
+
+	// ciphertext here is actually nonce+ciphertext
+	// So that when we decrypt, just knowing the nonce size
+	// is enough to separate it from the ciphertext.
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+func decrypt(secretKey []byte, ciphertext64 string) (string, error) {
+	ciphertextBytes, err := base64.StdEncoding.DecodeString(ciphertext64)
+	if err != nil {
+		return "", err
+	}
+
+	ciphertext := string(ciphertextBytes)
+
+	aes, err := aes.NewCipher(secretKey)
+	if err != nil {
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(aes)
+	if err != nil {
+		return "", err
+	}
+
+	// Since we know the ciphertext is actually nonce+ciphertext
+	// And len(nonce) == NonceSize(). We can separate the two.
+	nonceSize := gcm.NonceSize()
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+
+	plaintext, err := gcm.Open(nil, []byte(nonce), []byte(ciphertext), nil)
+	if err != nil {
+		return "", err
+	}
+
+	return string(plaintext), nil
+}
+
+func parseSigningKey(signingKey string) ([]byte, error) {
+	secret := signingKey[len("sk_"):]
+	return base64.StdEncoding.DecodeString(secret)
+}
+
+func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string) (*types.WorkspaceSecret, error) {
+
+	query := `
+	INSERT INTO workspace_secret (name, value, workspace_id, last_updated_by)
+	VALUES ($1, $2, $3, $4)
+	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
+	`
+
+	signingKey, err := parseSigningKey(*workspace.SigningKey)
+	if err != nil {
+		return nil, err
+	}
+
+	encryptedValue, err := encrypt(signingKey, value)
+	if err != nil {
+		return nil, err
+	}
+
+	var secret types.WorkspaceSecret
+	if err := r.client.GetContext(ctx, &secret, query, name, encryptedValue, workspace.Id, tokenId); err != nil {
+		return nil, err
+	}
+
+	return &secret, nil
+}
+
+func (r *PostgresBackendRepository) GetSecretByName(ctx context.Context, workspace *types.Workspace, name string) (*types.WorkspaceSecret, error) {
+	var secret types.WorkspaceSecret
+
+	query := `SELECT id, external_id, name, value, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE name = $1 AND workspace_id = $2;`
+	err := r.client.GetContext(ctx, &secret, query, name, workspace.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	signingKey, err := parseSigningKey(*workspace.SigningKey)
+	if err != nil {
+		return nil, err
+	}
+
+	decryptedSecret, err := decrypt(signingKey, secret.Value)
+	if err != nil {
+		return nil, err
+	}
+
+	secret.Value = string(decryptedSecret)
+
+	return &secret, nil
+}
+
+func (r *PostgresBackendRepository) ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.WorkspaceSecret, error) {
+	query := `SELECT id, external_id, name, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE workspace_id = $1;`
+
+	var secrets []types.WorkspaceSecret
+	err := r.client.SelectContext(ctx, &secrets, query, workspace.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	return secrets, nil
+}
+
+func (r *PostgresBackendRepository) DeleteSecret(ctx context.Context, workspace *types.Workspace, name string) error {
+	query := `DELETE FROM workspace_secret WHERE name = $1 AND workspace_id = $2;`
+	_, err := r.client.ExecContext(ctx, query, name, workspace.Id)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretId string, value string) (*types.WorkspaceSecret, error) {
+	query := `
+	UPDATE workspace_secret
+	SET value = $3
+	WHERE name = $1 AND workspace_id = $2
+	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
+	`
+
+	signingKey, err := parseSigningKey(*workspace.SigningKey)
+	if err != nil {
+		return nil, err
+	}
+
+	encryptedValue, err := encrypt(signingKey, value)
+	if err != nil {
+		return nil, err
+	}
+
+	var secret types.WorkspaceSecret
+	if err := r.client.GetContext(ctx, &secret, query, secretId, workspace.Id, encryptedValue); err != nil {
+		return nil, err
+	}
+
+	return &secret, nil
 }

@@ -253,3 +253,14 @@ type ConcurrencyLimit struct {
 	CreatedAt    time.Time `db:"created_at" json:"created_at,omitempty" redis:"-"`
 	UpdatedAt    time.Time `db:"updated_at" json:"updated_at,omitempty" redis:"-"`
 }
+
+type WorkspaceSecret struct {
+	Id            uint      `db:"id" json:"-"`
+	ExternalId    string    `db:"external_id" json:"external_id,omitempty"`
+	CreatedAt     time.Time `db:"created_at" json:"created_at,omitempty"`
+	UpdatedAt     time.Time `db:"updated_at" json:"updated_at,omitempty"`
+	Name          string    `db:"name" json:"name"`
+	Value         string    `db:"value" json:"value,omitempty"`
+	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id"`
+	LastUpdatedBy *uint     `db:"last_updated_by" json:"last_updated_by"`
+}

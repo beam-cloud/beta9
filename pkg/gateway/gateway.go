@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
+	"github.com/beam-cloud/beta9/pkg/abstractions/secret"
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -296,6 +297,10 @@ func (g *Gateway) registerServices() error {
 		return err
 	}
 	pb.RegisterOutputServiceServer(g.grpcServer, o)
+
+	// Register Secret service
+	ss := secret.NewWorkspaceSecretService(g.BackendRepo, g.rootRouteGroup)
+	pb.RegisterSecretServiceServer(g.grpcServer, ss)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService(g.Scheduler)
