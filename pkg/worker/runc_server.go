@@ -234,6 +234,10 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 		wg.Wait()
 	}()
 
+	err = stream.Send(&pb.RunCArchiveResponse{
+		Done: true, Success: s.imageClient.Archive(ctx, instance.Overlay.TopLayerPath(), req.ImageId, progressChan) == nil,
+	})
+
 	close(doneChan)
-	return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: true, Progress: 100})
+	return err
 }
