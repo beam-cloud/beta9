@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -159,33 +160,26 @@ func (s *RunCServer) RunCStreamLogs(req *pb.RunCStreamLogsRequest, stream pb.Run
 	return nil
 }
 
-func (s *RunCServer) RunCArchive(ctx context.Context, in *pb.RunCArchiveRequest) (*pb.RunCArchiveResponse, error) {
-	state, err := s.runcHandle.State(ctx, in.ContainerId)
+func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCService_RunCArchiveServer) error {
+	ctx := stream.Context()
+	state, err := s.runcHandle.State(ctx, req.ContainerId)
 	if err != nil {
-		return &pb.RunCArchiveResponse{
-			Ok: false,
-		}, nil
+		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not found"})
 	}
 
 	if state.Status != "running" {
-		return &pb.RunCArchiveResponse{
-			Ok: false,
-		}, nil
+		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not running"})
 	}
 
-	instance, exists := s.containerInstances.Get(in.ContainerId)
+	instance, exists := s.containerInstances.Get(req.ContainerId)
 	if !exists {
-		return &pb.RunCArchiveResponse{
-			Ok: false,
-		}, nil
+		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not found"})
 	}
 
 	// Copy initial config file from the base image bundle
 	err = copyFile(filepath.Join(instance.BundlePath, "config.json"), filepath.Join(instance.Overlay.TopLayerPath(), "initial_config.json"))
 	if err != nil {
-		return &pb.RunCArchiveResponse{
-			Ok: false,
-		}, nil
+		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
 	}
 
 	tempConfig := s.baseConfigSpec
@@ -196,18 +190,54 @@ func (s *RunCServer) RunCArchive(ctx context.Context, in *pb.RunCArchiveRequest)
 
 	file, err := json.MarshalIndent(tempConfig, "", " ")
 	if err != nil {
-		return nil, err
+		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
 	}
 
 	configPath := filepath.Join(instance.Overlay.TopLayerPath(), "config.json")
 	err = os.WriteFile(configPath, file, 0644)
 	if err != nil {
-		return &pb.RunCArchiveResponse{
-			Ok: false,
-		}, nil
+		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
 	}
 
-	return &pb.RunCArchiveResponse{
-		Ok: s.imageClient.Archive(ctx, instance.Overlay.TopLayerPath(), in.ImageId) == nil,
-	}, nil
+	progressChan := make(chan int)
+	doneChan := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		lastProgress := -1
+
+		for {
+			select {
+			case progress, ok := <-progressChan:
+				if !ok {
+					return
+				}
+				if progress > lastProgress && progress != lastProgress {
+					lastProgress = progress
+
+					log.Printf("Image upload progress: %d/100\n", progress)
+					err := stream.Send(&pb.RunCArchiveResponse{Done: false, Success: false, Progress: int32(progress), ErrorMsg: ""})
+					if err != nil {
+						return
+					}
+				}
+			case <-doneChan:
+				return
+			}
+		}
+	}()
+
+	defer func() {
+		close(progressChan)
+		wg.Wait()
+	}()
+
+	err = stream.Send(&pb.RunCArchiveResponse{
+		Done: true, Success: s.imageClient.Archive(ctx, instance.Overlay.TopLayerPath(), req.ImageId, progressChan) == nil,
+	})
+
+	close(doneChan)
+	return err
 }
