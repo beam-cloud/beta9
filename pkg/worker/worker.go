@@ -224,8 +224,8 @@ func (s *Worker) Run() error {
 		return err
 	}
 
-	go profileCPU(10 * time.Minute)
-	go profileMemory(10 * time.Minute)
+	go profileCPU(4 * time.Minute)
+	go profileMemory(4 * time.Minute)
 
 	go s.manageWorkerCapacity()
 	go s.processStopContainerEvents()
