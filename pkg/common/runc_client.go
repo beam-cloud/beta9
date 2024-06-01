@@ -162,11 +162,11 @@ func (c *RunCClient) Archive(ctx context.Context, containerId, imageId string, o
 			}
 
 			if resp.ErrorMsg != "" {
-				outputChan <- OutputMsg{Msg: resp.ErrorMsg, Done: false}
+				outputChan <- OutputMsg{Msg: resp.ErrorMsg + "\n", Done: false}
 			}
 
 			if !resp.Done && resp.ErrorMsg == "" {
-				outputChan <- OutputMsg{Msg: fmt.Sprintf("Image upload progress %d/100", resp.Progress), Done: false}
+				outputChan <- OutputMsg{Msg: fmt.Sprintf("Image upload progress %d/100\n", resp.Progress), Done: false}
 			}
 
 			if resp.Done && resp.Success {
