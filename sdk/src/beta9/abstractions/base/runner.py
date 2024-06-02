@@ -91,8 +91,6 @@ class RunnerAbstraction(BaseAbstraction):
 
         terminal.header("Invocation details")
         terminal.detail(f"""curl -X POST '{invocation_url}' \\
--H 'Accept: */*' \\
--H 'Accept-Encoding: gzip, deflate' \\
 -H 'Connection: keep-alive' \\
 -H 'Authorization: Bearer {self.config_context.token}' \\
 -H 'Content-Type: application/json' \\
