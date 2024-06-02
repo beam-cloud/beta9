@@ -92,7 +92,3 @@ class BaseAbstraction(ABC):
             set_settings(settings)
 
         super().__init_subclass__(**kwargs)
-
-    def __del__(self) -> None:
-        if _channel:
-            _channel.close()
