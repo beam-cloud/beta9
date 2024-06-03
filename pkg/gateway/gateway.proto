@@ -19,6 +19,7 @@ service GatewayService {
 
   // Containrs
   rpc ListContainers(ListContainersRequest) returns (ListContainersResponse) {}
+  rpc StopContainer(StopContainerRequest) returns (StopContainerResponse) {}
 
   // Tasks
   rpc StartTask(StartTaskRequest) returns (StartTaskResponse);
@@ -119,6 +120,13 @@ message ListContainersResponse {
   repeated Container containers = 1;
   bool ok = 2;
   string error_msg = 3;
+}
+
+message StopContainerRequest { string container_id = 1; }
+
+message StopContainerResponse {
+  bool ok = 1;
+  string error_msg = 2;
 }
 
 // Task messages

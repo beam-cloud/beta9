@@ -105,6 +105,8 @@ def handle_grpc_error(error: grpc.RpcError):
     code = error.code()
     if code == grpc.StatusCode.UNAUTHENTICATED:
         terminal.error("Unauthorized: Invalid auth token provided.")
+    elif code == grpc.StatusCode.UNAVAILABLE:
+        terminal.error("Unable to connect to gateway.")
     elif code == grpc.StatusCode.CANCELLED:
         return
     else:

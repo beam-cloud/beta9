@@ -26,6 +26,7 @@ const (
 	GatewayService_PutObjectStream_FullMethodName      = "/gateway.GatewayService/PutObjectStream"
 	GatewayService_ReplaceObjectContent_FullMethodName = "/gateway.GatewayService/ReplaceObjectContent"
 	GatewayService_ListContainers_FullMethodName       = "/gateway.GatewayService/ListContainers"
+	GatewayService_StopContainer_FullMethodName        = "/gateway.GatewayService/StopContainer"
 	GatewayService_StartTask_FullMethodName            = "/gateway.GatewayService/StartTask"
 	GatewayService_EndTask_FullMethodName              = "/gateway.GatewayService/EndTask"
 	GatewayService_StopTasks_FullMethodName            = "/gateway.GatewayService/StopTasks"
@@ -54,6 +55,7 @@ type GatewayServiceClient interface {
 	ReplaceObjectContent(ctx context.Context, opts ...grpc.CallOption) (GatewayService_ReplaceObjectContentClient, error)
 	// Containrs
 	ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error)
+	StopContainer(ctx context.Context, in *StopContainerRequest, opts ...grpc.CallOption) (*StopContainerResponse, error)
 	// Tasks
 	StartTask(ctx context.Context, in *StartTaskRequest, opts ...grpc.CallOption) (*StartTaskResponse, error)
 	EndTask(ctx context.Context, in *EndTaskRequest, opts ...grpc.CallOption) (*EndTaskResponse, error)
@@ -194,6 +196,15 @@ func (c *gatewayServiceClient) ListContainers(ctx context.Context, in *ListConta
 	return out, nil
 }
 
+func (c *gatewayServiceClient) StopContainer(ctx context.Context, in *StopContainerRequest, opts ...grpc.CallOption) (*StopContainerResponse, error) {
+	out := new(StopContainerResponse)
+	err := c.cc.Invoke(ctx, GatewayService_StopContainer_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) StartTask(ctx context.Context, in *StartTaskRequest, opts ...grpc.CallOption) (*StartTaskResponse, error) {
 	out := new(StartTaskResponse)
 	err := c.cc.Invoke(ctx, GatewayService_StartTask_FullMethodName, in, out, opts...)
@@ -316,6 +327,7 @@ type GatewayServiceServer interface {
 	ReplaceObjectContent(GatewayService_ReplaceObjectContentServer) error
 	// Containrs
 	ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error)
+	StopContainer(context.Context, *StopContainerRequest) (*StopContainerResponse, error)
 	// Tasks
 	StartTask(context.Context, *StartTaskRequest) (*StartTaskResponse, error)
 	EndTask(context.Context, *EndTaskRequest) (*EndTaskResponse, error)
@@ -360,6 +372,9 @@ func (UnimplementedGatewayServiceServer) ReplaceObjectContent(GatewayService_Rep
 }
 func (UnimplementedGatewayServiceServer) ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListContainers not implemented")
+}
+func (UnimplementedGatewayServiceServer) StopContainer(context.Context, *StopContainerRequest) (*StopContainerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StopContainer not implemented")
 }
 func (UnimplementedGatewayServiceServer) StartTask(context.Context, *StartTaskRequest) (*StartTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StartTask not implemented")
@@ -548,6 +563,24 @@ func _GatewayService_ListContainers_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GatewayServiceServer).ListContainers(ctx, req.(*ListContainersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_StopContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopContainerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).StopContainer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_StopContainer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).StopContainer(ctx, req.(*StopContainerRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -794,6 +827,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListContainers",
 			Handler:    _GatewayService_ListContainers_Handler,
+		},
+		{
+			MethodName: "StopContainer",
+			Handler:    _GatewayService_StopContainer_Handler,
 		},
 		{
 			MethodName: "StartTask",
