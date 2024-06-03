@@ -19,7 +19,7 @@ func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGro
 
 	g.POST("/id/:stubId", auth.WithAuth(group.endpointRequest))
 	g.POST("/:deploymentName/v:version", auth.WithAuth(group.endpointRequest))
-	g.POST("/public/:stubId", auth.WithAssumedAuth(group.endpointRequest, group.es.isPublic))
+	g.POST("/public/:stubId", auth.WithAssumedStubAuth(group.endpointRequest, group.es.isPublic))
 
 	return group
 }

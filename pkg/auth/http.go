@@ -52,7 +52,7 @@ func WithAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
 	}
 }
 
-func WithAssumedAuth(next func(ctx echo.Context) error, isPublic func(stubId string) (*types.Workspace, error)) func(ctx echo.Context) error {
+func WithAssumedStubAuth(next func(ctx echo.Context) error, isPublic func(stubId string) (*types.Workspace, error)) func(ctx echo.Context) error {
 	return func(ctx echo.Context) error {
 		stubId := ctx.Param("stubId")
 
