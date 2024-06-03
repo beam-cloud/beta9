@@ -123,4 +123,4 @@ def stop_container(service: ServiceClient, container_id: str):
     if res.ok:
         terminal.success(f"Stopped container: {container_id}.")
     else:
-        terminal.error(f"{res.error_msg}\nFailed to stop container: '{container_id}'")
+        terminal.error(f"{res.error_msg}")
