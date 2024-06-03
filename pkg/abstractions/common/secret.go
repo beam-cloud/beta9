@@ -2,7 +2,6 @@ package abstractions
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -12,9 +11,6 @@ func ConfigureContainerRequestSecrets(
 	workspace *types.Workspace,
 	stubConfig types.StubConfigV1,
 ) ([]string, error) {
-
-	log.Println("Configuring container request secrets", workspace.SigningKey, stubConfig)
-
 	signingKey, err := common.ParseSigningKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
