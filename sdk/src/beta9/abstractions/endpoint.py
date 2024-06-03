@@ -201,7 +201,7 @@ class _CallableWrapper:
         with ThreadPoolExecutor() as pool:
             sync_task = pool.submit(self.parent.sync_dir_to_workspace, dir=dir, object_id=object_id)
 
-            try:
+            def _run_serve():
                 for r in self.parent.endpoint_stub.start_endpoint_serve(
                     StartEndpointServeRequest(
                         stub_id=self.parent.stub_id,
@@ -216,5 +216,11 @@ class _CallableWrapper:
 
                 if last_response is None or not last_response.done or last_response.exit_code != 0:
                     terminal.error("Serve container failed ❌")
+
+            try:
+                run_task = pool.submit(_run_serve)
+            except KeyboardInterrupt:
+                raise
             finally:
+                run_task.cancel()
                 sync_task.cancel()

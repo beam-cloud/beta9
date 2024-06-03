@@ -172,6 +172,8 @@ def runner_context():
             print(traceback.format_exc())
             sys.exit(exit_code)
 
+        channel.close()
+
 
 def with_runner_context(func: Callable) -> Callable:
     @functools.wraps(func)
