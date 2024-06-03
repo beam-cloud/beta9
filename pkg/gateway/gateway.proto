@@ -17,7 +17,7 @@ service GatewayService {
   rpc ReplaceObjectContent(stream ReplaceObjectContentRequest)
       returns (ReplaceObjectContentResponse) {}
 
-  // Containrs
+  // Containers
   rpc ListContainers(ListContainersRequest) returns (ListContainersResponse) {}
   rpc StopContainer(StopContainerRequest) returns (StopContainerResponse) {}
 
