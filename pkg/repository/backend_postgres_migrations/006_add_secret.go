@@ -20,7 +20,6 @@ func upCreateSecretTable(tx *sql.Tx) error {
 		value TEXT NOT NULL,
 		workspace_id INT REFERENCES workspace(id) ON DELETE CASCADE NOT NULL,
 		last_updated_by INT REFERENCES token(id) ON DELETE SET NULL
-		version INT DEFAULT 1
 	);`)
 	if err != nil {
 		return err
