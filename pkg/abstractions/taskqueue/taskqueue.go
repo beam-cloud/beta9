@@ -154,7 +154,7 @@ func (tq *RedisTaskQueue) getStubConfig(stubId string) (*types.StubConfigV1, err
 	if !exists {
 		stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId)
 		if err != nil {
-			return nil, nil
+			return nil, err
 		}
 
 		var stubConfig types.StubConfigV1 = types.StubConfigV1{}

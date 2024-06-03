@@ -19,9 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	Scheduler_GetVersion_FullMethodName    = "/scheduler.Scheduler/GetVersion"
-	Scheduler_RunContainer_FullMethodName  = "/scheduler.Scheduler/RunContainer"
-	Scheduler_StopContainer_FullMethodName = "/scheduler.Scheduler/StopContainer"
+	Scheduler_GetVersion_FullMethodName   = "/scheduler.Scheduler/GetVersion"
+	Scheduler_RunContainer_FullMethodName = "/scheduler.Scheduler/RunContainer"
 )
 
 // SchedulerClient is the client API for Scheduler service.
@@ -30,7 +29,6 @@ const (
 type SchedulerClient interface {
 	GetVersion(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*VersionResponse, error)
 	RunContainer(ctx context.Context, in *RunContainerRequest, opts ...grpc.CallOption) (*RunContainerResponse, error)
-	StopContainer(ctx context.Context, in *StopContainerRequest, opts ...grpc.CallOption) (*StopContainerResponse, error)
 }
 
 type schedulerClient struct {
@@ -59,22 +57,12 @@ func (c *schedulerClient) RunContainer(ctx context.Context, in *RunContainerRequ
 	return out, nil
 }
 
-func (c *schedulerClient) StopContainer(ctx context.Context, in *StopContainerRequest, opts ...grpc.CallOption) (*StopContainerResponse, error) {
-	out := new(StopContainerResponse)
-	err := c.cc.Invoke(ctx, Scheduler_StopContainer_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // SchedulerServer is the server API for Scheduler service.
 // All implementations must embed UnimplementedSchedulerServer
 // for forward compatibility
 type SchedulerServer interface {
 	GetVersion(context.Context, *VersionRequest) (*VersionResponse, error)
 	RunContainer(context.Context, *RunContainerRequest) (*RunContainerResponse, error)
-	StopContainer(context.Context, *StopContainerRequest) (*StopContainerResponse, error)
 	mustEmbedUnimplementedSchedulerServer()
 }
 
@@ -87,9 +75,6 @@ func (UnimplementedSchedulerServer) GetVersion(context.Context, *VersionRequest)
 }
 func (UnimplementedSchedulerServer) RunContainer(context.Context, *RunContainerRequest) (*RunContainerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunContainer not implemented")
-}
-func (UnimplementedSchedulerServer) StopContainer(context.Context, *StopContainerRequest) (*StopContainerResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StopContainer not implemented")
 }
 func (UnimplementedSchedulerServer) mustEmbedUnimplementedSchedulerServer() {}
 
@@ -140,24 +125,6 @@ func _Scheduler_RunContainer_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Scheduler_StopContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StopContainerRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SchedulerServer).StopContainer(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Scheduler_StopContainer_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SchedulerServer).StopContainer(ctx, req.(*StopContainerRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // Scheduler_ServiceDesc is the grpc.ServiceDesc for Scheduler service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -172,10 +139,6 @@ var Scheduler_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RunContainer",
 			Handler:    _Scheduler_RunContainer_Handler,
-		},
-		{
-			MethodName: "StopContainer",
-			Handler:    _Scheduler_StopContainer_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

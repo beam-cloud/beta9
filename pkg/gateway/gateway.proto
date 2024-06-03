@@ -17,8 +17,9 @@ service GatewayService {
   rpc ReplaceObjectContent(stream ReplaceObjectContentRequest)
       returns (ReplaceObjectContentResponse) {}
 
-  // Containrs
+  // Containers
   rpc ListContainers(ListContainersRequest) returns (ListContainersResponse) {}
+  rpc StopContainer(StopContainerRequest) returns (StopContainerResponse) {}
 
   // Tasks
   rpc StartTask(StartTaskRequest) returns (StartTaskResponse);
@@ -121,6 +122,13 @@ message ListContainersResponse {
   string error_msg = 3;
 }
 
+message StopContainerRequest { string container_id = 1; }
+
+message StopContainerResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
 // Task messages
 message StartTaskRequest {
   string task_id = 1;
@@ -200,6 +208,7 @@ message GetOrCreateStubRequest {
   bool force_create = 17;
   string on_start = 18;
   string callback_url = 19;
+  bool authorized = 20;
 }
 
 message GetOrCreateStubResponse {

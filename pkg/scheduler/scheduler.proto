@@ -7,7 +7,6 @@ package scheduler;
 service Scheduler {
   rpc GetVersion(VersionRequest) returns (VersionResponse) {}
   rpc RunContainer(RunContainerRequest) returns (RunContainerResponse) {}
-  rpc StopContainer(StopContainerRequest) returns (StopContainerResponse) {}
 }
 
 message VersionRequest {}
@@ -25,13 +24,6 @@ message RunContainerRequest {
 }
 
 message RunContainerResponse {
-  bool success = 3;
-  string error = 4;
-}
-
-message StopContainerRequest { string container_id = 1; }
-
-message StopContainerResponse {
   bool success = 3;
   string error = 4;
 }

@@ -61,6 +61,12 @@ class Endpoint(RunnerAbstraction):
             The maximum number of tasks that can be pending in the queue. If the number of
             pending tasks exceeds this value, the task queue will stop accepting new tasks.
             Default is 100.
+        name (Optional[str]):
+            An optional name for this endpoint, used during deployment. If not specified, you must specify the name
+            at deploy time with the --name argument
+        authorized (Optional[str]):
+            If false, allows the endpoint to be invoked without an auth token.
+            Default is True.
     Example:
         ```python
         from beta9 import endpoint, Image
@@ -71,6 +77,7 @@ class Endpoint(RunnerAbstraction):
             gpu="T4",
             image=Image(python_packages=["torch"]),
             keep_warm_seconds=1000,
+            name="my-app",
         )
         def multiply(**inputs):
             result = inputs["x"] * 2
@@ -91,6 +98,8 @@ class Endpoint(RunnerAbstraction):
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         volumes: Optional[List[Volume]] = None,
+        name: Optional[str] = None,
+        authorized: Optional[bool] = True,
     ):
         super().__init__(
             cpu=cpu,
@@ -105,6 +114,8 @@ class Endpoint(RunnerAbstraction):
             max_pending_tasks=max_pending_tasks,
             on_start=on_start,
             volumes=volumes,
+            name=name,
+            authorized=authorized,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
@@ -134,6 +145,12 @@ class _CallableWrapper:
         return self.func(*args, **kwargs)
 
     def deploy(self, name: str) -> bool:
+        name = name or self.parent.name
+        if not name or name == "":
+            terminal.error(
+                "You must specify an app name (either in the decorator or via the --name argument)."
+            )
+
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=ENDPOINT_DEPLOYMENT_STUB_TYPE, force_create_stub=True
         ):
