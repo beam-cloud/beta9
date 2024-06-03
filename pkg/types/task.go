@@ -50,6 +50,7 @@ var (
 type TaskMessage struct {
 	TaskId        string                 `json:"task_id" redis:"task_id"`
 	WorkspaceName string                 `json:"workspace_name" redis:"workspace_name"`
+	WorkspaceId   string                 `json:"workspace_id" redis:"workspace_id"`
 	StubId        string                 `json:"stub_id" redis:"stub_id"`
 	Executor      string                 `json:"executor" redis:"executor"`
 	Args          []interface{}          `json:"args" redis:"args"`

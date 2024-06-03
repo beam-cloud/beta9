@@ -299,7 +299,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterOutputServiceServer(g.grpcServer, o)
 
 	// Register Secret service
-	ss := secret.NewWorkspaceSecretService(g.BackendRepo, g.rootRouteGroup)
+	ss := secret.NewSecretService(g.BackendRepo, g.rootRouteGroup)
 	pb.RegisterSecretServiceServer(g.grpcServer, ss)
 
 	// Register scheduler

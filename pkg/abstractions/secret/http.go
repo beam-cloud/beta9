@@ -24,7 +24,7 @@ func registerSecretRoutes(g *echo.Group, ss *WorkspaceSecretService) *secretGrou
 	g.GET("/:workspaceId/:secretName", auth.WithWorkspaceAuth(group.GetSecret))
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListSecrets))
 	g.PATCH("/:workspaceId/:secretName", auth.WithWorkspaceAuth(group.UpdateSecret))
-	g.DELETE("/:workspaceId/:secretId", auth.WithWorkspaceAuth(group.DeleteSecret))
+	g.DELETE("/:workspaceId/:secretName", auth.WithWorkspaceAuth(group.DeleteSecret))
 
 	return group
 }
@@ -41,7 +41,7 @@ func (g *secretGroup) CreateSecret(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
-	secretInput := types.WorkspaceSecret{}
+	secretInput := types.Secret{}
 	if err := ctx.Bind(&secretInput); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid secret")
 	}
@@ -69,7 +69,7 @@ func (g *secretGroup) GetSecret(ctx echo.Context) error {
 	}
 
 	secretName := ctx.Param("secretName")
-	secret, err := g.ss.backendRepo.GetSecretByName(ctx.Request().Context(), &workspace, secretName)
+	secret, err := g.ss.backendRepo.GetSecretByNameDecrypted(ctx.Request().Context(), &workspace, secretName)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Secret not found")
 	}
@@ -106,7 +106,7 @@ func (g *secretGroup) UpdateSecret(ctx echo.Context) error {
 
 	secretName := ctx.Param("secretName")
 
-	secretInput := types.WorkspaceSecret{}
+	secretInput := types.Secret{}
 	if err := ctx.Bind(&secretInput); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid secret")
 	}
@@ -127,8 +127,8 @@ func (g *secretGroup) DeleteSecret(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
-	secretId := ctx.Param("secretId")
-	if err := g.ss.backendRepo.DeleteSecret(ctx.Request().Context(), &workspace, secretId); err != nil {
+	secretName := ctx.Param("secretName")
+	if err := g.ss.backendRepo.DeleteSecret(ctx.Request().Context(), &workspace, secretName); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete secret")
 	}
 

@@ -180,6 +180,10 @@ message Volume {
   string mount_path = 2;
 }
 
+message SecretVar {
+  string name = 1;
+}
+
 message GetOrCreateStubRequest {
   string object_id = 1;
   string image_id = 2;
@@ -200,6 +204,7 @@ message GetOrCreateStubRequest {
   bool force_create = 17;
   string on_start = 18;
   string callback_url = 19;
+  repeated SecretVar secrets = 20;
 }
 
 message GetOrCreateStubResponse {

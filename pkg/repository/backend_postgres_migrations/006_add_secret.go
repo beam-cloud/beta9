@@ -7,10 +7,10 @@ import (
 )
 
 func init() {
-	goose.AddMigration(upCreateWorkspaceSecretTable, downDropWorkspaceSecretTable)
+	goose.AddMigration(upCreateSecretTable, downDropSecretTable)
 }
 
-func upCreateWorkspaceSecretTable(tx *sql.Tx) error {
+func upCreateSecretTable(tx *sql.Tx) error {
 	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS workspace_secret (
 		id SERIAL PRIMARY KEY,
 		external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
@@ -20,6 +20,7 @@ func upCreateWorkspaceSecretTable(tx *sql.Tx) error {
 		value TEXT NOT NULL,
 		workspace_id INT REFERENCES workspace(id) ON DELETE CASCADE NOT NULL,
 		last_updated_by INT REFERENCES token(id) ON DELETE SET NULL
+		version INT DEFAULT 1
 	);`)
 	if err != nil {
 		return err
@@ -34,7 +35,7 @@ func upCreateWorkspaceSecretTable(tx *sql.Tx) error {
 	return err
 }
 
-func downDropWorkspaceSecretTable(tx *sql.Tx) error {
+func downDropSecretTable(tx *sql.Tx) error {
 	_, err := tx.Exec(`DROP TABLE IF EXISTS workspace_secret;`)
 	return err
 }

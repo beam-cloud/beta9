@@ -55,9 +55,9 @@ class Container(RunnerAbstraction):
         gpu: str = "",
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
-        name: Optional[str] = None,
+        secrets: Optional[List[str]] = None,
     ) -> None:
-        super().__init__(cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes)
+        super().__init__(cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes, secrets=secrets)
 
         self.task_id = ""
         self._container_stub: Optional[ContainerServiceStub] = None

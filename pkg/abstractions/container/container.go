@@ -127,14 +127,26 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		stub.ExternalId,
 	)
 
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(
+		authInfo.Workspace,
+		stubConfig,
+	)
+	if err != nil {
+		return err
+	}
+
+	env := []string{
+		fmt.Sprintf("TASK_ID=%s", taskId),
+		fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
+		fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
+		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
+	}
+
+	env = append(env, secrets...)
+
 	err = cs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
-		Env: []string{
-			fmt.Sprintf("TASK_ID=%s", taskId),
-			fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
-			fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
-			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
-		},
+		Env:         env,
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
 		Gpu:         string(stubConfig.Runtime.Gpu),

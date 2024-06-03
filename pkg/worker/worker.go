@@ -613,6 +613,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.GRPC.Port),
 		"PYTHONUNBUFFERED=1",
 	}
+
 	env = append(env, request.Env...)
 	return env
 }

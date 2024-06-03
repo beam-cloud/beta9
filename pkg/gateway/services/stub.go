@@ -32,6 +32,22 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		MaxContainers:   uint(in.MaxContainers),
 		MaxPendingTasks: uint(in.MaxPendingTasks),
 		Volumes:         in.Volumes,
+		Secrets:         []types.Secret{},
+	}
+
+	// Get secrets
+	for _, secret := range in.Secrets {
+		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secret.Name)
+		if err != nil {
+			return &pb.GetOrCreateStubResponse{
+				Ok: false,
+			}, nil
+		}
+
+		stubConfig.Secrets = append(stubConfig.Secrets, types.Secret{
+			Name:  secret.Name,
+			Value: secret.Value,
+		})
 	}
 
 	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)

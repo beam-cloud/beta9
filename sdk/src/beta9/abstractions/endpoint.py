@@ -91,6 +91,7 @@ class Endpoint(RunnerAbstraction):
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -105,6 +106,7 @@ class Endpoint(RunnerAbstraction):
             max_pending_tasks=max_pending_tasks,
             on_start=on_start,
             volumes=volumes,
+            secrets=secrets,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None

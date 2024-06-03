@@ -19,11 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	SecretService_CreateSecret_FullMethodName = "/workspace_secret.SecretService/CreateSecret"
-	SecretService_DeleteSecret_FullMethodName = "/workspace_secret.SecretService/DeleteSecret"
-	SecretService_UpdateSecret_FullMethodName = "/workspace_secret.SecretService/UpdateSecret"
-	SecretService_GetSecret_FullMethodName    = "/workspace_secret.SecretService/GetSecret"
-	SecretService_ListSecrets_FullMethodName  = "/workspace_secret.SecretService/ListSecrets"
+	SecretService_CreateSecret_FullMethodName = "/secret.SecretService/CreateSecret"
+	SecretService_DeleteSecret_FullMethodName = "/secret.SecretService/DeleteSecret"
+	SecretService_UpdateSecret_FullMethodName = "/secret.SecretService/UpdateSecret"
+	SecretService_GetSecret_FullMethodName    = "/secret.SecretService/GetSecret"
+	SecretService_ListSecrets_FullMethodName  = "/secret.SecretService/ListSecrets"
 )
 
 // SecretServiceClient is the client API for SecretService service.
@@ -228,7 +228,7 @@ func _SecretService_ListSecrets_Handler(srv interface{}, ctx context.Context, de
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var SecretService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "workspace_secret.SecretService",
+	ServiceName: "secret.SecretService",
 	HandlerType: (*SecretServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{

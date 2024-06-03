@@ -31,21 +31,30 @@ type endpointInstance struct {
 }
 
 func (i *endpointInstance) startContainers(containersToRun int) error {
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, *i.buffer.stubConfig)
+	if err != nil {
+		return err
+	}
+
+	env := []string{
+		fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
+		fmt.Sprintf("HANDLER=%s", i.StubConfig.Handler),
+		fmt.Sprintf("ON_START=%s", i.StubConfig.OnStart),
+		fmt.Sprintf("STUB_ID=%s", i.Stub.ExternalId),
+		fmt.Sprintf("STUB_TYPE=%s", i.Stub.Type),
+		fmt.Sprintf("CONCURRENCY=%d", i.StubConfig.Concurrency),
+		fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.StubConfig.KeepWarmSeconds),
+		fmt.Sprintf("PYTHON_VERSION=%s", i.StubConfig.PythonVersion),
+		fmt.Sprintf("TIMEOUT=%d", i.StubConfig.TaskPolicy.Timeout),
+	}
+
+	env = append(env, secrets...)
+
 	for c := 0; c < containersToRun; c++ {
 		containerId := i.genContainerId()
 		runRequest := &types.ContainerRequest{
 			ContainerId: containerId,
-			Env: []string{
-				fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
-				fmt.Sprintf("HANDLER=%s", i.StubConfig.Handler),
-				fmt.Sprintf("ON_START=%s", i.StubConfig.OnStart),
-				fmt.Sprintf("STUB_ID=%s", i.Stub.ExternalId),
-				fmt.Sprintf("STUB_TYPE=%s", i.Stub.Type),
-				fmt.Sprintf("CONCURRENCY=%d", i.StubConfig.Concurrency),
-				fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.StubConfig.KeepWarmSeconds),
-				fmt.Sprintf("PYTHON_VERSION=%s", i.StubConfig.PythonVersion),
-				fmt.Sprintf("TIMEOUT=%d", i.StubConfig.TaskPolicy.Timeout),
-			},
+			Env:         env,
 			Cpu:         i.StubConfig.Runtime.Cpu,
 			Memory:      i.StubConfig.Runtime.Memory,
 			Gpu:         string(i.StubConfig.Runtime.Gpu),

@@ -154,6 +154,7 @@ type StubConfigV1 struct {
 	Authorized      bool         `json:"authorized"`
 	MaxContainers   uint         `json:"max_containers"`
 	Volumes         []*pb.Volume `json:"volumes"`
+	Secrets         []Secret     `json:"secrets"`
 }
 
 const (
@@ -254,7 +255,7 @@ type ConcurrencyLimit struct {
 	UpdatedAt    time.Time `db:"updated_at" json:"updated_at,omitempty" redis:"-"`
 }
 
-type WorkspaceSecret struct {
+type Secret struct {
 	Id            uint      `db:"id" json:"-"`
 	ExternalId    string    `db:"external_id" json:"external_id,omitempty"`
 	CreatedAt     time.Time `db:"created_at" json:"created_at,omitempty"`

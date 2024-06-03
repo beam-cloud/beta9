@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(eq=False, repr=False)
-class WorkspaceSecret(betterproto.Message):
+class Secret(betterproto.Message):
     id: str = betterproto.string_field(1)
     name: str = betterproto.string_field(2)
     value: str = betterproto.string_field(3)
@@ -47,11 +47,12 @@ class CreateSecretResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     id: str = betterproto.string_field(3)
+    name: str = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)
 class DeleteSecretRequest(betterproto.Message):
-    id: str = betterproto.string_field(1)
+    name: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
@@ -82,7 +83,7 @@ class GetSecretRequest(betterproto.Message):
 class GetSecretResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    secret: "WorkspaceSecret" = betterproto.message_field(3)
+    secret: "Secret" = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -94,7 +95,7 @@ class ListSecretsRequest(betterproto.Message):
 class ListSecretsResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    secrets: List["WorkspaceSecret"] = betterproto.message_field(3)
+    secrets: List["Secret"] = betterproto.message_field(3)
 
 
 class SecretServiceStub(SyncServiceStub):
@@ -102,7 +103,7 @@ class SecretServiceStub(SyncServiceStub):
         self, create_secret_request: "CreateSecretRequest"
     ) -> "CreateSecretResponse":
         return self._unary_unary(
-            "/workspace_secret.SecretService/CreateSecret",
+            "/secret.SecretService/CreateSecret",
             CreateSecretRequest,
             CreateSecretResponse,
         )(create_secret_request)
@@ -111,7 +112,7 @@ class SecretServiceStub(SyncServiceStub):
         self, delete_secret_request: "DeleteSecretRequest"
     ) -> "DeleteSecretResponse":
         return self._unary_unary(
-            "/workspace_secret.SecretService/DeleteSecret",
+            "/secret.SecretService/DeleteSecret",
             DeleteSecretRequest,
             DeleteSecretResponse,
         )(delete_secret_request)
@@ -120,14 +121,14 @@ class SecretServiceStub(SyncServiceStub):
         self, update_secret_request: "UpdateSecretRequest"
     ) -> "UpdateSecretResponse":
         return self._unary_unary(
-            "/workspace_secret.SecretService/UpdateSecret",
+            "/secret.SecretService/UpdateSecret",
             UpdateSecretRequest,
             UpdateSecretResponse,
         )(update_secret_request)
 
     def get_secret(self, get_secret_request: "GetSecretRequest") -> "GetSecretResponse":
         return self._unary_unary(
-            "/workspace_secret.SecretService/GetSecret",
+            "/secret.SecretService/GetSecret",
             GetSecretRequest,
             GetSecretResponse,
         )(get_secret_request)
@@ -136,7 +137,7 @@ class SecretServiceStub(SyncServiceStub):
         self, list_secrets_request: "ListSecretsRequest"
     ) -> "ListSecretsResponse":
         return self._unary_unary(
-            "/workspace_secret.SecretService/ListSecrets",
+            "/secret.SecretService/ListSecrets",
             ListSecretsRequest,
             ListSecretsResponse,
         )(list_secrets_request)

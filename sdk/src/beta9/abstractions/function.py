@@ -74,6 +74,7 @@ class Function(RunnerAbstraction):
         retries: int = 3,
         callback_url: Optional[str] = "",
         volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -84,6 +85,7 @@ class Function(RunnerAbstraction):
             retries=retries,
             callback_url=callback_url,
             volumes=volumes,
+            secrets=secrets,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None

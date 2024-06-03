@@ -100,6 +100,7 @@ class TaskQueue(RunnerAbstraction):
         on_start: Optional[Callable] = None,
         callback_url: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -115,6 +116,7 @@ class TaskQueue(RunnerAbstraction):
             on_start=on_start,
             callback_url=callback_url,
             volumes=volumes,
+            secrets=secrets,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
 

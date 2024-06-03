@@ -2,8 +2,6 @@ package repository
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
@@ -13,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/squirrel"
+	pkgCommon "github.com/beam-cloud/beta9/pkg/common"
 	_ "github.com/beam-cloud/beta9/pkg/repository/backend_postgres_migrations"
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -1020,70 +1019,7 @@ func (r *PostgresBackendRepository) GetConcurrencyLimitByWorkspaceId(ctx context
 	return &limit, nil
 }
 
-func encrypt(secretKey []byte, plaintext string) (string, error) {
-	aes, err := aes.NewCipher(secretKey)
-	if err != nil {
-		return "", err
-	}
-
-	gcm, err := cipher.NewGCM(aes)
-	if err != nil {
-		return "", err
-	}
-
-	// We need a 12-byte nonce for GCM (modifiable if you use cipher.NewGCMWithNonceSize())
-	// A nonce should always be randomly generated for every encryption.
-	nonce := make([]byte, gcm.NonceSize())
-	_, err = rand.Read(nonce)
-	if err != nil {
-		return "", err
-	}
-
-	// ciphertext here is actually nonce+ciphertext
-	// So that when we decrypt, just knowing the nonce size
-	// is enough to separate it from the ciphertext.
-	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
-
-	return base64.StdEncoding.EncodeToString(ciphertext), nil
-}
-
-func decrypt(secretKey []byte, ciphertext64 string) (string, error) {
-	ciphertextBytes, err := base64.StdEncoding.DecodeString(ciphertext64)
-	if err != nil {
-		return "", err
-	}
-
-	ciphertext := string(ciphertextBytes)
-
-	aes, err := aes.NewCipher(secretKey)
-	if err != nil {
-		return "", err
-	}
-
-	gcm, err := cipher.NewGCM(aes)
-	if err != nil {
-		return "", err
-	}
-
-	// Since we know the ciphertext is actually nonce+ciphertext
-	// And len(nonce) == NonceSize(). We can separate the two.
-	nonceSize := gcm.NonceSize()
-	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-
-	plaintext, err := gcm.Open(nil, []byte(nonce), []byte(ciphertext), nil)
-	if err != nil {
-		return "", err
-	}
-
-	return string(plaintext), nil
-}
-
-func parseSigningKey(signingKey string) ([]byte, error) {
-	secret := signingKey[len("sk_"):]
-	return base64.StdEncoding.DecodeString(secret)
-}
-
-func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string) (*types.WorkspaceSecret, error) {
+func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string) (*types.Secret, error) {
 
 	query := `
 	INSERT INTO workspace_secret (name, value, workspace_id, last_updated_by)
@@ -1091,17 +1027,17 @@ func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace 
 	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
 	`
 
-	signingKey, err := parseSigningKey(*workspace.SigningKey)
+	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
-	encryptedValue, err := encrypt(signingKey, value)
+	encryptedValue, err := pkgCommon.Encrypt(signingKey, value)
 	if err != nil {
 		return nil, err
 	}
 
-	var secret types.WorkspaceSecret
+	var secret types.Secret
 	if err := r.client.GetContext(ctx, &secret, query, name, encryptedValue, workspace.Id, tokenId); err != nil {
 		return nil, err
 	}
@@ -1109,8 +1045,8 @@ func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace 
 	return &secret, nil
 }
 
-func (r *PostgresBackendRepository) GetSecretByName(ctx context.Context, workspace *types.Workspace, name string) (*types.WorkspaceSecret, error) {
-	var secret types.WorkspaceSecret
+func (r *PostgresBackendRepository) GetSecretByName(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
+	var secret types.Secret
 
 	query := `SELECT id, external_id, name, value, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE name = $1 AND workspace_id = $2;`
 	err := r.client.GetContext(ctx, &secret, query, name, workspace.Id)
@@ -1118,25 +1054,34 @@ func (r *PostgresBackendRepository) GetSecretByName(ctx context.Context, workspa
 		return nil, err
 	}
 
-	signingKey, err := parseSigningKey(*workspace.SigningKey)
+	return &secret, nil
+}
+
+func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
+	secret, err := r.GetSecretByName(ctx, workspace, name)
 	if err != nil {
 		return nil, err
 	}
 
-	decryptedSecret, err := decrypt(signingKey, secret.Value)
+	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	if err != nil {
+		return nil, err
+	}
+
+	decryptedSecret, err := pkgCommon.Decrypt(signingKey, secret.Value)
 	if err != nil {
 		return nil, err
 	}
 
 	secret.Value = string(decryptedSecret)
 
-	return &secret, nil
+	return secret, nil
 }
 
-func (r *PostgresBackendRepository) ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.WorkspaceSecret, error) {
+func (r *PostgresBackendRepository) ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error) {
 	query := `SELECT id, external_id, name, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE workspace_id = $1;`
 
-	var secrets []types.WorkspaceSecret
+	var secrets []types.Secret
 	err := r.client.SelectContext(ctx, &secrets, query, workspace.Id)
 	if err != nil {
 		return nil, err
@@ -1155,26 +1100,26 @@ func (r *PostgresBackendRepository) DeleteSecret(ctx context.Context, workspace 
 	return nil
 }
 
-func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretId string, value string) (*types.WorkspaceSecret, error) {
+func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretId string, value string) (*types.Secret, error) {
 	query := `
 	UPDATE workspace_secret
-	SET value = $3
+	SET value = $3, last_updated_by = $4, updated_at = CURRENT_TIMESTAMP
 	WHERE name = $1 AND workspace_id = $2
 	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
 	`
 
-	signingKey, err := parseSigningKey(*workspace.SigningKey)
+	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
-	encryptedValue, err := encrypt(signingKey, value)
+	encryptedValue, err := pkgCommon.Encrypt(signingKey, value)
 	if err != nil {
 		return nil, err
 	}
 
-	var secret types.WorkspaceSecret
-	if err := r.client.GetContext(ctx, &secret, query, secretId, workspace.Id, encryptedValue); err != nil {
+	var secret types.Secret
+	if err := r.client.GetContext(ctx, &secret, query, secretId, workspace.Id, encryptedValue, tokenId); err != nil {
 		return nil, err
 	}
 
