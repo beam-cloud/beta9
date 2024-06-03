@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 
 	"github.com/Masterminds/squirrel"
@@ -1019,13 +1020,31 @@ func (r *PostgresBackendRepository) GetConcurrencyLimitByWorkspaceId(ctx context
 	return &limit, nil
 }
 
-func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string) (*types.Secret, error) {
+func validateEnvironmentVariableName(name string) error {
+	/* https://docs.aws.amazon.com/opsworks/latest/APIReference/API_EnvironmentVariable.html#:~:text=(Required)%20The%20environment%20variable's%20name,with%20a%20letter%20or%20underscore.
 
+	The environment variable's name, which can consist of up to 64 characters and must be specified. The name can contain upper- and lowercase letters, numbers, and underscores (_), but it must start with a letter or underscore.
+	*/
+
+	regexp := regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,63}$`)
+	if !regexp.MatchString(name) {
+		return fmt.Errorf("invalid environment variable name: %s", name)
+	}
+
+	return nil
+}
+
+func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string) (*types.Secret, error) {
 	query := `
 	INSERT INTO workspace_secret (name, value, workspace_id, last_updated_by)
 	VALUES ($1, $2, $3, $4)
 	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
 	`
+
+	err := validateEnvironmentVariableName(name)
+	if err != nil {
+		return nil, err
+	}
 
 	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
 	if err != nil {
