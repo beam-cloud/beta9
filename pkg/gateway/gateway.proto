@@ -200,6 +200,7 @@ message GetOrCreateStubRequest {
   bool force_create = 17;
   string on_start = 18;
   string callback_url = 19;
+  bool authorized = 20;
 }
 
 message GetOrCreateStubResponse {

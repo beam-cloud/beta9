@@ -231,6 +231,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     force_create: bool = betterproto.bool_field(17)
     on_start: str = betterproto.string_field(18)
     callback_url: str = betterproto.string_field(19)
+    authorized: bool = betterproto.bool_field(20)
 
 
 @dataclass(eq=False, repr=False)

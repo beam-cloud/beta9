@@ -19,7 +19,6 @@ func registerFunctionRoutes(g *echo.Group, fs *RunCFunctionService) *functionGro
 	group := &functionGroup{routerGroup: g, fs: fs}
 
 	g.POST("/id/:stubId", auth.WithAuth(group.FunctionInvoke))
-	g.POST("/id/:stubId/", auth.WithAuth(group.FunctionInvoke))
 	g.POST("/:deploymentName/v:version", auth.WithAuth(group.FunctionInvoke))
 
 	return group

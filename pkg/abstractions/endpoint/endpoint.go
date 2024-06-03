@@ -142,6 +142,19 @@ func (es *HttpEndpointService) endpointTaskFactory(ctx context.Context, msg type
 	}, nil
 }
 
+func (es *HttpEndpointService) isPublic(stubId string) (*types.Workspace, error) {
+	instance, err := es.getOrCreateEndpointInstance(stubId)
+	if err != nil {
+		return nil, err
+	}
+
+	if instance.StubConfig.Authorized {
+		return nil, errors.New("unauthorized")
+	}
+
+	return instance.Workspace, nil
+}
+
 // Forward request to endpoint
 func (es *HttpEndpointService) forwardRequest(
 	ctx echo.Context,

@@ -47,7 +47,7 @@ def common(**_):
     "-n",
     type=click.STRING,
     help="The name the deployment.",
-    required=True,
+    required=False,
 )
 @click.argument(
     "entrypoint",
@@ -82,8 +82,8 @@ def management():
 @click.option(
     "--name",
     "-n",
-    help="The name the deployment.",
-    required=True,
+    help="The name of the deployment.",
+    required=False,
 )
 @click.option(
     "--entrypoint",

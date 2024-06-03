@@ -71,6 +71,12 @@ class TaskQueue(RunnerAbstraction):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
         volumes (Optional[List[Volume]]):
             A list of storage volumes to be associated with the taskqueue. Default is [].
+        name (Optional[str]):
+            An optional name for this task_queue, used during deployment. If not specified, you must specify the name
+            at deploy time with the --name argument
+        authorized (Optional[str]):
+            If false, allows the task_queue to be invoked without an auth token.
+            Default is True.
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -100,6 +106,7 @@ class TaskQueue(RunnerAbstraction):
         on_start: Optional[Callable] = None,
         callback_url: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
+        name: Optional[str] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -115,6 +122,7 @@ class TaskQueue(RunnerAbstraction):
             on_start=on_start,
             callback_url=callback_url,
             volumes=volumes,
+            name=name,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
 

@@ -45,6 +45,9 @@ class Function(RunnerAbstraction):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
         volumes (Optional[List[Volume]]):
             A list of storage volumes to be associated with the function. Default is [].
+        name (Optional[str]):
+            An optional name for this function, used during deployment. If not specified, you must specify the name
+            at deploy time with the --name argument
     Example:
         ```python
         from beta9 import function, Image
@@ -74,6 +77,7 @@ class Function(RunnerAbstraction):
         retries: int = 3,
         callback_url: Optional[str] = "",
         volumes: Optional[List[Volume]] = None,
+        name: Optional[str] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -84,6 +88,7 @@ class Function(RunnerAbstraction):
             retries=retries,
             callback_url=callback_url,
             volumes=volumes,
+            name=name,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None
