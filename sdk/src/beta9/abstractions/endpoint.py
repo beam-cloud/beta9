@@ -61,6 +61,9 @@ class Endpoint(RunnerAbstraction):
             The maximum number of tasks that can be pending in the queue. If the number of
             pending tasks exceeds this value, the task queue will stop accepting new tasks.
             Default is 100.
+        secrets (Optional[List[str]):
+            A list of secrets that are injected into the container as environment variables. Default is [].
+
     Example:
         ```python
         from beta9 import endpoint, Image

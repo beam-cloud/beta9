@@ -45,6 +45,9 @@ class Function(RunnerAbstraction):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
         volumes (Optional[List[Volume]]):
             A list of storage volumes to be associated with the function. Default is [].
+        secrets (Optional[List[str]):
+            A list of secrets that are injected into the container as environment variables. Default is [].
+
     Example:
         ```python
         from beta9 import function, Image
