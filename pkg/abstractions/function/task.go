@@ -107,14 +107,6 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
-	workspace, err := t.fs.backendRepo.GetWorkspaceByExternalIdWithSigningKey(
-		ctx,
-		t.msg.WorkspaceId,
-	)
-	if err != nil {
-		return err
-	}
-
 	mounts := abstractions.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
 		stub.Workspace.Name,
@@ -123,7 +115,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 	)
 
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(
-		&workspace,
+		&stub.Workspace,
 		stubConfig,
 	)
 	if err != nil {
