@@ -74,9 +74,6 @@ class TaskQueue(RunnerAbstraction):
         name (Optional[str]):
             An optional name for this task_queue, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
-        authorized (Optional[str]):
-            If false, allows the task_queue to be invoked without an auth token.
-            Default is True.
     Example:
         ```python
         from beta9 import task_queue, Image
