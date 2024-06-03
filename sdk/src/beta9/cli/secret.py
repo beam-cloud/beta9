@@ -135,6 +135,7 @@ def delete_secret(service: ServiceClient, name: str):
 @extraclick.pass_service_client
 def show_secret(service: ServiceClient, name: str):
     res: GetSecretResponse
+
     res = service.secret.get_secret(GetSecretRequest(name=name))
 
     if res.ok:
