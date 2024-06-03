@@ -48,14 +48,19 @@ def serve(ctx: click.Context, service: ServiceClient, entrypoint: str):
     module_name = module_path.replace(".py", "").replace(os.path.sep, ".")
 
     if not Path(module_path).exists():
-        terminal.error(f"Unable to find file '{module_path}'")
+        terminal.error(f"Unable to find file: '{module_path}'")
+
     if not func_name:
-        terminal.error(f"Unable to parse function '{func_name}'")
+        terminal.error(
+            "Invalid handler function specified. Expected format: beam serve [file.py]:[function]"
+        )
 
     module = importlib.import_module(module_name)
 
     user_func = getattr(module, func_name, None)
     if user_func is None:
-        terminal.error(f"Unable to find function '{func_name}'")
+        terminal.error(
+            f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{func_name}'"
+        )
 
     user_func.serve()  # type:ignore

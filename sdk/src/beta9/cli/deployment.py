@@ -101,7 +101,8 @@ def create_deployment(service: ServiceClient, name: str, entrypoint: str):
     module_name = module_path.replace(".py", "").replace(os.path.sep, ".")
 
     if not Path(module_path).exists():
-        terminal.error(f"Unable to find file '{module_path}'")
+        terminal.error(f"Unable to find file: '{module_path}'")
+
     if not func_name:
         terminal.error(
             "Invalid handler function specified. Expected format: beam deploy [file.py]:[function]"
