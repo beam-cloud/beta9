@@ -16,7 +16,7 @@ from uvicorn.workers import UvicornWorker
 from ..abstractions.base.runner import (
     ENDPOINT_SERVE_STUB_TYPE,
 )
-from ..channel import Channel, with_runner_context
+from ..channel import runner_context
 from ..clients.gateway import (
     EndTaskRequest,
     GatewayServiceStub,
@@ -126,11 +126,10 @@ async def task_lifecycle(request: Request):
 
 class EndpointManager:
     @asynccontextmanager
-    @with_runner_context
-    async def lifespan(self, _: FastAPI, channel: Channel):
-        self.app.state.gateway_stub = GatewayServiceStub(channel)
-
-        yield
+    async def lifespan(self, _: FastAPI):
+        with runner_context() as channel:
+            self.app.state.gateway_stub = GatewayServiceStub(channel)
+            yield
 
     def __init__(self, logger: logging.Logger) -> None:
         self.logger = logger
