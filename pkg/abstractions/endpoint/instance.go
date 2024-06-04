@@ -48,7 +48,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 		fmt.Sprintf("TIMEOUT=%d", i.StubConfig.TaskPolicy.Timeout),
 	}
 
-	env = append(env, secrets...)
+	env = append(secrets, env...)
 
 	for c := 0; c < containersToRun; c++ {
 		containerId := i.genContainerId()

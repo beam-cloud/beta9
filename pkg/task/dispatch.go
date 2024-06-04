@@ -35,7 +35,6 @@ var taskMessagePool = sync.Pool{
 			TaskId:        uuid.Must(uuid.NewV4()).String(),
 			Args:          nil,
 			Kwargs:        nil,
-			WorkspaceId:   "",
 			Executor:      "",
 			StubId:        "",
 			WorkspaceName: "",
@@ -48,7 +47,6 @@ func (d *Dispatcher) getTaskMessage() *types.TaskMessage {
 	msg.TaskId = uuid.Must(uuid.NewV4()).String()
 	msg.StubId = ""
 	msg.WorkspaceName = ""
-	msg.WorkspaceId = ""
 	msg.Args = make([]interface{}, 0)
 	msg.Kwargs = make(map[string]interface{})
 	msg.Executor = ""
@@ -78,7 +76,6 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, authInfo *auth.A
 	taskMessage := d.getTaskMessage()
 	taskMessage.Executor = executor
 	taskMessage.WorkspaceName = authInfo.Workspace.Name
-	taskMessage.WorkspaceId = authInfo.Workspace.ExternalId
 	taskMessage.StubId = stubId
 	taskMessage.Args = payload.Args
 	taskMessage.Kwargs = payload.Kwargs

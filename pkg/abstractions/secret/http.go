@@ -38,24 +38,33 @@ func (g *secretGroup) CreateSecret(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.ss.backendRepo.GetWorkspaceByExternalIdWithSigningKey(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "invalid workspace ID",
+		})
 	}
 
 	secretInput := types.Secret{}
 	if err := ctx.Bind(&secretInput); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid secret")
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "invalid secret",
+		})
 	}
 
 	// Create the secret
 	secret, err := g.ss.backendRepo.CreateSecret(ctx.Request().Context(), &workspace, cc.AuthInfo.Token.Id, secretInput.Name, secretInput.Value)
 	if err != nil {
 		if err, ok := err.(*pq.Error); ok {
-			if err.Code == "23505" { // Unique violation
-				return echo.NewHTTPError(http.StatusConflict, "Secret already exists")
+			if err.Code.Name() == "unique_violation" {
+				return ctx.JSON(http.StatusConflict,
+					map[string]interface{}{
+						"error": "secret already exists",
+					})
 			}
 		}
 
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create secret")
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "failed to create secret",
+		})
 	}
 
 	return ctx.JSON(http.StatusOK, secret)
@@ -65,13 +74,17 @@ func (g *secretGroup) GetSecret(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.ss.backendRepo.GetWorkspaceByExternalIdWithSigningKey(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "invalid workspace ID",
+		})
 	}
 
 	secretName := ctx.Param("secretName")
 	secret, err := g.ss.backendRepo.GetSecretByNameDecrypted(ctx.Request().Context(), &workspace, secretName)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Secret not found")
+		return ctx.JSON(http.StatusNotFound, map[string]interface{}{
+			"error": "secret not found",
+		})
 	}
 
 	return ctx.JSON(http.StatusOK, secret)
@@ -81,12 +94,16 @@ func (g *secretGroup) ListSecrets(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.ss.backendRepo.GetWorkspaceByExternalIdWithSigningKey(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "invalid workspace ID",
+		})
 	}
 
 	secrets, err := g.ss.backendRepo.ListSecrets(ctx.Request().Context(), &workspace)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list secret")
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "failed to list secret",
+		})
 	}
 
 	return ctx.JSON(http.StatusOK, secrets)
@@ -101,20 +118,26 @@ func (g *secretGroup) UpdateSecret(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.ss.backendRepo.GetWorkspaceByExternalIdWithSigningKey(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "invalid workspace ID",
+		})
 	}
 
 	secretName := ctx.Param("secretName")
 
 	secretInput := types.Secret{}
 	if err := ctx.Bind(&secretInput); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid secret")
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "invalid secret",
+		})
 	}
 
 	// Update the secret
 	secret, err := g.ss.backendRepo.UpdateSecret(ctx.Request().Context(), &workspace, cc.AuthInfo.Token.Id, secretName, secretInput.Value)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update secret")
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "failed to update secret",
+		})
 	}
 
 	return ctx.JSON(http.StatusOK, secret)
@@ -124,12 +147,16 @@ func (g *secretGroup) DeleteSecret(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.ss.backendRepo.GetWorkspaceByExternalIdWithSigningKey(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "invalid workspace ID",
+		})
 	}
 
 	secretName := ctx.Param("secretName")
 	if err := g.ss.backendRepo.DeleteSecret(ctx.Request().Context(), &workspace, secretName); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete secret")
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "failed to delete secret",
+		})
 	}
 
 	return ctx.NoContent(http.StatusOK)

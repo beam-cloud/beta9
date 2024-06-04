@@ -142,7 +142,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 	}
 
-	env = append(env, secrets...)
+	env = append(secrets, env...)
 
 	err = cs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,

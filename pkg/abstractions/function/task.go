@@ -140,7 +140,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		fmt.Sprintf("CALLBACK_URL=%s", stubConfig.CallbackUrl),
 	}
 
-	env = append(env, secrets...)
+	env = append(secrets, env...)
 
 	err = t.fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: t.containerId,

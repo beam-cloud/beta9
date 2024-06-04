@@ -29,7 +29,6 @@ class Secret(betterproto.Message):
     id: str = betterproto.string_field(1)
     name: str = betterproto.string_field(2)
     value: str = betterproto.string_field(3)
-    sensitive: bool = betterproto.bool_field(4)
     last_updated_by: str = betterproto.string_field(5)
     created_at: datetime = betterproto.message_field(6)
     updated_at: datetime = betterproto.message_field(7)
@@ -39,7 +38,6 @@ class Secret(betterproto.Message):
 class CreateSecretRequest(betterproto.Message):
     name: str = betterproto.string_field(2)
     value: str = betterproto.string_field(3)
-    sensitive: bool = betterproto.bool_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -65,7 +63,6 @@ class DeleteSecretResponse(betterproto.Message):
 class UpdateSecretRequest(betterproto.Message):
     name: str = betterproto.string_field(2)
     value: str = betterproto.string_field(3)
-    sensitive: bool = betterproto.bool_field(4)
 
 
 @dataclass(eq=False, repr=False)

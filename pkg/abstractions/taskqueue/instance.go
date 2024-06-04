@@ -48,7 +48,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		fmt.Sprintf("PYTHON_VERSION=%s", i.StubConfig.PythonVersion),
 	}
 
-	env = append(env, secrets...)
+	env = append(secrets, env...)
 
 	for c := 0; c < containersToRun; c++ {
 		runRequest := &types.ContainerRequest{

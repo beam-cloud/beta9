@@ -44,7 +44,7 @@ func handleErrMsg(err error) string {
 	msg := err.Error()
 
 	if err, ok := err.(*pq.Error); ok {
-		if err.Code == "23505" { // Unique violation
+		if err.Code.Name() == "unique_violation" { // Unique violation
 			msg = "Secret already exists"
 		} else {
 			// Don't expose pg error messages
