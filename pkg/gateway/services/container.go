@@ -39,3 +39,36 @@ func (gws GatewayService) ListContainers(ctx context.Context, in *pb.ListContain
 		Containers: containers,
 	}, nil
 }
+
+func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContainerRequest) (*pb.StopContainerResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	workspaceId := authInfo.Workspace.ExternalId
+
+	state, err := gws.containerRepo.GetContainerState(in.ContainerId)
+	if err != nil {
+		return &pb.StopContainerResponse{
+			Ok:       false,
+			ErrorMsg: "Container not found",
+		}, nil
+	}
+
+	if state.WorkspaceId != workspaceId {
+		return &pb.StopContainerResponse{
+			Ok:       false,
+			ErrorMsg: "Container not found",
+		}, nil
+	}
+
+	err = gws.scheduler.Stop(in.ContainerId)
+	if err != nil {
+		return &pb.StopContainerResponse{
+			Ok:       false,
+			ErrorMsg: "Unable to stop container",
+		}, nil
+	}
+
+	return &pb.StopContainerResponse{
+		Ok: true,
+	}, nil
+}

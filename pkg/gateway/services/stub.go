@@ -33,6 +33,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		MaxPendingTasks: uint(in.MaxPendingTasks),
 		Volumes:         in.Volumes,
 		Secrets:         []types.Secret{},
+		Authorized:      in.Authorized,
 	}
 
 	// Get secrets
@@ -48,6 +49,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Name:  secret.Name,
 			Value: secret.Value,
 		})
+
 	}
 
 	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)

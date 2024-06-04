@@ -41,7 +41,6 @@ class Channel(InterceptorChannel):
             channel = grpc.insecure_channel(addr)
 
         interceptor = AuthTokenInterceptor(token)
-
         super().__init__(channel=channel, interceptor=interceptor)
 
 
@@ -90,6 +89,7 @@ class AuthTokenInterceptor(
     def intercept_call(self, continuation, client_call_details, request):
         """Intercept all types of calls to add auth token."""
         new_details = self._add_auth_metadata(client_call_details)
+
         return continuation(new_details, request)
 
     def intercept_call_stream(self, continuation, client_call_details, request_iterator):
@@ -100,6 +100,18 @@ class AuthTokenInterceptor(
     intercept_unary_stream = intercept_call
     intercept_stream_unary = intercept_call_stream
     intercept_stream_stream = intercept_call_stream
+
+
+def handle_grpc_error(error: grpc.RpcError):
+    code = error.code()
+    if code == grpc.StatusCode.UNAUTHENTICATED:
+        terminal.error("Unauthorized: Invalid auth token provided.")
+    elif code == grpc.StatusCode.UNAVAILABLE:
+        terminal.error("Unable to connect to gateway.")
+    elif code == grpc.StatusCode.CANCELLED:
+        return
+    else:
+        terminal.error(f"Unhandled GRPC error: {code}")
 
 
 def get_channel(context: Optional[ConfigContext] = None) -> Channel:

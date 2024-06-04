@@ -52,12 +52,16 @@ class RunnerAbstraction(BaseAbstraction):
         secrets: Optional[List[str]] = None,
         on_start: Optional[Callable] = None,
         callback_url: Optional[str] = None,
+        authorized: Optional[bool] = True,
+        name: Optional[str] = None,
     ) -> None:
         super().__init__()
 
         if image is None:
             image = Image()
 
+        self.name = name
+        self.authorized = authorized
         self.image: Image = image
         self.image_available: bool = False
         self.files_synced: bool = False
@@ -222,7 +226,6 @@ class RunnerAbstraction(BaseAbstraction):
         func: Optional[Callable] = None,
         stub_type: str,
         force_create_stub: bool = False,
-        name: Optional[str] = None,
     ) -> bool:
         if called_on_import():
             return False
@@ -231,9 +234,6 @@ class RunnerAbstraction(BaseAbstraction):
             self._map_callable_to_attr(attr="handler", func=func)
 
         stub_name = f"{stub_type}/{self.handler}" if self.handler else stub_type
-
-        if name:
-            stub_name = f"{stub_name}/{name}"
 
         if self.runtime_ready:
             return True
@@ -285,6 +285,7 @@ class RunnerAbstraction(BaseAbstraction):
                     volumes=[v.export() for v in self.volumes],
                     secrets=self.secrets,
                     force_create=force_create_stub,
+                    authorized=self.authorized,
                 )
             )
 

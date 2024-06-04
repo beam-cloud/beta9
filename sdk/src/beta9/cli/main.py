@@ -3,8 +3,9 @@ from types import ModuleType
 from typing import Any, Optional
 
 import click
+import grpc
 
-from ..channel import prompt_first_auth
+from ..channel import handle_grpc_error, prompt_first_auth
 from ..config import SDKSettings, is_config_empty, set_settings
 from . import config, container, deployment, machine, pool, secret, serve, task, volume
 from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCollection
@@ -92,4 +93,8 @@ def load_cli(**kwargs: Any) -> CLI:
 def start():
     """Used as entrypoint in Poetry"""
     cli = load_cli()
-    cli()
+
+    try:
+        cli()
+    except grpc.RpcError as error:
+        handle_grpc_error(error=error)

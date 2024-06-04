@@ -74,6 +74,9 @@ class TaskQueue(RunnerAbstraction):
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
 
+        name (Optional[str]):
+            An optional name for this task_queue, used during deployment. If not specified, you must specify the name
+            at deploy time with the --name argument
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -104,6 +107,7 @@ class TaskQueue(RunnerAbstraction):
         callback_url: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        name: Optional[str] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -120,6 +124,7 @@ class TaskQueue(RunnerAbstraction):
             callback_url=callback_url,
             volumes=volumes,
             secrets=secrets,
+            name=name,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
 
@@ -155,6 +160,12 @@ class _CallableWrapper:
         return self.func(*args, **kwargs)
 
     def deploy(self, name: str) -> bool:
+        name = name or self.parent.name
+        if not name or name == "":
+            terminal.error(
+                "You must specify an app name (either in the decorator or via the --name argument)."
+            )
+
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=TASKQUEUE_DEPLOYMENT_STUB_TYPE, force_create_stub=True
         ):

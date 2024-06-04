@@ -47,7 +47,9 @@ class Function(RunnerAbstraction):
             A list of storage volumes to be associated with the function. Default is [].
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
-
+        name (Optional[str]):
+            An optional name for this function, used during deployment. If not specified, you must specify the name
+            at deploy time with the --name argument
     Example:
         ```python
         from beta9 import function, Image
@@ -78,6 +80,7 @@ class Function(RunnerAbstraction):
         callback_url: Optional[str] = "",
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        name: Optional[str] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -89,6 +92,7 @@ class Function(RunnerAbstraction):
             callback_url=callback_url,
             volumes=volumes,
             secrets=secrets,
+            name=name,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None
@@ -167,6 +171,12 @@ class _CallableWrapper:
         terminal.error("Serve has not yet been implemented for functions.")
 
     def deploy(self, name: str) -> bool:
+        name = name or self.parent.name
+        if not name or name == "":
+            terminal.error(
+                "You must specify an app name (either in the decorator or via the --name argument)."
+            )
+
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=FUNCTION_DEPLOYMENT_STUB_TYPE, force_create_stub=True
         ):
