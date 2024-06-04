@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import inspect
 import json
@@ -124,6 +125,7 @@ class FunctionHandler:
     def __init__(self) -> None:
         self.pass_context: bool = False
         self.handler: Optional[Callable] = None
+        self.is_async: bool = False
         self._load()
 
     @contextmanager
@@ -145,6 +147,7 @@ class FunctionHandler:
             self.handler = getattr(target_module, func)
             sig = inspect.signature(self.handler.func)
             self.pass_context = "context" in sig.parameters
+            self.is_async = asyncio.iscoroutinefunction(self.handler.func)
         except BaseException:
             raise RunnerException()
 
