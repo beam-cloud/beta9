@@ -310,7 +310,6 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	flusher, ok := req.ctx.Response().Writer.(http.Flusher)
 	if !ok {
 		streamingSupported = false
-		return
 	}
 
 	// Send response to client in chunks
