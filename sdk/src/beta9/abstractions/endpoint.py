@@ -61,6 +61,8 @@ class Endpoint(RunnerAbstraction):
             The maximum number of tasks that can be pending in the queue. If the number of
             pending tasks exceeds this value, the task queue will stop accepting new tasks.
             Default is 100.
+        secrets (Optional[List[str]):
+            A list of secrets that are injected into the container as environment variables. Default is [].
         name (Optional[str]):
             An optional name for this endpoint, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
@@ -98,6 +100,7 @@ class Endpoint(RunnerAbstraction):
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
         authorized: Optional[bool] = True,
     ):
@@ -114,6 +117,7 @@ class Endpoint(RunnerAbstraction):
             max_pending_tasks=max_pending_tasks,
             on_start=on_start,
             volumes=volumes,
+            secrets=secrets,
             name=name,
             authorized=authorized,
         )

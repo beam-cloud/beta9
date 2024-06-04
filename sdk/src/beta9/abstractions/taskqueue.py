@@ -71,6 +71,9 @@ class TaskQueue(RunnerAbstraction):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
         volumes (Optional[List[Volume]]):
             A list of storage volumes to be associated with the taskqueue. Default is [].
+        secrets (Optional[List[str]):
+            A list of secrets that are injected into the container as environment variables. Default is [].
+
         name (Optional[str]):
             An optional name for this task_queue, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
@@ -103,6 +106,7 @@ class TaskQueue(RunnerAbstraction):
         on_start: Optional[Callable] = None,
         callback_url: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
     ) -> None:
         super().__init__(
@@ -119,6 +123,7 @@ class TaskQueue(RunnerAbstraction):
             on_start=on_start,
             callback_url=callback_url,
             volumes=volumes,
+            secrets=secrets,
             name=name,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None

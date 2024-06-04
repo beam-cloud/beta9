@@ -56,6 +56,7 @@ type BackendRepository interface {
 	ListWorkspaces(ctx context.Context) ([]types.Workspace, error)
 	CreateWorkspace(ctx context.Context) (types.Workspace, error)
 	GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error)
+	GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalId string) (types.Workspace, error)
 	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error)
 	GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error)
 	GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error)
@@ -92,6 +93,12 @@ type BackendRepository interface {
 	GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error)
 	CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint32, cpuLimit uint32) (*types.ConcurrencyLimit, error)
 	UpdateConcurrencyLimit(ctx context.Context, concurrencyLimitId uint, gpuLimit uint32, cpuLimit uint32) (*types.ConcurrencyLimit, error)
+	CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string) (*types.Secret, error)
+	GetSecretByName(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error)
+	GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error)
+	ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error)
+	UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretId string, value string) (*types.Secret, error)
+	DeleteSecret(ctx context.Context, workspace *types.Workspace, secretName string) error
 }
 
 type WorkerPoolRepository interface {

@@ -114,6 +114,14 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		stub.ExternalId,
 	)
 
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(
+		&stub.Workspace,
+		stubConfig,
+	)
+	if err != nil {
+		return err
+	}
+
 	token, err := t.fs.backendRepo.RetrieveActiveToken(ctx, stub.Workspace.Id)
 	if err != nil {
 		return err
@@ -124,15 +132,19 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		gpuCount = 1
 	}
 
+	env := []string{
+		fmt.Sprintf("TASK_ID=%s", t.msg.TaskId),
+		fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
+		fmt.Sprintf("BETA9_TOKEN=%s", token.Key),
+		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
+		fmt.Sprintf("CALLBACK_URL=%s", stubConfig.CallbackUrl),
+	}
+
+	env = append(secrets, env...)
+
 	err = t.fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: t.containerId,
-		Env: []string{
-			fmt.Sprintf("TASK_ID=%s", t.msg.TaskId),
-			fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
-			fmt.Sprintf("BETA9_TOKEN=%s", token.Key),
-			fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
-			fmt.Sprintf("CALLBACK_URL=%s", stubConfig.CallbackUrl),
-		},
+		Env:         env,
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
 		Gpu:         string(stubConfig.Runtime.Gpu),

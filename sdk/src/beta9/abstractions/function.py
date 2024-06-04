@@ -45,6 +45,8 @@ class Function(RunnerAbstraction):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
         volumes (Optional[List[Volume]]):
             A list of storage volumes to be associated with the function. Default is [].
+        secrets (Optional[List[str]):
+            A list of secrets that are injected into the container as environment variables. Default is [].
         name (Optional[str]):
             An optional name for this function, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
@@ -77,6 +79,7 @@ class Function(RunnerAbstraction):
         retries: int = 3,
         callback_url: Optional[str] = "",
         volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
     ) -> None:
         super().__init__(
@@ -88,6 +91,7 @@ class Function(RunnerAbstraction):
             retries=retries,
             callback_url=callback_url,
             volumes=volumes,
+            secrets=secrets,
             name=name,
         )
 

@@ -222,6 +222,11 @@ class Volume(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class SecretVar(betterproto.Message):
+    name: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
 class GetOrCreateStubRequest(betterproto.Message):
     object_id: str = betterproto.string_field(1)
     image_id: str = betterproto.string_field(2)
@@ -243,6 +248,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     on_start: str = betterproto.string_field(18)
     callback_url: str = betterproto.string_field(19)
     authorized: bool = betterproto.bool_field(20)
+    secrets: List["SecretVar"] = betterproto.message_field(21)
 
 
 @dataclass(eq=False, repr=False)
