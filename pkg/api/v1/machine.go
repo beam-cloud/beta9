@@ -76,7 +76,7 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Unable to lookup service: juicefs-redis")
 		}
-		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("rediss://%s/0", juiceFsRedisHostname)
+		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("redis://%s/0", juiceFsRedisHostname)
 	}
 
 	gatewayGrpcHostname, err := g.tailscale.GetHostnameForService("gateway-grpc")
@@ -85,6 +85,7 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	}
 
 	remoteConfig.Database.Redis.Addrs[0] = redisHostname
+	remoteConfig.Database.Redis.EnableTLS = false
 	remoteConfig.GatewayService.Host = strings.Split(gatewayGrpcHostname, ":")[0]
 
 	cpu, err := scheduler.ParseCPU(request.Cpu)

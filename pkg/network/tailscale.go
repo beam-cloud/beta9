@@ -87,7 +87,7 @@ func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (n
 	defer cancel()
 
 	addr := fmt.Sprintf(":%d", service.LocalPort)
-	listener, err := t.server.ListenTLS("tcp", addr)
+	listener, err := t.server.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
