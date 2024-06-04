@@ -148,6 +148,7 @@ class EndpointManager:
         async def health():
             return Response(status_code=HTTPStatus.OK)
 
+        @self.app.get("/")
         @self.app.post("/")
         async def function(request: Request, task_status: str = Depends(task_lifecycle)):
             task_id = request.headers.get("X-TASK-ID")
@@ -155,7 +156,7 @@ class EndpointManager:
 
             status_code = HTTPStatus.OK
             with StdoutJsonInterceptor(task_id=task_id):
-                result, err = self._call_function(task_id=task_id, payload=payload)
+                result, err = await self._call_function(task_id=task_id, payload=payload)
                 if err:
                     task_status = TaskStatus.Error
 
@@ -177,7 +178,7 @@ class EndpointManager:
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 
-    def _call_function(self, task_id: str, payload: dict) -> Tuple[Response, Any]:
+    async def _call_function(self, task_id: str, payload: dict) -> Tuple[Response, Any]:
         error = None
         response_body = {}
 
@@ -196,11 +197,18 @@ class EndpointManager:
         )
 
         try:
-            response_body = self.handler(
-                context,
-                *args,
-                **kwargs,
-            )
+            if self.handler.is_async:
+                response_body = await self.handler(
+                    context,
+                    *args,
+                    **kwargs,
+                )
+            else:
+                response_body = self.handler(
+                    context,
+                    *args,
+                    **kwargs,
+                )
         except BaseException:
             exception = traceback.format_exc()
             print(exception)
