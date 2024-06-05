@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -40,6 +41,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	for _, secret := range in.Secrets {
 		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secret.Name)
 		if err != nil {
+			if err == sql.ErrNoRows {
+				continue // Skip secret if not found
+			}
+
 			return &pb.GetOrCreateStubResponse{
 				Ok: false,
 			}, nil
