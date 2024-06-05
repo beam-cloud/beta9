@@ -50,7 +50,9 @@ func NewRedisClient(config types.RedisConfig, options ...func(*redis.UniversalOp
 	}
 
 	if config.EnableTLS {
-		opts.TLSConfig = &tls.Config{}
+		opts.TLSConfig = &tls.Config{
+			InsecureSkipVerify: config.InsecureSkipVerify,
+		}
 	}
 
 	var client redis.UniversalClient

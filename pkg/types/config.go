@@ -33,23 +33,24 @@ var (
 )
 
 type RedisConfig struct {
-	Addrs           []string      `key:"addrs" json:"addrs"`
-	Mode            RedisMode     `key:"mode" json:"mode"`
-	ClientName      string        `key:"clientName" json:"client_name"`
-	EnableTLS       bool          `key:"enableTLS" json:"enable_tls"`
-	MinIdleConns    int           `key:"minIdleConns" json:"min_idle_conns"`
-	MaxIdleConns    int           `key:"maxIdleConns" json:"max_idle_conns"`
-	ConnMaxIdleTime time.Duration `key:"connMaxIdleTime" json:"conn_max_idle_time"`
-	ConnMaxLifetime time.Duration `key:"connMaxLifetime" json:"conn_max_lifetime"`
-	DialTimeout     time.Duration `key:"dialTimeout" json:"dial_timeout"`
-	ReadTimeout     time.Duration `key:"readTimeout" json:"read_timeout"`
-	WriteTimeout    time.Duration `key:"writeTimeout" json:"write_timeout"`
-	MaxRedirects    int           `key:"maxRedirects" json:"max_redirects"`
-	MaxRetries      int           `key:"maxRetries" json:"max_retries"`
-	PoolSize        int           `key:"poolSize" json:"pool_size"`
-	Username        string        `key:"username" json:"username"`
-	Password        string        `key:"password" json:"password"`
-	RouteByLatency  bool          `key:"routeByLatency" json:"route_by_latency"`
+	Addrs              []string      `key:"addrs" json:"addrs"`
+	Mode               RedisMode     `key:"mode" json:"mode"`
+	ClientName         string        `key:"clientName" json:"client_name"`
+	EnableTLS          bool          `key:"enableTLS" json:"enable_tls"`
+	InsecureSkipVerify bool          `key:"insecureSkipVerify" json:"insecure_skip_verify"`
+	MinIdleConns       int           `key:"minIdleConns" json:"min_idle_conns"`
+	MaxIdleConns       int           `key:"maxIdleConns" json:"max_idle_conns"`
+	ConnMaxIdleTime    time.Duration `key:"connMaxIdleTime" json:"conn_max_idle_time"`
+	ConnMaxLifetime    time.Duration `key:"connMaxLifetime" json:"conn_max_lifetime"`
+	DialTimeout        time.Duration `key:"dialTimeout" json:"dial_timeout"`
+	ReadTimeout        time.Duration `key:"readTimeout" json:"read_timeout"`
+	WriteTimeout       time.Duration `key:"writeTimeout" json:"write_timeout"`
+	MaxRedirects       int           `key:"maxRedirects" json:"max_redirects"`
+	MaxRetries         int           `key:"maxRetries" json:"max_retries"`
+	PoolSize           int           `key:"poolSize" json:"pool_size"`
+	Username           string        `key:"username" json:"username"`
+	Password           string        `key:"password" json:"password"`
+	RouteByLatency     bool          `key:"routeByLatency" json:"route_by_latency"`
 }
 
 type PostgresConfig struct {
