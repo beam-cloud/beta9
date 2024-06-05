@@ -85,7 +85,6 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	}
 
 	remoteConfig.Database.Redis.Addrs[0] = redisHostname
-	remoteConfig.Database.Redis.EnableTLS = false
 	remoteConfig.GatewayService.Host = strings.Split(gatewayGrpcHostname, ":")[0]
 
 	cpu, err := scheduler.ParseCPU(request.Cpu)
