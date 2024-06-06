@@ -94,7 +94,8 @@ func NewExternalWorkerPoolController(
 func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
-	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeWorker, false)
+	// TODO: replace hard-coded workspace ID with look up of cluster admin
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeMachine, false)
 	if err != nil {
 		return nil, err
 	}
@@ -119,14 +120,25 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 				return nil
 			}
 
+			remainingMachineCpu := machine.State.Cpu
+			remainingMachineMemory := machine.State.Memory
+			remainingMachineGpuCount := machine.State.GpuCount
 			for _, worker := range workers {
-				machine.State.Cpu -= worker.TotalCpu
-				machine.State.Memory -= worker.TotalMemory
-				machine.State.GpuCount -= uint32(worker.TotalGpuCount)
+				remainingMachineCpu -= worker.TotalCpu
+				remainingMachineMemory -= worker.TotalMemory
+				remainingMachineGpuCount -= uint32(worker.TotalGpuCount)
 			}
 
-			if machine.State.Cpu >= int64(cpu) && machine.State.Memory >= int64(memory) && machine.State.Gpu == gpuType && machine.State.GpuCount >= gpuCount {
+			if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && machine.State.Gpu == gpuType && remainingMachineGpuCount >= gpuCount {
 				log.Printf("Using existing machine <machineId: %s>, hostname: %s\n", machine.State.MachineId, machine.State.HostName)
+
+				// If there is only one GPU available on the machine, give the worker access to everything
+				// This prevents situations where a user requests a small amount of compute, and the subsequent
+				// request has higher compute requirements
+				if machine.State.GpuCount == 1 {
+					cpu = machine.State.Cpu
+					memory = machine.State.Memory
+				}
 
 				worker, err := wpc.createWorkerOnMachine(workerId, machine.State.MachineId, machine.State, cpu, memory, gpuType, gpuCount)
 				if err != nil {
