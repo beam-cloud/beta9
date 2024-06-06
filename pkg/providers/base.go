@@ -3,11 +3,16 @@ package providers
 import (
 	"context"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+)
+
+const (
+	emptyMachineConsolidationPeriod time.Duration = 10 * time.Minute
 )
 
 type ExternalProvider struct {
@@ -74,7 +79,7 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 					}
 					defer p.ProviderRepo.RemoveMachineLock(p.Name, poolName, machineId)
 
-					_, err = p.ProviderRepo.GetMachine(p.Name, poolName, machineId)
+					machine, err := p.ProviderRepo.GetMachine(p.Name, poolName, machineId)
 					if err != nil {
 						log.Printf("<provider %s>: unable to retrieve machine <machineId: %s> - %v\n", p.Name, machineId, err)
 						p.TerminateMachineFunc(ctx, poolName, instanceId, machineId)
@@ -88,10 +93,20 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 					}
 
 					if len(workers) > 0 {
+						p.ProviderRepo.SetLastWorkerSeen(p.Name, poolName, machineId)
 						return
 					}
 
-					if len(workers) == 0 {
+					if !machine.AutoConsolidate {
+						return
+					}
+
+					lastWorkerSeen, err := strconv.ParseInt(machine.LastKeepalive, 10, 64)
+					if err != nil {
+						return
+					}
+
+					if len(workers) == 0 && (time.Since(time.Unix(lastWorkerSeen, 0)) > emptyMachineConsolidationPeriod) {
 						p.TerminateMachineFunc(ctx, poolName, instanceId, machineId)
 						return
 					}

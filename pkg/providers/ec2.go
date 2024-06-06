@@ -167,6 +167,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		Gpu:               instance.Spec.Gpu,
 		GpuCount:          instance.Spec.GpuCount,
 		RegistrationToken: token,
+		AutoConsolidate:   true,
 	})
 
 	if err != nil {

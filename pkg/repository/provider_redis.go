@@ -203,6 +203,25 @@ func (r *ProviderRedisRepository) SetMachineKeepAlive(providerName, poolName, ma
 	return nil
 }
 
+func (r *ProviderRedisRepository) SetLastWorkerSeen(providerName, poolName, machineId string) error {
+	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
+
+	machineInfo, err := r.getMachineFromKey(stateKey)
+	if err != nil {
+		return fmt.Errorf("failed to get machine state <%v>: %w", stateKey, err)
+	}
+
+	// Update the LastWorkerSeen with the current Unix timestamp
+	machineInfo.LastWorkerSeen = fmt.Sprintf("%d", time.Now().Unix())
+
+	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineInfo)).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
+	}
+
+	return nil
+}
+
 func (r *ProviderRedisRepository) RemoveMachine(providerName, poolName, machineId string) error {
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
 
