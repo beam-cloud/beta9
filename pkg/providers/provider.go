@@ -42,14 +42,12 @@ type Instance struct {
 }
 
 type userDataConfig struct {
-	AuthKey           string
-	ControlURL        string
-	GatewayHost       string
-	Beta9Token        string
-	K3sVersion        string
-	DisableComponents []string
+	TailscaleAuth     string
+	TailscaleUrl      string
+	RegistrationToken string
 	MachineId         string
 	PoolName          string
+	ProviderName      string
 }
 
 func generateCloudInitData(config userDataConfig, userDataTemplate string) (string, error) {
