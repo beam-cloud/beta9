@@ -23,6 +23,10 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+const (
+	externalWorkerNamespace string = "default"
+)
+
 type ExternalWorkerPoolController struct {
 	ctx            context.Context
 	name           string
@@ -205,7 +209,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 	worker.RequiresPoolSelector = wpc.workerPool.RequiresPoolSelector
 
 	// Create the job in the cluster
-	_, err = client.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(wpc.ctx, job, metav1.CreateOptions{})
+	_, err = client.BatchV1().Jobs(externalWorkerNamespace).Create(wpc.ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +309,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
-			Namespace: wpc.config.Worker.Namespace,
+			Namespace: externalWorkerNamespace,
 			Labels:    labels,
 		},
 		Spec: batchv1.JobSpec{
@@ -356,7 +360,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "POD_NAMESPACE",
-			Value: wpc.config.Worker.Namespace,
+			Value: externalWorkerNamespace,
 		},
 		{
 			Name:  "BETA9_GATEWAY_HOST",
