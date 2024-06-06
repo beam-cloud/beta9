@@ -38,15 +38,15 @@ func NewWorkerMetrics(
 
 func (wm *WorkerMetrics) metricsContainerDuration(request *types.ContainerRequest, duration time.Duration) {
 	wm.metricsRepo.IncrementCounter(types.MetricsWorkerContainerDuration, map[string]interface{}{
-		"container_id": request.ContainerId,
-		"worker_id":    wm.workerId,
-		"stub_id":      request.StubId,
-		"workspace_id": request.WorkspaceId,
-		"cpu_cores":    request.Cpu,
-		"mem_mb":       request.Memory,
-		"gpu":          request.Gpu,
-		"gpu_count":    request.GpuCount,
-		"duration_ms":  duration.Milliseconds(),
+		"container_id":   request.ContainerId,
+		"worker_id":      wm.workerId,
+		"stub_id":        request.StubId,
+		"workspace_id":   request.WorkspaceId,
+		"cpu_millicores": request.Cpu,
+		"mem_mb":         request.Memory,
+		"gpu":            request.Gpu,
+		"gpu_count":      request.GpuCount,
+		"duration_ms":    duration.Milliseconds(),
 	}, float64(duration.Milliseconds()))
 }
 
