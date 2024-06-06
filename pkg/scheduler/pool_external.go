@@ -106,8 +106,6 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 
 	// Attempt to schedule the worker on an existing machine first
 	for _, machine := range machines {
-		log.Printf("Machine: %+v\n", machine)
-		log.Printf("Machine state: %+v\n", machine.State)
 		worker := func() *types.Worker {
 			err := wpc.providerRepo.SetMachineLock(wpc.provider.GetName(), wpc.name, machine.State.MachineId)
 			if err != nil {
@@ -122,7 +120,6 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 			}
 
 			for _, worker := range workers {
-				log.Printf("Worker: %+v\n", worker)
 				machine.State.Cpu -= worker.TotalCpu
 				machine.State.Memory -= worker.TotalMemory
 				machine.State.GpuCount -= uint32(worker.TotalGpuCount)
