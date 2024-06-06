@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -27,6 +28,7 @@ func NewConcurrencyLimitGroup(
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.GetConcurrencyLimitByWorkspaceId))
 	g.POST("/:workspaceId", auth.WithClusterAdminAuth(group.CreateOrUpdateConcurrencyLimit))
+	g.DELETE("/:workspaceId", auth.WithClusterAdminAuth(group.DeleteConcurrencyLimit))
 
 	return group
 }
@@ -89,4 +91,25 @@ func (c *ConcurrencyLimitGroup) CreateOrUpdateConcurrencyLimit(ctx echo.Context)
 	}
 
 	return ctx.JSON(http.StatusOK, concurrencyLimit)
+}
+
+func (c *ConcurrencyLimitGroup) DeleteConcurrencyLimit(ctx echo.Context) error {
+	workspaceId := ctx.Param("workspaceId")
+
+	workspace, err := c.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Workspace not found")
+	}
+
+	if workspace.ConcurrencyLimitId == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Concurrency limit not found")
+	}
+
+	err = c.backendRepo.DeleteConcurrencyLimit(ctx.Request().Context(), workspace)
+	if err != nil {
+		log.Println(err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete concurrency limit")
+	}
+
+	return ctx.NoContent(http.StatusOK)
 }

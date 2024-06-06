@@ -55,6 +55,10 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 		return nil, false
 	}
 
+	if !token.Active || token.DisabledByClusterAdmin {
+		return nil, false
+	}
+
 	return &AuthInfo{
 		Token:     token,
 		Workspace: workspace,

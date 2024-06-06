@@ -38,6 +38,8 @@ type Token struct {
 	TokenType   string     `db:"token_type" json:"token_type"`
 	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
+
+	DisabledByClusterAdmin bool `db:"disabled_by_cluster_admin" json:"disabled_by_cluster_admin"`
 }
 
 type Volume struct {

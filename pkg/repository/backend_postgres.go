@@ -178,7 +178,7 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId
 
 func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error) {
 	query := `
-	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.token_type, t.reusable, t.workspace_id,
+	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.disabled_by_cluster_admin , t.token_type, t.reusable, t.workspace_id,
 	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.signing_key "workspace.signing_key", w.created_at "workspace.created_at", w.updated_at "workspace.updated_at"
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
@@ -253,6 +253,21 @@ func (r *PostgresBackendRepository) RevokeTokenByExternalId(ctx context.Context,
     `
 
 	_, err := r.client.ExecContext(ctx, updateQuery, externalId)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *PostgresBackendRepository) UpdateTokenAsClusterAdmin(ctx context.Context, tokenId string, disabled bool) error {
+	updateQuery := `
+		UPDATE token
+		SET disabled_by_cluster_admin = $1
+		WHERE external_id = $2;
+		`
+
+	_, err := r.client.ExecContext(ctx, updateQuery, disabled, tokenId)
 	if err != nil {
 		return err
 	}
@@ -1018,6 +1033,32 @@ func (r *PostgresBackendRepository) GetConcurrencyLimitByWorkspaceId(ctx context
 	}
 
 	return &limit, nil
+}
+
+func (r *PostgresBackendRepository) DeleteConcurrencyLimit(ctx context.Context, workspaceId types.Workspace) error {
+	updateWorkspaceQuery := `UPDATE workspace SET concurrency_limit_id = NULL WHERE id = $1;`
+	deleteConcurrencyLimitQuery := `DELETE FROM concurrency_limit WHERE id = $1;`
+
+	tx, err := r.client.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(updateWorkspaceQuery, workspaceId.Id)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(deleteConcurrencyLimitQuery, workspaceId.ConcurrencyLimitId)
+	if err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func validateEnvironmentVariableName(name string) error {
