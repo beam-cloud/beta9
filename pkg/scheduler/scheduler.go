@@ -265,7 +265,7 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	})
 
 	for _, worker := range workers {
-		if worker.Cpu >= int64(request.Cpu) && worker.Memory >= int64(request.Memory) && worker.Gpu == request.Gpu && worker.GpuCount >= request.GpuCount {
+		if worker.FreeCpu >= int64(request.Cpu) && worker.FreeMemory >= int64(request.Memory) && worker.Gpu == request.Gpu && worker.FreeGpuCount >= request.GpuCount {
 			return worker, nil
 		}
 	}

@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -119,15 +120,15 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 			}
 
 			for _, worker := range workers {
-				machine.State.Cpu -= worker.Cpu
-				machine.State.Memory -= worker.Memory
-				machine.State.GpuCount -= worker.GpuCount
+				machine.State.Cpu -= worker.TotalCpu
+				machine.State.Memory -= worker.TotalMemory
+				machine.State.GpuCount -= uint32(worker.TotalGpuCount)
 			}
 
 			if machine.State.Cpu >= int64(cpu) && machine.State.Memory >= int64(memory) && machine.State.Gpu == gpuType && machine.State.GpuCount >= gpuCount {
 				log.Printf("Using existing machine <machineId: %s>, hostname: %s\n", machine.State.MachineId, machine.State.HostName)
 
-				worker, err := wpc.createWorkerOnMachine(workerId, machine.State.MachineId, machine.State)
+				worker, err := wpc.createWorkerOnMachine(workerId, machine.State.MachineId, machine.State, cpu, memory, gpuType, gpuCount)
 				if err != nil {
 					return nil
 				}
@@ -167,7 +168,7 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	}
 
 	log.Printf("Machine registered <machineId: %s>, hostname: %s\n", machineId, machineState.HostName)
-	worker, err := wpc.createWorkerOnMachine(workerId, machineId, machineState)
+	worker, err := wpc.createWorkerOnMachine(workerId, machineId, machineState, cpu, memory, gpuType, gpuCount)
 	if err != nil {
 		return nil, err
 	}
@@ -175,14 +176,18 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	return worker, nil
 }
 
-func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState) (*types.Worker, error) {
+func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	client, err := wpc.getProxiedClient(machineState.HostName, machineState.Token)
 	if err != nil {
 		return nil, err
 	}
 
 	// Create a new worker job
-	job, worker := wpc.createWorkerJob(workerId, machineId, machineState.Cpu, machineState.Memory, machineState.Gpu, machineState.GpuCount)
+	job, worker, err := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType, gpuCount)
+	if err != nil {
+		return nil, err
+	}
+
 	worker.PoolName = wpc.name
 	worker.MachineId = machineId
 	worker.RequiresPoolSelector = wpc.workerPool.RequiresPoolSelector
@@ -202,7 +207,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 	return worker, nil
 }
 
-func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*batchv1.Job, *types.Worker) {
+func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*batchv1.Job, *types.Worker, error) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
 		"app":               Beta9WorkerLabelValue,
@@ -231,6 +236,11 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		}
 	}
 
+	env, err := wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpuType, workerGpuCount)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	containers := []corev1.Container{
 		{
 			Name:  defaultContainerName,
@@ -247,7 +257,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 					ContainerPort: int32(wpc.config.Monitoring.Prometheus.Port),
 				},
 			},
-			Env:          wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpuType, workerGpuCount),
+			Env:          env,
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
 			Resources:    resources,
 		},
@@ -264,16 +274,14 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 			Labels: labels,
 		},
 		Spec: corev1.PodSpec{
-			ServiceAccountName:           wpc.config.Worker.ServiceAccountName,
-			AutomountServiceAccountToken: ptr.To(true),
-			HostNetwork:                  true,
-			ImagePullSecrets:             imagePullSecrets,
-			RestartPolicy:                corev1.RestartPolicyOnFailure,
-			NodeSelector:                 wpc.workerPool.JobSpec.NodeSelector,
-			Containers:                   containers,
-			Volumes:                      wpc.getWorkerVolumes(workerMemory),
-			EnableServiceLinks:           ptr.To(false),
-			DNSPolicy:                    corev1.DNSClusterFirstWithHostNet,
+			HostNetwork:        true,
+			ImagePullSecrets:   imagePullSecrets,
+			RestartPolicy:      corev1.RestartPolicyOnFailure,
+			NodeSelector:       wpc.workerPool.JobSpec.NodeSelector,
+			Containers:         containers,
+			Volumes:            wpc.getWorkerVolumes(workerMemory),
+			EnableServiceLinks: ptr.To(false),
+			DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
 		},
 	}
 
@@ -295,17 +303,25 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	}
 
 	return job, &types.Worker{
-		Id:       workerId,
-		Cpu:      workerCpu,
-		Memory:   workerMemory,
-		Gpu:      workerGpuType,
-		GpuCount: workerGpuCount,
-		Status:   types.WorkerStatusPending,
-	}
+		Id:            workerId,
+		FreeCpu:       workerCpu,
+		FreeMemory:    workerMemory,
+		FreeGpuCount:  workerGpuCount,
+		TotalCpu:      workerCpu,
+		TotalMemory:   workerMemory,
+		TotalGpuCount: workerGpuCount,
+		Gpu:           workerGpuType,
+		Status:        types.WorkerStatusPending,
+	}, nil
 }
 
-func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) []corev1.EnvVar {
-	return []corev1.EnvVar{
+func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) ([]corev1.EnvVar, error) {
+	podHostname := fmt.Sprintf("%s.%s", machineId, wpc.config.Tailscale.HostName)
+	if wpc.config.Tailscale.User != "" {
+		podHostname = fmt.Sprintf("%s.%s.%s", machineId, wpc.config.Tailscale.User, wpc.config.Tailscale.HostName)
+	}
+
+	envVars := []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
 			Value: workerId,
@@ -340,13 +356,25 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "POD_HOSTNAME",
-			Value: fmt.Sprintf("%s.%s.%s", machineId, wpc.config.Tailscale.User, wpc.config.Tailscale.HostName),
-		},
-		{
-			Name:  "CONFIG_PATH",
-			Value: "/etc/config/config.json",
+			Value: podHostname,
 		},
 	}
+
+	remoteConfig, err := providers.GetRemoteConfig(wpc.config, wpc.tailscale)
+	if err != nil {
+		return nil, err
+	}
+
+	// Serialize the AppConfig struct to JSON
+	configJson, err := json.MarshalIndent(remoteConfig, "", "  ")
+	if err == nil {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "CONFIG_JSON",
+			Value: string(configJson),
+		})
+	}
+
+	return envVars, nil
 }
 
 func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
@@ -361,14 +389,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 				HostPath: &corev1.HostPathVolumeSource{
 					Path: defaultWorkerLogPath,
 					Type: &hostPathType,
-				},
-			},
-		},
-		{
-			Name: configVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName: configSecretName,
 				},
 			},
 		},
@@ -412,11 +432,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 			Name:      imagesVolumeName,
 			MountPath: "/images",
 			ReadOnly:  false,
-		},
-		{
-			Name:      configVolumeName,
-			MountPath: "/etc/config",
-			ReadOnly:  true,
 		},
 		{
 			Name:      logVolumeName,
