@@ -1,10 +1,13 @@
 package types
 
+import "time"
+
 const (
-	MachineStatusRegistered     MachineStatus = "registered"
-	MachineStatusPending        MachineStatus = "pending"
-	MachinePendingExpirationS   int           = 3600 // 1 hour
-	MachineKeepaliveExpirationS int           = 60   // 1 minute
+	MachineStatusRegistered          MachineStatus = "registered"
+	MachineStatusPending             MachineStatus = "pending"
+	MachinePendingExpirationS        int           = 3600 // 1 hour
+	MachineKeepaliveExpirationS      int           = 60   // 1 minute
+	MachineEmptyConsolidationPeriodM time.Duration = 10 * time.Minute
 )
 
 type MachineStatus string

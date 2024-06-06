@@ -11,10 +11,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-const (
-	emptyMachineConsolidationPeriod time.Duration = 10 * time.Minute
-)
-
 type ExternalProvider struct {
 	Ctx                  context.Context
 	Name                 string
@@ -106,7 +102,7 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 						return
 					}
 
-					if len(workers) == 0 && (time.Since(time.Unix(lastWorkerSeen, 0)) > emptyMachineConsolidationPeriod) {
+					if len(workers) == 0 && (time.Since(time.Unix(lastWorkerSeen, 0)) > types.MachineEmptyConsolidationPeriodM) {
 						p.TerminateMachineFunc(ctx, poolName, instanceId, machineId)
 						return
 					}
