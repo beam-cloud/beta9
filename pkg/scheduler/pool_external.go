@@ -204,8 +204,6 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 		return nil, err
 	}
 
-	log.Printf("Created worked: %+v\n", worker)
-
 	return worker, nil
 }
 
