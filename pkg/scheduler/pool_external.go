@@ -94,12 +94,6 @@ func NewExternalWorkerPoolController(
 func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
-	// TODO: replace hard-coded workspace ID with look up of cluster admin
-	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeMachine, false)
-	if err != nil {
-		return nil, err
-	}
-
 	machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name)
 	if err != nil {
 		return nil, err
@@ -154,6 +148,12 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 		if worker != nil {
 			return worker, nil
 		}
+	}
+
+	// TODO: replace hard-coded workspace ID with look up of cluster admin
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeMachine, false)
+	if err != nil {
+		return nil, err
 	}
 
 	// Provision a new machine
