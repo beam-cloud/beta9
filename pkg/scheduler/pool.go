@@ -17,9 +17,6 @@ const (
 	tmpVolumeName               string = "beta9-tmp"
 	logVolumeName               string = "beta9-logs"
 	imagesVolumeName            string = "beta9-images"
-	configVolumeName            string = "beta9-config"
-	configSecretName            string = "beta9-config"
-	configMountPath             string = "/etc/config"
 	defaultContainerName        string = "worker"
 	defaultWorkerEntrypoint     string = "/usr/local/bin/worker"
 	defaultWorkerLogPath        string = "/var/log/worker"
@@ -75,11 +72,11 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolCont
 	}
 
 	for _, worker := range workers {
-		capacity.FreeCpu += worker.Cpu
-		capacity.FreeMemory += worker.Memory
+		capacity.FreeCpu += worker.FreeCpu
+		capacity.FreeMemory += worker.FreeMemory
 
-		if worker.Gpu != "" && (worker.Cpu > 0 && worker.Memory > 0) {
-			capacity.FreeGpu += uint(worker.GpuCount)
+		if worker.Gpu != "" && (worker.FreeCpu > 0 && worker.FreeMemory > 0) {
+			capacity.FreeGpu += uint(worker.FreeGpuCount)
 		}
 	}
 
