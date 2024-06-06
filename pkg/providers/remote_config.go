@@ -3,6 +3,7 @@ package providers
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -35,7 +36,13 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 			return nil, err
 		}
 
-		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("rediss://%s/0", juiceFsRedisHostname)
+		parsedUrl, err := url.Parse(remoteConfig.Storage.JuiceFS.RedisURI)
+		if err != nil {
+			return nil, err
+		}
+
+		juicefsRedisPassword, _ := parsedUrl.User.Password()
+		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("rediss://:%s@%s/0", juicefsRedisPassword, juiceFsRedisHostname)
 	}
 
 	gatewayGrpcHostname, err := tailscale.GetHostnameForService("gateway-grpc")
