@@ -123,9 +123,9 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 
 			for _, worker := range workers {
 				log.Printf("Worker: %+v\n", worker)
-				machine.State.Cpu -= worker.Cpu
-				machine.State.Memory -= worker.Memory
-				machine.State.GpuCount -= worker.GpuCount
+				machine.State.Cpu -= worker.TotalCpu
+				machine.State.Memory -= worker.TotalMemory
+				machine.State.GpuCount -= uint32(worker.TotalGpuCount)
 			}
 
 			if machine.State.Cpu >= int64(cpu) && machine.State.Memory >= int64(memory) && machine.State.Gpu == gpuType && machine.State.GpuCount >= gpuCount {
@@ -206,6 +206,8 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 		log.Printf("Unable to create worker: %+v\n", err)
 		return nil, err
 	}
+
+	log.Printf("Created worked: %+v\n", worker)
 
 	return worker, nil
 }
@@ -306,12 +308,15 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	}
 
 	return job, &types.Worker{
-		Id:       workerId,
-		Cpu:      workerCpu,
-		Memory:   workerMemory,
-		Gpu:      workerGpuType,
-		GpuCount: workerGpuCount,
-		Status:   types.WorkerStatusPending,
+		Id:            workerId,
+		FreeCpu:       workerCpu,
+		FreeMemory:    workerMemory,
+		FreeGpuCount:  workerGpuCount,
+		TotalCpu:      workerCpu,
+		TotalMemory:   workerMemory,
+		TotalGpuCount: workerGpuCount,
+		Gpu:           workerGpuType,
+		Status:        types.WorkerStatusPending,
 	}, nil
 }
 
