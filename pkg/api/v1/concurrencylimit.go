@@ -1,7 +1,6 @@
 package apiv1
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -38,16 +37,22 @@ func (c *ConcurrencyLimitGroup) GetConcurrencyLimitByWorkspaceId(ctx echo.Contex
 
 	workspace, err := c.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Workspace not found")
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "invalid workspace ID",
+		})
 	}
 
 	if workspace.ConcurrencyLimitId == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Concurrency limit not found")
+		return ctx.JSON(http.StatusNotFound, map[string]interface{}{
+			"error": "concurrency limit not found",
+		})
 	}
 
 	concurrencyLimit, err := c.backendRepo.GetConcurrencyLimit(ctx.Request().Context(), *workspace.ConcurrencyLimitId)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get concurrency limit")
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "failed to get concurrency limit",
+		})
 	}
 
 	return ctx.JSON(http.StatusOK, concurrencyLimit)
@@ -58,23 +63,31 @@ func (c *ConcurrencyLimitGroup) CreateOrUpdateConcurrencyLimit(ctx echo.Context)
 
 	workspace, err := c.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Workspace not found")
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "invalid workspace ID",
+		})
 	}
 
 	data := new(types.ConcurrencyLimit)
 	if err := ctx.Bind(data); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode request body")
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "invalid request",
+		})
 	}
 
 	if workspace.ConcurrencyLimitId != nil {
 		concurrencyLimit, err := c.backendRepo.UpdateConcurrencyLimit(ctx.Request().Context(), *workspace.ConcurrencyLimitId, data.GPULimit, data.CPUMillicoreLimit)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update concurrency limit")
+			return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+				"error": "failed to update concurrency limit",
+			})
 		}
 
 		err = c.workspaceRepo.SetConcurrencyLimitByWorkspaceId(workspaceId, concurrencyLimit)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to recache concurrency limit")
+			return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+				"error": "failed to recache concurrency limit",
+			})
 		}
 
 		return ctx.JSON(http.StatusOK, concurrencyLimit)
@@ -82,12 +95,16 @@ func (c *ConcurrencyLimitGroup) CreateOrUpdateConcurrencyLimit(ctx echo.Context)
 
 	concurrencyLimit, err := c.backendRepo.CreateConcurrencyLimit(ctx.Request().Context(), workspace.Id, data.GPULimit, data.CPUMillicoreLimit)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create concurrency limit")
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "failed to create concurrency limit",
+		})
 	}
 
 	err = c.workspaceRepo.SetConcurrencyLimitByWorkspaceId(workspaceId, concurrencyLimit)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to recache concurrency limit")
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "failed to recache concurrency limit",
+		})
 	}
 
 	return ctx.JSON(http.StatusOK, concurrencyLimit)
@@ -98,17 +115,20 @@ func (c *ConcurrencyLimitGroup) DeleteConcurrencyLimit(ctx echo.Context) error {
 
 	workspace, err := c.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Workspace not found")
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "invalid workspace ID",
+		})
 	}
 
 	if workspace.ConcurrencyLimitId == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Concurrency limit not found")
+		return ctx.NoContent(http.StatusNoContent)
 	}
 
 	err = c.backendRepo.DeleteConcurrencyLimit(ctx.Request().Context(), workspace)
 	if err != nil {
-		log.Println(err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete concurrency limit")
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "failed to delete concurrency limit",
+		})
 	}
 
 	return ctx.NoContent(http.StatusOK)

@@ -49,13 +49,8 @@ func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
 	})
 }
 
-type RevokeTokenRequest struct {
-	Token string `json:"token"`
-}
-
 type ClusterAdminTokensRequestSerializer struct {
-	TokenIds []string `json:"token_ids"`
-	Disabled bool     `json:"enabled"`
+	Disabled bool `json:"enabled"`
 }
 
 func (g *TokenGroup) ClusterAdminUpdateAllWorkspaceTokens(ctx echo.Context) error {
