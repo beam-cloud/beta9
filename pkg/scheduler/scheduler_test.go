@@ -477,8 +477,8 @@ type BackendRepoConcurrencyLimitsForTest struct {
 
 func (b *BackendRepoConcurrencyLimitsForTest) GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error) {
 	return &types.ConcurrencyLimit{
-		GPULimit:     b.GPUConcurrencyLimit,
-		CPUCoreLimit: b.CPUConcurrencyLimit,
+		GPULimit:          b.GPUConcurrencyLimit,
+		CPUMillicoreLimit: b.CPUConcurrencyLimit,
 	}, nil
 }
 

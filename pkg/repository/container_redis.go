@@ -333,11 +333,11 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 		}
 
 		totalGpuCount := 0
-		totalCpuCores := 0
+		totalCpu := 0
 		totalMemory := int64(0)
 		for _, container := range containers {
 			totalGpuCount += int(container.GpuCount)
-			totalCpuCores += int(container.Cpu)
+			totalCpu += int(container.Cpu)
 			totalMemory += container.Memory
 		}
 
@@ -347,7 +347,7 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 			}
 		}
 
-		if totalCpuCores+int(request.Cpu) > int(quota.CPUCoreLimit) {
+		if totalCpu+int(request.Cpu) > int(quota.CPUMillicoreLimit) {
 			return &types.ThrottledByConcurrencyLimitError{
 				Reason: "cpu quota exceeded",
 			}

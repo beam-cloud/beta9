@@ -93,8 +93,8 @@ type BackendRepository interface {
 	GetConcurrencyLimit(ctx context.Context, concurrenyLimitId uint) (*types.ConcurrencyLimit, error)
 	GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error)
 	DeleteConcurrencyLimit(ctx context.Context, workspaceId types.Workspace) error
-	CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint32, cpuLimit uint32) (*types.ConcurrencyLimit, error)
-	UpdateConcurrencyLimit(ctx context.Context, concurrencyLimitId uint, gpuLimit uint32, cpuLimit uint32) (*types.ConcurrencyLimit, error)
+	CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint32, cpuMillicoreLimit uint32) (*types.ConcurrencyLimit, error)
+	UpdateConcurrencyLimit(ctx context.Context, concurrencyLimitId uint, gpuLimit uint32, cpuMillicoreLimit uint32) (*types.ConcurrencyLimit, error)
 	CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string) (*types.Secret, error)
 	GetSecretByName(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error)
 	GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error)
@@ -127,6 +127,7 @@ type ProviderRepository interface {
 	AddMachine(providerName, poolName, machineId string, machineInfo *types.ProviderMachineState) error
 	RemoveMachine(providerName, poolName, machineId string) error
 	SetMachineKeepAlive(providerName, poolName, machineId string) error
+	SetLastWorkerSeen(providerName, poolName, machineId string) error
 	RegisterMachine(providerName, poolName, machineId string, newMachineInfo *types.ProviderMachineState) error
 	WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
 	ListAllMachines(providerName, poolName string) ([]*types.ProviderMachine, error)

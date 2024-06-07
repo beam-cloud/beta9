@@ -77,8 +77,15 @@ func (p *LambdaLabsProvider) listMachines(ctx context.Context, poolName string) 
 	prefix := poolName + "-"
 	machines := make(map[string]string)
 	for _, item := range data["data"] {
-		instanceId := item["id"].(string)
-		name := item["name"].(string)
+		instanceId, ok := item["id"].(string)
+		if !ok {
+			continue
+		}
+
+		name, ok := item["name"].(string)
+		if !ok {
+			continue
+		}
 
 		// If the instance starts with the pool name, include it
 		if strings.HasPrefix(name, prefix) {
