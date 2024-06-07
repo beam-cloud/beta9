@@ -110,8 +110,8 @@ jobs:
         run: |
           python3 -m pip install -U "betterproto-beta9[compiler]" betterproto-beta9 grpcio
           brew install protobuf
-          brew install protoc-gen-go@v1.34.1
-          go get google.golang.org/grpc/cmd/protoc-gen-go-grpc
+          brew install protoc-gen-go@1.34.1
+          go get google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
       
       - name: Verify Protobuf Codegen
