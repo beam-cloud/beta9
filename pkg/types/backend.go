@@ -154,6 +154,7 @@ type StubConfigV1 struct {
 	Authorized      bool         `json:"authorized"`
 	MaxContainers   uint         `json:"max_containers"`
 	Volumes         []*pb.Volume `json:"volumes"`
+	Secrets         []Secret     `json:"secrets"`
 }
 
 const (
@@ -246,10 +247,21 @@ type FilterFieldMapping struct {
 }
 
 type ConcurrencyLimit struct {
-	Id           uint      `db:"id" json:"-" redis:"-"`
-	ExternalId   string    `db:"external_id" json:"external_id,omitempty" redis:"external_id"`
-	GPULimit     uint32    `db:"gpu_limit" json:"gpu_limit" redis:"gpu_limit"`
-	CPUCoreLimit uint32    `db:"cpu_core_limit" json:"cpu_core_limit" redis:"cpu_core_limit"`
-	CreatedAt    time.Time `db:"created_at" json:"created_at,omitempty" redis:"-"`
-	UpdatedAt    time.Time `db:"updated_at" json:"updated_at,omitempty" redis:"-"`
+	Id                uint      `db:"id" json:"-" redis:"-"`
+	ExternalId        string    `db:"external_id" json:"external_id,omitempty" redis:"external_id"`
+	GPULimit          uint32    `db:"gpu_limit" json:"gpu_limit" redis:"gpu_limit"`
+	CPUMillicoreLimit uint32    `db:"cpu_millicore_limit" json:"cpu_millicore_limit" redis:"cpu_millicore_limit"`
+	CreatedAt         time.Time `db:"created_at" json:"created_at,omitempty" redis:"-"`
+	UpdatedAt         time.Time `db:"updated_at" json:"updated_at,omitempty" redis:"-"`
+}
+
+type Secret struct {
+	Id            uint      `db:"id" json:"-"`
+	ExternalId    string    `db:"external_id" json:"external_id,omitempty"`
+	CreatedAt     time.Time `db:"created_at" json:"created_at,omitempty"`
+	UpdatedAt     time.Time `db:"updated_at" json:"updated_at,omitempty"`
+	Name          string    `db:"name" json:"name"`
+	Value         string    `db:"value" json:"value,omitempty"`
+	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id"`
+	LastUpdatedBy *uint     `db:"last_updated_by" json:"last_updated_by"`
 }

@@ -225,7 +225,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 		os.RemoveAll(tmpBundlePath)
 	}()
 
-	return c.Archive(ctx, tmpBundlePath, imageId)
+	return c.Archive(ctx, tmpBundlePath, imageId, nil)
 }
 
 func (c *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
@@ -297,7 +297,7 @@ func (c *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePa
 }
 
 // Generate and upload archived version of the image for distribution
-func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId string) error {
+func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId string, progressChan chan int) error {
 	startTime := time.Now()
 
 	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, c.registry.ImageFileExtension)
@@ -319,6 +319,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 					SecretKey: c.config.Registries.S3.SecretKey,
 				},
 			},
+			ProgressChan: progressChan,
 		}, &clipCommon.S3StorageInfo{
 			Bucket:   c.config.Registries.S3.BucketName,
 			Region:   c.config.Registries.S3.Region,

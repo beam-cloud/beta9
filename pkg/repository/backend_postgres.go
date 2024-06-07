@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 
 	"github.com/Masterminds/squirrel"
+	pkgCommon "github.com/beam-cloud/beta9/pkg/common"
 	_ "github.com/beam-cloud/beta9/pkg/repository/backend_postgres_migrations"
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -123,6 +125,18 @@ func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context
 	var workspace types.Workspace
 
 	query := `SELECT id, name, created_at, concurrency_limit_id FROM workspace WHERE external_id = $1;`
+	err := r.client.GetContext(ctx, &workspace, query, externalId)
+	if err != nil {
+		return types.Workspace{}, err
+	}
+
+	return workspace, nil
+}
+
+func (r *PostgresBackendRepository) GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalId string) (types.Workspace, error) {
+	var workspace types.Workspace
+
+	query := `SELECT id, name, created_at, concurrency_limit_id, signing_key FROM workspace WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &workspace, query, externalId)
 	if err != nil {
 		return types.Workspace{}, err
@@ -642,7 +656,7 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	query := `
 	SELECT
 	    s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at,
-	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at",
+	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key",
 	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"
 	FROM stub s
 	JOIN workspace w ON s.workspace_id = w.id
@@ -943,7 +957,7 @@ func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deploy
 func (r *PostgresBackendRepository) GetConcurrencyLimit(ctx context.Context, concurrencyLimitId uint) (*types.ConcurrencyLimit, error) {
 	var limit types.ConcurrencyLimit
 
-	query := `SELECT gpu_limit, cpu_core_limit, created_at, updated_at FROM concurrency_limit WHERE id = $1;`
+	query := `SELECT gpu_limit, cpu_millicore_limit, created_at, updated_at FROM concurrency_limit WHERE id = $1;`
 	err := r.client.GetContext(ctx, &limit, query, concurrencyLimitId)
 	if err != nil {
 		return nil, err
@@ -952,15 +966,15 @@ func (r *PostgresBackendRepository) GetConcurrencyLimit(ctx context.Context, con
 	return &limit, nil
 }
 
-func (r *PostgresBackendRepository) CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint32, cpuLimit uint32) (*types.ConcurrencyLimit, error) {
+func (r *PostgresBackendRepository) CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint32, cpuMillicoreLimit uint32) (*types.ConcurrencyLimit, error) {
 	query := `
-	INSERT INTO concurrency_limit (gpu_limit, cpu_core_limit)
+	INSERT INTO concurrency_limit (gpu_limit, cpu_millicore_limit)
 	VALUES ($1, $2)
-	RETURNING id, gpu_limit, cpu_core_limit, created_at, updated_at;
+	RETURNING id, gpu_limit, cpu_millicore_limit, created_at, updated_at;
 	`
 
 	var limit types.ConcurrencyLimit
-	if err := r.client.GetContext(ctx, &limit, query, gpuLimit, cpuLimit); err != nil {
+	if err := r.client.GetContext(ctx, &limit, query, gpuLimit, cpuMillicoreLimit); err != nil {
 		return nil, err
 	}
 
@@ -978,16 +992,16 @@ func (r *PostgresBackendRepository) CreateConcurrencyLimit(ctx context.Context, 
 	return &limit, nil
 }
 
-func (r *PostgresBackendRepository) UpdateConcurrencyLimit(ctx context.Context, concurrencyLimitId uint, gpuLimit uint32, cpuLimit uint32) (*types.ConcurrencyLimit, error) {
+func (r *PostgresBackendRepository) UpdateConcurrencyLimit(ctx context.Context, concurrencyLimitId uint, gpuLimit uint32, cpuMillicoreLimit uint32) (*types.ConcurrencyLimit, error) {
 	query := `
 	UPDATE concurrency_limit
-	SET gpu_limit = $2, cpu_core_limit = $3, updated_at = CURRENT_TIMESTAMP
+	SET gpu_limit = $2, cpu_millicore_limit = $3, updated_at = CURRENT_TIMESTAMP
 	WHERE id = $1
-	RETURNING id, gpu_limit, cpu_core_limit, created_at, updated_at;
+	RETURNING id, gpu_limit, cpu_millicore_limit, created_at, updated_at;
 	`
 
 	var limit types.ConcurrencyLimit
-	if err := r.client.GetContext(ctx, &limit, query, concurrencyLimitId, gpuLimit, cpuLimit); err != nil {
+	if err := r.client.GetContext(ctx, &limit, query, concurrencyLimitId, gpuLimit, cpuMillicoreLimit); err != nil {
 		return nil, err
 	}
 
@@ -997,11 +1011,136 @@ func (r *PostgresBackendRepository) UpdateConcurrencyLimit(ctx context.Context, 
 func (r *PostgresBackendRepository) GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error) {
 	var limit types.ConcurrencyLimit
 
-	query := `SELECT cl.id, cl.gpu_limit, cl.cpu_core_limit, cl.created_at, cl.updated_at FROM concurrency_limit cl join workspace w on cl.id = w.concurrency_limit_id WHERE w.external_id = $1;`
+	query := `SELECT cl.id, cl.gpu_limit, cl.cpu_millicore_limit, cl.created_at, cl.updated_at FROM concurrency_limit cl join workspace w on cl.id = w.concurrency_limit_id WHERE w.external_id = $1;`
 	err := r.client.GetContext(ctx, &limit, query, workspaceId)
 	if err != nil {
 		return nil, err
 	}
 
 	return &limit, nil
+}
+
+func validateEnvironmentVariableName(name string) error {
+	/* https://docs.aws.amazon.com/opsworks/latest/APIReference/API_EnvironmentVariable.html#:~:text=(Required)%20The%20environment%20variable's%20name,with%20a%20letter%20or%20underscore.
+
+	The environment variable's name, which can consist of up to 64 characters and must be specified. The name can contain upper- and lowercase letters, numbers, and underscores (_), but it must start with a letter or underscore.
+	*/
+
+	regexp := regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,63}$`)
+	if !regexp.MatchString(name) {
+		return fmt.Errorf("invalid environment variable name: %s", name)
+	}
+
+	return nil
+}
+
+func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string) (*types.Secret, error) {
+	query := `
+	INSERT INTO workspace_secret (name, value, workspace_id, last_updated_by)
+	VALUES ($1, $2, $3, $4)
+	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
+	`
+
+	err := validateEnvironmentVariableName(name)
+	if err != nil {
+		return nil, err
+	}
+
+	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	if err != nil {
+		return nil, err
+	}
+
+	encryptedValue, err := pkgCommon.Encrypt(signingKey, value)
+	if err != nil {
+		return nil, err
+	}
+
+	var secret types.Secret
+	if err := r.client.GetContext(ctx, &secret, query, name, encryptedValue, workspace.Id, tokenId); err != nil {
+		return nil, err
+	}
+
+	return &secret, nil
+}
+
+func (r *PostgresBackendRepository) GetSecretByName(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
+	var secret types.Secret
+
+	query := `SELECT id, external_id, name, value, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE name = $1 AND workspace_id = $2;`
+	err := r.client.GetContext(ctx, &secret, query, name, workspace.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	return &secret, nil
+}
+
+func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
+	secret, err := r.GetSecretByName(ctx, workspace, name)
+	if err != nil {
+		return nil, err
+	}
+
+	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	if err != nil {
+		return nil, err
+	}
+
+	decryptedSecret, err := pkgCommon.Decrypt(signingKey, secret.Value)
+	if err != nil {
+		return nil, err
+	}
+
+	secret.Value = string(decryptedSecret)
+
+	return secret, nil
+}
+
+func (r *PostgresBackendRepository) ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error) {
+	query := `SELECT id, external_id, name, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE workspace_id = $1;`
+
+	var secrets []types.Secret
+	err := r.client.SelectContext(ctx, &secrets, query, workspace.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	return secrets, nil
+}
+
+func (r *PostgresBackendRepository) DeleteSecret(ctx context.Context, workspace *types.Workspace, name string) error {
+	query := `DELETE FROM workspace_secret WHERE name = $1 AND workspace_id = $2;`
+	_, err := r.client.ExecContext(ctx, query, name, workspace.Id)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretId string, value string) (*types.Secret, error) {
+	query := `
+	UPDATE workspace_secret
+	SET value = $3, last_updated_by = $4, updated_at = CURRENT_TIMESTAMP
+	WHERE name = $1 AND workspace_id = $2
+	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
+	`
+
+	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	if err != nil {
+		return nil, err
+	}
+
+	encryptedValue, err := pkgCommon.Encrypt(signingKey, value)
+	if err != nil {
+		return nil, err
+	}
+
+	var secret types.Secret
+	if err := r.client.GetContext(ctx, &secret, query, secretId, workspace.Id, encryptedValue, tokenId); err != nil {
+		return nil, err
+	}
+
+	return &secret, nil
 }

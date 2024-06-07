@@ -67,19 +67,3 @@ func (wbs *SchedulerService) RunContainer(ctx context.Context, in *pb.RunContain
 	}, nil
 }
 
-// Stop a container
-func (wbs *SchedulerService) StopContainer(ctx context.Context, in *pb.StopContainerRequest) (*pb.StopContainerResponse, error) {
-	err := wbs.Scheduler.Stop(in.ContainerId)
-
-	if err != nil {
-		return &pb.StopContainerResponse{
-			Success: false,
-			Error:   err.Error(),
-		}, nil
-	}
-
-	return &pb.StopContainerResponse{
-		Success: true,
-		Error:   "",
-	}, nil
-}

@@ -295,23 +295,45 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	defer resp.Body.Close()
 	defer rb.afterRequest(req, c.id)
 
-	// Read the response body
-	bytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "Internal server error",
-		})
-		return
-	}
-
+	// Write response headers
 	for key, values := range resp.Header {
 		for _, value := range values {
 			req.ctx.Response().Writer.Header().Add(key, value)
 		}
 	}
 
+	// Write status code header
 	req.ctx.Response().Writer.WriteHeader(resp.StatusCode)
-	req.ctx.Response().Writer.Write(bytes)
+
+	// Check if we can stream the response
+	streamingSupported := true
+	flusher, ok := req.ctx.Response().Writer.(http.Flusher)
+	if !ok {
+		streamingSupported = false
+	}
+
+	// Send response to client in chunks
+	buf := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			req.ctx.Response().Writer.Write(buf[:n])
+
+			if streamingSupported {
+				flusher.Flush()
+			}
+		}
+
+		if err != nil {
+			if err != io.EOF {
+				req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+					"error": "Internal server error",
+				})
+			}
+
+			break
+		}
+	}
 }
 
 func (rb *RequestBuffer) heartBeat(req request, containerId string) {

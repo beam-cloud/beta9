@@ -41,6 +41,41 @@ func AuthMiddleware(backendRepo repository.BackendRepository) echo.MiddlewareFun
 	}
 }
 
+func WithAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
+	return func(ctx echo.Context) error {
+		cc, ok := ctx.(*HttpAuthContext)
+		if !ok {
+			return echo.NewHTTPError(http.StatusUnauthorized)
+		}
+
+		return next(cc)
+	}
+}
+
+func WithAssumedStubAuth(next func(ctx echo.Context) error, isPublic func(stubId string) (*types.Workspace, error)) func(ctx echo.Context) error {
+	return func(ctx echo.Context) error {
+		stubId := ctx.Param("stubId")
+
+		workspace, err := isPublic(stubId)
+		if err != nil {
+			return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error": "invalid stub id",
+			})
+		}
+
+		authInfo := &AuthInfo{
+			Workspace: workspace,
+
+			// We do not need the users token for assumed auth endpoints
+			// since we can look up a valid token by workspace ID
+			Token: nil,
+		}
+
+		cc := &HttpAuthContext{ctx, authInfo}
+		return next(cc)
+	}
+}
+
 func WithWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
 	return func(ctx echo.Context) error {
 		workspaceId := ctx.Param("workspaceId")

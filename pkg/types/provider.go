@@ -1,10 +1,13 @@
 package types
 
+import "time"
+
 const (
-	MachineStatusRegistered     MachineStatus = "registered"
-	MachineStatusPending        MachineStatus = "pending"
-	MachinePendingExpirationS   int           = 3600 // 1 hour
-	MachineKeepaliveExpirationS int           = 60   // 1 minute
+	MachineStatusRegistered          MachineStatus = "registered"
+	MachineStatusPending             MachineStatus = "pending"
+	MachinePendingExpirationS        int           = 3600 // 1 hour
+	MachineKeepaliveExpirationS      int           = 60   // 1 minute
+	MachineEmptyConsolidationPeriodM time.Duration = 10 * time.Minute
 )
 
 type MachineStatus string
@@ -31,6 +34,8 @@ type ProviderMachineState struct {
 	Gpu               string        `json:"gpu" redis:"gpu"`
 	GpuCount          uint32        `json:"gpu_count" redis:"gpu_count"`
 	RegistrationToken string        `json:"registration_token" redis:"registration_token"`
-	LastKeepalive     string        `json:"last_keepalive" redis:"last_keepalive"`
 	Created           string        `json:"created" redis:"created"`
+	LastWorkerSeen    string        `json:"last_worker_seen" redis:"last_worker_seen"`
+	LastKeepalive     string        `json:"last_keepalive" redis:"last_keepalive"`
+	AutoConsolidate   bool          `json:"auto_consolidate" redis:"auto_consolidate"`
 }
