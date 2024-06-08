@@ -218,7 +218,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 
 	// Create endpoint instance to hold endpoint specific methods/fields
 	instance = &endpointInstance{
-		buffer: NewRequestBuffer(es.ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig),
+		buffer: NewRequestBuffer(es.ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig, es.tailscale, es.config.Tailscale),
 	}
 
 	// Create base autoscaled instance

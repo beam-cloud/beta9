@@ -19,7 +19,6 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 
 	// Overwrite certain config fields with tailscale hostnames
 	// TODO: figure out a more elegant to override these fields without hardcoding service names
-	// possibly, use proxy config values
 	remoteConfig := types.AppConfig{}
 	if err = json.Unmarshal(configBytes, &remoteConfig); err != nil {
 		return nil, err
@@ -29,6 +28,8 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 	if err != nil {
 		return nil, err
 	}
+	remoteConfig.Database.Redis.Addrs[0] = redisHostname
+	remoteConfig.Database.Redis.InsecureSkipVerify = true
 
 	if baseConfig.Storage.Mode == storage.StorageModeJuiceFS {
 		juiceFsRedisHostname, err := tailscale.GetHostnameForService("juicefs-redis")
@@ -49,9 +50,6 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 	if err != nil {
 		return nil, err
 	}
-
-	remoteConfig.Database.Redis.Addrs[0] = redisHostname
-	remoteConfig.Database.Redis.InsecureSkipVerify = true
 	remoteConfig.GatewayService.Host = strings.Split(gatewayGrpcHostname, ":")[0]
 
 	return &remoteConfig, nil

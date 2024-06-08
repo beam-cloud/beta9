@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -37,6 +40,9 @@ type RequestBuffer struct {
 	ctx                   context.Context
 	httpClient            *http.Client
 	httpHealthCheckClient *http.Client
+	tailscale             *network.Tailscale
+	tsConfig              types.TailscaleConfig
+	tsClients             *common.SafeMap[*http.Client]
 
 	stubId                  string
 	stubConfig              *types.StubConfigV1
@@ -58,15 +64,18 @@ func NewRequestBuffer(
 	size int,
 	containerRepo repository.ContainerRepository,
 	stubConfig *types.StubConfigV1,
+	tailscale *network.Tailscale,
+	tsConfig types.TailscaleConfig,
 ) *RequestBuffer {
 	b := &RequestBuffer{
-		ctx:                     ctx,
-		rdb:                     rdb,
-		workspace:               workspace,
-		stubId:                  stubId,
-		stubConfig:              stubConfig,
-		buffer:                  abstractions.NewRingBuffer[request](size),
-		availableContainers:     []container{},
+		ctx:                 ctx,
+		rdb:                 rdb,
+		workspace:           workspace,
+		stubId:              stubId,
+		stubConfig:          stubConfig,
+		buffer:              abstractions.NewRingBuffer[request](size),
+		availableContainers: []container{},
+
 		availableContainersLock: sync.RWMutex{},
 		containerRepo:           containerRepo,
 		httpClient:              &http.Client{},
@@ -74,6 +83,10 @@ func NewRequestBuffer(
 			Timeout: 1 * time.Second,
 		},
 		length: atomic.Int32{},
+
+		tailscale: tailscale,
+		tsConfig:  tsConfig,
+		tsClients: common.NewSafeMap[*http.Client](),
 	}
 
 	go b.discoverContainers()
@@ -246,6 +259,38 @@ func (rb *RequestBuffer) decrementRequestsInFlight(containerId string) error {
 	return nil
 }
 
+func (rb *RequestBuffer) getOrCreateHttpClient(address string) (*http.Client, error) {
+	// If it isn't an tailnet address, just return the cached http client
+	if !rb.tsConfig.Enabled || !strings.Contains(address, rb.tsConfig.HostName) {
+		return rb.httpClient, nil
+	}
+
+	cachedClient, exists := rb.tsClients.Get(address)
+	if exists {
+		return cachedClient, nil
+	}
+
+	conn, err := network.ConnectToHost(rb.ctx, address, types.RequestTimeoutDurationS, rb.tailscale, rb.tsConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a custom transport that uses the established connection
+	// Either using tailscale or not
+	transport := &http.Transport{
+		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return conn, nil
+		},
+	}
+
+	client := &http.Client{
+		Transport: transport,
+	}
+
+	rb.tsClients.Set(address, client)
+	return client, nil
+}
+
 func (rb *RequestBuffer) handleHttpRequest(req request) {
 	rb.availableContainersLock.RLock()
 	if len(rb.availableContainers) == 0 {
@@ -270,6 +315,11 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
+	httpClient, err := rb.getOrCreateHttpClient(c.address)
+	if err != nil {
+		return
+	}
+
 	containerUrl := fmt.Sprintf("http://%s", c.address)
 	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, bytes.NewReader(requestBody))
 	if err != nil {
@@ -283,7 +333,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	httpReq.Header.Add("X-TASK-ID", req.taskMessage.TaskId) // Add task ID to header
 	go rb.heartBeat(req, c.id)                              // Send heartbeat via redis for duration of request
 
-	resp, err := rb.httpClient.Do(httpReq)
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
