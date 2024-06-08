@@ -37,12 +37,11 @@ type container struct {
 }
 
 type RequestBuffer struct {
-	ctx                   context.Context
-	httpClient            *http.Client
-	httpHealthCheckClient *http.Client
-	tailscale             *network.Tailscale
-	tsConfig              types.TailscaleConfig
-	tsClients             *common.SafeMap[*http.Client]
+	ctx        context.Context
+	httpClient *http.Client
+	tailscale  *network.Tailscale
+	tsConfig   types.TailscaleConfig
+	tsClients  *common.SafeMap[*http.Client]
 
 	stubId                  string
 	stubConfig              *types.StubConfigV1
@@ -79,10 +78,7 @@ func NewRequestBuffer(
 		availableContainersLock: sync.RWMutex{},
 		containerRepo:           containerRepo,
 		httpClient:              &http.Client{},
-		httpHealthCheckClient: &http.Client{
-			Timeout: 1 * time.Second,
-		},
-		length: atomic.Int32{},
+		length:                  atomic.Int32{},
 
 		tailscale: tailscale,
 		tsConfig:  tsConfig,
@@ -145,7 +141,20 @@ func (rb *RequestBuffer) Length() int {
 }
 
 func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
-	resp, err := rb.httpHealthCheckClient.Get(fmt.Sprintf("http://%s/health", address))
+	httpClient, err := rb.getOrCreateHttpClient(address)
+	if err != nil {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(rb.ctx, 1*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://%s/health", address), nil)
+	if err != nil {
+		return false
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return false
 	}
