@@ -37,14 +37,11 @@ type container struct {
 }
 
 type RequestBuffer struct {
-	ctx        context.Context
-	httpClient *http.Client
-	tailscale  *network.Tailscale
-	tsConfig   types.TailscaleConfig
-
-	// TODO: consider caching clients in memory
-	// tsClients  *common.SafeMap[*http.Client]
-
+	ctx                     context.Context
+	httpClient              *http.Client
+	tailscale               *network.Tailscale
+	tsConfig                types.TailscaleConfig
+	tsClients               *common.SafeMap[*http.Client]
 	stubId                  string
 	stubConfig              *types.StubConfigV1
 	workspace               *types.Workspace
@@ -84,6 +81,7 @@ func NewRequestBuffer(
 
 		tailscale: tailscale,
 		tsConfig:  tsConfig,
+		tsClients: common.NewSafeMap[*http.Client](),
 	}
 
 	go b.discoverContainers()
@@ -142,7 +140,7 @@ func (rb *RequestBuffer) Length() int {
 }
 
 func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
-	httpClient, err := rb.getHttpClient(address)
+	httpClient, err := rb.getOrCreateHttpClient(address)
 	if err != nil {
 		return false
 	}
@@ -269,10 +267,15 @@ func (rb *RequestBuffer) decrementRequestsInFlight(containerId string) error {
 	return nil
 }
 
-func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
+func (rb *RequestBuffer) getOrCreateHttpClient(address string) (*http.Client, error) {
 	// If it isn't an tailnet address, just return the standard http client
 	if !rb.tsConfig.Enabled || !strings.Contains(address, rb.tsConfig.HostName) {
 		return rb.httpClient, nil
+	}
+
+	cachedClient, exists := rb.tsClients.Get(address)
+	if exists {
+		return cachedClient, nil
 	}
 
 	conn, err := network.ConnectToHost(rb.ctx, address, types.RequestTimeoutDurationS, rb.tailscale, rb.tsConfig)
@@ -291,6 +294,8 @@ func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
 	client := &http.Client{
 		Transport: transport,
 	}
+
+	rb.tsClients.Set(address, client)
 	return client, nil
 }
 
@@ -318,7 +323,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
-	httpClient, err := rb.getHttpClient(c.address)
+	httpClient, err := rb.getOrCreateHttpClient(c.address)
 	if err != nil {
 		return
 	}
