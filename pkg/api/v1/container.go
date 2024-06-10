@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -60,9 +61,7 @@ func (c *ContainerGroup) StopAllWorkspaceContainers(ctx echo.Context) error {
 	for _, state := range containerStates {
 		err := c.scheduler.Stop(state.ContainerId)
 		if err != nil {
-			return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-				"message": "failed to stop containers",
-			})
+			log.Println("failed to stop container", state.ContainerId, err)
 		}
 	}
 
