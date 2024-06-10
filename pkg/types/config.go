@@ -296,14 +296,26 @@ type InternalService struct {
 }
 
 type FluentBitConfig struct {
-	Events FluentBitEventConfig `key:"events"`
+	Events  FluentBitEventConfig  `key:"events" json:"events"`
+	Outputs FluentBitOutputConfig `key:"outputs" json:"outputs"`
 }
 
 type FluentBitEventConfig struct {
-	Endpoint        string        `key:"endpoint"`
-	MaxConns        int           `key:"maxConns"`
-	MaxIdleConns    int           `key:"maxIdleConns"`
-	IdleConnTimeout time.Duration `key:"idleConnTimeout"`
-	DialTimeout     time.Duration `key:"dialTimeout"`
-	KeepAlive       time.Duration `key:"keepAlive"`
+	Endpoint        string        `key:"endpoint" json:"endpoint"`
+	MaxConns        int           `key:"maxConns" json:"max_conns"`
+	MaxIdleConns    int           `key:"maxIdleConns" json:"max_idle_conns"`
+	IdleConnTimeout time.Duration `key:"idleConnTimeout" json:"idle_conn_timeout"`
+	DialTimeout     time.Duration `key:"dialTimeout" json:"dial_timeout"`
+	KeepAlive       time.Duration `key:"keepAlive" json:"keep_alive"`
+}
+
+type FluentBitOutputConfig struct {
+	ElasticSearch ElasticSearchConfig `key:"es" json:"es"`
+}
+
+type ElasticSearchConfig struct {
+	Host       string `key:"host" json:"host"`
+	Port       string `key:"port" json:"port"`
+	HttpUser   string `key:"httpUser" json:"http_user"`
+	HttpPasswd string `key:"httpPasswd" json:"http_passwd"`
 }
