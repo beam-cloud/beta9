@@ -30,6 +30,10 @@ func AuthMiddleware(backendRepo repository.BackendRepository) echo.MiddlewareFun
 				return echo.NewHTTPError(http.StatusUnauthorized)
 			}
 
+			if !token.Active || token.DisabledByClusterAdmin {
+				return echo.NewHTTPError(http.StatusUnauthorized)
+			}
+
 			authInfo := &AuthInfo{
 				Token:     token,
 				Workspace: workspace,
