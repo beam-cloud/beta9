@@ -2,6 +2,9 @@
 
 This will help you run a single instance of Beta9 on [Crusoe Cloud](https://docs.crusoecloud.com/).
 
+> [!NOTE]
+> This setup runs everything on a single node. It is not recommended for production use.
+
 ## Prereqs
 
 1. Install terraform.
