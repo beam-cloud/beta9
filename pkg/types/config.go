@@ -226,29 +226,43 @@ type ProviderConfig struct {
 	LambdaLabsConfig LambdaLabsProviderConfig `key:"lambda" json:"lambda"`
 }
 
+type ProviderAgentConfig struct {
+	ElasticSearch ElasticSearchConfig `key:"elasticSearch" json:"elastic_search"`
+}
+
+type ElasticSearchConfig struct {
+	Host       string `key:"host" json:"host"`
+	Port       string `key:"port" json:"port"`
+	HttpUser   string `key:"httpUser" json:"http_user"`
+	HttpPasswd string `key:"httpPasswd" json:"http_passwd"`
+}
+
 type EC2ProviderConfig struct {
-	AWSAccessKey string  `key:"awsAccessKey" json:"aws_access_key"`
-	AWSSecretKey string  `key:"awsSecretKey" json:"aws_secret_key"`
-	AWSRegion    string  `key:"awsRegion" json:"aws_region"`
-	AMI          string  `key:"ami" json:"ami"`
-	SubnetId     *string `key:"subnetId" json:"subnet_id"`
+	AWSAccessKey string              `key:"awsAccessKey" json:"aws_access_key"`
+	AWSSecretKey string              `key:"awsSecretKey" json:"aws_secret_key"`
+	AWSRegion    string              `key:"awsRegion" json:"aws_region"`
+	AMI          string              `key:"ami" json:"ami"`
+	SubnetId     *string             `key:"subnetId" json:"subnet_id"`
+	Agent        ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type OCIProviderConfig struct {
-	Tenancy            string `key:"tenancy" json:"tenancy"`
-	UserId             string `key:"userId" json:"user_id"`
-	Region             string `key:"region" json:"region"`
-	FingerPrint        string `key:"fingerprint" json:"fingerprint"`
-	PrivateKey         string `key:"privateKey" json:"private_key"`
-	PrivateKeyPassword string `key:"privateKeyPassword" json:"private_key_password"`
-	CompartmentId      string `key:"compartmentId" json:"compartment_id"`
-	SubnetId           string `key:"subnetId" json:"subnet_id"`
-	AvailabilityDomain string `key:"availabilityDomain" json:"availability_domain"`
-	ImageId            string `key:"imageId" json:"image_id"`
+	Tenancy            string              `key:"tenancy" json:"tenancy"`
+	UserId             string              `key:"userId" json:"user_id"`
+	Region             string              `key:"region" json:"region"`
+	FingerPrint        string              `key:"fingerprint" json:"fingerprint"`
+	PrivateKey         string              `key:"privateKey" json:"private_key"`
+	PrivateKeyPassword string              `key:"privateKeyPassword" json:"private_key_password"`
+	CompartmentId      string              `key:"compartmentId" json:"compartment_id"`
+	SubnetId           string              `key:"subnetId" json:"subnet_id"`
+	AvailabilityDomain string              `key:"availabilityDomain" json:"availability_domain"`
+	ImageId            string              `key:"imageId" json:"image_id"`
+	Agent              ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type LambdaLabsProviderConfig struct {
-	ApiKey string `key:"apiKey" json:"apiKey"`
+	ApiKey string              `key:"apiKey" json:"apiKey"`
+	Agent  ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type MetricsCollector string
@@ -296,14 +310,14 @@ type InternalService struct {
 }
 
 type FluentBitConfig struct {
-	Events FluentBitEventConfig `key:"events"`
+	Events FluentBitEventConfig `key:"events" json:"events"`
 }
 
 type FluentBitEventConfig struct {
-	Endpoint        string        `key:"endpoint"`
-	MaxConns        int           `key:"maxConns"`
-	MaxIdleConns    int           `key:"maxIdleConns"`
-	IdleConnTimeout time.Duration `key:"idleConnTimeout"`
-	DialTimeout     time.Duration `key:"dialTimeout"`
-	KeepAlive       time.Duration `key:"keepAlive"`
+	Endpoint        string        `key:"endpoint" json:"endpoint"`
+	MaxConns        int           `key:"maxConns" json:"max_conns"`
+	MaxIdleConns    int           `key:"maxIdleConns" json:"max_idle_conns"`
+	IdleConnTimeout time.Duration `key:"idleConnTimeout" json:"idle_conn_timeout"`
+	DialTimeout     time.Duration `key:"dialTimeout" json:"dial_timeout"`
+	KeepAlive       time.Duration `key:"keepAlive" json:"keep_alive"`
 }

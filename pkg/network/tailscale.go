@@ -107,15 +107,18 @@ func (t *Tailscale) Dial(ctx context.Context, network, addr string) (net.Conn, e
 	defer cancel()
 
 	// Connect to tailnet, if we aren't already
-	t.mu.Lock()
 	if !t.initialized {
+		t.mu.Lock()
+
 		_, err := t.server.Up(timeoutCtx)
 		if err != nil {
+			t.mu.Unlock()
 			return nil, err
 		}
+
+		t.initialized = true
+		t.mu.Unlock()
 	}
-	t.initialized = true
-	t.mu.Unlock()
 
 	conn, err := t.server.Dial(timeoutCtx, network, addr)
 	if err != nil {

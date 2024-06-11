@@ -2,7 +2,7 @@
 
 # ----------------------------------------------
 # This script is used to setup the environment for Kubernetes development.
-# It installs kubectl, stern, helm, okteto, and k3d on the machine.
+# It installs kubectl, kustomize, stern, helm, okteto, and k3d on the machine.
 # It determines the operating system and architecture of the machine to download the appropriate binaries.
 # ----------------------------------------------
 
@@ -17,12 +17,17 @@ elif [ "$(uname -m)" = "x86_64" ]; then
 fi
 
 k8s_version=$(curl -sSfL https://dl.k8s.io/release/stable.txt)
+kustomize_version="5.4.2"
 stern_version="1.28.0"
 helm_verision="3.14.0"
 
 echo "Installing kubectl"
 curl -sSfL "https://dl.k8s.io/release/${k8s_version}/bin/${os}/${arch}/kubectl" > /usr/local/bin/kubectl
 chmod +x /usr/local/bin/kubectl
+
+echo "Installing kustomize"
+curl -sSfL https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${kustomize_version}/kustomize_v${kustomize_version}_${os}_${arch}.tar.gz | tar -xz -C /usr/local/bin kustomize
+chmod +x /usr/local/bin/kustomize
 
 echo "Installing stern"
 curl -sSfL "https://github.com/stern/stern/releases/download/v${stern_version}/stern_${stern_version}_${os}_${arch}.tar.gz" | tar -xz -C /usr/local/bin stern
