@@ -22,7 +22,7 @@ jobs:
 
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os: [macos-latest, ubuntu-latest]
         arch: [x86_64, arm64]
 
     steps:
