@@ -29,13 +29,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set version
-        id: set-version
+      - name: Set build info
+        id: set-build-info
         run: |
           if [[ ! -z "${{ inputs.app_version }}" ]]; then
             echo "app_version=${{ inputs.app_version }}" >> $GITHUB_OUTPUT
           else
             echo "app_version=${GITHUB_REF_NAME#sdk-}" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            echo "arch=arm64" >> $GITHUB_OUTPUT
+          else
+            echo "arch=amd64" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            echo "os_name=linux" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            echo "os_name=darwin" >> $GITHUB_OUTPUT
           fi
 
       - name: Setup Rust
@@ -54,7 +66,7 @@ jobs:
         id: build-binary
         env:
           PYAPP_PROJECT_NAME: "beta9"
-          PYAPP_PROJECT_VERSION: "${{ steps.set-version.outputs.app_version }}"
+          PYAPP_PROJECT_VERSION: "${{ steps.set-build-info.outputs.app_version }}"
           PYAPP_FULL_ISOLATION: "true"
           PYAPP_DISTRIBUTION_EMBED: "true"
         run: |
@@ -64,11 +76,19 @@ jobs:
 
           mv target/release/pyapp ${PYAPP_PROJECT_NAME}
 
-          TAR_FILE_NAME=${PYAPP_PROJECT_NAME}-${PYAPP_PROJECT_VERSION}.tar.gz
+          TAR_FILE_NAME=${PYAPP_PROJECT_NAME}-${PYAPP_PROJECT_VERSION}-${{ steps.set-build-info.outputs.os_name }}-${{ steps.set-build-info.outputs.arch }}.tar.gz
           tar -cvf ${TAR_FILE_NAME} ${PYAPP_PROJECT_NAME}
           echo "tar_file_name=${TAR_FILE_NAME}" >> $GITHUB_OUTPUT
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build-binary.outputs.tar_file_name }}
+          path: pyapp-latest/beta9
+          if-no-files-found: ignore
+          compression-level: "9"
+
       - name: Upload binary
+        if: inputs.app_version == ''
         run: |
           gh release upload ${GITHUB_REF_NAME} "${{ steps.build-binary.outputs.tar_file_name }}"
 
