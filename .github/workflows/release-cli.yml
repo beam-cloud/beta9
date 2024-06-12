@@ -69,12 +69,19 @@ jobs:
           echo "tar_file_name=${TAR_FILE_NAME}" >> $GITHUB_OUTPUT
 
       - name: Upload binary
-        uses: shallwefootball/s3-upload-action@master
-        id: upload-binary
-        with:
-          aws_key_id: "${{ secrets.TIGRIS_ACCESS_KEY }}"
-          aws_secret_access_key: "${{ secrets.TIGRIS_SECRET_KEY }}"
-          aws_bucket: "release.beam.cloud"
-          source_dir: "${{ steps.build-binary.outputs.tar_file_name }}"
-          destination_dir: "sdk"
-          endpoint: "https://fly.storage.tigris.dev"
+        run: |
+          gh release upload ${GITHUB_REF_NAME} "${{ steps.build-binary.outputs.tar_file_name }}"
+
+      # - name: Upload binary
+      #   uses: shallwefootball/s3-upload-action@master
+      #   id: upload-binary
+      #   with:
+      #     aws_key_id: "${{ secrets.TIGRIS_ACCESS_KEY }}"
+      #     aws_secret_access_key: "${{ secrets.TIGRIS_SECRET_KEY }}"
+      #     aws_bucket: "release.beam.cloud"
+      #     source_dir: "${{ steps.build-binary.outputs.tar_file_name }}"
+      #     destination_dir: "sdk"
+      #     endpoint: "https://fly.storage.tigris.dev"
+
+      # TODO: Generate new formula and push to homebrew-beam
+      #
