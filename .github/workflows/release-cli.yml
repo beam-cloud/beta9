@@ -76,21 +76,26 @@ jobs:
 
           mv target/release/pyapp ${PYAPP_PROJECT_NAME}
 
-          TAR_FILE_NAME=${PYAPP_PROJECT_NAME}-${PYAPP_PROJECT_VERSION}-${{ steps.set-build-info.outputs.os_name }}-${{ steps.set-build-info.outputs.arch }}.tar.gz
+          NAME=${PYAPP_PROJECT_NAME}-${PYAPP_PROJECT_VERSION}-${{ steps.set-build-info.outputs.os_name }}-${{ steps.set-build-info.outputs.arch }}
+          TAR_FILE_NAME=${NAME}.tar.gz
           tar -cvf ${TAR_FILE_NAME} ${PYAPP_PROJECT_NAME}
-          echo "tar_file_name=${TAR_FILE_NAME}" >> $GITHUB_OUTPUT
 
-      - uses: actions/upload-artifact@v4
+          echo "art_name=${NAME}" >> $GITHUB_OUTPUT
+          echo "bin_file_path=$(pwd)/${PYAPP_PROJECT_NAME}" >> $GITHUB_OUTPUT
+          echo "tar_file_path=$(pwd)/${TAR_FILE_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.build-binary.outputs.tar_file_name }}
-          path: pyapp-latest/beta9
+          name: ${{ steps.build-binary.outputs.art_name }}
+          path: ${{ steps.build-binary.outputs.bin_file_path }}
           if-no-files-found: ignore
           compression-level: "9"
 
       - name: Upload binary
         if: inputs.app_version == ''
         run: |
-          gh release upload ${GITHUB_REF_NAME} "${{ steps.build-binary.outputs.tar_file_name }}"
+          gh release upload ${GITHUB_REF_NAME} "${{ steps.build-binary.outputs.tar_file_path }}"
 
       # - name: Upload binary
       #   uses: shallwefootball/s3-upload-action@master
@@ -99,7 +104,7 @@ jobs:
       #     aws_key_id: "${{ secrets.TIGRIS_ACCESS_KEY }}"
       #     aws_secret_access_key: "${{ secrets.TIGRIS_SECRET_KEY }}"
       #     aws_bucket: "release.beam.cloud"
-      #     source_dir: "${{ steps.build-binary.outputs.tar_file_name }}"
+      #     source_dir: "${{ steps.build-binary.outputs.tar_file_path }}"
       #     destination_dir: "sdk"
       #     endpoint: "https://fly.storage.tigris.dev"
 
