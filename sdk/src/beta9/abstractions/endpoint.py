@@ -10,6 +10,7 @@ from ..abstractions.base.runner import (
 )
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
+from ..channel import with_grpc_error_handling
 from ..clients.endpoint import (
     EndpointServiceStub,
     StartEndpointServeRequest,
@@ -177,6 +178,7 @@ class _CallableWrapper:
 
         return deploy_response.ok
 
+    @with_grpc_error_handling
     def serve(self):
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=ENDPOINT_SERVE_STUB_TYPE, force_create_stub=True
