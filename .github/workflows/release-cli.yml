@@ -84,7 +84,7 @@ jobs:
           echo "bin_file_path=$(pwd)/${PYAPP_PROJECT_NAME}" >> $GITHUB_OUTPUT
           echo "tar_file_path=$(pwd)/${TAR_FILE_NAME}" >> $GITHUB_OUTPUT
 
-      - name: Upload artifact
+      - name: Upload artifact to workflow
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.build-binary.outputs.art_name }}
@@ -92,7 +92,7 @@ jobs:
           if-no-files-found: ignore
           compression-level: "9"
 
-      - name: Upload binary
+      - name: Upload binary to release
         if: inputs.app_version == ''
         run: |
           gh release upload ${GITHUB_REF_NAME} "${{ steps.build-binary.outputs.tar_file_path }}"
