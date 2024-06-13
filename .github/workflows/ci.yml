@@ -78,7 +78,7 @@ jobs:
           make test-pkg
   
   verify_protobufs:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
@@ -91,33 +91,37 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           version: "25.1"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }} 
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: "3.11.9"
 
-      - name: Cache Go modules
-        uses: actions/cache@v3
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+      # - name: Cache Go modules
+      #   id: cache-go
+      #   uses: actions/cache@v3
+      #   with:
+      #     path: ~/go/pkg/mod
+      #     key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-go-
       
       - name: Install Protobuf Compilers
+        if: steps.cache-go.outputs.cache-hit != 'true'
         run: |
-          python3 -m pip install -U "betterproto-beta9[compiler]" betterproto-beta9 grpcio
-          brew update
-          brew install protobuf
+          export PATH="$PATH:$(go env GOPATH)/bin"
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
           go get google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
+        
+      - name: Install Python GRPC Package
+        run: |
+          python3 -m pip install -U "betterproto-beta9[compiler]" betterproto-beta9 grpcio
+          apt update
+          apt install protobuf-compiler -y
       
       - name: Verify Protobuf Codegen
         env:
           GO_PATH: ~/go
         run: |
-          export PATH="$PATH:$(go env GOPATH)/bin"
           make verify-protocol
