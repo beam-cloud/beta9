@@ -37,7 +37,7 @@ jobs:
           if [[ ! -z "${{ inputs.app_version }}" ]]; then
             echo "app_version=${{ inputs.app_version }}" >> $GITHUB_OUTPUT
           else
-            echo "app_version=${GITHUB_REF_NAME#sdk-}" >> $GITHUB_OUTPUT
+            echo "app_version=${GITHUB_REF_NAME#cli-}" >> $GITHUB_OUTPUT
           fi
 
           if [[ "${{ matrix.arch }}" == "arm64" ]]; then
