@@ -96,6 +96,8 @@ jobs:
 
       - name: Upload binary to release
         if: inputs.app_version == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload ${GITHUB_REF_NAME} "${{ steps.build-binary.outputs.tar_file_path }}"
 
