@@ -3,6 +3,7 @@ package volume
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 
@@ -81,6 +82,8 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 
 	volumePath := ctx.Param("volumePath*")
 	stream := ctx.Request().Body
+	defer stream.Close()
+
 	ch := make(chan CopyPathContent)
 	decodedVolumePath, err := url.QueryUnescape(volumePath)
 	if err != nil {
@@ -94,6 +97,10 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 			buf := make([]byte, uploadBufferSize) // 8 Mb
 			n, err := stream.Read(buf)
 			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Printf("Failed to upload file: %v\n", err)
 				break
 			}
 
