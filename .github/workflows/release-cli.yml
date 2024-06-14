@@ -1,0 +1,122 @@
+name: Build and release CLI
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: Semantic version of release
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  build:
+    if: startsWith(github.ref, 'refs/tags/cli-') || inputs.app_version != ''
+    runs-on: ${{ matrix.os }}
+    environment: Release
+    outputs:
+      app_version: ${{ steps.set-build-info.outputs.app_version }}
+
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        arch: [x86_64, arm64]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set build info
+        id: set-build-info
+        run: |
+          if [[ ! -z "${{ inputs.app_version }}" ]]; then
+            echo "app_version=${{ inputs.app_version }}" >> $GITHUB_OUTPUT
+          else
+            echo "app_version=${GITHUB_REF_NAME#sdk-}" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            echo "arch=arm64" >> $GITHUB_OUTPUT
+          else
+            echo "arch=amd64" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            echo "os_name=linux" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            echo "os_name=darwin" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Rust
+        uses: moonrepo/setup-rust@v1
+
+      - name: Setup PyApp
+        id: setup-pyapp
+        env:
+          PYAPP_VERSION: 0.22.0
+        run: |
+          curl -L -o pyapp.tar.gz https://github.com/ofek/pyapp/releases/download/v${PYAPP_VERSION}/source.tar.gz
+          tar -xzf pyapp.tar.gz
+          mv pyapp-v* pyapp-latest
+
+      - name: Build binary
+        id: build-binary
+        env:
+          PYAPP_PROJECT_NAME: "beta9"
+          PYAPP_PROJECT_VERSION: "${{ steps.set-build-info.outputs.app_version }}"
+          PYAPP_FULL_ISOLATION: "true"
+          PYAPP_DISTRIBUTION_EMBED: "true"
+        run: |
+          cd pyapp-latest
+
+          cargo build --release
+
+          mv target/release/pyapp ${PYAPP_PROJECT_NAME}
+
+          NAME=${PYAPP_PROJECT_NAME}-${PYAPP_PROJECT_VERSION}-${{ steps.set-build-info.outputs.os_name }}-${{ steps.set-build-info.outputs.arch }}
+          TAR_FILE_NAME=${NAME}.tar.gz
+          tar -cvf ${TAR_FILE_NAME} ${PYAPP_PROJECT_NAME}
+
+          echo "art_name=${NAME}" >> $GITHUB_OUTPUT
+          echo "bin_file_path=$(pwd)/${PYAPP_PROJECT_NAME}" >> $GITHUB_OUTPUT
+          echo "tar_file_path=$(pwd)/${TAR_FILE_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build-binary.outputs.art_name }}
+          path: ${{ steps.build-binary.outputs.bin_file_path }}
+          if-no-files-found: ignore
+          compression-level: "9"
+
+      - name: Upload binary to release
+        if: inputs.app_version == ''
+        run: |
+          gh release upload ${GITHUB_REF_NAME} "${{ steps.build-binary.outputs.tar_file_path }}"
+
+  formula:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send update formula event
+        run: |
+          PAYLOAD=$(
+            jq -n \
+              --arg name "Beta9" \
+              --arg version "${{ needs.build.outputs.app_version }}" \
+              --arg tag "$GITHUB_REF_NAME" \
+              --arg repo "$GITHUB_REPOSITORY" \
+            '{event_type: "update-formula", client_payload: {name: $name, version: $version, tag: $tag, repo: $repo}}'
+          )
+
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -d "$PAYLOAD" \
+            https://api.github.com/repos/beam-cloud/homebrew-beam/dispatches
