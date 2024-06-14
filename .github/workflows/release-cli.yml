@@ -102,6 +102,7 @@ jobs:
   formula:
     needs: build
     runs-on: ubuntu-latest
+    environment: Release
     steps:
       - name: Send update formula event
         uses: peter-evans/repository-dispatch@v3
