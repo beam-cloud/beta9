@@ -30,7 +30,7 @@ func AuthMiddleware(backendRepo repository.BackendRepository) echo.MiddlewareFun
 				return echo.NewHTTPError(http.StatusUnauthorized)
 			}
 
-			if !token.Active || token.DisabledByClusterAdmin {
+			if (!token.Active || token.DisabledByClusterAdmin) && req.Method != http.MethodGet {
 				return echo.NewHTTPError(http.StatusUnauthorized)
 			}
 
