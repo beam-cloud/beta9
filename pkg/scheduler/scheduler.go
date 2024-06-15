@@ -65,6 +65,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		}
 
 		workerPoolManager.SetPool(name, pool, controller)
+		log.Printf("loaded controller for pool <%s> with mode: %s and GPU type: %s\n", name, pool.Mode, pool.GPUType)
 	}
 
 	return &Scheduler{
