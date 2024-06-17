@@ -108,7 +108,6 @@ jobs:
       #       ${{ runner.os }}-go-
       
       - name: Install Protobuf Compilers
-        if: steps.cache-go.outputs.cache-hit != 'true'
         run: |
           export PATH="$PATH:$(go env GOPATH)/bin"
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
