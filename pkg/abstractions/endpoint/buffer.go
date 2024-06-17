@@ -106,8 +106,10 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPay
 	for {
 		select {
 		case <-rb.ctx.Done():
+			return nil
 		case <-done:
 			return nil
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
 }

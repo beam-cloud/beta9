@@ -11,6 +11,7 @@ from ..abstractions.base.runner import (
 )
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
+from ..channel import with_grpc_error_handling
 from ..clients.function import (
     FunctionInvokeRequest,
     FunctionInvokeResponse,
@@ -117,6 +118,7 @@ class _CallableWrapper:
         self.func: Callable = func
         self.parent: Function = parent
 
+    @with_grpc_error_handling
     def __call__(self, *args, **kwargs) -> Any:
         if not is_local():
             return self.local(*args, **kwargs)
@@ -130,6 +132,7 @@ class _CallableWrapper:
         with terminal.progress("Working..."):
             return self._call_remote(*args, **kwargs)
 
+    @with_grpc_error_handling
     def _call_remote(self, *args, **kwargs) -> Any:
         args = cloudpickle.dumps(
             {

@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
 	"github.com/beam-cloud/beta9/pkg/abstractions/secret"
 	"github.com/beam-cloud/beta9/pkg/task"
+	"github.com/labstack/echo-contrib/pprof"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"google.golang.org/grpc"
@@ -140,6 +141,10 @@ func (g *Gateway) initHttp() error {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
+
+	if g.Config.DebugMode {
+		pprof.Register(e)
+	}
 
 	e.Pre(middleware.RemoveTrailingSlash())
 	configureEchoLogger(e, g.Config.GatewayService.HTTP.EnablePrettyLogs)

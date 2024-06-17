@@ -104,14 +104,27 @@ class AuthTokenInterceptor(
 
 def handle_grpc_error(error: grpc.RpcError):
     code = error.code()
+    details = error.details()
     if code == grpc.StatusCode.UNAUTHENTICATED:
         terminal.error("Unauthorized: Invalid auth token provided.")
     elif code == grpc.StatusCode.UNAVAILABLE:
         terminal.error("Unable to connect to gateway.")
     elif code == grpc.StatusCode.CANCELLED:
         return
+    elif code == grpc.StatusCode.UNKNOWN:
+        terminal.error(f"Error {details}")
     else:
         terminal.error(f"Unhandled GRPC error: {code}")
+
+
+def with_grpc_error_handling(func: Callable) -> Callable:
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except grpc.RpcError as e:
+            handle_grpc_error(e)
+
+    return wrapper
 
 
 def get_channel(context: Optional[ConfigContext] = None) -> Channel:

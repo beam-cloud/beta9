@@ -7,6 +7,7 @@ from ..abstractions.base.runner import (
 )
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
+from ..channel import with_grpc_error_handling
 from ..clients.container import (
     CommandExecutionRequest,
     CommandExecutionResponse,
@@ -77,6 +78,7 @@ class Container(RunnerAbstraction):
     def stub(self, value: ContainerServiceStub) -> None:
         self._container_stub = value
 
+    @with_grpc_error_handling
     def run(self, command: List[str]) -> int:
         """Run a command in a container and return the exit code"""
         if not self.prepare_runtime(
