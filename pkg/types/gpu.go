@@ -12,6 +12,8 @@ const (
 	GPU_A100_80 GPUType = "A100-80"
 	GPU_L4      GPUType = "L4"
 	GPU_T4      GPUType = "T4"
+	GPU_H100    GPUType = "H100"
+	GPU_A6000   GPUType = "A6000"
 
 	NO_GPU GPUType = "NO_GPU"
 )
