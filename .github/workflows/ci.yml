@@ -76,3 +76,51 @@ jobs:
       - name: Run Tests
         run: |
           make test-pkg
+  
+  verify_protobufs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: "1.21"
+      
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }} 
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11.9"
+
+      # - name: Cache Go modules
+      #   id: cache-go
+      #   uses: actions/cache@v3
+      #   with:
+      #     path: ~/go/pkg/mod
+      #     key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+      #     restore-keys: |
+      #       ${{ runner.os }}-go-
+      
+      - name: Install Protobuf Compilers
+        run: |
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
+          go get google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
+        
+      - name: Install Python GRPC Package
+        run: |
+          python3 -m pip install -U "betterproto-beta9[compiler]" betterproto-beta9 grpcio
+          sudo apt update
+          sudo apt install protobuf-compiler -y
+      
+      - name: Verify Protobuf Codegen
+        env:
+          GO_PATH: ~/go
+        run: |
+          make verify-protocol
