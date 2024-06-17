@@ -97,21 +97,11 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: "3.11.9"
-
-      # - name: Cache Go modules
-      #   id: cache-go
-      #   uses: actions/cache@v3
-      #   with:
-      #     path: ~/go/pkg/mod
-      #     key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-      #     restore-keys: |
-      #       ${{ runner.os }}-go-
       
       - name: Install Protobuf Compilers
         run: |
-          export PATH="$PATH:$(go env GOPATH)/bin"
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
-          go get google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
         
       - name: Install Python GRPC Package
         run: |
