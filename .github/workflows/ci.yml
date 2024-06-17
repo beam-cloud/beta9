@@ -116,8 +116,8 @@ jobs:
       - name: Install Python GRPC Package
         run: |
           python3 -m pip install -U "betterproto-beta9[compiler]" betterproto-beta9 grpcio
-          apt update
-          apt install protobuf-compiler -y
+          sudo apt update
+          sudo apt install protobuf-compiler -y
       
       - name: Verify Protobuf Codegen
         env:
