@@ -85,8 +85,7 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		return nil, err
 	}
 
-	// TODO: pass in a real config somehow
-	client, err := blobcache.NewBlobCacheClient(context.TODO(), blobcache.BlobCacheConfig{})
+	client, err := blobcache.NewBlobCacheClient(context.TODO(), config.CacheConfig)
 	if err != nil {
 		return nil, err
 	}
