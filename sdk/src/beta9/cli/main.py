@@ -38,8 +38,8 @@ class CLI:
             context_settings=context_settings,
         )
 
-    def __call__(self, *args: Any, **kwargs: Any) -> None:
-        self.common_group.main(*args, **kwargs)
+    def __call__(self) -> None:
+        self.common_group.main(prog_name=self.settings.name.lower())
 
     def register(self, module: ModuleType) -> None:
         if hasattr(module, "common"):
