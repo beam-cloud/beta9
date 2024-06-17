@@ -93,6 +93,7 @@ type GatewayServiceConfig struct {
 type ImageServiceConfig struct {
 	CacheURL                       string                    `key:"cacheURL" json:"cache_url"`
 	CacheConfig                    blobcache.BlobCacheConfig `key:"cacheConfig" json:"cache_config"`
+	CachedEnabled                  bool                      `key:"cachedEnabled" json:"cache_enabled"`
 	RegistryStore                  string                    `key:"registryStore" json:"registry_store"`
 	RegistryCredentialProviderName string                    `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
 	Registries                     ImageRegistriesConfig     `key:"registries" json:"registries"`
