@@ -23,3 +23,5 @@ venv
 .k3d
 .python-version
 test
+manifests
+tmp

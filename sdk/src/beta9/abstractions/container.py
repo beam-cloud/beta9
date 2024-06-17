@@ -7,6 +7,7 @@ from ..abstractions.base.runner import (
 )
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
+from ..channel import with_grpc_error_handling
 from ..clients.container import (
     CommandExecutionRequest,
     CommandExecutionResponse,
@@ -32,6 +33,8 @@ class Container(RunnerAbstraction):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Volume]]):
             A list of volumes to be mounted to the container. Default is None.
+        secrets (Optional[List[str]):
+            A list of secrets that are injected into the container as environment variables. Default is [].
         name (Optional[str]):
             A name for the container. Default is None.
 
@@ -55,9 +58,11 @@ class Container(RunnerAbstraction):
         gpu: str = "",
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
-        name: Optional[str] = None,
+        secrets: Optional[List[str]] = None,
     ) -> None:
-        super().__init__(cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes)
+        super().__init__(
+            cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes, secrets=secrets
+        )
 
         self.task_id = ""
         self._container_stub: Optional[ContainerServiceStub] = None
@@ -73,6 +78,7 @@ class Container(RunnerAbstraction):
     def stub(self, value: ContainerServiceStub) -> None:
         self._container_stub = value
 
+    @with_grpc_error_handling
     def run(self, command: List[str]) -> int:
         """Run a command in a container and return the exit code"""
         if not self.prepare_runtime(

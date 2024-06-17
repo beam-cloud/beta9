@@ -75,10 +75,6 @@ func (m *WorkerPoolManager) SetPool(name string, config types.WorkerPoolConfig, 
 		Controller: controller,
 	}
 
-	if err := m.repo.SetPool(pool.Name, pool.Config); err != nil {
-		return err
-	}
-
 	m.pools[name] = pool
 
 	return nil

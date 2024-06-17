@@ -14,6 +14,7 @@ database:
     - redis-master.beta9:6379
     password:
     enableTLS: false
+    insecureSkipVerify: false
     dialTimeout: 3s
 storage:
   mode: juicefs

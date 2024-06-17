@@ -26,6 +26,7 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	runc "github.com/beam-cloud/go-runc"
 )
 
@@ -63,7 +64,7 @@ func getImageMountPath(workerId string) string {
 
 type ImageClient struct {
 	registry           *common.ImageRegistry
-	cacheClient        *CacheClient
+	cacheClient        *blobcache.BlobCacheClient
 	imageCachePath     string
 	imageMountPath     string
 	imageBundlePath    string
@@ -84,9 +85,10 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		return nil, err
 	}
 
-	var cacheClient *CacheClient = nil
-	if config.CacheURL != "" {
-		cacheClient, err = NewCacheClient(config.CacheURL, "")
+	var client *blobcache.BlobCacheClient = nil
+
+	if config.CachedEnabled {
+		client, err = blobcache.NewBlobCacheClient(context.TODO(), config.CacheConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -95,7 +97,7 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 	c := &ImageClient{
 		config:             config,
 		registry:           registry,
-		cacheClient:        cacheClient,
+		cacheClient:        client,
 		imageBundlePath:    imageBundlePath,
 		imageCachePath:     getImageCachePath(),
 		imageMountPath:     getImageMountPath(workerId),
@@ -225,7 +227,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 		os.RemoveAll(tmpBundlePath)
 	}()
 
-	return c.Archive(ctx, tmpBundlePath, imageId)
+	return c.Archive(ctx, tmpBundlePath, imageId, nil)
 }
 
 func (c *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
@@ -297,7 +299,7 @@ func (c *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePa
 }
 
 // Generate and upload archived version of the image for distribution
-func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId string) error {
+func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId string, progressChan chan int) error {
 	startTime := time.Now()
 
 	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, c.registry.ImageFileExtension)
@@ -319,6 +321,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 					SecretKey: c.config.Registries.S3.SecretKey,
 				},
 			},
+			ProgressChan: progressChan,
 		}, &clipCommon.S3StorageInfo{
 			Bucket:   c.config.Registries.S3.BucketName,
 			Region:   c.config.Registries.S3.Region,

@@ -16,10 +16,13 @@ const (
 type Worker struct {
 	Id                   string       `json:"id" redis:"id"`
 	Status               WorkerStatus `json:"status" redis:"status"`
-	Cpu                  int64        `json:"cpu" redis:"cpu"`
-	Memory               int64        `json:"memory" redis:"memory"`
+	TotalCpu             int64        `json:"total_cpu" redis:"total_cpu"`
+	TotalMemory          int64        `json:"total_memory" redis:"total_memory"`
+	TotalGpuCount        uint32       `json:"total_gpu_count" redis:"total_gpu_count"`
+	FreeCpu              int64        `json:"free_cpu" redis:"free_cpu"`
+	FreeMemory           int64        `json:"free_memory" redis:"free_memory"`
+	FreeGpuCount         uint32       `json:"free_gpu_count" redis:"gpu_count"`
 	Gpu                  string       `json:"gpu" redis:"gpu"`
-	GpuCount             uint32       `json:"gpu_count" redis:"gpu_count"`
 	PoolName             string       `json:"pool_name" redis:"pool_name"`
 	MachineId            string       `json:"machine_id" redis:"machine_id"`
 	ResourceVersion      int64        `json:"resource_version" redis:"resource_version"`

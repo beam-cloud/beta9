@@ -11,6 +11,7 @@ from ...abstractions.base import BaseAbstraction
 from ...abstractions.image import Image, ImageBuildResult
 from ...abstractions.volume import Volume
 from ...clients.gateway import (
+    SecretVar,
     GatewayServiceStub,
     GetOrCreateStubRequest,
     GetOrCreateStubResponse,
@@ -48,14 +49,19 @@ class RunnerAbstraction(BaseAbstraction):
         retries: int = 3,
         timeout: int = 3600,
         volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
         on_start: Optional[Callable] = None,
         callback_url: Optional[str] = None,
+        authorized: Optional[bool] = True,
+        name: Optional[str] = None,
     ) -> None:
         super().__init__()
 
         if image is None:
             image = Image()
 
+        self.name = name
+        self.authorized = authorized
         self.image: Image = image
         self.image_available: bool = False
         self.files_synced: bool = False
@@ -71,6 +77,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.memory = self._parse_memory(memory) if isinstance(memory, str) else memory
         self.gpu = gpu
         self.volumes = volumes or []
+        self.secrets = [SecretVar(name=s) for s in (secrets or [])]
         self.concurrency = concurrency
         self.keep_warm_seconds = keep_warm_seconds
         self.max_pending_tasks = max_pending_tasks
@@ -91,8 +98,6 @@ class RunnerAbstraction(BaseAbstraction):
 
         terminal.header("Invocation details")
         terminal.detail(f"""curl -X POST '{invocation_url}' \\
--H 'Accept: */*' \\
--H 'Accept-Encoding: gzip, deflate' \\
 -H 'Connection: keep-alive' \\
 -H 'Authorization: Bearer {self.config_context.token}' \\
 -H 'Content-Type: application/json' \\
@@ -200,9 +205,7 @@ class RunnerAbstraction(BaseAbstraction):
             except Empty:
                 time.sleep(0.1)
 
-    async def sync_dir_to_workspace(
-        self, *, dir: str, object_id: str
-    ) -> ReplaceObjectContentResponse:
+    def sync_dir_to_workspace(self, *, dir: str, object_id: str) -> ReplaceObjectContentResponse:
         file_update_queue = Queue()
         event_handler = SyncEventHandler(file_update_queue)
 
@@ -223,7 +226,6 @@ class RunnerAbstraction(BaseAbstraction):
         func: Optional[Callable] = None,
         stub_type: str,
         force_create_stub: bool = False,
-        name: Optional[str] = None,
     ) -> bool:
         if called_on_import():
             return False
@@ -232,9 +234,6 @@ class RunnerAbstraction(BaseAbstraction):
             self._map_callable_to_attr(attr="handler", func=func)
 
         stub_name = f"{stub_type}/{self.handler}" if self.handler else stub_type
-
-        if name:
-            stub_name = f"{stub_name}/{name}"
 
         if self.runtime_ready:
             return True
@@ -284,7 +283,9 @@ class RunnerAbstraction(BaseAbstraction):
                     max_containers=self.max_containers,
                     max_pending_tasks=self.max_pending_tasks,
                     volumes=[v.export() for v in self.volumes],
+                    secrets=self.secrets,
                     force_create=force_create_stub,
+                    authorized=self.authorized,
                 )
             )
 

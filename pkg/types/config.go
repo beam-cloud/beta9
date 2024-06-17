@@ -3,6 +3,7 @@ package types
 import (
 	"time"
 
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -33,23 +34,24 @@ var (
 )
 
 type RedisConfig struct {
-	Addrs           []string      `key:"addrs" json:"addrs"`
-	Mode            RedisMode     `key:"mode" json:"mode"`
-	ClientName      string        `key:"clientName" json:"client_name"`
-	EnableTLS       bool          `key:"enableTLS" json:"enable_tls"`
-	MinIdleConns    int           `key:"minIdleConns" json:"min_idle_conns"`
-	MaxIdleConns    int           `key:"maxIdleConns" json:"max_idle_conns"`
-	ConnMaxIdleTime time.Duration `key:"connMaxIdleTime" json:"conn_max_idle_time"`
-	ConnMaxLifetime time.Duration `key:"connMaxLifetime" json:"conn_max_lifetime"`
-	DialTimeout     time.Duration `key:"dialTimeout" json:"dial_timeout"`
-	ReadTimeout     time.Duration `key:"readTimeout" json:"read_timeout"`
-	WriteTimeout    time.Duration `key:"writeTimeout" json:"write_timeout"`
-	MaxRedirects    int           `key:"maxRedirects" json:"max_redirects"`
-	MaxRetries      int           `key:"maxRetries" json:"max_retries"`
-	PoolSize        int           `key:"poolSize" json:"pool_size"`
-	Username        string        `key:"username" json:"username"`
-	Password        string        `key:"password" json:"password"`
-	RouteByLatency  bool          `key:"routeByLatency" json:"route_by_latency"`
+	Addrs              []string      `key:"addrs" json:"addrs"`
+	Mode               RedisMode     `key:"mode" json:"mode"`
+	ClientName         string        `key:"clientName" json:"client_name"`
+	EnableTLS          bool          `key:"enableTLS" json:"enable_tls"`
+	InsecureSkipVerify bool          `key:"insecureSkipVerify" json:"insecure_skip_verify"`
+	MinIdleConns       int           `key:"minIdleConns" json:"min_idle_conns"`
+	MaxIdleConns       int           `key:"maxIdleConns" json:"max_idle_conns"`
+	ConnMaxIdleTime    time.Duration `key:"connMaxIdleTime" json:"conn_max_idle_time"`
+	ConnMaxLifetime    time.Duration `key:"connMaxLifetime" json:"conn_max_lifetime"`
+	DialTimeout        time.Duration `key:"dialTimeout" json:"dial_timeout"`
+	ReadTimeout        time.Duration `key:"readTimeout" json:"read_timeout"`
+	WriteTimeout       time.Duration `key:"writeTimeout" json:"write_timeout"`
+	MaxRedirects       int           `key:"maxRedirects" json:"max_redirects"`
+	MaxRetries         int           `key:"maxRetries" json:"max_retries"`
+	PoolSize           int           `key:"poolSize" json:"pool_size"`
+	Username           string        `key:"username" json:"username"`
+	Password           string        `key:"password" json:"password"`
+	RouteByLatency     bool          `key:"routeByLatency" json:"route_by_latency"`
 }
 
 type PostgresConfig struct {
@@ -89,16 +91,18 @@ type GatewayServiceConfig struct {
 }
 
 type ImageServiceConfig struct {
-	CacheURL                       string                `key:"cacheURL" json:"cache_url"`
-	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
-	RegistryCredentialProviderName string                `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
-	Registries                     ImageRegistriesConfig `key:"registries" json:"registries"`
-	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
-	EnableTLS                      bool                  `key:"enableTLS" json:"enable_tls"`
-	BuildContainerCpu              int64                 `key:"buildContainerCpu" json:"build_container_cpu"`
-	BuildContainerMemory           int64                 `key:"buildContainerMemory" json:"build_container_memory"`
-	BuildContainerPoolSelector     string                `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
-	Runner                         RunnerConfig          `key:"runner" json:"runner"`
+	CacheURL                       string                    `key:"cacheURL" json:"cache_url"`
+	CacheConfig                    blobcache.BlobCacheConfig `key:"cacheConfig" json:"cache_config"`
+	CachedEnabled                  bool                      `key:"cachedEnabled" json:"cache_enabled"`
+	RegistryStore                  string                    `key:"registryStore" json:"registry_store"`
+	RegistryCredentialProviderName string                    `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
+	Registries                     ImageRegistriesConfig     `key:"registries" json:"registries"`
+	LocalCacheEnabled              bool                      `key:"localCacheEnabled" json:"local_cache_enabled"`
+	EnableTLS                      bool                      `key:"enableTLS" json:"enable_tls"`
+	BuildContainerCpu              int64                     `key:"buildContainerCpu" json:"build_container_cpu"`
+	BuildContainerMemory           int64                     `key:"buildContainerMemory" json:"build_container_memory"`
+	BuildContainerPoolSelector     string                    `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
+	Runner                         RunnerConfig              `key:"runner" json:"runner"`
 }
 
 type ImageRegistriesConfig struct {
@@ -225,29 +229,43 @@ type ProviderConfig struct {
 	LambdaLabsConfig LambdaLabsProviderConfig `key:"lambda" json:"lambda"`
 }
 
+type ProviderAgentConfig struct {
+	ElasticSearch ElasticSearchConfig `key:"elasticSearch" json:"elastic_search"`
+}
+
+type ElasticSearchConfig struct {
+	Host       string `key:"host" json:"host"`
+	Port       string `key:"port" json:"port"`
+	HttpUser   string `key:"httpUser" json:"http_user"`
+	HttpPasswd string `key:"httpPasswd" json:"http_passwd"`
+}
+
 type EC2ProviderConfig struct {
-	AWSAccessKey string  `key:"awsAccessKey" json:"aws_access_key"`
-	AWSSecretKey string  `key:"awsSecretKey" json:"aws_secret_key"`
-	AWSRegion    string  `key:"awsRegion" json:"aws_region"`
-	AMI          string  `key:"ami" json:"ami"`
-	SubnetId     *string `key:"subnetId" json:"subnet_id"`
+	AWSAccessKey string              `key:"awsAccessKey" json:"aws_access_key"`
+	AWSSecretKey string              `key:"awsSecretKey" json:"aws_secret_key"`
+	AWSRegion    string              `key:"awsRegion" json:"aws_region"`
+	AMI          string              `key:"ami" json:"ami"`
+	SubnetId     *string             `key:"subnetId" json:"subnet_id"`
+	Agent        ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type OCIProviderConfig struct {
-	Tenancy            string `key:"tenancy" json:"tenancy"`
-	UserId             string `key:"userId" json:"user_id"`
-	Region             string `key:"region" json:"region"`
-	FingerPrint        string `key:"fingerprint" json:"fingerprint"`
-	PrivateKey         string `key:"privateKey" json:"private_key"`
-	PrivateKeyPassword string `key:"privateKeyPassword" json:"private_key_password"`
-	CompartmentId      string `key:"compartmentId" json:"compartment_id"`
-	SubnetId           string `key:"subnetId" json:"subnet_id"`
-	AvailabilityDomain string `key:"availabilityDomain" json:"availability_domain"`
-	ImageId            string `key:"imageId" json:"image_id"`
+	Tenancy            string              `key:"tenancy" json:"tenancy"`
+	UserId             string              `key:"userId" json:"user_id"`
+	Region             string              `key:"region" json:"region"`
+	FingerPrint        string              `key:"fingerprint" json:"fingerprint"`
+	PrivateKey         string              `key:"privateKey" json:"private_key"`
+	PrivateKeyPassword string              `key:"privateKeyPassword" json:"private_key_password"`
+	CompartmentId      string              `key:"compartmentId" json:"compartment_id"`
+	SubnetId           string              `key:"subnetId" json:"subnet_id"`
+	AvailabilityDomain string              `key:"availabilityDomain" json:"availability_domain"`
+	ImageId            string              `key:"imageId" json:"image_id"`
+	Agent              ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type LambdaLabsProviderConfig struct {
-	ApiKey string `key:"apiKey" json:"apiKey"`
+	ApiKey string              `key:"apiKey" json:"apiKey"`
+	Agent  ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type MetricsCollector string
@@ -295,14 +313,14 @@ type InternalService struct {
 }
 
 type FluentBitConfig struct {
-	Events FluentBitEventConfig `key:"events"`
+	Events FluentBitEventConfig `key:"events" json:"events"`
 }
 
 type FluentBitEventConfig struct {
-	Endpoint        string        `key:"endpoint"`
-	MaxConns        int           `key:"maxConns"`
-	MaxIdleConns    int           `key:"maxIdleConns"`
-	IdleConnTimeout time.Duration `key:"idleConnTimeout"`
-	DialTimeout     time.Duration `key:"dialTimeout"`
-	KeepAlive       time.Duration `key:"keepAlive"`
+	Endpoint        string        `key:"endpoint" json:"endpoint"`
+	MaxConns        int           `key:"maxConns" json:"max_conns"`
+	MaxIdleConns    int           `key:"maxIdleConns" json:"max_idle_conns"`
+	IdleConnTimeout time.Duration `key:"idleConnTimeout" json:"idle_conn_timeout"`
+	DialTimeout     time.Duration `key:"dialTimeout" json:"dial_timeout"`
+	KeepAlive       time.Duration `key:"keepAlive" json:"keep_alive"`
 }

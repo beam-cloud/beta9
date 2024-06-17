@@ -110,6 +110,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	if opts.ExistingImageUri != "" {
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
 			return err
 		}
 	}
@@ -121,6 +122,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		ExistingImageUri:  opts.ExistingImageUri,
 	})
 	if err != nil {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
 		return err
 	}
 
@@ -151,6 +153,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		PoolSelector: b.config.ImageService.BuildContainerPoolSelector,
 	})
 	if err != nil {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
 		return err
 	}
 
@@ -168,6 +171,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
 	if err != nil {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 
@@ -179,6 +183,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	for {
 		r, err := client.Status(containerId)
 		if err != nil {
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
 			return err
 		}
 
@@ -188,6 +193,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 
 		if time.Since(start) > defaultContainerSpinupTimeout {
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Timeout: container not running after 180 seconds.\n"}
 			return errors.New("timeout: container not running after 180 seconds")
 		}
 
@@ -196,6 +202,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	imageId, err := b.GetImageId(opts)
 	if err != nil {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
 		return err
 	}
 
@@ -242,7 +249,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 	log.Printf("container <%v> build took %v\n", containerId, time.Since(startTime))
 
-	err = client.Archive(containerId, imageId)
+	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Uploading image, this make take a few minutes..."}
+	err = client.Archive(ctx, containerId, imageId, outputChan)
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
 		return err

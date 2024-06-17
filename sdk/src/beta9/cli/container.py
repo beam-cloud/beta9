@@ -7,7 +7,7 @@ from rich.table import Column, Table, box
 from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
-from ..clients.gateway import ListContainersRequest
+from ..clients.gateway import ListContainersRequest, StopContainerRequest, StopContainerResponse
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
@@ -105,3 +105,22 @@ def list_containers(ctx: click.Context, service: ServiceClient, format: str, col
     table.add_section()
     table.add_row(f"[bold]{len(res.containers)} items")
     terminal.print(table)
+
+
+@management.command(
+    name="stop",
+    help="Stop a container.",
+)
+@click.argument(
+    "container_id",
+    required=True,
+)
+@extraclick.pass_service_client
+def stop_container(service: ServiceClient, container_id: str):
+    res: StopContainerResponse
+    res = service.gateway.stop_container(StopContainerRequest(container_id=container_id))
+
+    if res.ok:
+        terminal.success(f"Stopped container: {container_id}.")
+    else:
+        terminal.error(f"{res.error_msg}")

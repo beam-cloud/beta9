@@ -142,6 +142,19 @@ func (es *HttpEndpointService) endpointTaskFactory(ctx context.Context, msg type
 	}, nil
 }
 
+func (es *HttpEndpointService) isPublic(stubId string) (*types.Workspace, error) {
+	instance, err := es.getOrCreateEndpointInstance(stubId)
+	if err != nil {
+		return nil, err
+	}
+
+	if instance.StubConfig.Authorized {
+		return nil, errors.New("unauthorized")
+	}
+
+	return instance.Workspace, nil
+}
+
 // Forward request to endpoint
 func (es *HttpEndpointService) forwardRequest(
 	ctx echo.Context,
@@ -204,9 +217,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 	}
 
 	// Create endpoint instance to hold endpoint specific methods/fields
-	instance = &endpointInstance{
-		buffer: NewRequestBuffer(es.ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig),
-	}
+	instance = &endpointInstance{}
 
 	// Create base autoscaled instance
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(es.ctx, &abstractions.AutoscaledInstanceConfig{
@@ -228,6 +239,8 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 	if err != nil {
 		return nil, err
 	}
+
+	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig, es.tailscale, es.config.Tailscale)
 
 	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance
@@ -253,8 +266,8 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 
 	// Monitor and then clean up the instance once it's done
 	go instance.Monitor()
-	go func(q *endpointInstance) {
-		<-q.Ctx.Done()
+	go func(i *endpointInstance) {
+		<-i.Ctx.Done()
 		es.endpointInstances.Delete(stubId)
 	}(instance)
 

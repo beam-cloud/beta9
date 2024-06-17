@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -138,14 +139,56 @@ func (c *RunCClient) StreamLogs(ctx context.Context, containerId string, outputC
 	}
 }
 
-func (c *RunCClient) Archive(containerId, imageId string) error {
-	_, err := c.client.RunCArchive(context.TODO(), &pb.RunCArchiveRequest{
-		ContainerId: containerId,
-		ImageId:     imageId,
-	})
+func generateProgressBar(progress int, total int) string {
+	barWidth := 50
+	progressWidth := (progress * barWidth) / total
+	remainingWidth := barWidth - progressWidth
+
+	progressBar := "[" +
+		fmt.Sprintf("%s%s",
+			strings.Repeat("=", progressWidth),
+			strings.Repeat(" ", remainingWidth)) +
+		"]"
+
+	return fmt.Sprintf("\r%s %d%%", progressBar, (progress*100)/total)
+}
+
+func (c *RunCClient) Archive(ctx context.Context, containerId, imageId string, outputChan chan OutputMsg) error {
+	stream, err := c.client.RunCArchive(ctx, &pb.RunCArchiveRequest{ContainerId: containerId,
+		ImageId: imageId})
 	if err != nil {
-		return err
+		return fmt.Errorf("error creating archive stream: %w", err)
 	}
 
-	return nil
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		default:
+			resp, err := stream.Recv()
+			if err == io.EOF {
+				return nil
+			}
+
+			if err != nil {
+				return fmt.Errorf("error receiving from archive stream: %w", err)
+			}
+
+			if resp.ErrorMsg != "" {
+				outputChan <- OutputMsg{Msg: resp.ErrorMsg + "\n", Done: false}
+			}
+
+			if !resp.Done && resp.ErrorMsg == "" {
+				progressBar := generateProgressBar(int(resp.Progress), 100)
+				outputChan <- OutputMsg{Msg: progressBar, Done: false}
+			}
+
+			if resp.Done && resp.Success {
+				return nil
+			} else if resp.Done && !resp.Success {
+				return errors.New("image archiving failed")
+			}
+		}
+	}
 }

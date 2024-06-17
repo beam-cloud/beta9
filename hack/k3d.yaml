@@ -16,6 +16,9 @@ ports:
 - port: 9000:9000
   nodeFilters:
   - loadbalancer
+- port: 8008:8008
+  nodeFilters:
+  - loadbalancer
 
 volumes:
 - volume: $PWD/manifests/k3d:k3s-manifests-custom

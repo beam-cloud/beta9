@@ -130,6 +130,17 @@ class ListContainersResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class StopContainerRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class StopContainerResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
 class StartTaskRequest(betterproto.Message):
     """Task messages"""
 
@@ -211,6 +222,11 @@ class Volume(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class SecretVar(betterproto.Message):
+    name: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
 class GetOrCreateStubRequest(betterproto.Message):
     object_id: str = betterproto.string_field(1)
     image_id: str = betterproto.string_field(2)
@@ -231,6 +247,8 @@ class GetOrCreateStubRequest(betterproto.Message):
     force_create: bool = betterproto.bool_field(17)
     on_start: str = betterproto.string_field(18)
     callback_url: str = betterproto.string_field(19)
+    authorized: bool = betterproto.bool_field(20)
+    secrets: List["SecretVar"] = betterproto.message_field(21)
 
 
 @dataclass(eq=False, repr=False)
@@ -445,6 +463,15 @@ class GatewayServiceStub(SyncServiceStub):
             ListContainersRequest,
             ListContainersResponse,
         )(list_containers_request)
+
+    def stop_container(
+        self, stop_container_request: "StopContainerRequest"
+    ) -> "StopContainerResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/StopContainer",
+            StopContainerRequest,
+            StopContainerResponse,
+        )(stop_container_request)
 
     def start_task(self, start_task_request: "StartTaskRequest") -> "StartTaskResponse":
         return self._unary_unary(

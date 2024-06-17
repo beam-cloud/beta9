@@ -65,6 +65,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		}
 
 		workerPoolManager.SetPool(name, pool, controller)
+		log.Printf("loaded controller for pool <%s> with mode: %s and GPU type: %s\n", name, pool.Mode, pool.GPUType)
 	}
 
 	return &Scheduler{
@@ -265,7 +266,7 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	})
 
 	for _, worker := range workers {
-		if worker.Cpu >= int64(request.Cpu) && worker.Memory >= int64(request.Memory) && worker.Gpu == request.Gpu && worker.GpuCount >= request.GpuCount {
+		if worker.FreeCpu >= int64(request.Cpu) && worker.FreeMemory >= int64(request.Memory) && worker.Gpu == request.Gpu && worker.FreeGpuCount >= request.GpuCount {
 			return worker, nil
 		}
 	}
@@ -297,6 +298,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 		}
 
 		log.Printf("Giving up on request <%s> after %d attempts or due to max retry duration exceeded\n", request.ContainerId, request.RetryCount)
+		s.containerRepo.DeleteContainerState(&types.ContainerRequest{ContainerId: request.ContainerId})
 	}()
 
 	return nil

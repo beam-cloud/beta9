@@ -12,6 +12,7 @@ from grpc._interceptor import _Channel as InterceptorChannel
 
 from . import terminal
 from .clients.gateway import AuthorizeRequest, AuthorizeResponse, GatewayServiceStub
+from .clients.secret import SecretServiceStub
 from .clients.volume import VolumeServiceStub
 from .config import (
     DEFAULT_CONTEXT_NAME,
@@ -40,7 +41,6 @@ class Channel(InterceptorChannel):
             channel = grpc.insecure_channel(addr)
 
         interceptor = AuthTokenInterceptor(token)
-
         super().__init__(channel=channel, interceptor=interceptor)
 
 
@@ -89,6 +89,7 @@ class AuthTokenInterceptor(
     def intercept_call(self, continuation, client_call_details, request):
         """Intercept all types of calls to add auth token."""
         new_details = self._add_auth_metadata(client_call_details)
+
         return continuation(new_details, request)
 
     def intercept_call_stream(self, continuation, client_call_details, request_iterator):
@@ -99,6 +100,31 @@ class AuthTokenInterceptor(
     intercept_unary_stream = intercept_call
     intercept_stream_unary = intercept_call_stream
     intercept_stream_stream = intercept_call_stream
+
+
+def handle_grpc_error(error: grpc.RpcError):
+    code = error.code()
+    details = error.details()
+    if code == grpc.StatusCode.UNAUTHENTICATED:
+        terminal.error("Unauthorized: Invalid auth token provided.")
+    elif code == grpc.StatusCode.UNAVAILABLE:
+        terminal.error("Unable to connect to gateway.")
+    elif code == grpc.StatusCode.CANCELLED:
+        return
+    elif code == grpc.StatusCode.UNKNOWN:
+        terminal.error(f"Error {details}")
+    else:
+        terminal.error(f"Unhandled GRPC error: {code}")
+
+
+def with_grpc_error_handling(func: Callable) -> Callable:
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except grpc.RpcError as e:
+            handle_grpc_error(e)
+
+    return wrapper
 
 
 def get_channel(context: Optional[ConfigContext] = None) -> Channel:
@@ -171,6 +197,8 @@ def runner_context():
             print(traceback.format_exc())
             sys.exit(exit_code)
 
+        channel.close()
+
 
 def with_runner_context(func: Callable) -> Callable:
     @functools.wraps(func)
@@ -187,6 +215,7 @@ class ServiceClient:
         self._channel: Optional[Channel] = None
         self._gateway: Optional[GatewayServiceStub] = None
         self._volume: Optional[VolumeServiceStub] = None
+        self._secret: Optional[SecretServiceStub] = None
 
     def __enter__(self) -> "ServiceClient":
         return self
@@ -224,6 +253,12 @@ class ServiceClient:
         if not self._volume:
             self._volume = VolumeServiceStub(self.channel)
         return self._volume
+
+    @property
+    def secret(self) -> SecretServiceStub:
+        if not self._secret:
+            self._secret = SecretServiceStub(self.channel)
+        return self._secret
 
     def close(self) -> None:
         if self._channel:
