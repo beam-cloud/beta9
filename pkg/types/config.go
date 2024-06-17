@@ -3,6 +3,7 @@ package types
 import (
 	"time"
 
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -90,16 +91,18 @@ type GatewayServiceConfig struct {
 }
 
 type ImageServiceConfig struct {
-	CacheURL                       string                `key:"cacheURL" json:"cache_url"`
-	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
-	RegistryCredentialProviderName string                `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
-	Registries                     ImageRegistriesConfig `key:"registries" json:"registries"`
-	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
-	EnableTLS                      bool                  `key:"enableTLS" json:"enable_tls"`
-	BuildContainerCpu              int64                 `key:"buildContainerCpu" json:"build_container_cpu"`
-	BuildContainerMemory           int64                 `key:"buildContainerMemory" json:"build_container_memory"`
-	BuildContainerPoolSelector     string                `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
-	Runner                         RunnerConfig          `key:"runner" json:"runner"`
+	CacheURL                       string                    `key:"cacheURL" json:"cache_url"`
+	CacheConfig                    blobcache.BlobCacheConfig `key:"cacheConfig" json:"cache_config"`
+	CachedEnabled                  bool                      `key:"cachedEnabled" json:"cache_enabled"`
+	RegistryStore                  string                    `key:"registryStore" json:"registry_store"`
+	RegistryCredentialProviderName string                    `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
+	Registries                     ImageRegistriesConfig     `key:"registries" json:"registries"`
+	LocalCacheEnabled              bool                      `key:"localCacheEnabled" json:"local_cache_enabled"`
+	EnableTLS                      bool                      `key:"enableTLS" json:"enable_tls"`
+	BuildContainerCpu              int64                     `key:"buildContainerCpu" json:"build_container_cpu"`
+	BuildContainerMemory           int64                     `key:"buildContainerMemory" json:"build_container_memory"`
+	BuildContainerPoolSelector     string                    `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
+	Runner                         RunnerConfig              `key:"runner" json:"runner"`
 }
 
 type ImageRegistriesConfig struct {

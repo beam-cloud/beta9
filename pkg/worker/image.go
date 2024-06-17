@@ -26,6 +26,7 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	runc "github.com/beam-cloud/go-runc"
 )
 
@@ -63,7 +64,7 @@ func getImageMountPath(workerId string) string {
 
 type ImageClient struct {
 	registry           *common.ImageRegistry
-	cacheClient        *CacheClient
+	cacheClient        *blobcache.BlobCacheClient
 	imageCachePath     string
 	imageMountPath     string
 	imageBundlePath    string
@@ -84,9 +85,10 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		return nil, err
 	}
 
-	var cacheClient *CacheClient = nil
-	if config.CacheURL != "" {
-		cacheClient, err = NewCacheClient(config.CacheURL, "")
+	var client *blobcache.BlobCacheClient = nil
+
+	if config.CachedEnabled {
+		client, err = blobcache.NewBlobCacheClient(context.TODO(), config.CacheConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -95,7 +97,7 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 	c := &ImageClient{
 		config:             config,
 		registry:           registry,
-		cacheClient:        cacheClient,
+		cacheClient:        client,
 		imageBundlePath:    imageBundlePath,
 		imageCachePath:     getImageCachePath(),
 		imageMountPath:     getImageMountPath(workerId),
