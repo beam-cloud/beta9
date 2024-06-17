@@ -46,6 +46,7 @@ func (rb *RingBuffer[T]) Pop() (T, bool) {
 	}
 
 	request = rb.buffer[rb.head]
+	rb.buffer[rb.head] = *new(T) // Clear the value
 	rb.head = (rb.head + 1) % rb.size
 	rb.count--
 

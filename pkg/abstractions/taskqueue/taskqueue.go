@@ -154,7 +154,7 @@ func (tq *RedisTaskQueue) getStubConfig(stubId string) (*types.StubConfigV1, err
 	if !exists {
 		stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId)
 		if err != nil {
-			return nil, nil
+			return nil, err
 		}
 
 		var stubConfig types.StubConfigV1 = types.StubConfigV1{}
@@ -545,8 +545,8 @@ func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...fun
 
 	// Monitor and then clean up the instance once it's done
 	go instance.Monitor()
-	go func(q *taskQueueInstance) {
-		<-q.Ctx.Done()
+	go func(i *taskQueueInstance) {
+		<-i.Ctx.Done()
 		tq.queueInstances.Delete(stubId)
 	}(instance)
 

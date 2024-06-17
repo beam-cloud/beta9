@@ -81,12 +81,12 @@ func (wpc *WorkerPoolControllerForTest) generateWorkerId() string {
 func (wpc *WorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := wpc.generateWorkerId()
 	worker := &types.Worker{
-		Id:       workerId,
-		Cpu:      cpu,
-		Memory:   memory,
-		Gpu:      gpuType,
-		GpuCount: gpuCount,
-		Status:   types.WorkerStatusPending,
+		Id:           workerId,
+		FreeCpu:      cpu,
+		FreeMemory:   memory,
+		Gpu:          gpuType,
+		FreeGpuCount: gpuCount,
+		Status:       types.WorkerStatusPending,
 	}
 
 	// Add the worker state
@@ -261,10 +261,10 @@ func TestSelectGPUWorker(t *testing.T) {
 	assert.NotNil(t, wb)
 
 	newWorker := &types.Worker{
-		Status: types.WorkerStatusPending,
-		Cpu:    1000,
-		Memory: 1000,
-		Gpu:    "A10G",
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Gpu:        "A10G",
 	}
 
 	// Create a new worker
@@ -309,10 +309,10 @@ func TestSelectCPUWorker(t *testing.T) {
 	assert.NotNil(t, wb)
 
 	newWorker := &types.Worker{
-		Status: types.WorkerStatusPending,
-		Cpu:    2000,
-		Memory: 2000,
-		Gpu:    "",
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    2000,
+		FreeMemory: 2000,
+		Gpu:        "",
 	}
 
 	// Create a new worker
@@ -348,8 +348,8 @@ func TestSelectCPUWorker(t *testing.T) {
 
 	updatedWorker, err := wb.workerRepo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(0), updatedWorker.Cpu)
-	assert.Equal(t, int64(0), updatedWorker.Memory)
+	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
 	assert.Equal(t, "", updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusPending, updatedWorker.Status)
 }
@@ -362,20 +362,20 @@ func TestRequiresPoolSelectorWorker(t *testing.T) {
 	newWorkerWithRequiresPoolSelector := &types.Worker{
 		Id:                   "worker1",
 		Status:               types.WorkerStatusAvailable,
-		Cpu:                  2000,
-		Memory:               2000,
+		FreeCpu:              2000,
+		FreeMemory:           2000,
 		Gpu:                  "",
 		RequiresPoolSelector: true,
 		PoolName:             "cpu",
 	}
 
 	newWorkerWithoutRequiresPoolSelector := &types.Worker{
-		Id:       "worker2",
-		Status:   types.WorkerStatusAvailable,
-		Cpu:      2000,
-		Memory:   2000,
-		Gpu:      "",
-		PoolName: "cpu2",
+		Id:         "worker2",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    2000,
+		FreeMemory: 2000,
+		Gpu:        "",
+		PoolName:   "cpu2",
 	}
 
 	// Create a new worker with the correct pool selector
@@ -422,8 +422,8 @@ func TestRequiresPoolSelectorWorker(t *testing.T) {
 	updatedWorker, err := wb.workerRepo.GetWorkerById(newWorkerWithRequiresPoolSelector.Id)
 	assert.Nil(t, err)
 
-	assert.Equal(t, int64(1000), updatedWorker.Cpu)
-	assert.Equal(t, int64(1000), updatedWorker.Memory)
+	assert.Equal(t, int64(1000), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(1000), updatedWorker.FreeMemory)
 	assert.Equal(t, "", updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusAvailable, updatedWorker.Status)
 }
@@ -435,8 +435,8 @@ func TestSelectBuildWorker(t *testing.T) {
 
 	newWorker := &types.Worker{
 		Status:               types.WorkerStatusPending,
-		Cpu:                  2000,
-		Memory:               2000,
+		FreeCpu:              2000,
+		FreeMemory:           2000,
 		Gpu:                  "",
 		PoolName:             "beta9-build",
 		RequiresPoolSelector: true,
@@ -463,8 +463,8 @@ func TestSelectBuildWorker(t *testing.T) {
 
 	updatedWorker, err := wb.workerRepo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(0), updatedWorker.Cpu)
-	assert.Equal(t, int64(0), updatedWorker.Memory)
+	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
 	assert.Equal(t, "", updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusPending, updatedWorker.Status)
 }
@@ -477,8 +477,8 @@ type BackendRepoConcurrencyLimitsForTest struct {
 
 func (b *BackendRepoConcurrencyLimitsForTest) GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error) {
 	return &types.ConcurrencyLimit{
-		GPULimit:     b.GPUConcurrencyLimit,
-		CPUCoreLimit: b.CPUConcurrencyLimit,
+		GPULimit:          b.GPUConcurrencyLimit,
+		CPUMillicoreLimit: b.CPUConcurrencyLimit,
 	}, nil
 }
 

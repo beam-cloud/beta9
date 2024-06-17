@@ -126,7 +126,13 @@ func (p *Proxy) startServiceProxy(service types.InternalService, listener net.Li
 	if p.config.Tailscale.Enabled {
 		go func() {
 			for {
-				hostName := fmt.Sprintf("%s-%s.%s.%s:%d", service.Name, serviceId, p.config.Tailscale.User, p.config.Tailscale.HostName, service.LocalPort)
+				hostName := fmt.Sprintf("%s-%s.%s:%d", service.Name, serviceId, p.config.Tailscale.HostName, service.LocalPort)
+
+				// If user is != "", add it into hostname (for self-managed control servers like headscale)
+				if p.config.Tailscale.User != "" {
+					hostName = fmt.Sprintf("%s-%s.%s.%s:%d", service.Name, serviceId, p.config.Tailscale.User, p.config.Tailscale.HostName, service.LocalPort)
+				}
+
 				err := p.tailscaleRepo.SetHostname(service.Name, serviceId, hostName)
 				if err != nil {
 					log.Printf("Unable to set tailscale hostname: %+v\n", err)

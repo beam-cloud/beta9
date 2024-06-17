@@ -183,7 +183,7 @@ class TaskQueueWorker:
         except (grpc.RpcError, OSError):
             return None
 
-    async def _monitor_task(
+    def _monitor_task(
         self,
         *,
         context: FunctionContext,

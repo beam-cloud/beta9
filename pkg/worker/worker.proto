@@ -9,7 +9,7 @@ service RunCService {
   rpc RunCExec(RunCExecRequest) returns (RunCExecResponse) {}
   rpc RunCStatus(RunCStatusRequest) returns (RunCStatusResponse) {}
   rpc RunCStreamLogs(RunCStreamLogsRequest) returns (stream RunCLogEntry) {}
-  rpc RunCArchive(RunCArchiveRequest) returns (RunCArchiveResponse) {}
+  rpc RunCArchive(RunCArchiveRequest) returns (stream RunCArchiveResponse) {}
 }
 
 message RunCKillRequest { string container_id = 1; }
@@ -36,4 +36,9 @@ message RunCArchiveRequest {
   string image_id = 2;
 }
 
-message RunCArchiveResponse { bool ok = 1; }
+message RunCArchiveResponse {
+  bool done = 1;
+  bool success = 2;
+  int32 progress = 3;
+  string error_msg = 4;
+}

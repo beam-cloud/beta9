@@ -11,6 +11,7 @@ from ..abstractions.base.runner import (
 )
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
+from ..channel import with_grpc_error_handling
 from ..clients.function import (
     FunctionInvokeRequest,
     FunctionInvokeResponse,
@@ -45,6 +46,11 @@ class Function(RunnerAbstraction):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
         volumes (Optional[List[Volume]]):
             A list of storage volumes to be associated with the function. Default is [].
+        secrets (Optional[List[str]):
+            A list of secrets that are injected into the container as environment variables. Default is [].
+        name (Optional[str]):
+            An optional name for this function, used during deployment. If not specified, you must specify the name
+            at deploy time with the --name argument
     Example:
         ```python
         from beta9 import function, Image
@@ -74,6 +80,8 @@ class Function(RunnerAbstraction):
         retries: int = 3,
         callback_url: Optional[str] = "",
         volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
+        name: Optional[str] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -84,6 +92,8 @@ class Function(RunnerAbstraction):
             retries=retries,
             callback_url=callback_url,
             volumes=volumes,
+            secrets=secrets,
+            name=name,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None
@@ -108,6 +118,7 @@ class _CallableWrapper:
         self.func: Callable = func
         self.parent: Function = parent
 
+    @with_grpc_error_handling
     def __call__(self, *args, **kwargs) -> Any:
         if not is_local():
             return self.local(*args, **kwargs)
@@ -121,6 +132,7 @@ class _CallableWrapper:
         with terminal.progress("Working..."):
             return self._call_remote(*args, **kwargs)
 
+    @with_grpc_error_handling
     def _call_remote(self, *args, **kwargs) -> Any:
         args = cloudpickle.dumps(
             {
@@ -162,6 +174,12 @@ class _CallableWrapper:
         terminal.error("Serve has not yet been implemented for functions.")
 
     def deploy(self, name: str) -> bool:
+        name = name or self.parent.name
+        if not name or name == "":
+            terminal.error(
+                "You must specify an app name (either in the decorator or via the --name argument)."
+            )
+
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=FUNCTION_DEPLOYMENT_STUB_TYPE, force_create_stub=True
         ):

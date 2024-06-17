@@ -11,7 +11,9 @@ import (
 	"syscall"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
+	"github.com/beam-cloud/beta9/pkg/abstractions/secret"
 	"github.com/beam-cloud/beta9/pkg/task"
+	"github.com/labstack/echo-contrib/pprof"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"google.golang.org/grpc"
@@ -140,6 +142,10 @@ func (g *Gateway) initHttp() error {
 	e.HideBanner = true
 	e.HidePort = true
 
+	if g.Config.DebugMode {
+		pprof.Register(e)
+	}
+
 	e.Pre(middleware.RemoveTrailingSlash())
 	configureEchoLogger(e, g.Config.GatewayService.HTTP.EnablePrettyLogs)
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
@@ -164,10 +170,10 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.Config)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.Config)
 	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.BackendRepo, g.TaskDispatcher, g.Config)
-	apiv1.NewDeploymentGroup(g.baseRouteGroup.Group("/deployment", authMiddleware), g.BackendRepo, g.Config)
-	apiv1.NewContainerGroup(g.baseRouteGroup.Group("/container", authMiddleware), g.BackendRepo, g.ContainerRepo, g.Config)
+	apiv1.NewContainerGroup(g.baseRouteGroup.Group("/container", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.Config)
 	apiv1.NewStubGroup(g.baseRouteGroup.Group("/stub", authMiddleware), g.BackendRepo, g.Config)
 	apiv1.NewConcurrencyLimitGroup(g.baseRouteGroup.Group("/concurrency-limit", authMiddleware), g.BackendRepo, g.WorkspaceRepo)
+	apiv1.NewDeploymentGroup(g.baseRouteGroup.Group("/deployment", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.RedisClient, g.Config)
 
 	return nil
 }
@@ -296,6 +302,10 @@ func (g *Gateway) registerServices() error {
 		return err
 	}
 	pb.RegisterOutputServiceServer(g.grpcServer, o)
+
+	// Register Secret service
+	ss := secret.NewSecretService(g.BackendRepo, g.rootRouteGroup)
+	pb.RegisterSecretServiceServer(g.grpcServer, ss)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService(g.Scheduler)

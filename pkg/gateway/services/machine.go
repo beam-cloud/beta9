@@ -126,6 +126,7 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 		PoolName:          in.PoolName,
 		RegistrationToken: token.Key,
 		Gpu:               pool.GPUType,
+		AutoConsolidate:   false,
 	})
 	if err != nil {
 		return &pb.CreateMachineResponse{

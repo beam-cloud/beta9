@@ -65,9 +65,9 @@ type SquirrelCursorPaginator[DBType any] struct {
 func getOperator(sortOrder string) string {
 	lowercaseSortOrder := strings.ToLower(sortOrder)
 	if lowercaseSortOrder == "asc" {
-		return ">"
+		return ">="
 	}
-	return "<"
+	return "<="
 }
 
 func EncodeCursor(cursor DatetimeCursor) string {
@@ -123,7 +123,6 @@ func Paginate[DBType any](settings SquirrelCursorPaginator[DBType], cursorString
 	}
 
 	sql, args, err := settings.SelectBuilder.ToSql()
-
 	if err != nil {
 		return nil, err
 	}

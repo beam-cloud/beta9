@@ -211,12 +211,15 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 	}
 
 	return job, &types.Worker{
-		Id:       workerId,
-		Cpu:      workerCpu,
-		Memory:   workerMemory,
-		Gpu:      workerGpuType,
-		GpuCount: workerGpuCount,
-		Status:   types.WorkerStatusPending,
+		Id:            workerId,
+		FreeCpu:       workerCpu,
+		FreeMemory:    workerMemory,
+		FreeGpuCount:  workerGpuCount,
+		TotalCpu:      workerCpu,
+		TotalMemory:   workerMemory,
+		TotalGpuCount: workerGpuCount,
+		Gpu:           workerGpuType,
+		Status:        types.WorkerStatusPending,
 	}
 }
 

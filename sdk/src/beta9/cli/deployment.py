@@ -47,7 +47,7 @@ def common(**_):
     "-n",
     type=click.STRING,
     help="The name the deployment.",
-    required=True,
+    required=False,
 )
 @click.argument(
     "entrypoint",
@@ -82,8 +82,8 @@ def management():
 @click.option(
     "--name",
     "-n",
-    help="The name the deployment.",
-    required=True,
+    help="The name of the deployment.",
+    required=False,
 )
 @click.option(
     "--entrypoint",
@@ -101,15 +101,20 @@ def create_deployment(service: ServiceClient, name: str, entrypoint: str):
     module_name = module_path.replace(".py", "").replace(os.path.sep, ".")
 
     if not Path(module_path).exists():
-        terminal.error(f"Unable to find file '{module_path}'")
+        terminal.error(f"Unable to find file: '{module_path}'")
+
     if not func_name:
-        terminal.error(f"Unable to parse function '{func_name}'")
+        terminal.error(
+            "Invalid handler function specified. Expected format: beam deploy [file.py]:[function]"
+        )
 
     module = importlib.import_module(module_name)
 
     user_func = getattr(module, func_name, None)
     if user_func is None:
-        terminal.error(f"Unable to find function '{func_name}'")
+        terminal.error(
+            f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{func_name}'"
+        )
 
     if not user_func.deploy(name=name):  # type:ignore
         terminal.error("Deployment failed ☠️")

@@ -26,11 +26,11 @@ func TestAddAndRemoveWorker(t *testing.T) {
 	repo := NewWorkerRedisRepositoryForTest(rdb)
 
 	newWorker := &types.Worker{
-		Id:     "worker1",
-		Status: types.WorkerStatusPending,
-		Cpu:    1000,
-		Memory: 1000,
-		Gpu:    "",
+		Id:         "worker1",
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Gpu:        "",
 	}
 
 	err = repo.AddWorker(newWorker)
@@ -38,8 +38,8 @@ func TestAddAndRemoveWorker(t *testing.T) {
 
 	worker, err := repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
-	assert.Equal(t, newWorker.Cpu, worker.Cpu)
-	assert.Equal(t, newWorker.Memory, worker.Memory)
+	assert.Equal(t, newWorker.FreeCpu, worker.FreeCpu)
+	assert.Equal(t, newWorker.FreeMemory, worker.FreeMemory)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 	assert.Equal(t, newWorker.Status, worker.Status)
 
@@ -61,11 +61,11 @@ func TestGetWorkerById(t *testing.T) {
 	repo := NewWorkerRedisRepositoryForTest(rdb)
 
 	newWorker := &types.Worker{
-		Id:     "worker1",
-		Status: types.WorkerStatusPending,
-		Cpu:    1000,
-		Memory: 1000,
-		Gpu:    "",
+		Id:         "worker1",
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Gpu:        "",
 	}
 
 	err = repo.AddWorker(newWorker)
@@ -73,8 +73,8 @@ func TestGetWorkerById(t *testing.T) {
 
 	worker, err := repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
-	assert.Equal(t, newWorker.Cpu, worker.Cpu)
-	assert.Equal(t, newWorker.Memory, worker.Memory)
+	assert.Equal(t, newWorker.FreeCpu, worker.FreeCpu)
+	assert.Equal(t, newWorker.FreeMemory, worker.FreeMemory)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 	assert.Equal(t, newWorker.Status, worker.Status)
 }
@@ -87,11 +87,11 @@ func TestToggleWorkerAvailable(t *testing.T) {
 	repo := NewWorkerRedisRepositoryForTest(rdb)
 
 	newWorker := &types.Worker{
-		Id:     "worker1",
-		Status: types.WorkerStatusPending,
-		Cpu:    1000,
-		Memory: 1000,
-		Gpu:    "",
+		Id:         "worker1",
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Gpu:        "",
 	}
 
 	// Create a pending worker
@@ -100,8 +100,8 @@ func TestToggleWorkerAvailable(t *testing.T) {
 
 	worker, err := repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
-	assert.Equal(t, newWorker.Cpu, worker.Cpu)
-	assert.Equal(t, newWorker.Memory, worker.Memory)
+	assert.Equal(t, newWorker.FreeCpu, worker.FreeCpu)
+	assert.Equal(t, newWorker.FreeMemory, worker.FreeMemory)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 	assert.Equal(t, newWorker.Status, worker.Status)
 
@@ -112,8 +112,8 @@ func TestToggleWorkerAvailable(t *testing.T) {
 	// Retrieve it again and check fields
 	worker, err = repo.GetWorkerById(worker.Id)
 	assert.Nil(t, err)
-	assert.Equal(t, newWorker.Cpu, worker.Cpu)
-	assert.Equal(t, newWorker.Memory, worker.Memory)
+	assert.Equal(t, newWorker.FreeCpu, worker.FreeCpu)
+	assert.Equal(t, newWorker.FreeMemory, worker.FreeMemory)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 	assert.Equal(t, types.WorkerStatusAvailable, worker.Status)
 }
@@ -127,12 +127,12 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	assert.Nil(t, err)
 
 	newWorker := &types.Worker{
-		Id:       "worker1",
-		Status:   types.WorkerStatusPending,
-		Cpu:      0,
-		Memory:   0,
-		Gpu:      "A10G",
-		GpuCount: 0,
+		Id:           "worker1",
+		Status:       types.WorkerStatusPending,
+		FreeCpu:      0,
+		FreeMemory:   0,
+		Gpu:          "A10G",
+		FreeGpuCount: 0,
 	}
 
 	// Create a new worker
@@ -142,8 +142,8 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	// Retrieve the worker
 	worker, err := repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
-	assert.Equal(t, newWorker.Cpu, worker.Cpu)
-	assert.Equal(t, newWorker.Memory, worker.Memory)
+	assert.Equal(t, newWorker.FreeCpu, worker.FreeCpu)
+	assert.Equal(t, newWorker.FreeMemory, worker.FreeMemory)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 	assert.Equal(t, newWorker.Status, worker.Status)
 	assert.Equal(t, int64(0), newWorker.ResourceVersion)
@@ -162,8 +162,8 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	// Retrieve the updated worker
 	updatedWorker, err := repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
-	assert.Equal(t, request.Cpu, updatedWorker.Cpu)
-	assert.Equal(t, request.Memory, updatedWorker.Memory)
+	assert.Equal(t, request.Cpu, updatedWorker.FreeCpu)
+	assert.Equal(t, request.Memory, updatedWorker.FreeMemory)
 	assert.Equal(t, request.Gpu, updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusPending, worker.Status)
 	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
@@ -184,8 +184,8 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	assert.Equal(t, int64(2), updatedWorker.ResourceVersion)
 	assert.Nil(t, err)
 
-	assert.Equal(t, int64(400), updatedWorker.Cpu)
-	assert.Equal(t, int64(900), updatedWorker.Memory)
+	assert.Equal(t, int64(400), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(900), updatedWorker.FreeMemory)
 	assert.Equal(t, request.Gpu, updatedWorker.Gpu)
 }
 
@@ -197,11 +197,11 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 	repo := NewWorkerRedisRepositoryForTest(rdb)
 
 	newWorker := &types.Worker{
-		Id:     "worker1",
-		Status: types.WorkerStatusPending,
-		Cpu:    1000,
-		Memory: 1000,
-		Gpu:    "",
+		Id:         "worker1",
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Gpu:        "",
 	}
 
 	// Create a new worker
@@ -211,8 +211,8 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 	// Retrieve the worker
 	worker, err := repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
-	assert.Equal(t, newWorker.Cpu, worker.Cpu)
-	assert.Equal(t, newWorker.Memory, worker.Memory)
+	assert.Equal(t, newWorker.FreeCpu, worker.FreeCpu)
+	assert.Equal(t, newWorker.FreeMemory, worker.FreeMemory)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 	assert.Equal(t, newWorker.Status, worker.Status)
 	assert.Equal(t, int64(0), newWorker.ResourceVersion)
@@ -230,8 +230,8 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 	// Retrieve the updated worker
 	updatedWorker, err := repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
-	assert.Equal(t, worker.Cpu-firstRequest.Cpu, updatedWorker.Cpu)
-	assert.Equal(t, worker.Memory-firstRequest.Memory, updatedWorker.Memory)
+	assert.Equal(t, worker.FreeCpu-firstRequest.Cpu, updatedWorker.FreeCpu)
+	assert.Equal(t, worker.FreeMemory-firstRequest.Memory, updatedWorker.FreeMemory)
 	assert.Equal(t, firstRequest.Gpu, updatedWorker.Gpu)
 	assert.Equal(t, worker.Status, updatedWorker.Status)
 	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
@@ -263,8 +263,8 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 	updatedWorker, err = repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
 
-	assert.Equal(t, worker.Cpu-firstRequest.Cpu-secondRequest.Cpu-thirdRequest.Cpu, updatedWorker.Cpu)
-	assert.Equal(t, worker.Memory-firstRequest.Memory-secondRequest.Memory-thirdRequest.Memory, updatedWorker.Memory)
+	assert.Equal(t, worker.FreeCpu-firstRequest.Cpu-secondRequest.Cpu-thirdRequest.Cpu, updatedWorker.FreeCpu)
+	assert.Equal(t, worker.FreeMemory-firstRequest.Memory-secondRequest.Memory-thirdRequest.Memory, updatedWorker.FreeMemory)
 	assert.Equal(t, worker.Gpu, updatedWorker.Gpu)
 	assert.Equal(t, int64(3), updatedWorker.ResourceVersion)
 }
@@ -280,12 +280,12 @@ func TestGetAllWorkers(t *testing.T) {
 	nWorkers := 100
 	for i := 0; i < nWorkers; i++ {
 		err := repo.AddWorker(&types.Worker{
-			Id:       fmt.Sprintf("worker-available-%d", i),
-			Status:   types.WorkerStatusAvailable,
-			Cpu:      1000,
-			Memory:   1000,
-			Gpu:      "A10G",
-			GpuCount: 1,
+			Id:           fmt.Sprintf("worker-available-%d", i),
+			Status:       types.WorkerStatusAvailable,
+			FreeCpu:      1000,
+			FreeMemory:   1000,
+			Gpu:          "A10G",
+			FreeGpuCount: 1,
 		})
 		assert.Nil(t, err)
 	}
@@ -293,12 +293,12 @@ func TestGetAllWorkers(t *testing.T) {
 	// Create a bunch of pending workers
 	for i := 0; i < nWorkers; i++ {
 		err := repo.AddWorker(&types.Worker{
-			Id:       fmt.Sprintf("worker-pending-%d", i),
-			Status:   types.WorkerStatusPending,
-			Cpu:      1000,
-			Memory:   1000,
-			Gpu:      "A10G",
-			GpuCount: 1,
+			Id:           fmt.Sprintf("worker-pending-%d", i),
+			Status:       types.WorkerStatusPending,
+			FreeCpu:      1000,
+			FreeMemory:   1000,
+			Gpu:          "A10G",
+			FreeGpuCount: 1,
 		})
 		assert.Nil(t, err)
 	}

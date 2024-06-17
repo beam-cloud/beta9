@@ -21,21 +21,20 @@ func isMap(payload map[string]interface{}) bool {
 }
 
 func SerializeHttpPayload(ctx echo.Context) (*types.TaskPayload, error) {
-	body, err := io.ReadAll(ctx.Request().Body)
-	if err != nil {
-		return nil, errors.New("failed to read request body")
-	}
+	defer ctx.Request().Body.Close()
 
-	// Handle completely empty body
-	if len(body) == 0 {
-		return &types.TaskPayload{
-			Args:   nil,
-			Kwargs: make(map[string]interface{}),
-		}, nil
-	}
+	// Create a JSON decoder
+	decoder := json.NewDecoder(ctx.Request().Body)
 
+	// Decode the JSON directly from the reader
 	payload := map[string]interface{}{}
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := decoder.Decode(&payload); err != nil {
+		if err == io.EOF {
+			return &types.TaskPayload{
+				Args:   nil,
+				Kwargs: make(map[string]interface{}),
+			}, nil
+		}
 		return nil, errors.New("invalid request payload")
 	}
 

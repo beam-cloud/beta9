@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
@@ -9,6 +10,7 @@ from ..abstractions.base.runner import (
 )
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
+from ..channel import with_grpc_error_handling
 from ..clients.endpoint import (
     EndpointServiceStub,
     StartEndpointServeRequest,
@@ -60,6 +62,14 @@ class Endpoint(RunnerAbstraction):
             The maximum number of tasks that can be pending in the queue. If the number of
             pending tasks exceeds this value, the task queue will stop accepting new tasks.
             Default is 100.
+        secrets (Optional[List[str]):
+            A list of secrets that are injected into the container as environment variables. Default is [].
+        name (Optional[str]):
+            An optional name for this endpoint, used during deployment. If not specified, you must specify the name
+            at deploy time with the --name argument
+        authorized (Optional[str]):
+            If false, allows the endpoint to be invoked without an auth token.
+            Default is True.
     Example:
         ```python
         from beta9 import endpoint, Image
@@ -70,6 +80,7 @@ class Endpoint(RunnerAbstraction):
             gpu="T4",
             image=Image(python_packages=["torch"]),
             keep_warm_seconds=1000,
+            name="my-app",
         )
         def multiply(**inputs):
             result = inputs["x"] * 2
@@ -90,6 +101,9 @@ class Endpoint(RunnerAbstraction):
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
+        name: Optional[str] = None,
+        authorized: Optional[bool] = True,
     ):
         super().__init__(
             cpu=cpu,
@@ -104,6 +118,9 @@ class Endpoint(RunnerAbstraction):
             max_pending_tasks=max_pending_tasks,
             on_start=on_start,
             volumes=volumes,
+            secrets=secrets,
+            name=name,
+            authorized=authorized,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
@@ -133,6 +150,12 @@ class _CallableWrapper:
         return self.func(*args, **kwargs)
 
     def deploy(self, name: str) -> bool:
+        name = name or self.parent.name
+        if not name or name == "":
+            terminal.error(
+                "You must specify an app name (either in the decorator or via the --name argument)."
+            )
+
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=ENDPOINT_DEPLOYMENT_STUB_TYPE, force_create_stub=True
         ):
@@ -155,6 +178,7 @@ class _CallableWrapper:
 
         return deploy_response.ok
 
+    @with_grpc_error_handling
     def serve(self):
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=ENDPOINT_SERVE_STUB_TYPE, force_create_stub=True
@@ -171,9 +195,8 @@ class _CallableWrapper:
                     invocation_url=f"{base_url}/endpoint/id/{self.parent.stub_id}"
                 )
 
-                return self.parent.run_sync(
-                    self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
-                )
+                return self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
+
         except KeyboardInterrupt:
             self._handle_serve_interrupt()
 
@@ -195,24 +218,30 @@ class _CallableWrapper:
 
         terminal.print("Goodbye 👋")
 
-    async def _serve(self, *, dir: str, object_id: str):
-        sync_task = self.parent.loop.create_task(
-            self.parent.sync_dir_to_workspace(dir=dir, object_id=object_id)
-        )
-        try:
-            for r in self.parent.endpoint_stub.start_endpoint_serve(
-                StartEndpointServeRequest(
-                    stub_id=self.parent.stub_id,
-                )
-            ):
-                if r.output != "":
-                    terminal.detail(r.output, end="")
+    def _serve(self, *, dir: str, object_id: str):
+        with ThreadPoolExecutor() as pool:
+            sync_task = pool.submit(self.parent.sync_dir_to_workspace, dir=dir, object_id=object_id)
 
-                if r.done or r.exit_code != 0:
-                    last_response = r
-                    break
+            def _run_serve():
+                for r in self.parent.endpoint_stub.start_endpoint_serve(
+                    StartEndpointServeRequest(
+                        stub_id=self.parent.stub_id,
+                    )
+                ):
+                    if r.output != "":
+                        terminal.detail(r.output, end="")
 
-            if last_response is None or not last_response.done or last_response.exit_code != 0:
-                terminal.error("Serve container failed ❌")
-        finally:
-            sync_task.cancel()
+                    if r.done or r.exit_code != 0:
+                        last_response = r
+                        break
+
+                if last_response is None or not last_response.done or last_response.exit_code != 0:
+                    terminal.error("Serve container failed ❌")
+
+            try:
+                run_task = pool.submit(_run_serve)
+            except KeyboardInterrupt:
+                raise
+            finally:
+                run_task.cancel()
+                sync_task.cancel()
