@@ -80,7 +80,7 @@ jobs:
   verify_protobufs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v3
 
       - name: Set up Go
         uses: actions/setup-go@v3
@@ -98,8 +98,6 @@ jobs:
         with:
           python-version: "3.11.9"
           cache: 'pip' 
-        run: |
-          pip install -U "betterproto-beta9[compiler]" betterproto-beta9 grpcio
       
       - name: Install Protobuf Compilers
         run: |
@@ -107,6 +105,10 @@ jobs:
           sudo apt install protobuf-compiler -y
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
+        
+      - name: Install Python GRPC Package
+        run: |
+          pip install -U "betterproto-beta9[compiler]" betterproto-beta9 grpcio
           
       - name: Verify Protobuf Codegen
         env:
