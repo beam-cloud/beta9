@@ -52,13 +52,13 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 	}
 	remoteConfig.GatewayService.Host = strings.Split(gatewayGrpcHostname, ":")[0]
 
-	if baseConfig.ImageService.CachedEnabled {
+	if baseConfig.ImageService.BlobCacheEnabled {
 		blobcacheRedisHostname, err := tailscale.GetHostnameForService("blobcache-redis")
 		if err != nil {
 			return nil, err
 		}
 
-		remoteConfig.ImageService.CacheConfig.Metadata.RedisAddr = blobcacheRedisHostname
+		remoteConfig.ImageService.BlobCache.Metadata.RedisAddr = blobcacheRedisHostname
 	}
 
 	return &remoteConfig, nil
