@@ -16,16 +16,33 @@ permissions:
 
 jobs:
   build:
-    if: startsWith(github.ref, 'refs/tags/cli-') || inputs.app_version != ''
-    runs-on: ${{ matrix.os }}
+    if: (github.event_name == 'release' && startsWith(github.ref_name, 'cli-')) || inputs.app_version != ''
+    name: build (${{ matrix.platform.target_alt }})
+    timeout-minutes: 5
     outputs:
       app_version: ${{ steps.set-build-info.outputs.app_version }}
 
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest]
-        arch: [x86_64, arm64]
+        platform:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            target_alt: darwin-arm64
+            bin_name: beta9
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            target_alt: darwin-amd64
+            bin_name: beta9
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            target_alt: linux-amd64
+            bin_name: beta9
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            target_alt: linux-arm64
+            bin_name: beta9
 
+    runs-on: ${{ matrix.platform.os }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,23 +56,12 @@ jobs:
             echo "app_version=${GITHUB_REF_NAME#cli-}" >> $GITHUB_OUTPUT
           fi
 
-          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
-            echo "arch=arm64" >> $GITHUB_OUTPUT
-          else
-            echo "arch=amd64" >> $GITHUB_OUTPUT
-          fi
-
-          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-            echo "os_name=linux" >> $GITHUB_OUTPUT
-          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            echo "os_name=darwin" >> $GITHUB_OUTPUT
-          fi
-
       - name: Setup Rust
         uses: moonrepo/setup-rust@v1
+        with:
+          targets: "${{ matrix.platform.target }}"
 
       - name: Setup PyApp
-        id: setup-pyapp
         env:
           PYAPP_VERSION: 0.22.0
         run: |
@@ -64,43 +70,46 @@ jobs:
           mv pyapp-v* pyapp-latest
 
       - name: Build binary
-        id: build-binary
+        uses: houseabsolute/actions-rust-cross@v0.0.13
         env:
           PYAPP_PROJECT_NAME: "beta9"
           PYAPP_PROJECT_VERSION: "${{ steps.set-build-info.outputs.app_version }}"
           PYAPP_FULL_ISOLATION: "true"
           PYAPP_DISTRIBUTION_EMBED: "true"
+        with:
+          command: "build"
+          args: "--release --locked"
+          target: "${{ matrix.platform.target }}"
+          strip: true
+          working-directory: pyapp-latest
+
+      - name: Prepare artifact
+        id: prepare-artifact
+        env:
+          GZIP: "-9"
         run: |
-          cd pyapp-latest
+          mv -v pyapp-latest/target/${{ matrix.platform.target }}/release/pyapp pyapp-latest/target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin_name }}
+          cp -v pyapp-latest/target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin_name }} .
+          tar -cvzf ${{ matrix.platform.bin_name }}-${{ steps.set-build-info.outputs.app_version }}-${{ matrix.platform.target_alt }}.tar.gz ${{ matrix.platform.bin_name }}
+          echo "tar_file_path=$(pwd)/${{ matrix.platform.bin_name }}-${{ steps.set-build-info.outputs.app_version }}-${{ matrix.platform.target_alt }}.tar.gz" >> $GITHUB_OUTPUT
 
-          cargo build --release
-
-          mv target/release/pyapp ${PYAPP_PROJECT_NAME}
-
-          NAME=${PYAPP_PROJECT_NAME}-${PYAPP_PROJECT_VERSION}-${{ steps.set-build-info.outputs.os_name }}-${{ steps.set-build-info.outputs.arch }}
-          TAR_FILE_NAME=${NAME}.tar.gz
-          tar -cvf ${TAR_FILE_NAME} ${PYAPP_PROJECT_NAME}
-
-          echo "art_name=${NAME}" >> $GITHUB_OUTPUT
-          echo "bin_file_path=$(pwd)/${PYAPP_PROJECT_NAME}" >> $GITHUB_OUTPUT
-          echo "tar_file_path=$(pwd)/${TAR_FILE_NAME}" >> $GITHUB_OUTPUT
-
-      - name: Upload artifact to workflow
+      - name: Upload artifact to actions run
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.build-binary.outputs.art_name }}
-          path: ${{ steps.build-binary.outputs.bin_file_path }}
+          name: ${{ matrix.platform.bin_name }}-${{ steps.set-build-info.outputs.app_version }}-${{ matrix.platform.target_alt }}
+          path: ${{ matrix.platform.bin_name }}
           if-no-files-found: ignore
           compression-level: "9"
 
-      - name: Upload binary to release
-        if: inputs.app_version == ''
+      - name: Upload artifact to release
+        if: github.event_name == 'release' && startsWith(github.ref_name, 'cli-')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${GITHUB_REF_NAME} "${{ steps.build-binary.outputs.tar_file_path }}"
+          gh release upload ${GITHUB_REF_NAME} "${{ steps.prepare-artifact.outputs.tar_file_path }}"
 
   formula:
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'cli-')
     needs: build
     runs-on: ubuntu-latest
     steps:
