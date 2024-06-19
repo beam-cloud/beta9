@@ -24,7 +24,6 @@ import (
 )
 
 const (
-	buildContainerPrefix          string        = "build-"
 	defaultBuildContainerCpu      int64         = 1000
 	defaultBuildContainerMemory   int64         = 1024
 	defaultContainerSpinupTimeout time.Duration = 180 * time.Second
@@ -261,7 +260,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 }
 
 func (b *Builder) genContainerId() string {
-	return fmt.Sprintf("%s%s", buildContainerPrefix, uuid.New().String()[:8])
+	return fmt.Sprintf("%s%s", types.BuildContainerPrefix, uuid.New().String()[:8])
 }
 
 func (b *Builder) extractPackageName(pkg string) string {
