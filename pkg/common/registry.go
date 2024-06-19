@@ -167,8 +167,6 @@ func (s *S3Store) Size(ctx context.Context, key string) (int64, error) {
 
 // headObject returns the metadata of an object
 func (s *S3Store) headObject(ctx context.Context, key string) (*s3.HeadObjectOutput, error) {
-	// TODO: Currently the Tigris Storage Server's HeadObject API is inaccurate and out of sync
-	// the actual state of an object. This is a temporary workaround to verify the object's existence
 	_, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.config.BucketName),
 		Key:    aws.String(key),
