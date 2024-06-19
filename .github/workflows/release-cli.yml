@@ -9,6 +9,14 @@ on:
         description: Semantic version of release
         required: true
         type: string
+      app_name:
+        description: Determines the binary, archive, artifact, and formula names
+        type: string
+        default: beta9
+
+defaults:
+  run:
+    shell: bash
 
 permissions:
   actions: write
@@ -28,19 +36,23 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             target_alt: darwin-arm64
-            bin_name: beta9
+            bin_name: ${{ inputs.app_name }}
           - os: macos-latest
             target: x86_64-apple-darwin
             target_alt: darwin-amd64
-            bin_name: beta9
+            bin_name: ${{ inputs.app_name }}
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             target_alt: linux-amd64
-            bin_name: beta9
+            bin_name: ${{ inputs.app_name }}
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             target_alt: linux-arm64
-            bin_name: beta9
+            bin_name: ${{ inputs.app_name }}
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            target_alt: windows-amd64
+            bin_name: ${{ inputs.app_name }}.exe
 
     runs-on: ${{ matrix.platform.os }}
     steps:
@@ -72,7 +84,7 @@ jobs:
       - name: Build binary
         uses: houseabsolute/actions-rust-cross@v0.0.13
         env:
-          PYAPP_PROJECT_NAME: "beta9"
+          PYAPP_PROJECT_NAME: "${{ inputs.app_name }}"
           PYAPP_PROJECT_VERSION: "${{ steps.set-build-info.outputs.app_version }}"
           PYAPP_FULL_ISOLATION: "true"
           PYAPP_DISTRIBUTION_EMBED: "true"
@@ -96,7 +108,7 @@ jobs:
       - name: Upload artifact to actions run
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform.bin_name }}-${{ steps.set-build-info.outputs.app_version }}-${{ matrix.platform.target_alt }}
+          name: ${{ inputs.app_name }}-${{ steps.set-build-info.outputs.app_version }}-${{ matrix.platform.target_alt }}
           path: ${{ matrix.platform.bin_name }}
           if-no-files-found: ignore
           compression-level: "9"
@@ -121,7 +133,7 @@ jobs:
           event-type: update-formula
           client-payload: |-
             {
-              "name": "Beta9",
+              "name": "${{ inputs.app_name }}",
               "version": "${{ needs.build.outputs.app_version }}",
               "tag": "${{ github.ref_name }}",
               "repo": "${{ github.repository }}"
