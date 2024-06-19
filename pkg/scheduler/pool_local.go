@@ -190,8 +190,11 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 			Containers:                   containers,
 			Volumes:                      wpc.getWorkerVolumes(workerMemory),
 			EnableServiceLinks:           ptr.To(false),
-			DNSPolicy:                    corev1.DNSClusterFirstWithHostNet,
 		},
+	}
+
+	if wpc.config.Worker.HostNetwork {
+		podTemplate.Spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
 	}
 
 	if wpc.workerPool.Runtime != "" {
