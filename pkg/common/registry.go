@@ -119,6 +119,11 @@ func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 	tmpLocalPath := fmt.Sprintf("%s.%s", localPath, uuid.New().String()[:6])
 
+	_, err := s.headObject(ctx, key)
+	if err != nil {
+		return err
+	}
+
 	f, err := os.Create(tmpLocalPath)
 	if err != nil {
 		log.Println(err)
@@ -167,6 +172,17 @@ func (s *S3Store) Size(ctx context.Context, key string) (int64, error) {
 
 // headObject returns the metadata of an object
 func (s *S3Store) headObject(ctx context.Context, key string) (*s3.HeadObjectOutput, error) {
+	// TODO: Currently the Tigris Storage Server's HeadObject API is inaccurate and out of sync
+	// the actual state of an object. This is a temporary workaround to verify the object's existence
+	_, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.config.BucketName),
+		Key:    aws.String(key),
+		Range:  aws.String("bytes=0-0"),
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return s.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(s.config.BucketName),
 		Key:    aws.String(key),
