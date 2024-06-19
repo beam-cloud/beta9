@@ -119,11 +119,6 @@ func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 	tmpLocalPath := fmt.Sprintf("%s.%s", localPath, uuid.New().String()[:6])
 
-	_, err := s.headObject(ctx, key)
-	if err != nil {
-		return err
-	}
-
 	f, err := os.Create(tmpLocalPath)
 	if err != nil {
 		log.Println(err)
