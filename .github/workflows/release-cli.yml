@@ -26,7 +26,7 @@ jobs:
   build:
     if: (github.event_name == 'release' && startsWith(github.ref_name, 'cli-')) || inputs.app_version != ''
     name: build (${{ matrix.platform.target_alt }})
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
       app_version: ${{ steps.set-build-info.outputs.app_version }}
 
