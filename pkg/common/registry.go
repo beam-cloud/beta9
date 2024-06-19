@@ -167,6 +167,15 @@ func (s *S3Store) Size(ctx context.Context, key string) (int64, error) {
 
 // headObject returns the metadata of an object
 func (s *S3Store) headObject(ctx context.Context, key string) (*s3.HeadObjectOutput, error) {
+	_, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.config.BucketName),
+		Key:    aws.String(key),
+		Range:  aws.String("bytes=0-0"),
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return s.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(s.config.BucketName),
 		Key:    aws.String(key),
