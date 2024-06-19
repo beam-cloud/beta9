@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -118,9 +119,13 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 	return c, nil
 }
 
-func (c *ImageClient) PullLazy(imageId string) error {
+func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
+	imageId := request.ImageId
+
+	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
+
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
-	if !c.config.LocalCacheEnabled {
+	if !c.config.LocalCacheEnabled && !isBuildContainer {
 		localCachePath = ""
 	}
 

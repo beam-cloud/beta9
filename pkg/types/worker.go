@@ -11,6 +11,10 @@ const (
 	WorkerKeepAliveInterval        time.Duration = 15 * time.Second
 )
 
+const (
+	BuildContainerPrefix string = "build-"
+)
+
 type ContainerResourceUsage struct {
 	ContainerID       string `json:"ContainerID"`
 	CpuMillicoresUsed int64  `json:"CpuMillicoresUsed"`
