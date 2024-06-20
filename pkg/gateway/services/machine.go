@@ -113,7 +113,7 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 	}
 
 	// Create a one-time auth token
-	token, err := gws.backendRepo.CreateToken(ctx, *authInfo.Token.WorkspaceId, types.TokenTypeMachine, false)
+	token, err := gws.backendRepo.CreateToken(ctx, *authInfo.Token.WorkspaceId, types.TokenTypeMachine, true)
 	if err != nil {
 		return &pb.CreateMachineResponse{
 			Ok:     false,
