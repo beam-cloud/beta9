@@ -23,15 +23,10 @@ class SyncEventHandler(FileSystemEventHandler):
     def __init__(self, restart_callback):
         super().__init__()
         self.restart_callback = restart_callback
-
-    def on_created(self, event):
-        self._trigger_reload(event)
-
-    def on_modified(self, event):
-        self._trigger_reload(event)
-
-    def on_deleted(self, event):
-        self._trigger_reload(event)
+        self.on_created = self._trigger_reload
+        self.on_deleted = self._trigger_reload
+        self.on_modified = self._trigger_reload
+        self.on_moved = self._trigger_reload
 
     def _trigger_reload(self, event):
         if not event.is_directory and event.src_path.endswith(".py"):
@@ -98,7 +93,6 @@ class ServeGateway:
             self.restart_event.wait()
 
     def trigger_restart(self) -> None:
-        print("Detected file change, restarting...")
         self.restart_event.set()
 
 

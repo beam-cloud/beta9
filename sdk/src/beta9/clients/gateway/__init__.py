@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 class ReplaceObjectContentOperation(betterproto.Enum):
     WRITE = 0
     DELETE = 1
+    MOVED = 2
 
 
 @dataclass(eq=False, repr=False)
@@ -99,8 +100,10 @@ class PutObjectResponse(betterproto.Message):
 class ReplaceObjectContentRequest(betterproto.Message):
     object_id: str = betterproto.string_field(1)
     path: str = betterproto.string_field(2)
-    data: bytes = betterproto.bytes_field(3)
-    op: "ReplaceObjectContentOperation" = betterproto.enum_field(4)
+    new_path: str = betterproto.string_field(3)
+    is_dir: bool = betterproto.bool_field(4)
+    data: bytes = betterproto.bytes_field(5)
+    op: "ReplaceObjectContentOperation" = betterproto.enum_field(6)
 
 
 @dataclass(eq=False, repr=False)

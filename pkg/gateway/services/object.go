@@ -165,13 +165,21 @@ func (gws *GatewayService) ReplaceObjectContent(stream pb.GatewayService_Replace
 		}
 
 		destPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, req.ObjectId, req.Path)
+		destNewPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, req.ObjectId, req.NewPath)
 
 		switch req.Op {
 		case pb.ReplaceObjectContentOperation_DELETE:
 			os.RemoveAll(destPath)
 		case pb.ReplaceObjectContentOperation_WRITE:
-			os.MkdirAll(destPath, 0644)
-			os.WriteFile(destPath, req.Data, 0644)
+			if req.IsDir {
+				os.MkdirAll(destPath, 0755)
+			} else {
+				os.MkdirAll(path.Dir(destPath), 0755)
+				os.WriteFile(destPath, req.Data, 0644)
+			}
+		case pb.ReplaceObjectContentOperation_MOVED:
+			os.MkdirAll(path.Dir(destNewPath), 0755)
+			os.Rename(destPath, destNewPath)
 		}
 	}
 

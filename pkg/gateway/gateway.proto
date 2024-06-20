@@ -93,13 +93,16 @@ message PutObjectResponse {
 enum ReplaceObjectContentOperation {
   WRITE = 0;
   DELETE = 1;
+  MOVED = 2;
 }
 
 message ReplaceObjectContentRequest {
   string object_id = 1;
   string path = 2;
-  bytes data = 3;
-  ReplaceObjectContentOperation op = 4;
+  string new_path = 3;
+  bool is_dir = 4;
+  bytes data = 5;
+  ReplaceObjectContentOperation op = 6;
 }
 
 message ReplaceObjectContentResponse { bool ok = 1; }

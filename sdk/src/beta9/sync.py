@@ -7,7 +7,7 @@ from pathlib import Path
 from queue import Queue
 from typing import Generator, NamedTuple, Optional
 
-from watchdog.events import FileSystemEventHandler
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
 
 from . import terminal
 from .clients.gateway import (
@@ -163,21 +163,18 @@ class SyncEventHandler(FileSystemEventHandler):
         super().__init__()
         self.queue = queue
 
-    def on_created(self, event):
-        if not event.is_directory:
-            self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path))
+    def on_any_event(self, event: FileSystemEvent) -> None:
+        if not event.is_directory and event.src_path.endswith(".py"):
+            terminal.warn(f"Detected changes in '{event.src_path}'. Reloading...")
 
-        terminal.warn(f"File created: {event.src_path}")
+    def on_created(self, event) -> None:
+        self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path, None))
 
-    def on_modified(self, event):
-        if not event.is_directory:
-            self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path))
-            terminal.warn(f"File modified: {event.src_path}")
+    def on_modified(self, event: FileSystemEvent) -> None:
+        self.on_created(event)
 
-    def on_deleted(self, event):
-        if event.is_directory:
-            terminal.warn(f"Folder deleted: {event.src_path}")
-        else:
-            terminal.warn(f"File deleted: {event.src_path}")
+    def on_deleted(self, event: FileSystemEvent) -> None:
+        self.queue.put((ReplaceObjectContentOperation.DELETE, event.src_path, None))
 
-        self.queue.put((ReplaceObjectContentOperation.DELETE, event.src_path))
+    def on_moved(self, event: FileSystemEvent) -> None:
+        self.queue.put((ReplaceObjectContentOperation.MOVED, event.src_path, event.dest_path))
