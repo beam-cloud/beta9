@@ -2,7 +2,7 @@ import inspect
 import os
 import time
 from queue import Empty, Queue
-from typing import Callable, List, Optional, Union
+from typing import Callable, Iterator, List, Optional, Union
 
 from watchdog.observers import Observer
 
@@ -11,13 +11,13 @@ from ...abstractions.base import BaseAbstraction
 from ...abstractions.image import Image, ImageBuildResult
 from ...abstractions.volume import Volume
 from ...clients.gateway import (
-    SecretVar,
     GatewayServiceStub,
     GetOrCreateStubRequest,
     GetOrCreateStubResponse,
     ReplaceObjectContentOperation,
     ReplaceObjectContentRequest,
     ReplaceObjectContentResponse,
+    SecretVar,
 )
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import
@@ -180,30 +180,40 @@ class RunnerAbstraction(BaseAbstraction):
         function_name = func.__name__
         setattr(self, attr, f"{module_name}:{function_name}")
 
-    def _object_iterator(self, *, dir: str, object_id: str, file_update_queue: Queue):
+    def _object_iterator(
+        self, *, dir: str, object_id: str, file_update_queue: Queue
+    ) -> Iterator[ReplaceObjectContentRequest]:
         while True:
             try:
-                operation, path = file_update_queue.get_nowait()
+                operation, path, new_path = file_update_queue.get_nowait()
+
+                req = ReplaceObjectContentRequest(
+                    object_id=object_id,
+                    path=os.path.relpath(path, start=dir),
+                    is_dir=os.path.isdir(path),
+                    op=operation,
+                )
 
                 if operation == ReplaceObjectContentOperation.WRITE:
-                    with open(path, "rb") as f:
-                        yield ReplaceObjectContentRequest(
-                            object_id=object_id,
-                            path=os.path.relpath(path, start=dir),
-                            data=f.read(),
-                            op=ReplaceObjectContentOperation.WRITE,
-                        )
+                    if req.is_dir:
+                        yield req
+                    else:
+                        with open(path, "rb") as f:
+                            req.data = f.read()
+                            yield req
 
                 elif operation == ReplaceObjectContentOperation.DELETE:
-                    yield ReplaceObjectContentRequest(
-                        object_id=object_id,
-                        path=os.path.relpath(path, start=dir),
-                        op=ReplaceObjectContentOperation.DELETE,
-                    )
+                    yield req
+
+                elif operation == ReplaceObjectContentOperation.MOVED:
+                    req.new_path = os.path.relpath(new_path, start=dir)
+                    yield req
 
                 file_update_queue.task_done()
             except Empty:
                 time.sleep(0.1)
+            except Exception as e:
+                terminal.warn(str(e))
 
     def sync_dir_to_workspace(self, *, dir: str, object_id: str) -> ReplaceObjectContentResponse:
         file_update_queue = Queue()
