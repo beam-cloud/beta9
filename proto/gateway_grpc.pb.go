@@ -52,7 +52,7 @@ type GatewayServiceClient interface {
 	HeadObject(ctx context.Context, in *HeadObjectRequest, opts ...grpc.CallOption) (*HeadObjectResponse, error)
 	PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error)
 	PutObjectStream(ctx context.Context, opts ...grpc.CallOption) (GatewayService_PutObjectStreamClient, error)
-	ReplaceObjectContent(ctx context.Context, opts ...grpc.CallOption) (GatewayService_ReplaceObjectContentClient, error)
+	ReplaceObjectContent(ctx context.Context, in *ReplaceObjectContentRequest, opts ...grpc.CallOption) (*ReplaceObjectContentResponse, error)
 	// Containers
 	ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error)
 	StopContainer(ctx context.Context, in *StopContainerRequest, opts ...grpc.CallOption) (*StopContainerResponse, error)
@@ -153,38 +153,13 @@ func (x *gatewayServicePutObjectStreamClient) CloseAndRecv() (*PutObjectResponse
 	return m, nil
 }
 
-func (c *gatewayServiceClient) ReplaceObjectContent(ctx context.Context, opts ...grpc.CallOption) (GatewayService_ReplaceObjectContentClient, error) {
-	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[1], GatewayService_ReplaceObjectContent_FullMethodName, opts...)
+func (c *gatewayServiceClient) ReplaceObjectContent(ctx context.Context, in *ReplaceObjectContentRequest, opts ...grpc.CallOption) (*ReplaceObjectContentResponse, error) {
+	out := new(ReplaceObjectContentResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ReplaceObjectContent_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &gatewayServiceReplaceObjectContentClient{stream}
-	return x, nil
-}
-
-type GatewayService_ReplaceObjectContentClient interface {
-	Send(*ReplaceObjectContentRequest) error
-	CloseAndRecv() (*ReplaceObjectContentResponse, error)
-	grpc.ClientStream
-}
-
-type gatewayServiceReplaceObjectContentClient struct {
-	grpc.ClientStream
-}
-
-func (x *gatewayServiceReplaceObjectContentClient) Send(m *ReplaceObjectContentRequest) error {
-	return x.ClientStream.SendMsg(m)
-}
-
-func (x *gatewayServiceReplaceObjectContentClient) CloseAndRecv() (*ReplaceObjectContentResponse, error) {
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	m := new(ReplaceObjectContentResponse)
-	if err := x.ClientStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
+	return out, nil
 }
 
 func (c *gatewayServiceClient) ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error) {
@@ -324,7 +299,7 @@ type GatewayServiceServer interface {
 	HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error)
 	PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error)
 	PutObjectStream(GatewayService_PutObjectStreamServer) error
-	ReplaceObjectContent(GatewayService_ReplaceObjectContentServer) error
+	ReplaceObjectContent(context.Context, *ReplaceObjectContentRequest) (*ReplaceObjectContentResponse, error)
 	// Containers
 	ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error)
 	StopContainer(context.Context, *StopContainerRequest) (*StopContainerResponse, error)
@@ -367,8 +342,8 @@ func (UnimplementedGatewayServiceServer) PutObject(context.Context, *PutObjectRe
 func (UnimplementedGatewayServiceServer) PutObjectStream(GatewayService_PutObjectStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method PutObjectStream not implemented")
 }
-func (UnimplementedGatewayServiceServer) ReplaceObjectContent(GatewayService_ReplaceObjectContentServer) error {
-	return status.Errorf(codes.Unimplemented, "method ReplaceObjectContent not implemented")
+func (UnimplementedGatewayServiceServer) ReplaceObjectContent(context.Context, *ReplaceObjectContentRequest) (*ReplaceObjectContentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReplaceObjectContent not implemented")
 }
 func (UnimplementedGatewayServiceServer) ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListContainers not implemented")
@@ -523,30 +498,22 @@ func (x *gatewayServicePutObjectStreamServer) Recv() (*PutObjectRequest, error) 
 	return m, nil
 }
 
-func _GatewayService_ReplaceObjectContent_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(GatewayServiceServer).ReplaceObjectContent(&gatewayServiceReplaceObjectContentServer{stream})
-}
-
-type GatewayService_ReplaceObjectContentServer interface {
-	SendAndClose(*ReplaceObjectContentResponse) error
-	Recv() (*ReplaceObjectContentRequest, error)
-	grpc.ServerStream
-}
-
-type gatewayServiceReplaceObjectContentServer struct {
-	grpc.ServerStream
-}
-
-func (x *gatewayServiceReplaceObjectContentServer) SendAndClose(m *ReplaceObjectContentResponse) error {
-	return x.ServerStream.SendMsg(m)
-}
-
-func (x *gatewayServiceReplaceObjectContentServer) Recv() (*ReplaceObjectContentRequest, error) {
-	m := new(ReplaceObjectContentRequest)
-	if err := x.ServerStream.RecvMsg(m); err != nil {
+func _GatewayService_ReplaceObjectContent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReplaceObjectContentRequest)
+	if err := dec(in); err != nil {
 		return nil, err
 	}
-	return m, nil
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ReplaceObjectContent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ReplaceObjectContent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ReplaceObjectContent(ctx, req.(*ReplaceObjectContentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _GatewayService_ListContainers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -825,6 +792,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GatewayService_PutObject_Handler,
 		},
 		{
+			MethodName: "ReplaceObjectContent",
+			Handler:    _GatewayService_ReplaceObjectContent_Handler,
+		},
+		{
 			MethodName: "ListContainers",
 			Handler:    _GatewayService_ListContainers_Handler,
 		},
@@ -885,11 +856,6 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "PutObjectStream",
 			Handler:       _GatewayService_PutObjectStream_Handler,
-			ClientStreams: true,
-		},
-		{
-			StreamName:    "ReplaceObjectContent",
-			Handler:       _GatewayService_ReplaceObjectContent_Handler,
 			ClientStreams: true,
 		},
 	},

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"time"
 
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
@@ -116,6 +117,20 @@ func (c *RunCClient) StreamLogs(ctx context.Context, containerId string, outputC
 	if err != nil {
 		return fmt.Errorf("error creating log stream: %w", err)
 	}
+
+	// Keepalive for streaming logs
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				outputChan <- OutputMsg{Msg: ""}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	for {
 		select {

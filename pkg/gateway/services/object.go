@@ -11,8 +11,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
@@ -147,41 +145,34 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 }
 
 // ReplaceObjectContent modifies files in an extracted object directory
-func (gws *GatewayService) ReplaceObjectContent(stream pb.GatewayService_ReplaceObjectContentServer) error {
-	ctx := stream.Context()
-
+func (gws *GatewayService) ReplaceObjectContent(ctx context.Context, in *pb.ReplaceObjectContentRequest) (*pb.ReplaceObjectContentResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	extractedObjectPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name)
 	os.MkdirAll(extractedObjectPath, 0644)
 
-	for {
-		req, err := stream.Recv()
-		if err == io.EOF {
-			break
+	destPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId, in.Path)
+	destNewPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId, in.NewPath)
+
+	switch in.Op {
+	case pb.ReplaceObjectContentOperation_DELETE:
+		if err := os.RemoveAll(destPath); err != nil {
+			return &pb.ReplaceObjectContentResponse{Ok: false}, nil
 		}
-
-		if err != nil {
-			return status.Errorf(codes.Unknown, "Received an error: %v", err)
-		}
-
-		destPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, req.ObjectId, req.Path)
-		destNewPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, req.ObjectId, req.NewPath)
-
-		switch req.Op {
-		case pb.ReplaceObjectContentOperation_DELETE:
-			os.RemoveAll(destPath)
-		case pb.ReplaceObjectContentOperation_WRITE:
-			if req.IsDir {
-				os.MkdirAll(destPath, 0755)
-			} else {
-				os.MkdirAll(path.Dir(destPath), 0755)
-				os.WriteFile(destPath, req.Data, 0644)
+	case pb.ReplaceObjectContentOperation_WRITE:
+		if in.IsDir {
+			os.MkdirAll(destPath, 0755)
+		} else {
+			os.MkdirAll(path.Dir(destPath), 0755)
+			if err := os.WriteFile(destPath, in.Data, 0644); err != nil {
+				return &pb.ReplaceObjectContentResponse{Ok: false}, nil
 			}
-		case pb.ReplaceObjectContentOperation_MOVED:
-			os.MkdirAll(path.Dir(destNewPath), 0755)
-			os.Rename(destPath, destNewPath)
+		}
+	case pb.ReplaceObjectContentOperation_MOVED:
+		os.MkdirAll(path.Dir(destNewPath), 0755)
+		if err := os.Rename(destPath, destNewPath); err != nil {
+			return &pb.ReplaceObjectContentResponse{Ok: false}, nil
 		}
 	}
 
-	return stream.SendAndClose(&pb.ReplaceObjectContentResponse{Ok: true})
+	return &pb.ReplaceObjectContentResponse{Ok: true}, nil
 }

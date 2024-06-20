@@ -443,20 +443,13 @@ class GatewayServiceStub(SyncServiceStub):
         )
 
     def replace_object_content(
-        self,
-        replace_object_content_request_iterator: Iterable[
-            "ReplaceObjectContentRequest"
-        ],
+        self, replace_object_content_request: "ReplaceObjectContentRequest"
     ) -> "ReplaceObjectContentResponse":
-        return (
-            self._stream_unary(
-                "/gateway.GatewayService/ReplaceObjectContent",
-                ReplaceObjectContentRequest,
-                ReplaceObjectContentResponse,
-            )
-            .future(replace_object_content_request_iterator)
-            .result()
-        )
+        return self._unary_unary(
+            "/gateway.GatewayService/ReplaceObjectContent",
+            ReplaceObjectContentRequest,
+            ReplaceObjectContentResponse,
+        )(replace_object_content_request)
 
     def list_containers(
         self, list_containers_request: "ListContainersRequest"
