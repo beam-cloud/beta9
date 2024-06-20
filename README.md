@@ -32,16 +32,14 @@
 
 # Beta9
 
-Beta9 is an open-source platform for running scalable serverless GPU workloads across cloud providers.
+Beta9 makes it easy for developers to run serverless functions on cloud GPUs. 
 
 Features:
 
-- Scale out workloads to thousands of GPU (or CPU) containers
-- Ultrafast cold-start for custom ML models
-- Automatic scale to zero so you pay for only what you use
-- Flexible distributed storage for storing models and function outputs
-- Distribute workloads across multiple cloud providers
-- Easily deploy task queues and functions using simple Python abstractions
+- Run Python functions on thousands of GPUs in the cloud
+- Automatically scale up and scale down resources
+- Flexible: run workloads on the public cloud or your own hardware
+- Built for AI: store model weights in distributed storage and deploy custom models with ultra-fast, serverless cold starts
 
 We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale.
 
