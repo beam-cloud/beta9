@@ -14,7 +14,7 @@ service GatewayService {
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
   rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
-  rpc ReplaceObjectContent(stream ReplaceObjectContentRequest)
+  rpc ReplaceObjectContent(ReplaceObjectContentRequest)
       returns (ReplaceObjectContentResponse) {}
 
   // Containers

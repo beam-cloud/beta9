@@ -16,6 +16,7 @@ from ..channel import with_grpc_error_handling
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..clients.taskqueue import (
     StartTaskQueueServeRequest,
+    StartTaskQueueServeResponse,
     StopTaskQueueServeRequest,
     TaskQueuePutRequest,
     TaskQueuePutResponse,
@@ -228,12 +229,14 @@ class _CallableWrapper:
             )
 
         terminal.print("Goodbye 👋")
+        os._exit(0)  # kills all threads immediately
 
     def _serve(self, *, dir: str, object_id: str):
         with ThreadPoolExecutor() as pool:
-            sync_task = pool.submit(self.parent.sync_dir_to_workspace, dir=dir, object_id=object_id)
+            pool.submit(self.parent.sync_dir_to_workspace, dir=dir, object_id=object_id)
 
             def _run_serve():
+                r: Optional[StartTaskQueueServeResponse] = None
                 for r in self.parent.taskqueue_stub.start_task_queue_serve(
                     StartTaskQueueServeRequest(
                         stub_id=self.parent.stub_id,
@@ -243,19 +246,12 @@ class _CallableWrapper:
                         terminal.detail(r.output, end="")
 
                     if r.done or r.exit_code != 0:
-                        last_response = r
                         break
 
-                if last_response is None or not last_response.done or last_response.exit_code != 0:
+                if r is None or not r.done or r.exit_code != 0:
                     terminal.error("Serve container failed ❌")
 
-            try:
-                run_task = pool.submit(_run_serve)
-            except KeyboardInterrupt:
-                raise
-            finally:
-                run_task.cancel()
-                sync_task.cancel()
+            pool.submit(_run_serve)
 
     def put(self, *args, **kwargs) -> bool:
         if not self.parent.prepare_runtime(

@@ -2,7 +2,7 @@ import inspect
 import os
 import time
 from queue import Empty, Queue
-from typing import Callable, Iterator, List, Optional, Union
+from typing import Callable, List, Optional, Union
 
 from watchdog.observers import Observer
 
@@ -180,40 +180,37 @@ class RunnerAbstraction(BaseAbstraction):
         function_name = func.__name__
         setattr(self, attr, f"{module_name}:{function_name}")
 
-    def _object_iterator(
-        self, *, dir: str, object_id: str, file_update_queue: Queue
-    ) -> Iterator[ReplaceObjectContentRequest]:
-        while True:
-            try:
-                operation, path, new_path = file_update_queue.get_nowait()
+    def _sync_content(self, *, dir: str, object_id: str, file_update_queue: Queue) -> None:
+        try:
+            operation, path, new_path = file_update_queue.get_nowait()
 
-                req = ReplaceObjectContentRequest(
-                    object_id=object_id,
-                    path=os.path.relpath(path, start=dir),
-                    is_dir=os.path.isdir(path),
-                    op=operation,
-                )
+            req = ReplaceObjectContentRequest(
+                object_id=object_id,
+                path=os.path.relpath(path, start=dir),
+                is_dir=os.path.isdir(path),
+                op=operation,
+            )
 
-                if operation == ReplaceObjectContentOperation.WRITE:
-                    if req.is_dir:
-                        yield req
-                    else:
-                        with open(path, "rb") as f:
-                            req.data = f.read()
-                            yield req
+            if operation == ReplaceObjectContentOperation.WRITE:
+                if not req.is_dir:
+                    with open(path, "rb") as f:
+                        req.data = f.read()
 
-                elif operation == ReplaceObjectContentOperation.DELETE:
-                    yield req
+            elif operation == ReplaceObjectContentOperation.DELETE:
+                pass
 
-                elif operation == ReplaceObjectContentOperation.MOVED:
-                    req.new_path = os.path.relpath(new_path, start=dir)
-                    yield req
+            elif operation == ReplaceObjectContentOperation.MOVED:
+                req.new_path = os.path.relpath(new_path, start=dir)
 
-                file_update_queue.task_done()
-            except Empty:
-                time.sleep(0.1)
-            except Exception as e:
-                terminal.warn(str(e))
+            res = self.gateway_stub.replace_object_content(req)
+            if not res.ok:
+                terminal.warn("Failed to sync content")
+
+            file_update_queue.task_done()
+        except Empty:
+            time.sleep(0.1)
+        except Exception as e:
+            terminal.warn(str(e))
 
     def sync_dir_to_workspace(self, *, dir: str, object_id: str) -> ReplaceObjectContentResponse:
         file_update_queue = Queue()
@@ -223,12 +220,9 @@ class RunnerAbstraction(BaseAbstraction):
         observer.schedule(event_handler, dir, recursive=True)
         observer.start()
 
-        terminal.header(f"Watching {dir} for changes...")
-        return self.gateway_stub.replace_object_content(
-            replace_object_content_request_iterator=self._object_iterator(
-                dir=dir, object_id=object_id, file_update_queue=file_update_queue
-            )
-        )
+        terminal.header(f"Watching '{dir}' for changes...")
+        while True:
+            self._sync_content(dir=dir, object_id=object_id, file_update_queue=file_update_queue)
 
     def prepare_runtime(
         self,
