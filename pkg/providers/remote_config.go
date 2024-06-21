@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
+
+const connectTimeout time.Duration = time.Second * 5
 
 func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (*types.AppConfig, error) {
 	configBytes, err := json.Marshal(baseConfig)
@@ -24,7 +27,7 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 		return nil, err
 	}
 
-	redisHostname, err := tailscale.GetHostnameForService("redis")
+	redisHostname, err := network.ResolveTailscaleService("control-plane-redis", connectTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +35,7 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 	remoteConfig.Database.Redis.InsecureSkipVerify = true
 
 	if baseConfig.Storage.Mode == storage.StorageModeJuiceFS {
-		juiceFsRedisHostname, err := tailscale.GetHostnameForService("juicefs-redis")
+		juiceFsRedisHostname, err := network.ResolveTailscaleService("juicefs-redis", connectTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -46,14 +49,14 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("rediss://:%s@%s/0", juicefsRedisPassword, juiceFsRedisHostname)
 	}
 
-	gatewayGrpcHostname, err := tailscale.GetHostnameForService("gateway-grpc")
+	gatewayGrpcHostname, err := network.ResolveTailscaleService("gateway-proxy", connectTimeout)
 	if err != nil {
 		return nil, err
 	}
 	remoteConfig.GatewayService.Host = strings.Split(gatewayGrpcHostname, ":")[0]
 
 	if baseConfig.ImageService.BlobCacheEnabled {
-		blobcacheRedisHostname, err := tailscale.GetHostnameForService("blobcache-redis")
+		blobcacheRedisHostname, err := network.ResolveTailscaleService("blobcache-redis", connectTimeout)
 		if err != nil {
 			return nil, err
 		}
