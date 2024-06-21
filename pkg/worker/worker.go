@@ -330,6 +330,8 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			return nil
 		}
 
+		log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
+
 		// Stop container if it is "orphaned" - meaning it's running but has no associated state
 		state, err := s.containerRepo.GetContainerState(request.ContainerId)
 		if err != nil {
@@ -346,8 +348,6 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 		if err != nil {
 			log.Printf("<%s> - unable to update container state: %v\n", request.ContainerId, err)
 		}
-
-		log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
 	}
 }
 

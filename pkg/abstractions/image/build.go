@@ -174,6 +174,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
+	go func() {
+		<-ctx.Done() // If user cancels the build, kill the container
+		client.Kill(containerId)
+	}()
 	defer client.Kill(containerId) // Kill and remove container after the build completes
 
 	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Waiting for build container to start...\n"}
