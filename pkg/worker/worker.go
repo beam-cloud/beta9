@@ -609,8 +609,8 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
-		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", s.config.GatewayService.Host),
-		fmt.Sprintf("BETA9_GATEWAY_PORT=%d", s.config.GatewayService.GRPC.Port),
+		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
+		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
 		"PYTHONUNBUFFERED=1",
 	}
 
