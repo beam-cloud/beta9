@@ -49,11 +49,7 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("rediss://:%s@%s/0", juicefsRedisPassword, juiceFsRedisHostname)
 	}
 
-	gatewayGrpcHostname, err := network.ResolveTailscaleService("gateway-proxy", connectTimeout)
-	if err != nil {
-		return nil, err
-	}
-	remoteConfig.GatewayService.Host = strings.Split(gatewayGrpcHostname, ":")[0]
+	remoteConfig.GatewayService.Host = strings.TrimPrefix(remoteConfig.GatewayService.ExternalURL, "https://")
 
 	if baseConfig.ImageService.BlobCacheEnabled {
 		blobcacheRedisHostname, err := network.ResolveTailscaleService("blobcache-redis", connectTimeout)
