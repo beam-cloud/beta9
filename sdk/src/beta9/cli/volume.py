@@ -17,6 +17,7 @@ from ..clients.volume import (
     ListPathResponse,
     ListVolumesRequest,
     ListVolumesResponse,
+    MovePathRequest,
 )
 from ..terminal import pluralize
 from . import extraclick
@@ -227,6 +228,41 @@ def rm(service: ServiceClient, remote_path: str):
     terminal.header(f"{remote_path} ({num_del} object{suffix} deleted)")
     for deleted in res.deleted:
         terminal.print(deleted, highlight=False, markup=False)
+
+
+
+@common.command(
+    help="Move a file or directory to a new location within the same volume.",
+    epilog="""
+    Examples:
+
+      # Move a directory within the same volume
+      {cli_name} mv myvol/subdir1 myvol/subdir2
+
+      # Move a file to another directory within the same volume
+      {cli_name} mv myvol/subdir/file.txt myvol/anotherdir/file.txt
+      \b
+    """,
+)
+@click.argument(
+    "original_path",
+    type=click.STRING,
+    required=True,
+)
+@click.argument(
+    "new_path",
+    type=click.STRING,
+    required=True,
+)
+@extraclick.pass_service_client
+def mv(service: ServiceClient, original_path: str, new_path: str):
+    req = MovePathRequest(original_path=original_path, new_path=new_path)
+    res = service.volume.move_path(req)
+
+    if not res.ok:
+        terminal.error(f"Failed to move {original_path} to {new_path} ({res.err_msg})")
+    else:
+        terminal.success(f"Moved {original_path} to {res.new_path}")
 
 
 @click.group(

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -25,6 +26,7 @@ type VolumeService interface {
 	GetOrCreateVolume(ctx context.Context, in *pb.GetOrCreateVolumeRequest) (*pb.GetOrCreateVolumeResponse, error)
 	ListPath(ctx context.Context, in *pb.ListPathRequest) (*pb.ListPathResponse, error)
 	DeletePath(ctx context.Context, in *pb.DeletePathRequest) (*pb.DeletePathResponse, error)
+	MovePath(ctx context.Context, in *pb.MovePathRequest) (*pb.MovePathResponse, error)
 	CopyPathStream(stream pb.VolumeService_CopyPathStreamServer) error
 }
 
@@ -188,6 +190,23 @@ func (vs *GlobalVolumeService) DeletePath(ctx context.Context, in *pb.DeletePath
 	return &pb.DeletePathResponse{
 		Ok:      true,
 		Deleted: paths,
+	}, nil
+}
+
+func (vs *GlobalVolumeService) MovePath(ctx context.Context, in *pb.MovePathRequest) (*pb.MovePathResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	newPath, err := vs.movePath(ctx, in.GetOriginalPath(), in.GetNewPath(), authInfo.Workspace)
+	if err != nil {
+		return &pb.MovePathResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
+
+	return &pb.MovePathResponse{
+		Ok:      true,
+		NewPath: newPath,
 	}, nil
 }
 
@@ -402,6 +421,42 @@ func parseVolumeInput(input string) (string, string) {
 		volumePath = strings.Join(parts[1:], string(os.PathSeparator))
 	}
 	return volumeName, filepath.Clean(volumePath)
+}
+
+func (vs *GlobalVolumeService) movePath(ctx context.Context, originalPath string, newPath string, workspace *types.Workspace) (string, error) {
+	originalVolumeName, originalRelativePath := parseVolumeInput(originalPath)
+	newVolumeName, newRelativePath := parseVolumeInput(newPath)
+
+	if originalVolumeName != newVolumeName {
+		return "", errors.New("moving across different volumes is not supported")
+	}
+
+	volume, err := vs.backendRepo.GetVolume(ctx, workspace.Id, originalVolumeName)
+	if err != nil {
+		return "", errors.New("unable to find volume")
+	}
+
+	_, originalFullPath, _ := GetVolumePaths(workspace.Name, volume.ExternalId, originalRelativePath)
+
+	if _, err := os.Stat(originalFullPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("error finding original path %s", originalPath)
+	}
+
+	_, newFullPath, _ := GetVolumePaths(workspace.Name, volume.ExternalId, newRelativePath)
+	os.MkdirAll(path.Dir(newFullPath), os.FileMode(0755))
+
+	if err := os.Rename(originalFullPath, newFullPath); err != nil {
+		return "", fmt.Errorf("failed to move from %s to %s: no such file or directory", originalPath, newPath)
+	}
+
+	originalDir := path.Dir(originalFullPath)
+	if _, err := os.Stat(originalDir); !os.IsNotExist(err) {
+		if err := os.Remove(originalDir); err != nil {
+			fmt.Printf("Non-critical: failed to remove original directory %s, might not be empty: %v\n", originalDir, err)
+		}
+	}
+
+	return newPath, nil
 }
 
 // GetVolumePaths returns the absolute parent directory and absolute volumePath.
