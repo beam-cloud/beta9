@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -27,18 +26,20 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 		return nil, err
 	}
 
-	redisHostname, err := network.ResolveTailscaleService("control-plane-redis", connectTimeout)
+	redisHostname, err := tailscale.ResolveService("control-plane-redis", connectTimeout)
 	if err != nil {
 		return nil, err
 	}
-	remoteConfig.Database.Redis.Addrs[0] = redisHostname
+	remoteConfig.Database.Redis.Addrs[0] = fmt.Sprintf("%s:%d", redisHostname, 6379)
 	remoteConfig.Database.Redis.InsecureSkipVerify = true
 
 	if baseConfig.Storage.Mode == storage.StorageModeJuiceFS {
-		juiceFsRedisHostname, err := network.ResolveTailscaleService("juicefs-redis", connectTimeout)
+		juiceFsRedisHostname, err := tailscale.ResolveService("juicefs-redis", connectTimeout)
 		if err != nil {
 			return nil, err
 		}
+
+		juiceFsRedisHostname = fmt.Sprintf("%s:%d", juiceFsRedisHostname, 6379)
 
 		parsedUrl, err := url.Parse(remoteConfig.Storage.JuiceFS.RedisURI)
 		if err != nil {
@@ -49,15 +50,12 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("rediss://:%s@%s/0", juicefsRedisPassword, juiceFsRedisHostname)
 	}
 
-	remoteConfig.GatewayService.Host = strings.TrimPrefix(remoteConfig.GatewayService.ExternalURL, "https://")
-
 	if baseConfig.ImageService.BlobCacheEnabled {
-		blobcacheRedisHostname, err := network.ResolveTailscaleService("blobcache-redis", connectTimeout)
+		blobcacheRedisHostname, err := tailscale.ResolveService("blobcache-redis", connectTimeout)
 		if err != nil {
 			return nil, err
 		}
-
-		remoteConfig.ImageService.BlobCache.Metadata.RedisAddr = blobcacheRedisHostname
+		remoteConfig.ImageService.BlobCache.Metadata.RedisAddr = fmt.Sprintf("%s:%d", blobcacheRedisHostname, 6379)
 	}
 
 	return &remoteConfig, nil

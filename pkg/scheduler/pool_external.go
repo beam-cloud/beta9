@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/providers"
@@ -365,7 +364,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "BETA9_GATEWAY_HOST",
-			Value: strings.TrimPrefix(wpc.config.GatewayService.ExternalURL, "https://"),
+			Value: wpc.config.GatewayService.Host,
 		},
 		{
 			Name:  "BETA9_GATEWAY_PORT",
