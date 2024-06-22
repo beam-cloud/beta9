@@ -364,7 +364,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "BETA9_GATEWAY_HOST",
-			Value: wpc.config.GatewayService.Host,
+			Value: wpc.config.GatewayService.ExternalHost,
 		},
 		{
 			Name:  "BETA9_GATEWAY_PORT",

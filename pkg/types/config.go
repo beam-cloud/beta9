@@ -84,6 +84,7 @@ type CORSConfig struct {
 
 type GatewayServiceConfig struct {
 	Host            string        `key:"host" json:"host"`
+	ExternalHost    string        `key:"externalHost" json:"external_host"`
 	ExternalURL     string        `key:"externalURL" json:"external_url"`
 	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
 	HTTP            HTTPConfig    `key:"http" json:"http"`
