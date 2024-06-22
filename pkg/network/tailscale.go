@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -154,6 +155,40 @@ func (t *Tailscale) GetHostnameForService(serviceName string) (string, error) {
 
 func (t *Tailscale) GetServer() *tsnet.Server {
 	return t.server
+}
+
+func (t *Tailscale) ResolveService(serviceName string, timeout time.Duration) (string, error) {
+	client, err := t.server.LocalClient()
+	if err != nil {
+		return "", err
+	}
+
+	interval := time.Second * 1
+	startTime := time.Now()
+
+	for time.Since(startTime) < timeout {
+		// Get the status from Tailscale
+		status, err := client.Status(context.Background())
+		if err != nil {
+			return "", err
+		}
+
+		// Iterate through the peers to find a matching service
+		for _, peer := range status.Peer {
+			if !peer.Online {
+				continue
+			}
+
+			if strings.Contains(peer.HostName, serviceName) {
+				log.Printf("Found tailscale service<%s> @ %s\n", serviceName, peer.DNSName)
+				return strings.TrimSuffix(peer.DNSName, "."), nil
+			}
+		}
+
+		time.Sleep(interval)
+	}
+
+	return "", fmt.Errorf("no valid service found for <%s>", serviceName)
 }
 
 // Stops the Tailscale server
