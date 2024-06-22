@@ -252,7 +252,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 	log.Printf("container <%v> build took %v\n", containerId, time.Since(startTime))
 
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Uploading image, this make take a few minutes..."}
+	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "\nSaving image, this may take a few minutes...\n"}
 	err = client.Archive(ctx, containerId, imageId, outputChan)
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}

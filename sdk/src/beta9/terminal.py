@@ -3,10 +3,22 @@ import sys
 from contextlib import contextmanager
 from typing import Any, Optional, Sequence, Tuple
 
+import rich
+import rich.control
+import rich.status
 from rich.console import Console
+from rich.control import STRIP_CONTROL_CODES as _STRIP_CONTROL_CODES
 from rich.markup import escape
 from rich.progress import open as _progress_open
 from rich.text import Text
+
+# Fixes printing carriage returns and backspaces
+# https://github.com/Textualize/rich/issues/3260
+for i in (8, 13):
+    if i in _STRIP_CONTROL_CODES:
+        _STRIP_CONTROL_CODES.remove(i)
+        rich.control.strip_control_codes.__defaults__ = ({c: None for c in _STRIP_CONTROL_CODES},)
+
 
 _console = Console()
 

@@ -165,7 +165,14 @@ func generateProgressBar(progress int, total int) string {
 			strings.Repeat(" ", remainingWidth)) +
 		"]"
 
-	return fmt.Sprintf("\r%s %d%%", progressBar, (progress*100)/total)
+	percent := (progress * 100) / total
+
+	up := ""
+	if percent > 0 {
+		up = "\033[A"
+	}
+
+	return fmt.Sprintf("%s\r%s %d%%\n", up, progressBar, (progress*100)/total)
 }
 
 func (c *RunCClient) Archive(ctx context.Context, containerId, imageId string, outputChan chan OutputMsg) error {
