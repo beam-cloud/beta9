@@ -243,16 +243,13 @@ class EndpointManager:
 
 
 if __name__ == "__main__":
-    os.mkdir("/tmp/worker")
-
     options = {
         "bind": [f"[::]:{cfg.bind_port}"],
         "workers": cfg.concurrency,
         "worker_class": "uvicorn.workers.UvicornWorker",
-        "worker_tmp_dir": "/tmp/worker",
         "loglevel": "info",
         "post_fork": GunicornApplication.post_fork_initialize,
-        "timeout": 30,
+        "timeout": cfg.timeout,
     }
 
     GunicornApplication(Starlette(), options).run()
