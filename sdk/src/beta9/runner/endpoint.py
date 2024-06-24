@@ -156,7 +156,6 @@ class EndpointManager:
         self.pid: int = os.getpid()
         self.exit_code: int = 0
         self.app = FastAPI(lifespan=self.lifespan)
-        self.worker = worker
 
         # Register signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)
