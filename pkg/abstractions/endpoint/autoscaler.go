@@ -14,7 +14,7 @@ type endpointAutoscalerSample struct {
 func endpointSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
 	totalRequests, err := i.TaskRepo.TasksInFlight(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
 	if err != nil {
-		return nil, err
+		totalRequests = -1
 	}
 
 	currentContainers := 0
@@ -33,23 +33,25 @@ func endpointSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) 
 	return sample, nil
 }
 
-func endpointDeploymentScaleFunc(i *endpointInstance, sample *endpointAutoscalerSample) *abstractions.AutoscalerResult {
+func endpointDeploymentScaleFunc(i *endpointInstance, s *endpointAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 0
 
-	if sample.TotalRequests == 0 {
+	if s.TotalRequests == 0 {
 		desiredContainers = 0
 	} else {
-		desiredContainers = int(sample.TotalRequests / int64(i.StubConfig.Concurrency))
-		if sample.TotalRequests%int64(i.StubConfig.Concurrency) > 0 {
+		if s.TotalRequests == -1 {
+			return &abstractions.AutoscalerResult{
+				ResultValid: false,
+			}
+		}
+
+		desiredContainers = int(s.TotalRequests / int64(i.StubConfig.Autoscaler.TasksPerContainer))
+		if s.TotalRequests%int64(i.StubConfig.Autoscaler.TasksPerContainer) > 0 {
 			desiredContainers += 1
 		}
 
-		if i.StubConfig.MaxTasksPerContainer > 0 {
-			desiredContainers = int(math.Ceil(float64(desiredContainers) / float64(i.StubConfig.MaxTasksPerContainer)))
-		}
-
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
-		maxReplicas := math.Min(float64(i.StubConfig.MaxContainers), float64(abstractions.MaxReplicas))
+		maxReplicas := math.Min(float64(i.StubConfig.Autoscaler.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
 

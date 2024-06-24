@@ -19,6 +19,7 @@ from ..clients.endpoint import (
 )
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..env import is_local
+from ..type import Autoscaler, QueueDepthAutoscaler
 
 
 class Endpoint(RunnerAbstraction):
@@ -44,16 +45,11 @@ class Endpoint(RunnerAbstraction):
             Default is 3600. Set it to -1 to disable the timeout.
         retries (Optional[int]):
             The maximum number of times a task will be retried if the container crashes. Default is 3.
-        concurrency (Optional[int]):
-            The number of concurrent tasks to handle per container.
+        workers (Optional[int]):
+            The number of processes handling tasks per container.
             Modifying this parameter can improve throughput for certain workloads.
             Workers will share the CPU, Memory, and GPU defined.
             You may need to increase these values to increase concurrency.
-            Default is 1.
-        max_containers (int):
-            The maximum number of containers that the task queue will autoscale to. If the number of tasks
-            in the queue goes over the concurrency value, the task queue will automatically add containers to
-            handle the load.
             Default is 1.
         keep_warm_seconds (int):
             The duration in seconds to keep the task queue warm even if there are no pending
@@ -71,6 +67,8 @@ class Endpoint(RunnerAbstraction):
         authorized (Optional[str]):
             If false, allows the endpoint to be invoked without an auth token.
             Default is True.
+        autoscaler (Optional[Autoscaler]):
+            TODO: write me
     Example:
         ```python
         from beta9 import endpoint, Image
@@ -96,23 +94,22 @@ class Endpoint(RunnerAbstraction):
         gpu: str = "",
         image: Image = Image(),
         timeout: int = 180,
-        concurrency: int = 1,
-        max_containers: int = 1,
-        keep_warm_seconds: int = 300,
+        workers: int = 1,
+        keep_warm_seconds: int = 180,
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
         authorized: Optional[bool] = True,
+        autoscaler: Optional[Autoscaler] = QueueDepthAutoscaler(),
     ):
         super().__init__(
             cpu=cpu,
             memory=memory,
             gpu=gpu,
             image=image,
-            concurrency=concurrency,
-            max_containers=max_containers,
+            workers=workers,
             timeout=timeout,
             retries=0,
             keep_warm_seconds=keep_warm_seconds,
@@ -122,6 +119,7 @@ class Endpoint(RunnerAbstraction):
             secrets=secrets,
             name=name,
             authorized=authorized,
+            autoscaler=autoscaler,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None

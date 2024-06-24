@@ -61,13 +61,13 @@ func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSample) *abs
 			}
 		}
 
-		desiredContainers = int(s.QueueLength / int64(i.StubConfig.Concurrency))
-		if s.QueueLength%int64(i.StubConfig.Concurrency) > 0 {
+		desiredContainers = int(s.QueueLength / int64(i.StubConfig.Autoscaler.TasksPerContainer))
+		if s.QueueLength%int64(i.StubConfig.Autoscaler.TasksPerContainer) > 0 {
 			desiredContainers += 1
 		}
 
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
-		maxReplicas := math.Min(float64(i.StubConfig.MaxContainers), float64(abstractions.MaxReplicas))
+		maxReplicas := math.Min(float64(i.StubConfig.Autoscaler.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
 

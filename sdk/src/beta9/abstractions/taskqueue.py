@@ -23,6 +23,7 @@ from ..clients.taskqueue import (
     TaskQueueServiceStub,
 )
 from ..env import is_local
+from ..type import Autoscaler, QueueDepthAutoscaler
 
 
 class TaskQueue(RunnerAbstraction):
@@ -47,16 +48,11 @@ class TaskQueue(RunnerAbstraction):
             Default is 3600. Set it to -1 to disable the timeout.
         retries (Optional[int]):
             The maximum number of times a task will be retried if the container crashes. Default is 3.
-        concurrency (Optional[int]):
-            The number of concurrent tasks to handle per container.
+        workers (Optional[int]):
+            The number of processes handling tasks per container.
             Modifying this parameter can improve throughput for certain workloads.
             Workers will share the CPU, Memory, and GPU defined.
             You may need to increase these values to increase concurrency.
-            Default is 1.
-        max_containers (int):
-            The maximum number of containers that the task queue will autoscale to. If the number of tasks
-            in the queue goes over the concurrency value, the task queue will automatically add containers to
-            handle the load.
             Default is 1.
         keep_warm_seconds (int):
             The duration in seconds to keep the task queue warm even if there are no pending
@@ -101,8 +97,7 @@ class TaskQueue(RunnerAbstraction):
         image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,
-        concurrency: int = 1,
-        max_containers: int = 1,
+        workers: int = 1,
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
@@ -110,14 +105,14 @@ class TaskQueue(RunnerAbstraction):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
+        autoscaler: Optional[Autoscaler] = QueueDepthAutoscaler(),
     ) -> None:
         super().__init__(
             cpu=cpu,
             memory=memory,
             gpu=gpu,
             image=image,
-            concurrency=concurrency,
-            max_containers=max_containers,
+            workers=workers,
             timeout=timeout,
             retries=retries,
             keep_warm_seconds=keep_warm_seconds,
@@ -127,6 +122,7 @@ class TaskQueue(RunnerAbstraction):
             volumes=volumes,
             secrets=secrets,
             name=name,
+            autoscaler=autoscaler,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
 

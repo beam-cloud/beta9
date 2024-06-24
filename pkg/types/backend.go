@@ -144,20 +144,31 @@ type TaskCountByTime struct {
 }
 
 type StubConfigV1 struct {
-	Runtime              Runtime      `json:"runtime"`
-	Handler              string       `json:"handler"`
-	OnStart              string       `json:"on_start"`
-	PythonVersion        string       `json:"python_version"`
-	KeepWarmSeconds      uint         `json:"keep_warm_seconds"`
-	MaxPendingTasks      uint         `json:"max_pending_tasks"`
-	CallbackUrl          string       `json:"callback_url"`
-	TaskPolicy           TaskPolicy   `json:"task_policy"`
-	Concurrency          uint         `json:"concurrency"`
-	Authorized           bool         `json:"authorized"`
-	MaxContainers        uint         `json:"max_containers"`
-	MaxTasksPerContainer uint         `json:"max_tasks_per_container"`
-	Volumes              []*pb.Volume `json:"volumes"`
-	Secrets              []Secret     `json:"secrets"`
+	Runtime         Runtime      `json:"runtime"`
+	Handler         string       `json:"handler"`
+	OnStart         string       `json:"on_start"`
+	PythonVersion   string       `json:"python_version"`
+	KeepWarmSeconds uint         `json:"keep_warm_seconds"`
+	MaxPendingTasks uint         `json:"max_pending_tasks"`
+	CallbackUrl     string       `json:"callback_url"`
+	TaskPolicy      TaskPolicy   `json:"task_policy"`
+	Workers         uint         `json:"workers"`
+	Authorized      bool         `json:"authorized"`
+	Volumes         []*pb.Volume `json:"volumes"`
+	Secrets         []Secret     `json:"secrets"`
+	Autoscaler      *Autoscaler  `json:"autoscaler"`
+}
+
+type AutoscalerType string
+
+const (
+	QueueDepthAutoscaler AutoscalerType = "queue_depth"
+)
+
+type Autoscaler struct {
+	Type              AutoscalerType `json:"type"`
+	MaxContainers     uint           `json:"max_containers"`
+	TasksPerContainer uint           `json:"tasks_per_container"`
 }
 
 const (

@@ -10,6 +10,7 @@ from ... import terminal
 from ...abstractions.base import BaseAbstraction
 from ...abstractions.image import Image, ImageBuildResult
 from ...abstractions.volume import Volume
+from ...clients.gateway import Autoscaler as AutoscalerProto
 from ...clients.gateway import (
     GatewayServiceStub,
     GetOrCreateStubRequest,
@@ -22,6 +23,7 @@ from ...clients.gateway import (
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import
 from ...sync import FileSyncer, SyncEventHandler
+from ...type import Autoscaler, QueueDepthAutoscaler
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -42,8 +44,7 @@ class RunnerAbstraction(BaseAbstraction):
         memory: Union[int, str] = 128,
         gpu: str = "",
         image: Image = Image(),
-        concurrency: int = 1,
-        max_containers: int = 1,
+        workers: int = 1,
         keep_warm_seconds: float = 10.0,
         max_pending_tasks: int = 100,
         retries: int = 3,
@@ -54,6 +55,7 @@ class RunnerAbstraction(BaseAbstraction):
         callback_url: Optional[str] = None,
         authorized: Optional[bool] = True,
         name: Optional[str] = None,
+        autoscaler: Optional[Autoscaler] = QueueDepthAutoscaler(),
     ) -> None:
         super().__init__()
 
@@ -78,12 +80,12 @@ class RunnerAbstraction(BaseAbstraction):
         self.gpu = gpu
         self.volumes = volumes or []
         self.secrets = [SecretVar(name=s) for s in (secrets or [])]
-        self.concurrency = concurrency
+        self.workers = workers
         self.keep_warm_seconds = keep_warm_seconds
         self.max_pending_tasks = max_pending_tasks
-        self.max_containers = max_containers
         self.retries = retries
         self.timeout = timeout
+        self.autoscaler = autoscaler
 
         if on_start is not None:
             self._map_callable_to_attr(attr="on_start", func=on_start)
@@ -283,13 +285,17 @@ class RunnerAbstraction(BaseAbstraction):
                     retries=self.retries,
                     timeout=self.timeout,
                     keep_warm_seconds=self.keep_warm_seconds,
-                    concurrency=self.concurrency,
-                    max_containers=self.max_containers,
+                    workers=self.workers,
                     max_pending_tasks=self.max_pending_tasks,
                     volumes=[v.export() for v in self.volumes],
                     secrets=self.secrets,
                     force_create=force_create_stub,
                     authorized=self.authorized,
+                    autoscaler=AutoscalerProto(
+                        type=self.autoscaler.type,
+                        max_containers=self.autoscaler.max_containers,
+                        tasks_per_container=self.autoscaler.tasks_per_container,
+                    ),
                 )
             )
 

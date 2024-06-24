@@ -25,7 +25,7 @@ class Config:
     container_hostname: Optional[str]
     stub_id: Optional[str]
     stub_type: Optional[str]
-    concurrency: Optional[int]
+    workers: Optional[int]
     keep_warm_seconds: Optional[int]
     timeout: Optional[int]
     python_version: str
@@ -41,7 +41,7 @@ class Config:
         container_hostname = os.getenv("CONTAINER_HOSTNAME")
         stub_id = os.getenv("STUB_ID")
         stub_type = os.getenv("STUB_TYPE")
-        concurrency = int(os.getenv("CONCURRENCY", 1))
+        workers = int(os.getenv("WORKERS", 1))
         keep_warm_seconds = float(os.getenv("KEEP_WARM_SECONDS", 10))
         python_version = os.getenv("PYTHON_VERSION")
         handler = os.getenv("HANDLER")
@@ -51,8 +51,8 @@ class Config:
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
 
-        if concurrency <= 0:
-            concurrency = 1
+        if workers <= 0:
+            workers = 1
 
         if not container_id or not stub_id:
             raise RunnerException("Invalid runner environment")
@@ -62,7 +62,7 @@ class Config:
             container_hostname=container_hostname,
             stub_id=stub_id,
             stub_type=stub_type,
-            concurrency=concurrency,
+            workers=workers,
             keep_warm_seconds=keep_warm_seconds,
             python_version=python_version,
             handler=handler,

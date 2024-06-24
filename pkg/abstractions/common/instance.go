@@ -113,6 +113,13 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		FailedContainerThreshold: failedContainerThreshold,
 	}
 
+	if instance.StubConfig.Autoscaler == nil {
+		instance.StubConfig.Autoscaler = &types.Autoscaler{}
+		instance.StubConfig.Autoscaler.Type = types.QueueDepthAutoscaler
+		instance.StubConfig.Autoscaler.MaxContainers = 1
+		instance.StubConfig.Autoscaler.TasksPerContainer = 1
+	}
+
 	return instance, nil
 }
 

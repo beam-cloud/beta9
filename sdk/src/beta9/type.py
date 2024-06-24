@@ -1,4 +1,6 @@
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Protocol
 
 
 class LifeCycleMethod(str, Enum):
@@ -80,3 +82,24 @@ class GpuType(str, Enum):
     A100_80 = "A100-80"
     H100 = "H100"
     A6000 = "A6000"
+
+
+QUEUE_DEPTH_AUTOSCALER_TYPE = "queue_depth"
+DEFAULT_AUTOSCALER_MAX_CONTAINERS = 1
+DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER = 1
+
+
+class Autoscaler(Protocol):
+    type: str
+    max_containers: int = DEFAULT_AUTOSCALER_MAX_CONTAINERS
+    tasks_per_container: int = DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER
+
+
+@dataclass
+class QueueDepthAutoscaler(Autoscaler):
+    max_containers: int
+    tasks_per_container: int
+    type: str = field(repr=False, default=QUEUE_DEPTH_AUTOSCALER_TYPE)
+
+
+AUTOSCALERS = {}

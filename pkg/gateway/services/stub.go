@@ -13,6 +13,17 @@ import (
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	autoscaler := &types.Autoscaler{}
+	if in.Autoscaler.Type == "" {
+		autoscaler.Type = types.QueueDepthAutoscaler
+		autoscaler.MaxContainers = 1
+		autoscaler.TasksPerContainer = 1
+	} else {
+		autoscaler.Type = types.AutoscalerType(in.Autoscaler.Type)
+		autoscaler.MaxContainers = uint(in.Autoscaler.MaxContainers)
+		autoscaler.TasksPerContainer = uint(in.Autoscaler.TasksPerContainer)
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:     in.Cpu,
@@ -29,12 +40,12 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Timeout:    int(in.Timeout),
 		},
 		KeepWarmSeconds: uint(in.KeepWarmSeconds),
-		Concurrency:     uint(in.Concurrency),
-		MaxContainers:   uint(in.MaxContainers),
+		Workers:         uint(in.Workers),
 		MaxPendingTasks: uint(in.MaxPendingTasks),
 		Volumes:         in.Volumes,
 		Secrets:         []types.Secret{},
 		Authorized:      in.Authorized,
+		Autoscaler:      autoscaler,
 	}
 
 	// Get secrets
