@@ -68,7 +68,8 @@ class Endpoint(RunnerAbstraction):
             If false, allows the endpoint to be invoked without an auth token.
             Default is True.
         autoscaler (Optional[Autoscaler]):
-            TODO: write me
+            Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
+            various autoscaling strategies (Defaults to QueueDepthAutoscaler())
     Example:
         ```python
         from beta9 import endpoint, Image

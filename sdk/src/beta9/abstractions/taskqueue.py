@@ -71,10 +71,12 @@ class TaskQueue(RunnerAbstraction):
             A list of storage volumes to be associated with the taskqueue. Default is [].
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
-
         name (Optional[str]):
             An optional name for this task_queue, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
+        autoscaler (Optional[Autoscaler]):
+            Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
+            various autoscaling strategies (Defaults to QueueDepthAutoscaler())
     Example:
         ```python
         from beta9 import task_queue, Image
