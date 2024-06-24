@@ -15,11 +15,6 @@ type taskQueueAutoscalerSample struct {
 
 // taskQueueAutoscalerSampleFunc retrieves an autoscaling sample from the task queue instance
 func taskQueueAutoscalerSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSample, error) {
-	queueLength, err := i.client.QueueLength(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
-	if err != nil {
-		queueLength = -1
-	}
-
 	runningTasks, err := i.client.TasksRunning(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
 	if err != nil {
 		runningTasks = -1
@@ -28,6 +23,11 @@ func taskQueueAutoscalerSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSa
 	taskDuration, err := i.client.GetTaskDuration(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
 	if err != nil {
 		taskDuration = -1
+	}
+
+	queueLength, err := i.TaskRepo.TasksInFlight(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
+	if err != nil {
+		queueLength = -1
 	}
 
 	currentContainers := 0
@@ -39,14 +39,10 @@ func taskQueueAutoscalerSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSa
 	currentContainers = state.PendingContainers + state.RunningContainers
 
 	sample := &taskQueueAutoscalerSample{
-		QueueLength:       queueLength,
+		QueueLength:       int64(queueLength),
 		RunningTasks:      int64(runningTasks),
 		CurrentContainers: currentContainers,
 		TaskDuration:      taskDuration,
-	}
-
-	if sample.RunningTasks >= 0 {
-		sample.QueueLength = sample.QueueLength + int64(runningTasks)
 	}
 
 	return sample, nil
@@ -61,8 +57,7 @@ func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSample) *abs
 	} else {
 		if s.QueueLength == -1 {
 			return &abstractions.AutoscalerResult{
-				DesiredContainers: 0,
-				ResultValid:       false,
+				ResultValid: false,
 			}
 		}
 
