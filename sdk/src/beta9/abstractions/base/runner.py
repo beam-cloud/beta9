@@ -23,7 +23,7 @@ from ...clients.gateway import (
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import
 from ...sync import FileSyncer, SyncEventHandler
-from ...type import Autoscaler, QueueDepthAutoscaler
+from ...type import _AUTOSCALERS, Autoscaler, QueueDepthAutoscaler
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -268,6 +268,10 @@ class RunnerAbstraction(BaseAbstraction):
             if not v.ready and not v.get_or_create():
                 return False
 
+        autoscaler_type = _AUTOSCALERS.get(type(self.autoscaler), None)
+        if autoscaler_type is None:
+            return False
+
         if not self.stub_created:
             stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
                 GetOrCreateStubRequest(
@@ -292,7 +296,7 @@ class RunnerAbstraction(BaseAbstraction):
                     force_create=force_create_stub,
                     authorized=self.authorized,
                     autoscaler=AutoscalerProto(
-                        type=self.autoscaler.type,
+                        type=autoscaler_type,
                         max_containers=self.autoscaler.max_containers,
                         tasks_per_container=self.autoscaler.tasks_per_container,
                     ),
