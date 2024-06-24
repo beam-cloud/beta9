@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import signal
@@ -77,7 +78,7 @@ class GunicornApplication(BaseApplication):
         logger.propagate = False
 
         try:
-            mg = EndpointManager(logger=logger)
+            mg = EndpointManager(logger=logger, worker=worker)
             asgi_app: ASGIApp = mg.app
 
             # Override the default starlette app
@@ -124,6 +125,25 @@ async def task_lifecycle(request: Request):
         )
 
 
+class OnStartMethodHandler:
+    def __init__(self, worker):
+        self._is_running = True
+        self._worker = worker
+
+    async def start(self):
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(self._keep_worker_alive())
+        result = await loop.run_in_executor(None, execute_lifecycle_method, LifeCycleMethod.OnStart)
+        self._is_running = False
+        await task
+        return result
+
+    async def _keep_worker_alive(self):
+        while self._is_running:
+            self._worker.notify()
+            await asyncio.sleep(1)
+
+
 class EndpointManager:
     @asynccontextmanager
     async def lifespan(self, _: FastAPI):
@@ -131,7 +151,7 @@ class EndpointManager:
             self.app.state.gateway_stub = GatewayServiceStub(channel)
             yield
 
-    def __init__(self, logger: logging.Logger) -> None:
+    def __init__(self, logger: logging.Logger, worker: UvicornWorker) -> None:
         self.logger = logger
         self.pid: int = os.getpid()
         self.exit_code: int = 0
@@ -142,7 +162,7 @@ class EndpointManager:
 
         # Load handler and execute on_start method
         self.handler: FunctionHandler = FunctionHandler()
-        self.on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
+        self.on_start_value = asyncio.run(OnStartMethodHandler(worker).start())
 
         @self.app.get("/health")
         async def health():
