@@ -223,7 +223,7 @@ class EndpointManager:
 if __name__ == "__main__":
     options = {
         "bind": [f"[::]:{cfg.bind_port}"],
-        "workers": cfg.concurrency,
+        "workers": cfg.workers,
         "worker_class": "uvicorn.workers.UvicornWorker",
         "loglevel": "info",
         "post_fork": GunicornApplication.post_fork_initialize,

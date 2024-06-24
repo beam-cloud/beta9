@@ -42,7 +42,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 		fmt.Sprintf("ON_START=%s", i.StubConfig.OnStart),
 		fmt.Sprintf("STUB_ID=%s", i.Stub.ExternalId),
 		fmt.Sprintf("STUB_TYPE=%s", i.Stub.Type),
-		fmt.Sprintf("CONCURRENCY=%d", i.StubConfig.Concurrency),
+		fmt.Sprintf("WORKERS=%d", i.StubConfig.Workers),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.StubConfig.KeepWarmSeconds),
 		fmt.Sprintf("PYTHON_VERSION=%s", i.StubConfig.PythonVersion),
 		fmt.Sprintf("TIMEOUT=%d", i.StubConfig.TaskPolicy.Timeout),

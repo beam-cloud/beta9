@@ -8,7 +8,7 @@ from .abstractions.output import Output
 from .abstractions.queue import SimpleQueue as Queue
 from .abstractions.taskqueue import TaskQueue as task_queue
 from .abstractions.volume import Volume
-from .type import GpuType, PythonVersion
+from .type import GpuType, PythonVersion, QueueDepthAutoscaler
 
 __all__ = [
     "Map",
@@ -23,4 +23,5 @@ __all__ = [
     "GpuType",
     "PythonVersion",
     "Output",
+    "QueueDepthAutoscaler",
 ]

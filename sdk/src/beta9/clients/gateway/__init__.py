@@ -230,6 +230,13 @@ class SecretVar(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class Autoscaler(betterproto.Message):
+    type: str = betterproto.string_field(1)
+    max_containers: int = betterproto.uint32_field(2)
+    tasks_per_container: int = betterproto.uint32_field(3)
+
+
+@dataclass(eq=False, repr=False)
 class GetOrCreateStubRequest(betterproto.Message):
     object_id: str = betterproto.string_field(1)
     image_id: str = betterproto.string_field(2)
@@ -243,8 +250,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     retries: int = betterproto.uint32_field(10)
     timeout: int = betterproto.int64_field(11)
     keep_warm_seconds: float = betterproto.float_field(12)
-    concurrency: int = betterproto.uint32_field(13)
-    max_containers: int = betterproto.uint32_field(14)
+    workers: int = betterproto.uint32_field(13)
     max_pending_tasks: int = betterproto.uint32_field(15)
     volumes: List["Volume"] = betterproto.message_field(16)
     force_create: bool = betterproto.bool_field(17)
@@ -252,6 +258,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     callback_url: str = betterproto.string_field(19)
     authorized: bool = betterproto.bool_field(20)
     secrets: List["SecretVar"] = betterproto.message_field(21)
+    autoscaler: "Autoscaler" = betterproto.message_field(22)
 
 
 @dataclass(eq=False, repr=False)

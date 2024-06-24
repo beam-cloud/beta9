@@ -50,7 +50,7 @@ class TaskQueueManager:
         set_start_method("spawn", force=True)
 
         # Task worker attributes
-        self.task_worker_count: int = config.concurrency
+        self.task_worker_count: int = config.workers
         self.task_processes: List[Process] = []
         self.task_workers: List[TaskQueueWorker] = []
         self.task_worker_startup_events: List[TEvent] = [

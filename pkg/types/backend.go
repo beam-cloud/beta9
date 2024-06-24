@@ -152,11 +152,23 @@ type StubConfigV1 struct {
 	MaxPendingTasks uint         `json:"max_pending_tasks"`
 	CallbackUrl     string       `json:"callback_url"`
 	TaskPolicy      TaskPolicy   `json:"task_policy"`
-	Concurrency     uint         `json:"concurrency"`
+	Workers         uint         `json:"workers"`
 	Authorized      bool         `json:"authorized"`
-	MaxContainers   uint         `json:"max_containers"`
 	Volumes         []*pb.Volume `json:"volumes"`
 	Secrets         []Secret     `json:"secrets"`
+	Autoscaler      *Autoscaler  `json:"autoscaler"`
+}
+
+type AutoscalerType string
+
+const (
+	QueueDepthAutoscaler AutoscalerType = "queue_depth"
+)
+
+type Autoscaler struct {
+	Type              AutoscalerType `json:"type"`
+	MaxContainers     uint           `json:"max_containers"`
+	TasksPerContainer uint           `json:"tasks_per_container"`
 }
 
 const (

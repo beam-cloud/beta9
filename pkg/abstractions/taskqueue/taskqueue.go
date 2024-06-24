@@ -47,7 +47,7 @@ type TaskQueueServiceOpts struct {
 const (
 	taskQueueContainerPrefix                 string        = "taskqueue"
 	taskQueueRoutePrefix                     string        = "/taskqueue"
-	taskQueueDefaultTaskExpiration           int           = 3600 * 12 // 12 hours
+	taskQueueDefaultTaskExpiration           int           = 3600 * 2 // 2 hours
 	taskQueueServeContainerTimeout           time.Duration = 600 * time.Second
 	taskQueueServeContainerKeepaliveInterval time.Duration = 30 * time.Second
 )
@@ -216,41 +216,61 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 		}, nil
 	}
 
-	msg, err := instance.client.Pop(ctx, authInfo.Workspace.Name, in.StubId, in.ContainerId)
-	if err != nil || msg == nil {
+	// Retrieve the next "valid" task (not in a completed state) from the queue
+	task, msg := func() (*types.TaskWithRelated, []byte) {
+		for {
+			msg, err := instance.client.Pop(ctx, authInfo.Workspace.Name, in.StubId, in.ContainerId)
+			if err != nil {
+				continue
+			}
+
+			// There are no items left in the queue
+			if msg == nil {
+				return nil, nil
+			}
+
+			var tm types.TaskMessage
+			err = tm.Decode(msg)
+			if err != nil {
+				continue
+			}
+
+			t, err := tq.backendRepo.GetTaskWithRelated(ctx, tm.TaskId)
+			if err != nil {
+				continue
+			}
+
+			if t.Status.IsCompleted() {
+				instance.client.rdb.Del(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, t.ExternalId))
+				continue
+			}
+
+			return t, msg
+		}
+	}()
+
+	// We couldn't get a valid task from the queue
+	if task == nil {
 		return &pb.TaskQueuePopResponse{Ok: false}, nil
 	}
 
-	var tm types.TaskMessage
-	err = tm.Decode(msg)
+	err = tq.taskDispatcher.Claim(ctx, authInfo.Workspace.Name, task.Stub.ExternalId, task.ExternalId, in.ContainerId)
 	if err != nil {
 		return nil, err
-	}
-
-	err = tq.taskDispatcher.Claim(ctx, authInfo.Workspace.Name, tm.StubId, tm.TaskId, in.ContainerId)
-	if err != nil {
-		return nil, err
-	}
-
-	task, err := tq.backendRepo.GetTask(ctx, tm.TaskId)
-	if err != nil {
-		return &pb.TaskQueuePopResponse{
-			Ok: false,
-		}, nil
 	}
 
 	task.ContainerId = in.ContainerId
 	task.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatusRunning
 
-	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, tm.TaskId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
+	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, task.ExternalId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
 	if err != nil {
 		return &pb.TaskQueuePopResponse{
 			Ok: false,
 		}, nil
 	}
 
-	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
+	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task)
 	if err != nil {
 		return &pb.TaskQueuePopResponse{
 			Ok: false,

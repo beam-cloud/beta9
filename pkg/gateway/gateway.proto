@@ -191,8 +191,12 @@ message Volume {
   string mount_path = 2;
 }
 
-message SecretVar {
-  string name = 1;
+message SecretVar { string name = 1; }
+
+message Autoscaler {
+  string type = 1;
+  uint32 max_containers = 2;
+  uint32 tasks_per_container = 3;
 }
 
 message GetOrCreateStubRequest {
@@ -208,8 +212,7 @@ message GetOrCreateStubRequest {
   uint32 retries = 10;
   int64 timeout = 11;
   float keep_warm_seconds = 12;
-  uint32 concurrency = 13;
-  uint32 max_containers = 14;
+  uint32 workers = 13;
   uint32 max_pending_tasks = 15;
   repeated Volume volumes = 16;
   bool force_create = 17;
@@ -217,6 +220,7 @@ message GetOrCreateStubRequest {
   string callback_url = 19;
   bool authorized = 20;
   repeated SecretVar secrets = 21;
+  Autoscaler autoscaler = 22;
 }
 
 message GetOrCreateStubResponse {
