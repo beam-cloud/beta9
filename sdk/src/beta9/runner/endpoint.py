@@ -132,13 +132,13 @@ class OnStartMethodHandler:
 
     async def start(self):
         loop = asyncio.get_running_loop()
-        task = loop.create_task(self._continously_notify_worker())
+        task = loop.create_task(self._keep_worker_alive())
         result = await loop.run_in_executor(None, execute_lifecycle_method, LifeCycleMethod.OnStart)
         self._is_running = False
         await task
         return result
 
-    async def _continously_notify_worker(self):
+    async def _keep_worker_alive(self):
         while self._is_running:
             self._worker.notify()
             await asyncio.sleep(1)
@@ -163,7 +163,6 @@ class EndpointManager:
 
         # Load handler and execute on_start method
         self.handler: FunctionHandler = FunctionHandler()
-        # self.on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
         self.on_start_value = asyncio.run(OnStartMethodHandler(worker).start())
 
         @self.app.get("/health")
