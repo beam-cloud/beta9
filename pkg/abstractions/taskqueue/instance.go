@@ -50,6 +50,11 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 
 	env = append(secrets, env...)
 
+	gpuCount := 0
+	if i.StubConfig.Runtime.Gpu != "" {
+		gpuCount = 1
+	}
+
 	for c := 0; c < containersToRun; c++ {
 		runRequest := &types.ContainerRequest{
 			ContainerId: i.genContainerId(),
@@ -57,6 +62,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			Cpu:         i.StubConfig.Runtime.Cpu,
 			Memory:      i.StubConfig.Runtime.Memory,
 			Gpu:         string(i.StubConfig.Runtime.Gpu),
+			GpuCount:    uint32(gpuCount),
 			ImageId:     i.StubConfig.Runtime.ImageId,
 			StubId:      i.Stub.ExternalId,
 			WorkspaceId: i.Workspace.ExternalId,
