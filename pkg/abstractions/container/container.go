@@ -144,12 +144,18 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 
 	env = append(secrets, env...)
 
+	gpuCount := 0
+	if stubConfig.Runtime.Gpu != "" {
+		gpuCount = 1
+	}
+
 	err = cs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env:         env,
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
 		Gpu:         string(stubConfig.Runtime.Gpu),
+		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,
 		WorkspaceId: authInfo.Workspace.ExternalId,
