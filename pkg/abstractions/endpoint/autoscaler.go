@@ -44,10 +44,13 @@ func endpointDeploymentScaleFunc(i *endpointInstance, sample *endpointAutoscaler
 			desiredContainers += 1
 		}
 
+		if i.StubConfig.MaxTasksPerContainer > 0 {
+			desiredContainers = int(math.Ceil(float64(desiredContainers) / float64(i.StubConfig.MaxTasksPerContainer)))
+		}
+
 		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
 		maxReplicas := math.Min(float64(i.StubConfig.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
-
 	}
 
 	return &abstractions.AutoscalerResult{
