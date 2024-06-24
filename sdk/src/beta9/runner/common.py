@@ -163,7 +163,7 @@ class FunctionHandler:
         return self.handler(*args, **kwargs)
 
 
-def execute_lifecycle_method(*, name: str) -> Union[Any, None]:
+def execute_lifecycle_method(name: str) -> Union[Any, None]:
     """Executes a container lifecycle method defined by the user and return it's value"""
 
     if sys.path[0] != USER_CODE_VOLUME:
