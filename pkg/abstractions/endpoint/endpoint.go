@@ -46,7 +46,7 @@ type HttpEndpointService struct {
 var (
 	endpointContainerPrefix                 string        = "endpoint"
 	endpointRoutePrefix                     string        = "/endpoint"
-	endpointRequestTimeoutS                 int           = 180
+	endpointRequestTimeoutS                 int           = 300
 	endpointServeContainerTimeout           time.Duration = 600 * time.Second
 	endpointServeContainerKeepaliveInterval time.Duration = 30 * time.Second
 	endpointRequestHeartbeatInterval        time.Duration = 30 * time.Second
