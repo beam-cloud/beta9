@@ -65,6 +65,12 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 
 	taskId, err := g.tq.put(ctx.Request().Context(), cc.AuthInfo, stubId, payload)
 	if err != nil {
+		if _, ok := err.(*types.ErrExceededTaskLimit); ok {
+			return ctx.JSON(http.StatusTooManyRequests, map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
+
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": err.Error(),
 		})

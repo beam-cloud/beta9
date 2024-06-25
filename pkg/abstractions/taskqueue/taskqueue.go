@@ -176,6 +176,15 @@ func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stub
 		return "", err
 	}
 
+	tasksInFlight, err := tq.taskRepo.TasksInFlight(ctx, authInfo.Workspace.Name, stubId)
+	if err != nil {
+		return "", err
+	}
+
+	if tasksInFlight >= int(stubConfig.MaxPendingTasks) {
+		return "", &types.ErrExceededTaskLimit{MaxPendingTasks: stubConfig.MaxPendingTasks}
+	}
+
 	policy := stubConfig.TaskPolicy
 	policy.Expires = time.Now().Add(time.Duration(taskQueueDefaultTaskExpiration) * time.Second)
 
