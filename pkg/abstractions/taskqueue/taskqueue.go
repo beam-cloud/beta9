@@ -221,7 +221,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 		for {
 			msg, err := instance.client.Pop(ctx, authInfo.Workspace.Name, in.StubId, in.ContainerId)
 			if err != nil {
-				continue
+				return nil, nil
 			}
 
 			// There are no items left in the queue
