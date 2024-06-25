@@ -168,7 +168,7 @@ func (es *HttpEndpointService) forwardRequest(
 
 	tasksInFlight, err := es.taskRepo.TasksInFlight(ctx.Request().Context(), authInfo.Workspace.Name, stubId)
 	if err != nil {
-		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": err.Error(),
 		})
 	}
