@@ -161,16 +161,30 @@ func (es *HttpEndpointService) forwardRequest(
 	authInfo *auth.AuthInfo,
 	stubId string,
 ) error {
+	instance, err := es.getOrCreateEndpointInstance(stubId)
+	if err != nil {
+		return err
+	}
+
+	tasksInFlight, err := es.taskRepo.TasksInFlight(ctx.Request().Context(), authInfo.Workspace.Name, stubId)
+	if err != nil {
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": err.Error(),
+		})
+	}
+
+	if tasksInFlight >= int(instance.StubConfig.MaxPendingTasks) {
+		err := types.ErrExceededTaskLimit{MaxPendingTasks: instance.StubConfig.MaxPendingTasks}
+		return ctx.JSON(http.StatusTooManyRequests, map[string]interface{}{
+			"error": err.Error(),
+		})
+	}
+
 	payload, err := task.SerializeHttpPayload(ctx)
 	if err != nil {
 		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error": err.Error(),
 		})
-	}
-
-	instance, err := es.getOrCreateEndpointInstance(stubId)
-	if err != nil {
-		return err
 	}
 
 	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), authInfo, stubId, payload, types.TaskPolicy{

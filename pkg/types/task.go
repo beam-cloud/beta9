@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/gofrs/uuid"
@@ -111,4 +112,12 @@ type TaskPolicy struct {
 	MaxRetries uint      `json:"max_retries" redis:"max_retries"`
 	Timeout    int       `json:"timeout" redis:"timeout"`
 	Expires    time.Time `json:"expires" redis:"expires"`
+}
+
+type ErrExceededTaskLimit struct {
+	MaxPendingTasks uint
+}
+
+func (e *ErrExceededTaskLimit) Error() string {
+	return fmt.Sprintf("exceeded max pending tasks: %d", e.MaxPendingTasks)
 }
