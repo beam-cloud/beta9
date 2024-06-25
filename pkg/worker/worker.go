@@ -364,6 +364,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 					return
 				}
 
+				log.Printf("<%s> - container still running after stop event %ds ago - force killing container.\n", request.ContainerId, s.config.Worker.TerminationGracePeriod)
 				s.stopContainerChan <- stopContainerEvent{
 					ContainerId: request.ContainerId,
 					Kill:        true,
