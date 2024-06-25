@@ -60,10 +60,6 @@ type Worker struct {
 	config               types.AppConfig
 }
 
-type stopContainerEvent struct {
-	ContainerId string
-	Kill        bool
-}
 type ContainerInstance struct {
 	Id           string
 	StubId       string
@@ -80,6 +76,11 @@ type ContainerInstance struct {
 type ContainerOptions struct {
 	BindPort    int
 	InitialSpec *specs.Spec
+}
+
+type stopContainerEvent struct {
+	ContainerId string
+	Kill        bool
 }
 
 var (
