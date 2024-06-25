@@ -51,7 +51,7 @@ type Worker struct {
 	containerLogger      *ContainerLogger
 	workerMetrics        *WorkerMetrics
 	completedRequests    chan *types.ContainerRequest
-	stopContainerChan    chan string
+	stopContainerChan    chan stopContainerEvent
 	workerRepo           repo.WorkerRepository
 	eventRepo            repo.EventRepository
 	storage              storage.Storage
@@ -76,6 +76,11 @@ type ContainerInstance struct {
 type ContainerOptions struct {
 	BindPort    int
 	InitialSpec *specs.Spec
+}
+
+type stopContainerEvent struct {
+	ContainerId string
+	Kill        bool
 }
 
 var (
@@ -186,7 +191,7 @@ func NewWorker() (*Worker, error) {
 		workerRepo:        workerRepo,
 		eventRepo:         eventRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
-		stopContainerChan: make(chan string, 1000),
+		stopContainerChan: make(chan stopContainerEvent, 1000),
 		storage:           storage,
 	}, nil
 }
@@ -337,7 +342,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 		if err != nil {
 			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
 				log.Printf("<%s> - container state not found, stopping container\n", request.ContainerId)
-				s.stopContainerChan <- request.ContainerId
+				s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
 				return nil
 			}
 
@@ -347,6 +352,25 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 		err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
 		if err != nil {
 			log.Printf("<%s> - unable to update container state: %v\n", request.ContainerId, err)
+		}
+
+		// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
+		// ensure it is killed after that
+		if state.Status == types.ContainerStatusStopping {
+			go func() {
+				time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
+
+				_, exists := s.containerInstances.Get(request.ContainerId)
+				if !exists {
+					return
+				}
+
+				log.Printf("<%s> - container still running after stop event %ds ago - force killing\n", request.ContainerId, s.config.Worker.TerminationGracePeriod)
+				s.stopContainerChan <- stopContainerEvent{
+					ContainerId: request.ContainerId,
+					Kill:        true,
+				}
+			}()
 		}
 	}
 }
@@ -371,17 +395,17 @@ func (s *Worker) stopContainer(event *common.Event) bool {
 	var err error = nil
 	if _, exists := s.containerInstances.Get(containerId); exists {
 		log.Printf("<%s> - received stop container event.\n", containerId)
-		s.stopContainerChan <- containerId
+		s.stopContainerChan <- stopContainerEvent{ContainerId: containerId, Kill: false}
 	}
 
 	return err == nil
 }
 
 func (s *Worker) processStopContainerEvents() {
-	for containerId := range s.stopContainerChan {
-		log.Printf("<%s> - stopping container.\n", containerId)
+	for event := range s.stopContainerChan {
+		log.Printf("<%s> - stopping container.\n", event.ContainerId)
 
-		instance, exists := s.containerInstances.Get(containerId)
+		instance, exists := s.containerInstances.Get(event.ContainerId)
 		if !exists {
 			continue
 		}
@@ -391,19 +415,23 @@ func (s *Worker) processStopContainerEvents() {
 			continue
 		}
 
-		err := s.runcHandle.Kill(s.ctx, containerId, int(syscall.SIGTERM), &runc.KillOpts{
+		signal := int(syscall.SIGTERM)
+		if event.Kill {
+			signal = int(syscall.SIGKILL)
+		}
+
+		err := s.runcHandle.Kill(s.ctx, event.ContainerId, signal, &runc.KillOpts{
 			All: true,
 		})
-
 		if err != nil {
-			log.Printf("<%s> - unable to stop container: %v\n", containerId, err)
+			log.Printf("<%s> - unable to stop container: %v\n", event.ContainerId, err)
 
-			s.stopContainerChan <- containerId
+			s.stopContainerChan <- event
 			time.Sleep(time.Second)
 			continue
 		}
 
-		log.Printf("<%s> - container stopped.\n", containerId)
+		log.Printf("<%s> - container stopped.\n", event.ContainerId)
 	}
 }
 
