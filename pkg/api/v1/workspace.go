@@ -22,6 +22,7 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 	}
 
 	g.POST("", group.CreateWorkspace)
+	g.GET("/current", auth.WithAuth(group.CurrentWorkspace))
 
 	return group
 }
@@ -48,4 +49,10 @@ func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"workspace_id": workspace.ExternalId,
 	})
+}
+
+func (g *WorkspaceGroup) CurrentWorkspace(ctx echo.Context) error {
+	authContext, _ := ctx.(*auth.HttpAuthContext)
+
+	return ctx.JSON(http.StatusOK, authContext.AuthInfo.Workspace)
 }
