@@ -17,6 +17,8 @@ service TaskQueueService {
       returns (stream StartTaskQueueServeResponse) {}
   rpc StopTaskQueueServe(StopTaskQueueServeRequest)
       returns (StopTaskQueueServeResponse) {}
+  rpc TaskQueueServeKeepAlive(TaskQueueServeKeepAliveRequest)
+      returns (TaskQueueServeKeepAliveResponse) {}
 }
 
 message TaskQueuePutRequest {
@@ -81,3 +83,6 @@ message StartTaskQueueServeResponse {
 
 message StopTaskQueueServeRequest { string stub_id = 1; }
 message StopTaskQueueServeResponse { bool ok = 1; }
+
+message TaskQueueServeKeepAliveRequest { string stub_id = 1; }
+message TaskQueueServeKeepAliveResponse { bool ok = 1; }

@@ -182,9 +182,18 @@ class RunnerAbstraction(BaseAbstraction):
         function_name = func.__name__
         setattr(self, attr, f"{module_name}:{function_name}")
 
-    def _sync_content(self, *, dir: str, object_id: str, file_update_queue: Queue) -> None:
+    def _sync_content(
+        self,
+        *,
+        dir: str,
+        object_id: str,
+        file_update_queue: Queue,
+        on_event: Optional[Callable] = None,
+    ) -> None:
         try:
             operation, path, new_path = file_update_queue.get_nowait()
+            if on_event:
+                on_event(operation, path, new_path)
 
             req = ReplaceObjectContentRequest(
                 object_id=object_id,
@@ -214,7 +223,9 @@ class RunnerAbstraction(BaseAbstraction):
         except Exception as e:
             terminal.warn(str(e))
 
-    def sync_dir_to_workspace(self, *, dir: str, object_id: str) -> ReplaceObjectContentResponse:
+    def sync_dir_to_workspace(
+        self, *, dir: str, object_id: str, on_event: Optional[Callable] = None
+    ) -> ReplaceObjectContentResponse:
         file_update_queue = Queue()
         event_handler = SyncEventHandler(file_update_queue)
 
@@ -224,7 +235,9 @@ class RunnerAbstraction(BaseAbstraction):
 
         terminal.header(f"Watching '{dir}' for changes...")
         while True:
-            self._sync_content(dir=dir, object_id=object_id, file_update_queue=file_update_queue)
+            self._sync_content(
+                dir=dir, object_id=object_id, file_update_queue=file_update_queue, on_event=on_event
+            )
 
     def prepare_runtime(
         self,

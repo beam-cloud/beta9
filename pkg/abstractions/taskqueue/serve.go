@@ -2,7 +2,7 @@ package taskqueue
 
 import (
 	"context"
-	"time"
+	"log"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -54,27 +54,6 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		}
 		return nil
 	}
-
-	// Keep serve container active for as long as user has their terminal open
-	// We can handle timeouts on the client side
-	go func() {
-		ticker := time.NewTicker(taskQueueServeContainerKeepaliveInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				instance.Rdb.SetEx(
-					context.Background(),
-					Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-					1,
-					taskQueueServeContainerTimeout,
-				)
-			}
-		}
-	}()
 
 	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
 		SendCallback:    sendCallback,
@@ -130,4 +109,22 @@ func (tq *RedisTaskQueue) StopTaskQueueServe(ctx context.Context, in *pb.StopTas
 	}
 
 	return &pb.StopTaskQueueServeResponse{Ok: true}, nil
+}
+
+func (tq *RedisTaskQueue) TaskQueueServeKeepAlive(ctx context.Context, in *pb.TaskQueueServeKeepAliveRequest) (*pb.TaskQueueServeKeepAliveResponse, error) {
+	log.Println("TaskQueueServeKeepAlive")
+	instance, exists := tq.queueInstances.Get(in.StubId)
+	if !exists {
+		return &pb.TaskQueueServeKeepAliveResponse{Ok: false}, nil
+	}
+
+	// Update lock expiration
+	instance.Rdb.SetEx(
+		context.Background(),
+		Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
+		1,
+		taskQueueServeContainerTimeout,
+	)
+
+	return &pb.TaskQueueServeKeepAliveResponse{Ok: true}, nil
 }
