@@ -284,6 +284,7 @@ type MonitoringConfig struct {
 }
 
 type PrometheusConfig struct {
+	AgentUrl      bool `key:"agentUrl" json:"agent_url"`
 	ScrapeWorkers bool `key:"scrapeWorkers" json:"scrape_workers"`
 	Port          int  `key:"port" json:"port"`
 }
