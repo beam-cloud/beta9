@@ -45,10 +45,11 @@ type TaskQueueServiceOpts struct {
 }
 
 const (
-	taskQueueContainerPrefix       string        = "taskqueue"
-	taskQueueRoutePrefix           string        = "/taskqueue"
-	taskQueueDefaultTaskExpiration int           = 3600 * 2 // 2 hours
-	taskQueueServeContainerTimeout time.Duration = 10 * time.Minute
+	taskQueueContainerPrefix                 string        = "taskqueue"
+	taskQueueRoutePrefix                     string        = "/taskqueue"
+	taskQueueDefaultTaskExpiration           int           = 3600 * 2 // 2 hours
+	taskQueueServeContainerKeepaliveInterval time.Duration = 30 * time.Second
+	taskQueueServeContainerTimeout           time.Duration = 10 * time.Minute
 )
 
 type RedisTaskQueue struct {

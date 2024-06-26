@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 @dataclass(eq=False, repr=False)
 class StartEndpointServeRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
+    timeout: int = betterproto.int32_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -49,6 +50,7 @@ class StopEndpointServeResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class EndpointServeKeepAliveRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
+    timeout: int = betterproto.int32_field(2)
 
 
 @dataclass(eq=False, repr=False)

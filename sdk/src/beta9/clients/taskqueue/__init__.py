@@ -93,6 +93,7 @@ class TaskQueueMonitorResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class StartTaskQueueServeRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
+    timeout: int = betterproto.int32_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -115,6 +116,7 @@ class StopTaskQueueServeResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class TaskQueueServeKeepAliveRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
+    timeout: int = betterproto.int32_field(2)
 
 
 @dataclass(eq=False, repr=False)

@@ -2,6 +2,7 @@ package endpoint
 
 import (
 	"context"
+	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -28,13 +29,42 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 		return err
 	}
 
+	var timeoutDuration time.Duration = endpointServeContainerTimeout
+	if in.Timeout > 0 {
+		timeoutDuration = time.Duration(in.Timeout) * time.Second
+	}
+
 	// Set lock (used by autoscaler to scale up the single serve container)
 	instance.Rdb.SetEx(
 		context.Background(),
 		Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
 		1,
-		endpointServeContainerTimeout,
+		timeoutDuration,
 	)
+
+	// Keep serve container active for as long as user has their terminal open
+	// We can handle timeouts on the client side
+	// If timeout is set to negative, we want to keep the container alive indefinitely while the user is connected
+	if in.Timeout < 0 {
+		go func() {
+			ticker := time.NewTicker(endpointServeContainerKeepaliveInterval)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					instance.Rdb.SetEx(
+						context.Background(),
+						Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
+						1,
+						timeoutDuration,
+					)
+				}
+			}
+		}()
+	}
 
 	container, err := instance.WaitForContainer(ctx, endpointServeContainerTimeout)
 	if err != nil {
@@ -124,12 +154,22 @@ func (es *HttpEndpointService) EndpointServeKeepAlive(ctx context.Context, in *p
 		return &pb.EndpointServeKeepAliveResponse{Ok: false}, nil
 	}
 
+	var timeoutDuration time.Duration = endpointServeContainerTimeout
+	if in.Timeout != 0 {
+		timeoutDuration = time.Duration(in.Timeout) * time.Second
+	}
+
+	if in.Timeout < 0 {
+		// There is no timeout, so we can just return
+		return &pb.EndpointServeKeepAliveResponse{Ok: true}, nil
+	}
+
 	// Set lock (used by autoscaler to scale up the single serve container)
 	instance.Rdb.SetEx(
 		context.Background(),
 		Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
 		1,
-		endpointServeContainerTimeout,
+		timeoutDuration,
 	)
 
 	return &pb.EndpointServeKeepAliveResponse{Ok: true}, nil

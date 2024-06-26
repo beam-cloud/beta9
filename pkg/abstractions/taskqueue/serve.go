@@ -2,7 +2,7 @@ package taskqueue
 
 import (
 	"context"
-	"log"
+	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -27,13 +27,42 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		return err
 	}
 
+	var timeoutDuration time.Duration = taskQueueServeContainerTimeout
+	if in.Timeout > 0 {
+		timeoutDuration = time.Duration(in.Timeout) * time.Second
+	}
+
 	// Set lock (used by autoscaler to scale up the single serve container)
 	instance.Rdb.SetEx(
 		context.Background(),
 		Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
 		1,
-		taskQueueServeContainerTimeout,
+		timeoutDuration,
 	)
+
+	// Keep serve container active for as long as user has their terminal open
+	// We can handle timeouts on the client side
+	// If timeout is set to negative, we want to keep the container alive indefinitely while the user is connected
+	if in.Timeout < 0 {
+		go func() {
+			ticker := time.NewTicker(taskQueueServeContainerKeepaliveInterval)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					instance.Rdb.SetEx(
+						context.Background(),
+						Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
+						1,
+						timeoutDuration,
+					)
+				}
+			}
+		}()
+	}
 
 	container, err := instance.WaitForContainer(ctx, taskQueueServeContainerTimeout)
 	if err != nil {
@@ -112,10 +141,19 @@ func (tq *RedisTaskQueue) StopTaskQueueServe(ctx context.Context, in *pb.StopTas
 }
 
 func (tq *RedisTaskQueue) TaskQueueServeKeepAlive(ctx context.Context, in *pb.TaskQueueServeKeepAliveRequest) (*pb.TaskQueueServeKeepAliveResponse, error) {
-	log.Println("TaskQueueServeKeepAlive")
 	instance, exists := tq.queueInstances.Get(in.StubId)
 	if !exists {
 		return &pb.TaskQueueServeKeepAliveResponse{Ok: false}, nil
+	}
+
+	var timeoutDuration time.Duration = taskQueueServeContainerTimeout
+	if in.Timeout != 0 {
+		timeoutDuration = time.Duration(in.Timeout) * time.Second
+	}
+
+	if in.Timeout < 0 {
+		// There is no timeout, so we can just return
+		return &pb.TaskQueueServeKeepAliveResponse{Ok: true}, nil
 	}
 
 	// Update lock expiration
@@ -123,7 +161,7 @@ func (tq *RedisTaskQueue) TaskQueueServeKeepAlive(ctx context.Context, in *pb.Ta
 		context.Background(),
 		Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
 		1,
-		taskQueueServeContainerTimeout,
+		timeoutDuration,
 	)
 
 	return &pb.TaskQueueServeKeepAliveResponse{Ok: true}, nil

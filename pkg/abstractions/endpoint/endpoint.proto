@@ -13,7 +13,7 @@ service EndpointService {
       returns (EndpointServeKeepAliveResponse) {}
 }
 
-message StartEndpointServeRequest { string stub_id = 1; }
+message StartEndpointServeRequest { string stub_id = 1; int32 timeout = 2;}
 
 message StartEndpointServeResponse {
   string output = 1;
@@ -24,5 +24,5 @@ message StartEndpointServeResponse {
 message StopEndpointServeRequest { string stub_id = 1; }
 message StopEndpointServeResponse { bool ok = 1; }
 
-message EndpointServeKeepAliveRequest { string stub_id = 1; }
+message EndpointServeKeepAliveRequest { string stub_id = 1; int32 timeout = 2;}
 message EndpointServeKeepAliveResponse { bool ok = 1; }
