@@ -32,7 +32,6 @@ var (
 var (
 	workerPrefix                 string = "worker"
 	workerImageLock              string = "worker:%s:image:%s:lock"
-	workerContainerRequest       string = "worker:%s:container:%s:request"
 	workerContainerResourceUsage string = "worker:%s:container:%s:resource_usage"
 )
 
@@ -160,10 +159,6 @@ func (rk *redisKeys) GatewayDeploymentMinContainerCount(appId string) string {
 // Worker keys
 func (rk *redisKeys) WorkerPrefix() string {
 	return workerPrefix
-}
-
-func (rk *redisKeys) WorkerContainerRequest(workerId string, containerId string) string {
-	return fmt.Sprintf(workerContainerRequest, workerId, containerId)
 }
 
 func (rk *redisKeys) WorkerContainerResourceUsage(workerId string, containerId string) string {
