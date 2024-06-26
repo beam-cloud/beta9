@@ -332,9 +332,10 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 }
 
 func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) ([]corev1.EnvVar, error) {
-	podHostname := fmt.Sprintf("%s.%s", machineId, wpc.config.Tailscale.HostName)
+	// HOTFIX: clean up the way we pass tailscale hostname to remote worker
+	podHostname := fmt.Sprintf("machine-%s.%s", machineId, wpc.config.Tailscale.HostName)
 	if wpc.config.Tailscale.User != "" {
-		podHostname = fmt.Sprintf("%s.%s.%s", machineId, wpc.config.Tailscale.User, wpc.config.Tailscale.HostName)
+		podHostname = fmt.Sprintf("machine-%s.%s.%s", machineId, wpc.config.Tailscale.User, wpc.config.Tailscale.HostName)
 	}
 
 	envVars := []corev1.EnvVar{
