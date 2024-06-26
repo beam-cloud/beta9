@@ -42,30 +42,6 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 		timeoutDuration,
 	)
 
-	// Keep serve container active for as long as user has their terminal open
-	// We can handle timeouts on the client side
-	// If timeout is set to negative, we want to keep the container alive indefinitely while the user is connected
-	if in.Timeout < 0 {
-		go func() {
-			ticker := time.NewTicker(endpointServeContainerKeepaliveInterval)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					instance.Rdb.SetEx(
-						context.Background(),
-						Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-						1,
-						timeoutDuration,
-					)
-				}
-			}
-		}()
-	}
-
 	container, err := instance.WaitForContainer(ctx, endpointServeContainerTimeout)
 	if err != nil {
 		return err
@@ -90,6 +66,30 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 			return err
 		}
 		return nil
+	}
+
+	// Keep serve container active for as long as user has their terminal open
+	// We can handle timeouts on the client side
+	// If timeout is set to negative, we want to keep the container alive indefinitely while the user is connected
+	if in.Timeout < 0 {
+		go func() {
+			ticker := time.NewTicker(endpointServeContainerKeepaliveInterval)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					instance.Rdb.SetEx(
+						context.Background(),
+						Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
+						1,
+						timeoutDuration,
+					)
+				}
+			}
+		}()
 	}
 
 	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{

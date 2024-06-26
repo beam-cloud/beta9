@@ -40,6 +40,26 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		timeoutDuration,
 	)
 
+	container, err := instance.WaitForContainer(ctx, taskQueueServeContainerTimeout)
+	if err != nil {
+		return err
+	}
+
+	sendCallback := func(o common.OutputMsg) error {
+		if err := stream.Send(&pb.StartTaskQueueServeResponse{Output: o.Msg, Done: o.Done}); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	exitCallback := func(exitCode int32) error {
+		if err := stream.Send(&pb.StartTaskQueueServeResponse{Done: true, ExitCode: int32(exitCode)}); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	// Keep serve container active for as long as user has their terminal open
 	// We can handle timeouts on the client side
 	// If timeout is set to negative, we want to keep the container alive indefinitely while the user is connected
@@ -62,26 +82,6 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 				}
 			}
 		}()
-	}
-
-	container, err := instance.WaitForContainer(ctx, taskQueueServeContainerTimeout)
-	if err != nil {
-		return err
-	}
-
-	sendCallback := func(o common.OutputMsg) error {
-		if err := stream.Send(&pb.StartTaskQueueServeResponse{Output: o.Msg, Done: o.Done}); err != nil {
-			return err
-		}
-
-		return nil
-	}
-
-	exitCallback := func(exitCode int32) error {
-		if err := stream.Send(&pb.StartTaskQueueServeResponse{Done: true, ExitCode: int32(exitCode)}); err != nil {
-			return err
-		}
-		return nil
 	}
 
 	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
