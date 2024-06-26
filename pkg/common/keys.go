@@ -15,6 +15,7 @@ var (
 	schedulerContainerState          string = "scheduler:container:state:%s"
 	schedulerContainerAddress        string = "scheduler:container:container_addr:%s"
 	schedulerContainerIndex          string = "scheduler:container:index:%s"
+	schedulerContainerWorkerIndex    string = "scheduler:container:worker:index:%s"
 	schedulerContainerWorkspaceIndex string = "scheduler:container:workspace:index:%s"
 	schedulerWorkerAddress           string = "scheduler:container:worker_addr:%s"
 	schedulerContainerLock           string = "scheduler:container:lock:%s"
@@ -117,6 +118,10 @@ func (rk *redisKeys) SchedulerContainerConfig(containerId string) string {
 
 func (rk *redisKeys) SchedulerContainerIndex(stubId string) string {
 	return fmt.Sprintf(schedulerContainerIndex, stubId)
+}
+
+func (rk *redisKeys) SchedulerContainerWorkerIndex(workerId string) string {
+	return fmt.Sprintf(schedulerContainerWorkerIndex, workerId)
 }
 
 func (rk *redisKeys) SchedulerContainerWorkspaceIndex(workspaceId string) string {

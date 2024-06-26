@@ -283,6 +283,17 @@ func (cr *ContainerRedisRepository) GetActiveContainersByWorkspaceId(workspaceId
 	return cr.listContainerStateByIndex(indexKey, keys)
 }
 
+func (cr *ContainerRedisRepository) GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error) {
+	indexKey := common.RedisKeys.SchedulerContainerWorkerIndex(workerId)
+	keys, err := cr.rdb.SMembers(context.TODO(), indexKey).Result()
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve container state keys: %v", err)
+	}
+
+	return cr.listContainerStateByIndex(indexKey, keys)
+}
+
 func (cr *ContainerRedisRepository) GetFailedContainerCountByStubId(stubId string) (int, error) {
 	indexKey := common.RedisKeys.SchedulerContainerIndex(stubId)
 	keys, err := cr.rdb.SMembers(context.TODO(), indexKey).Result()
