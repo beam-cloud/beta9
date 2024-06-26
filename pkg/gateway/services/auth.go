@@ -18,8 +18,8 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 	}
 
 	// See if this gateway has been configured previously
-	existingContexts, err := gws.backendRepo.ListWorkspaces(ctx)
-	if err != nil || len(existingContexts) >= 1 {
+	workspaces, err := gws.backendRepo.ListWorkspaces(ctx)
+	if err != nil || len(workspaces) >= 1 {
 		return &pb.AuthorizeResponse{
 			Ok:       false,
 			ErrorMsg: "Invalid token",
