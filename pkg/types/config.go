@@ -284,9 +284,11 @@ type MonitoringConfig struct {
 }
 
 type PrometheusConfig struct {
-	AgentUrl      bool `key:"agentUrl" json:"agent_url"`
-	ScrapeWorkers bool `key:"scrapeWorkers" json:"scrape_workers"`
-	Port          int  `key:"port" json:"port"`
+	AgentUrl      string `key:"agentUrl" json:"agent_url"`
+	AgentUser     string `key:"agentUsername" json:"agent_username"`
+	AgentPassword string `key:"agentPassword json:"agent_password"`
+	ScrapeWorkers bool   `key:"scrapeWorkers" json:"scrape_workers"`
+	Port          int    `key:"port" json:"port"`
 }
 
 type OpenMeterConfig struct {
