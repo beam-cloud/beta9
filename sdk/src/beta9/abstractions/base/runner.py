@@ -192,6 +192,7 @@ class RunnerAbstraction(BaseAbstraction):
     ) -> None:
         try:
             operation, path, new_path = file_update_queue.get_nowait()
+
             if on_event:
                 on_event(operation, path, new_path)
 

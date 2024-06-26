@@ -105,7 +105,6 @@ class AuthTokenInterceptor(
 def handle_grpc_error(error: grpc.RpcError):
     code = error.code()
     details = error.details()
-    print(error)
 
     if code == grpc.StatusCode.UNAUTHENTICATED:
         terminal.error("Unauthorized: Invalid auth token provided.")
