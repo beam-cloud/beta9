@@ -93,11 +93,11 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 						return
 					}
 
-					if !machine.AutoConsolidate {
+					if !machine.State.AutoConsolidate {
 						return
 					}
 
-					lastWorkerSeen, err := strconv.ParseInt(machine.LastKeepalive, 10, 64)
+					lastWorkerSeen, err := strconv.ParseInt(machine.State.LastKeepalive, 10, 64)
 					if err != nil {
 						return
 					}

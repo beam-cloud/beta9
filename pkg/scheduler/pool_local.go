@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -31,7 +32,7 @@ type LocalKubernetesWorkerPoolController struct {
 	workerRepo repository.WorkerRepository
 }
 
-func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, workerPoolRepo repository.WorkerPoolRepository) (WorkerPoolController, error) {
+func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, workerPoolRepo repository.WorkerPoolRepository, providerRepo repository.ProviderRepository) (WorkerPoolController, error) {
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -53,7 +54,7 @@ func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.Ap
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, &workerPool, workerPoolRepo)
+	err = MonitorPoolSize(wpc, &workerPool, workerRepo, workerPoolRepo, providerRepo)
 	if err != nil {
 		log.Printf("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
 	}
@@ -74,6 +75,10 @@ func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapac
 func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 	return wpc.addWorkerWithId(workerId, cpu, memory, gpuType, gpuCount)
+}
+
+func (wpc *LocalKubernetesWorkerPoolController) AddWorkerOnMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
+	return nil, errors.New("unimplemented")
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {

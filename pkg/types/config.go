@@ -188,6 +188,7 @@ type WorkerPoolConfig struct {
 	Provider             *MachineProvider                  `key:"provider" json:"provider"`
 	JobSpec              WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
 	PoolSizing           WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
+	DefaultMachineCost   float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
 	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
 }
 
