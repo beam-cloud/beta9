@@ -346,7 +346,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 func (r *WorkerRedisRepository) AddContainerToWorker(workerId string, containerId string) error {
 	containerStateKey := common.RedisKeys.SchedulerContainerState(containerId)
 
-	err := r.rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(containerStateKey), containerId).Err()
+	err := r.rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(workerId), containerStateKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to add container to worker container index: %w", err)
 	}
