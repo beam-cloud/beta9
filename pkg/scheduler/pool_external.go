@@ -176,8 +176,12 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 	defer wpc.providerRepo.RemoveMachineLock(wpc.provider.GetName(), wpc.name, machine.State.MachineId)
 
 	workers, err := wpc.workerRepo.GetAllWorkersOnMachine(machine.State.MachineId)
-	if err != nil || machine.State.Status != types.MachineStatusRegistered {
+	if err != nil {
 		return nil, err
+	}
+
+	if machine.State.Status != types.MachineStatusRegistered {
+		return nil, errors.New("machine not registered")
 	}
 
 	remainingMachineCpu := machine.State.Cpu
@@ -198,6 +202,7 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		if machine.State.GpuCount == 1 {
 			cpu = machine.State.Cpu
 			memory = machine.State.Memory
+			gpuCount = machine.State.GpuCount
 		}
 
 		worker, err := wpc.createWorkerOnMachine(workerId, machine.State.MachineId, machine.State, cpu, memory, gpuType, gpuCount)

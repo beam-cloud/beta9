@@ -95,7 +95,6 @@ func (s *WorkerPoolSizer) occupyAvailableMachines() error {
 
 		worker, err := s.controller.AddWorkerToMachine(cpu, memory, gpuType, gpuCount, m.State.MachineId)
 		if err != nil {
-			log.Printf("<pool %s> Error adding new worker to machine: %v\n", s.controller.Name(), err)
 			continue
 		}
 
