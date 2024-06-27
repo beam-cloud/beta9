@@ -11,16 +11,31 @@ import (
 const poolMonitoringInterval = 1 * time.Second
 
 type WorkerPoolSizer struct {
-	controller     WorkerPoolController
-	config         *types.WorkerPoolSizingConfig
-	workerPoolRepo repository.WorkerPoolRepository
+	controller             WorkerPoolController
+	workerRepo             repository.WorkerRepository
+	workerPoolRepo         repository.WorkerPoolRepository
+	providerRepo           repository.ProviderRepository
+	workerPoolConfig       *types.WorkerPoolConfig
+	workerPoolSizingConfig *types.WorkerPoolSizingConfig
 }
 
-func NewWorkerPoolSizer(controller WorkerPoolController, poolSizingConfig *types.WorkerPoolSizingConfig, workerPoolRepo repository.WorkerPoolRepository) (*WorkerPoolSizer, error) {
+func NewWorkerPoolSizer(controller WorkerPoolController,
+	workerPoolConfig *types.WorkerPoolConfig,
+	workerRepo repository.WorkerRepository,
+	workerPoolRepo repository.WorkerPoolRepository,
+	providerRepo repository.ProviderRepository) (*WorkerPoolSizer, error) {
+	poolSizingConfig, err := parsePoolSizingConfig(workerPoolConfig.PoolSizing)
+	if err != nil {
+		return nil, err
+	}
+
 	return &WorkerPoolSizer{
-		controller:     controller,
-		config:         poolSizingConfig,
-		workerPoolRepo: workerPoolRepo,
+		controller:             controller,
+		workerPoolConfig:       workerPoolConfig,
+		workerPoolSizingConfig: poolSizingConfig,
+		workerRepo:             workerRepo,
+		workerPoolRepo:         workerPoolRepo,
+		providerRepo:           providerRepo,
 	}, nil
 }
 
@@ -42,9 +57,52 @@ func (s *WorkerPoolSizer) Start() {
 				return
 			}
 
-			s.addWorkerIfNeeded(freeCapacity)
+			// Handle case where pool sizing says we want to keep a buffer
+			newWorker, err := s.addWorkerIfNeeded(freeCapacity)
+			if err != nil {
+				log.Printf("<pool %s> Error adding new worker: %v\n", s.controller.Name(), err)
+			} else if newWorker != nil {
+				log.Printf("<pool %s> Added new worker to maintain pool size: %+v\n", s.controller.Name(), newWorker)
+			}
+
+			// Handle case where we want to make sure all available manually provisioned nodes have available workers
+			if s.workerPoolConfig.Mode == types.PoolModeExternal {
+				err := s.occupyAvailableMachines()
+				if err != nil {
+					log.Printf("<pool %s> Failed to list machines in external pool: %+v\n", s.controller.Name(), err)
+				}
+			}
 		}()
 	}
+}
+
+// occupyAvailableMachines ensures that all manually provisioned machines always have workers occupying them
+func (s *WorkerPoolSizer) occupyAvailableMachines() error {
+	machines, err := s.providerRepo.ListAllMachines(string(*s.workerPoolConfig.Provider), s.controller.Name())
+	if err != nil {
+		return err
+	}
+
+	for _, m := range machines {
+		if m.State.AutoConsolidate {
+			continue
+		}
+
+		cpu := s.workerPoolSizingConfig.DefaultWorkerCpu
+		memory := s.workerPoolSizingConfig.DefaultWorkerMemory
+		gpuType := s.workerPoolSizingConfig.DefaultWorkerGpuType
+		gpuCount := s.workerPoolSizingConfig.DefaultWorkerGpuCount
+
+		worker, err := s.controller.AddWorkerToMachine(cpu, memory, gpuType, gpuCount, m.State.MachineId)
+		if err != nil {
+			log.Printf("<pool %s> Error adding new worker to machine: %v\n", s.controller.Name(), err)
+			continue
+		}
+
+		log.Printf("<pool %s> Added new worker to occupy existing machine: %+v\n", s.controller.Name(), worker)
+	}
+
+	return nil
 }
 
 func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*types.Worker, error) {
@@ -52,22 +110,32 @@ func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*
 	var newWorker *types.Worker = nil
 
 	// Check if the free capacity is below the configured minimum and add a worker if needed
-	if freeCapacity.FreeCpu < s.config.MinFreeCpu || freeCapacity.FreeMemory < s.config.MinFreeMemory || (s.config.MinFreeGpu > 0 && freeCapacity.FreeGpu < s.config.MinFreeGpu) {
-		newWorker, err = s.controller.AddWorker(s.config.DefaultWorkerCpu, s.config.DefaultWorkerMemory, s.config.DefaultWorkerGpuType, s.config.DefaultWorkerGpuCount)
+	if shouldAddWorker(freeCapacity, s.workerPoolSizingConfig) {
+		newWorker, err = s.controller.AddWorker(
+			s.workerPoolSizingConfig.DefaultWorkerCpu,
+			s.workerPoolSizingConfig.DefaultWorkerMemory,
+			s.workerPoolSizingConfig.DefaultWorkerGpuType,
+			s.workerPoolSizingConfig.DefaultWorkerGpuCount,
+		)
 		if err != nil {
-			log.Printf("<pool %s> Error adding new worker: %v\n", s.controller.Name(), err)
 			return nil, err
 		}
 
-		log.Printf("<pool %s> Added new worker to maintain pool size: %+v\n", s.controller.Name(), newWorker)
 	}
 
 	return newWorker, nil
 }
 
-// ParsePoolSizingConfig converts a common.WorkerPoolJobSpecPoolSizingConfig to a types.WorkerPoolSizingConfig.
+// shouldAddWorker checks if the conditions are met for a new worker to be added
+func shouldAddWorker(freeCapacity *WorkerPoolCapacity, config *types.WorkerPoolSizingConfig) bool {
+	return freeCapacity.FreeCpu < config.MinFreeCpu ||
+		freeCapacity.FreeMemory < config.MinFreeMemory ||
+		(config.MinFreeGpu > 0 && freeCapacity.FreeGpu < config.MinFreeGpu)
+}
+
+// parsePoolSizingConfig converts a common.WorkerPoolJobSpecPoolSizingConfig to a types.WorkerPoolSizingConfig.
 // When a value is not parsable or is invalid, we ignore the error and set a default.
-func ParsePoolSizingConfig(config types.WorkerPoolJobSpecPoolSizingConfig) (*types.WorkerPoolSizingConfig, error) {
+func parsePoolSizingConfig(config types.WorkerPoolJobSpecPoolSizingConfig) (*types.WorkerPoolSizingConfig, error) {
 	c := types.NewWorkerPoolSizingConfig()
 
 	if minFreeCpu, err := ParseCPU(config.MinFreeCPU); err == nil {

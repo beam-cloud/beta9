@@ -2,12 +2,14 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"log"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -49,7 +51,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 
 	workerPoolManager := NewWorkerPoolManager(repo.NewWorkerPoolRedisRepository(rdb))
 	for name, pool := range config.Worker.Pools {
-		workerPoolManager.SetPool(name, pool, &WorkerPoolControllerForTest{
+		workerPoolManager.SetPool(name, pool, &LocalWorkerPoolControllerForTest{
 			name:       name,
 			config:     config,
 			workerRepo: workerRepo,
@@ -68,17 +70,17 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	}, nil
 }
 
-type WorkerPoolControllerForTest struct {
+type LocalWorkerPoolControllerForTest struct {
 	name       string
 	config     types.AppConfig
 	workerRepo repo.WorkerRepository
 }
 
-func (wpc *WorkerPoolControllerForTest) generateWorkerId() string {
+func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
 }
 
-func (wpc *WorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := wpc.generateWorkerId()
 	worker := &types.Worker{
 		Id:           workerId,
@@ -99,11 +101,125 @@ func (wpc *WorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuTy
 	return worker, nil
 }
 
-func (wpc *WorkerPoolControllerForTest) Name() string {
+func (wpc *LocalWorkerPoolControllerForTest) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
+	return nil, errors.New("unimplemented")
+}
+
+func (wpc *LocalWorkerPoolControllerForTest) Name() string {
 	return wpc.name
 }
 
-func (wpc *WorkerPoolControllerForTest) FreeCapacity() (*WorkerPoolCapacity, error) {
+func (wpc *LocalWorkerPoolControllerForTest) FreeCapacity() (*WorkerPoolCapacity, error) {
+	return &WorkerPoolCapacity{}, nil
+}
+
+type ExternalWorkerPoolControllerForTest struct {
+	name         string
+	workerRepo   repo.WorkerRepository
+	providerRepo repository.ProviderRepository
+	poolName     string
+	providerName string
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {
+	return uuid.New().String()[:8]
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+	workerId := wpc.generateWorkerId()
+	worker := &types.Worker{
+		Id:           workerId,
+		FreeCpu:      cpu,
+		FreeMemory:   memory,
+		Gpu:          gpuType,
+		FreeGpuCount: gpuCount,
+		Status:       types.WorkerStatusPending,
+		PoolName:     wpc.poolName,
+	}
+
+	// Add the worker state
+	err := wpc.workerRepo.AddWorker(worker)
+	if err != nil {
+		log.Printf("Unable to create worker: %+v\n", err)
+		return nil, err
+	}
+
+	return worker, nil
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
+	workerId := GenerateWorkerId()
+
+	err := wpc.providerRepo.SetMachineLock(wpc.providerName, wpc.name, machineId)
+	if err != nil {
+		return nil, err
+	}
+	defer wpc.providerRepo.RemoveMachineLock(wpc.providerName, wpc.name, machineId)
+
+	machine, err := wpc.providerRepo.GetMachine(wpc.providerName, wpc.name, machineId)
+	if err != nil {
+		return nil, err
+	}
+
+	workers, err := wpc.workerRepo.GetAllWorkersOnMachine(machineId)
+	if err != nil {
+		return nil, err
+	}
+
+	if machine.State.Status != types.MachineStatusRegistered {
+		return nil, errors.New("machine not registered")
+	}
+
+	remainingMachineCpu := machine.State.Cpu
+	remainingMachineMemory := machine.State.Memory
+	remainingMachineGpuCount := machine.State.GpuCount
+	for _, worker := range workers {
+		remainingMachineCpu -= worker.TotalCpu
+		remainingMachineMemory -= worker.TotalMemory
+		remainingMachineGpuCount -= uint32(worker.TotalGpuCount)
+	}
+
+	if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && machine.State.Gpu == gpuType && remainingMachineGpuCount >= gpuCount {
+		// If there is only one GPU available on the machine, give the worker access to everything
+		// This prevents situations where a user requests a small amount of compute, and the subsequent
+		// request has higher compute requirements
+		if machine.State.GpuCount == 1 {
+			cpu = machine.State.Cpu
+			memory = machine.State.Memory
+		}
+	} else {
+		return nil, errors.New("machine out of capacity")
+	}
+
+	worker := &types.Worker{
+		Id:            workerId,
+		FreeCpu:       cpu,
+		FreeMemory:    memory,
+		Gpu:           gpuType,
+		FreeGpuCount:  gpuCount,
+		Status:        types.WorkerStatusPending,
+		PoolName:      wpc.poolName,
+		TotalGpuCount: gpuCount,
+		TotalCpu:      cpu,
+		TotalMemory:   memory,
+	}
+
+	worker.MachineId = machineId
+
+	// Add the worker state
+	if err := wpc.workerRepo.AddWorker(worker); err != nil {
+		log.Printf("Unable to create worker: %+v\n", err)
+		return nil, err
+	}
+
+	return worker, nil
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) Name() string {
+	return wpc.name
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) FreeCapacity() (*WorkerPoolCapacity, error) {
 	return &WorkerPoolCapacity{}, nil
 }
 

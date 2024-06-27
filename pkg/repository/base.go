@@ -124,7 +124,7 @@ type TaskRepository interface {
 }
 
 type ProviderRepository interface {
-	GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
+	GetMachine(providerName, poolName, machineId string) (*types.ProviderMachine, error)
 	AddMachine(providerName, poolName, machineId string, machineInfo *types.ProviderMachineState) error
 	RemoveMachine(providerName, poolName, machineId string) error
 	SetMachineKeepAlive(providerName, poolName, machineId string) error

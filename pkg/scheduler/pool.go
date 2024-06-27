@@ -25,6 +25,7 @@ const (
 
 type WorkerPoolController interface {
 	AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error)
+	AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error)
 	Name() string
 	FreeCapacity() (*WorkerPoolCapacity, error)
 }
@@ -44,13 +45,12 @@ func GenerateWorkerId() string {
 	return uuid.New().String()[:8]
 }
 
-func MonitorPoolSize(wpc WorkerPoolController, workerPool *types.WorkerPoolConfig, workerPoolRepo repository.WorkerPoolRepository) error {
-	config, err := ParsePoolSizingConfig(workerPool.PoolSizing)
-	if err != nil {
-		return err
-	}
-
-	poolSizer, err := NewWorkerPoolSizer(wpc, config, workerPoolRepo)
+func MonitorPoolSize(wpc WorkerPoolController,
+	workerPoolConfig *types.WorkerPoolConfig,
+	workerRepo repository.WorkerRepository,
+	workerPoolRepo repository.WorkerPoolRepository,
+	providerRepo repository.ProviderRepository) error {
+	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, workerPoolRepo, providerRepo)
 	if err != nil {
 		return err
 	}

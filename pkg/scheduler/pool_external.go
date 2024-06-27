@@ -84,7 +84,7 @@ func NewExternalWorkerPoolController(
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, &workerPool, workerPoolRepo)
+	err = MonitorPoolSize(wpc, &workerPool, workerRepo, workerPoolRepo, providerRepo)
 	if err != nil {
 		log.Printf("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
 	}
@@ -105,53 +105,12 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 
 	// Attempt to schedule the worker on an existing machine first
 	for _, machine := range machines {
-		worker := func() *types.Worker {
-			err := wpc.providerRepo.SetMachineLock(wpc.provider.GetName(), wpc.name, machine.State.MachineId)
-			if err != nil {
-				return nil
-			}
-
-			defer wpc.providerRepo.RemoveMachineLock(wpc.provider.GetName(), wpc.name, machine.State.MachineId)
-
-			workers, err := wpc.workerRepo.GetAllWorkersOnMachine(machine.State.MachineId)
-			if err != nil || machine.State.Status != types.MachineStatusRegistered {
-				return nil
-			}
-
-			remainingMachineCpu := machine.State.Cpu
-			remainingMachineMemory := machine.State.Memory
-			remainingMachineGpuCount := machine.State.GpuCount
-			for _, worker := range workers {
-				remainingMachineCpu -= worker.TotalCpu
-				remainingMachineMemory -= worker.TotalMemory
-				remainingMachineGpuCount -= uint32(worker.TotalGpuCount)
-			}
-
-			if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && machine.State.Gpu == gpuType && remainingMachineGpuCount >= gpuCount {
-				log.Printf("Using existing machine <machineId: %s>, hostname: %s\n", machine.State.MachineId, machine.State.HostName)
-
-				// If there is only one GPU available on the machine, give the worker access to everything
-				// This prevents situations where a user requests a small amount of compute, and the subsequent
-				// request has higher compute requirements
-				if machine.State.GpuCount == 1 {
-					cpu = machine.State.Cpu
-					memory = machine.State.Memory
-				}
-
-				worker, err := wpc.createWorkerOnMachine(workerId, machine.State.MachineId, machine.State, cpu, memory, gpuType, gpuCount)
-				if err != nil {
-					return nil
-				}
-
-				return worker
-			}
-
-			return nil
-		}()
-
-		if worker != nil {
-			return worker, nil
+		worker, err := wpc.attemptToAssignWorkerToMachine(workerId, cpu, memory, gpuType, gpuCount, machine)
+		if err != nil {
+			continue
 		}
+
+		return worker, nil
 	}
 
 	// TODO: replace hard-coded workspace ID with look up of cluster admin
@@ -190,6 +149,66 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	}
 
 	return worker, nil
+}
+
+func (wpc *ExternalWorkerPoolController) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
+	workerId := GenerateWorkerId()
+
+	machine, err := wpc.providerRepo.GetMachine(wpc.provider.GetName(), wpc.name, machineId)
+	if err != nil {
+		return nil, err
+	}
+
+	worker, err := wpc.attemptToAssignWorkerToMachine(workerId, cpu, memory, gpuType, gpuCount, machine)
+	if err != nil {
+		return nil, err
+	}
+
+	return worker, nil
+}
+
+func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, machine *types.ProviderMachine) (*types.Worker, error) {
+	err := wpc.providerRepo.SetMachineLock(wpc.provider.GetName(), wpc.name, machine.State.MachineId)
+	if err != nil {
+		return nil, err
+	}
+
+	defer wpc.providerRepo.RemoveMachineLock(wpc.provider.GetName(), wpc.name, machine.State.MachineId)
+
+	workers, err := wpc.workerRepo.GetAllWorkersOnMachine(machine.State.MachineId)
+	if err != nil || machine.State.Status != types.MachineStatusRegistered {
+		return nil, err
+	}
+
+	remainingMachineCpu := machine.State.Cpu
+	remainingMachineMemory := machine.State.Memory
+	remainingMachineGpuCount := machine.State.GpuCount
+	for _, worker := range workers {
+		remainingMachineCpu -= worker.TotalCpu
+		remainingMachineMemory -= worker.TotalMemory
+		remainingMachineGpuCount -= uint32(worker.TotalGpuCount)
+	}
+
+	if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && machine.State.Gpu == gpuType && remainingMachineGpuCount >= gpuCount {
+		log.Printf("Using existing machine <machineId: %s>, hostname: %s\n", machine.State.MachineId, machine.State.HostName)
+
+		// If there is only one GPU available on the machine, give the worker access to everything
+		// This prevents situations where a user requests a small amount of compute, and the subsequent
+		// request has higher compute requirements
+		if machine.State.GpuCount == 1 {
+			cpu = machine.State.Cpu
+			memory = machine.State.Memory
+		}
+
+		worker, err := wpc.createWorkerOnMachine(workerId, machine.State.MachineId, machine.State, cpu, memory, gpuType, gpuCount)
+		if err != nil {
+			return nil, err
+		}
+
+		return worker, nil
+	}
+
+	return nil, errors.New("machine out of capacity")
 }
 
 func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
