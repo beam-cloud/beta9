@@ -50,6 +50,7 @@ type RunCFunctionService struct {
 	keyEventManager *common.KeyEventManager
 	rdb             *common.RedisClient
 	routeGroup      *echo.Group
+	eventRepo       repository.EventRepository
 }
 
 type FunctionServiceOpts struct {
@@ -62,6 +63,7 @@ type FunctionServiceOpts struct {
 	Tailscale      *network.Tailscale
 	RouteGroup     *echo.Group
 	TaskDispatcher *task.Dispatcher
+	EventRepo      repository.EventRepository
 }
 
 func NewRuncFunctionService(ctx context.Context,
@@ -83,6 +85,7 @@ func NewRuncFunctionService(ctx context.Context,
 		keyEventManager: keyEventManager,
 		taskDispatcher:  opts.TaskDispatcher,
 		routeGroup:      opts.RouteGroup,
+		eventRepo:       opts.EventRepo,
 	}
 
 	// Register task dispatcher
@@ -105,6 +108,16 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	if err != nil {
 		return err
 	}
+
+	go func() {
+		stub, err := fs.backendRepo.GetStubByExternalId(ctx, in.StubId)
+		if err != nil {
+			log.Printf("error getting stub: %v", err)
+			return
+		}
+
+		go fs.eventRepo.PushAbstractionTriggeredEvent(authInfo.Workspace.ExternalId, &stub.Stub)
+	}()
 
 	return fs.stream(ctx, stream, authInfo, task)
 }

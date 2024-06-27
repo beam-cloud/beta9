@@ -161,12 +161,15 @@ monitoring:
     port: 9090
   fluentbit:
     events:
-      endpoint: http://fluent-bit.beta9:9880
+      endpoint: http://fluent-bit.monitoring:9880
       maxConns: 0
       maxIdleConns: 30
       idleConnTimeout: 10s
       dialTimeout: 2s
       keepAlive: 30s
+      # mapping:
+      # - name: container.lifecycle
+      #   tag: internal_api
   openmeter:
     serverUrl: ""
     apiKey: ""

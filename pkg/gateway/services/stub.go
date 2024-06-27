@@ -124,6 +124,8 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
+	go gws.eventRepo.PushAbstractionTriggeredEvent(authInfo.Workspace.ExternalId, &stub.Stub)
+
 	return &pb.DeployStubResponse{
 		Ok:           true,
 		DeploymentId: deployment.ExternalId,

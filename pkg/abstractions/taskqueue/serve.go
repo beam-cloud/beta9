@@ -27,6 +27,8 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		return err
 	}
 
+	go tq.eventRepo.PushAbstractionTriggeredEvent(instance.Workspace.ExternalId, &instance.Stub.Stub)
+
 	// Set lock (used by autoscaler to scale up the single serve container)
 	instance.Rdb.SetEx(
 		context.Background(),

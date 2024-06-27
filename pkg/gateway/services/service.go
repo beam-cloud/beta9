@@ -17,6 +17,7 @@ type GatewayService struct {
 	scheduler      *scheduler.Scheduler
 	taskDispatcher *task.Dispatcher
 	redisClient    *common.RedisClient
+	eventRepo      repository.EventRepository
 	pb.UnimplementedGatewayServiceServer
 }
 
@@ -28,6 +29,7 @@ type GatewayServiceOpts struct {
 	Scheduler      *scheduler.Scheduler
 	TaskDispatcher *task.Dispatcher
 	RedisClient    *common.RedisClient
+	EventRepo      repository.EventRepository
 }
 
 func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
@@ -39,5 +41,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		scheduler:      opts.Scheduler,
 		taskDispatcher: opts.TaskDispatcher,
 		redisClient:    opts.RedisClient,
+		eventRepo:      opts.EventRepo,
 	}, nil
 }
