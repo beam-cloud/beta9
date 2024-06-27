@@ -187,6 +187,8 @@ func (wpc *ExternalWorkerPoolControllerForTest) AddWorkerOnMachine(cpu int64, me
 			cpu = machine.State.Cpu
 			memory = machine.State.Memory
 		}
+	} else {
+		return nil, errors.New("machine out of capacity")
 	}
 
 	worker := &types.Worker{

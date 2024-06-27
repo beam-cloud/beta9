@@ -240,6 +240,7 @@ func TestOccupyAvailableMachines(t *testing.T) {
 
 	// Add some "manually" provisioned machines
 	err = providerRepo.AddMachine(string(types.ProviderLambdaLabs), lambdaPoolName, "machine1", &types.ProviderMachineState{
+		Gpu:             "A10G",
 		GpuCount:        1,
 		AutoConsolidate: false,
 		Cpu:             30000,
@@ -249,6 +250,7 @@ func TestOccupyAvailableMachines(t *testing.T) {
 	assert.NoError(t, err)
 
 	err = providerRepo.RegisterMachine(string(types.ProviderLambdaLabs), lambdaPoolName, "machine1", &types.ProviderMachineState{
+		Gpu:             "A10G",
 		GpuCount:        1,
 		AutoConsolidate: false,
 		Cpu:             30000,
@@ -258,6 +260,7 @@ func TestOccupyAvailableMachines(t *testing.T) {
 	assert.NoError(t, err)
 
 	err = providerRepo.AddMachine(string(types.ProviderLambdaLabs), lambdaPoolName, "machine2", &types.ProviderMachineState{
+		Gpu:             "A10G",
 		GpuCount:        1,
 		AutoConsolidate: false,
 		Cpu:             30000,
@@ -267,6 +270,7 @@ func TestOccupyAvailableMachines(t *testing.T) {
 	assert.NoError(t, err)
 
 	err = providerRepo.RegisterMachine(string(types.ProviderLambdaLabs), lambdaPoolName, "machine2", &types.ProviderMachineState{
+		Gpu:             "A10G",
 		GpuCount:        1,
 		AutoConsolidate: false,
 		Cpu:             30000,
@@ -318,4 +322,8 @@ func TestOccupyAvailableMachines(t *testing.T) {
 			assert.Equal(t, tt.expectedWorkersOnMachineAfter, len(workers))
 		})
 	}
+
+	workers, err := workerRepo.GetAllWorkersInPool(lambdaPoolName)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(workers))
 }

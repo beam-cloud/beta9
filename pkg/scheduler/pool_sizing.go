@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"log"
-	"math"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -79,7 +78,6 @@ func (s *WorkerPoolSizer) Start() {
 
 // occupyAvailableMachines ensures that all manually provisioned machines always have workers occupying them
 func (s *WorkerPoolSizer) occupyAvailableMachines() error {
-	log.Println("calling occupy machines")
 	machines, err := s.providerRepo.ListAllMachines(string(*s.workerPoolConfig.Provider), s.controller.Name())
 	if err != nil {
 		return err
@@ -90,39 +88,10 @@ func (s *WorkerPoolSizer) occupyAvailableMachines() error {
 			continue
 		}
 
-		workers, err := s.workerRepo.GetAllWorkersOnMachine(m.State.MachineId)
-		if err != nil {
-			continue
-		}
-
-		remainingMachineCpu := m.State.Cpu
-		remainingMachineMemory := m.State.Memory
-		remainingMachineGpuCount := m.State.GpuCount
-		for _, worker := range workers {
-			remainingMachineCpu -= worker.TotalCpu
-			remainingMachineMemory -= worker.TotalMemory
-			remainingMachineGpuCount -= uint32(worker.TotalGpuCount)
-		}
-
-		if remainingMachineGpuCount == 0 {
-			continue
-		}
-
 		cpu := s.workerPoolSizingConfig.DefaultWorkerCpu
 		memory := s.workerPoolSizingConfig.DefaultWorkerMemory
 		gpuType := s.workerPoolSizingConfig.DefaultWorkerGpuType
 		gpuCount := s.workerPoolSizingConfig.DefaultWorkerGpuCount
-
-		cpu = int64(math.Min(float64(cpu), float64(remainingMachineCpu)))
-		memory = int64(math.Min(float64(memory), float64(remainingMachineMemory)))
-
-		// If there is only one GPU available on the machine, give the worker access to everything
-		// This prevents situations where a user requests a small amount of compute, and the subsequent
-		// request has higher compute requirements
-		if m.State.GpuCount == 1 {
-			cpu = m.State.Cpu
-			memory = m.State.Memory
-		}
 
 		worker, err := s.controller.AddWorkerOnMachine(cpu, memory, gpuType, gpuCount, m.State.MachineId)
 		if err != nil {
