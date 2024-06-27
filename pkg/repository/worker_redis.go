@@ -344,7 +344,9 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 }
 
 func (r *WorkerRedisRepository) AddContainerToWorker(workerId string, containerId string) error {
-	err := r.rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(workerId), containerId).Err()
+	containerStateKey := common.RedisKeys.SchedulerContainerState(containerId)
+
+	err := r.rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(containerStateKey), containerId).Err()
 	if err != nil {
 		return fmt.Errorf("failed to add container to worker container index: %w", err)
 	}
@@ -354,7 +356,9 @@ func (r *WorkerRedisRepository) AddContainerToWorker(workerId string, containerI
 }
 
 func (r *WorkerRedisRepository) RemoveContainerFromWorker(workerId string, containerId string) error {
-	err := r.rdb.SRem(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(workerId), containerId).Err()
+	containerStateKey := common.RedisKeys.SchedulerContainerState(containerId)
+
+	err := r.rdb.SRem(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(workerId), containerStateKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to remove container from worker container index: %w", err)
 	}
