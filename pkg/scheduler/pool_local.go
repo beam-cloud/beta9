@@ -77,7 +77,7 @@ func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int6
 	return wpc.addWorkerWithId(workerId, cpu, memory, gpuType, gpuCount)
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) AddWorkerOnMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
+func (wpc *LocalKubernetesWorkerPoolController) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
 	return nil, errors.New("unimplemented")
 }
 

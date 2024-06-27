@@ -25,7 +25,7 @@ const (
 
 type WorkerPoolController interface {
 	AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error)
-	AddWorkerOnMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error)
+	AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error)
 	Name() string
 	FreeCapacity() (*WorkerPoolCapacity, error)
 }

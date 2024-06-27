@@ -151,7 +151,7 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	return worker, nil
 }
 
-func (wpc *ExternalWorkerPoolController) AddWorkerOnMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
+func (wpc *ExternalWorkerPoolController) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
 	machine, err := wpc.providerRepo.GetMachine(wpc.provider.GetName(), wpc.name, machineId)

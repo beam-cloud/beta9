@@ -101,7 +101,7 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, 
 	return worker, nil
 }
 
-func (wpc *LocalWorkerPoolControllerForTest) AddWorkerOnMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
+func (wpc *LocalWorkerPoolControllerForTest) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
 	return nil, errors.New("unimplemented")
 }
 
@@ -147,7 +147,7 @@ func (wpc *ExternalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int6
 	return worker, nil
 }
 
-func (wpc *ExternalWorkerPoolControllerForTest) AddWorkerOnMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
+func (wpc *ExternalWorkerPoolControllerForTest) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
 	err := wpc.providerRepo.SetMachineLock(wpc.providerName, wpc.name, machineId)
