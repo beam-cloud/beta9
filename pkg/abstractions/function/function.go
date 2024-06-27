@@ -116,7 +116,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 			return
 		}
 
-		go fs.eventRepo.PushAbstractionTriggeredEvent(authInfo.Workspace.ExternalId, &stub.Stub)
+		go fs.eventRepo.PushRunStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
 	}()
 
 	return fs.stream(ctx, stream, authInfo, task)

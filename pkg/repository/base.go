@@ -147,7 +147,9 @@ type EventRepository interface {
 	PushContainerStoppedEvent(containerID string, workerID string)
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
-	PushAbstractionTriggeredEvent(workspaceId string, stub *types.Stub)
+	PushDeployStubEvent(workspaceId string, stub *types.Stub)
+	PushServeStubEvent(workspaceId string, stub *types.Stub)
+	PushRunStubEvent(workspaceId string, stub *types.Stub)
 }
 
 type MetricsRepository interface {

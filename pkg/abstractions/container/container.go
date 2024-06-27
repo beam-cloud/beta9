@@ -89,7 +89,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		return err
 	}
 
-	go cs.eventRepo.PushAbstractionTriggeredEvent(authInfo.Workspace.ExternalId, &stub.Stub)
+	go cs.eventRepo.PushRunStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
 
 	task, err := cs.backendRepo.CreateTask(ctx, &types.TaskParams{
 		WorkspaceId: authInfo.Workspace.Id,

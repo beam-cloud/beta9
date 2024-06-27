@@ -174,11 +174,37 @@ func (t *TCPEventClientRepo) PushWorkerStoppedEvent(workerID string) {
 	)
 }
 
-func (t *TCPEventClientRepo) PushAbstractionTriggeredEvent(workspaceId string, stub *types.Stub) {
+func (t *TCPEventClientRepo) PushDeployStubEvent(workspaceId string, stub *types.Stub) {
 	t.pushEvent(
-		types.EventAbstractionTrigger,
-		types.EventAbstractionTriggerSchemaVersion,
-		types.EventAbstractionTriggeredSchema{
+		types.EventStubDeploy,
+		types.EventStubSchemaVersion,
+		types.EventStubSchema{
+			ID:          stub.ExternalId,
+			StubType:    stub.Type,
+			StubConfig:  stub.Config,
+			WorkspaceID: workspaceId,
+		},
+	)
+}
+
+func (t *TCPEventClientRepo) PushServeStubEvent(workspaceId string, stub *types.Stub) {
+	t.pushEvent(
+		types.EventStubServe,
+		types.EventStubSchemaVersion,
+		types.EventStubSchema{
+			ID:          stub.ExternalId,
+			StubType:    stub.Type,
+			StubConfig:  stub.Config,
+			WorkspaceID: workspaceId,
+		},
+	)
+}
+
+func (t *TCPEventClientRepo) PushRunStubEvent(workspaceId string, stub *types.Stub) {
+	t.pushEvent(
+		types.EventStubRun,
+		types.EventStubSchemaVersion,
+		types.EventStubSchema{
 			ID:          stub.ExternalId,
 			StubType:    stub.Type,
 			StubConfig:  stub.Config,
