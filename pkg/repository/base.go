@@ -127,7 +127,7 @@ type ProviderRepository interface {
 	GetMachine(providerName, poolName, machineId string) (*types.ProviderMachine, error)
 	AddMachine(providerName, poolName, machineId string, machineInfo *types.ProviderMachineState) error
 	RemoveMachine(providerName, poolName, machineId string) error
-	SetMachineKeepAlive(providerName, poolName, machineId string) error
+	SetMachineKeepAlive(providerName, poolName, machineId string, metrics *types.ProviderMachineMetrics) error
 	SetLastWorkerSeen(providerName, poolName, machineId string) error
 	RegisterMachine(providerName, poolName, machineId string, newMachineInfo *types.ProviderMachineState) error
 	WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error)

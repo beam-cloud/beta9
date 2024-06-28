@@ -308,6 +308,21 @@ message Machine {
   string tailscale_auth = 11;
   string last_keepalive = 12;
   string created = 13;
+  MachineMetrics machine_metrics = 14;
+}
+
+message MachineMetrics {
+  int32 total_cpu_available = 1;
+  int32 total_memory_available = 2;
+  float cpu_utilization_pct = 3;
+  float memory_utilization_pct = 4;
+  int32 worker_count = 5;
+  int32 container_count = 6;
+  int32 free_gpu_count = 7;
+  float cache_usage_pct = 8;
+  int32 cache_capacity = 9;
+  int32 cache_memory_usage = 10;
+  float cache_cpu_usage = 11;
 }
 
 message ListMachinesRequest {

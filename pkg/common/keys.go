@@ -59,10 +59,11 @@ var (
 )
 
 var (
-	providerPrefix       string = "provider"
-	providerMachineState string = "provider:machine:%s:%s:%s"
-	providerMachineIndex string = "provider:machine:%s:%s:machine_index"
-	providerMachineLock  string = "provider:machine:%s:%s:%s:lock"
+	providerPrefix         string = "provider"
+	providerMachineState   string = "provider:machine:%s:%s:%s"
+	providerMachineMetrics string = "provider:machine:%s:%s:%s:metrics"
+	providerMachineIndex   string = "provider:machine:%s:%s:machine_index"
+	providerMachineLock    string = "provider:machine:%s:%s:%s:lock"
 )
 
 var (
@@ -240,6 +241,10 @@ func (rk *redisKeys) ProviderPrefix() string {
 
 func (rk *redisKeys) ProviderMachineState(providerName, poolName, machineId string) string {
 	return fmt.Sprintf(providerMachineState, providerName, poolName, machineId)
+}
+
+func (rk *redisKeys) ProviderMachineMetrics(providerName, poolName, machineId string) string {
+	return fmt.Sprintf(providerMachineMetrics, providerName, poolName, machineId)
 }
 
 func (rk *redisKeys) ProviderMachineIndex(providerName, poolName string) string {
