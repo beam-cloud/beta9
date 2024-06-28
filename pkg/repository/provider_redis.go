@@ -236,7 +236,7 @@ func (r *ProviderRedisRepository) SetMachineKeepAlive(providerName, poolName, ma
 	// Update latest machine metrics
 	err = r.rdb.HSet(context.TODO(), metricsKey, common.ToSlice(metrics)).Err()
 	if err != nil {
-		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
+		return fmt.Errorf("failed to set machine metrics <%v>: %w", metricsKey, err)
 	}
 
 	// Set TTL on state key
@@ -246,9 +246,9 @@ func (r *ProviderRedisRepository) SetMachineKeepAlive(providerName, poolName, ma
 	}
 
 	// Set TTL on metrics key
-	err = r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.MachineKeepaliveExpirationS)*time.Second).Err()
+	err = r.rdb.Expire(context.TODO(), metricsKey, time.Duration(types.MachineKeepaliveExpirationS)*time.Second).Err()
 	if err != nil {
-		return fmt.Errorf("failed to set machine metrics ttl <%v>: %w", stateKey, err)
+		return fmt.Errorf("failed to set machine metrics ttl <%v>: %w", metricsKey, err)
 	}
 
 	return nil
