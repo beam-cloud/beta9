@@ -225,7 +225,7 @@ curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dear
 
 apt-get update &&  apt-get install -y nvidia-container-toolkit nvidia-container-runtime jq nvidia-driver-470-server
 
-curl -L -o agent https://release.beam.cloud/agent && \
+curl -L -o agent https://release.beam.cloud/agent/agent && \
 chmod +x agent && \\
 ./agent --token "{{.RegistrationToken}}" --machine-id "{{.MachineId}}" \
 --tailscale-url "{{.TailscaleUrl}}" \
