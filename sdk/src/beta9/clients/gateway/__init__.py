@@ -364,6 +364,22 @@ class Machine(betterproto.Message):
     tailscale_auth: str = betterproto.string_field(11)
     last_keepalive: str = betterproto.string_field(12)
     created: str = betterproto.string_field(13)
+    machine_metrics: "MachineMetrics" = betterproto.message_field(14)
+
+
+@dataclass(eq=False, repr=False)
+class MachineMetrics(betterproto.Message):
+    total_cpu_available: int = betterproto.int32_field(1)
+    total_memory_available: int = betterproto.int32_field(2)
+    cpu_utilization_pct: float = betterproto.float_field(3)
+    memory_utilization_pct: float = betterproto.float_field(4)
+    worker_count: int = betterproto.int32_field(5)
+    container_count: int = betterproto.int32_field(6)
+    free_gpu_count: int = betterproto.int32_field(7)
+    cache_usage_pct: float = betterproto.float_field(8)
+    cache_capacity: int = betterproto.int32_field(9)
+    cache_memory_usage: int = betterproto.int32_field(10)
+    cache_cpu_usage: float = betterproto.float_field(11)
 
 
 @dataclass(eq=False, repr=False)
