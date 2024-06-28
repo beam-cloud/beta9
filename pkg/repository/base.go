@@ -23,8 +23,8 @@ type WorkerRepository interface {
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
 	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
 	GetNextContainerRequest(workerId string) (*types.ContainerRequest, error)
-	AddContainerRequestToWorker(workerId string, containerId string, request *types.ContainerRequest) error
-	RemoveContainerRequestFromWorker(workerId string, containerId string) error
+	AddContainerToWorker(workerId string, containerId string) error
+	RemoveContainerFromWorker(workerId string, containerId string) error
 	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
 	SetImagePullLock(workerId, imageId string) error
 	RemoveImagePullLock(workerId, imageId string) error
@@ -44,6 +44,7 @@ type ContainerRepository interface {
 	GetWorkerAddress(containerId string) (string, error)
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
+	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
 	GetFailedContainerCountByStubId(stubId string) (int, error)
 }
 
@@ -123,7 +124,7 @@ type TaskRepository interface {
 }
 
 type ProviderRepository interface {
-	GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
+	GetMachine(providerName, poolName, machineId string) (*types.ProviderMachine, error)
 	AddMachine(providerName, poolName, machineId string, machineInfo *types.ProviderMachineState) error
 	RemoveMachine(providerName, poolName, machineId string) error
 	SetMachineKeepAlive(providerName, poolName, machineId string) error
@@ -147,6 +148,9 @@ type EventRepository interface {
 	PushContainerStoppedEvent(containerID string, workerID string)
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
+	PushDeployStubEvent(workspaceId string, stub *types.Stub)
+	PushServeStubEvent(workspaceId string, stub *types.Stub)
+	PushRunStubEvent(workspaceId string, stub *types.Stub)
 }
 
 type MetricsRepository interface {

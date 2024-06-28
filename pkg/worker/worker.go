@@ -508,8 +508,8 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec *specs.Spec, outputChan chan common.OutputMsg) {
-	s.workerRepo.AddContainerRequestToWorker(s.workerId, request.ContainerId, request)
-	defer s.workerRepo.RemoveContainerRequestFromWorker(s.workerId, request.ContainerId)
+	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
+	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
 
 	var containerErr error = nil
 

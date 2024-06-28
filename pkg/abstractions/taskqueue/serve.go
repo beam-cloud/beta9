@@ -26,6 +26,7 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 	if err != nil {
 		return err
 	}
+	go tq.eventRepo.PushServeStubEvent(instance.Workspace.ExternalId, &instance.Stub.Stub)
 
 	var timeoutDuration time.Duration = taskQueueServeContainerTimeout
 	if in.Timeout > 0 {

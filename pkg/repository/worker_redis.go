@@ -343,27 +343,24 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	return nil
 }
 
-func (r *WorkerRedisRepository) AddContainerRequestToWorker(workerId string, containerId string, request *types.ContainerRequest) error {
-	// Serialize the ContainerRequest -> JSON
-	requestJSON, err := json.Marshal(request)
+func (r *WorkerRedisRepository) AddContainerToWorker(workerId string, containerId string) error {
+	containerStateKey := common.RedisKeys.SchedulerContainerState(containerId)
+
+	err := r.rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(workerId), containerStateKey).Err()
 	if err != nil {
-		return fmt.Errorf("failed to serialize request: %w", err)
+		return fmt.Errorf("failed to add container to worker container index: %w", err)
 	}
 
-	err = r.rdb.Set(context.TODO(), common.RedisKeys.WorkerContainerRequest(workerId, containerId), requestJSON, 0).Err()
-	if err != nil {
-		return fmt.Errorf("failed to set request: %w", err)
-	}
-
-	log.Printf("Request for container %s added to worker: %s\n", containerId, workerId)
-
+	log.Printf("Container %s added to worker: %s\n", containerId, workerId)
 	return nil
 }
 
-func (r *WorkerRedisRepository) RemoveContainerRequestFromWorker(workerId string, containerId string) error {
-	err := r.rdb.Del(context.TODO(), common.RedisKeys.WorkerContainerRequest(workerId, containerId)).Err()
+func (r *WorkerRedisRepository) RemoveContainerFromWorker(workerId string, containerId string) error {
+	containerStateKey := common.RedisKeys.SchedulerContainerState(containerId)
+
+	err := r.rdb.SRem(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(workerId), containerStateKey).Err()
 	if err != nil {
-		return fmt.Errorf("failed to set request: %w", err)
+		return fmt.Errorf("failed to remove container from worker container index: %w", err)
 	}
 
 	log.Printf("Removed container %s from worker %s\n", containerId, workerId)

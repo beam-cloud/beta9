@@ -188,6 +188,7 @@ type WorkerPoolConfig struct {
 	Provider             *MachineProvider                  `key:"provider" json:"provider"`
 	JobSpec              WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
 	PoolSizing           WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
+	DefaultMachineCost   float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
 	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
 }
 
@@ -284,8 +285,11 @@ type MonitoringConfig struct {
 }
 
 type PrometheusConfig struct {
-	ScrapeWorkers bool `key:"scrapeWorkers" json:"scrape_workers"`
-	Port          int  `key:"port" json:"port"`
+	AgentUrl      string `key:"agentUrl" json:"agent_url"`
+	AgentUsername string `key:"agentUsername" json:"agent_username"`
+	AgentPassword string `key:"agentPassword" json:"agent_password"`
+	ScrapeWorkers bool   `key:"scrapeWorkers" json:"scrape_workers"`
+	Port          int    `key:"port" json:"port"`
 }
 
 type OpenMeterConfig struct {
@@ -317,11 +321,17 @@ type FluentBitConfig struct {
 	Events FluentBitEventConfig `key:"events" json:"events"`
 }
 
+type FluentBitEventMapping struct {
+	Name string `key:"name" json:"name"`
+	Tag  string `key:"tag" json:"tag"`
+}
+
 type FluentBitEventConfig struct {
-	Endpoint        string        `key:"endpoint" json:"endpoint"`
-	MaxConns        int           `key:"maxConns" json:"max_conns"`
-	MaxIdleConns    int           `key:"maxIdleConns" json:"max_idle_conns"`
-	IdleConnTimeout time.Duration `key:"idleConnTimeout" json:"idle_conn_timeout"`
-	DialTimeout     time.Duration `key:"dialTimeout" json:"dial_timeout"`
-	KeepAlive       time.Duration `key:"keepAlive" json:"keep_alive"`
+	Endpoint        string                  `key:"endpoint" json:"endpoint"`
+	MaxConns        int                     `key:"maxConns" json:"max_conns"`
+	MaxIdleConns    int                     `key:"maxIdleConns" json:"max_idle_conns"`
+	IdleConnTimeout time.Duration           `key:"idleConnTimeout" json:"idle_conn_timeout"`
+	DialTimeout     time.Duration           `key:"dialTimeout" json:"dial_timeout"`
+	KeepAlive       time.Duration           `key:"keepAlive" json:"keep_alive"`
+	Mapping         []FluentBitEventMapping `key:"mapping" json:"mapping"`
 }

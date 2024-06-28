@@ -13,6 +13,10 @@ def is_local() -> bool:
     return os.getenv("CONTAINER_ID", "") == ""
 
 
+def is_remote() -> bool:
+    return not is_local()
+
+
 def local_entrypoint(func: Callable) -> None:
     """Decorator that executes the decorated function if the environment is local (i.e. not a remote container)"""
 

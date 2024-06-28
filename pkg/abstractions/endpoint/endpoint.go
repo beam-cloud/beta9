@@ -37,6 +37,7 @@ type HttpEndpointService struct {
 	scheduler         *scheduler.Scheduler
 	backendRepo       repository.BackendRepository
 	containerRepo     repository.ContainerRepository
+	eventRepo         repository.EventRepository
 	taskRepo          repository.TaskRepository
 	endpointInstances *common.SafeMap[*endpointInstance]
 	tailscale         *network.Tailscale
@@ -63,6 +64,7 @@ type EndpointServiceOpts struct {
 	RouteGroup     *echo.Group
 	Tailscale      *network.Tailscale
 	TaskDispatcher *task.Dispatcher
+	EventRepo      repository.EventRepository
 }
 
 func NewHTTPEndpointService(
@@ -92,6 +94,7 @@ func NewHTTPEndpointService(
 		endpointInstances: common.NewSafeMap[*endpointInstance](),
 		tailscale:         opts.Tailscale,
 		taskDispatcher:    opts.TaskDispatcher,
+		eventRepo:         opts.EventRepo,
 	}
 
 	// Listen for container events with a certain prefix

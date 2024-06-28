@@ -35,6 +35,7 @@ func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, 
 type RegisterMachineRequest struct {
 	Token        string `json:"token"`
 	MachineID    string `json:"machine_id"`
+	HostName     string `json:"hostname"`
 	ProviderName string `json:"provider_name"`
 	PoolName     string `json:"pool_name"`
 	Cpu          string `json:"cpu"`
@@ -73,11 +74,11 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "invalid gpu count")
 	}
 
-	hostName := fmt.Sprintf("%s.%s", request.MachineID, g.config.Tailscale.HostName)
+	hostName := fmt.Sprintf("%s.%s", request.HostName, g.config.Tailscale.HostName)
 
 	// If user is != "", add it into hostname (for self-managed control servers like headscale)
 	if g.config.Tailscale.User != "" {
-		hostName = fmt.Sprintf("%s.%s.%s", request.MachineID, g.config.Tailscale.User, g.config.Tailscale.HostName)
+		hostName = fmt.Sprintf("%s.%s.%s", request.HostName, g.config.Tailscale.User, g.config.Tailscale.HostName)
 	}
 
 	err = g.providerRepo.RegisterMachine(request.ProviderName, request.PoolName, request.MachineID, &types.ProviderMachineState{

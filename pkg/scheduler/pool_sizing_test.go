@@ -79,13 +79,13 @@ func TestAddWorkerIfNeeded(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			controller := &WorkerPoolControllerForTest{
+			controller := &LocalWorkerPoolControllerForTest{
 				name:       "TestPool",
 				workerRepo: workerRepo,
 			}
 			sizer := &WorkerPoolSizer{
-				controller: controller,
-				config:     tt.config,
+				controller:             controller,
+				workerPoolSizingConfig: tt.config,
 			}
 
 			newWorker, err := sizer.addWorkerIfNeeded(tt.freeCapacity)
@@ -192,10 +192,138 @@ func TestParsePoolSizingConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config, err := ParsePoolSizingConfig(*tt.sizingConfigHave)
+			config, err := parsePoolSizingConfig(*tt.sizingConfigHave)
 			assert.NoError(t, err)
 
 			assert.Equal(t, tt.sizingConfigWant, config)
 		})
 	}
+}
+
+func TestOccupyAvailableMachines(t *testing.T) {
+	s, err := miniredis.Run()
+	assert.NotNil(t, s)
+	assert.Nil(t, err)
+
+	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
+	assert.NotNil(t, redisClient)
+	assert.Nil(t, err)
+
+	providerRepo := repo.NewProviderRedisRepositoryForTest(redisClient)
+	workerRepo := repo.NewWorkerRedisRepositoryForTest(redisClient)
+
+	lambdaPoolName := "LambdaLabsPool"
+	controller := &ExternalWorkerPoolControllerForTest{
+		name:         lambdaPoolName,
+		workerRepo:   workerRepo,
+		providerRepo: providerRepo,
+		poolName:     lambdaPoolName,
+		providerName: string(types.ProviderLambdaLabs),
+	}
+
+	sizer := &WorkerPoolSizer{
+		providerRepo: providerRepo,
+		workerRepo:   workerRepo,
+		controller:   controller,
+		workerPoolConfig: &types.WorkerPoolConfig{
+			Provider: &types.ProviderLambdaLabs,
+			GPUType:  "A10G",
+			Mode:     types.PoolModeExternal,
+		},
+		workerPoolSizingConfig: &types.WorkerPoolSizingConfig{
+			DefaultWorkerCpu:      8000,
+			DefaultWorkerMemory:   16000,
+			DefaultWorkerGpuType:  "A10G",
+			DefaultWorkerGpuCount: 1,
+		},
+	}
+
+	// Add some "manually" provisioned machines
+	err = providerRepo.AddMachine(string(types.ProviderLambdaLabs), lambdaPoolName, "machine1", &types.ProviderMachineState{
+		Gpu:             "A10G",
+		GpuCount:        1,
+		AutoConsolidate: false,
+		Cpu:             30000,
+		Memory:          16000,
+		Status:          types.MachineStatusRegistered,
+	})
+	assert.NoError(t, err)
+
+	err = providerRepo.RegisterMachine(string(types.ProviderLambdaLabs), lambdaPoolName, "machine1", &types.ProviderMachineState{
+		Gpu:             "A10G",
+		GpuCount:        1,
+		AutoConsolidate: false,
+		Cpu:             30000,
+		Memory:          16000,
+		Status:          types.MachineStatusRegistered,
+	})
+	assert.NoError(t, err)
+
+	err = providerRepo.AddMachine(string(types.ProviderLambdaLabs), lambdaPoolName, "machine2", &types.ProviderMachineState{
+		Gpu:             "A10G",
+		GpuCount:        1,
+		AutoConsolidate: false,
+		Cpu:             30000,
+		Memory:          10000,
+		Status:          types.MachineStatusRegistered,
+	})
+	assert.NoError(t, err)
+
+	err = providerRepo.RegisterMachine(string(types.ProviderLambdaLabs), lambdaPoolName, "machine2", &types.ProviderMachineState{
+		Gpu:             "A10G",
+		GpuCount:        1,
+		AutoConsolidate: false,
+		Cpu:             30000,
+		Memory:          16000,
+		Status:          types.MachineStatusRegistered,
+	})
+	assert.NoError(t, err)
+	assert.NoError(t, err)
+
+	tests := []struct {
+		name                           string
+		expectedError                  error
+		expectedWorkersOnMachineBefore int
+		expectedWorkersOnMachineAfter  int
+		machineId                      string
+	}{
+
+		{
+			name:                           "successfully add workers to machine1 and machine2",
+			expectedError:                  nil,
+			expectedWorkersOnMachineBefore: 0,
+			expectedWorkersOnMachineAfter:  1,
+			machineId:                      "machine1",
+		},
+		{
+			name:                           "did not add additional workers to machine2",
+			expectedError:                  nil,
+			expectedWorkersOnMachineBefore: 1,
+			expectedWorkersOnMachineAfter:  1,
+			machineId:                      "machine2",
+		},
+	}
+
+	machines, err := providerRepo.ListAllMachines(string(types.ProviderLambdaLabs), lambdaPoolName)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(machines))
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err = sizer.occupyAvailableMachines()
+			if tt.expectedError != nil {
+				assert.EqualError(t, err, tt.expectedError.Error())
+			} else {
+				assert.NoError(t, err)
+			}
+
+			workers, err := workerRepo.GetAllWorkersOnMachine(tt.machineId)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedWorkersOnMachineAfter, len(workers))
+		})
+	}
+
+	workers, err := workerRepo.GetAllWorkersInPool(lambdaPoolName)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(workers))
 }

@@ -42,6 +42,7 @@ type TaskQueueServiceOpts struct {
 	Tailscale      *network.Tailscale
 	RouteGroup     *echo.Group
 	TaskDispatcher *task.Dispatcher
+	EventRepo      repository.EventRepository
 }
 
 const (
@@ -67,6 +68,7 @@ type RedisTaskQueue struct {
 	keyEventManager *common.KeyEventManager
 	queueClient     *taskQueueClient
 	tailscale       *network.Tailscale
+	eventRepo       repository.EventRepository
 }
 
 func NewRedisTaskQueueService(
@@ -98,6 +100,7 @@ func NewRedisTaskQueueService(
 		queueClient:     newRedisTaskQueueClient(opts.RedisClient, opts.TaskRepo),
 		queueInstances:  common.NewSafeMap[*taskQueueInstance](),
 		tailscale:       opts.Tailscale,
+		eventRepo:       opts.EventRepo,
 	}
 
 	// Listen for container events with a certain prefix

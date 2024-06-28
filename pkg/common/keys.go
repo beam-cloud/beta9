@@ -15,6 +15,7 @@ var (
 	schedulerContainerState          string = "scheduler:container:state:%s"
 	schedulerContainerAddress        string = "scheduler:container:container_addr:%s"
 	schedulerContainerIndex          string = "scheduler:container:index:%s"
+	schedulerContainerWorkerIndex    string = "scheduler:container:worker:index:%s"
 	schedulerContainerWorkspaceIndex string = "scheduler:container:workspace:index:%s"
 	schedulerWorkerAddress           string = "scheduler:container:worker_addr:%s"
 	schedulerContainerLock           string = "scheduler:container:lock:%s"
@@ -31,7 +32,6 @@ var (
 var (
 	workerPrefix                 string = "worker"
 	workerImageLock              string = "worker:%s:image:%s:lock"
-	workerContainerRequest       string = "worker:%s:container:%s:request"
 	workerContainerResourceUsage string = "worker:%s:container:%s:resource_usage"
 )
 
@@ -119,6 +119,10 @@ func (rk *redisKeys) SchedulerContainerIndex(stubId string) string {
 	return fmt.Sprintf(schedulerContainerIndex, stubId)
 }
 
+func (rk *redisKeys) SchedulerContainerWorkerIndex(workerId string) string {
+	return fmt.Sprintf(schedulerContainerWorkerIndex, workerId)
+}
+
 func (rk *redisKeys) SchedulerContainerWorkspaceIndex(workspaceId string) string {
 	return fmt.Sprintf(schedulerContainerWorkspaceIndex, workspaceId)
 }
@@ -155,10 +159,6 @@ func (rk *redisKeys) GatewayDeploymentMinContainerCount(appId string) string {
 // Worker keys
 func (rk *redisKeys) WorkerPrefix() string {
 	return workerPrefix
-}
-
-func (rk *redisKeys) WorkerContainerRequest(workerId string, containerId string) string {
-	return fmt.Sprintf(workerContainerRequest, workerId, containerId)
 }
 
 func (rk *redisKeys) WorkerContainerResourceUsage(workerId string, containerId string) string {

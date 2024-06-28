@@ -51,7 +51,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 
 		switch pool.Mode {
 		case types.PoolModeLocal:
-			controller, err = NewLocalKubernetesWorkerPoolController(ctx, config, name, workerRepo, workerPoolRepo)
+			controller, err = NewLocalKubernetesWorkerPoolController(ctx, config, name, workerRepo, workerPoolRepo, providerRepo)
 		case types.PoolModeExternal:
 			controller, err = NewExternalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, workerPoolRepo, providerRepo, tailscale, pool.Provider)
 		default:

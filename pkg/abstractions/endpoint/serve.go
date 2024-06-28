@@ -29,6 +29,8 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 		return err
 	}
 
+	go es.eventRepo.PushServeStubEvent(instance.Workspace.ExternalId, &instance.Stub.Stub)
+
 	var timeoutDuration time.Duration = endpointServeContainerTimeout
 	if in.Timeout > 0 {
 		timeoutDuration = time.Duration(in.Timeout) * time.Second

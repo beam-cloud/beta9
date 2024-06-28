@@ -41,6 +41,7 @@ type CmdContainerService struct {
 	rdb             *common.RedisClient
 	tailscale       *network.Tailscale
 	config          types.AppConfig
+	eventRepo       repository.EventRepository
 }
 
 type ContainerServiceOpts struct {
@@ -50,6 +51,7 @@ type ContainerServiceOpts struct {
 	Tailscale     *network.Tailscale
 	Scheduler     *scheduler.Scheduler
 	RedisClient   *common.RedisClient
+	EventRepo     repository.EventRepository
 }
 
 func NewContainerService(
@@ -69,6 +71,7 @@ func NewContainerService(
 		keyEventManager: keyEventManager,
 		tailscale:       opts.Tailscale,
 		config:          opts.Config,
+		eventRepo:       opts.EventRepo,
 	}
 
 	return cs, nil
@@ -85,6 +88,8 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 	if err != nil {
 		return err
 	}
+
+	go cs.eventRepo.PushRunStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
 
 	task, err := cs.backendRepo.CreateTask(ctx, &types.TaskParams{
 		WorkspaceId: authInfo.Workspace.Id,

@@ -24,7 +24,7 @@ func NewProviderRedisRepository(rdb *common.RedisClient) ProviderRepository {
 	return &ProviderRedisRepository{rdb: rdb, lock: lock, lockOptions: lockOptions}
 }
 
-func (r *ProviderRedisRepository) GetMachine(providerName, poolName, machineId string) (*types.ProviderMachineState, error) {
+func (r *ProviderRedisRepository) GetMachine(providerName, poolName, machineId string) (*types.ProviderMachine, error) {
 	ctx := context.TODO()
 
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
@@ -45,7 +45,7 @@ func (r *ProviderRedisRepository) GetMachine(providerName, poolName, machineId s
 		return nil, fmt.Errorf("error parsing machine state for %s: %w", machineId, err)
 	}
 
-	return state, nil
+	return &types.ProviderMachine{State: state}, nil
 }
 
 func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string) ([]*types.ProviderMachine, error) {
