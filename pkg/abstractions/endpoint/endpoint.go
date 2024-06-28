@@ -48,7 +48,7 @@ var (
 	endpointContainerPrefix                 string        = "endpoint"
 	endpointRoutePrefix                     string        = "/endpoint"
 	endpointRequestTimeoutS                 int           = 300
-	endpointServeContainerTimeout           time.Duration = 600 * time.Second
+	endpointServeContainerTimeout           time.Duration = 10 * time.Minute
 	endpointServeContainerKeepaliveInterval time.Duration = 30 * time.Second
 	endpointRequestHeartbeatInterval        time.Duration = 30 * time.Second
 	endpointMinRequestBufferSize            int           = 10

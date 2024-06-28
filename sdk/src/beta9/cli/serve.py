@@ -2,6 +2,7 @@ import importlib
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 import click
 
@@ -37,9 +38,17 @@ def common(**_):
     nargs=1,
     required=True,
 )
+@click.option(
+    "--timeout",
+    "-t",
+    default=0,
+    help="The inactivity timeout for the serve instance in seconds. Set to -1 for no timeout. Set to 0 to use default timeout (10 minutes)",
+)
 @extraclick.pass_service_client
 @click.pass_context
-def serve(ctx: click.Context, service: ServiceClient, entrypoint: str):
+def serve(
+    ctx: click.Context, service: ServiceClient, entrypoint: str, timeout: Optional[int] = None
+):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
@@ -63,4 +72,4 @@ def serve(ctx: click.Context, service: ServiceClient, entrypoint: str):
             f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{func_name}'"
         )
 
-    user_func.serve()  # type:ignore
+    user_func.serve(timeout=int(timeout))  # type:ignore

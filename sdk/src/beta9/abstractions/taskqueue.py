@@ -1,6 +1,6 @@
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor
+import threading
 from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
@@ -20,6 +20,7 @@ from ..clients.taskqueue import (
     StopTaskQueueServeRequest,
     TaskQueuePutRequest,
     TaskQueuePutResponse,
+    TaskQueueServeKeepAliveRequest,
     TaskQueueServiceStub,
 )
 from ..env import is_local
@@ -189,7 +190,7 @@ class _CallableWrapper:
         return deploy_response.ok
 
     @with_grpc_error_handling
-    def serve(self):
+    def serve(self, timeout: int = 0) -> bool:
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=TASKQUEUE_SERVE_STUB_TYPE, force_create_stub=True
         ):
@@ -205,7 +206,9 @@ class _CallableWrapper:
                     invocation_url=f"{base_url}/taskqueue/id/{self.parent.stub_id}"
                 )
 
-                return self._serve(dir=os.getcwd(), object_id=self.parent.object_id)
+                return self._serve(
+                    dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout
+                )
 
         except KeyboardInterrupt:
             self._handle_serve_interrupt()
@@ -229,27 +232,38 @@ class _CallableWrapper:
         terminal.print("Goodbye 👋")
         os._exit(0)  # kills all threads immediately
 
-    def _serve(self, *, dir: str, object_id: str):
-        with ThreadPoolExecutor() as pool:
-            pool.submit(self.parent.sync_dir_to_workspace, dir=dir, object_id=object_id)
+    def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
+        def notify(*_, **__):
+            self.parent.taskqueue_stub.task_queue_serve_keep_alive(
+                TaskQueueServeKeepAliveRequest(
+                    stub_id=self.parent.stub_id,
+                    timeout=timeout,
+                )
+            )
 
-            def _run_serve():
-                r: Optional[StartTaskQueueServeResponse] = None
-                for r in self.parent.taskqueue_stub.start_task_queue_serve(
-                    StartTaskQueueServeRequest(
-                        stub_id=self.parent.stub_id,
-                    )
-                ):
-                    if r.output != "":
-                        terminal.detail(r.output, end="")
+        threading.Thread(
+            target=self.parent.sync_dir_to_workspace,
+            kwargs={"dir": dir, "object_id": object_id, "on_event": notify},
+            daemon=True,
+        ).start()
 
-                    if r.done or r.exit_code != 0:
-                        break
+        r: Optional[StartTaskQueueServeResponse] = None
+        for r in self.parent.taskqueue_stub.start_task_queue_serve(
+            StartTaskQueueServeRequest(
+                stub_id=self.parent.stub_id,
+                timeout=timeout,
+            )
+        ):
+            if r.output != "":
+                terminal.detail(r.output, end="")
 
-                if r is None or not r.done or r.exit_code != 0:
-                    terminal.error("Serve container failed ❌")
+            if r.done or r.exit_code != 0:
+                break
 
-            pool.submit(_run_serve)
+        if r is None or not r.done or r.exit_code != 0:
+            terminal.error("Serve container failed ❌")
+
+        terminal.warn("Taskqueue serve timed out. Container has been stopped.")
 
     def put(self, *args, **kwargs) -> bool:
         if not self.parent.prepare_runtime(

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 @dataclass(eq=False, repr=False)
 class StartEndpointServeRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
+    timeout: int = betterproto.int32_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -43,6 +44,17 @@ class StopEndpointServeRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class StopEndpointServeResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class EndpointServeKeepAliveRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    timeout: int = betterproto.int32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class EndpointServeKeepAliveResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
@@ -65,3 +77,12 @@ class EndpointServiceStub(SyncServiceStub):
             StopEndpointServeRequest,
             StopEndpointServeResponse,
         )(stop_endpoint_serve_request)
+
+    def endpoint_serve_keep_alive(
+        self, endpoint_serve_keep_alive_request: "EndpointServeKeepAliveRequest"
+    ) -> "EndpointServeKeepAliveResponse":
+        return self._unary_unary(
+            "/endpoint.EndpointService/EndpointServeKeepAlive",
+            EndpointServeKeepAliveRequest,
+            EndpointServeKeepAliveResponse,
+        )(endpoint_serve_keep_alive_request)

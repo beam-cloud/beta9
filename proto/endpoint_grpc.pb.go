@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	EndpointService_StartEndpointServe_FullMethodName = "/endpoint.EndpointService/StartEndpointServe"
-	EndpointService_StopEndpointServe_FullMethodName  = "/endpoint.EndpointService/StopEndpointServe"
+	EndpointService_StartEndpointServe_FullMethodName     = "/endpoint.EndpointService/StartEndpointServe"
+	EndpointService_StopEndpointServe_FullMethodName      = "/endpoint.EndpointService/StopEndpointServe"
+	EndpointService_EndpointServeKeepAlive_FullMethodName = "/endpoint.EndpointService/EndpointServeKeepAlive"
 )
 
 // EndpointServiceClient is the client API for EndpointService service.
@@ -29,6 +30,7 @@ const (
 type EndpointServiceClient interface {
 	StartEndpointServe(ctx context.Context, in *StartEndpointServeRequest, opts ...grpc.CallOption) (EndpointService_StartEndpointServeClient, error)
 	StopEndpointServe(ctx context.Context, in *StopEndpointServeRequest, opts ...grpc.CallOption) (*StopEndpointServeResponse, error)
+	EndpointServeKeepAlive(ctx context.Context, in *EndpointServeKeepAliveRequest, opts ...grpc.CallOption) (*EndpointServeKeepAliveResponse, error)
 }
 
 type endpointServiceClient struct {
@@ -80,12 +82,22 @@ func (c *endpointServiceClient) StopEndpointServe(ctx context.Context, in *StopE
 	return out, nil
 }
 
+func (c *endpointServiceClient) EndpointServeKeepAlive(ctx context.Context, in *EndpointServeKeepAliveRequest, opts ...grpc.CallOption) (*EndpointServeKeepAliveResponse, error) {
+	out := new(EndpointServeKeepAliveResponse)
+	err := c.cc.Invoke(ctx, EndpointService_EndpointServeKeepAlive_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EndpointServiceServer is the server API for EndpointService service.
 // All implementations must embed UnimplementedEndpointServiceServer
 // for forward compatibility
 type EndpointServiceServer interface {
 	StartEndpointServe(*StartEndpointServeRequest, EndpointService_StartEndpointServeServer) error
 	StopEndpointServe(context.Context, *StopEndpointServeRequest) (*StopEndpointServeResponse, error)
+	EndpointServeKeepAlive(context.Context, *EndpointServeKeepAliveRequest) (*EndpointServeKeepAliveResponse, error)
 	mustEmbedUnimplementedEndpointServiceServer()
 }
 
@@ -98,6 +110,9 @@ func (UnimplementedEndpointServiceServer) StartEndpointServe(*StartEndpointServe
 }
 func (UnimplementedEndpointServiceServer) StopEndpointServe(context.Context, *StopEndpointServeRequest) (*StopEndpointServeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StopEndpointServe not implemented")
+}
+func (UnimplementedEndpointServiceServer) EndpointServeKeepAlive(context.Context, *EndpointServeKeepAliveRequest) (*EndpointServeKeepAliveResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method EndpointServeKeepAlive not implemented")
 }
 func (UnimplementedEndpointServiceServer) mustEmbedUnimplementedEndpointServiceServer() {}
 
@@ -151,6 +166,24 @@ func _EndpointService_StopEndpointServe_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EndpointService_EndpointServeKeepAlive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EndpointServeKeepAliveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EndpointServiceServer).EndpointServeKeepAlive(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EndpointService_EndpointServeKeepAlive_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EndpointServiceServer).EndpointServeKeepAlive(ctx, req.(*EndpointServeKeepAliveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EndpointService_ServiceDesc is the grpc.ServiceDesc for EndpointService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -161,6 +194,10 @@ var EndpointService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StopEndpointServe",
 			Handler:    _EndpointService_StopEndpointServe_Handler,
+		},
+		{
+			MethodName: "EndpointServeKeepAlive",
+			Handler:    _EndpointService_EndpointServeKeepAlive_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

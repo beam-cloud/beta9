@@ -31,18 +31,29 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 
 	go es.eventRepo.PushServeStubEvent(instance.Workspace.ExternalId, &instance.Stub.Stub)
 
+	var timeoutDuration time.Duration = endpointServeContainerTimeout
+	if in.Timeout > 0 {
+		timeoutDuration = time.Duration(in.Timeout) * time.Second
+	}
+
 	// Set lock (used by autoscaler to scale up the single serve container)
 	instance.Rdb.SetEx(
 		context.Background(),
 		Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
 		1,
-		endpointServeContainerTimeout,
+		timeoutDuration,
 	)
 
 	container, err := instance.WaitForContainer(ctx, endpointServeContainerTimeout)
 	if err != nil {
 		return err
 	}
+
+	// Remove the container lock and rely on the serve lock to keep container alive
+	instance.Rdb.Del(
+		context.Background(),
+		Keys.endpointKeepWarmLock(instance.Workspace.Name, instance.Stub.ExternalId, container.ContainerId),
+	)
 
 	sendCallback := func(o common.OutputMsg) error {
 		if err := stream.Send(&pb.StartEndpointServeResponse{Output: o.Msg, Done: o.Done}); err != nil {
@@ -61,24 +72,27 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 
 	// Keep serve container active for as long as user has their terminal open
 	// We can handle timeouts on the client side
-	go func() {
-		ticker := time.NewTicker(endpointServeContainerKeepaliveInterval)
-		defer ticker.Stop()
+	// If timeout is set to negative, we want to keep the container alive indefinitely while the user is connected
+	if in.Timeout < 0 {
+		go func() {
+			ticker := time.NewTicker(endpointServeContainerKeepaliveInterval)
+			defer ticker.Stop()
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				instance.Rdb.SetEx(
-					context.Background(),
-					Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-					1,
-					endpointServeContainerTimeout,
-				)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					instance.Rdb.SetEx(
+						context.Background(),
+						Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
+						1,
+						timeoutDuration,
+					)
+				}
 			}
-		}
-	}()
+		}()
+	}
 
 	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
 		SendCallback:    sendCallback,
@@ -134,4 +148,31 @@ func (es *HttpEndpointService) StopEndpointServe(ctx context.Context, in *pb.Sto
 	}
 
 	return &pb.StopEndpointServeResponse{Ok: true}, nil
+}
+
+func (es *HttpEndpointService) EndpointServeKeepAlive(ctx context.Context, in *pb.EndpointServeKeepAliveRequest) (*pb.EndpointServeKeepAliveResponse, error) {
+	instance, exists := es.endpointInstances.Get(in.StubId)
+	if !exists {
+		return &pb.EndpointServeKeepAliveResponse{Ok: false}, nil
+	}
+
+	var timeoutDuration time.Duration = endpointServeContainerTimeout
+	if in.Timeout != 0 {
+		timeoutDuration = time.Duration(in.Timeout) * time.Second
+	}
+
+	if in.Timeout < 0 {
+		// There is no timeout, so we can just return
+		return &pb.EndpointServeKeepAliveResponse{Ok: true}, nil
+	}
+
+	// Set lock (used by autoscaler to scale up the single serve container)
+	instance.Rdb.SetEx(
+		context.Background(),
+		Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
+		1,
+		timeoutDuration,
+	)
+
+	return &pb.EndpointServeKeepAliveResponse{Ok: true}, nil
 }
