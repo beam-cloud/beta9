@@ -98,7 +98,7 @@ func NewExternalWorkerPoolController(
 func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
-	machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name)
+	machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name, true)
 	if err != nil {
 		return nil, err
 	}

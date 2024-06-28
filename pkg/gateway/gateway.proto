@@ -308,7 +308,8 @@ message Machine {
   string tailscale_auth = 11;
   string last_keepalive = 12;
   string created = 13;
-  MachineMetrics machine_metrics = 14;
+  string agent_version = 14;
+  MachineMetrics machine_metrics = 15;
 }
 
 message MachineMetrics {

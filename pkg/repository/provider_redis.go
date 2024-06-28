@@ -54,7 +54,7 @@ func (r *ProviderRedisRepository) GetMachine(providerName, poolName, machineId s
 	return machine, nil
 }
 
-func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string) ([]*types.ProviderMachine, error) {
+func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string, useLock bool) ([]*types.ProviderMachine, error) {
 	machines := []*types.ProviderMachine{}
 
 	// Get all machines from the machine index
@@ -71,15 +71,20 @@ func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string)
 
 		machineId := keyParts[len(keyParts)-1]
 
-		err := r.lock.Acquire(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), common.RedisLockOptions{TtlS: 10, Retries: 0})
-		if err != nil {
-			continue
+		if useLock {
+			err := r.lock.Acquire(context.TODO(), common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+			if err != nil {
+				continue
+			}
 		}
 
 		machineState, err := r.getMachineStateFromKey(key)
 		if err != nil {
 			r.RemoveMachine(providerName, poolName, machineId)
-			r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
+
+			if useLock {
+				r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
+			}
 			continue
 		}
 
@@ -89,7 +94,9 @@ func (r *ProviderRedisRepository) ListAllMachines(providerName, poolName string)
 			machine.Metrics = metrics
 		}
 
-		r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
+		if useLock {
+			r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
+		}
 		machines = append(machines, machine)
 	}
 
@@ -216,7 +223,7 @@ func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId s
 	return nil
 }
 
-func (r *ProviderRedisRepository) SetMachineKeepAlive(providerName, poolName, machineId string, metrics *types.ProviderMachineMetrics) error {
+func (r *ProviderRedisRepository) SetMachineKeepAlive(providerName, poolName, machineId, agentVersion string, metrics *types.ProviderMachineMetrics) error {
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
 	metricsKey := common.RedisKeys.ProviderMachineMetrics(providerName, poolName, machineId)
 
@@ -227,6 +234,7 @@ func (r *ProviderRedisRepository) SetMachineKeepAlive(providerName, poolName, ma
 
 	// Update the LastKeepalive with the current Unix timestamp
 	machineState.LastKeepalive = fmt.Sprintf("%d", time.Now().Unix())
+	machineState.AgentVersion = agentVersion
 
 	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineState)).Err()
 	if err != nil {

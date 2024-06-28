@@ -53,4 +53,5 @@ type ProviderMachineState struct {
 	LastWorkerSeen    string        `json:"last_worker_seen" redis:"last_worker_seen"`
 	LastKeepalive     string        `json:"last_keepalive" redis:"last_keepalive"`
 	AutoConsolidate   bool          `json:"auto_consolidate" redis:"auto_consolidate"`
+	AgentVersion      string        `json:"agent_version" redis:"agent_version"`
 }
