@@ -14,7 +14,7 @@ def is_local() -> bool:
 
 
 def is_remote() -> bool:
-    return not is_remote()
+    return not is_local()
 
 
 def local_entrypoint(func: Callable) -> None:
