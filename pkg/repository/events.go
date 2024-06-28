@@ -17,6 +17,7 @@ import (
 type TCPEventClientRepo struct {
 	config            types.FluentBitEventConfig
 	endpointAvailable bool
+	eventTagMap       map[string]string
 }
 
 func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
@@ -25,9 +26,16 @@ func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
 		log.Println("[WARNING] fluentbit host does not appear to be up, events will be dropped")
 	}
 
+	// Parse event mapping
+	eventTagMap := make(map[string]string)
+	for _, mapping := range config.Mapping {
+		eventTagMap[mapping.Name] = mapping.Tag
+	}
+
 	return &TCPEventClientRepo{
 		config:            config,
 		endpointAvailable: endpointAvailable,
+		eventTagMap:       eventTagMap,
 	}
 }
 
@@ -50,7 +58,7 @@ func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion s
 
 	event := cloudevents.NewEvent()
 	event.SetID(objectId)
-	event.SetSource("beam-cloud")
+	event.SetSource("beta9-cluster")
 	event.SetType(eventName)
 	event.SetSpecVersion(schemaVersion)
 	event.SetTime(time.Now())
@@ -76,7 +84,13 @@ func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, d
 		return
 	}
 
-	resp, err := http.Post(t.config.Endpoint, "application/json", bytes.NewBuffer(eventBytes))
+	var tag string
+	tag, ok := t.eventTagMap[eventName]
+	if !ok {
+		tag = ""
+	}
+
+	resp, err := http.Post(t.config.Endpoint+"/"+tag, "application/json", bytes.NewBuffer(eventBytes))
 	if err != nil {
 		log.Println("failed to send payload to event server:", err)
 		return
@@ -152,10 +166,49 @@ func (t *TCPEventClientRepo) PushWorkerStartedEvent(workerID string) {
 func (t *TCPEventClientRepo) PushWorkerStoppedEvent(workerID string) {
 	t.pushEvent(
 		types.EventWorkerLifecycle,
-		types.EventWorkerLifecycle,
+		types.EventWorkerLifecycleSchemaVersion,
 		types.EventWorkerLifecycleSchema{
 			WorkerID: workerID,
 			Status:   types.EventWorkerLifecycleStopped,
+		},
+	)
+}
+
+func (t *TCPEventClientRepo) PushDeployStubEvent(workspaceId string, stub *types.Stub) {
+	t.pushEvent(
+		types.EventStubDeploy,
+		types.EventStubSchemaVersion,
+		types.EventStubSchema{
+			ID:          stub.ExternalId,
+			StubType:    stub.Type,
+			StubConfig:  stub.Config,
+			WorkspaceID: workspaceId,
+		},
+	)
+}
+
+func (t *TCPEventClientRepo) PushServeStubEvent(workspaceId string, stub *types.Stub) {
+	t.pushEvent(
+		types.EventStubServe,
+		types.EventStubSchemaVersion,
+		types.EventStubSchema{
+			ID:          stub.ExternalId,
+			StubType:    stub.Type,
+			StubConfig:  stub.Config,
+			WorkspaceID: workspaceId,
+		},
+	)
+}
+
+func (t *TCPEventClientRepo) PushRunStubEvent(workspaceId string, stub *types.Stub) {
+	t.pushEvent(
+		types.EventStubRun,
+		types.EventStubSchemaVersion,
+		types.EventStubSchema{
+			ID:          stub.ExternalId,
+			StubType:    stub.Type,
+			StubConfig:  stub.Config,
+			WorkspaceID: workspaceId,
 		},
 	)
 }

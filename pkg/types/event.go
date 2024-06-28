@@ -11,6 +11,9 @@ type EventClient interface {
 var (
 	EventContainerLifecycle = "container.lifecycle"
 	EventWorkerLifecycle    = "worker.lifecycle"
+	EventStubDeploy         = "stub.deploy"
+	EventStubServe          = "stub.serve"
+	EventStubRun            = "stub.run"
 )
 
 var (
@@ -49,4 +52,13 @@ var EventWorkerLifecycleSchemaVersion = "1.0"
 type EventWorkerLifecycleSchema struct {
 	WorkerID string `json:"worker_id"`
 	Status   string `json:"status"`
+}
+
+var EventStubSchemaVersion = "1.0"
+
+type EventStubSchema struct {
+	ID          string   `json:"id"`
+	StubType    StubType `json:"stub_type"`
+	WorkspaceID string   `json:"workspace_id"`
+	StubConfig  string   `json:"stub_config"`
 }

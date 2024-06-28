@@ -55,6 +55,7 @@ type Gateway struct {
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
+	EventRepo      repository.EventRepository
 	Tailscale      *network.Tailscale
 	metricsRepo    repository.MetricsRepository
 	Storage        storage.Storage
@@ -115,6 +116,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
+	eventRepo := repository.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)
@@ -133,6 +135,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.Tailscale = tailscale
 	gateway.TaskDispatcher = taskDispatcher
 	gateway.metricsRepo = metricsRepo
+	gateway.EventRepo = eventRepo
 
 	return gateway, nil
 }
@@ -233,6 +236,7 @@ func (g *Gateway) registerServices() error {
 		Tailscale:      g.Tailscale,
 		RouteGroup:     g.rootRouteGroup,
 		TaskDispatcher: g.TaskDispatcher,
+		EventRepo:      g.EventRepo,
 	})
 	if err != nil {
 		return err
@@ -250,6 +254,7 @@ func (g *Gateway) registerServices() error {
 		Tailscale:      g.Tailscale,
 		RouteGroup:     g.rootRouteGroup,
 		TaskDispatcher: g.TaskDispatcher,
+		EventRepo:      g.EventRepo,
 	})
 	if err != nil {
 		return err
@@ -266,6 +271,7 @@ func (g *Gateway) registerServices() error {
 		RouteGroup:     g.rootRouteGroup,
 		Tailscale:      g.Tailscale,
 		TaskDispatcher: g.TaskDispatcher,
+		EventRepo:      g.EventRepo,
 	})
 	if err != nil {
 		return err
@@ -289,6 +295,7 @@ func (g *Gateway) registerServices() error {
 			Tailscale:     g.Tailscale,
 			Scheduler:     g.Scheduler,
 			RedisClient:   g.RedisClient,
+			EventRepo:     g.EventRepo,
 		},
 	)
 	if err != nil {
@@ -324,6 +331,7 @@ func (g *Gateway) registerServices() error {
 		Scheduler:      g.Scheduler,
 		TaskDispatcher: g.TaskDispatcher,
 		RedisClient:    g.RedisClient,
+		EventRepo:      g.EventRepo,
 	})
 	if err != nil {
 		return err
