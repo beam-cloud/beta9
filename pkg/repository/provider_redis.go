@@ -220,15 +220,15 @@ func (r *ProviderRedisRepository) SetMachineKeepAlive(providerName, poolName, ma
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
 	metricsKey := common.RedisKeys.ProviderMachineMetrics(providerName, poolName, machineId)
 
-	machineInfo, err := r.getMachineStateFromKey(stateKey)
+	machineState, err := r.getMachineStateFromKey(stateKey)
 	if err != nil {
 		return fmt.Errorf("failed to get machine state <%v>: %w", stateKey, err)
 	}
 
 	// Update the LastKeepalive with the current Unix timestamp
-	machineInfo.LastKeepalive = fmt.Sprintf("%d", time.Now().Unix())
+	machineState.LastKeepalive = fmt.Sprintf("%d", time.Now().Unix())
 
-	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineInfo)).Err()
+	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineState)).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
 	}
