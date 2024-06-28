@@ -141,7 +141,7 @@ def create_machine(service: ServiceClient, pool: str):
             f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
         )
         terminal.detail(
-            f"""sudo curl -L -o agent https://release.beam.cloud/agent && \\
+            f"""sudo curl -L -o agent https://release.beam.cloud/agent/agent && \\
 sudo chmod +x agent && \\
 sudo ./agent --token "{res.machine.registration_token}" --machine-id "{res.machine.id}" \\
 --tailscale-url "{res.machine.tailscale_url}" \\

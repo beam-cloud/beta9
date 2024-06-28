@@ -255,7 +255,7 @@ yum remove -y libnvidia-container
 yum install -y nvidia-container-toolkit nvidia-container-runtime
 yum-config-manager --enable amzn2-nvidia-470-branch amzn2-core
 
-curl -L -o agent https://release.beam.cloud/agent && \
+curl -L -o agent https://release.beam.cloud/agent/agent && \
 chmod +x agent && \
 ./agent --token "{{.RegistrationToken}}" --machine-id "{{.MachineId}}" \
 --tailscale-url "{{.TailscaleUrl}}" \
