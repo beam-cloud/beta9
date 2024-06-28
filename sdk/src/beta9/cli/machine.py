@@ -92,6 +92,8 @@ def list_machines(
         Column("Pool"),
         Column("Created"),
         Column("Last Keepalive"),
+        Column("Agent Version"),
+        Column("Free GPU Count"),
         box=box.SIMPLE,
     )
 
@@ -109,6 +111,8 @@ def list_machines(
             )
             if machine.last_keepalive != ""
             else "Never",
+            f"v{machine.agent_version}" or "-",
+            str(machine.machine_metrics.free_gpu_count),
         )
 
     table.add_section()

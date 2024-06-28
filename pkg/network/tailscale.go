@@ -180,7 +180,6 @@ func (t *Tailscale) ResolveService(serviceName string, timeout time.Duration) (s
 			}
 
 			if strings.Contains(peer.HostName, serviceName) {
-				log.Printf("Found tailscale service<%s> @ %s\n", serviceName, peer.DNSName)
 				return strings.TrimSuffix(peer.DNSName, "."), nil
 			}
 		}

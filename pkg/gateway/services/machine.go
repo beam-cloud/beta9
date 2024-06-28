@@ -46,6 +46,10 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 		}
 
 		for _, machine := range machines {
+			if machine.Metrics == nil {
+				machine.Metrics = &types.ProviderMachineMetrics{}
+			}
+
 			formattedMachines = append(formattedMachines, &pb.Machine{
 				Id:            machine.State.MachineId,
 				Cpu:           machine.State.Cpu,
@@ -88,6 +92,10 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 			}
 
 			for _, machine := range machines {
+				if machine.Metrics == nil {
+					machine.Metrics = &types.ProviderMachineMetrics{}
+				}
+
 				formattedMachines = append(formattedMachines, &pb.Machine{
 					Id:            machine.State.MachineId,
 					Cpu:           machine.State.Cpu,

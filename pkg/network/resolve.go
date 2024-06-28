@@ -3,7 +3,6 @@ package network
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"time"
@@ -50,7 +49,6 @@ func ResolveTailscaleService(serviceName string, timeout time.Duration) (string,
 			}
 
 			if strings.Contains(peer.HostName, serviceName) {
-				log.Printf("Found tailscale service<%s> @ %s\n", serviceName, peer.HostName)
 				return peer.HostName, nil
 			}
 		}
