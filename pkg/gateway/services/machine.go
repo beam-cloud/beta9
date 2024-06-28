@@ -37,7 +37,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 			}, nil
 		}
 
-		machines, err := gws.providerRepo.ListAllMachines(string(*pool.Provider), in.PoolName)
+		machines, err := gws.providerRepo.ListAllMachines(string(*pool.Provider), in.PoolName, false)
 		if err != nil {
 			return &pb.ListMachinesResponse{
 				Ok:     false,
@@ -56,6 +56,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 				PoolName:      machine.State.PoolName,
 				LastKeepalive: machine.State.LastKeepalive,
 				Created:       machine.State.Created,
+				AgentVersion:  machine.State.AgentVersion,
 				MachineMetrics: &pb.MachineMetrics{
 					TotalCpuAvailable:    int32(machine.Metrics.TotalCpuAvailable),
 					TotalMemoryAvailable: int32(machine.Metrics.TotalMemoryAvailable),
@@ -78,7 +79,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 				continue
 			}
 
-			machines, err := gws.providerRepo.ListAllMachines(string(*pool.Provider), poolName)
+			machines, err := gws.providerRepo.ListAllMachines(string(*pool.Provider), poolName, false)
 			if err != nil {
 				return &pb.ListMachinesResponse{
 					Ok:     false,
@@ -97,6 +98,20 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 					PoolName:      machine.State.PoolName,
 					LastKeepalive: machine.State.LastKeepalive,
 					Created:       machine.State.Created,
+					AgentVersion:  machine.State.AgentVersion,
+					MachineMetrics: &pb.MachineMetrics{
+						TotalCpuAvailable:    int32(machine.Metrics.TotalCpuAvailable),
+						TotalMemoryAvailable: int32(machine.Metrics.TotalMemoryAvailable),
+						CpuUtilizationPct:    float32(machine.Metrics.CpuUtilizationPct),
+						MemoryUtilizationPct: float32(machine.Metrics.MemoryUtilizationPct),
+						WorkerCount:          int32(machine.Metrics.WorkerCount),
+						ContainerCount:       int32(machine.Metrics.ContainerCount),
+						FreeGpuCount:         int32(machine.Metrics.FreeGpuCount),
+						CacheUsagePct:        float32(machine.Metrics.CacheUsagePct),
+						CacheCapacity:        int32(machine.Metrics.CacheCapacity),
+						CacheMemoryUsage:     int32(machine.Metrics.CacheMemoryUsage),
+						CacheCpuUsage:        float32(machine.Metrics.CacheCpuUsage),
+					},
 				})
 			}
 		}

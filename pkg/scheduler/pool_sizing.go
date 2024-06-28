@@ -78,7 +78,7 @@ func (s *WorkerPoolSizer) Start() {
 
 // occupyAvailableMachines ensures that all manually provisioned machines always have workers occupying them
 func (s *WorkerPoolSizer) occupyAvailableMachines() error {
-	machines, err := s.providerRepo.ListAllMachines(string(*s.workerPoolConfig.Provider), s.controller.Name())
+	machines, err := s.providerRepo.ListAllMachines(string(*s.workerPoolConfig.Provider), s.controller.Name(), true)
 	if err != nil {
 		return err
 	}

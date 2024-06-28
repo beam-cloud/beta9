@@ -364,7 +364,8 @@ class Machine(betterproto.Message):
     tailscale_auth: str = betterproto.string_field(11)
     last_keepalive: str = betterproto.string_field(12)
     created: str = betterproto.string_field(13)
-    machine_metrics: "MachineMetrics" = betterproto.message_field(14)
+    agent_version: str = betterproto.string_field(14)
+    machine_metrics: "MachineMetrics" = betterproto.message_field(15)
 
 
 @dataclass(eq=False, repr=False)

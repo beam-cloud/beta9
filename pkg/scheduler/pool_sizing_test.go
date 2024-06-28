@@ -304,7 +304,7 @@ func TestOccupyAvailableMachines(t *testing.T) {
 		},
 	}
 
-	machines, err := providerRepo.ListAllMachines(string(types.ProviderLambdaLabs), lambdaPoolName)
+	machines, err := providerRepo.ListAllMachines(string(types.ProviderLambdaLabs), lambdaPoolName, true)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(machines))
 
