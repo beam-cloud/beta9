@@ -23,7 +23,7 @@ from ...clients.gateway import (
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import
 from ...sync import FileSyncer, SyncEventHandler
-from ...type import _AUTOSCALERS, Autoscaler, GpuType, QueueDepthAutoscaler
+from ...type import _AUTOSCALERS, Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -42,7 +42,7 @@ class RunnerAbstraction(BaseAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: Union[GpuType, str] = GpuType.NoGPU,
+        gpu: GpuTypeAlias = GpuType.NoGPU,
         image: Image = Image(),
         workers: int = 1,
         keep_warm_seconds: float = 10.0,

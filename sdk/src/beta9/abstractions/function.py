@@ -20,7 +20,7 @@ from ..clients.function import (
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..env import is_local
 from ..sync import FileSyncer
-from ..type import GpuType
+from ..type import GpuType, GpuTypeAlias
 
 
 class Function(RunnerAbstraction):
@@ -75,7 +75,7 @@ class Function(RunnerAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: Union[GpuType, str] = "",
+        gpu: GpuTypeAlias = GpuType.NoGPU,
         image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,
