@@ -170,7 +170,7 @@ class _CallableWrapper:
     def remote(self, *args, **kwargs) -> Any:
         return self(*args, **kwargs)
 
-    def serve(self):
+    def serve(self, **kwargs):
         terminal.error("Serve has not yet been implemented for functions.")
 
     def deploy(self, name: str) -> bool:
