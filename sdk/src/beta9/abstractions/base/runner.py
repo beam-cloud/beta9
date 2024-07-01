@@ -267,6 +267,7 @@ class RunnerAbstraction(BaseAbstraction):
                 self.image_available = True
                 self.image_id = image_build_result.image_id
             else:
+                terminal.error("Image build failed", exit=False)
                 return False
 
         if not self.files_synced:
@@ -276,10 +277,12 @@ class RunnerAbstraction(BaseAbstraction):
                 self.files_synced = True
                 self.object_id = sync_result.object_id
             else:
+                terminal.error("File sync failed", exit=False)
                 return False
 
         for v in self.volumes:
             if not v.ready and not v.get_or_create():
+                terminal.error(f"Volume is not ready: {v.name}", exit=False)
                 return False
 
         try:
@@ -290,6 +293,10 @@ class RunnerAbstraction(BaseAbstraction):
 
         autoscaler_type = _AUTOSCALERS.get(type(self.autoscaler), None)
         if autoscaler_type is None:
+            terminal.error(
+                f"Invalid Autoscaler class: {type(self.autoscaler).__name__}",
+                exit=False,
+            )
             return False
 
         if not self.stub_created:
