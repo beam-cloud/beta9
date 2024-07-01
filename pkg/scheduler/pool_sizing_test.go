@@ -156,18 +156,20 @@ func TestParsePoolSizingConfig(t *testing.T) {
 			name:             "should parse defaultWorkerGpuType as T4",
 			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGpuType: "T4"},
 			sizingConfigWant: &types.WorkerPoolSizingConfig{
-				DefaultWorkerCpu:     1000,
-				DefaultWorkerMemory:  1024,
-				DefaultWorkerGpuType: "T4",
+				DefaultWorkerCpu:      1000,
+				DefaultWorkerMemory:   1024,
+				DefaultWorkerGpuType:  "T4",
+				DefaultWorkerGpuCount: 1,
 			},
 		},
 		{
 			name:             "should parse defaultWorkerGpuType as A100-40",
 			sizingConfigHave: &types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerGpuType: "A100-40"},
 			sizingConfigWant: &types.WorkerPoolSizingConfig{
-				DefaultWorkerCpu:     1000,
-				DefaultWorkerMemory:  1024,
-				DefaultWorkerGpuType: "A100-40",
+				DefaultWorkerCpu:      1000,
+				DefaultWorkerMemory:   1024,
+				DefaultWorkerGpuType:  "A100-40",
+				DefaultWorkerGpuCount: 1,
 			},
 		},
 		{
