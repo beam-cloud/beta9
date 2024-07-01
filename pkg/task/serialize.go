@@ -9,17 +9,6 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// Helper function to check if a payload is purely a map (kwargs)
-func isMap(payload map[string]interface{}) bool {
-	for _, value := range payload {
-		switch value.(type) {
-		case []interface{}: // If any value is a slice, this isn't a pure map
-			return false
-		}
-	}
-	return true
-}
-
 func SerializeHttpPayload(ctx echo.Context) (*types.TaskPayload, error) {
 	defer ctx.Request().Body.Close()
 
@@ -58,18 +47,9 @@ func SerializeHttpPayload(ctx echo.Context) (*types.TaskPayload, error) {
 	if kwargs, ok := payload["kwargs"].(map[string]interface{}); ok {
 		taskPayload.Kwargs = kwargs
 		delete(payload, "kwargs")
-	} else if len(payload) > 0 && isMap(payload) {
-		// Remaining payload is treated as kwargs if it is a map and 'kwargs' key wasn't explicitly provided
+	} else if len(payload) > 0 {
+		// Remaining payload is treated as kwargs if not empty
 		taskPayload.Kwargs = payload
-	}
-
-	// If the payload is empty after removing "args", assume all entries are args
-	if len(payload) == 0 && len(taskPayload.Args) == 0 {
-		if args, ok := payload[""].([]interface{}); ok {
-			taskPayload.Args = args
-		} else {
-			return nil, errors.New("task payload structure not recognized")
-		}
 	}
 
 	return taskPayload, nil

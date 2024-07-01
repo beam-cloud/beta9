@@ -18,6 +18,7 @@ func setupEchoContext(jsonBody string) echo.Context {
 	rec := httptest.NewRecorder()
 	return e.NewContext(req, rec)
 }
+
 func TestSerializeHttpPayload(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -85,6 +86,15 @@ func TestSerializeHttpPayload(t *testing.T) {
 			wantPayload: nil,
 			wantErr:     true,
 		},
+		{
+			name: "nested kwargs",
+			body: `{"kwargs": {"nestedList": [1, 2, 3], "nestedMap": {"key": "value"}}}`,
+			wantPayload: &types.TaskPayload{
+				Args:   nil,
+				Kwargs: map[string]interface{}{"nestedList": []interface{}{1.0, 2.0, 3.0}, "nestedMap": map[string]interface{}{"key": "value"}},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -96,7 +106,7 @@ func TestSerializeHttpPayload(t *testing.T) {
 				return
 			}
 			if !tt.wantErr && !reflect.DeepEqual(got, tt.wantPayload) {
-				t.Errorf("SerializeHttpPayload() got = %v, want %v", got, tt.wantPayload)
+				t.Errorf("SerializeHttpPayload() got = %+v, want %+v", got, tt.wantPayload)
 			}
 		})
 	}
