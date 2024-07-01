@@ -157,12 +157,18 @@ func parsePoolSizingConfig(config types.WorkerPoolJobSpecPoolSizingConfig) (*typ
 		c.DefaultWorkerMemory = defaultWorkerMemory
 	}
 
-	if defaultWorkerGpuType, err := ParseGPUType(config.DefaultWorkerGpuType); err == nil {
+	defaultWorkerGpuType, err := ParseGPUType(config.DefaultWorkerGpuType)
+	if err == nil {
 		c.DefaultWorkerGpuType = defaultWorkerGpuType.String()
 	}
 
 	if defaultWorkerGpuCount, err := ParseGpuCount(config.DefaultWorkerGpuCount); err == nil {
 		c.DefaultWorkerGpuCount = uint32(defaultWorkerGpuCount)
+	}
+
+	// Don't allow creation of workers with no gpu count if there is a GPU type set
+	if c.DefaultWorkerGpuCount <= 0 && defaultWorkerGpuType != "" {
+		c.DefaultWorkerGpuCount = 1
 	}
 
 	return c, nil
