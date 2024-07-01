@@ -23,7 +23,7 @@ from ...clients.gateway import (
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import
 from ...sync import FileSyncer, SyncEventHandler
-from ...type import _AUTOSCALERS, Autoscaler, QueueDepthAutoscaler
+from ...type import _AUTOSCALERS, Autoscaler, GpuType, QueueDepthAutoscaler
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -42,7 +42,7 @@ class RunnerAbstraction(BaseAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: str = "",
+        gpu: Union[GpuType, str] = GpuType.NoGPU,
         image: Image = Image(),
         workers: int = 1,
         keep_warm_seconds: float = 10.0,
@@ -281,6 +281,12 @@ class RunnerAbstraction(BaseAbstraction):
         for v in self.volumes:
             if not v.ready and not v.get_or_create():
                 return False
+
+        try:
+            self.gpu = GpuType(self.gpu).value
+        except ValueError:
+            terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
+            return False
 
         autoscaler_type = _AUTOSCALERS.get(type(self.autoscaler), None)
         if autoscaler_type is None:
