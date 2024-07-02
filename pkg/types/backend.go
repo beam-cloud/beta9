@@ -132,6 +132,23 @@ type TaskWithRelated struct {
 	Stub      Stub      `db:"stub" json:"stub"`
 }
 
+func (t *TaskWithRelated) SanitizeStubConfig() error {
+	var stubConfig StubConfigV1
+	err := json.Unmarshal([]byte(t.Stub.Config), &stubConfig)
+	if err != nil {
+		return err
+	}
+
+	stubConfig.Secrets = []Secret{}
+
+	stubConfigBytes, err := json.Marshal(stubConfig)
+	if err != nil {
+		return err
+	}
+	t.Stub.Config = string(stubConfigBytes)
+	return nil
+}
+
 type TaskCountPerDeployment struct {
 	DeploymentName string `db:"deployment_name" json:"deployment_name"`
 	TaskCount      uint   `db:"task_count" json:"task_count"`
@@ -155,7 +172,7 @@ type StubConfigV1 struct {
 	Workers         uint         `json:"workers"`
 	Authorized      bool         `json:"authorized"`
 	Volumes         []*pb.Volume `json:"volumes"`
-	Secrets         []Secret     `json:"secrets"`
+	Secrets         []Secret     `json:"secrets,omitempty"`
 	Autoscaler      *Autoscaler  `json:"autoscaler"`
 }
 
