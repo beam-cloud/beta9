@@ -168,7 +168,7 @@ func (g *DeploymentGroup) DeleteDeployment(ctx echo.Context) error {
 	// Delete deployment
 	if err := g.backendRepo.DeleteDeployment(ctx.Request().Context(), deploymentWithRelated.Deployment); err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "failed to delete deployment" + err.Error(),
+			"error": "failed to delete deployment",
 		})
 	}
 
