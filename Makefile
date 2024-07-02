@@ -56,3 +56,6 @@ verify-protocol:
 
 test-pkg:
 	go test -v ./pkg/... -bench=./pkg/..
+
+aws-deploy:
+	bin/aws_deploy.sh
