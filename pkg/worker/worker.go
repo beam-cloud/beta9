@@ -385,20 +385,53 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 	}
 }
 
+// TODO: might be better to just encapsulate this logic directly in the cedana client
+// as long as it has access to the containerInstances map, I think that's all it needs
 func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
-	// TODO: wait for a health check to pass before snapshotting
-
-	s.containerLock.Lock() // TODO: do we even need to lock here?
-	_, exists := s.containerInstances.Get(request.ContainerId)
-	defer s.containerLock.Unlock()
-
+	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return
 	}
 
+	_ = fmt.Sprintf("0.0.0.0:%d/health", instance.Port)
+	// TODO: we need a reliable way to detect that the container is completely booted
+
+	/*
+		   We can't just use health checks because one worker could be up while the others
+		   are still booting. After we have a reliable way of doing that,
+		   we should probably be polling whatever method that is here, and also checking for the
+		   containers existence. Something like this:
+
+		   elapsed := 0
+		   start := time.Now()
+		   containerReady := false
+		   timeout := time.Duration(time.Second * 120)
+		   for := range time.Ticker(time.Second) {
+		   	   // 1. check if container exists
+				instance, exists := s.containerInstances.Get(request.ContainerId)
+				if !exists {
+					return
+				}
+
+			   // 2. check if container is ready
+			   if weAreGood {
+			      containerReady := true
+				  break
+			   }
+
+			   if time.Since(start) > timeout {
+			 		break
+			   }
+			}
+
+			if !containerReady {
+				return
+			}
+	*/
+
 	err := s.cedanaClient.Checkpoint(request.ContainerId)
 	if err != nil {
-		log.Printf("<%s> cedana checkpoint failed: %+v\n", request.ContainerId, err)
+		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
 	}
 }
 
@@ -408,7 +441,7 @@ func (s *Worker) SpawnAsync(request *types.ContainerRequest, bundlePath string, 
 
 	go s.containerWg.Add(1)
 
-	// TODO: also check the stub config here
+	// TODO: also need to check the stub config here for experimental cedana flag
 	// which we may want to attach to the container request for ease of access
 	if s.config.Cedana.Enabled && s.cedanaClient != nil {
 		go s.createCheckpoint(request)
