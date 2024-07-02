@@ -165,6 +165,13 @@ func (g *DeploymentGroup) DeleteDeployment(ctx echo.Context) error {
 		})
 	}
 
+	// Stop deployment first
+	if err := g.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx); err != nil {
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "failed to stop deployment",
+		})
+	}
+
 	// Delete deployment
 	if err := g.backendRepo.DeleteDeployment(ctx.Request().Context(), deploymentWithRelated.Deployment); err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
@@ -172,7 +179,7 @@ func (g *DeploymentGroup) DeleteDeployment(ctx echo.Context) error {
 		})
 	}
 
-	return ctx.JSON(http.StatusOK, "")
+	return ctx.NoContent(http.StatusOK)
 }
 
 func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRelated, ctx echo.Context) error {
@@ -202,5 +209,5 @@ func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRela
 		}})
 	}
 
-	return ctx.JSON(http.StatusOK, "")
+	return ctx.NoContent(http.StatusOK)
 }
