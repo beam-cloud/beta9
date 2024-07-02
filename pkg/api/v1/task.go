@@ -84,6 +84,10 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 	if task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve task")
 	} else {
+		if task == nil {
+			return ctx.JSON(http.StatusBadRequest, map[string]string{})
+		}
+
 		task.SanitizeStubConfig()
 		return ctx.JSON(http.StatusOK, task)
 	}

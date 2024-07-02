@@ -18,6 +18,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
 )
@@ -415,6 +416,10 @@ func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, exte
     `
 	err := r.client.GetContext(ctx, &taskWithRelated, query, externalId)
 	if err != nil {
+		if err, ok := err.(*pq.Error); ok && err.Code.Class() == "22" {
+			// Class 22 - Data Exception (e.g. invalid input)
+			return nil, nil
+		}
 		return nil, err
 	}
 
