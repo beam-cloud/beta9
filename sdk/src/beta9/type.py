@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
+from typing import Literal, Protocol, Union
 
 
 class LifeCycleMethod(str, Enum):
@@ -82,6 +82,23 @@ class GpuType(str, Enum):
     A100_80 = "A100-80"
     H100 = "H100"
     A6000 = "A6000"
+
+
+# Add GpuType str literals. Must copy/paste for now.
+# https://github.com/python/typing/issues/781
+GpuTypeLiteral = Literal[
+    "",
+    "any",
+    "T4",
+    "L4",
+    "A10G",
+    "A100_40",
+    "A100_80",
+    "H100",
+    "A6000",
+]
+
+GpuTypeAlias = Union[GpuType, GpuTypeLiteral]
 
 
 QUEUE_DEPTH_AUTOSCALER_TYPE = "queue_depth"

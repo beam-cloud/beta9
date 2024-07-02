@@ -20,6 +20,7 @@ from ..clients.function import (
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..env import is_local
 from ..sync import FileSyncer
+from ..type import GpuType, GpuTypeAlias
 
 
 class Function(RunnerAbstraction):
@@ -74,7 +75,7 @@ class Function(RunnerAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: str = "",
+        gpu: GpuTypeAlias = GpuType.NoGPU,
         image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,
@@ -170,7 +171,7 @@ class _CallableWrapper:
     def remote(self, *args, **kwargs) -> Any:
         return self(*args, **kwargs)
 
-    def serve(self):
+    def serve(self, **kwargs):
         terminal.error("Serve has not yet been implemented for functions.")
 
     def deploy(self, name: str) -> bool:
