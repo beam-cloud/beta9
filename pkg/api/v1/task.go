@@ -75,6 +75,9 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 	if tasks, err := g.backendRepo.ListTasksWithRelatedPaginated(ctx.Request().Context(), *filters); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
 	} else {
+		for i := range tasks.Data {
+			tasks.Data[i].SanitizeStubConfig()
+		}
 		return ctx.JSON(http.StatusOK, tasks)
 	}
 }
