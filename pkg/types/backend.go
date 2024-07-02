@@ -157,6 +157,11 @@ type StubConfigV1 struct {
 	Volumes         []*pb.Volume `json:"volumes"`
 	Secrets         []Secret     `json:"secrets"`
 	Autoscaler      *Autoscaler  `json:"autoscaler"`
+	Experimental    Experimental `json:"experimental"`
+}
+
+type Experimental struct {
+	CedanaCheckpointEnabled bool `json:"cedana_checkpoint_enabled"`
 }
 
 type AutoscalerType string

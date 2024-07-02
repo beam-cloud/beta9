@@ -19,6 +19,7 @@ type AppConfig struct {
 	Tailscale      TailscaleConfig      `key:"tailscale" json:"tailscale"`
 	Proxy          ProxyConfig          `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig     `key:"monitoring" json:"monitoring"`
+	Cedana         CedanaConfig         `key:"cedana" json:"cedana"`
 }
 
 type DatabaseConfig struct {
@@ -171,7 +172,7 @@ type WorkerConfig struct {
 	DefaultWorkerMemoryRequest int64                       `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
 	ImagePVCName               string                      `key:"imagePVCName" json:"image_pvc_name"`
 	AddWorkerTimeout           time.Duration               `key:"addWorkerTimeout" json:"add_worker_timeout"`
-	TerminationGracePeriod     int64                       `key:"terminationGracePeriod"`
+	TerminationGracePeriod     int64                       `key:"terminationGracePeriod" json:"termination_grace_period"`
 }
 
 type PoolMode string
@@ -334,4 +335,10 @@ type FluentBitEventConfig struct {
 	DialTimeout     time.Duration           `key:"dialTimeout" json:"dial_timeout"`
 	KeepAlive       time.Duration           `key:"keepAlive" json:"keep_alive"`
 	Mapping         []FluentBitEventMapping `key:"mapping" json:"mapping"`
+}
+
+type CedanaConfig struct {
+	Enabled  bool   `key:"enabled" json:"enabled"`
+	HostName string `key:"hostname" json:"hostname"`
+	// TODO: not sure what we need here... authtoken, maybe some sort of checkpoint settings, etc.
 }

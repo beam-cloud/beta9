@@ -42,6 +42,7 @@ type Worker struct {
 	containerCudaManager *ContainerCudaManager
 	redisClient          *common.RedisClient
 	imageClient          *ImageClient
+	cedanaClient         *CedanaClient
 	workerId             string
 	eventBus             *common.EventBus
 	containerInstances   *common.SafeMap[*ContainerInstance]
@@ -162,6 +163,14 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	var cedanaClient *CedanaClient = nil
+	if config.Cedana.Enabled {
+		cedanaClient, err = NewCedanaClient(config.Cedana.HostName, "")
+		if err != nil {
+			log.Printf("Unable to create Cedana client, checkpoint/restore unavailable: %+v\n", err)
+		}
+	}
+
 	return &Worker{
 		ctx:                  ctx,
 		cancel:               cancel,
@@ -177,6 +186,7 @@ func NewWorker() (*Worker, error) {
 		redisClient:          redisClient,
 		podAddr:              podAddr,
 		imageClient:          imageClient,
+		cedanaClient:         cedanaClient,
 		podHostName:          podHostName,
 		eventBus:             nil,
 		workerId:             workerId,

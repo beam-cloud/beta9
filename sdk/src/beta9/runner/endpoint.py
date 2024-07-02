@@ -164,6 +164,11 @@ class EndpointManager:
         self.handler: FunctionHandler = FunctionHandler()
         self.on_start_value = asyncio.run(OnStartMethodHandler(worker).start())
 
+        if cfg.cedana_checkpoint_enabled:
+            # TODO: do something - will need to figure out how this works across multiple worker processes
+            # this might not be the right place for it.
+            pass
+
         @self.app.get("/health")
         async def health():
             return Response(status_code=HTTPStatus.OK)
