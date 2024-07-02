@@ -21,7 +21,7 @@ from ..clients.volume import (
 )
 from ..terminal import pluralize
 from . import extraclick
-from .extraclick import ClickCommonGroup, ClickManagementGroup
+from .extraclick import ClickCommonGroup, ClickManagementGroup, RemotePath
 
 
 @click.group(cls=ClickCommonGroup)
@@ -166,6 +166,42 @@ def cp(service: ServiceClient, local_path: str, remote_path: str):
 
         if not res.ok:
             terminal.error(f"{dst} ({res.err_msg})")
+
+
+@common.command(
+    help="Copy contents to a volume.",
+    epilog="""
+      Examples:
+
+        Still working on this. Check back later.
+      \b
+    """,
+)
+@click.argument(
+    "source",
+    type=click.STRING,
+    required=True,
+    callback=extraclick.validate_path_callback,
+)
+@click.argument(
+    "target",
+    type=click.STRING,
+    required=True,
+    callback=extraclick.validate_path_callback,
+)
+@extraclick.pass_service_client
+def copy(service: ServiceClient, source: Union[Path, RemotePath], target: Union[Path, RemotePath]):
+    print("source path:", source)
+    if isinstance(source, RemotePath):
+        print("source prefix:", source.prefix)
+        print("source secret:", source.find_credentials())
+
+    print()
+
+    print("target path:", target)
+    if isinstance(target, RemotePath):
+        print("target prefix:", target.prefix)
+        print("target secret:", target.find_credentials())
 
 
 def read_with_progress(
