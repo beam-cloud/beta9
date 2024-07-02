@@ -12,6 +12,8 @@ from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
+    DeleteDeploymentRequest,
+    DeleteDeploymentResponse,
     ListDeploymentsRequest,
     ListDeploymentsResponse,
     StopDeploymentRequest,
@@ -238,3 +240,31 @@ def stop_deployments(service: ServiceClient, deployment_ids: List[str]):
             continue
 
         terminal.print(f"Stopped {id}")
+
+
+@management.command(
+    name="delete",
+    help="Delete a deployment.",
+    epilog="""
+    Examples:
+    
+        # Delete a deployment
+        {cli_name} deployment delete 5bd2e248-6d7c-417b-ac7b-0b92aa0a5572
+        \b
+     """,
+)
+@click.argument(
+    "deployment_id",
+    nargs=1,
+    type=click.STRING,
+    required=True,
+)
+@extraclick.pass_service_client
+def delete_deployment(service: ServiceClient, deployment_id: str):
+    res: DeleteDeploymentResponse
+    res = service.gateway.delete_deployment(DeleteDeploymentRequest(deployment_id))
+
+    if not res.ok:
+        terminal.error(res.err_msg)
+
+    terminal.print(f"Deleted {deployment_id}")

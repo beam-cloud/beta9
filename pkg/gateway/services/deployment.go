@@ -120,3 +120,28 @@ func (gws *GatewayService) StopDeployment(ctx context.Context, in *pb.StopDeploy
 		Ok: true,
 	}, nil
 }
+
+func (gws *GatewayService) DeleteDeployment(ctx context.Context, in *pb.DeleteDeploymentRequest) (*pb.DeleteDeploymentResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	// Get deployment
+	deploymentWithRelated, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, in.Id)
+	if err != nil {
+		return &pb.DeleteDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unable to get deployment",
+		}, nil
+	}
+
+	// Delete deployment
+	if err := gws.backendRepo.DeleteDeployment(ctx, deploymentWithRelated.Deployment); err != nil {
+		return &pb.DeleteDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unable to delete deployment",
+		}, nil
+	}
+
+	return &pb.DeleteDeploymentResponse{
+		Ok: true,
+	}, nil
+}

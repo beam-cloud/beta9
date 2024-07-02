@@ -742,7 +742,7 @@ func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Contex
 	query := `
         SELECT id, external_id, name, active, workspace_id, stub_id, version, created_at, updated_at
         FROM deployment
-        WHERE workspace_id = $1 AND name = $2 AND stub_type = $3
+        WHERE workspace_id = $1 AND name = $2 AND stub_type = $3 and deleted_at IS NULL
         ORDER BY version DESC
         LIMIT 1;
     `
@@ -768,7 +768,7 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
         JOIN stub s ON d.stub_id = s.id
-        WHERE d.workspace_id = $1 AND d.name = $2 AND d.version = $3 AND d.stub_type = $4
+        WHERE d.workspace_id = $1 AND d.name = $2 AND d.version = $3 AND d.stub_type = $4 and d.deleted_at IS NULL
         LIMIT 1;
     `
 
@@ -791,7 +791,7 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
         JOIN stub s ON d.stub_id = s.id
-        WHERE d.workspace_id = $1 AND d.external_id = $2
+        WHERE d.workspace_id = $1 AND d.external_id = $2 and d.deleted_at IS NULL
         LIMIT 1;
     `
 
@@ -810,7 +810,9 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
 	).From("deployment d").
 		Join("workspace w ON d.workspace_id = w.id").
-		Join("stub s ON d.stub_id = s.id").OrderBy("d.created_at DESC")
+		Join("stub s ON d.stub_id = s.id").
+		Where("d.deleted_at IS NULL").
+		OrderBy("d.created_at DESC")
 
 	// Apply filters
 	qb = qb.Where(squirrel.Eq{"d.workspace_id": filters.WorkspaceID})
@@ -953,7 +955,7 @@ func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deploy
 	query := `
 	UPDATE deployment
 	SET name = $3, active = $4, version = $5, updated_at = CURRENT_TIMESTAMP
-	WHERE id = $1 OR external_id = $2
+	WHERE id = $1 OR external_id = $2 and deleted_at IS NULL
 	RETURNING id, external_id, name, active, version, workspace_id, stub_id, stub_type, created_at, updated_at;
 	`
 
@@ -967,6 +969,20 @@ func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deploy
 	}
 
 	return &updated, nil
+}
+
+func (r *PostgresBackendRepository) DeleteDeployment(ctx context.Context, deployment types.Deployment) error {
+	query := `
+	UPDATE deployment
+	SET deleted_at = CURRENT_TIMESTAMP
+	WHERE id = $1;
+	`
+
+	if _, err := r.client.ExecContext(ctx, query, deployment.Id); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *PostgresBackendRepository) GetConcurrencyLimit(ctx context.Context, concurrencyLimitId uint) (*types.ConcurrencyLimit, error) {

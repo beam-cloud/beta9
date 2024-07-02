@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"database/sql"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -41,6 +42,7 @@ func NewDeploymentGroup(
 	g.GET("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.RetrieveDeployment))
 	g.POST("/:workspaceId/stop/:deploymentId/", auth.WithWorkspaceAuth(group.StopDeployment))
 	g.POST("/:workspaceId/stop-all-active-deployments", auth.WithClusterAdminAuth(group.StopAllActiveDeployments))
+	g.DELETE("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.DeleteDeployment))
 
 	return group
 }
@@ -67,7 +69,7 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 		}
 	} else {
 		if deployments, err := g.backendRepo.ListDeploymentsWithRelated(ctx.Request().Context(), filters); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list deployments")
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list deployments"+err.Error())
 		} else {
 			return ctx.JSON(http.StatusOK, deployments)
 		}
@@ -84,6 +86,11 @@ func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 
 	deploymentId := ctx.Param("deploymentId")
 	if deployment, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), workspace.Id, deploymentId); err != nil {
+		if err == sql.ErrNoRows {
+			return ctx.JSON(http.StatusNotFound, map[string]interface{}{
+				"error": "deployment not found",
+			})
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve deployment")
 	} else {
 		return ctx.JSON(http.StatusOK, deployment)
@@ -101,6 +108,11 @@ func (g *DeploymentGroup) StopDeployment(ctx echo.Context) error {
 	// Get deployment
 	deploymentWithRelated, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentId)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return ctx.JSON(http.StatusNotFound, map[string]interface{}{
+				"error": "deployment not found",
+			})
+		}
 		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
 			"error": "failed to get deployment",
 		})
@@ -130,6 +142,37 @@ func (g *DeploymentGroup) StopAllActiveDeployments(ctx echo.Context) error {
 	}
 
 	return g.stopDeployments(deployments, ctx)
+}
+
+func (g *DeploymentGroup) DeleteDeployment(ctx echo.Context) error {
+	cc, ok := ctx.(*auth.HttpAuthContext)
+	if !ok {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get auth info")
+	}
+
+	deploymentId := ctx.Param("deploymentId")
+
+	// Get deployment
+	deploymentWithRelated, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentId)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return ctx.JSON(http.StatusNotFound, map[string]interface{}{
+				"error": "deployment not found",
+			})
+		}
+		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+			"error": "failed to get deployment",
+		})
+	}
+
+	// Delete deployment
+	if err := g.backendRepo.DeleteDeployment(ctx.Request().Context(), deploymentWithRelated.Deployment); err != nil {
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "failed to delete deployment" + err.Error(),
+		})
+	}
+
+	return ctx.JSON(http.StatusOK, "")
 }
 
 func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRelated, ctx echo.Context) error {
