@@ -23,6 +23,8 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
+var PostgresDataError = pq.ErrorClass("22")
+
 type PostgresBackendRepository struct {
 	client *sqlx.DB
 }
@@ -416,8 +418,7 @@ func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, exte
     `
 	err := r.client.GetContext(ctx, &taskWithRelated, query, externalId)
 	if err != nil {
-		if err, ok := err.(*pq.Error); ok && err.Code.Class() == "22" {
-			// Class 22 - Data Exception (e.g. invalid input)
+		if err, ok := err.(*pq.Error); ok && err.Code.Class() == PostgresDataError {
 			return nil, nil
 		}
 		return nil, err
