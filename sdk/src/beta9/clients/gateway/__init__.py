@@ -405,6 +405,9 @@ class ListMachinesResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     machines: List["Machine"] = betterproto.message_field(3)
+    gpus: Dict[str, bool] = betterproto.map_field(
+        4, betterproto.TYPE_STRING, betterproto.TYPE_BOOL
+    )
 
 
 @dataclass(eq=False, repr=False)

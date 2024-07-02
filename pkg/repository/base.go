@@ -126,6 +126,7 @@ type ProviderRepository interface {
 	ListAllMachines(providerName, poolName string, useLock bool) ([]*types.ProviderMachine, error)
 	SetMachineLock(providerName, poolName, machineId string) error
 	RemoveMachineLock(providerName, poolName, machineId string) error
+	GetGPUAvailability(pools map[string]types.WorkerPoolConfig) (map[string]bool, error)
 }
 
 type TailscaleRepository interface {

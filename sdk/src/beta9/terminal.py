@@ -4,13 +4,18 @@ from contextlib import contextmanager
 from typing import Any, Optional, Sequence, Tuple
 
 import rich
+import rich.columns
 import rich.control
 import rich.status
+import rich.traceback
 from rich.console import Console
 from rich.control import STRIP_CONTROL_CODES as _STRIP_CONTROL_CODES
 from rich.markup import escape
 from rich.progress import open as _progress_open
+from rich.table import Table
 from rich.text import Text
+
+from . import env
 
 # Fixes printing carriage returns and backspaces
 # https://github.com/Textualize/rich/issues/3260
@@ -20,6 +25,9 @@ for i in (8, 13):
         rich.control.strip_control_codes.__defaults__ = ({c: None for c in _STRIP_CONTROL_CODES},)
 
 
+if env.is_local():
+    rich.traceback.install()
+
 _console = Console()
 
 
@@ -28,7 +36,19 @@ def header(text: str, subtext: str = "") -> None:
     _console.print(header_text, subtext)
 
 
+def _add_footer_to_table(table: Table):
+    row_count = table.row_count
+    if not row_count:
+        table.add_row(*("-" * len(table.columns)))
+
+    table.add_section()
+    table.add_row(f"[bold]{row_count} items")
+
+
 def print(*objects: Any, **kwargs: Any) -> None:
+    for obj in objects:
+        if isinstance(obj, Table):
+            _add_footer_to_table(obj)
     _console.print(*objects, **kwargs)
 
 
