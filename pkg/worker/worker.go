@@ -385,11 +385,35 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 	}
 }
 
+func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
+	// TODO: wait for a health check to pass before snapshotting
+
+	s.containerLock.Lock() // TODO: do we even need to lock here?
+	_, exists := s.containerInstances.Get(request.ContainerId)
+	defer s.containerLock.Unlock()
+
+	if !exists {
+		return
+	}
+
+	err := s.cedanaClient.Checkpoint(request.ContainerId)
+	if err != nil {
+		log.Printf("<%s> cedana checkpoint failed: %+v\n", request.ContainerId, err)
+	}
+}
+
 // Invoke a runc container using a predefined config spec
 func (s *Worker) SpawnAsync(request *types.ContainerRequest, bundlePath string, spec *specs.Spec) error {
 	outputChan := make(chan common.OutputMsg)
 
 	go s.containerWg.Add(1)
+
+	// TODO: also check the stub config here
+	// which we may want to attach to the container request for ease of access
+	if s.config.Cedana.Enabled && s.cedanaClient != nil {
+		go s.createCheckpoint(request)
+	}
+
 	go s.spawn(request, bundlePath, spec, outputChan)
 
 	return nil

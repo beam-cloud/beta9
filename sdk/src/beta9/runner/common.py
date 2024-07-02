@@ -34,7 +34,6 @@ class Config:
     callback_url: Optional[str]
     task_id: Optional[str]
     bind_port: int
-    cedana_checkpoint_enabled: Optional[bool]
 
     @classmethod
     def load_from_env(cls) -> "Config":
@@ -51,7 +50,6 @@ class Config:
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
-        cedana_checkpoint_enabled = bool(os.getenv("CEDANA_CHECKPOINT_ENABLED", False))
 
         if workers <= 0:
             workers = 1
@@ -73,7 +71,6 @@ class Config:
             task_id=task_id,
             bind_port=bind_port,
             timeout=timeout,
-            cedana_checkpoint_enabled=cedana_checkpoint_enabled,
         )
 
 

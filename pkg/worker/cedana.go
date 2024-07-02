@@ -73,6 +73,10 @@ func AuthInterceptor(token string) grpc.UnaryClientInterceptor {
 	}
 }
 
+func (c *CedanaClient) Checkpoint(containerId string) error {
+	return nil
+}
+
 // func (c *CedanaClient) Available(containerId string) (*pb.CedanaAvailableResponse, error) {
 // 	return resp, nil
 // }
