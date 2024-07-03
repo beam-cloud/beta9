@@ -128,8 +128,9 @@ type Task struct {
 
 type TaskWithRelated struct {
 	Task
-	Workspace Workspace `db:"workspace" json:"workspace"`
-	Stub      Stub      `db:"stub" json:"stub"`
+	Outputs   []TaskOutput `json:"outputs"`
+	Workspace Workspace    `db:"workspace" json:"workspace"`
+	Stub      Stub         `db:"stub" json:"stub"`
 }
 
 func (t *TaskWithRelated) SanitizeStubConfig() error {
@@ -158,6 +159,12 @@ type TaskCountByTime struct {
 	Time         time.Time       `db:"time" json:"time"`
 	Count        uint            `count:"count" json:"count"`
 	StatusCounts json.RawMessage `db:"status_counts" json:"status_counts"`
+}
+
+type TaskOutput struct {
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	ExpiresIn uint32 `json:"expires_in"`
 }
 
 type StubConfigV1 struct {
