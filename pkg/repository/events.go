@@ -116,37 +116,40 @@ func (t *TCPEventClientRepo) PushContainerRequestedEvent(request *types.Containe
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerScheduledEvent(containerID string, workerID string) {
+func (t *TCPEventClientRepo) PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest) {
 	t.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			Request:     *request,
 			Status:      types.EventContainerLifecycleScheduled,
 		},
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerStartedEvent(containerID string, workerID string) {
+func (t *TCPEventClientRepo) PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest) {
 	t.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			Request:     *request,
 			Status:      types.EventContainerLifecycleStarted,
 		},
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, workerID string) {
+func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest) {
 	t.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			Request:     *request,
 			Status:      types.EventContainerLifecycleStopped,
 		},
 	)

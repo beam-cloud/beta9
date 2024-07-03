@@ -143,9 +143,9 @@ type TailscaleRepository interface {
 
 type EventRepository interface {
 	PushContainerRequestedEvent(request *types.ContainerRequest)
-	PushContainerScheduledEvent(containerID string, workerID string)
-	PushContainerStartedEvent(containerID string, workerID string)
-	PushContainerStoppedEvent(containerID string, workerID string)
+	PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest)
+	PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest)
+	PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest)
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
 	PushDeployStubEvent(workspaceId string, stub *types.Stub)
