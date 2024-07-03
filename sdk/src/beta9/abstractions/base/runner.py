@@ -23,7 +23,7 @@ from ...clients.gateway import (
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import
 from ...sync import FileSyncer, SyncEventHandler
-from ...type import _AUTOSCALERS, Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from ...type import _AUTOSCALER_TYPES, Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -53,9 +53,9 @@ class RunnerAbstraction(BaseAbstraction):
         secrets: Optional[List[str]] = None,
         on_start: Optional[Callable] = None,
         callback_url: Optional[str] = None,
-        authorized: Optional[bool] = True,
+        authorized: bool = True,
         name: Optional[str] = None,
-        autoscaler: Optional[Autoscaler] = QueueDepthAutoscaler(),
+        autoscaler: Autoscaler = QueueDepthAutoscaler(),
     ) -> None:
         super().__init__()
 
@@ -291,8 +291,8 @@ class RunnerAbstraction(BaseAbstraction):
             terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
             return False
 
-        autoscaler_type = _AUTOSCALERS.get(type(self.autoscaler), None)
-        if autoscaler_type is None:
+        autoscaler_type = _AUTOSCALER_TYPES.get(type(self.autoscaler), "")
+        if not autoscaler_type:
             terminal.error(
                 f"Invalid Autoscaler class: {type(self.autoscaler).__name__}",
                 exit=False,
@@ -334,6 +334,7 @@ class RunnerAbstraction(BaseAbstraction):
                 self.stub_created = True
                 self.stub_id = stub_response.stub_id
             else:
+                terminal.error("Failed to get or create stub", exit=False)
                 return False
 
         self.runtime_ready = True
