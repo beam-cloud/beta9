@@ -120,6 +120,20 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 	return c, nil
 }
 
+func blobfsAvailable(path string) bool {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return false
+	}
+
+	// Check if it's a valid mount point
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return false
+	}
+
+	return stat.Type != 0
+}
+
 func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	imageId := request.ImageId
 
@@ -130,7 +144,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 		localCachePath = ""
 	}
 
-	if c.config.BlobCache.BlobFs.Enabled {
+	if c.config.BlobCache.BlobFs.Enabled && blobfsAvailable(baseBlobFsPath) {
 		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
 		sourceOffset := int64(0)
 
