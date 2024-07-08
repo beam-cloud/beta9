@@ -131,10 +131,28 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	}
 
 	if c.config.BlobCache.BlobFs.Enabled {
+		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
+		sourceOffset := int64(0)
+
 		// If the image archive is already cached in blobcache, then we can use that as the local cache path
-		baseBlobFsContentPath := fmt.Sprintf("%s/images/%s.clip", baseBlobFsPath, imageId)
+		baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseBlobFsPath, sourcePath)
 		if _, err := os.Stat(baseBlobFsContentPath); err == nil {
 			localCachePath = baseBlobFsContentPath
+		} else {
+
+			log.Printf("<%s> - blobfs cache entry not found for image<%s>, storing content nearby\n", request.ContainerId, imageId)
+
+			startTime := time.Now()
+			// Otherwise, lets cache it in a nearby blobcache host
+			_, err := c.cacheClient.StoreContentFromSource(sourcePath, sourceOffset)
+			if err == nil {
+				localCachePath = baseBlobFsContentPath
+			}
+
+			elapsed := time.Since(startTime)
+
+			log.Printf("<%s> - blobfs cache took %v\n", request.ContainerId, elapsed)
+
 		}
 	}
 
