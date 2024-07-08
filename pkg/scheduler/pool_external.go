@@ -459,6 +459,15 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 				},
 			},
 		},
+		{
+			Name: cacheVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: defaultCachePath,
+					Type: &hostPathType,
+				},
+			},
+		},
 	}
 }
 
@@ -473,6 +482,11 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 			Name:      imagesVolumeName,
 			MountPath: "/images",
 			ReadOnly:  false,
+		},
+		{
+			Name:      cacheVolumeName,
+			MountPath: "/cache",
+			ReadOnly:  true,
 		},
 		{
 			Name:      logVolumeName,
