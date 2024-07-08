@@ -104,15 +104,6 @@ type BackendRepository interface {
 	DeleteSecret(ctx context.Context, workspace *types.Workspace, secretName string) error
 }
 
-type WorkerPoolRepository interface {
-	GetPool(name string) (*types.WorkerPoolConfig, error)
-	GetPools() ([]types.WorkerPoolConfig, error)
-	SetPool(name string, pool types.WorkerPoolConfig) error
-	RemovePool(name string) error
-	SetPoolLock(name string) error
-	RemovePoolLock(name string) error
-}
-
 type TaskRepository interface {
 	SetTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error
 	DeleteTaskState(ctx context.Context, workspaceName, stubId, taskId string) error

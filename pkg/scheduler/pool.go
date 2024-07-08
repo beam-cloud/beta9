@@ -50,9 +50,8 @@ func GenerateWorkerId() string {
 func MonitorPoolSize(wpc WorkerPoolController,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerRepo repository.WorkerRepository,
-	workerPoolRepo repository.WorkerPoolRepository,
 	providerRepo repository.ProviderRepository) error {
-	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, workerPoolRepo, providerRepo)
+	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, providerRepo)
 	if err != nil {
 		return err
 	}
