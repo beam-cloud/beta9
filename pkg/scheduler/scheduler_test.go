@@ -49,7 +49,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		metricsRepo: nil,
 	}
 
-	workerPoolManager := NewWorkerPoolManager(repo.NewWorkerPoolRedisRepository(rdb))
+	workerPoolManager := NewWorkerPoolManager()
 	for name, pool := range config.Worker.Pools {
 		workerPoolManager.SetPool(name, pool, &LocalWorkerPoolControllerForTest{
 			name:       name,

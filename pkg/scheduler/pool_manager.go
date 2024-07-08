@@ -1,91 +1,51 @@
 package scheduler
 
 import (
-	"sync"
-
-	repo "github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-// WorkerPool represents a pool of workers with a specific name, configuration,
-// and a controller responsible for managing its worker instances.
+// WorkerPool represents a pool of workers with specific configuration and controller.
 type WorkerPool struct {
 	Name       string
 	Config     types.WorkerPoolConfig
 	Controller WorkerPoolController
 }
 
-// WorkerPoolManager is responsible for managing multiple worker pools. It
-// maintains a collection of worker pools, and provides methods to interact with
-// and manage these pools. It uses a sync.RWMutex for concurrent access control
-// to ensure thread safety.
+// WorkerPoolManager manages a collection of WorkerPools using a thread-safe SafeMap.
+// It provides additional functionality to filter and retrieve pools based on specific criteria, such as GPU type.
 type WorkerPoolManager struct {
-	mu    sync.RWMutex
-	pools map[string]*WorkerPool
-	repo  repo.WorkerPoolRepository
+	poolMap *common.SafeMap[*WorkerPool]
 }
 
-// NewWorkerPoolManager creates a new instance of WorkerPoolManager with the
-// specified worker pool repository ('repo'). It initializes an empty map of
-// worker pools and associates it with the repository.
-func NewWorkerPoolManager(repo repo.WorkerPoolRepository) *WorkerPoolManager {
+func NewWorkerPoolManager() *WorkerPoolManager {
 	return &WorkerPoolManager{
-		pools: map[string]*WorkerPool{},
-		repo:  repo,
+		poolMap: common.NewSafeMap[*WorkerPool](),
 	}
 }
 
-// Gets a pool from memory.
-// We don't fetch from the db because we don't know how to construct the controller. This is
-// the responsibility of the caller calling `SetPool()`.
+// GetPool retrieves a WorkerPool by its name.
 func (m *WorkerPoolManager) GetPool(name string) (*WorkerPool, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	pool, ok := m.pools[name]
-	if !ok {
-		return nil, false
-	}
-
-	return pool, true
+	return m.poolMap.Get(name)
 }
 
+// GetPoolByGPU retrieves a WorkerPool by its GPU type.
+// It returns the first matching WorkerPool found.
 func (m *WorkerPoolManager) GetPoolByGPU(gpuType string) (*WorkerPool, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	var wp *WorkerPool
+	var ok bool
 
-	for _, pool := range m.pools {
-		if pool.Config.GPUType == gpuType {
-			return pool, true
+	m.poolMap.Range(func(key string, value *WorkerPool) bool {
+		if value.Config.GPUType == gpuType {
+			wp, ok = value, true
+			return false
 		}
-	}
+		return true
+	})
 
-	return nil, false
+	return wp, ok
 }
 
-// Set/add WorkerPool.
-// This will overwrite any existing WorkerPools with the same name defined in WorkerPoolResource.
-func (m *WorkerPoolManager) SetPool(name string, config types.WorkerPoolConfig, controller WorkerPoolController) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	pool := &WorkerPool{
-		Name:       name,
-		Config:     config,
-		Controller: controller,
-	}
-
-	m.pools[name] = pool
-
-	return nil
-}
-
-// Remove WorkerPool.
-// Removes from memory first since failures are a noop, then removes from the db.
-func (m *WorkerPoolManager) RemovePool(name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	delete(m.pools, name)
-	return m.repo.RemovePool(name)
+func (m *WorkerPoolManager) SetPool(name string, config types.WorkerPoolConfig, controller WorkerPoolController) {
+	m.poolMap.Set(name, &WorkerPool{Name: name, Config: config, Controller: controller})
 }
