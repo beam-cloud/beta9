@@ -39,6 +39,7 @@ const (
 var (
 	baseImageCachePath string = "/images/cache"
 	baseImageMountPath string = "/images/mnt/%s"
+	baseBlobFsPath     string = "/cache"
 )
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
@@ -127,6 +128,14 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
 	if !c.config.LocalCacheEnabled && !isBuildContainer {
 		localCachePath = ""
+	}
+
+	if c.config.BlobCache.BlobFs.Enabled {
+		// If the image archive is already cached in blobcache, then we can use that as the local cache path
+		baseBlobFsContentPath := fmt.Sprintf("%s/images/%s.clip", baseBlobFsPath, imageId)
+		if _, err := os.Stat(baseBlobFsContentPath); err == nil {
+			localCachePath = baseBlobFsContentPath
+		}
 	}
 
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)

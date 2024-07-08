@@ -17,10 +17,12 @@ const (
 	tmpVolumeName               string = "beta9-tmp"
 	logVolumeName               string = "beta9-logs"
 	imagesVolumeName            string = "beta9-images"
+	cacheVolumeName             string = "beta9-cache"
 	defaultContainerName        string = "worker"
 	defaultWorkerEntrypoint     string = "/usr/local/bin/worker"
 	defaultWorkerLogPath        string = "/var/log/worker"
 	defaultImagesPath           string = "/images"
+	defaultCachePath            string = "/cache"
 )
 
 type WorkerPoolController interface {
