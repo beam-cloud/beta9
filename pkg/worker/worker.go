@@ -134,7 +134,7 @@ func NewWorker() (*Worker, error) {
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
-	imageClient, err := NewImageClient(config.ImageService, workerId, workerRepo)
+	imageClient, err := NewImageClient(config, workerId, workerRepo)
 	if err != nil {
 		return nil, err
 	}

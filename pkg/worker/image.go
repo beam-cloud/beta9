@@ -76,20 +76,20 @@ type ImageClient struct {
 	commandTimeout     int
 	debug              bool
 	creds              string
-	config             types.ImageServiceConfig
+	config             types.AppConfig
 	workerId           string
 	workerRepo         repository.WorkerRepository
 }
 
-func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
-	registry, err := common.NewImageRegistry(config)
+func NewImageClient(config types.AppConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
+	registry, err := common.NewImageRegistry(config.ImageService)
 	if err != nil {
 		return nil, err
 	}
 
 	var client *blobcache.BlobCacheClient = nil
 
-	if config.BlobCacheEnabled {
+	if config.ImageService.BlobCacheEnabled {
 		client, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
 		if err != nil {
 			return nil, err
@@ -140,7 +140,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
-	if !c.config.LocalCacheEnabled && !isBuildContainer {
+	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
 		localCachePath = ""
 	}
 
@@ -153,11 +153,10 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 		if _, err := os.Stat(baseBlobFsContentPath); err == nil {
 			localCachePath = baseBlobFsContentPath
 		} else {
-
 			log.Printf("<%s> - blobfs cache entry not found for image<%s>, storing content nearby\n", request.ContainerId, imageId)
 
-			startTime := time.Now()
 			// Otherwise, lets cache it in a nearby blobcache host
+			startTime := time.Now()
 			_, err := c.cacheClient.StoreContentFromSource(sourcePath, sourceOffset)
 			if err == nil {
 				localCachePath = baseBlobFsContentPath
@@ -189,8 +188,8 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 		ContentCacheAvailable: c.cacheClient != nil,
 		Credentials: storage.ClipStorageCredentials{
 			S3: &storage.S3ClipStorageCredentials{
-				AccessKey: c.config.Registries.S3.AccessKey,
-				SecretKey: c.config.Registries.S3.SecretKey,
+				AccessKey: c.config.ImageService.Registries.S3.AccessKey,
+				SecretKey: c.config.ImageService.Registries.S3.SecretKey,
 			},
 		},
 	}
@@ -296,7 +295,7 @@ func (c *ImageClient) args(creds *string) (out []string) {
 		out = append(out, "--command-timeout", fmt.Sprintf("%d", c.commandTimeout))
 	}
 
-	if !c.config.EnableTLS {
+	if !c.config.ImageService.EnableTLS {
 		out = append(out, []string{"--src-tls-verify=false", "--dest-tls-verify=false"}...)
 	}
 
@@ -356,22 +355,22 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}()
 
 	var err error = nil
-	switch c.config.RegistryStore {
+	switch c.config.ImageService.RegistryStore {
 	case "s3":
 		err = clip.CreateAndUploadArchive(clip.CreateOptions{
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
 			Credentials: storage.ClipStorageCredentials{
 				S3: &storage.S3ClipStorageCredentials{
-					AccessKey: c.config.Registries.S3.AccessKey,
-					SecretKey: c.config.Registries.S3.SecretKey,
+					AccessKey: c.config.ImageService.Registries.S3.AccessKey,
+					SecretKey: c.config.ImageService.Registries.S3.SecretKey,
 				},
 			},
 			ProgressChan: progressChan,
 		}, &clipCommon.S3StorageInfo{
-			Bucket:   c.config.Registries.S3.BucketName,
-			Region:   c.config.Registries.S3.Region,
-			Endpoint: c.config.Registries.S3.Endpoint,
+			Bucket:   c.config.ImageService.Registries.S3.BucketName,
+			Region:   c.config.ImageService.Registries.S3.Region,
+			Endpoint: c.config.ImageService.Registries.S3.Endpoint,
 			Key:      fmt.Sprintf("%s.clip", imageId),
 		})
 	case "local":
