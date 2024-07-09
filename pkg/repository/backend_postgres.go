@@ -780,7 +780,6 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 
 	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, name, version, stubType)
 	if err != nil {
-		log.Println("err: ", err)
 		return nil, err
 	}
 
@@ -803,6 +802,14 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
 
 	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, deploymentExternalId)
 	if err != nil {
+		if err, ok := err.(*pq.Error); ok && err.Code.Class() == PostgresDataError {
+			return nil, nil
+		}
+
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+
 		return nil, err
 	}
 
