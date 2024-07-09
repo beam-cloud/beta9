@@ -34,6 +34,7 @@ service GatewayService {
   // Deployments
   rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
   rpc StopDeployment(StopDeploymentRequest) returns (StopDeploymentResponse);
+  rpc DeleteDeployment(DeleteDeploymentRequest) returns (DeleteDeploymentResponse);
 
   // Pools
   rpc ListPools(ListPoolsRequest) returns (ListPoolsResponse);
@@ -267,6 +268,13 @@ message ListDeploymentsResponse {
 message StopDeploymentRequest { string id = 1; }
 
 message StopDeploymentResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message DeleteDeploymentRequest { string id = 1; }
+
+message DeleteDeploymentResponse {
   bool ok = 1;
   string err_msg = 2;
 }

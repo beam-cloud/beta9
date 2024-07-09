@@ -322,6 +322,17 @@ class StopDeploymentResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class DeleteDeploymentRequest(betterproto.Message):
+    id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteDeploymentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
 class Pool(betterproto.Message):
     name: str = betterproto.string_field(2)
     active: bool = betterproto.bool_field(3)
@@ -556,6 +567,15 @@ class GatewayServiceStub(SyncServiceStub):
             StopDeploymentRequest,
             StopDeploymentResponse,
         )(stop_deployment_request)
+
+    def delete_deployment(
+        self, delete_deployment_request: "DeleteDeploymentRequest"
+    ) -> "DeleteDeploymentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DeleteDeployment",
+            DeleteDeploymentRequest,
+            DeleteDeploymentResponse,
+        )(delete_deployment_request)
 
     def list_pools(self, list_pools_request: "ListPoolsRequest") -> "ListPoolsResponse":
         return self._unary_unary(
