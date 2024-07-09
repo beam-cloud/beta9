@@ -42,6 +42,7 @@ type Worker struct {
 	containerCudaManager *ContainerCudaManager
 	redisClient          *common.RedisClient
 	imageClient          *ImageClient
+	cedanaClient         *CedanaClient
 	workerId             string
 	eventBus             *common.EventBus
 	containerInstances   *common.SafeMap[*ContainerInstance]
@@ -162,6 +163,14 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	var cedanaClient *CedanaClient = nil
+	if config.Cedana.Enabled {
+		cedanaClient, err = NewCedanaClient(config.Cedana.HostName, "")
+		if err != nil {
+			log.Printf("Unable to create Cedana client, checkpoint/restore unavailable: %+v\n", err)
+		}
+	}
+
 	return &Worker{
 		ctx:                  ctx,
 		cancel:               cancel,
@@ -177,6 +186,7 @@ func NewWorker() (*Worker, error) {
 		redisClient:          redisClient,
 		podAddr:              podAddr,
 		imageClient:          imageClient,
+		cedanaClient:         cedanaClient,
 		podHostName:          podHostName,
 		eventBus:             nil,
 		workerId:             workerId,
@@ -375,11 +385,68 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 	}
 }
 
+// TODO: might be better to just encapsulate this logic directly in the cedana client
+// as long as it has access to the containerInstances map, I think that's all it needs
+func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists {
+		return
+	}
+
+	_ = fmt.Sprintf("0.0.0.0:%d/health", instance.Port)
+	// TODO: we need a reliable way to detect that the container is completely booted
+
+	/*
+		   We can't just use health checks because one worker could be up while the others
+		   are still booting. After we have a reliable way of doing that,
+		   we should probably be polling whatever method that is here, and also checking for the
+		   containers existence. Something like this:
+
+		   elapsed := 0
+		   start := time.Now()
+		   containerReady := false
+		   timeout := time.Duration(time.Second * 120)
+		   for := range time.Ticker(time.Second) {
+		   	   // 1. check if container exists
+				instance, exists := s.containerInstances.Get(request.ContainerId)
+				if !exists {
+					return
+				}
+
+			   // 2. check if container is ready
+			   if weAreGood {
+			      containerReady := true
+				  break
+			   }
+
+			   if time.Since(start) > timeout {
+			 		break
+			   }
+			}
+
+			if !containerReady {
+				return
+			}
+	*/
+
+	err := s.cedanaClient.Checkpoint(request.ContainerId)
+	if err != nil {
+		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
+	}
+}
+
 // Invoke a runc container using a predefined config spec
 func (s *Worker) SpawnAsync(request *types.ContainerRequest, bundlePath string, spec *specs.Spec) error {
 	outputChan := make(chan common.OutputMsg)
 
 	go s.containerWg.Add(1)
+
+	// TODO: also need to check the stub config here for experimental cedana flag
+	// which we may want to attach to the container request for ease of access
+	if s.config.Cedana.Enabled && s.cedanaClient != nil {
+		go s.createCheckpoint(request)
+	}
+
 	go s.spawn(request, bundlePath, spec, outputChan)
 
 	return nil
