@@ -13,7 +13,6 @@ const poolMonitoringInterval = 1 * time.Second
 type WorkerPoolSizer struct {
 	controller             WorkerPoolController
 	workerRepo             repository.WorkerRepository
-	workerPoolRepo         repository.WorkerPoolRepository
 	providerRepo           repository.ProviderRepository
 	workerPoolConfig       *types.WorkerPoolConfig
 	workerPoolSizingConfig *types.WorkerPoolSizingConfig
@@ -22,7 +21,6 @@ type WorkerPoolSizer struct {
 func NewWorkerPoolSizer(controller WorkerPoolController,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerRepo repository.WorkerRepository,
-	workerPoolRepo repository.WorkerPoolRepository,
 	providerRepo repository.ProviderRepository) (*WorkerPoolSizer, error) {
 	poolSizingConfig, err := parsePoolSizingConfig(workerPoolConfig.PoolSizing)
 	if err != nil {
@@ -34,7 +32,6 @@ func NewWorkerPoolSizer(controller WorkerPoolController,
 		workerPoolConfig:       workerPoolConfig,
 		workerPoolSizingConfig: poolSizingConfig,
 		workerRepo:             workerRepo,
-		workerPoolRepo:         workerPoolRepo,
 		providerRepo:           providerRepo,
 	}, nil
 }
@@ -45,12 +42,6 @@ func (s *WorkerPoolSizer) Start() {
 
 	for range ticker.C {
 		func() {
-			err := s.workerPoolRepo.SetPoolLock(s.controller.Name())
-			if err != nil {
-				return
-			}
-			defer s.workerPoolRepo.RemovePoolLock(s.controller.Name())
-
 			freeCapacity, err := s.controller.FreeCapacity()
 			if err != nil {
 				log.Printf("<pool %s> Error getting free capacity: %v\n", s.controller.Name(), err)

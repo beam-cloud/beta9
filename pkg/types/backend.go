@@ -129,8 +129,26 @@ type Task struct {
 
 type TaskWithRelated struct {
 	Task
-	Workspace Workspace `db:"workspace" json:"workspace"`
-	Stub      Stub      `db:"stub" json:"stub"`
+	Outputs   []TaskOutput `json:"outputs"`
+	Workspace Workspace    `db:"workspace" json:"workspace"`
+	Stub      Stub         `db:"stub" json:"stub"`
+}
+
+func (t *TaskWithRelated) SanitizeStubConfig() error {
+	var stubConfig StubConfigV1
+	err := json.Unmarshal([]byte(t.Stub.Config), &stubConfig)
+	if err != nil {
+		return err
+	}
+
+	stubConfig.Secrets = []Secret{}
+
+	stubConfigBytes, err := json.Marshal(stubConfig)
+	if err != nil {
+		return err
+	}
+	t.Stub.Config = string(stubConfigBytes)
+	return nil
 }
 
 type TaskCountPerDeployment struct {
@@ -142,6 +160,12 @@ type TaskCountByTime struct {
 	Time         time.Time       `db:"time" json:"time"`
 	Count        uint            `count:"count" json:"count"`
 	StatusCounts json.RawMessage `db:"status_counts" json:"status_counts"`
+}
+
+type TaskOutput struct {
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	ExpiresIn uint32 `json:"expires_in"`
 }
 
 type StubConfigV1 struct {
@@ -156,7 +180,7 @@ type StubConfigV1 struct {
 	Workers         uint         `json:"workers"`
 	Authorized      bool         `json:"authorized"`
 	Volumes         []*pb.Volume `json:"volumes"`
-	Secrets         []Secret     `json:"secrets"`
+	Secrets         []Secret     `json:"secrets,omitempty"`
 	Autoscaler      *Autoscaler  `json:"autoscaler"`
 }
 

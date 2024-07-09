@@ -1,5 +1,6 @@
 import inspect
 import os
+import textwrap
 import time
 from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
@@ -23,7 +24,7 @@ from ...clients.gateway import (
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import
 from ...sync import FileSyncer, SyncEventHandler
-from ...type import _AUTOSCALERS, Autoscaler, QueueDepthAutoscaler
+from ...type import _AUTOSCALER_TYPES, Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -42,7 +43,7 @@ class RunnerAbstraction(BaseAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: str = "",
+        gpu: GpuTypeAlias = GpuType.NoGPU,
         image: Image = Image(),
         workers: int = 1,
         keep_warm_seconds: float = 10.0,
@@ -53,9 +54,9 @@ class RunnerAbstraction(BaseAbstraction):
         secrets: Optional[List[str]] = None,
         on_start: Optional[Callable] = None,
         callback_url: Optional[str] = None,
-        authorized: Optional[bool] = True,
+        authorized: bool = True,
         name: Optional[str] = None,
-        autoscaler: Optional[Autoscaler] = QueueDepthAutoscaler(),
+        autoscaler: Autoscaler = QueueDepthAutoscaler(),
     ) -> None:
         super().__init__()
 
@@ -99,11 +100,17 @@ class RunnerAbstraction(BaseAbstraction):
         """Print curl request to call deployed container URL"""
 
         terminal.header("Invocation details")
-        terminal.detail(f"""curl -X POST '{invocation_url}' \\
--H 'Connection: keep-alive' \\
--H 'Authorization: Bearer {self.config_context.token}' \\
--H 'Content-Type: application/json' \\
--d '{"{}"}'""")
+        terminal.print(
+            textwrap.dedent(f"""\
+                curl -X POST '{invocation_url}' \\
+                -H 'Connection: keep-alive' \\
+                -H 'Content-Type: application/json' \\
+                -H 'Authorization: Bearer {self.config_context.token}' \\
+                -d '{"{}"}'\
+            """),
+            crop=False,
+            overflow="ignore",
+        )
 
     def _parse_memory(self, memory_str: str) -> int:
         """Parse memory str (with units) to megabytes."""
@@ -267,6 +274,7 @@ class RunnerAbstraction(BaseAbstraction):
                 self.image_available = True
                 self.image_id = image_build_result.image_id
             else:
+                terminal.error("Image build failed", exit=False)
                 return False
 
         if not self.files_synced:
@@ -276,14 +284,26 @@ class RunnerAbstraction(BaseAbstraction):
                 self.files_synced = True
                 self.object_id = sync_result.object_id
             else:
+                terminal.error("File sync failed", exit=False)
                 return False
 
         for v in self.volumes:
             if not v.ready and not v.get_or_create():
+                terminal.error(f"Volume is not ready: {v.name}", exit=False)
                 return False
 
-        autoscaler_type = _AUTOSCALERS.get(type(self.autoscaler), None)
-        if autoscaler_type is None:
+        try:
+            self.gpu = GpuType(self.gpu).value
+        except ValueError:
+            terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
+            return False
+
+        autoscaler_type = _AUTOSCALER_TYPES.get(type(self.autoscaler), "")
+        if not autoscaler_type:
+            terminal.error(
+                f"Invalid Autoscaler class: {type(self.autoscaler).__name__}",
+                exit=False,
+            )
             return False
 
         if not self.stub_created:
@@ -321,6 +341,7 @@ class RunnerAbstraction(BaseAbstraction):
                 self.stub_created = True
                 self.stub_id = stub_response.stub_id
             else:
+                terminal.error("Failed to get or create stub", exit=False)
                 return False
 
         self.runtime_ready = True

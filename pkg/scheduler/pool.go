@@ -17,10 +17,12 @@ const (
 	tmpVolumeName               string = "beta9-tmp"
 	logVolumeName               string = "beta9-logs"
 	imagesVolumeName            string = "beta9-images"
+	cacheVolumeName             string = "beta9-cache"
 	defaultContainerName        string = "worker"
 	defaultWorkerEntrypoint     string = "/usr/local/bin/worker"
 	defaultWorkerLogPath        string = "/var/log/worker"
 	defaultImagesPath           string = "/images"
+	defaultCachePath            string = "/cache"
 )
 
 type WorkerPoolController interface {
@@ -48,9 +50,8 @@ func GenerateWorkerId() string {
 func MonitorPoolSize(wpc WorkerPoolController,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerRepo repository.WorkerRepository,
-	workerPoolRepo repository.WorkerPoolRepository,
 	providerRepo repository.ProviderRepository) error {
-	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, workerPoolRepo, providerRepo)
+	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, providerRepo)
 	if err != nil {
 		return err
 	}

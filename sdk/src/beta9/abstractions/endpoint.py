@@ -20,7 +20,7 @@ from ..clients.endpoint import (
 )
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..env import is_local
-from ..type import Autoscaler, QueueDepthAutoscaler
+from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
 
 
 class Endpoint(RunnerAbstraction):
@@ -93,7 +93,7 @@ class Endpoint(RunnerAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: str = "",
+        gpu: GpuTypeAlias = GpuType.NoGPU,
         image: Image = Image(),
         timeout: int = 180,
         workers: int = 1,

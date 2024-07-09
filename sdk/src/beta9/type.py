@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
+from typing import Dict, Literal, Type, Union
 
 
 class LifeCycleMethod(str, Enum):
@@ -84,22 +84,39 @@ class GpuType(str, Enum):
     A6000 = "A6000"
 
 
+# Add GpuType str literals. Must copy/paste for now.
+# https://github.com/python/typing/issues/781
+GpuTypeLiteral = Literal[
+    "",
+    "any",
+    "T4",
+    "L4",
+    "A10G",
+    "A100_40",
+    "A100_80",
+    "H100",
+    "A6000",
+]
+
+GpuTypeAlias = Union[GpuType, GpuTypeLiteral]
+
+
 QUEUE_DEPTH_AUTOSCALER_TYPE = "queue_depth"
 DEFAULT_AUTOSCALER_MAX_CONTAINERS = 1
 DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER = 1
 
 
-class Autoscaler(Protocol):
+@dataclass
+class Autoscaler:
     max_containers: int = DEFAULT_AUTOSCALER_MAX_CONTAINERS
     tasks_per_container: int = DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER
 
 
 @dataclass
 class QueueDepthAutoscaler(Autoscaler):
-    max_containers: int
-    tasks_per_container: int
+    pass
 
 
-_AUTOSCALERS = {
+_AUTOSCALER_TYPES: Dict[Type[Autoscaler], str] = {
     QueueDepthAutoscaler: QUEUE_DEPTH_AUTOSCALER_TYPE,
 }

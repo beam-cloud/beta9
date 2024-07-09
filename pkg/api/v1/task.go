@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/abstractions/output"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -14,6 +15,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
+
+var DefaultTaskOutputExpirationS uint32 = 3600
 
 type TaskGroup struct {
 	routerGroup    *echo.Group
@@ -67,6 +70,8 @@ func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
 }
 
 func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	filters, err := g.preprocessFilters(ctx)
 	if err != nil {
 		return err
@@ -75,17 +80,45 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 	if tasks, err := g.backendRepo.ListTasksWithRelatedPaginated(ctx.Request().Context(), *filters); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
 	} else {
+		for i := range tasks.Data {
+			tasks.Data[i].SanitizeStubConfig()
+			g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, &tasks.Data[i])
+		}
 		return ctx.JSON(http.StatusOK, tasks)
 	}
 }
 
 func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	taskId := ctx.Param("taskId")
 	if task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve task")
 	} else {
+		if task == nil {
+			return ctx.JSON(http.StatusBadRequest, map[string]string{})
+		}
+
+		task.SanitizeStubConfig()
+		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
+
 		return ctx.JSON(http.StatusOK, task)
 	}
+}
+
+func (g *TaskGroup) addOutputsToTask(ctx context.Context, workspaceName string, task *types.TaskWithRelated) error {
+	task.Outputs = []types.TaskOutput{}
+	outputFiles := output.GetTaskOutputFiles(workspaceName, task)
+
+	for outputId, fileName := range outputFiles {
+		url, err := output.SetPublicURL(ctx, g.config, g.backendRepo, g.redisClient, workspaceName, task.ExternalId, outputId, fileName, DefaultTaskOutputExpirationS)
+		if err != nil {
+			return err
+		}
+		task.Outputs = append(task.Outputs, types.TaskOutput{Name: fileName, URL: url, ExpiresIn: DefaultTaskOutputExpirationS})
+	}
+
+	return nil
 }
 
 type StopTasksRequest struct {

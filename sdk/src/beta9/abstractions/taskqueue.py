@@ -24,7 +24,7 @@ from ..clients.taskqueue import (
     TaskQueueServiceStub,
 )
 from ..env import is_local
-from ..type import Autoscaler, QueueDepthAutoscaler
+from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
 
 
 class TaskQueue(RunnerAbstraction):
@@ -96,7 +96,7 @@ class TaskQueue(RunnerAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: str = "",
+        gpu: GpuTypeAlias = GpuType.NoGPU,
         image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,

@@ -8,17 +8,18 @@ import (
 )
 
 type AppConfig struct {
-	ClusterName    string               `key:"clusterName" json:"cluster_name"`
-	DebugMode      bool                 `key:"debugMode" json:"debug_mode"`
-	Database       DatabaseConfig       `key:"database" json:"database"`
-	GatewayService GatewayServiceConfig `key:"gateway" json:"gateway_service"`
-	ImageService   ImageServiceConfig   `key:"imageservice" json:"image_service"`
-	Storage        StorageConfig        `key:"storage" json:"storage"`
-	Worker         WorkerConfig         `key:"worker" json:"worker"`
-	Providers      ProviderConfig       `key:"providers" json:"providers"`
-	Tailscale      TailscaleConfig      `key:"tailscale" json:"tailscale"`
-	Proxy          ProxyConfig          `key:"proxy" json:"proxy"`
-	Monitoring     MonitoringConfig     `key:"monitoring" json:"monitoring"`
+	ClusterName    string                    `key:"clusterName" json:"cluster_name"`
+	DebugMode      bool                      `key:"debugMode" json:"debug_mode"`
+	Database       DatabaseConfig            `key:"database" json:"database"`
+	GatewayService GatewayServiceConfig      `key:"gateway" json:"gateway_service"`
+	ImageService   ImageServiceConfig        `key:"imageservice" json:"image_service"`
+	Storage        StorageConfig             `key:"storage" json:"storage"`
+	Worker         WorkerConfig              `key:"worker" json:"worker"`
+	Providers      ProviderConfig            `key:"providers" json:"providers"`
+	Tailscale      TailscaleConfig           `key:"tailscale" json:"tailscale"`
+	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
+	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
+	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
 }
 
 type DatabaseConfig struct {
@@ -92,18 +93,17 @@ type GatewayServiceConfig struct {
 }
 
 type ImageServiceConfig struct {
-	CacheURL                       string                    `key:"cacheURL" json:"cache_url"`
-	BlobCache                      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
-	BlobCacheEnabled               bool                      `key:"blobCacheEnabled" json:"blob_cache_enabled"`
-	RegistryStore                  string                    `key:"registryStore" json:"registry_store"`
-	RegistryCredentialProviderName string                    `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
-	Registries                     ImageRegistriesConfig     `key:"registries" json:"registries"`
-	LocalCacheEnabled              bool                      `key:"localCacheEnabled" json:"local_cache_enabled"`
-	EnableTLS                      bool                      `key:"enableTLS" json:"enable_tls"`
-	BuildContainerCpu              int64                     `key:"buildContainerCpu" json:"build_container_cpu"`
-	BuildContainerMemory           int64                     `key:"buildContainerMemory" json:"build_container_memory"`
-	BuildContainerPoolSelector     string                    `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
-	Runner                         RunnerConfig              `key:"runner" json:"runner"`
+	CacheURL                       string                `key:"cacheURL" json:"cache_url"`
+	BlobCacheEnabled               bool                  `key:"blobCacheEnabled" json:"blob_cache_enabled"`
+	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
+	RegistryCredentialProviderName string                `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
+	Registries                     ImageRegistriesConfig `key:"registries" json:"registries"`
+	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
+	EnableTLS                      bool                  `key:"enableTLS" json:"enable_tls"`
+	BuildContainerCpu              int64                 `key:"buildContainerCpu" json:"build_container_cpu"`
+	BuildContainerMemory           int64                 `key:"buildContainerMemory" json:"build_container_memory"`
+	BuildContainerPoolSelector     string                `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
+	Runner                         RunnerConfig          `key:"runner" json:"runner"`
 }
 
 type ImageRegistriesConfig struct {
