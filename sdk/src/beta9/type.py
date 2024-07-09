@@ -1,4 +1,3 @@
-import abc
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, Literal, Type, Union
@@ -107,7 +106,8 @@ DEFAULT_AUTOSCALER_MAX_CONTAINERS = 1
 DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER = 1
 
 
-class Autoscaler(abc.ABC):
+@dataclass
+class Autoscaler:
     max_containers: int = DEFAULT_AUTOSCALER_MAX_CONTAINERS
     tasks_per_container: int = DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER
 
