@@ -7,8 +7,8 @@ const (
 	HttpServerRootRoute string = ""
 )
 
-func NewHTTPError(ctx echo.Context, code int, message string) error {
-	return ctx.JSON(code, map[string]interface{}{
+func NewHTTPError(code int, message string) error {
+	return echo.NewHTTPError(code, map[string]interface{}{
 		"message": message,
 	})
 }

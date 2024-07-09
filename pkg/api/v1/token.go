@@ -32,16 +32,12 @@ func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error": "invalid workspace ID",
-		})
+		return NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
 	token, err := g.backendRepo.CreateToken(ctx.Request().Context(), workspace.Id, types.TokenTypeWorkspace, true)
 	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "unable to create token",
-		})
+		return NewHTTPError(http.StatusInternalServerError, "Unable to create token")
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
@@ -57,31 +53,23 @@ func (g *TokenGroup) ClusterAdminUpdateAllWorkspaceTokens(ctx echo.Context) erro
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error": "invalid workspace ID",
-		})
+		return NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
 	var req ClusterAdminTokensRequestSerializer
 	if err := ctx.Bind(&req); err != nil {
-		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error": "invalid request",
-		})
+		return NewHTTPError(http.StatusBadRequest, "Invalid request")
 	}
 
 	tokens, err := g.backendRepo.ListTokens(ctx.Request().Context(), workspace.Id)
 	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "failed to list tokens",
-		})
+		return NewHTTPError(http.StatusInternalServerError, "Failed to list tokens")
 	}
 
 	for _, token := range tokens {
 		err := g.backendRepo.UpdateTokenAsClusterAdmin(ctx.Request().Context(), token.ExternalId, req.Disabled)
 		if err != nil {
-			return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-				"error": "unable to update token",
-			})
+			return NewHTTPError(http.StatusInternalServerError, "Unable to update token")
 		}
 	}
 
@@ -94,16 +82,12 @@ func (g *TokenGroup) ListWorkspaceTokens(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error": "invalid workspace ID",
-		})
+		return NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
 	tokens, err := g.backendRepo.ListTokens(ctx.Request().Context(), workspace.Id)
 	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "failed to list tokens",
-		})
+		return NewHTTPError(http.StatusInternalServerError, "Failed to list tokens")
 	}
 
 	return ctx.JSON(http.StatusOK, tokens)

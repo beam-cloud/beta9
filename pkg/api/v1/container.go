@@ -44,7 +44,7 @@ func (c *ContainerGroup) ListContainersByWorkspaceId(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	containerStates, err := c.containerRepo.GetActiveContainersByWorkspaceId(workspaceId)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get containers")
+		return NewHTTPError(http.StatusInternalServerError, "Failed to get containers")
 	}
 
 	return ctx.JSON(http.StatusOK, containerStates)
@@ -56,11 +56,11 @@ func (c *ContainerGroup) GetContainer(ctx echo.Context) error {
 
 	containerState, err := c.containerRepo.GetContainerState(containerId)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid container id")
+		return NewHTTPError(http.StatusBadRequest, "invalid container id")
 	}
 
 	if containerState.WorkspaceId != workspaceId {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid workspace id")
+		return NewHTTPError(http.StatusBadRequest, "invalid workspace id")
 	}
 
 	return ctx.JSON(http.StatusOK, containerState)
@@ -70,9 +70,7 @@ func (c *ContainerGroup) StopAllWorkspaceContainers(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	containerStates, err := c.containerRepo.GetActiveContainersByWorkspaceId(workspaceId)
 	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"message": "failed to stop containers",
-		})
+		return NewHTTPError(http.StatusInternalServerError, "Failed to stop containers")
 	}
 
 	for _, state := range containerStates {
