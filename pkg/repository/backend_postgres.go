@@ -742,18 +742,23 @@ func (c *PostgresBackendRepository) ListVolumesWithRelated(ctx context.Context, 
 
 // Deployment
 
-func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string) (*types.Deployment, error) {
-	var deployment types.Deployment
+func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string) (*types.DeploymentWithRelated, error) {
+	var deploymentWithRelated types.DeploymentWithRelated
 
 	query := `
-        SELECT id, external_id, name, active, workspace_id, stub_id, version, created_at, updated_at
-        FROM deployment
-        WHERE workspace_id = $1 AND name = $2 AND stub_type = $3 and deleted_at IS NULL
-        ORDER BY version DESC
+        SELECT
+            d.*,
+            s.external_id AS "stub.external_id",
+            s.name AS "stub.name",
+            s.config AS "stub.config"
+        FROM deployment d
+        JOIN stub s ON d.stub_id = s.id
+        WHERE d.workspace_id = $1 AND d.name = $2 AND d.stub_type = $3 and d.deleted_at IS NULL
+        ORDER BY d.version DESC
         LIMIT 1;
     `
 
-	err := c.client.GetContext(ctx, &deployment, query, workspaceId, name, stubType)
+	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, name, stubType)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Return nil if no deployment found
@@ -761,7 +766,7 @@ func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Contex
 		return nil, err
 	}
 
-	return &deployment, nil
+	return &deploymentWithRelated, nil
 }
 
 func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint, stubType string) (*types.DeploymentWithRelated, error) {

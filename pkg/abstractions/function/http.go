@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -19,6 +20,8 @@ func registerFunctionRoutes(g *echo.Group, fs *RunCFunctionService) *functionGro
 	group := &functionGroup{routerGroup: g, fs: fs}
 
 	g.POST("/id/:stubId", auth.WithAuth(group.FunctionInvoke))
+	g.POST("/:deploymentName", auth.WithAuth(group.FunctionInvoke))
+	g.POST("/:deploymentName/latest", auth.WithAuth(group.FunctionInvoke))
 	g.POST("/:deploymentName/v:version", auth.WithAuth(group.FunctionInvoke))
 
 	return group
@@ -31,25 +34,29 @@ func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
 	deploymentName := ctx.Param("deploymentName")
 	version := ctx.Param("version")
 
-	if deploymentName != "" && version != "" {
-		version, err := strconv.Atoi(version)
-		if err != nil {
-			return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-				"error": "invalid deployment version",
-			})
-		}
+	if deploymentName != "" {
+		var deployment *types.DeploymentWithRelated
 
-		deployment, err := g.fs.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), types.StubTypeFunctionDeployment)
-		if err != nil {
-			ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-				"error": "invalid deployment",
-			})
+		if version == "" {
+			var err error
+			deployment, err = g.fs.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, types.StubTypeFunctionDeployment)
+			if err != nil {
+				return apiv1.HTTPBadRequest("Invalid deployment")
+			}
+		} else {
+			version, err := strconv.Atoi(version)
+			if err != nil {
+				return apiv1.HTTPBadRequest("Invalid deployment version")
+			}
+
+			deployment, err = g.fs.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), types.StubTypeFunctionDeployment)
+			if err != nil {
+				return apiv1.HTTPBadRequest("Invalid deployment")
+			}
 		}
 
 		if !deployment.Active {
-			return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-				"error": "deployment is not active",
-			})
+			return apiv1.HTTPBadRequest("Deployment is not active")
 		}
 
 		stubId = deployment.Stub.ExternalId
