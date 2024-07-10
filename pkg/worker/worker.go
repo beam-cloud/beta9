@@ -600,8 +600,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	// Log metrics
 	usageTrackingCompleteChan := make(chan bool)
 	go s.workerMetrics.EmitContainerUsage(request, usageTrackingCompleteChan)
-	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId)
-	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId) }()
+	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId, request)
+	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId, request) }()
 
 	pidChan := make(chan int, 1)
 
