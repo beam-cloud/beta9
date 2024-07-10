@@ -198,12 +198,11 @@ class EndpointManager:
         ):
             task_id = request.headers.get("X-TASK-ID")
             payload = await request.json()
-            gateway_stub = request.app.state.gateway_stub
 
             status_code = HTTPStatus.OK
             with StdoutJsonInterceptor(task_id=task_id):
                 task_lifecycle_data.result, err = await self._call_function(
-                    gateway_stub=gateway_stub, task_id=task_id, payload=payload
+                    task_id=task_id, payload=payload
                 )
                 if err:
                     task_lifecycle_data.status = TaskStatus.Error
@@ -226,9 +225,7 @@ class EndpointManager:
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 
-    async def _call_function(
-        self, gateway_stub: GatewayServiceStub, task_id: str, payload: dict
-    ) -> Tuple[Response, Any]:
+    async def _call_function(self, task_id: str, payload: dict) -> Tuple[Response, Any]:
         error = None
         response_body = {}
 
