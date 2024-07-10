@@ -44,7 +44,7 @@ func (g *endpointGroup) endpointRequest(ctx echo.Context) error {
 
 		if version == "" {
 			var err error
-			deployment, err = g.es.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, types.StubTypeEndpointDeployment)
+			deployment, err = g.es.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, types.StubTypeEndpointDeployment, true)
 			if err != nil {
 				return apiv1.HTTPBadRequest("Invalid deployment")
 			}

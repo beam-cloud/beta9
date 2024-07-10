@@ -742,8 +742,13 @@ func (c *PostgresBackendRepository) ListVolumesWithRelated(ctx context.Context, 
 
 // Deployment
 
-func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string) (*types.DeploymentWithRelated, error) {
+func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string, filterDeleted bool) (*types.DeploymentWithRelated, error) {
 	var deploymentWithRelated types.DeploymentWithRelated
+
+	filterDeletedQuery := ""
+	if filterDeleted {
+		filterDeletedQuery = "AND d.deleted_at IS NULL "
+	}
 
 	query := `
         SELECT
@@ -753,7 +758,7 @@ func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Contex
             s.config AS "stub.config"
         FROM deployment d
         JOIN stub s ON d.stub_id = s.id
-        WHERE d.workspace_id = $1 AND d.name = $2 AND d.stub_type = $3 and d.deleted_at IS NULL
+        WHERE d.workspace_id = $1 AND d.name = $2 AND d.stub_type = $3 ` + filterDeletedQuery + `
         ORDER BY d.version DESC
         LIMIT 1;
     `

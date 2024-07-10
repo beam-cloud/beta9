@@ -40,7 +40,7 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 
 		if version == "" {
 			var err error
-			deployment, err = g.tq.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, types.StubTypeTaskQueueDeployment)
+			deployment, err = g.tq.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, types.StubTypeTaskQueueDeployment, true)
 			if err != nil {
 				return apiv1.HTTPBadRequest("Invalid deployment")
 			}
