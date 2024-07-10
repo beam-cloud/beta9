@@ -1,10 +1,10 @@
 import asyncio
-import dataclasses
 import logging
 import os
 import signal
 import traceback
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any, Dict, Optional, Tuple
 
@@ -98,7 +98,7 @@ class GunicornApplication(BaseApplication):
             os._exit(1)
 
 
-@dataclasses.dataclass
+@dataclass
 class TaskLifecycleData:
     status: TaskStatus
     result: Any
