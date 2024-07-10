@@ -50,7 +50,7 @@ func (g *TaskGroup) GetTaskCountByDeployment(ctx echo.Context) error {
 	}
 
 	if tasks, err := g.backendRepo.GetTaskCountPerDeployment(ctx.Request().Context(), *filters); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
+		return HTTPInternalServerError("Failed to list tasks")
 	} else {
 		return ctx.JSON(http.StatusOK, tasks)
 	}
@@ -63,7 +63,7 @@ func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
 	}
 
 	if tasks, err := g.backendRepo.AggregateTasksByTimeWindow(ctx.Request().Context(), *filters); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
+		return HTTPInternalServerError("Failed to list tasks")
 	} else {
 		return ctx.JSON(http.StatusOK, tasks)
 	}
@@ -78,7 +78,7 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 	}
 
 	if tasks, err := g.backendRepo.ListTasksWithRelatedPaginated(ctx.Request().Context(), *filters); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tasks")
+		return HTTPInternalServerError("Failed to list tasks")
 	} else {
 		for i := range tasks.Data {
 			tasks.Data[i].SanitizeStubConfig()
@@ -93,7 +93,7 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 
 	taskId := ctx.Param("taskId")
 	if task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve task")
+		return HTTPInternalServerError("Failed to retrieve task")
 	} else {
 		if task == nil {
 			return ctx.JSON(http.StatusBadRequest, map[string]string{})
@@ -128,7 +128,7 @@ type StopTasksRequest struct {
 func (g *TaskGroup) StopTasks(ctx echo.Context) error {
 	var req StopTasksRequest
 	if err := ctx.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode task ids")
+		return HTTPBadRequest("Failed to decode task ids")
 	}
 
 	for _, taskId := range req.TaskIds {
@@ -175,11 +175,11 @@ func (g *TaskGroup) preprocessFilters(ctx echo.Context) (*types.TaskFilter, erro
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return nil, echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+		return nil, HTTPBadRequest("Invalid workspace ID")
 	}
 
 	if err := ctx.Bind(&filters); err != nil {
-		return nil, echo.NewHTTPError(http.StatusBadRequest, "Failed to decode query parameters")
+		return nil, HTTPBadRequest("Failed to decode query parameters")
 	}
 
 	filters.WorkspaceID = workspace.Id

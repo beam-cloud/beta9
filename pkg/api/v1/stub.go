@@ -32,13 +32,13 @@ func (g *StubGroup) ListStubsByWorkspaceId(ctx echo.Context) error {
 
 	var filters types.StubFilter
 	if err := ctx.Bind(&filters); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode query parameters")
+		return HTTPBadRequest("Failed to decode query parameters")
 	}
 
 	filters.WorkspaceID = workspaceID
 
 	if stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), filters); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list stubs")
+		return HTTPInternalServerError("Failed to list stubs")
 	} else {
 		return ctx.JSON(http.StatusOK, stubs)
 	}
@@ -47,11 +47,11 @@ func (g *StubGroup) ListStubsByWorkspaceId(ctx echo.Context) error {
 func (g *StubGroup) ListStubs(ctx echo.Context) error {
 	var filters types.StubFilter
 	if err := ctx.Bind(&filters); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode query parameters")
+		return HTTPBadRequest("Failed to decode query parameters")
 	}
 
 	if stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), filters); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list stubs")
+		return HTTPInternalServerError("Failed to list stubs")
 	} else {
 		return ctx.JSON(http.StatusOK, stubs)
 	}

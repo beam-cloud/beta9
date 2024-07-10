@@ -51,25 +51,25 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return NewHTTPError(ctx, http.StatusBadRequest, "Invalid workspace ID")
+		return HTTPBadRequest("Invalid workspace ID")
 	}
 
 	var filters types.DeploymentFilter
 	if err := ctx.Bind(&filters); err != nil {
-		return NewHTTPError(ctx, http.StatusBadRequest, "Failed to decode query parameters")
+		return HTTPBadRequest("Failed to decode query parameters")
 	}
 
 	filters.WorkspaceID = workspace.Id
 
 	if filters.Pagination {
 		if deployments, err := g.backendRepo.ListDeploymentsPaginated(ctx.Request().Context(), filters); err != nil {
-			return NewHTTPError(ctx, http.StatusInternalServerError, "Failed to list deployments")
+			return HTTPInternalServerError("Failed to list deployments")
 		} else {
 			return ctx.JSON(http.StatusOK, deployments)
 		}
 	} else {
 		if deployments, err := g.backendRepo.ListDeploymentsWithRelated(ctx.Request().Context(), filters); err != nil {
-			return NewHTTPError(ctx, http.StatusInternalServerError, "Failed to list deployments")
+			return HTTPInternalServerError("Failed to list deployments")
 		} else {
 			return ctx.JSON(http.StatusOK, deployments)
 		}
@@ -81,14 +81,14 @@ func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return NewHTTPError(ctx, http.StatusBadRequest, "Invalid workspace ID")
+		return HTTPBadRequest("Invalid workspace ID")
 	}
 
 	deploymentId := ctx.Param("deploymentId")
 	if deployment, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), workspace.Id, deploymentId); err != nil {
-		return NewHTTPError(ctx, http.StatusInternalServerError, "Failed to get deployment")
+		return HTTPInternalServerError("Failed to get deployment")
 	} else if deployment == nil {
-		return echo.NewHTTPError(http.StatusNotFound)
+		return HTTPNotFound()
 	} else {
 		return ctx.JSON(http.StatusOK, deployment)
 	}
@@ -102,9 +102,9 @@ func (g *DeploymentGroup) StopDeployment(ctx echo.Context) error {
 	deploymentWithRelated, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentId)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return NewHTTPError(ctx, http.StatusNotFound, "Deployment not found")
+			return HTTPNotFound()
 		}
-		return NewHTTPError(ctx, http.StatusBadRequest, "Failed to get deployment")
+		return HTTPBadRequest("Failed to get deployment")
 	}
 
 	return g.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx)
@@ -114,7 +114,7 @@ func (g *DeploymentGroup) StopAllActiveDeployments(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
-		return NewHTTPError(ctx, http.StatusBadRequest, "Invalid workspace ID")
+		return HTTPBadRequest("Invalid workspace ID")
 	}
 
 	filters := types.DeploymentFilter{
@@ -124,7 +124,7 @@ func (g *DeploymentGroup) StopAllActiveDeployments(ctx echo.Context) error {
 
 	deployments, err := g.backendRepo.ListDeploymentsWithRelated(ctx.Request().Context(), filters)
 	if err != nil {
-		return NewHTTPError(ctx, http.StatusBadRequest, "Failed to get deployments")
+		return HTTPBadRequest("Failed to get deployments")
 	}
 
 	return g.stopDeployments(deployments, ctx)
@@ -137,21 +137,21 @@ func (g *DeploymentGroup) DeleteDeployment(ctx echo.Context) error {
 	// Get deployment
 	deploymentWithRelated, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentId)
 	if err != nil {
-		return NewHTTPError(ctx, http.StatusBadRequest, "Failed to get deployment")
+		return HTTPBadRequest("Failed to get deployment")
 	}
 
 	if deploymentWithRelated == nil {
-		return NewHTTPError(ctx, http.StatusBadRequest, "Deployment not found")
+		return HTTPBadRequest("Deployment not found")
 	}
 
 	// Stop deployment first
 	if err := g.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx); err != nil {
-		return NewHTTPError(ctx, http.StatusInternalServerError, "Failed to stop deployment")
+		return HTTPInternalServerError("Failed to stop deployment")
 	}
 
 	// Delete deployment
 	if err := g.backendRepo.DeleteDeployment(ctx.Request().Context(), deploymentWithRelated.Deployment); err != nil {
-		return NewHTTPError(ctx, http.StatusInternalServerError, "Failed to delete deployment")
+		return HTTPInternalServerError("Failed to delete deployment")
 	}
 
 	return ctx.NoContent(http.StatusOK)
@@ -171,7 +171,7 @@ func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRela
 		deployment.Active = false
 		_, err = g.backendRepo.UpdateDeployment(ctx.Request().Context(), deployment.Deployment)
 		if err != nil {
-			return NewHTTPError(ctx, http.StatusInternalServerError, "Failed to disable deployment")
+			return HTTPInternalServerError("Failed to disable deployment")
 		}
 
 		// Publish reload instance event

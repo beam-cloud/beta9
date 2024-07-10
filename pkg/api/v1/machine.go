@@ -46,32 +46,32 @@ type RegisterMachineRequest struct {
 func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 	if (cc.AuthInfo.Token.TokenType != types.TokenTypeMachine) && (cc.AuthInfo.Token.TokenType != types.TokenTypeWorker) {
-		return echo.NewHTTPError(http.StatusForbidden, "Invalid token")
+		return HTTPForbidden("Invalid token")
 	}
 
 	var request RegisterMachineRequest
 	if err := ctx.Bind(&request); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid payload")
+		return HTTPBadRequest("Invalid payload")
 	}
 
 	remoteConfig, err := providers.GetRemoteConfig(g.config, g.tailscale)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "unable to create remote config")
+		return HTTPInternalServerError("Unable to create remote config")
 	}
 
 	cpu, err := scheduler.ParseCPU(request.Cpu)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "invalid machine cpu value")
+		return HTTPInternalServerError("Invalid machine cpu value")
 	}
 
 	memory, err := scheduler.ParseMemory(request.Memory)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "invalid machine memory value")
+		return HTTPInternalServerError("Invalid machine memory value")
 	}
 
 	gpuCount, err := strconv.ParseUint(request.GpuCount, 10, 32)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "invalid gpu count")
+		return HTTPInternalServerError("Invalid gpu count")
 	}
 
 	hostName := fmt.Sprintf("%s.%s", request.HostName, g.config.Tailscale.HostName)
@@ -90,7 +90,7 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 		GpuCount:  uint32(gpuCount),
 	})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to register machine")
+		return HTTPInternalServerError("Failed to register machine")
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
