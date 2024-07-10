@@ -747,7 +747,7 @@ func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Contex
 
 	filterDeletedQuery := ""
 	if filterDeleted {
-		filterDeletedQuery = "AND d.deleted_at IS NULL"
+		filterDeletedQuery = "AND d.deleted_at IS NULL "
 	}
 
 	query := `
