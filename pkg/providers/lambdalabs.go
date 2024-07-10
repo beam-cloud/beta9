@@ -42,7 +42,7 @@ func NewLambdaLabsProvider(ctx context.Context, appConfig types.AppConfig, provi
 }
 
 func (p *LambdaLabsProvider) ProvisionMachine(ctx context.Context, poolName, token string, compute types.ProviderComputeRequest) (string, error) {
-	return "", errors.New("not implemented")
+	return "", types.NewProviderNotImplemented()
 }
 
 func (p *LambdaLabsProvider) listMachines(ctx context.Context, poolName string) (map[string]string, error) {
@@ -51,7 +51,7 @@ func (p *LambdaLabsProvider) listMachines(ctx context.Context, poolName string) 
 		return nil, err
 	}
 
-	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", p.AppConfig.Providers.LambdaLabsConfig.ApiKey))
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", p.AppConfig.Providers.LambdaLabs.ApiKey))
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -107,7 +107,7 @@ func (p *LambdaLabsProvider) TerminateMachine(ctx context.Context, poolName, ins
 		return err
 	}
 
-	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", p.AppConfig.Providers.LambdaLabsConfig.ApiKey))
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", p.AppConfig.Providers.LambdaLabs.ApiKey))
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {

@@ -223,12 +223,16 @@ var (
 	ProviderEC2        MachineProvider = "ec2"
 	ProviderOCI        MachineProvider = "oci"
 	ProviderLambdaLabs MachineProvider = "lambda"
+	ProviderCrusoe     MachineProvider = "crusoe"
+	ProviderHydra      MachineProvider = "hydra"
 )
 
 type ProviderConfig struct {
-	EC2Config        EC2ProviderConfig        `key:"ec2" json:"ec2"`
-	OCIConfig        OCIProviderConfig        `key:"oci" json:"oci"`
-	LambdaLabsConfig LambdaLabsProviderConfig `key:"lambda" json:"lambda"`
+	EC2        EC2ProviderConfig        `key:"ec2" json:"ec2"`
+	OCI        OCIProviderConfig        `key:"oci" json:"oci"`
+	LambdaLabs LambdaLabsProviderConfig `key:"lambda" json:"lambda"`
+	Crusoe     CrusoeProviderConfig     `key:"crusoe" json:"crusoe"`
+	Hydra      HydraProviderConfig      `key:"hydra" json:"hydra"`
 }
 
 type ProviderAgentConfig struct {
@@ -268,6 +272,14 @@ type OCIProviderConfig struct {
 type LambdaLabsProviderConfig struct {
 	ApiKey string              `key:"apiKey" json:"apiKey"`
 	Agent  ProviderAgentConfig `key:"agent" json:"agent"`
+}
+
+type CrusoeProviderConfig struct {
+	Agent ProviderAgentConfig `key:"agent" json:"agent"`
+}
+
+type HydraProviderConfig struct {
+	Agent ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type MetricsCollector string

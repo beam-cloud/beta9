@@ -63,8 +63,12 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 		case <-ticker.C:
 			machines, err := p.ListMachinesFunc(ctx, poolName)
 			if err != nil {
-				log.Printf("<provider %s>: unable to list machines - %v\n", p.Name, err)
-				continue
+				if _, ok := err.(*types.ProviderNotImplemented); ok {
+					return
+				} else {
+					log.Printf("<provider %s>: unable to list machines - %v\n", "providerName", err)
+					continue
+				}
 			}
 
 			for machineId, instanceId := range machines {
