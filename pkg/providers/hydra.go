@@ -16,7 +16,7 @@ func NewHydraProvider(ctx context.Context, appConfig types.AppConfig, providerRe
 	hydraProvider := &HydraProvider{}
 
 	baseProvider := NewExternalProvider(ctx, &ExternalProviderConfig{
-		Name:                 string(types.ProviderCrusoe),
+		Name:                 string(types.ProviderHydra),
 		ClusterName:          appConfig.ClusterName,
 		AppConfig:            appConfig,
 		TailScale:            tailscale,

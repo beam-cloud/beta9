@@ -62,7 +62,7 @@ func NewExternalWorkerPoolController(
 	case types.ProviderCrusoe:
 		provider, err = providers.NewCrusoeProvider(ctx, config, providerRepo, workerRepo, tailscale)
 	case types.ProviderHydra:
-		provider, err = providers.NewCrusoeProvider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewHydraProvider(ctx, config, providerRepo, workerRepo, tailscale)
 	default:
 		return nil, errors.New("invalid provider name")
 	}
