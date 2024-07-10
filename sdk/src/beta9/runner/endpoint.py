@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import logging
 import os
 import signal
@@ -27,6 +28,7 @@ from ..logging import StdoutJsonInterceptor
 from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_method
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
+from .common import send_callback
 
 
 class EndpointFilter(logging.Filter):
@@ -96,6 +98,12 @@ class GunicornApplication(BaseApplication):
             os._exit(1)
 
 
+@dataclasses.dataclass
+class TaskLifecycleData:
+    status: TaskStatus
+    result: Any
+
+
 async def task_lifecycle(request: Request):
     task_id = request.headers.get("X-TASK-ID")
     if not task_id:
@@ -110,9 +118,12 @@ async def task_lifecycle(request: Request):
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to start task"
         )
 
+    task_lifecycle_data = TaskLifecycleData(
+        status=TaskStatus.Complete,
+        result=None,
+    )
     try:
-        task_status = TaskStatus.Complete
-        yield task_status
+        yield task_lifecycle_data
         print(f"Task <{task_id}> finished")
     finally:
         request.app.state.gateway_stub.end_task(
@@ -120,8 +131,19 @@ async def task_lifecycle(request: Request):
                 task_id=task_id,
                 container_id=cfg.container_id,
                 keep_warm_seconds=cfg.keep_warm_seconds,
-                task_status=task_status,
+                task_status=task_lifecycle_data.status,
             )
+        )
+
+        send_callback(
+            gateway_stub=request.app.state.gateway_stub,
+            context=FunctionContext.new(
+                config=cfg,
+                task_id=task_id,
+                on_start_value=None,
+            ),
+            payload=task_lifecycle_data.result,
+            task_status=task_lifecycle_data.status,
         )
 
 
@@ -170,20 +192,26 @@ class EndpointManager:
 
         @self.app.get("/")
         @self.app.post("/")
-        async def function(request: Request, task_status: str = Depends(task_lifecycle)):
+        async def function(
+            request: Request,
+            task_lifecycle_data: TaskLifecycleData = Depends(task_lifecycle),
+        ):
             task_id = request.headers.get("X-TASK-ID")
             payload = await request.json()
+            gateway_stub = request.app.state.gateway_stub
 
             status_code = HTTPStatus.OK
             with StdoutJsonInterceptor(task_id=task_id):
-                result, err = await self._call_function(task_id=task_id, payload=payload)
+                task_lifecycle_data.result, err = await self._call_function(
+                    gateway_stub=gateway_stub, task_id=task_id, payload=payload
+                )
                 if err:
-                    task_status = TaskStatus.Error
+                    task_lifecycle_data.status = TaskStatus.Error
 
-            if task_status == TaskStatus.Error:
+            if task_lifecycle_data.status == TaskStatus.Error:
                 status_code = HTTPStatus.INTERNAL_SERVER_ERROR
 
-            return self._create_response(body=result, status_code=status_code)
+            return self._create_response(body=task_lifecycle_data.result, status_code=status_code)
 
     def _create_response(self, *, body: Any, status_code: int = HTTPStatus.OK) -> Response:
         if isinstance(body, Response):
@@ -198,7 +226,9 @@ class EndpointManager:
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 
-    async def _call_function(self, task_id: str, payload: dict) -> Tuple[Response, Any]:
+    async def _call_function(
+        self, gateway_stub: GatewayServiceStub, task_id: str, payload: dict
+    ) -> Tuple[Response, Any]:
         error = None
         response_body = {}
 

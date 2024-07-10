@@ -9,8 +9,9 @@ from ..aio import run_sync
 from ..channel import Channel, with_runner_context
 from ..clients.gateway import EndTaskRequest, GatewayServiceStub, StartTaskRequest
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import config
+from ..runner.common import FunctionContext, config
 from ..type import TaskStatus
+from .common import send_callback
 
 
 class ContainerManager:
@@ -57,6 +58,17 @@ class ContainerManager:
                             task_status=TaskStatus.Complete,
                         )
                     )
+
+                send_callback(
+                    gateway_stub=stub,
+                    context=FunctionContext.new(
+                        config=config,
+                        task_id=self.task_id,
+                        on_start_value=None,
+                    ),
+                    payload=None,
+                    task_status=TaskStatus.Complete,
+                )
 
         run_sync(_run())
 

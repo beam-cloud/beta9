@@ -105,6 +105,7 @@ class Endpoint(RunnerAbstraction):
         name: Optional[str] = None,
         authorized: Optional[bool] = True,
         autoscaler: Optional[Autoscaler] = QueueDepthAutoscaler(),
+        callback_url: Optional[str] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -122,6 +123,7 @@ class Endpoint(RunnerAbstraction):
             name=name,
             authorized=authorized,
             autoscaler=autoscaler,
+            callback_url=callback_url,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None

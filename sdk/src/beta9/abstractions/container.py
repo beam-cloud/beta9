@@ -59,9 +59,10 @@ class Container(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        callback_url: Optional[str] = None,
     ) -> None:
         super().__init__(
-            cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes, secrets=secrets
+            cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes, secrets=secrets, callback_url=callback_url
         )
 
         self.task_id = ""
