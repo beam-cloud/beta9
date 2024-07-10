@@ -91,6 +91,10 @@ def list_machines(
     )
     for gpu_type, gpu_avail in res.gpus.items():
         table.add_row(gpu_type, "✅" if gpu_avail else "❌")
+    if not res.gpus:
+        table.add_row(*("-" * len(res.gpus)))
+    table.add_section()
+    table.add_row(f"[bold]{len(res.gpus)} items")
     terminal.print(table)
 
     # Display external provider machines connected to cluster
@@ -112,8 +116,10 @@ def list_machines(
         for machine in res.machines:
             table.add_row(
                 machine.id,
-                f"{machine.cpu:,}m",
-                terminal.humanize_memory(machine.memory * 1024 * 1024),
+                f"{machine.cpu:,}m" if machine.cpu > 0 else "-",
+                terminal.humanize_memory(machine.memory * 1024 * 1024)
+                if machine.memory > 0
+                else "-",
                 machine.gpu,
                 machine.status,
                 machine.pool_name,
@@ -125,10 +131,12 @@ def list_machines(
                 )
                 if machine.last_keepalive != ""
                 else "Never",
-                f"v{machine.agent_version}" or "-",
+                f"v{machine.agent_version}" if machine.agent_version else "-",
                 str(machine.machine_metrics.free_gpu_count),
             )
 
+        table.add_section()
+        table.add_row(f"[bold]{len(res.machines)} items")
         terminal.print(table)
 
 
