@@ -343,6 +343,7 @@ message ListMachinesResponse {
   bool ok = 1;
   string err_msg = 2;
   repeated Machine machines = 3;
+  map<string, bool> gpus = 4;
 }
 
 message CreateMachineRequest { string pool_name = 1; }
