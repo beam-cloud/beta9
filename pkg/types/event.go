@@ -34,9 +34,10 @@ var (
 var EventContainerLifecycleSchemaVersion = "1.0"
 
 type EventContainerLifecycleSchema struct {
-	ContainerID string `json:"container_id"`
-	WorkerID    string `json:"worker_id"`
-	Status      string `json:"status"`
+	ContainerID string           `json:"container_id"`
+	WorkerID    string           `json:"worker_id"`
+	Status      string           `json:"status"`
+	Request     ContainerRequest `json:"request"`
 }
 
 var EventContainerStatusRequestedSchemaVersion = "1.0"

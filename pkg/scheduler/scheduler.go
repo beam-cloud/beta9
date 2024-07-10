@@ -235,7 +235,7 @@ func (s *Scheduler) StartProcessingRequests() {
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
 	go s.schedulerMetrics.CounterIncContainerScheduled(request)
-	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id)
+	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
 
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
