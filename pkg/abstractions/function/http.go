@@ -39,7 +39,7 @@ func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
 
 		if version == "" {
 			var err error
-			deployment, err = g.fs.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, types.StubTypeFunctionDeployment)
+			deployment, err = g.fs.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, types.StubTypeFunctionDeployment, true)
 			if err != nil {
 				return apiv1.HTTPBadRequest("Invalid deployment")
 			}
