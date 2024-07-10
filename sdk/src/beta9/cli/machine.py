@@ -80,8 +80,7 @@ def list_machines(
 
     if format == "json":
         machines = [d.to_dict(casing=Casing.SNAKE) for d in res.machines]  # type:ignore
-        gpus = [d.to_dict(casing=Casing.SNAKE) for d in res.gpus]  # type:ignore
-        terminal.print_json({"machines": machines, "gpus": gpus})
+        terminal.print_json({"machines": machines, "gpus": res.gpus})
         return
 
     # Display GPU types available
