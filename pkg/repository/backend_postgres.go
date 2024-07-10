@@ -758,7 +758,7 @@ func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Contex
             s.config AS "stub.config"
         FROM deployment d
         JOIN stub s ON d.stub_id = s.id
-        WHERE d.workspace_id = $1 AND d.name = $2 AND d.stub_type = $3` + filterDeletedQuery + `
+        WHERE d.workspace_id = $1 AND d.name = $2 AND d.stub_type = $3 ` + filterDeletedQuery + `
         ORDER BY d.version DESC
         LIMIT 1;
     `
