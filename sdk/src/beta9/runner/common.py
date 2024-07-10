@@ -13,7 +13,12 @@ from typing import Any, Callable, Optional, Union
 import requests
 from starlette.responses import Response
 
-from ..clients.gateway import GatewayServiceStub, SignPayloadRequest, SignPayloadResponse
+from ..clients.gateway import (
+    EndTaskRequest,
+    GatewayServiceStub,
+    SignPayloadRequest,
+    SignPayloadResponse,
+)
 from ..exceptions import RunnerException
 
 USER_CODE_VOLUME = "/mnt/code"
@@ -186,6 +191,28 @@ def execute_lifecycle_method(name: str) -> Union[Any, None]:
         return result
     except BaseException:
         raise RunnerException()
+
+
+def end_task_and_send_callback(
+    *,
+    gateway_stub,
+    payload,
+    end_task_request: EndTaskRequest,
+):
+    resp = gateway_stub.end_task(end_task_request)
+
+    send_callback(
+        gateway_stub=gateway_stub,
+        context=FunctionContext.new(
+            config=config,
+            task_id=end_task_request.task_id,
+            on_start_value=None,
+        ),
+        payload=payload,
+        task_status=end_task_request.task_status,
+    )
+
+    return resp
 
 
 def send_callback(

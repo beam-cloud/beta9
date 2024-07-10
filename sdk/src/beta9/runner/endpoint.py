@@ -28,7 +28,7 @@ from ..logging import StdoutJsonInterceptor
 from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_method
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
-from .common import send_callback
+from .common import end_task_and_send_callback
 
 
 class EndpointFilter(logging.Filter):
@@ -126,24 +126,15 @@ async def task_lifecycle(request: Request):
         yield task_lifecycle_data
         print(f"Task <{task_id}> finished")
     finally:
-        request.app.state.gateway_stub.end_task(
-            EndTaskRequest(
+        end_task_and_send_callback(
+            gateway_stub=request.app.state.gateway_stub,
+            payload=task_lifecycle_data.result,
+            end_task_request=EndTaskRequest(
                 task_id=task_id,
                 container_id=cfg.container_id,
                 keep_warm_seconds=cfg.keep_warm_seconds,
                 task_status=task_lifecycle_data.status,
-            )
-        )
-
-        send_callback(
-            gateway_stub=request.app.state.gateway_stub,
-            context=FunctionContext.new(
-                config=cfg,
-                task_id=task_id,
-                on_start_value=None,
             ),
-            payload=task_lifecycle_data.result,
-            task_status=task_lifecycle_data.status,
         )
 
 

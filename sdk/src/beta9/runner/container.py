@@ -9,9 +9,9 @@ from ..aio import run_sync
 from ..channel import Channel, with_runner_context
 from ..clients.gateway import EndTaskRequest, GatewayServiceStub, StartTaskRequest
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, config
+from ..runner.common import config
 from ..type import TaskStatus
-from .common import send_callback
+from .common import FunctionContext, end_task_and_send_callback, send_callback
 
 
 class ContainerManager:
@@ -51,24 +51,26 @@ class ContainerManager:
                     print(line.strip().decode("utf-8"))
 
                 if not self.killed:
-                    stub.end_task(
-                        EndTaskRequest(
+                    end_task_and_send_callback(
+                        gateway_stub=stub,
+                        payload={},
+                        end_task_request=EndTaskRequest(
                             task_id=self.task_id,
                             container_id=config.container_id,
                             task_status=TaskStatus.Complete,
-                        )
+                        ),
                     )
-
-                send_callback(
-                    gateway_stub=stub,
-                    context=FunctionContext.new(
-                        config=config,
-                        task_id=self.task_id,
-                        on_start_value=None,
-                    ),
-                    payload=None,
-                    task_status=TaskStatus.Complete,
-                )
+                else:
+                    send_callback(
+                        gateway_stub=stub,
+                        context=FunctionContext.new(
+                            config=config,
+                            task_id=self.task_id,
+                            on_start_value=None,
+                        ),
+                        payload={},
+                        task_status=TaskStatus.Cancelled,
+                    )
 
         run_sync(_run())
 
