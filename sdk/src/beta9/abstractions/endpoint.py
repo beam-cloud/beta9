@@ -71,6 +71,8 @@ class Endpoint(RunnerAbstraction):
         autoscaler (Optional[Autoscaler]):
             Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
             various autoscaling strategies (Defaults to QueueDepthAutoscaler())
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
     Example:
         ```python
         from beta9 import endpoint, Image
@@ -105,6 +107,7 @@ class Endpoint(RunnerAbstraction):
         name: Optional[str] = None,
         authorized: Optional[bool] = True,
         autoscaler: Optional[Autoscaler] = QueueDepthAutoscaler(),
+        callback_url: Optional[str] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -122,6 +125,7 @@ class Endpoint(RunnerAbstraction):
             name=name,
             authorized=authorized,
             autoscaler=autoscaler,
+            callback_url=callback_url,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None

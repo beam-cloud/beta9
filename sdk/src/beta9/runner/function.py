@@ -26,7 +26,13 @@ from ..clients.gateway import (
 )
 from ..exceptions import InvalidFunctionArgumentsException, RunnerException
 from ..logging import StdoutJsonInterceptor
-from ..runner.common import FunctionContext, FunctionHandler, config, send_callback
+from ..runner.common import (
+    FunctionContext,
+    FunctionHandler,
+    config,
+    end_task_and_send_callback,
+    send_callback,
+)
 from ..type import TaskExitCode, TaskStatus
 
 
@@ -183,29 +189,23 @@ def main(channel: Channel):
 
         task_duration = time.time() - start_time
 
-        # End the task
-        end_task_response = gateway_stub.end_task(
-            EndTaskRequest(
+        end_task_response = end_task_and_send_callback(
+            gateway_stub=gateway_stub,
+            payload=result,
+            end_task_request=EndTaskRequest(
                 task_id=task_id,
                 task_duration=task_duration,
                 task_status=task_status,
                 container_id=container_id,
                 container_hostname=container_hostname,
                 keep_warm_seconds=0,
-            )
+            ),
         )
 
         if not end_task_response.ok:
             raise RunnerException("Unable to end task")
 
         monitor_task.cancel()
-
-        send_callback(
-            gateway_stub=gateway_stub,
-            context=context,
-            payload=result,
-            task_status=task_status,
-        )  # Send callback to callback_url, if defined
 
         if error is not None and task_status == TaskStatus.Error:
             raise error.with_traceback(error.__traceback__)

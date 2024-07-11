@@ -37,6 +37,8 @@ class Container(RunnerAbstraction):
             A list of secrets that are injected into the container as environment variables. Default is [].
         name (Optional[str]):
             A name for the container. Default is None.
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
 
     Example usage:
         ```
@@ -59,9 +61,10 @@ class Container(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        callback_url: Optional[str] = None,
     ) -> None:
         super().__init__(
-            cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes, secrets=secrets
+            cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes, secrets=secrets, callback_url=callback_url
         )
 
         self.task_id = ""
