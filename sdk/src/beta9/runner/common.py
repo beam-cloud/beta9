@@ -230,7 +230,7 @@ def send_callback(
     """
 
     callback_url = override_callback_url or context.callback_url
-    if callback_url == "" or callback_url is None:
+    if not callback_url:
         return
 
     body = {}
