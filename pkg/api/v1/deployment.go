@@ -1,7 +1,6 @@
 package apiv1
 
 import (
-	"database/sql"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -101,10 +100,11 @@ func (g *DeploymentGroup) StopDeployment(ctx echo.Context) error {
 	// Get deployment
 	deploymentWithRelated, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentId)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return HTTPNotFound()
-		}
 		return HTTPBadRequest("Failed to get deployment")
+	}
+
+	if deploymentWithRelated == nil {
+		return HTTPBadRequest("Deployment not found")
 	}
 
 	return g.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx)

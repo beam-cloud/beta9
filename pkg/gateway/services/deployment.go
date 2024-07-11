@@ -91,6 +91,13 @@ func (gws *GatewayService) StopDeployment(ctx context.Context, in *pb.StopDeploy
 		}, nil
 	}
 
+	if deploymentWithRelated == nil {
+		return &pb.StopDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Deployment not found",
+		}, nil
+	}
+
 	// Stop deployment
 	if err := gws.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx); err != nil {
 		return &pb.StopDeploymentResponse{
@@ -113,6 +120,13 @@ func (gws *GatewayService) DeleteDeployment(ctx context.Context, in *pb.DeleteDe
 		return &pb.DeleteDeploymentResponse{
 			Ok:     false,
 			ErrMsg: "Unable to get deployment",
+		}, nil
+	}
+
+	if deploymentWithRelated == nil {
+		return &pb.DeleteDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Deployment not found",
 		}, nil
 	}
 

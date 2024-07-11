@@ -60,6 +60,10 @@ func (g *endpointGroup) endpointRequest(ctx echo.Context) error {
 			}
 		}
 
+		if deployment == nil {
+			return apiv1.HTTPBadRequest("Invalid deployment")
+		}
+
 		if !deployment.Active {
 			return apiv1.HTTPBadRequest("Deployment is not active")
 		}
