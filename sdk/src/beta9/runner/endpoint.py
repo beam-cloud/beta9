@@ -202,7 +202,9 @@ class EndpointManager:
             if task_lifecycle_data.status == TaskStatus.Error:
                 status_code = HTTPStatus.INTERNAL_SERVER_ERROR
 
-            task_lifecycle_data.override_callback_url = payload.get("kwargs").get("callback_url")
+            task_lifecycle_data.override_callback_url = payload.get("kwargs", {}).get(
+                "callback_url"
+            )
 
             return self._create_response(body=task_lifecycle_data.result, status_code=status_code)
 
