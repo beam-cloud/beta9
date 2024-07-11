@@ -78,6 +78,8 @@ def list_machines(
     if not res.ok:
         terminal.error(res.err_msg)
 
+    res.gpus = {gpu: res.gpus[gpu] for gpu in sorted(res.gpus)}
+
     if format == "json":
         machines = [d.to_dict(casing=Casing.SNAKE) for d in res.machines]  # type:ignore
         terminal.print_json({"machines": machines, "gpus": res.gpus})
