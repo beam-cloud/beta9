@@ -122,7 +122,6 @@ async def task_lifecycle(request: Request):
     task_lifecycle_data = TaskLifecycleData(
         status=TaskStatus.Complete, result=None, override_callback_url=None
     )
-    print("callback_url", task_lifecycle_data.override_callback_url)
     try:
         yield task_lifecycle_data
         print(f"Task <{task_id}> finished")
