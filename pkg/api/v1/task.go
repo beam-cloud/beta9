@@ -137,6 +137,10 @@ func (g *TaskGroup) StopTasks(ctx echo.Context) error {
 			continue
 		}
 
+		if task == nil {
+			continue
+		}
+
 		err = g.stopTask(ctx.Request().Context(), task)
 		if err != nil {
 			continue
