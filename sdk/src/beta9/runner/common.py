@@ -195,8 +195,8 @@ def execute_lifecycle_method(name: str) -> Union[Any, None]:
 
 def end_task_and_send_callback(
     *,
-    gateway_stub,
-    payload,
+    gateway_stub: GatewayServiceStub,
+    payload: Any,
     end_task_request: EndTaskRequest,
 ):
     resp = gateway_stub.end_task(end_task_request)
