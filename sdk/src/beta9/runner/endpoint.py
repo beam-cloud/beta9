@@ -102,6 +102,7 @@ class GunicornApplication(BaseApplication):
 class TaskLifecycleData:
     status: TaskStatus
     result: Any
+    override_callback_url: Optional[str] = None
 
 
 async def task_lifecycle(request: Request):
@@ -119,8 +120,7 @@ async def task_lifecycle(request: Request):
         )
 
     task_lifecycle_data = TaskLifecycleData(
-        status=TaskStatus.Complete,
-        result=None,
+        status=TaskStatus.Complete, result=None, override_callback_url=None
     )
     try:
         yield task_lifecycle_data
@@ -135,6 +135,7 @@ async def task_lifecycle(request: Request):
                 keep_warm_seconds=cfg.keep_warm_seconds,
                 task_status=task_lifecycle_data.status,
             ),
+            override_callback_url=task_lifecycle_data.override_callback_url,
         )
 
 
@@ -200,6 +201,10 @@ class EndpointManager:
 
             if task_lifecycle_data.status == TaskStatus.Error:
                 status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+
+            task_lifecycle_data.override_callback_url = payload.get("kwargs", {}).get(
+                "callback_url"
+            )
 
             return self._create_response(body=task_lifecycle_data.result, status_code=status_code)
 
