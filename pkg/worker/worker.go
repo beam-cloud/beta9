@@ -281,9 +281,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		return err
 	}
 
-	// Every 30 seconds, update container status
-	go s.updateContainerStatus(request)
-
 	bindPort, err := GetRandomFreePort()
 	if err != nil {
 		return err
@@ -542,6 +539,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		LogBuffer: common.NewLogBuffer(),
 	}
 	s.containerInstances.Set(containerId, containerInstance)
+
+	// Every 30 seconds, update container status
+	go s.updateContainerStatus(request)
 
 	// Set worker hostname
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, defaultWorkerServerPort)
