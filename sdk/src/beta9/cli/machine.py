@@ -1,3 +1,4 @@
+import textwrap
 from datetime import datetime, timezone
 
 import click
@@ -77,6 +78,8 @@ def list_machines(
 
     if not res.ok:
         terminal.error(res.err_msg)
+
+    res.gpus = {gpu: res.gpus[gpu] for gpu in sorted(res.gpus)}
 
     if format == "json":
         machines = [d.to_dict(casing=Casing.SNAKE) for d in res.machines]  # type:ignore
@@ -165,13 +168,19 @@ def create_machine(service: ServiceClient, pool: str):
             f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
         )
         terminal.detail(
-            f"""sudo curl -L -o agent https://release.beam.cloud/agent/agent && \\
-sudo chmod +x agent && \\
-sudo ./agent --token "{res.machine.registration_token}" --machine-id "{res.machine.id}" \\
---tailscale-url "{res.machine.tailscale_url}" \\
---tailscale-auth "{res.machine.tailscale_auth}" \\
---pool-name "{res.machine.pool_name}" \\
---provider-name "{res.machine.provider_name}" """
+            textwrap.dedent(f"""
+            #!/bin/bash
+            sudo curl -L -o agent https://release.beam.cloud/agent/agent && \\
+            sudo chmod +x agent && \\
+            sudo ./agent --token "{res.machine.registration_token}" \\
+              --machine-id "{res.machine.id}" \\
+              --tailscale-url "{res.machine.tailscale_url}" \\
+              --tailscale-auth "{res.machine.tailscale_auth}" \\
+              --pool-name "{res.machine.pool_name}" \\
+              --provider-name "{res.machine.provider_name}"
+            """),
+            crop=False,
+            overflow="ignore",
         )
 
     else:
