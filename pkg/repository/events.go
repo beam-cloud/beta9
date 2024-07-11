@@ -177,6 +177,20 @@ func (t *TCPEventClientRepo) PushWorkerStoppedEvent(workerID string) {
 	)
 }
 
+func (t *TCPEventClientRepo) PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData) {
+	t.pushEvent(
+		types.EventContainerMetrics,
+		types.EventContainerMetricsSchemaVersion,
+		types.EventContainerMetricsSchema{
+			WorkerID:         workerID,
+			ContainerID:      request.ContainerId,
+			WorkspaceID:      request.WorkspaceId,
+			StubID:           request.StubId,
+			ContainerMetrics: metrics,
+		},
+	)
+}
+
 func (t *TCPEventClientRepo) PushDeployStubEvent(workspaceId string, stub *types.Stub) {
 	t.pushEvent(
 		types.EventStubDeploy,
