@@ -37,6 +37,8 @@ class Container(RunnerAbstraction):
             A list of secrets that are injected into the container as environment variables. Default is [].
         name (Optional[str]):
             A name for the container. Default is None.
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
 
     Example usage:
         ```
