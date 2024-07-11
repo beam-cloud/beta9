@@ -335,6 +335,7 @@ class TaskQueueWorker:
                         context=context,
                         payload=result or {},
                         task_status=task_status,
+                        override_callback_url=kwargs.get("callback_url"),
                     )  # Send callback to callback_url, if defined
 
 

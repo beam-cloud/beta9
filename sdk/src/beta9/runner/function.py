@@ -200,6 +200,7 @@ def main(channel: Channel):
                 container_hostname=container_hostname,
                 keep_warm_seconds=0,
             ),
+            override_callback_url=kwargs.get("callback_url"),
         )
 
         if not end_task_response.ok:
