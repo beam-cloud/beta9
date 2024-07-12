@@ -135,22 +135,21 @@ func (m *ProcessMonitor) fetchNetworkIO() (*net.IOCountersStat, error) {
 		return nil, err
 	}
 
-	counter := net.IOCountersStat{}
 	if len(counters) != 1 {
 		return nil, errors.New("failed to get network io counter")
 	}
-	counter = counters[0]
+	currentNetIO := counters[0]
 
-	delta := net.IOCountersStat{
-		BytesSent:   counter.BytesSent - m.lastNetIO.BytesSent,
-		BytesRecv:   counter.BytesRecv - m.lastNetIO.BytesRecv,
-		PacketsSent: counter.PacketsSent - m.lastNetIO.PacketsSent,
-		PacketsRecv: counter.PacketsRecv - m.lastNetIO.PacketsRecv,
+	deltaIO := net.IOCountersStat{
+		BytesSent:   currentNetIO.BytesSent - m.lastNetIO.BytesSent,
+		BytesRecv:   currentNetIO.BytesRecv - m.lastNetIO.BytesRecv,
+		PacketsSent: currentNetIO.PacketsSent - m.lastNetIO.PacketsSent,
+		PacketsRecv: currentNetIO.PacketsRecv - m.lastNetIO.PacketsRecv,
 	}
 
-	m.lastNetIO = counter
+	m.lastNetIO = currentNetIO
 
-	return &delta, nil
+	return &deltaIO, nil
 }
 
 func (m *ProcessMonitor) fetchIO(proceses []*process.Process) (*process.IOCountersStat, error) {
