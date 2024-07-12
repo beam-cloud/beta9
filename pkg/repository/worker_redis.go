@@ -209,6 +209,8 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Work
 		cmds[i] = pipe.HGetAll(context.TODO(), key)
 	}
 
+	log.Println("keys: ", keys)
+
 	_, err := pipe.Exec(context.TODO())
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute pipeline: %v", err)
@@ -218,7 +220,7 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Work
 	for i, cmd := range cmds {
 		res, err := cmd.Result()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get worker <%s>: %v", keys[i], err)
+			continue
 		}
 
 		workerId := strings.Split(keys[i], ":")[len(strings.Split(keys[i], ":"))-1]
@@ -228,6 +230,11 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Work
 			return nil, fmt.Errorf("failed to deserialize worker state <%v>: %v", keys[i], err)
 		}
 		workers[i] = worker
+	}
+
+	log.Printf("workers; %+v\n", workers)
+	for _, w := range workers {
+		log.Printf("worker: %+v\n", w)
 	}
 
 	return workers, nil
