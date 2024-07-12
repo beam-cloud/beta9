@@ -598,22 +598,23 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 
 	// Log metrics
-	usageTrackingCompleteChan := make(chan bool)
-	go s.workerMetrics.EmitContainerUsage(request, usageTrackingCompleteChan)
+	containerCompleteCh := make(chan bool)
+	go s.workerMetrics.EmitContainerUsage(request, containerCompleteCh)
 	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId, request) }()
 
+	// Capture resource usage (cpu/mem/gpu)
 	pidChan := make(chan int, 1)
+	go s.collectAndSendContainerMetrics(request, spec, pidChan, containerCompleteCh)
 
 	// Invoke runc process (launch the container)
-	// This will return exit code 137 even if the container is stopped gracefully. We don't know why.
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
 		OutputWriter: containerInstance.OutputWriter,
 		ConfigPath:   configPath,
 		Started:      pidChan,
 	})
 
-	usageTrackingCompleteChan <- true
+	containerCompleteCh <- true
 
 	// Send last log message since the container has exited
 	outputChan <- common.OutputMsg{

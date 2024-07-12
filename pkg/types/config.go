@@ -290,10 +290,11 @@ var (
 )
 
 type MonitoringConfig struct {
-	MetricsCollector string           `key:"metricsCollector" json:"metrics_collector"`
-	Prometheus       PrometheusConfig `key:"prometheus" json:"prometheus"`
-	OpenMeter        OpenMeterConfig  `key:"openmeter" json:"openmeter"`
-	FluentBit        FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
+	MetricsCollector         string           `key:"metricsCollector" json:"metrics_collector"`
+	Prometheus               PrometheusConfig `key:"prometheus" json:"prometheus"`
+	OpenMeter                OpenMeterConfig  `key:"openmeter" json:"openmeter"`
+	FluentBit                FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
+	ContainerMetricsInterval time.Duration    `key:"containerMetricsInterval"`
 }
 
 type PrometheusConfig struct {

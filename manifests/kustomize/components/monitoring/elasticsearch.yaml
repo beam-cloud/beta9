@@ -1,0 +1,25 @@
+---
+apiVersion: builtin
+kind: HelmChartInflationGenerator
+metadata:
+  name: elasticsearch
+name: elasticsearch
+releaseName: elasticsearch
+repo: https://charts.bitnami.com/bitnami
+version: 21.3.1
+namespace: monitoring
+includeCRDs: true
+valuesInline:
+  global:
+    kibanaEnabled: true
+  master:
+    masterOnly: false
+    replicaCount: 1
+    extraRoles:
+    - data
+  data:
+    replicaCount: 0
+  coordinating:
+    replicaCount: 0
+  ingest:
+    replicaCount: 0
