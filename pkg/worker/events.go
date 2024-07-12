@@ -3,7 +3,6 @@ package worker
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -133,7 +132,9 @@ func (m *ProcessMonitor) fetchGPUMemory() *GPUInfoStat {
 // Avoid using this data for external purposes.
 // TODO: Look into per-process network IO
 func (m *ProcessMonitor) fetchNetworkIO() (*net.IOCountersStat, error) {
-	counters, err := net.IOCountersByFile(false, filepath.Join("/proc", fmt.Sprint(m.pid), "net/dev"))
+	// net.IOCountersByFile() does exist, but the proc files for all PIDs have the same
+	// data as in /proc/net/dev which is where net.IOCounters() gets its data from on linux.
+	counters, err := net.IOCounters(false)
 	if err != nil {
 		return nil, err
 	}
