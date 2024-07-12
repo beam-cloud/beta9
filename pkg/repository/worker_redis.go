@@ -12,6 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 type WorkerRedisRepository struct {
@@ -148,28 +149,30 @@ func (r *WorkerRedisRepository) getWorkers(useLock bool) ([]*types.Worker, error
 		return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
 	}
 
+	if !useLock {
+		workers, err := r.getWorkersFromKeys(keys)
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
+		}
+
+		return workers, nil
+	}
+
 	for _, key := range keys {
 		workerId := strings.Split(key, ":")[3]
 
-		if useLock {
-			err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
-			if err != nil {
-				continue
-			}
+		err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+		if err != nil {
+			continue
 		}
 
 		w, err := r.getWorkerFromKey(key)
 		if err != nil {
-			if useLock {
-				r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
-			}
+			r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
 			continue
 		}
 
-		if useLock {
-			r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
-		}
-
+		r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
 		workers = append(workers, w)
 	}
 
@@ -195,6 +198,39 @@ func (r *WorkerRedisRepository) GetWorkerById(workerId string) (*types.Worker, e
 	}
 
 	return r.getWorkerFromKey(key)
+}
+
+func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Worker, error) {
+	pipe := r.rdb.Pipeline()
+	cmds := make([]*redis.MapStringStringCmd, len(keys))
+
+	// Fetch all workers at once using a pipeline
+	for i, key := range keys {
+		cmds[i] = pipe.HGetAll(context.TODO(), key)
+	}
+
+	_, err := pipe.Exec(context.TODO())
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute pipeline: %v", err)
+	}
+
+	workers := make([]*types.Worker, len(keys))
+	for i, cmd := range cmds {
+		res, err := cmd.Result()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get worker <%s>: %v", keys[i], err)
+		}
+
+		workerId := strings.Split(keys[i], ":")[len(strings.Split(keys[i], ":"))-1]
+		worker := &types.Worker{Id: workerId}
+
+		if err = common.ToStruct(res, worker); err != nil {
+			return nil, fmt.Errorf("failed to deserialize worker state <%v>: %v", keys[i], err)
+		}
+		workers[i] = worker
+	}
+
+	return workers, nil
 }
 
 func (r *WorkerRedisRepository) getWorkerFromKey(key string) (*types.Worker, error) {
