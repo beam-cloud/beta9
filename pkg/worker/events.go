@@ -129,6 +129,9 @@ func (m *ProcessMonitor) fetchGPUMemory() *GPUInfoStat {
 	return stat
 }
 
+// fetchNetworkIO gets network IO for all NICs globally, regardless of process.
+// Avoid using this data for external purposes.
+// TODO: Look into per-process network IO
 func (m *ProcessMonitor) fetchNetworkIO() (*net.IOCountersStat, error) {
 	counters, err := net.IOCountersByFile(false, filepath.Join("/proc", fmt.Sprint(m.pid), "net/dev"))
 	if err != nil {
