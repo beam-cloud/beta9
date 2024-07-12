@@ -155,6 +155,7 @@ proxy:
     localPort: 1993
     destination: beta9-gateway.beta9:1993
 monitoring:
+  containerMetricsInterval: 3s
   metricsCollector: prometheus
   prometheus:
     scrapeWorkers: true

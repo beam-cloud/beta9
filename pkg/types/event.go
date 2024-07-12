@@ -52,13 +52,22 @@ type EventContainerMetricsSchema struct {
 }
 
 type EventContainerMetricsData struct {
-	CPUUsed        uint64 `json:"cpu_used"`
-	CPUTotal       uint64 `json:"cpu_total"`
-	MemoryUsed     uint64 `json:"memory_used"`
-	MemoryTotal    uint64 `json:"memory_total"`
-	GPUMemoryUsed  uint64 `json:"gpu_memory_used"`
-	GPUMemoryTotal uint64 `json:"gpu_memory_total"`
-	GPUType        string `json:"gpu_type"`
+	CPUUsed            uint64  `json:"cpu_used"`
+	CPUTotal           uint64  `json:"cpu_total"`
+	CPUPercent         float32 `json:"cpu_pct"`
+	MemoryRSS          uint64  `json:"memory_rss_bytes"`
+	MemoryVMS          uint64  `json:"memory_vms_bytes"`
+	MemorySwap         uint64  `json:"memory_swap_bytes"`
+	MemoryTotal        uint64  `json:"memory_total_bytes"`
+	DiskReadBytes      uint64  `json:"disk_read_bytes"`
+	DiskWriteBytes     uint64  `json:"disk_write_bytes"`
+	NetworkBytesRecv   uint64  `json:"network_recv_bytes"`
+	NetworkBytesSent   uint64  `json:"network_sent_bytes"`
+	NetworkPacketsRecv uint64  `json:"network_recv_packets"`
+	NetworkPacketsSent uint64  `json:"network_sent_packets"`
+	GPUMemoryUsed      uint64  `json:"gpu_memory_used_bytes"`
+	GPUMemoryTotal     uint64  `json:"gpu_memory_total_bytes"`
+	GPUType            string  `json:"gpu_type"`
 }
 
 var EventContainerStatusRequestedSchemaVersion = "1.0"
