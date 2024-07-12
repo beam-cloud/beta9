@@ -209,8 +209,6 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Work
 		cmds[i] = pipe.HGetAll(context.TODO(), key)
 	}
 
-	log.Println("keys: ", keys)
-
 	_, err := pipe.Exec(context.TODO())
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute pipeline: %v", err)
@@ -231,11 +229,6 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Work
 		}
 
 		workers = append(workers, worker)
-	}
-
-	log.Printf("workers; %+v\n", workers)
-	for _, w := range workers {
-		log.Printf("worker: %+v\n", w)
 	}
 
 	return workers, nil
