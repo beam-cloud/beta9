@@ -120,7 +120,7 @@ func (m *ProcessMonitor) fetchGPUMemory() *GPUInfoStat {
 		if device.Minor == nil || !device.Allow {
 			continue
 		}
-		stats, err := GetGpuMemoryUsage(*device.Minor)
+		stats, err := GetGpuMemoryUsage(int(*device.Minor))
 		if err == nil {
 			stat.MemoryUsed += uint64(stats.UsedCapacity)
 			stat.MemoryTotal += uint64(stats.TotalCapacity)

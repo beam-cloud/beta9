@@ -19,7 +19,7 @@ type GpuMemoryUsageStats struct {
 
 // GetGpuMemoryUsage retrieves the memory usage of a specific NVIDIA GPU.
 // It returns the total and used memory in bytes.
-func GetGpuMemoryUsage(deviceIndex int64) (GpuMemoryUsageStats, error) {
+func GetGpuMemoryUsage(deviceIndex int) (GpuMemoryUsageStats, error) {
 	stats := GpuMemoryUsageStats{}
 
 	command := "nvidia-smi"
