@@ -216,7 +216,7 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Work
 		return nil, fmt.Errorf("failed to execute pipeline: %v", err)
 	}
 
-	workers := make([]*types.Worker, len(keys))
+	var workers []*types.Worker
 	for i, cmd := range cmds {
 		res, err := cmd.Result()
 		if err != nil {
@@ -229,7 +229,8 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Work
 		if err = common.ToStruct(res, worker); err != nil {
 			return nil, fmt.Errorf("failed to deserialize worker state <%v>: %v", keys[i], err)
 		}
-		workers[i] = worker
+
+		workers = append(workers, worker)
 	}
 
 	log.Printf("workers; %+v\n", workers)
