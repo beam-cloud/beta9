@@ -217,8 +217,8 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Work
 	var workers []*types.Worker
 	for i, cmd := range cmds {
 		res, err := cmd.Result()
-		if err != nil {
-			// If the state key does not exist, remove it from the worker index
+		if err != nil || len(res) == 0 {
+			// If there is an error or the result is empty, remove the key from the index
 			indexKey := common.RedisKeys.SchedulerWorkerIndex()
 			r.rdb.SRem(context.TODO(), indexKey, keys[i]).Err()
 			continue
