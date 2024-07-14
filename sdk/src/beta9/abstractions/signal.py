@@ -11,6 +11,7 @@ from ..clients.signal import (
     SignalSetRequest,
     SignalSetResponse,
 )
+from ..env import called_on_import
 
 
 class Signal(BaseAbstraction):
@@ -27,7 +28,7 @@ class Signal(BaseAbstraction):
         self.handler: Union[Callable, None] = handler
         self._stub: Optional[SignalServiceStub] = None
 
-        if self.handler is not None:
+        if self.handler is not None and called_on_import():
             self._monitor()
 
     @property
