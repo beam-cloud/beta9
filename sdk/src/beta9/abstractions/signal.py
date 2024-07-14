@@ -29,7 +29,10 @@ class Signal(BaseAbstraction):
         self._stub: Optional[SignalServiceStub] = None
 
         if self.handler is not None and called_on_import():
-            self._monitor()
+            threading.Thread(
+                target=self._monitor,
+                daemon=True,
+            ).start()
 
     @property
     def stub(self) -> SignalServiceStub:
@@ -50,17 +53,11 @@ class Signal(BaseAbstraction):
         return r.ok
 
     def _monitor(self) -> None:
-        def _monitor_signal():
-            for response in self.stub.signal_monitor(
-                SignalMonitorRequest(
-                    name=self.name,
-                )
-            ):
-                response: SignalMonitorResponse
-                if response.set:
-                    self.handler()
-
-        threading.Thread(
-            target=_monitor_signal,
-            daemon=True,
-        ).start()
+        for response in self.stub.signal_monitor(
+            SignalMonitorRequest(
+                name=self.name,
+            )
+        ):
+            response: SignalMonitorResponse
+            if response.set:
+                self.handler()
