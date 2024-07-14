@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 @dataclass(eq=False, repr=False)
 class SignalSetRequest(betterproto.Message):
     name: str = betterproto.string_field(1)
+    ttl: int = betterproto.int64_field(2)
 
 
 @dataclass(eq=False, repr=False)

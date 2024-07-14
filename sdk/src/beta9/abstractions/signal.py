@@ -1,4 +1,5 @@
 import threading
+import time
 from typing import Callable, Optional, Union
 
 from ..abstractions.base import BaseAbstraction
@@ -17,7 +18,13 @@ from ..env import called_on_import
 class Signal(BaseAbstraction):
     """"""
 
-    def __init__(self, *, name: str, handler: Optional[Callable] = None) -> None:
+    def __init__(
+        self,
+        *,
+        name: str,
+        handler: Optional[Callable] = None,
+        clear_after_seconds: Optional[int] = -1,
+    ) -> None:
         """
         Creates a Signal Instance.
 
@@ -27,6 +34,7 @@ class Signal(BaseAbstraction):
         self.name: str = name
         self.handler: Union[Callable, None] = handler
         self._stub: Optional[SignalServiceStub] = None
+        self.clear_after_seconds: Optional[int] = clear_after_seconds
 
         if self.handler is not None and called_on_import():
             threading.Thread(
@@ -44,8 +52,8 @@ class Signal(BaseAbstraction):
     def stub(self, value: SignalServiceStub):
         self._stub = value
 
-    def set(self) -> bool:
-        r: SignalSetResponse = self.stub.signal_set(SignalSetRequest(name=self.name))
+    def set(self, ttl: Optional[int] = 600) -> bool:
+        r: SignalSetResponse = self.stub.signal_set(SignalSetRequest(name=self.name, ttl=ttl))
         return r.ok
 
     def clear(self) -> bool:
@@ -61,3 +69,7 @@ class Signal(BaseAbstraction):
             response: SignalMonitorResponse
             if response.set:
                 self.handler()
+
+            if self.clear_after_seconds > 0:
+                time.sleep(self.clear_after_seconds)
+                self.clear()

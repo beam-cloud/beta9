@@ -11,7 +11,10 @@ service SignalService {
       returns (stream SignalMonitorResponse);
 }
 
-message SignalSetRequest { string name = 1; }
+message SignalSetRequest {
+  string name = 1;
+  int64 ttl = 2;
+}
 message SignalSetResponse { bool ok = 1; }
 
 message SignalClearRequest { string name = 1; }

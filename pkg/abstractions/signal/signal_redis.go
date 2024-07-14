@@ -11,6 +11,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+const (
+	signalDefaultSetTtlS int = 600
+)
+
 type RedisSignalService struct {
 	pb.UnimplementedSignalServiceServer
 
@@ -27,7 +31,12 @@ func (s *RedisSignalService) SignalSet(ctx context.Context, in *pb.SignalSetRequ
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	signalName := Keys.SignalName(authInfo.Workspace.Name, in.Name)
 
-	err := s.rdb.Set(ctx, signalName, 1, 0).Err()
+	ttl := in.Ttl
+	if ttl <= 0 {
+		ttl = int64(signalDefaultSetTtlS)
+	}
+
+	err := s.rdb.Set(ctx, signalName, 1, time.Duration(ttl)*time.Second).Err()
 	return &pb.SignalSetResponse{
 		Ok: err == nil,
 	}, nil
@@ -37,7 +46,7 @@ func (s *RedisSignalService) SignalClear(ctx context.Context, in *pb.SignalClear
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	signalName := Keys.SignalName(authInfo.Workspace.Name, in.Name)
 
-	err := s.rdb.Set(ctx, signalName, 0, 0).Err()
+	err := s.rdb.Del(ctx, signalName).Err()
 	return &pb.SignalClearResponse{
 		Ok: err == nil,
 	}, nil
