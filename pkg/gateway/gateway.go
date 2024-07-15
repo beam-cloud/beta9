@@ -19,10 +19,12 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/container"
+	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	dmap "github.com/beam-cloud/beta9/pkg/abstractions/map"
 	simplequeue "github.com/beam-cloud/beta9/pkg/abstractions/queue"
+
 	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -311,8 +313,15 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterOutputServiceServer(g.grpcServer, o)
 
 	// Register Secret service
-	ss := secret.NewSecretService(g.BackendRepo, g.rootRouteGroup)
-	pb.RegisterSecretServiceServer(g.grpcServer, ss)
+	secretService := secret.NewSecretService(g.BackendRepo, g.rootRouteGroup)
+	pb.RegisterSecretServiceServer(g.grpcServer, secretService)
+
+	// Register Signal service
+	signalService, err := _signal.NewRedisSignalService(g.RedisClient)
+	if err != nil {
+		return err
+	}
+	pb.RegisterSignalServiceServer(g.grpcServer, signalService)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService(g.Scheduler)
