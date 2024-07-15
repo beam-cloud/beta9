@@ -92,11 +92,11 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	taskId := ctx.Param("taskId")
-	if task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId); err != nil {
+	if task, err := g.backendRepo.GetTaskByWorkspace(ctx.Request().Context(), taskId, cc.AuthInfo.Workspace); err != nil {
 		return HTTPInternalServerError("Failed to retrieve task")
 	} else {
 		if task == nil {
-			return ctx.JSON(http.StatusBadRequest, map[string]string{})
+			return HTTPNotFound()
 		}
 
 		task.SanitizeStubConfig()
