@@ -23,7 +23,7 @@ class Signal(BaseAbstraction):
         *,
         name: str,
         handler: Optional[Callable] = None,
-        clear_after_seconds: Optional[int] = -1,
+        clear_after_interval: Optional[int] = -1,
     ) -> None:
         """
         Creates a Signal Instance.
@@ -34,7 +34,7 @@ class Signal(BaseAbstraction):
         self.name: str = name
         self.handler: Union[Callable, None] = handler
         self._stub: Optional[SignalServiceStub] = None
-        self.clear_after_seconds: Optional[int] = clear_after_seconds
+        self.clear_after_interval: Optional[int] = clear_after_interval
 
         if self.handler is not None and called_on_import():
             threading.Thread(
@@ -70,6 +70,6 @@ class Signal(BaseAbstraction):
             if response.set:
                 self.handler()
 
-            if self.clear_after_seconds > 0:
-                time.sleep(self.clear_after_seconds)
+            if self.clear_after_interval > 0:
+                time.sleep(self.clear_after_interval)
                 self.clear()
