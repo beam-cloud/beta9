@@ -26,8 +26,8 @@ class Signal(BaseAbstraction):
         """
 
         Creates a Signal Instance. Signals can be used to notify a container to do something using a flag.
-        For example, you may want to conditionally reload some global state, send a webhook, or
-        exit the container. Signals are an experimental feature.
+        For example, you may want to reload some global state, send a webhook, or exit the container.
+        Signals are an experimental feature.
 
         Parameters:
         name (str):
