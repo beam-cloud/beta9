@@ -16,8 +16,6 @@ from ..base import BaseAbstraction
 
 
 class Signal(BaseAbstraction):
-    """"""
-
     def __init__(
         self,
         *,
