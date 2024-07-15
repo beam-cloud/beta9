@@ -19,11 +19,11 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/container"
+	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	dmap "github.com/beam-cloud/beta9/pkg/abstractions/map"
 	simplequeue "github.com/beam-cloud/beta9/pkg/abstractions/queue"
-	_signal "github.com/beam-cloud/beta9/pkg/abstractions/signal"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"

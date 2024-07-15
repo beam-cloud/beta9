@@ -38,5 +38,5 @@ protoc -I ./pkg/abstractions/output/ --python_betterproto_beta9_out=./sdk/src/be
 protoc -I ./pkg/abstractions/secret/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/secret/secret.proto
 protoc -I ./pkg/abstractions/secret/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/secret/secret.proto
 
-protoc -I ./pkg/abstractions/signal/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/signal/signal.proto
-protoc -I ./pkg/abstractions/signal/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/signal/signal.proto
+protoc -I ./pkg/abstractions/experimental/signal/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/experimental/signal/signal.proto
+protoc -I ./pkg/abstractions/experimental/signal/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/experimental/signal/signal.proto
