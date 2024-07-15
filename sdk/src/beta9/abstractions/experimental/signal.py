@@ -85,12 +85,12 @@ class Signal(BaseAbstraction):
         self._stub = value
 
     def set(self, ttl: Optional[int] = 600) -> bool:
-        """Set a flag that can be used to notify a container something has occurred"""
+        """Fires an event to another container to notify the container that something has occurred"""
         r: SignalSetResponse = self.stub.signal_set(SignalSetRequest(name=self.name, ttl=ttl))
         return r.ok
 
     def clear(self) -> bool:
-        """Clear the signal flag"""
+        """Removes the signal flag that has been set. This supersedes clear_after_interval, if set"""
         r: SignalClearResponse = self.stub.signal_clear(SignalClearRequest(name=self.name))
         return r.ok
 
