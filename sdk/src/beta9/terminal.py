@@ -1,7 +1,7 @@
 import datetime
 import sys
 from contextlib import contextmanager
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Generator, Optional, Sequence, Tuple
 
 import rich
 import rich.columns
@@ -76,9 +76,9 @@ def url(text: str) -> None:
 
 
 @contextmanager
-def progress(task_name: str):
-    with _console.status(task_name, spinner="dots", spinner_style="white"):
-        yield
+def progress(task_name: str) -> Generator[rich.status.Status, None, None]:
+    with _console.status(task_name, spinner="dots", spinner_style="white") as s:
+        yield s
 
 
 def progress_open(file, mode, **kwargs):
