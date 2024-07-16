@@ -1011,7 +1011,6 @@ func (c *PostgresBackendRepository) listStubsQueryBuilder(filters types.StubFilt
 	}
 
 	if len(filters.StubTypes) > 0 {
-		log.Println(filters.StubTypes)
 		qb = qb.Where(squirrel.Eq{"s.type": filters.StubTypes})
 	}
 
