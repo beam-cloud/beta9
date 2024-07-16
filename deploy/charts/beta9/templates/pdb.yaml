@@ -1,0 +1,18 @@
+{{- range $name, $controller := .Values.controllers }}
+{{- range $controller.pod }}
+{{- if and . (hasKey . "enabled") .enabled -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $.Release.Name }}-{{ $name }}
+  labels:
+    {{- include "bjw-s.common.lib.metadata.allLabels" $ | trim | nindent 4 }}
+spec:
+  minAvailable: {{ .minAvailable | default 1 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: "{{ $.Release.Name }}"
+      app.kubernetes.io/component: "{{ $name }}"
+{{- end }}
+{{- end }}
+{{- end }}
