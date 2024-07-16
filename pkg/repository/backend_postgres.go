@@ -823,35 +823,6 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	return &deploymentWithRelated, nil
 }
 
-func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
-	query := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).
-		Select("d.*").
-		From("deployment d").
-		JoinClause(`join (
-		select id, name, max(version) as version
-		from deployment
-		where workspace_id = $1
-		group by name, id) as latest on d.id = latest.id`, filters.WorkspaceID)
-
-	page, err := common.Paginate(
-		common.SquirrelCursorPaginator[types.DeploymentWithRelated]{
-			Client:          c.client,
-			SelectBuilder:   query,
-			SortOrder:       "DESC",
-			SortColumn:      "created_at",
-			SortQueryPrefix: "d",
-			PageSize:        10,
-		},
-		filters.Cursor,
-	)
-
-	if err != nil {
-		return common.CursorPaginationInfo[types.DeploymentWithRelated]{}, err
-	}
-
-	return *page, nil
-}
-
 func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Context, workspaceId uint, deploymentExternalId string) (*types.DeploymentWithRelated, error) {
 	var deploymentWithRelated types.DeploymentWithRelated
 
