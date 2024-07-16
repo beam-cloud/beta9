@@ -24,10 +24,6 @@ controllers:
     rollingUpdate:
       unavailable:
       surge:
-    # pod:
-    #   disruptionBudget:
-    #     enabled: true
-    #     minAvailable: 25%
     initContainers:
       wait-on-backends:
         image:
