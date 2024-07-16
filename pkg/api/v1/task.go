@@ -22,13 +22,15 @@ type TaskGroup struct {
 	routerGroup    *echo.Group
 	config         types.AppConfig
 	backendRepo    repository.BackendRepository
+	taskRepo       repository.TaskRepository
 	redisClient    *common.RedisClient
 	taskDispatcher *task.Dispatcher
 }
 
-func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, config types.AppConfig) *TaskGroup {
+func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, config types.AppConfig) *TaskGroup {
 	group := &TaskGroup{routerGroup: g,
 		backendRepo:    backendRepo,
+		taskRepo:       taskRepo,
 		config:         config,
 		redisClient:    redisClient,
 		taskDispatcher: taskDispatcher,
@@ -83,6 +85,7 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 		for i := range tasks.Data {
 			tasks.Data[i].SanitizeStubConfig()
 			g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, &tasks.Data[i])
+			g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, &tasks.Data[i])
 		}
 		return ctx.JSON(http.StatusOK, tasks)
 	}
@@ -101,6 +104,7 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 
 		task.SanitizeStubConfig()
 		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
+		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
 
 		return ctx.JSON(http.StatusOK, task)
 	}
@@ -118,6 +122,16 @@ func (g *TaskGroup) addOutputsToTask(ctx context.Context, workspaceName string, 
 		task.Outputs = append(task.Outputs, types.TaskOutput{Name: fileName, URL: url, ExpiresIn: DefaultTaskOutputExpirationS})
 	}
 
+	return nil
+}
+
+func (g *TaskGroup) addStatsToTask(ctx context.Context, workspaceName string, task *types.TaskWithRelated) error {
+	tasksInFlight, err := g.taskRepo.TasksInFlight(ctx, workspaceName, task.Stub.ExternalId)
+	if err != nil {
+		return err
+	}
+
+	task.Stats.InFlight = uint32(tasksInFlight)
 	return nil
 }
 

@@ -130,6 +130,7 @@ type Task struct {
 type TaskWithRelated struct {
 	Task
 	Outputs   []TaskOutput `json:"outputs"`
+	Stats     TaskStats    `json:"stats"`
 	Workspace Workspace    `db:"workspace" json:"workspace"`
 	Stub      Stub         `db:"stub" json:"stub"`
 }
@@ -166,6 +167,10 @@ type TaskOutput struct {
 	Name      string `json:"name"`
 	URL       string `json:"url"`
 	ExpiresIn uint32 `json:"expires_in"`
+}
+
+type TaskStats struct {
+	InFlight uint32 `json:"tasks_in_flight"`
 }
 
 type StubConfigV1 struct {
