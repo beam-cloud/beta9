@@ -823,6 +823,37 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	return &deploymentWithRelated, nil
 }
 
+func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
+	query := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).
+		Select("d.*").
+		From("deployment d").
+		JoinClause(`join (
+			select name, max(version) as version, stub_type
+			from deployment
+			where workspace_id = ?
+			group by name, stub_type
+		)
+		as latest on d.name = latest.name and d.stub_type = latest.stub_type and d.version = latest.version`, filters.WorkspaceID)
+
+	page, err := common.Paginate(
+		common.SquirrelCursorPaginator[types.DeploymentWithRelated]{
+			Client:          c.client,
+			SelectBuilder:   query,
+			SortOrder:       "DESC",
+			SortColumn:      "created_at",
+			SortQueryPrefix: "d",
+			PageSize:        10,
+		},
+		filters.Cursor,
+	)
+
+	if err != nil {
+		return common.CursorPaginationInfo[types.DeploymentWithRelated]{}, err
+	}
+
+	return *page, nil
+}
+
 func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Context, workspaceId uint, deploymentExternalId string) (*types.DeploymentWithRelated, error) {
 	var deploymentWithRelated types.DeploymentWithRelated
 
@@ -875,12 +906,16 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 		qb = qb.Where(squirrel.Eq{"d.stub_type": filters.StubType})
 	}
 
-	if filters.Name != "" {
-		if err := uuid.Validate(filters.Name); err == nil {
-			qb = qb.Where(squirrel.Eq{"d.external_id": filters.Name})
+	if filters.SearchQuery != "" {
+		if err := uuid.Validate(filters.SearchQuery); err == nil {
+			qb = qb.Where(squirrel.Eq{"d.external_id": filters.SearchQuery})
 		} else {
-			qb = qb.Where(squirrel.Like{"d.name": "%" + filters.Name + "%"})
+			qb = qb.Where(squirrel.Like{"d.name": "%" + filters.SearchQuery + "%"})
 		}
+	}
+
+	if filters.Name != "" {
+		qb = qb.Where(squirrel.Like{"d.name": filters.Name})
 	}
 
 	if filters.Active != nil {
