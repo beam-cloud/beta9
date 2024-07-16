@@ -1,7 +1,6 @@
 package apiv1
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -81,7 +80,6 @@ func (g *StubGroup) RetrieveStub(ctx echo.Context) error {
 
 	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID)
 	if err != nil {
-		log.Println(err)
 		return HTTPInternalServerError("Failed to retrieve stub")
 	} else if stub == nil {
 		return HTTPNotFound()
