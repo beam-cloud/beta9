@@ -131,7 +131,7 @@ func (g *TaskGroup) addStatsToTask(ctx context.Context, workspaceName string, ta
 		return err
 	}
 
-	task.Stats.InFlight = uint32(tasksInFlight)
+	task.Stats.QueueDepth = uint32(tasksInFlight)
 	return nil
 }
 

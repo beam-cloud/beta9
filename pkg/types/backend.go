@@ -170,7 +170,7 @@ type TaskOutput struct {
 }
 
 type TaskStats struct {
-	InFlight uint32 `json:"tasks_in_flight"`
+	QueueDepth uint32 `json:"queue_depth"`
 }
 
 type StubConfigV1 struct {
