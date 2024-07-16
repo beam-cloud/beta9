@@ -220,7 +220,7 @@ func (t StubType) IsDeployment() bool {
 }
 
 type Stub struct {
-	Id            uint      `db:"id" json:"id"`
+	Id            uint      `db:"id" json:"_"`
 	ExternalId    string    `db:"external_id" json:"external_id"`
 	Name          string    `db:"name" json:"name"`
 	Type          StubType  `db:"type" json:"type"`

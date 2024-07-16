@@ -93,6 +93,7 @@ type BackendRepository interface {
 	UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error)
 	DeleteDeployment(ctx context.Context, deployment types.Deployment) error
 	ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error)
+	ListStubsPaginated(ctx context.Context, filters types.StubFilter) (common.CursorPaginationInfo[types.StubWithRelated], error)
 	GetConcurrencyLimit(ctx context.Context, concurrenyLimitId uint) (*types.ConcurrencyLimit, error)
 	GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error)
 	DeleteConcurrencyLimit(ctx context.Context, workspaceId types.Workspace) error

@@ -981,6 +981,10 @@ func (c *PostgresBackendRepository) listStubsQueryBuilder(filters types.StubFilt
 		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
 	}
 
+	if len(filters.StubTypes) > 0 {
+		qb = qb.Where(squirrel.Eq{"s.type": filters.StubTypes})
+	}
+
 	return qb
 }
 
@@ -999,6 +1003,26 @@ func (c *PostgresBackendRepository) ListStubs(ctx context.Context, filters types
 	}
 
 	return stubs, nil
+}
+
+func (c *PostgresBackendRepository) ListStubsPaginated(ctx context.Context, filters types.StubFilter) (common.CursorPaginationInfo[types.StubWithRelated], error) {
+	qb := c.listStubsQueryBuilder(filters)
+
+	page, err := common.Paginate(
+		common.SquirrelCursorPaginator[types.StubWithRelated]{
+			Client:          c.client,
+			SelectBuilder:   qb,
+			SortOrder:       "DESC",
+			SortColumn:      "created_at",
+			SortQueryPrefix: "s",
+			PageSize:        10,
+		},
+		filters.Cursor,
+	)
+	if err != nil {
+		return common.CursorPaginationInfo[types.StubWithRelated]{}, err
+	}
+	return *page, nil
 }
 
 func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error) {

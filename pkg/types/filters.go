@@ -48,4 +48,7 @@ type TaskFilter struct {
 type StubFilter struct {
 	WorkspaceID string      `query:"workspace_id"`
 	StubIds     StringSlice `query:"stub_ids"` // The query parameter name is "values"
+	StubTypes   StringSlice `query:"stub_types"`
+	Cursor      string      `query:"cursor"`
+	Pagination  bool        `query:"pagination"`
 }
