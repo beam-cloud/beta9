@@ -38,6 +38,7 @@ func NewDeploymentGroup(
 	}
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListDeployments))
+	g.GET("/:workspaceId/latest", auth.WithWorkspaceAuth(group.ListLatestDeployments))
 	g.GET("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.RetrieveDeployment))
 	g.POST("/:workspaceId/stop/:deploymentId/", auth.WithWorkspaceAuth(group.StopDeployment))
 	g.POST("/:workspaceId/stop-all-active-deployments", auth.WithClusterAdminAuth(group.StopAllActiveDeployments))
@@ -155,6 +156,27 @@ func (g *DeploymentGroup) DeleteDeployment(ctx echo.Context) error {
 	}
 
 	return ctx.NoContent(http.StatusOK)
+}
+
+func (g *DeploymentGroup) ListLatestDeployments(ctx echo.Context) error {
+	workspaceId := ctx.Param("workspaceId")
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return HTTPBadRequest("Invalid workspace ID")
+	}
+
+	var filters types.DeploymentFilter
+	if err := ctx.Bind(&filters); err != nil {
+		return HTTPBadRequest("Failed to decode query parameters")
+	}
+
+	filters.WorkspaceID = workspace.Id
+
+	if deployments, err := g.backendRepo.ListLatestDeploymentsWithRelatedPaginated(ctx.Request().Context(), filters); err != nil {
+		return HTTPInternalServerError("Failed to list deployments")
+	} else {
+		return ctx.JSON(http.StatusOK, deployments)
+	}
 }
 
 func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRelated, ctx echo.Context) error {
