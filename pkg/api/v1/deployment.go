@@ -1,7 +1,6 @@
 package apiv1
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -174,7 +173,6 @@ func (g *DeploymentGroup) ListLatestDeployments(ctx echo.Context) error {
 	filters.WorkspaceID = workspace.Id
 
 	if deployments, err := g.backendRepo.ListLatestDeploymentsWithRelatedPaginated(ctx.Request().Context(), filters); err != nil {
-		log.Println(err)
 		return HTTPInternalServerError("Failed to list deployments")
 	} else {
 		return ctx.JSON(http.StatusOK, deployments)

@@ -827,7 +827,7 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 	query := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).
 		Select("d.*").
 		From("deployment d").
-		JoinClause(`join (
+		Join(`(
 			select name, max(version) as version, stub_type
 			from deployment
 			where workspace_id = ?
