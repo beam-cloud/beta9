@@ -830,7 +830,7 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 		Join(`(
 			select name, max(version) as version, stub_type
 			from deployment
-			where workspace_id = ?
+			where workspace_id = ? and deleted_at is null
 			group by name, stub_type
 		)
 		as latest on d.name = latest.name and d.stub_type = latest.stub_type and d.version = latest.version`, filters.WorkspaceID)
