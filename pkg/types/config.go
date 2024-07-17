@@ -83,6 +83,10 @@ type CORSConfig struct {
 	AllowedHeaders []string `key:"allowHeaders" json:"allow_headers"`
 }
 
+type StubLimits struct {
+	Memory uint64 `key:"memory" json:"memory"`
+}
+
 type GatewayServiceConfig struct {
 	Host            string        `key:"host" json:"host"`
 	ExternalHost    string        `key:"externalHost" json:"external_host"`
@@ -90,6 +94,7 @@ type GatewayServiceConfig struct {
 	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
 	HTTP            HTTPConfig    `key:"http" json:"http"`
 	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
+	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
 }
 
 type ImageServiceConfig struct {
