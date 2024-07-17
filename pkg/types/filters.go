@@ -28,6 +28,7 @@ type DeploymentFilter struct {
 	CreatedAtStart string      `query:"created_at_start"`
 	CreatedAtEnd   string      `query:"created_at_end"`
 	Pagination     bool        `query:"pagination"`
+	SearchQuery    string      `query:"search_query"`
 }
 
 type TaskFilter struct {
