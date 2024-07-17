@@ -7,6 +7,7 @@ package volume;
 
 service VolumeService {
   rpc GetOrCreateVolume(GetOrCreateVolumeRequest) returns (GetOrCreateVolumeResponse) {}
+  rpc DeleteVolume(DeleteVolumeRequest) returns (DeleteVolumeResponse) {}
   rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse) {}
   rpc ListPath(ListPathRequest) returns (ListPathResponse) {}
   rpc DeletePath(DeletePathRequest) returns (DeletePathResponse) {}
@@ -32,6 +33,15 @@ message GetOrCreateVolumeResponse {
   bool ok = 1;
   string err_msg = 2;
   VolumeInstance volume = 3;
+}
+
+message DeleteVolumeRequest {
+  string name = 1;
+}
+
+message DeleteVolumeResponse {
+  bool ok = 1;
+  string err_msg = 2;
 }
 
 message PathInfo {

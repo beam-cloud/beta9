@@ -83,6 +83,7 @@ type BackendRepository interface {
 	GetStubByExternalId(ctx context.Context, externalId string) (*types.StubWithRelated, error)
 	GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
 	GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
+	DeleteVolume(ctx context.Context, workspaceId uint, name string) error
 	ListVolumesWithRelated(ctx context.Context, workspaceId uint) ([]types.VolumeWithRelated, error)
 	ListDeploymentsWithRelated(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error)
 	ListDeploymentsPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error)

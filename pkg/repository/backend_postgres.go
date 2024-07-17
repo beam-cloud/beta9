@@ -750,6 +750,15 @@ func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, works
 	return &volume, nil
 }
 
+func (c *PostgresBackendRepository) DeleteVolume(ctx context.Context, workspaceId uint, name string) error {
+	query := `DELETE FROM volume WHERE name = $1 AND workspace_id = $2;`
+	_, err := c.client.ExecContext(ctx, query, name, workspaceId)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *PostgresBackendRepository) ListVolumesWithRelated(ctx context.Context, workspaceId uint) ([]types.VolumeWithRelated, error) {
 	var volumes []types.VolumeWithRelated
 	query := `
