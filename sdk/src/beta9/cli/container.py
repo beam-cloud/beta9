@@ -93,7 +93,7 @@ def list_containers(ctx: click.Context, service: ServiceClient, format: str, col
         for dc in desired_columns:
             val = getattr(container, dc)
 
-            if type(val) == datetime.datetime:
+            if isinstance(val, datetime.datetime):
                 cols.append(terminal.humanize_date(val))
             else:
                 cols.append(val)

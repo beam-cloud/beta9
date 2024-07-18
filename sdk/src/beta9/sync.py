@@ -1,9 +1,8 @@
 import fnmatch
 import hashlib
 import os
-import uuid
-import zipfile
 import tempfile
+import zipfile
 from pathlib import Path
 from queue import Queue
 from typing import Generator, NamedTuple, Optional
