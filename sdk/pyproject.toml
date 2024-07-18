@@ -62,9 +62,8 @@ exclude_also = [
 
 [tool.ruff]
 line-length = 100
-ignore-init-module-imports = true
 exclude = ["src/beta9/clients"]
 src = ["src", "test", "bin"]
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "src/beta9/__init__.py" = ["F403"]
