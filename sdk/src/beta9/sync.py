@@ -3,6 +3,7 @@ import hashlib
 import os
 import uuid
 import zipfile
+import tempfile
 from pathlib import Path
 from queue import Queue
 from typing import Generator, NamedTuple, Optional
@@ -119,7 +120,7 @@ class FileSyncer:
 
         self._init_ignore_file()
         self.ignore_patterns = self._read_ignore_file()
-        temp_zip_name = f"/tmp/{uuid.uuid4()}"
+        temp_zip_name = tempfile.NamedTemporaryFile(delete=False).name
 
         with zipfile.ZipFile(temp_zip_name, "w") as zipf:
             for file in self._collect_files():
