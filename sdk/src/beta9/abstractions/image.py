@@ -1,7 +1,8 @@
+import os
 from pathlib import Path
-from typing import List, NamedTuple, Optional, Tuple, Union
+from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
 
-from .. import terminal
+from .. import env, terminal
 from ..abstractions.base import BaseAbstraction
 from ..clients.image import (
     BuildImageRequest,
@@ -10,14 +11,36 @@ from ..clients.image import (
     VerifyImageBuildRequest,
     VerifyImageBuildResponse,
 )
-from ..type import (
-    PythonVersion,
-)
+from ..type import PythonVersion
+
+try:
+    from typing import TypeAlias
+except ImportError:
+    from typing_extensions import TypeAlias
 
 
 class ImageBuildResult(NamedTuple):
     success: bool = False
     image_id: str = ""
+
+
+class ImageCredentialValueNotFound(Exception):
+    def __init__(self, key_name: str, *args: object) -> None:
+        super().__init__(*args)
+        self.key_name = key_name
+
+    def __str__(self) -> str:
+        return f"Did not find the environment variable {self.key_name}. Did you forget to set it?"
+
+
+class AWSCredentials(TypedDict, total=False):
+    AWS_ACCESS_KEY_ID: str
+    AWS_SECRET_ACCESS_KEY: str
+    AWS_SESSION_TOKEN: str
+    AWS_REGION: str
+
+
+ImageCredentials: TypeAlias = Union[AWSCredentials, Sequence[str]]
 
 
 class Image(BaseAbstraction):
@@ -31,6 +54,7 @@ class Image(BaseAbstraction):
         python_packages: Union[List[str], str] = [],
         commands: List[str] = [],
         base_image: Optional[str] = None,
+        base_image_creds: Optional[ImageCredentials] = None,
     ):
         """
         Creates an Image instance.
@@ -55,6 +79,28 @@ class Image(BaseAbstraction):
                 This image must contain a valid python executable that matches the version specified
                 in python_version (i.e. python3.8, python3.9, etc)
                 Default is None.
+            base_image_creds (Optional[ImageCredentials]):
+                A key/value pair or key sequence of environment variables that contain credentials to
+                a private registry. When provided as a dict, you must supply the correct keys and values.
+                When provided as a sequence, the keys are used to lookup the environment variable value
+                for you. Currently only AWS ECR is supported and can be configured by setting the
+                `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and `AWS_REGION` keys.
+                Default is None.
+
+        Example:
+
+            Using a custom private image from AWS ECR. By defining a sequence of AWS environment variable
+            keys, the Image object will lookup the values automatically.
+
+            ```python
+            image = Image(
+                base_image="111111111111.dkr.ecr.us-east-1.amazonaws.com/myapp:latest,
+                base_image_creds=("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"),
+            )
+            @endpoint(image=image)
+            def squared(i: int = 0) -> int:
+                return i**2
+            ```
         """
         super().__init__()
 
@@ -64,8 +110,8 @@ class Image(BaseAbstraction):
         self.python_version = python_version
         self.python_packages = self._sanitize_python_packages(python_packages)
         self.commands = commands
-        self.base_image = base_image
-        self.base_image_creds = None
+        self.base_image = base_image or ""
+        self.base_image_creds = base_image_creds or {}
         self._stub: Optional[ImageServiceStub] = None
 
     @property
@@ -118,6 +164,7 @@ class Image(BaseAbstraction):
                     python_version=self.python_version,
                     commands=self.commands,
                     existing_image_uri=self.base_image,
+                    existing_image_creds=self.get_credentials_from_env(),
                 )
             ):
                 if r.msg != "":
@@ -133,3 +180,21 @@ class Image(BaseAbstraction):
 
         terminal.header("Build complete 🎉")
         return ImageBuildResult(success=True, image_id=last_response.image_id)
+
+    def get_credentials_from_env(self) -> Dict[str, str]:
+        if env.is_remote():
+            return {}
+
+        keys = (
+            self.base_image_creds.keys()
+            if isinstance(self.base_image_creds, dict)
+            else self.base_image_creds
+        )
+
+        creds = {}
+        for key in keys:
+            if v := os.getenv(key):
+                creds[key] = v
+            else:
+                raise ImageCredentialValueNotFound(key)
+        return creds

@@ -34,7 +34,7 @@ message BuildImageRequest {
   string existing_image_uri = 4; // URI for an existing image in the format
   // "docker://image-repo-name:tag"
 
-  string existing_image_creds = 5;
+  map<string, string> existing_image_creds = 5;
 }
 
 message BuildImageResponse {
