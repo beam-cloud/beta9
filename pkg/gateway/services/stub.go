@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -12,6 +13,13 @@ import (
 
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if in.Memory > int64(gws.appConfig.GatewayService.StubLimits.Memory) {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("Memory must be %dGiB or less.", gws.appConfig.GatewayService.StubLimits.Memory/1024),
+		}, nil
+	}
 
 	autoscaler := &types.Autoscaler{}
 	if in.Autoscaler.Type == "" {

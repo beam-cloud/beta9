@@ -265,6 +265,7 @@ class GetOrCreateStubRequest(betterproto.Message):
 class GetOrCreateStubResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     stub_id: str = betterproto.string_field(2)
+    err_msg: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)

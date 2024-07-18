@@ -45,6 +45,8 @@ gateway:
       allowHeaders: "*"
       allowMethods: "*"
   shutdownTimeout: 180s
+  stubLimits:
+    memory: 32768
 imageService:
   cacheURL:
   localCacheEnabled: true

@@ -341,7 +341,10 @@ class RunnerAbstraction(BaseAbstraction):
                 self.stub_created = True
                 self.stub_id = stub_response.stub_id
             else:
-                terminal.error("Failed to get or create stub", exit=False)
+                if err := stub_response.err_msg:
+                    terminal.error(err, exit=False)
+                else:
+                    terminal.error("Failed to get or create stub", exit=False)
                 return False
 
         self.runtime_ready = True
