@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion7
 
 const (
 	VolumeService_GetOrCreateVolume_FullMethodName = "/volume.VolumeService/GetOrCreateVolume"
+	VolumeService_DeleteVolume_FullMethodName      = "/volume.VolumeService/DeleteVolume"
 	VolumeService_ListVolumes_FullMethodName       = "/volume.VolumeService/ListVolumes"
 	VolumeService_ListPath_FullMethodName          = "/volume.VolumeService/ListPath"
 	VolumeService_DeletePath_FullMethodName        = "/volume.VolumeService/DeletePath"
@@ -32,6 +33,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type VolumeServiceClient interface {
 	GetOrCreateVolume(ctx context.Context, in *GetOrCreateVolumeRequest, opts ...grpc.CallOption) (*GetOrCreateVolumeResponse, error)
+	DeleteVolume(ctx context.Context, in *DeleteVolumeRequest, opts ...grpc.CallOption) (*DeleteVolumeResponse, error)
 	ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error)
 	ListPath(ctx context.Context, in *ListPathRequest, opts ...grpc.CallOption) (*ListPathResponse, error)
 	DeletePath(ctx context.Context, in *DeletePathRequest, opts ...grpc.CallOption) (*DeletePathResponse, error)
@@ -50,6 +52,15 @@ func NewVolumeServiceClient(cc grpc.ClientConnInterface) VolumeServiceClient {
 func (c *volumeServiceClient) GetOrCreateVolume(ctx context.Context, in *GetOrCreateVolumeRequest, opts ...grpc.CallOption) (*GetOrCreateVolumeResponse, error) {
 	out := new(GetOrCreateVolumeResponse)
 	err := c.cc.Invoke(ctx, VolumeService_GetOrCreateVolume_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *volumeServiceClient) DeleteVolume(ctx context.Context, in *DeleteVolumeRequest, opts ...grpc.CallOption) (*DeleteVolumeResponse, error) {
+	out := new(DeleteVolumeResponse)
+	err := c.cc.Invoke(ctx, VolumeService_DeleteVolume_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +142,7 @@ func (c *volumeServiceClient) MovePath(ctx context.Context, in *MovePathRequest,
 // for forward compatibility
 type VolumeServiceServer interface {
 	GetOrCreateVolume(context.Context, *GetOrCreateVolumeRequest) (*GetOrCreateVolumeResponse, error)
+	DeleteVolume(context.Context, *DeleteVolumeRequest) (*DeleteVolumeResponse, error)
 	ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error)
 	ListPath(context.Context, *ListPathRequest) (*ListPathResponse, error)
 	DeletePath(context.Context, *DeletePathRequest) (*DeletePathResponse, error)
@@ -145,6 +157,9 @@ type UnimplementedVolumeServiceServer struct {
 
 func (UnimplementedVolumeServiceServer) GetOrCreateVolume(context.Context, *GetOrCreateVolumeRequest) (*GetOrCreateVolumeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetOrCreateVolume not implemented")
+}
+func (UnimplementedVolumeServiceServer) DeleteVolume(context.Context, *DeleteVolumeRequest) (*DeleteVolumeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteVolume not implemented")
 }
 func (UnimplementedVolumeServiceServer) ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListVolumes not implemented")
@@ -188,6 +203,24 @@ func _VolumeService_GetOrCreateVolume_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(VolumeServiceServer).GetOrCreateVolume(ctx, req.(*GetOrCreateVolumeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VolumeService_DeleteVolume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteVolumeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeServiceServer).DeleteVolume(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeService_DeleteVolume_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeServiceServer).DeleteVolume(ctx, req.(*DeleteVolumeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -300,6 +333,10 @@ var VolumeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetOrCreateVolume",
 			Handler:    _VolumeService_GetOrCreateVolume_Handler,
+		},
+		{
+			MethodName: "DeleteVolume",
+			Handler:    _VolumeService_DeleteVolume_Handler,
 		},
 		{
 			MethodName: "ListVolumes",
