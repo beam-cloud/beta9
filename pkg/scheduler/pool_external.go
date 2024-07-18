@@ -292,12 +292,6 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 			SecurityContext: &corev1.SecurityContext{
 				Privileged: ptr.To(true),
 			},
-			Ports: []corev1.ContainerPort{
-				{
-					Name:          "metrics",
-					ContainerPort: int32(wpc.config.Monitoring.Prometheus.Port),
-				},
-			},
 			Env:          env,
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
 			Resources:    resources,

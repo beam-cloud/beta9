@@ -544,7 +544,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	go s.updateContainerStatus(request)
 
 	// Set worker hostname
-	hostname := fmt.Sprintf("%s:%d", s.podAddr, defaultWorkerServerPort)
+	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
 	s.containerRepo.SetWorkerAddress(request.ContainerId, hostname)
 
 	// Handle stdout/stderr from spawned container
