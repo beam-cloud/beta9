@@ -26,7 +26,6 @@ import (
 
 const (
 	defaultWorkingDirectory string = "/mnt/code"
-	defaultWorkerServerPort int    = 1989
 )
 
 type RunCServer struct {
