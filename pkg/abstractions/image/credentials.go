@@ -82,8 +82,8 @@ func GetECRToken(opts *BuildOpts) (string, error) {
 	}
 
 	// Return the username and password
-	var username = parts[0]
-	var password = parts[1]
+	username := parts[0]
+	password := parts[1]
 
 	var token = fmt.Sprintf("%s:%s", username, password)
 	return token, nil
