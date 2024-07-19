@@ -55,7 +55,7 @@ func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], image
 }
 
 func (s *RunCServer) Start() error {
-	listener, err := net.Listen("tcp", ":0") // Random port
+	listener, err := net.Listen("tcp", ":0") // // Random free port
 	if err != nil {
 		log.Fatalf("failed to listen: %v\n", err)
 	}
