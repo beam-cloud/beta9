@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -236,8 +235,8 @@ func (c *ImageClient) Cleanup() error {
 	return nil
 }
 
-func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds *string) error {
-	baseImage, err := extractImageNameAndTag(sourceImage)
+func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds string) error {
+	baseImage, err := image.ExtractImageNameAndTag(sourceImage)
 	if err != nil {
 		return err
 	}
@@ -282,10 +281,10 @@ func (c *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
 	return runc.Monitor.Start(cmd)
 }
 
-func (c *ImageClient) args(creds *string) (out []string) {
-	if creds != nil && *creds != "" {
-		out = append(out, "--src-creds", *creds)
-	} else if creds != nil && *creds == "" {
+func (c *ImageClient) args(creds string) (out []string) {
+	if creds != "" {
+		out = append(out, "--src-creds", creds)
+	} else if creds == "" {
 		out = append(out, "--src-no-creds")
 	} else if c.creds != "" {
 		out = append(out, "--src-creds", c.creds)
@@ -396,29 +395,4 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 
 	log.Printf("Image <%v> push took %v\n", imageId, time.Since(startTime))
 	return nil
-}
-
-var imageNamePattern = regexp.MustCompile(`^(?:(.*?)\/)?(?:([^\/:]+)\/)?([^\/:]+)(?::([^\/:]+))?$`)
-
-func extractImageNameAndTag(sourceImage string) (image.BaseImage, error) {
-	matches := imageNamePattern.FindStringSubmatch(sourceImage)
-	if matches == nil {
-		return image.BaseImage{}, errors.New("invalid image URI format")
-	}
-
-	registry, name, tag := matches[1], matches[3], matches[4]
-
-	if registry == "" {
-		registry = "docker.io"
-	}
-
-	if tag == "" {
-		tag = "latest"
-	}
-
-	return image.BaseImage{
-		SourceRegistry: registry,
-		ImageName:      name,
-		ImageTag:       tag,
-	}, nil
 }
