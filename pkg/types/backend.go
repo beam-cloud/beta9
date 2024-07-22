@@ -170,7 +170,8 @@ type TaskOutput struct {
 }
 
 type TaskStats struct {
-	QueueDepth uint32 `json:"queue_depth"`
+	ActiveContainers uint32 `json:"active_containers"`
+	QueueDepth       uint32 `json:"queue_depth"`
 }
 
 type StubConfigV1 struct {
