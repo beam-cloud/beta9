@@ -224,6 +224,10 @@ func (t StubType) IsDeployment() bool {
 	return strings.HasSuffix(string(t), "/deployment")
 }
 
+func (t StubType) Kind() string {
+	return strings.Split(string(t), "/")[0]
+}
+
 type Stub struct {
 	Id            uint      `db:"id" json:"_"`
 	ExternalId    string    `db:"external_id" json:"external_id"`
@@ -235,6 +239,15 @@ type Stub struct {
 	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
 	CreatedAt     time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
+}
+
+func (s *Stub) UnmarshalConfig() (*StubConfigV1, error) {
+	var config *StubConfigV1
+	err := json.Unmarshal([]byte(s.Config), &config)
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
 }
 
 type StubWithRelated struct {

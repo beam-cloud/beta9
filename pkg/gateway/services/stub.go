@@ -132,11 +132,17 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
+	invokeURL := fmt.Sprintf("%s/%s/%s/v%d", gws.appConfig.GatewayService.ExternalURL, stub.Type.Kind(), in.Name, deployment.Version)
+	if stubConfig, err := stub.UnmarshalConfig(); err == nil && !stubConfig.Authorized {
+		invokeURL = fmt.Sprintf("%s/%s/%s/%s", gws.appConfig.GatewayService.ExternalURL, stub.Type.Kind(), "public", stub.ExternalId)
+	}
+
 	go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
 
 	return &pb.DeployStubResponse{
 		Ok:           true,
 		DeploymentId: deployment.ExternalId,
 		Version:      uint32(deployment.Version),
+		InvokeUrl:    invokeURL,
 	}, nil
 }
