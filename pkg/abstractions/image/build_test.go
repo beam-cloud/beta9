@@ -3,62 +3,63 @@ package image
 import (
 	"testing"
 
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestExtractImageNameAndTag(t *testing.T) {
-	b := &Builder{}
-
 	tests := []struct {
-		imageURI      string
-		expected      BaseImage
-		expectedError error
+		image        string
+		wantTag      string
+		wantName     string
+		wantRegistry string
 	}{
 		{
-			imageURI: "docker.io/registry1/docker-image:v1",
-			expected: BaseImage{
-				SourceRegistry: "docker.io/registry1",
-				ImageName:      "docker-image",
-				ImageTag:       "v1",
-			},
-			expectedError: nil,
+			image:        "nginx",
+			wantTag:      "latest",
+			wantName:     "nginx",
+			wantRegistry: "docker.io",
 		},
 		{
-			imageURI: "docker.io/registry1/docker-image",
-			expected: BaseImage{
-				SourceRegistry: "docker.io/registry1",
-				ImageName:      "docker-image",
-				ImageTag:       "latest",
-			},
-			expectedError: nil,
+			image:        "docker.io/nginx",
+			wantTag:      "latest",
+			wantName:     "nginx",
+			wantRegistry: "docker.io",
 		},
 		{
-			imageURI:      "",
-			expected:      BaseImage{},
-			expectedError: errors.New("invalid image URI format"),
+			image:        "docker.io/nginx:1.25.3",
+			wantTag:      "1.25.3",
+			wantName:     "nginx",
+			wantRegistry: "docker.io",
 		},
 		{
-			imageURI: "ubuntu:22.04",
-			expected: BaseImage{
-				SourceRegistry: "docker.io",
-				ImageName:      "ubuntu",
-				ImageTag:       "22.04",
-			},
-			expectedError: nil,
+			image:        "docker.io/nginx:latest",
+			wantTag:      "latest",
+			wantName:     "nginx",
+			wantRegistry: "docker.io",
+		},
+		{
+			image:        "registry.localhost:5000/beta9-runner:py311-latest",
+			wantTag:      "py311-latest",
+			wantName:     "beta9-runner",
+			wantRegistry: "registry.localhost:5000",
+		},
+		{
+			image:        "111111111111.dkr.ecr.us-east-1.amazonaws.com/myapp:latest",
+			wantTag:      "latest",
+			wantName:     "myapp",
+			wantRegistry: "111111111111.dkr.ecr.us-east-1.amazonaws.com",
 		},
 	}
 
-	for _, tt := range tests {
-		result, err := b.extractImageNameAndTag(tt.imageURI)
-		assert.Equal(t, tt.expected, result)
+	for _, test := range tests {
+		t.Run(test.image, func(t *testing.T) {
+			image, err := ExtractImageNameAndTag(test.image)
+			assert.NoError(t, err)
 
-		if tt.expectedError != nil {
-			assert.NotNil(t, err)
-			assert.Equal(t, tt.expectedError.Error(), err.Error())
-		} else {
-			assert.Nil(t, err)
-		}
+			assert.Equal(t, test.wantTag, image.ImageTag)
+			assert.Equal(t, test.wantName, image.ImageName)
+			assert.Equal(t, test.wantRegistry, image.SourceRegistry)
+		})
 	}
 }
 

@@ -105,8 +105,8 @@ class Endpoint(RunnerAbstraction):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
-        authorized: Optional[bool] = True,
-        autoscaler: Optional[Autoscaler] = QueueDepthAutoscaler(),
+        authorized: bool = True,
+        autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
     ):
         super().__init__(
@@ -172,14 +172,8 @@ class _CallableWrapper:
         )
 
         if deploy_response.ok:
-            base_url = self.parent.settings.api_host
-            if not base_url.startswith(("http://", "https://")):
-                base_url = f"http://{base_url}"
-
             terminal.header("Deployed 🎉")
-            self.parent.print_invocation_snippet(
-                invocation_url=f"{base_url}/endpoint/{name}/v{deploy_response.version}"
-            )
+            self.parent.print_invocation_snippet(deploy_response.invoke_url)
 
         return deploy_response.ok
 

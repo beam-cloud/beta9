@@ -41,11 +41,12 @@ type BuildOpts struct {
 	BaseImageRegistry  string
 	BaseImageName      string
 	BaseImageTag       string
+	BaseImageCreds     string
 	PythonVersion      string
 	PythonPackages     []string
 	Commands           []string
 	ExistingImageUri   string
-	ExistingImageCreds *string
+	ExistingImageCreds map[string]string
 	ForceRebuild       bool
 }
 
@@ -141,15 +142,16 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	err = b.scheduler.Run(&types.ContainerRequest{
-		ContainerId:  containerId,
-		Env:          []string{},
-		Cpu:          cpu,
-		Memory:       memory,
-		ImageId:      baseImageId,
-		SourceImage:  &sourceImage,
-		WorkspaceId:  authInfo.Workspace.ExternalId,
-		EntryPoint:   []string{"tail", "-f", "/dev/null"},
-		PoolSelector: b.config.ImageService.BuildContainerPoolSelector,
+		ContainerId:      containerId,
+		Env:              []string{},
+		Cpu:              cpu,
+		Memory:           memory,
+		ImageId:          baseImageId,
+		SourceImage:      &sourceImage,
+		SourceImageCreds: opts.BaseImageCreds,
+		WorkspaceId:      authInfo.Workspace.ExternalId,
+		EntryPoint:       []string{"tail", "-f", "/dev/null"},
+		PoolSelector:     b.config.ImageService.BuildContainerPoolSelector,
 	})
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
@@ -289,12 +291,20 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Using custom base image: %s\n", opts.ExistingImageUri)}
 	}
 
-	baseImage, err := b.extractImageNameAndTag(opts.ExistingImageUri)
+	baseImage, err := ExtractImageNameAndTag(opts.ExistingImageUri)
 	if err != nil {
 		if outputChan != nil {
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
 		}
 		return err
+	}
+
+	if len(opts.ExistingImageCreds) > 0 && opts.ExistingImageUri != "" {
+		token, err := GetRegistryToken(opts)
+		if err != nil {
+			return err
+		}
+		opts.BaseImageCreds = token
 	}
 
 	opts.BaseImageRegistry = baseImage.SourceRegistry
@@ -331,36 +341,6 @@ func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
 }
 
-// Extracts the image name and tag from a given Docker image URI.
-// Returns an error if the URI is invalid.
-func (b *Builder) extractImageNameAndTag(imageURI string) (BaseImage, error) {
-	re := regexp.MustCompile(`^(([^/]+/[^/]+)/)?([^:]+):?(.*)$`)
-	matches := re.FindStringSubmatch(imageURI)
-
-	if matches == nil {
-		return BaseImage{}, errors.New("invalid image URI format")
-	}
-
-	// Use default source registry if not specified
-	sourceRegistry := "docker.io"
-	if matches[2] != "" {
-		sourceRegistry = matches[2]
-	}
-
-	imageName := matches[3]
-	imageTag := "latest"
-
-	if matches[4] != "" {
-		imageTag = matches[4]
-	}
-
-	return BaseImage{
-		SourceRegistry: sourceRegistry,
-		ImageName:      imageName,
-		ImageTag:       imageTag,
-	}, nil
-}
-
 func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common gcc curl git"
 	components := []string{
@@ -386,4 +366,29 @@ func (b *Builder) generatePipInstallCommand(opts *BuildOpts) string {
 
 	packages := strings.Join(escapedPackages, " ")
 	return fmt.Sprintf("%s -m pip install --root-user-action=ignore %s", opts.PythonVersion, packages)
+}
+
+var imageNamePattern = regexp.MustCompile(`^(?:([^/]+)(?:/))?((?:[^/:]+/)?[^/:]+)(?::([^/]+))?$`)
+
+func ExtractImageNameAndTag(imageURI string) (BaseImage, error) {
+	matches := imageNamePattern.FindStringSubmatch(imageURI)
+	if matches == nil {
+		return BaseImage{}, errors.New("invalid image URI format")
+	}
+
+	registry, name, tag := matches[1], matches[2], matches[3]
+
+	if registry == "" {
+		registry = "docker.io"
+	}
+
+	if tag == "" {
+		tag = "latest"
+	}
+
+	return BaseImage{
+		SourceRegistry: registry,
+		ImageName:      name,
+		ImageTag:       tag,
+	}, nil
 }

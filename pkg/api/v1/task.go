@@ -23,14 +23,16 @@ type TaskGroup struct {
 	config         types.AppConfig
 	backendRepo    repository.BackendRepository
 	taskRepo       repository.TaskRepository
+	containerRepo  repository.ContainerRepository
 	redisClient    *common.RedisClient
 	taskDispatcher *task.Dispatcher
 }
 
-func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, config types.AppConfig) *TaskGroup {
+func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, config types.AppConfig) *TaskGroup {
 	group := &TaskGroup{routerGroup: g,
 		backendRepo:    backendRepo,
 		taskRepo:       taskRepo,
+		containerRepo:  containerRepo,
 		config:         config,
 		redisClient:    redisClient,
 		taskDispatcher: taskDispatcher,
@@ -136,8 +138,14 @@ func (g *TaskGroup) addStatsToTask(ctx context.Context, workspaceName string, ta
 	if err != nil {
 		return err
 	}
-
 	task.Stats.QueueDepth = uint32(tasksInFlight)
+
+	activeContainers, err := g.containerRepo.GetActiveContainersByStubId(task.Stub.ExternalId)
+	if err != nil {
+		return err
+	}
+	task.Stats.ActiveContainers = uint32(len(activeContainers))
+
 	return nil
 }
 

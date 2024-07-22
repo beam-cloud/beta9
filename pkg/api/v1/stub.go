@@ -21,9 +21,9 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 		config:      config,
 	}
 
-	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId))  // Allows workspace admins to list stubs specific to their workspace
-	g.GET("/:workspaceId/:stubId", auth.WithClusterAdminAuth(group.RetrieveStub)) // Allows cluster admins to retrieve a specific stub
-	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                         // Allows cluster admins to list all stubs
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId)) // Allows workspace admins to list stubs specific to their workspace
+	g.GET("/:workspaceId/:stubId", auth.WithWorkspaceAuth(group.RetrieveStub))   // Allows workspace admins to retrieve a specific stub
+	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                        // Allows cluster admins to list all stubs
 
 	return group
 }

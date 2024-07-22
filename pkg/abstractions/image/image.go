@@ -85,13 +85,14 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	log.Printf("incoming image build request: %+v", in)
 
 	buildOptions := &BuildOpts{
-		BaseImageTag:      is.config.ImageService.Runner.Tags[in.PythonVersion],
-		BaseImageName:     is.config.ImageService.Runner.BaseImageName,
-		BaseImageRegistry: is.config.ImageService.Runner.BaseImageRegistry,
-		PythonVersion:     in.PythonVersion,
-		PythonPackages:    in.PythonPackages,
-		Commands:          in.Commands,
-		ExistingImageUri:  in.ExistingImageUri,
+		BaseImageTag:       is.config.ImageService.Runner.Tags[in.PythonVersion],
+		BaseImageName:      is.config.ImageService.Runner.BaseImageName,
+		BaseImageRegistry:  is.config.ImageService.Runner.BaseImageRegistry,
+		PythonVersion:      in.PythonVersion,
+		PythonPackages:     in.PythonPackages,
+		Commands:           in.Commands,
+		ExistingImageUri:   in.ExistingImageUri,
+		ExistingImageCreds: in.ExistingImageCreds,
 	}
 
 	ctx := stream.Context()

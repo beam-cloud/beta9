@@ -1,6 +1,5 @@
 import inspect
 import os
-import textwrap
 import time
 from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
@@ -96,21 +95,22 @@ class RunnerAbstraction(BaseAbstraction):
         self.settings: SDKSettings = get_settings()
         self.config_context: ConfigContext = get_config_context()
 
-    def print_invocation_snippet(self, invocation_url) -> None:
+    def print_invocation_snippet(self, invocation_url: str) -> None:
         """Print curl request to call deployed container URL"""
 
         terminal.header("Invocation details")
-        terminal.print(
-            textwrap.dedent(f"""\
-                curl -X POST '{invocation_url}' \\
-                -H 'Connection: keep-alive' \\
-                -H 'Content-Type: application/json' \\
-                -H 'Authorization: Bearer {self.config_context.token}' \\
-                -d '{"{}"}'\
-            """),
-            crop=False,
-            overflow="ignore",
-        )
+        commands = [
+            f"curl -X POST '{invocation_url}' \\",
+            "-H 'Connection: keep-alive' \\",
+            "-H 'Content-Type: application/json' \\",
+            *(
+                [f"-H 'Authorization: Bearer {self.config_context.token}' \\"]
+                if self.authorized
+                else []
+            ),
+            "-d '{}'",
+        ]
+        terminal.print("\n".join(commands), crop=False, overflow="ignore")
 
     def _parse_memory(self, memory_str: str) -> int:
         """Parse memory str (with units) to megabytes."""

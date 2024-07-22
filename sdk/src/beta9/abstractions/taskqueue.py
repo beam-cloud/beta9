@@ -178,14 +178,8 @@ class _CallableWrapper:
         )
 
         if deploy_response.ok:
-            base_url = self.parent.settings.api_host
-            if not base_url.startswith(("http://", "https://")):
-                base_url = f"http://{base_url}"
-
             terminal.header("Deployed 🎉")
-            self.parent.print_invocation_snippet(
-                invocation_url=f"{base_url}/taskqueue/{name}/v{deploy_response.version}"
-            )
+            self.parent.print_invocation_snippet(deploy_response.invoke_url)
 
         return deploy_response.ok
 
