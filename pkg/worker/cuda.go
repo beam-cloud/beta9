@@ -112,11 +112,26 @@ func (c *ContainerCudaManager) AssignGpuDevices(containerId string, gpuCount uin
 	}, nil
 }
 
+func hexToPaddedString(hexStr string) (string, error) {
+	// Remove the "0x" prefix if it exists
+	hexStr = strings.TrimPrefix(hexStr, "0x")
+
+	// Parse the hexadecimal string to an integer
+	value, err := strconv.ParseUint(hexStr, 16, 16)
+	if err != nil {
+		return "", err
+	}
+
+	// Format the integer as a zero-padded string with 4 digits
+	paddedStr := fmt.Sprintf("%04x", value)
+	return paddedStr, nil
+}
+
 func (c *ContainerCudaManager) availableGPUDevices() ([]int, error) {
 	// Find available GPU BUS IDs
 
 	command := "nvidia-smi"
-	commandArgs := []string{"--query-gpu=pci.bus_id,index", "--format=csv,noheader,nounits"}
+	commandArgs := []string{"--query-gpu=pci.domain,pci.bus_id,index", "--format=csv,noheader,nounits"}
 
 	out, err := exec.Command(command, commandArgs...).Output()
 	if err != nil {
@@ -135,9 +150,17 @@ func (c *ContainerCudaManager) availableGPUDevices() ([]int, error) {
 			return nil, fmt.Errorf("unexpected output from nvidia-smi: %s", line)
 		}
 
-		busId := strings.TrimPrefix(strings.TrimSpace(parts[0]), "0000")
+		domain, err := hexToPaddedString(strings.TrimSpace(parts[0]))
+		if err != nil {
+			return nil, err
+		}
+
+		// PCI bus_id is shown to be "domain:bus:device.function", but the folder in /proc/driver/nvidia/gpus is just "bus:device.function"
+		busId := strings.TrimPrefix(strings.TrimSpace(parts[0]), domain)
+		gpuIndex := strings.TrimSpace(parts[2])
+
 		if _, err := os.Stat(fmt.Sprintf("/proc/driver/nvidia/gpus/%s", busId)); err == nil {
-			index, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+			index, err := strconv.Atoi(strings.TrimSpace(gpuIndex))
 			if err != nil {
 				return nil, err
 			}
