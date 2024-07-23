@@ -143,7 +143,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 		localCachePath = ""
 	}
 
-	if c.config.BlobCache.BlobFs.Enabled && blobfsAvailable(baseBlobFsPath) {
+	if c.config.BlobCache.BlobFs.Enabled && blobfsAvailable(baseBlobFsPath) && !isBuildContainer {
 		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
 		sourceOffset := int64(0)
 
