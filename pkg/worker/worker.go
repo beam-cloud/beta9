@@ -290,6 +290,8 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
 
+	log.Printf("<%s> - read bundle config.\n", containerID)
+
 	// Generate dynamic runc spec for this container
 	spec, err := s.specFromRequest(request, &ContainerOptions{
 		BindPort:    bindPort,

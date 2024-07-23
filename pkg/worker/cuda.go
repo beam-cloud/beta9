@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -110,11 +112,46 @@ func (c *ContainerCudaManager) AssignGpuDevices(containerId string, gpuCount uin
 	}, nil
 }
 
+func (c *ContainerCudaManager) availableGPUDevices() ([]int, error) {
+	// Find available GPU BUS IDs
+
+	command := "nvidia-smi"
+	commandArgs := []string{"--query-gpu=pci.bus_id,index", "--format=csv,noheader,nounits"}
+
+	out, err := exec.Command(command, commandArgs...).Output()
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse the output
+	result := []int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if len(line) == 0 {
+			continue
+		}
+
+		parts := strings.Split(line, ",")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("unexpected output from nvidia-smi: %s", line)
+		}
+
+		busId := strings.TrimPrefix(strings.TrimSpace(parts[0]), "0000")
+		if _, err := os.Stat(fmt.Sprintf("/proc/driver/nvidia/gpus/%s", busId)); err == nil {
+			index, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if err != nil {
+				return nil, err
+			}
+
+			result = append(result, index)
+		}
+	}
+
+	return result, nil
+}
+
 func (c *ContainerCudaManager) chooseDevices(containerId string, requestedGpuCount uint32) ([]int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	allocatedDevices := []int{}
 
 	currentAllocations := make(map[int]bool)
 	c.gpuAllocationMap.Range(func(_ string, value []int) bool {
@@ -124,22 +161,33 @@ func (c *ContainerCudaManager) chooseDevices(containerId string, requestedGpuCou
 		return true // Continue iteration
 	})
 
+	availableDevices, err := c.availableGPUDevices()
+	if err != nil {
+		return nil, err
+	}
+
+	allocableDevices := []int{}
 	// Find available GPUs and allocate to the current container
-	for gpuId := 0; gpuId < int(c.gpuCount) && uint32(len(allocatedDevices)) < requestedGpuCount; gpuId++ {
-		if !currentAllocations[gpuId] {
-			allocatedDevices = append(allocatedDevices, gpuId)
+	if len(currentAllocations) < len(availableDevices) {
+		for _, gpuId := range availableDevices {
+			if !currentAllocations[gpuId] {
+				allocableDevices = append(allocableDevices, gpuId)
+			}
 		}
 	}
 
 	// Check if we managed to allocate the requested number of GPUs
-	if len(allocatedDevices) < int(requestedGpuCount) {
-		return nil, fmt.Errorf("not enough GPUs available, requested: %d, available: %d", requestedGpuCount, int(c.gpuCount)-len(currentAllocations))
+	if len(allocableDevices) < int(requestedGpuCount) {
+		return nil, fmt.Errorf("not enough GPUs available, requested: %d, allocable: %d out of %d", requestedGpuCount, int(c.gpuCount)-len(allocableDevices), len(availableDevices))
 	}
 
-	// Save the allocation in the SafeMap
-	c.gpuAllocationMap.Set(containerId, allocatedDevices)
+	// Allocate the requested number of GPUs
+	devicesToAllocate := allocableDevices[:requestedGpuCount]
 
-	return allocatedDevices, nil
+	// Save the allocation in the SafeMap
+	c.gpuAllocationMap.Set(containerId, devicesToAllocate)
+
+	return availableDevices, nil
 }
 
 // getDeviceMajorNumber returns the major device number for the given device node path
