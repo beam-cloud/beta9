@@ -270,9 +270,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}
 
-	defer func() {
-		os.RemoveAll(tmpBundlePath)
-	}()
+	defer os.RemoveAll(baseTmpBundlePath)
 
 	return c.Archive(ctx, tmpBundlePath, imageId, nil)
 }
