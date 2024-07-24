@@ -241,7 +241,10 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 		return err
 	}
 
-	dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
+	baseTmpBundlePath := filepath.Join(c.imageBundlePath, baseImage.Repo)
+	os.MkdirAll(baseTmpBundlePath, 0755)
+
+	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
 
 	args = append(args, c.args(creds)...)
@@ -258,11 +261,11 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 
 	status, err := runc.Monitor.Wait(cmd, ec)
 	if err == nil && status != 0 {
-		log.Printf("unable to copy base image: %v -> %v", sourceImage, dest)
+		return fmt.Errorf("unable to copy image: %v", cmd.String())
 	}
 
-	tmpBundlePath := filepath.Join(c.imageBundlePath, imageId)
-	err = c.unpack(baseImage.ImageName, baseImage.ImageTag, tmpBundlePath)
+	tmpBundlePath := filepath.Join(baseTmpBundlePath, imageId)
+	err = c.unpack(baseImage.Repo, baseImage.Tag, tmpBundlePath)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}
