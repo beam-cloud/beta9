@@ -93,12 +93,34 @@ func mockStat(path string, stat *syscall.Stat_t) error {
 	return nil
 }
 
+type NvidiaSMIClientForTest struct {
+	GpuCount int
+}
+
+func (c *NvidiaSMIClientForTest) GetGpuMemoryUsage(deviceIndex int) (GpuMemoryUsageStats, error) {
+	return GpuMemoryUsageStats{}, nil
+}
+
+func (c *NvidiaSMIClientForTest) AvailableGPUDevices() ([]int, error) {
+	gpus := []int{}
+	for i := 0; i < c.GpuCount; i++ {
+		gpus = append(gpus, i)
+	}
+
+	return gpus, nil
+}
+
 func TestAssignAndUnassignGpuDevices(t *testing.T) {
-	manager := NewContainerCudaManager(4) // Assume a machine with 4 GPUs
+	// Assume a machine with 4 GPUs
+	manager := NewContainerCudaManager(4)
 	manager.statFunc = mockStat
 
 	// Assign 2 GPUs to a container
 	gpuCount := 2
+	manager.nvidiaSmi = &NvidiaSMIClientForTest{
+		GpuCount: 4,
+	}
+
 	assignedDevices, err := manager.AssignGpuDevices("container1", uint32(gpuCount))
 	if err != nil {
 		t.Fatalf("Failed to assign GPU devices: %v", err)
@@ -137,6 +159,10 @@ func TestAssignMoreGPUsThanAvailable(t *testing.T) {
 func TestAssignGPUsToMultipleContainers(t *testing.T) {
 	manager := NewContainerCudaManager(4) // Assume a machine with 4 GPUs
 	manager.statFunc = mockStat
+
+	manager.nvidiaSmi = &NvidiaSMIClientForTest{
+		GpuCount: 4,
+	}
 
 	// Assign 2 GPUs to the first container
 	_, err := manager.AssignGpuDevices("container1", 2)

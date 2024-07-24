@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
-	"strconv"
 	"strings"
 	"syscall"
 
@@ -25,6 +23,7 @@ type ContainerCudaManager struct {
 	gpuCount         uint32
 	mu               sync.Mutex
 	statFunc         func(path string, stat *syscall.Stat_t) (err error)
+	nvidiaSmi        NvidiaSMIClientInterface
 }
 
 func NewContainerCudaManager(gpuCount uint32) *ContainerCudaManager {
@@ -33,6 +32,7 @@ func NewContainerCudaManager(gpuCount uint32) *ContainerCudaManager {
 		gpuCount:         gpuCount,
 		mu:               sync.Mutex{},
 		statFunc:         syscall.Stat,
+		nvidiaSmi:        NewNvidiaSMIClient(),
 	}
 }
 
@@ -112,66 +112,6 @@ func (c *ContainerCudaManager) AssignGpuDevices(containerId string, gpuCount uin
 	}, nil
 }
 
-func hexToPaddedString(hexStr string) (string, error) {
-	// Remove the "0x" prefix if it exists
-	hexStr = strings.TrimPrefix(hexStr, "0x")
-
-	// Parse the hexadecimal string to an integer
-	value, err := strconv.ParseUint(hexStr, 16, 16)
-	if err != nil {
-		return "", err
-	}
-
-	// Format the integer as a zero-padded string with 4 digits
-	paddedStr := fmt.Sprintf("%04x", value)
-	return paddedStr, nil
-}
-
-func (c *ContainerCudaManager) availableGPUDevices() ([]int, error) {
-	// Find available GPU BUS IDs
-
-	command := "nvidia-smi"
-	commandArgs := []string{"--query-gpu=pci.domain,pci.bus_id,index", "--format=csv,noheader,nounits"}
-
-	out, err := exec.Command(command, commandArgs...).Output()
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse the output
-	result := []int{}
-	for _, line := range strings.Split(string(out), "\n") {
-		if len(line) == 0 {
-			continue
-		}
-
-		parts := strings.Split(line, ",")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("unexpected output from nvidia-smi: %s", line)
-		}
-
-		domain, err := hexToPaddedString(strings.TrimSpace(parts[0]))
-		if err != nil {
-			return nil, err
-		}
-
-		// PCI bus_id is shown to be "domain:bus:device.function", but the folder in /proc/driver/nvidia/gpus is just "bus:device.function"
-		busId := strings.TrimPrefix(strings.TrimSpace(parts[0]), domain)
-		gpuIndex := strings.TrimSpace(parts[2])
-
-		if _, err := os.Stat(fmt.Sprintf("/proc/driver/nvidia/gpus/%s", busId)); err == nil {
-			index, err := strconv.Atoi(strings.TrimSpace(gpuIndex))
-			if err != nil {
-				return nil, err
-			}
-
-			result = append(result, index)
-		}
-	}
-
-	return result, nil
-}
-
 func (c *ContainerCudaManager) chooseDevices(containerId string, requestedGpuCount uint32) ([]int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -184,7 +124,7 @@ func (c *ContainerCudaManager) chooseDevices(containerId string, requestedGpuCou
 		return true // Continue iteration
 	})
 
-	availableDevices, err := c.availableGPUDevices()
+	availableDevices, err := c.nvidiaSmi.AvailableGPUDevices()
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +150,7 @@ func (c *ContainerCudaManager) chooseDevices(containerId string, requestedGpuCou
 	// Save the allocation in the SafeMap
 	c.gpuAllocationMap.Set(containerId, devicesToAllocate)
 
-	return availableDevices, nil
+	return devicesToAllocate, nil
 }
 
 // getDeviceMajorNumber returns the major device number for the given device node path
