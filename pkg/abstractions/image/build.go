@@ -98,9 +98,17 @@ func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 }
 
 type BaseImage struct {
-	SourceRegistry string
-	ImageName      string
-	ImageTag       string
+	Registry string
+	Repo     string
+	Tag      string
+	Digest   string
+}
+
+func (i *BaseImage) String() string {
+	if i.Digest != "" {
+		return fmt.Sprintf("%s/%s@%s", i.Registry, i.Repo, i.Digest)
+	}
+	return fmt.Sprintf("%s/%s:%s", i.Registry, i.Repo, i.Tag)
 }
 
 // Build user image
@@ -307,9 +315,9 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 		opts.BaseImageCreds = token
 	}
 
-	opts.BaseImageRegistry = baseImage.SourceRegistry
-	opts.BaseImageName = baseImage.ImageName
-	opts.BaseImageTag = baseImage.ImageTag
+	opts.BaseImageRegistry = baseImage.Registry
+	opts.BaseImageName = baseImage.Repo
+	opts.BaseImageTag = baseImage.Tag
 
 	// Override any specified python packages with base requirements (to ensure we have what need in the image)
 	baseRequirementsSlice := strings.Split(strings.TrimSpace(basePythonRequirements), "\n")
@@ -368,27 +376,44 @@ func (b *Builder) generatePipInstallCommand(opts *BuildOpts) string {
 	return fmt.Sprintf("%s -m pip install --root-user-action=ignore %s", opts.PythonVersion, packages)
 }
 
-var imageNamePattern = regexp.MustCompile(`^(?:([^/]+)(?:/))?((?:[^/:]+/)?[^/:]+)(?::([^/]+))?$`)
+var imageNamePattern = regexp.MustCompile(
+	`^` + // Assert position at the start of the string
+		`(?:(?P<Registry>(?:(?:localhost|[\w.-]+(?:\.[\w.-]+)+)(?::\d+)?)|[\w]+:\d+)\/)?` + // Optional registry, which can be localhost, a domain with optional port, or a simple registry with port
+		`(?P<Namespace>(?:[a-z0-9]+(?:(?:[._]|__|[-]*)[a-z0-9]+)*)\/)*` + // Optional namespace, which can contain multiple segments separated by slashes
+		`(?P<Repo>[a-z0-9-]+)` + // Required repository name, which must match the pattern [a-z0-9-]
+		`(?::(?P<Tag>[\w][\w.-]{0,127}))?` + // Optional tag, which starts with a word character and can contain word characters, dots, and hyphens
+		`(?:@(?P<Digest>[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9A-Fa-f]{32,}))?` + // Optional digest, which is a hash algorithm followed by a colon and a hexadecimal hash
+		`$`, // Assert position at the end of the string
+)
 
-func ExtractImageNameAndTag(imageURI string) (BaseImage, error) {
-	matches := imageNamePattern.FindStringSubmatch(imageURI)
+func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
+	matches := imageNamePattern.FindStringSubmatch(imageRef)
 	if matches == nil {
 		return BaseImage{}, errors.New("invalid image URI format")
 	}
 
-	registry, name, tag := matches[1], matches[2], matches[3]
+	result := make(map[string]string)
+	for i, name := range imageNamePattern.SubexpNames() {
+		if i > 0 && name != "" {
+			result[name] = matches[i]
+		}
+	}
 
+	registry := result["Registry"]
 	if registry == "" {
 		registry = "docker.io"
 	}
 
-	if tag == "" {
+	repo := result["Namespace"] + result["Repo"]
+	tag, digest := result["Tag"], result["Digest"]
+	if tag == "" && digest == "" {
 		tag = "latest"
 	}
 
 	return BaseImage{
-		SourceRegistry: registry,
-		ImageName:      name,
-		ImageTag:       tag,
+		Registry: registry,
+		Repo:     repo,
+		Tag:      tag,
+		Digest:   digest,
 	}, nil
 }
