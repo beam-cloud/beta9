@@ -69,7 +69,11 @@ func (c *NvidiaSMIClient) AvailableGPUDevices() ([]int, error) {
 		}
 
 		// PCI bus_id is shown to be "domain:bus:device.function", but the folder in /proc/driver/nvidia/gpus is just "bus:device.function"
-		busId := strings.TrimPrefix(strings.TrimSpace(parts[1]), domain)
+		busId := strings.ToLower(
+			strings.TrimPrefix(
+				strings.TrimSpace(parts[1]), domain,
+			),
+		)
 		gpuIndex := strings.TrimSpace(parts[2])
 
 		if _, err := os.Stat(fmt.Sprintf("/proc/driver/nvidia/gpus/%s", busId)); err == nil {
