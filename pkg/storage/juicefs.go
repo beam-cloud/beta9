@@ -126,6 +126,9 @@ func (s *JuiceFsStorage) Unmount(localPath string) error {
 
 	_, err := cmd.CombinedOutput()
 	if err != nil {
+		log.Printf("error executing juicefs umount: %v\n", err)
+		log.Printf("attempting to kill fuser processes\n")
+
 		cmd := exec.Command("fuser", "-k", "/dev/fuse")
 		output, err := cmd.CombinedOutput()
 		if err != nil {
