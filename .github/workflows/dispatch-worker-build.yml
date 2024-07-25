@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   build_and_release_worker:
+    environment: Release
     runs-on: ubuntu-latest
 
     steps:
