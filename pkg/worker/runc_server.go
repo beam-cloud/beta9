@@ -26,7 +26,6 @@ import (
 
 const (
 	defaultWorkingDirectory string = "/mnt/code"
-	defaultWorkerServerPort int    = 1989
 )
 
 type RunCServer struct {
@@ -35,6 +34,7 @@ type RunCServer struct {
 	pb.UnimplementedRunCServiceServer
 	containerInstances *common.SafeMap[*ContainerInstance]
 	imageClient        *ImageClient
+	port               int
 }
 
 func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], imageClient *ImageClient) (*RunCServer, error) {
@@ -54,10 +54,13 @@ func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], image
 }
 
 func (s *RunCServer) Start() error {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", defaultWorkerServerPort))
+	listener, err := net.Listen("tcp", ":0") // // Random free port
 	if err != nil {
 		log.Fatalf("failed to listen: %v\n", err)
 	}
+
+	s.port = listener.Addr().(*net.TCPAddr).Port
+	log.Printf("RunCServer started on port %d\n", s.port)
 
 	grpcServer := grpc.NewServer()
 	pb.RegisterRunCServiceServer(grpcServer, s)
