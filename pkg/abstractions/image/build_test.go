@@ -8,57 +8,97 @@ import (
 
 func TestExtractImageNameAndTag(t *testing.T) {
 	tests := []struct {
-		image        string
+		ref          string
 		wantTag      string
-		wantName     string
+		wantDigest   string
+		wantRepo     string
 		wantRegistry string
 	}{
 		{
-			image:        "nginx",
+			ref: "",
+		},
+		{
+			ref:          "nginx",
 			wantTag:      "latest",
-			wantName:     "nginx",
+			wantRepo:     "nginx",
 			wantRegistry: "docker.io",
 		},
 		{
-			image:        "docker.io/nginx",
+			ref:          "docker.io/nginx",
 			wantTag:      "latest",
-			wantName:     "nginx",
+			wantRepo:     "nginx",
 			wantRegistry: "docker.io",
 		},
 		{
-			image:        "docker.io/nginx:1.25.3",
+			ref:          "docker.io/nginx:1.25.3",
 			wantTag:      "1.25.3",
-			wantName:     "nginx",
+			wantRepo:     "nginx",
 			wantRegistry: "docker.io",
 		},
 		{
-			image:        "docker.io/nginx:latest",
+			ref:          "docker.io/nginx:latest",
 			wantTag:      "latest",
-			wantName:     "nginx",
+			wantRepo:     "nginx",
 			wantRegistry: "docker.io",
 		},
 		{
-			image:        "registry.localhost:5000/beta9-runner:py311-latest",
+			ref:          "docker.io/nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04",
+			wantTag:      "12.4.1-cudnn-runtime-ubuntu22.04",
+			wantRepo:     "nvidia/cuda",
+			wantRegistry: "docker.io",
+		},
+		{
+			ref:          "nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04",
+			wantTag:      "12.4.1-cudnn-runtime-ubuntu22.04",
+			wantRepo:     "nvidia/cuda",
+			wantRegistry: "docker.io",
+		},
+		{
+			ref:          "nvidia/cuda@sha256:2fcc4280646484290cc50dce5e65f388dd04352b07cbe89a635703bd1f9aedb6",
+			wantDigest:   "sha256:2fcc4280646484290cc50dce5e65f388dd04352b07cbe89a635703bd1f9aedb6",
+			wantRepo:     "nvidia/cuda",
+			wantRegistry: "docker.io",
+		},
+		{
+			ref:          "registry.localhost:5000/beta9-runner:py311-latest",
 			wantTag:      "py311-latest",
-			wantName:     "beta9-runner",
+			wantRepo:     "beta9-runner",
 			wantRegistry: "registry.localhost:5000",
 		},
 		{
-			image:        "111111111111.dkr.ecr.us-east-1.amazonaws.com/myapp:latest",
+			ref:          "111111111111.dkr.ecr.us-east-1.amazonaws.com/myapp:latest",
 			wantTag:      "latest",
-			wantName:     "myapp",
+			wantRepo:     "myapp",
 			wantRegistry: "111111111111.dkr.ecr.us-east-1.amazonaws.com",
+		},
+		{
+			ref:          "111111111111.dkr.ecr.us-east-1.amazonaws.com/myapp/service:latest",
+			wantTag:      "latest",
+			wantRepo:     "myapp/service",
+			wantRegistry: "111111111111.dkr.ecr.us-east-1.amazonaws.com",
+		},
+		{
+			ref:          "nvcr.io/nim/meta/llama-3.1-8b-instruct:1.1.0",
+			wantTag:      "1.1.0",
+			wantRepo:     "meta/llama-3.1-8b-instruct",
+			wantRegistry: "nvcr.io",
 		},
 	}
 
 	for _, test := range tests {
-		t.Run(test.image, func(t *testing.T) {
-			image, err := ExtractImageNameAndTag(test.image)
-			assert.NoError(t, err)
+		t.Run(test.ref, func(t *testing.T) {
+			image, err := ExtractImageNameAndTag(test.ref)
+			if test.ref == "" {
+				assert.Error(t, err)
+				return
+			} else {
+				assert.NoError(t, err)
+			}
 
-			assert.Equal(t, test.wantTag, image.ImageTag)
-			assert.Equal(t, test.wantName, image.ImageName)
-			assert.Equal(t, test.wantRegistry, image.SourceRegistry)
+			assert.Equal(t, test.wantTag, image.Tag)
+			assert.Equal(t, test.wantDigest, image.Digest)
+			assert.Equal(t, test.wantRepo, image.Repo)
+			assert.Equal(t, test.wantRegistry, image.Registry)
 		})
 	}
 }
