@@ -122,11 +122,16 @@ func (s *JuiceFsStorage) Format(fsName string) error {
 }
 
 func (s *JuiceFsStorage) Unmount(localPath string) error {
-	cmd := exec.Command("juicefs", "umount", "--force", localPath)
+	cmd := exec.Command("juicefs", "umount", localPath)
 
-	output, err := cmd.CombinedOutput()
+	_, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("error executing juicefs umount: %v, output: %s", err, string(output))
+		cmd := exec.Command("fuser", "-k", "/dev/fuse")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("error executing juicefs umount: %v, output: %s", err, string(output))
+		}
+		return nil
 	}
 
 	log.Printf("JuiceFS filesystem unmounted from: '%s'\n", localPath)
