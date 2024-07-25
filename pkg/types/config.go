@@ -220,6 +220,7 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 	MinFreeCPU            string `key:"minFreeCPU" json:"min_free_cpu"`
 	MinFreeMemory         string `key:"minFreeMemory" json:"min_free_memory"`
 	MinFreeGPU            string `key:"minFreeGPU" json:"min_free_gpu"`
+	SharedMemoryLimitPct  string `key:"sharedMemoryLimitPct" json:"shared_memory_limit_pct"`
 }
 
 type MachineProvider string

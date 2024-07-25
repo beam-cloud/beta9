@@ -98,6 +98,7 @@ worker:
         minFreeCpu: 8000m
         minFreeGpu: 0
         minFreeMemory: 32Gi
+        sharedMemoryLimitPct: 100%
     # example gpu worker pool
     # nvidia:
     #   gpuType: A40
