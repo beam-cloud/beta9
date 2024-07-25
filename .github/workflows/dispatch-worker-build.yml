@@ -1,4 +1,4 @@
-name: Build and release custom Worker tag
+name: Build and release Custom Worker Tag
 
 on:
   workflow_dispatch:
