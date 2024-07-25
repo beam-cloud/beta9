@@ -89,7 +89,7 @@ var (
 	baseConfigPath             string  = "/tmp"
 	containerLogsPath          string  = "/var/log/worker"
 	defaultContainerDirectory  string  = "/mnt/code"
-	defaultWorkerSpindownTimeS float64 = 150
+	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
 )
 
 func NewWorker() (*Worker, error) {
