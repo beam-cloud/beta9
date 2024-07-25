@@ -5,46 +5,47 @@ import (
 	"testing"
 
 	"github.com/tj/assert"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 func TestCalculateMemoryQuantity(t *testing.T) {
 	tests := []struct {
-		percent  float32
-		memory   int64
-		expected resource.Quantity
+		percentStr string
+		memory     int64
+		expected   string
 	}{
-		{0.1, 1024, resource.MustParse("102Mi")},
-		{0.25, 1024, resource.MustParse("256Mi")},
-		{0.5, 1024, resource.MustParse("512Mi")},
-		{0.75, 1024, resource.MustParse("768Mi")},
-		{1, 1024, resource.MustParse("1024Mi")},
+		{"10%", 1024, "102Mi"},
+		{"25%", 1024, "256Mi"},
+		{"50%", 1024, "512Mi"},
+		{"75", 1024, "768Mi"},
+		{"100", 1024, "1Gi"},
+		{"-1", 1024, "512Mi"},
 	}
 	for _, test := range tests {
-		t.Run(fmt.Sprint(test.percent), func(t *testing.T) {
-			value := calculateMemoryQuantity(test.percent, test.memory)
-			assert.Equal(t, test.expected, value)
+		name := fmt.Sprintf("%s of %d is %v", test.percentStr, test.memory, test.expected)
+		t.Run(name, func(t *testing.T) {
+			quantity := calculateMemoryQuantity(test.percentStr, test.memory)
+			assert.Equal(t, test.expected, quantity.String())
 		})
 	}
 }
 
 func TestGetPercentageWithDefault(t *testing.T) {
 	tests := []struct {
-		percentStr     string
-		defaultPercent float32
-		expected       float32
+		percentStr string
+		expected   float32
 	}{
-		{"100%", 0.5, 1},
-		{"99%", 0.1, 0.99},
-		{"1%", 0.2, 0.01},
-		{"33", 0.4, 0.33},
-		{"xx", 0.5, 0.5},
-		{"yy", 0.2, 0.2},
+		{"100%", 1},
+		{"99%", 0.99},
+		{"1%", 0.01},
+		{"33", 0.33},
+		{"0", defaultSharedMemoryPct},
+		{"-1", defaultSharedMemoryPct},
+		{"xx", defaultSharedMemoryPct},
 	}
 	for _, test := range tests {
-		name := fmt.Sprintf("%s with default %.2f becomes %.2f", test.percentStr, test.defaultPercent, test.expected)
+		name := fmt.Sprintf("%s becomes or defaults to %.2f", test.percentStr, test.expected)
 		t.Run(name, func(t *testing.T) {
-			value := getPercentageWithDefault(test.percentStr, test.defaultPercent)
+			value := getPercentageWithDefault(test.percentStr)
 			assert.Equal(t, test.expected, value)
 		})
 	}

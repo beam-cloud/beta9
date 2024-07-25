@@ -88,28 +88,22 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolCont
 	return capacity, nil
 }
 
-// calculateMemoryQuantity calculates the memory based on the percentage and total memory.
-func calculateMemoryQuantity(percent float32, memoryTotal int64) resource.Quantity {
+func calculateMemoryQuantity(percentStr string, memoryTotal int64) resource.Quantity {
+	percent := getPercentageWithDefault(percentStr)
 	return resource.MustParse(fmt.Sprintf("%dMi", int64(float32(memoryTotal)*percent)))
 }
 
-// getPercentageWithDefault parses the percentage string and returns the default value if there's an error.
-func getPercentageWithDefault(percentageStr string, defaultValue float32) float32 {
-	percent, err := parsePercentage(percentageStr)
-	if err != nil {
-		return defaultValue
-	}
-	return percent
-}
+func getPercentageWithDefault(percentageStr string) float32 {
+	ps := strings.TrimSuffix(percentageStr, "%")
 
-// parsePercentage converts a percentage string (e.g., "50%") to a decimal (e.g., 0.5).
-func parsePercentage(percentStr string) (float32, error) {
-	s := strings.TrimSuffix(percentStr, "%")
-
-	percent, err := strconv.ParseFloat(s, 32)
+	percent, err := strconv.ParseFloat(ps, 32)
 	if err != nil {
-		return 0, err
+		return defaultSharedMemoryPct
 	}
 
-	return float32(percent) / 100, nil
+	if percent <= 0 {
+		return defaultSharedMemoryPct
+	}
+
+	return float32(percent) / 100
 }
