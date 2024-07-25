@@ -38,14 +38,19 @@ func TestGetPercentageWithDefault(t *testing.T) {
 		{"99%", 0.99},
 		{"1%", 0.01},
 		{"33", 0.33},
-		{"0", defaultSharedMemoryPct},
-		{"-1", defaultSharedMemoryPct},
-		{"xx", defaultSharedMemoryPct},
+		{"0", 0},
+		{"-1", 0},
+		{"xx", 0},
 	}
 	for _, test := range tests {
 		name := fmt.Sprintf("%s becomes or defaults to %.2f", test.percentStr, test.expected)
 		t.Run(name, func(t *testing.T) {
-			value := getPercentageWithDefault(test.percentStr)
+			value, err := parseMemoryPercentage(test.percentStr)
+			if test.expected == 0 {
+				assert.Error(t, err)
+				assert.Equal(t, test.expected, value)
+			}
+
 			assert.Equal(t, test.expected, value)
 		})
 	}

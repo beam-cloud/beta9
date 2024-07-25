@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -89,21 +90,25 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolCont
 }
 
 func calculateMemoryQuantity(percentStr string, memoryTotal int64) resource.Quantity {
-	percent := getPercentageWithDefault(percentStr)
+	percent, err := parseMemoryPercentage(percentStr)
+	if err != nil {
+		percent = defaultSharedMemoryPct
+	}
+
 	return resource.MustParse(fmt.Sprintf("%dMi", int64(float32(memoryTotal)*percent)))
 }
 
-func getPercentageWithDefault(percentageStr string) float32 {
-	ps := strings.TrimSuffix(percentageStr, "%")
+func parseMemoryPercentage(percentStr string) (float32, error) {
+	ps := strings.TrimSuffix(percentStr, "%")
 
 	percent, err := strconv.ParseFloat(ps, 32)
 	if err != nil {
-		return defaultSharedMemoryPct
+		return 0, err
 	}
 
 	if percent <= 0 {
-		return defaultSharedMemoryPct
+		return 0, errors.New("percent must be greater than 0")
 	}
 
-	return float32(percent) / 100
+	return float32(percent) / 100, nil
 }
