@@ -5,7 +5,7 @@ on:
     inputs:
       tag:
         description: 'image tag'
-        required: false
+        required: true
         type: string
 
 permissions:
