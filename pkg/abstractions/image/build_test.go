@@ -77,6 +77,18 @@ func TestExtractImageNameAndTag(t *testing.T) {
 			wantRepo:     "myapp/service",
 			wantRegistry: "111111111111.dkr.ecr.us-east-1.amazonaws.com",
 		},
+		{
+			ref:          "nvcr.io/nim/meta/llama-3.1-8b-instruct:1.1.0",
+			wantTag:      "1.1.0",
+			wantRepo:     "meta/llama-3.1-8b-instruct",
+			wantRegistry: "nvcr.io",
+		},
+		{
+			ref:          "nvcr.io/nvidia/tao/tao-toolkit:5.3.0-pyt",
+			wantTag:      "5.3.0-pyt",
+			wantRepo:     "tao/tao-toolkit",
+			wantRegistry: "nvcr.io",
+		},
 	}
 
 	for _, test := range tests {
