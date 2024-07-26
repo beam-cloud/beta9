@@ -1,11 +1,60 @@
 package worker
 
 import (
+	"bufio"
+	"errors"
+	"fmt"
+	"os/exec"
 	"runtime"
+	"strconv"
+	"strings"
 
 	"github.com/prometheus/procfs"
 )
 
+type GpuMemoryUsageStats struct {
+	UsedCapacity  int64
+	TotalCapacity int64
+}
+
+// GetGpuMemoryUsage retrieves the memory usage of a specific NVIDIA GPU.
+// It returns the total and used memory in bytes.
+func GetGpuMemoryUsage(deviceIndex int) (GpuMemoryUsageStats, error) {
+	stats := GpuMemoryUsageStats{}
+
+	command := "nvidia-smi"
+	commandArgs := []string{"--query-gpu=memory.total,memory.used", "--format=csv,noheader,nounits", fmt.Sprintf("--id=%d", deviceIndex)}
+
+	out, err := exec.Command(command, commandArgs...).Output()
+	if err != nil {
+		return stats, fmt.Errorf("unable to invoke nvidia-smi: %v", err)
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+	if scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Split(line, ",")
+
+		if len(fields) != 2 {
+			return stats, errors.New("unable to parse gpu memory info")
+		}
+
+		total, err := strconv.ParseInt(strings.Trim(fields[0], " "), 10, 64)
+		if err != nil {
+			return stats, fmt.Errorf("unable to parse total gpu memory: %v", err)
+		}
+
+		used, err := strconv.ParseInt(strings.Trim(fields[1], " "), 10, 64)
+		if err != nil {
+			return stats, fmt.Errorf("unable to parse used gpu memory: %v", err)
+		}
+
+		stats.TotalCapacity = total * 1024 * 1024
+		stats.UsedCapacity = used * 1024 * 1024
+	}
+
+	return stats, nil
+}
 func GetSystemCPU() (float64, error) {
 	fs, err := procfs.NewFS("/proc")
 	if err != nil {

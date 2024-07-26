@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -18,22 +20,27 @@ var (
 	defaultContainerLibrary     []string = []string{"/usr/lib/x86_64-linux-gnu", "/usr/lib/worker/x86_64-linux-gnu", "/usr/local/nvidia/lib64"}
 )
 
+type ContainerGPUManager interface {
+	availableGPUDevices() ([]int, error)
+}
+
 type ContainerCudaManager struct {
+	ContainerGPUManager
 	gpuAllocationMap *common.SafeMap[[]int]
 	gpuCount         uint32
 	mu               sync.Mutex
 	statFunc         func(path string, stat *syscall.Stat_t) (err error)
-	nvidiaSmi        NvidiaSMIClientInterface
 }
 
 func NewContainerCudaManager(gpuCount uint32) *ContainerCudaManager {
-	return &ContainerCudaManager{
+	gpuManager := &ContainerCudaManager{
 		gpuAllocationMap: common.NewSafeMap[[]int](),
 		gpuCount:         gpuCount,
 		mu:               sync.Mutex{},
 		statFunc:         syscall.Stat,
-		nvidiaSmi:        NewNvidiaSMIClient(),
 	}
+	gpuManager.ContainerGPUManager = gpuManager // We set this so we can override the availableGPUDevices method
+	return gpuManager
 }
 
 type AssignedGpuDevices struct {
@@ -112,6 +119,69 @@ func (c *ContainerCudaManager) AssignGpuDevices(containerId string, gpuCount uin
 	}, nil
 }
 
+func (c *ContainerCudaManager) hexToPaddedString(hexStr string) (string, error) {
+	// Remove the "0x" prefix if it exists
+	hexStr = strings.TrimPrefix(hexStr, "0x")
+
+	// Parse the hexadecimal string to an integer
+	value, err := strconv.ParseUint(hexStr, 16, 16)
+	if err != nil {
+		return "", err
+	}
+
+	// Format the integer as a zero-padded string with 4 digits
+	paddedStr := fmt.Sprintf("%04x", value)
+	return paddedStr, nil
+}
+
+func (c *ContainerCudaManager) AvailableGPUDevices() ([]int, error) {
+	// Find available GPU BUS IDs
+	command := "nvidia-smi"
+	commandArgs := []string{"--query-gpu=pci.domain,pci.bus_id,index", "--format=csv,noheader,nounits"}
+
+	out, err := exec.Command(command, commandArgs...).Output()
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse the output
+	result := []int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if len(line) == 0 {
+			continue
+		}
+
+		parts := strings.Split(line, ",")
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("unexpected output from nvidia-smi: %s", line)
+		}
+
+		domain, err := c.hexToPaddedString(strings.TrimSpace(parts[0]))
+		if err != nil {
+			return nil, err
+		}
+
+		// PCI bus_id is shown to be "domain:bus:device.function", but the folder in /proc/driver/nvidia/gpus is just "bus:device.function"
+		busId := strings.ToLower(
+			strings.TrimPrefix(
+				strings.TrimSpace(parts[1]), domain,
+			),
+		)
+		gpuIndex := strings.TrimSpace(parts[2])
+
+		if _, err := os.Stat(fmt.Sprintf("/proc/driver/nvidia/gpus/%s", busId)); err == nil {
+			index, err := strconv.Atoi(strings.TrimSpace(gpuIndex))
+			if err != nil {
+				return nil, err
+			}
+
+			result = append(result, index)
+		}
+	}
+
+	return result, nil
+}
+
 func (c *ContainerCudaManager) chooseDevices(containerId string, requestedGpuCount uint32) ([]int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -124,7 +194,7 @@ func (c *ContainerCudaManager) chooseDevices(containerId string, requestedGpuCou
 		return true // Continue iteration
 	})
 
-	availableDevices, err := c.nvidiaSmi.AvailableGPUDevices()
+	availableDevices, err := c.ContainerGPUManager.availableGPUDevices()
 	if err != nil {
 		return nil, err
 	}
