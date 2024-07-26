@@ -124,9 +124,9 @@ func (s *JuiceFsStorage) Format(fsName string) error {
 func (s *JuiceFsStorage) Unmount(localPath string) error {
 	cmd := exec.Command("juicefs", "umount", localPath)
 
-	_, err := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Println("error executing juicefs umount: %v", err)
+		log.Printf("error executing juicefs umount: %v, output %s\n", err, string(output))
 
 		time.Sleep(5 * time.Minute) // TEST: keep alive so we can debug
 
