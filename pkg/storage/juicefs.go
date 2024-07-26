@@ -122,13 +122,13 @@ func (s *JuiceFsStorage) Format(fsName string) error {
 }
 
 func (s *JuiceFsStorage) Unmount(localPath string) error {
-	cmd := exec.Command("juicefs", "umount", localPath)
+	cmd := exec.Command("juicefs", "umount", "--flush", localPath)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("error executing juicefs umount: %v, output %s\n", err, string(output))
 
-		time.Sleep(5 * time.Minute) // TEST: keep alive so we can debug
+		// time.Sleep(5 * time.Minute) // TEST: keep alive so we can debug
 
 		// log.Printf("error executing juicefs umount: %v\n", err)
 		// log.Printf("attempting to kill fuser processes\n")
