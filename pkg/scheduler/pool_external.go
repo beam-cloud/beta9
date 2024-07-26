@@ -264,8 +264,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	workerImage := fmt.Sprintf("%s/%s:%s",
 		wpc.config.Worker.ImageRegistry,
 		wpc.config.Worker.ImageName,
-		// wpc.config.Worker.ImageTag,
-		"devel",
+		wpc.config.Worker.ImageTag,
 	)
 
 	resources := corev1.ResourceRequirements{}
@@ -293,10 +292,9 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 			SecurityContext: &corev1.SecurityContext{
 				Privileged: ptr.To(true),
 			},
-			ImagePullPolicy: "Always",
-			Env:             env,
-			VolumeMounts:    wpc.getWorkerVolumeMounts(),
-			Resources:       resources,
+			Env:          env,
+			VolumeMounts: wpc.getWorkerVolumeMounts(),
+			Resources:    resources,
 		},
 	}
 
@@ -417,7 +415,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 
 func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
 	hostPathType := corev1.HostPathDirectoryOrCreate
-	sharedMemoryLimit := resource.MustParse(fmt.Sprintf("%dMi", workerMemory/2))
+	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPool.PoolSizing.SharedMemoryLimitPct, workerMemory)
 
 	tmpSizeLimit := resource.MustParse("30Gi")
 	return []corev1.Volume{

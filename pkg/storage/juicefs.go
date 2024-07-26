@@ -136,7 +136,7 @@ func (s *JuiceFsStorage) Unmount(localPath string) error {
 		return nil
 	}
 
-	err := backoff.Retry(juiceFsUmount, backoff.WithMaxRetries(backoff.NewConstantBackOff(1), 10))
+	err := backoff.Retry(juiceFsUmount, backoff.WithMaxRetries(backoff.NewConstantBackOff(1*time.Second), 10))
 	if err == nil {
 		return nil
 	}
@@ -147,6 +147,5 @@ func (s *JuiceFsStorage) Unmount(localPath string) error {
 		return fmt.Errorf("error executing fuser -k /dev/fuse: %v", err)
 	}
 
-	return fmt.Errorf("failed to unmount JuiceFS filesystem from: '%s'", localPath)
-
+	return nil
 }
