@@ -231,6 +231,7 @@ var (
 	ProviderLambdaLabs MachineProvider = "lambda"
 	ProviderCrusoe     MachineProvider = "crusoe"
 	ProviderHydra      MachineProvider = "hydra"
+	ProviderGeneric    MachineProvider = "generic"
 )
 
 type ProviderConfig struct {
@@ -239,6 +240,7 @@ type ProviderConfig struct {
 	LambdaLabs LambdaLabsProviderConfig `key:"lambda" json:"lambda"`
 	Crusoe     CrusoeProviderConfig     `key:"crusoe" json:"crusoe"`
 	Hydra      HydraProviderConfig      `key:"hydra" json:"hydra"`
+	Generic    GenericProviderConfig    `key:"generic" json:"generic"`
 }
 
 type ProviderAgentConfig struct {
@@ -285,6 +287,10 @@ type CrusoeProviderConfig struct {
 }
 
 type HydraProviderConfig struct {
+	Agent ProviderAgentConfig `key:"agent" json:"agent"`
+}
+
+type GenericProviderConfig struct {
 	Agent ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
