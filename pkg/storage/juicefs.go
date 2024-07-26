@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/cenkalti/backoff"
 )
 
 const juiceFsMountTimeout time.Duration = 30 * time.Second
@@ -122,13 +123,29 @@ func (s *JuiceFsStorage) Format(fsName string) error {
 }
 
 func (s *JuiceFsStorage) Unmount(localPath string) error {
-	cmd := exec.Command("juicefs", "umount", "--force", localPath)
+	juiceFsUmount := func() error {
+		cmd := exec.Command("juicefs", "umount", localPath)
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("error executing juicefs umount: %v, output: %s", err, string(output))
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Printf("error executing juicefs umount: %v, output: %s", err, string(output))
+			return err
+		}
+
+		log.Printf("JuiceFS filesystem unmounted from: '%s'\n", localPath)
+		return nil
 	}
 
-	log.Printf("JuiceFS filesystem unmounted from: '%s'\n", localPath)
+	err := backoff.Retry(juiceFsUmount, backoff.WithMaxRetries(backoff.NewConstantBackOff(1*time.Second), 10))
+	if err == nil {
+		return nil
+	}
+
+	// Forcefully kill the fuse mount devices
+	err = exec.Command("fuser", "-k", "/dev/fuse").Run()
+	if err != nil {
+		return fmt.Errorf("error executing fuser -k /dev/fuse: %v", err)
+	}
+
 	return nil
 }
