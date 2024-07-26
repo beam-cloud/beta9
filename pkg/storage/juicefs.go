@@ -136,7 +136,7 @@ func (s *JuiceFsStorage) Unmount(localPath string) error {
 		return nil
 	}
 
-	err := backoff.Retry(juiceFsUmount, backoff.WithMaxRetries(backoff.NewConstantBackOff(1), 10))
+	err := backoff.Retry(juiceFsUmount, backoff.WithMaxRetries(backoff.NewConstantBackOff(1*time.Second), 10))
 	if err == nil {
 		return nil
 	}
