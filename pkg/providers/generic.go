@@ -16,7 +16,7 @@ func NewGenericProvider(ctx context.Context, appConfig types.AppConfig, provider
 	genericProvider := &GenericProvider{}
 
 	baseProvider := NewExternalProvider(ctx, &ExternalProviderConfig{
-		Name:                 string(types.ProviderCrusoe),
+		Name:                 string(types.ProviderGeneric),
 		ClusterName:          appConfig.ClusterName,
 		AppConfig:            appConfig,
 		TailScale:            tailscale,
