@@ -121,7 +121,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	go startPprofServer(":6061")
+	go startPprofServer(":1992")
 
 	gpuCount, err := strconv.ParseInt(os.Getenv("GPU_COUNT"), 10, 64)
 	if err != nil {
