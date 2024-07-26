@@ -122,25 +122,20 @@ func (s *JuiceFsStorage) Format(fsName string) error {
 }
 
 func (s *JuiceFsStorage) Unmount(localPath string) error {
-	cmd := exec.Command("juicefs", "umount", "--flush", localPath)
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("error executing juicefs umount: %v, output %s\n", err, string(output))
+	for i := 0; i < 3; i++ {
+		cmd := exec.Command("juicefs", "umount", localPath)
 
-		// time.Sleep(5 * time.Minute) // TEST: keep alive so we can debug
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Printf("error executing juicefs umount: %v, output: %s", err, string(output))
+			time.Sleep(1 * time.Second)
+			continue
+		}
 
-		// log.Printf("error executing juicefs umount: %v\n", err)
-		// log.Printf("attempting to kill fuser processes\n")
-
-		// cmd := exec.Command("fuser", "-k", "/dev/fuse")
-		// output, err := cmd.CombinedOutput()
-		// if err != nil {
-		// 	return fmt.Errorf("error executing juicefs umount: %v, output: %s", err, string(output))
-		// }
-		return err
+		log.Printf("JuiceFS filesystem unmounted from: '%s'\n", localPath)
+		return nil
 	}
 
-	log.Printf("JuiceFS filesystem unmounted from: '%s'\n", localPath)
-	return nil
+	return fmt.Errorf("failed to unmount JuiceFS filesystem from: '%s'", localPath)
 }
