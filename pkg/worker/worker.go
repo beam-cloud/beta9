@@ -624,7 +624,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 
 	// Capture resource usage (cpu/mem/gpu)
 	pidChan := make(chan int, 1)
-	go s.collectAndSendContainerMetrics(request, spec, pidChan, containerCompleteCh)
+	// go s.collectAndSendContainerMetrics(request, spec, pidChan, containerCompleteCh)
 
 	// Invoke runc process (launch the container)
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
