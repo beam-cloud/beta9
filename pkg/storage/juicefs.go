@@ -147,6 +147,5 @@ func (s *JuiceFsStorage) Unmount(localPath string) error {
 		return fmt.Errorf("error executing fuser -k /dev/fuse: %v", err)
 	}
 
-	return fmt.Errorf("failed to unmount JuiceFS filesystem from: '%s'", localPath)
-
+	return nil
 }
