@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,6 +31,20 @@ const (
 	requestProcessingInterval     time.Duration = 100 * time.Millisecond
 	containerStatusUpdateInterval time.Duration = 30 * time.Second
 )
+
+func startPprofServer(port string) {
+	for {
+		listener, err := net.Listen("tcp", port)
+		if err != nil {
+			log.Printf("Port %s is in use, retrying...\n", port)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		log.Printf("Starting pprof server on %s\n", port)
+		log.Println(http.Serve(listener, nil))
+		break
+	}
+}
 
 type Worker struct {
 	cpuLimit             int64
@@ -103,6 +120,8 @@ func NewWorker() (*Worker, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	go startPprofServer(":6061")
 
 	gpuCount, err := strconv.ParseInt(os.Getenv("GPU_COUNT"), 10, 64)
 	if err != nil {
