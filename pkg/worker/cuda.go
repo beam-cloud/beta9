@@ -134,7 +134,7 @@ func (c *ContainerCudaManager) hexToPaddedString(hexStr string) (string, error) 
 	return paddedStr, nil
 }
 
-func (c *ContainerCudaManager) AvailableGPUDevices() ([]int, error) {
+func (c *ContainerCudaManager) availableGPUDevices() ([]int, error) {
 	// Find available GPU BUS IDs
 	command := "nvidia-smi"
 	commandArgs := []string{"--query-gpu=pci.domain,pci.bus_id,index", "--format=csv,noheader,nounits"}
