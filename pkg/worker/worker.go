@@ -12,6 +12,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,10 @@ const (
 	requestProcessingInterval     time.Duration = 100 * time.Millisecond
 	containerStatusUpdateInterval time.Duration = 30 * time.Second
 )
+
+func init() {
+	runtime.SetMutexProfileFraction(1) // 1 means every mutex contention
+}
 
 func startPprofServer(port string) {
 	for {
