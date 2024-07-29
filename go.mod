@@ -15,7 +15,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.48.1
-	github.com/beam-cloud/blobcache-v2 v0.0.0-20240725165455-48ea5903ac5b
+	github.com/beam-cloud/blobcache-v2 v0.0.0-20240729185220-dea3fa2c79e9
 	github.com/beam-cloud/clip v0.0.0-20240729183725-d9f2eaf54176
 	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
 	github.com/bsm/redislock v0.9.4
