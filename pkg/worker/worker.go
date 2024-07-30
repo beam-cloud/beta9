@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"strconv"
