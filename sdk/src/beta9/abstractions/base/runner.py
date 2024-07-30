@@ -181,7 +181,7 @@ class RunnerAbstraction(BaseAbstraction):
 
         module = inspect.getmodule(func)  # Determine module / function name
         if module:
-            module_file = os.path.basename(module.__file__)
+            module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
         else:
             module_name = "__main__"
