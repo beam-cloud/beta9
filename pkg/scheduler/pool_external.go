@@ -396,6 +396,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 			Name:  "POD_HOSTNAME",
 			Value: podHostname,
 		},
+		{
+			Name:  "TS_DEBUG_DISABLE_PORTLIST",
+			Value: "true",
+		},
 	}
 
 	remoteConfig, err := providers.GetRemoteConfig(wpc.config, wpc.tailscale)
