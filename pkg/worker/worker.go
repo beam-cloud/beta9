@@ -39,7 +39,7 @@ type Worker struct {
 	imageMountPath       string
 	runcHandle           runc.Runc
 	runcServer           *RunCServer
-	containerCudaManager *ContainerCudaManager
+	containerCudaManager GPUManager
 	redisClient          *common.RedisClient
 	imageClient          *ImageClient
 	workerId             string
@@ -173,7 +173,7 @@ func NewWorker() (*Worker, error) {
 		gpuCount:             uint32(gpuCount),
 		runcHandle:           runc.Runc{},
 		runcServer:           runcServer,
-		containerCudaManager: NewContainerCudaManager(uint32(gpuCount)),
+		containerCudaManager: NewContainerNvidiaManager(uint32(gpuCount)),
 		redisClient:          redisClient,
 		podAddr:              podAddr,
 		imageClient:          imageClient,
@@ -456,7 +456,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	// De-allocate GPU devices so they are available for new containers
 	if request.Gpu != "" {
-		s.containerCudaManager.UnassignGpuDevices(containerId)
+		s.containerCudaManager.UnassignGPUDevices(containerId)
 	}
 
 	s.completedRequests <- request
@@ -694,14 +694,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart[0].Args = append(spec.Hooks.Prestart[0].Args, configPath, "prestart")
 
 		existingCudaFound := false
-		env, existingCudaFound = s.containerCudaManager.InjectCudaEnvVars(env, options)
+		env, existingCudaFound = s.containerCudaManager.InjectEnvVars(env, options)
 		if !existingCudaFound {
 			// If the container image does not have cuda libraries installed, mount cuda libs from the host
-			spec.Mounts = s.containerCudaManager.InjectCudaMounts(spec.Mounts)
+			spec.Mounts = s.containerCudaManager.InjectMounts(spec.Mounts)
 		}
 
 		// Assign n-number of GPUs to a container
-		assignedGpus, err := s.containerCudaManager.AssignGpuDevices(request.ContainerId, request.GpuCount)
+		assignedGpus, err := s.containerCudaManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
 		if err != nil {
 			return nil, err
 		}

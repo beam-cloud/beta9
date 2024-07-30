@@ -73,14 +73,15 @@ type GPUInfoStat struct {
 }
 
 type ProcessMonitor struct {
-	pid       int32
-	devices   []specs.LinuxDeviceCgroup
-	lastIO    process.IOCountersStat
-	lastNetIO net.IOCountersStat
+	pid           int32
+	devices       []specs.LinuxDeviceCgroup
+	lastIO        process.IOCountersStat
+	lastNetIO     net.IOCountersStat
+	gpuInfoClient GPUInfoClient
 }
 
 func NewProcessMonitor(pid int, devices []specs.LinuxDeviceCgroup) *ProcessMonitor {
-	return &ProcessMonitor{pid: int32(pid), devices: devices}
+	return &ProcessMonitor{pid: int32(pid), devices: devices, gpuInfoClient: &NvidiaInfoClient{}}
 }
 
 func (m *ProcessMonitor) GetStatistics() (*ProcessStats, error) {
@@ -115,11 +116,13 @@ func (m *ProcessMonitor) GetStatistics() (*ProcessStats, error) {
 
 func (m *ProcessMonitor) fetchGPUMemory() *GPUInfoStat {
 	stat := &GPUInfoStat{}
-	for _, device := range m.devices {
-		if device.Minor == nil || !device.Allow {
-			continue
-		}
-		stats, err := GetGpuMemoryUsage(int(*device.Minor))
+	availableDevices, err := m.gpuInfoClient.AvailableGPUDevices()
+	if err != nil {
+		return stat
+	}
+
+	for _, device := range availableDevices {
+		stats, err := m.gpuInfoClient.GetGPUMemoryUsage(device)
 		if err == nil {
 			stat.MemoryUsed += uint64(stats.UsedCapacity)
 			stat.MemoryTotal += uint64(stats.TotalCapacity)
