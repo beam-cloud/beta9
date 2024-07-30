@@ -857,5 +857,7 @@ func (s *Worker) shutdown() error {
 		return fmt.Errorf("error executing fuser -k /dev/fuse: %v", err)
 	}
 
+	log.Println("worker shutdown complete")
+
 	return errs
 }
