@@ -82,20 +82,13 @@ class GpuType(str, Enum):
     A100_80 = "A100-80"
     H100 = "H100"
     A6000 = "A6000"
+    RTX4090 = "RTX4090"
 
 
 # Add GpuType str literals. Must copy/paste for now.
 # https://github.com/python/typing/issues/781
 GpuTypeLiteral = Literal[
-    "",
-    "any",
-    "T4",
-    "L4",
-    "A10G",
-    "A100_40",
-    "A100_80",
-    "H100",
-    "A6000",
+    "", "any", "T4", "L4", "A10G", "A100_40", "A100_80", "H100", "A6000", "RTX4090"
 ]
 
 GpuTypeAlias = Union[GpuType, GpuTypeLiteral]
