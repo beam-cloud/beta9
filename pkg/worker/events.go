@@ -3,6 +3,7 @@ package worker
 import (
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -116,14 +117,18 @@ func (m *ProcessMonitor) GetStatistics() (*ProcessStats, error) {
 
 func (m *ProcessMonitor) fetchGPUMemory() *GPUInfoStat {
 	stat := &GPUInfoStat{}
-	for _, device := range m.devices {
-		if device.Minor == nil || !device.Allow {
-			continue
-		}
-		stats, err := m.gpuInfoClient.GetGPUMemoryUsage(int(*device.Minor))
+	availableDevices, err := m.gpuInfoClient.AvailableGPUDevices()
+	if err != nil {
+		return stat
+	}
+
+	for _, device := range availableDevices {
+		stats, err := m.gpuInfoClient.GetGPUMemoryUsage(device)
 		if err == nil {
 			stat.MemoryUsed += uint64(stats.UsedCapacity)
 			stat.MemoryTotal += uint64(stats.TotalCapacity)
+
+			log.Printf("GPU %d: %d/%d", device, stats.UsedCapacity, stats.TotalCapacity)
 		}
 	}
 	return stat

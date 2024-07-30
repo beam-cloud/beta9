@@ -33,8 +33,8 @@ func (c *GPUInfoClientForTest) AvailableGPUDevices() ([]int, error) {
 	return gpus, nil
 }
 
-func (c *GPUInfoClientForTest) GetGPUMemoryUsage(gpuId int) (GpuMemoryUsageStats, error) {
-	return GpuMemoryUsageStats{}, nil
+func (c *GPUInfoClientForTest) GetGPUMemoryUsage(gpuId int) (GPUMemoryUsageStats, error) {
+	return GPUMemoryUsageStats{}, nil
 }
 
 func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {

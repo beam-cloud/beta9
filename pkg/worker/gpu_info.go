@@ -12,10 +12,10 @@ import (
 
 type GPUInfoClient interface {
 	AvailableGPUDevices() ([]int, error)
-	GetGPUMemoryUsage(deviceIndex int) (GpuMemoryUsageStats, error)
+	GetGPUMemoryUsage(deviceIndex int) (GPUMemoryUsageStats, error)
 }
 
-type GpuMemoryUsageStats struct {
+type GPUMemoryUsageStats struct {
 	UsedCapacity  int64
 	TotalCapacity int64
 }
@@ -87,8 +87,8 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 
 // GetGpuMemoryUsage retrieves the memory usage of a specific NVIDIA GPU.
 // It returns the total and used memory in bytes.
-func (c *NvidiaInfoClient) GetGPUMemoryUsage(deviceIndex int) (GpuMemoryUsageStats, error) {
-	stats := GpuMemoryUsageStats{}
+func (c *NvidiaInfoClient) GetGPUMemoryUsage(deviceIndex int) (GPUMemoryUsageStats, error) {
+	stats := GPUMemoryUsageStats{}
 
 	command := "nvidia-smi"
 	commandArgs := []string{"--query-gpu=memory.total,memory.used", "--format=csv,noheader,nounits", fmt.Sprintf("--id=%d", deviceIndex)}
