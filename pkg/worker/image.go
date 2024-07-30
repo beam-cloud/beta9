@@ -241,8 +241,10 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 		return err
 	}
 
-	baseTmpBundlePath := filepath.Join(c.imageBundlePath, baseImage.Repo)
-	os.MkdirAll(baseTmpBundlePath, 0755)
+	// Create directory so Skopeo can copy OCI image into
+	ociDir := filepath.Join(c.imageBundlePath, baseImage.Repo)
+	os.MkdirAll(ociDir, 0755)
+	defer os.RemoveAll(ociDir)
 
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
@@ -264,13 +266,13 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 		return fmt.Errorf("unable to copy image: %v", cmd.String())
 	}
 
-	tmpBundlePath := filepath.Join(baseTmpBundlePath, imageId)
+	tmpBundlePath := filepath.Join(c.imageBundlePath, imageId)
 	err = c.unpack(baseImage.Repo, baseImage.Tag, tmpBundlePath)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}
 
-	defer os.RemoveAll(baseTmpBundlePath)
+	defer os.RemoveAll(tmpBundlePath)
 
 	return c.Archive(ctx, tmpBundlePath, imageId, nil)
 }
