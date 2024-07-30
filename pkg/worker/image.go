@@ -228,7 +228,9 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 func (c *ImageClient) Cleanup() error {
 	c.mountedFuseServers.Range(func(imageId string, server *fuse.Server) bool {
 		log.Printf("Un-mounting image: %s\n", imageId)
-		server.Unmount()
+		if err := server.Unmount(); err != nil {
+			log.Printf("Failed to unmount image: %s\n", imageId)
+		}
 		return true // Continue iteration
 	})
 
