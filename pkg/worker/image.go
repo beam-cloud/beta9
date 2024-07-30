@@ -231,6 +231,7 @@ func (c *ImageClient) Cleanup() error {
 		if err := server.Unmount(); err != nil {
 			log.Printf("Failed to unmount image: %s\n", imageId)
 		}
+		log.Println("Cleaned up image mount")
 		return true // Continue iteration
 	})
 
