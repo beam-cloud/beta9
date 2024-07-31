@@ -835,8 +835,8 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
 	query := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).
 		Select(
-			`d.*`,
-			`s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"`
+			"d.*",
+			"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\""
 		).
 		From("deployment d").
 		Join(`(
