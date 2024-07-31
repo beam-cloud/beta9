@@ -1,5 +1,4 @@
 import functools
-import os
 import sys
 import traceback
 from abc import ABC, abstractmethod
@@ -129,9 +128,6 @@ def with_grpc_error_handling(func: Callable) -> Callable:
 
 
 def get_channel(context: Optional[ConfigContext] = None) -> Channel:
-    if os.getenv("CI"):
-        return Channel("localhost:50051")
-
     if not context:
         _, context = prompt_for_config_context()
 
