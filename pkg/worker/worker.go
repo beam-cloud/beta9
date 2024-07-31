@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -848,16 +847,6 @@ func (s *Worker) shutdown() error {
 	if err != nil {
 		errs = errors.Join(errs, err)
 	}
-
-	log.Println("cleaned up image mount path")
-
-	// Forcefully kill the fuse mount devices
-	err = exec.Command("umount", "tmp/", "/dev/fuse").Run()
-	if err != nil {
-		return fmt.Errorf("error executing fuser -k /dev/fuse: %v", err)
-	}
-
-	log.Println("worker shutdown complete")
 
 	return errs
 }
