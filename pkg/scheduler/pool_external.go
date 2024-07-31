@@ -266,8 +266,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	workerImage := fmt.Sprintf("%s/%s:%s",
 		wpc.config.Worker.ImageRegistry,
 		wpc.config.Worker.ImageName,
-		// wpc.config.Worker.ImageTag,
-		"devel",
+		wpc.config.Worker.ImageTag,
 	)
 
 	resources := corev1.ResourceRequirements{}
@@ -292,7 +291,6 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 			Command: []string{
 				defaultWorkerEntrypoint,
 			},
-			ImagePullPolicy: "Always",
 			SecurityContext: &corev1.SecurityContext{
 				Privileged: ptr.To(true),
 			},

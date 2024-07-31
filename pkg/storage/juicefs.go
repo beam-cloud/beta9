@@ -141,11 +141,11 @@ func (s *JuiceFsStorage) Unmount(localPath string) error {
 		return nil
 	}
 
-	// // Forcefully kill the fuse mount devices
-	// err = exec.Command("fuser", "-k", "/dev/fuse").Run()
-	// if err != nil {
-	// 	return fmt.Errorf("error executing fuser -k /dev/fuse: %v", err)
-	// }
+	// Forcefully kill the fuse mount devices
+	err = exec.Command("fuser", "-k", "/dev/fuse").Run()
+	if err != nil {
+		return fmt.Errorf("error executing fuser -k /dev/fuse: %v", err)
+	}
 
 	return nil
 }
