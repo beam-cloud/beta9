@@ -223,7 +223,7 @@ curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dear
     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
     sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-apt-get update &&  apt-get install -y nvidia-container-toolkit nvidia-container-runtime jq nvidia-driver-470-server
+apt-get update &&  apt-get install -y nvidia-container-toolkit nvidia-container-runtime jq
 
 curl -L -o agent https://release.beam.cloud/agent/agent && \
 chmod +x agent && \\
