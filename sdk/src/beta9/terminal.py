@@ -1,7 +1,7 @@
 import datetime
 import sys
 from contextlib import contextmanager
-from typing import Any, Generator, Optional, Sequence, Tuple
+from typing import Any, Generator, Literal, Optional, Sequence, Tuple
 
 import rich
 import rich.columns
@@ -89,7 +89,7 @@ def progress_open(file, mode, **kwargs):
         **kwargs,
     )
 
-    if "description" in options:
+    if "description" in options and options["description"]:
         options["description"] = escape(f"[{options['description']}]")
 
     return _progress_open(file, mode, **options)  # type:ignore
@@ -123,11 +123,19 @@ def humanize_date(d: datetime.datetime) -> str:
         return f"{s // 3600} hours ago"
 
 
-def humanize_memory(m: float) -> str:
-    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+def humanize_memory(m: float, base: Literal[2, 10] = 2) -> str:
+    if base not in [2, 10]:
+        raise ValueError("Base must be 2 (binary) or 10 (decimal)")
+
+    factor = 1024 if base == 2 else 1000
+    units = (
+        ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+        if base == 2
+        else ["B", "KB", "MB", "GB", "TB", "PB"]
+    )
     index = 0
-    while m >= 1024 and index < len(units) - 1:
-        m /= 1024
+    while m >= factor and index < len(units) - 1:
+        m /= factor
         index += 1
     return f"{m:.2f} {units[index]}"
 
