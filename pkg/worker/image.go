@@ -235,7 +235,8 @@ func (c *ImageClient) Cleanup() error {
 	if c.config.BlobCache.BlobFs.Enabled && blobfsAvailable(baseBlobFsPath) {
 		o, err := exec.Command("umount", "-f", baseBlobFsPath).Output()
 		if err != nil {
-			log.Printf("Failed to unmount blobfs: %v\n", o)
+
+			log.Printf("Failed to unmount blobfs: %v\n: %v", string(o), err)
 		}
 	}
 

@@ -841,8 +841,6 @@ func (s *Worker) shutdown() error {
 		errs = errors.Join(errs, fmt.Errorf("failed to cleanup fuse mounts: %v", err))
 	}
 
-	log.Println("cleaned up image mounts")
-
 	err = os.RemoveAll(s.imageMountPath)
 	if err != nil {
 		errs = errors.Join(errs, err)
