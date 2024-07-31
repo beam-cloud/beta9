@@ -852,7 +852,7 @@ func (s *Worker) shutdown() error {
 	log.Println("cleaned up image mount path")
 
 	// Forcefully kill the fuse mount devices
-	err = exec.Command("fuser", "-k", "/dev/fuse").Run()
+	err = exec.Command("umount", "tmp/", "/dev/fuse").Run()
 	if err != nil {
 		return fmt.Errorf("error executing fuser -k /dev/fuse: %v", err)
 	}
