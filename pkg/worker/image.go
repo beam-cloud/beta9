@@ -231,6 +231,13 @@ func (c *ImageClient) Cleanup() error {
 		return true // Continue iteration
 	})
 
+	if c.config.BlobCache.BlobFs.Enabled {
+		err := c.cacheClient.Cleanup()
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
