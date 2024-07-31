@@ -129,6 +129,8 @@ class FileSyncer:
         size = os.path.getsize(temp_zip_name)
         hash = self._calculate_sha256(temp_zip_name)
 
+        terminal.detail(f"Collected object is {terminal.humanize_memory(size, base=10)}")
+
         head_response: HeadObjectResponse = self.gateway_stub.head_object(
             HeadObjectRequest(hash=hash)
         )
@@ -138,12 +140,12 @@ class FileSyncer:
             metadata = ObjectMetadata(name=hash, size=size)
 
             def stream_requests():
-                with open(temp_zip_name, "rb") as file:
+                with terminal.progress_open(temp_zip_name, "rb", description=None) as file:
                     while chunk := file.read(CHUNK_SIZE):
                         yield PutObjectRequest(chunk, metadata, hash, False)
 
-            with terminal.progress("Uploading"):
-                put_response = self.gateway_stub.put_object_stream(stream_requests())
+            terminal.header("Uploading")
+            put_response = self.gateway_stub.put_object_stream(stream_requests())
 
         elif head_response.exists and head_response.ok:
             terminal.header("Files synced")
