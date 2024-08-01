@@ -14,8 +14,10 @@ class DeployableMixin:
     def _validate(self):
         if not hasattr(self, "func") or not isinstance(self.func, Callable):
             raise AttributeError("func variable not set or is incorrect type")
+
         if not hasattr(self, "parent") or not isinstance(self.parent, RunnerAbstraction):
             raise AttributeError("parent variable not set or is incorrect type")
+
         if not hasattr(self, "deployment_stub_type") or not self.deployment_stub_type:
             raise AttributeError("deployment_stub_type variable not set")
 
@@ -23,7 +25,7 @@ class DeployableMixin:
         self._validate()
 
         name = name or self.parent.name
-        if not name or name == "":
+        if not name:
             terminal.error(
                 "You must specify an app name (either in the decorator or via the --name argument)."
             )
