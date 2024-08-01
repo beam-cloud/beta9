@@ -165,7 +165,6 @@ class Output(BaseAbstraction):
         Raises:
             OutputSaveError: An error indicating the output failed to save.
         """
-        path = Path(self.path)
         if self.path.is_dir():
             path = self.zip_dir(self.path)
 
@@ -193,8 +192,10 @@ class Output(BaseAbstraction):
         if not self.id:
             raise OutputNotSavedError
 
+        path_name = self.zipped_path.name if self.path.is_dir() else self.path.name
+
         res: OutputStatResponse = self.stub.output_stat(
-            OutputStatRequest(self.id, self.task_id, self.path.name)
+            OutputStatRequest(self.id, self.task_id, path_name)
         )
 
         if not res.ok:
