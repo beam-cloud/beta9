@@ -849,7 +849,7 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 		on d.name = latest.name
 		and d.stub_type = latest.stub_type
 		and d.version = latest.version
-		and d.workspace_id = latest.workspace_id`, filters.WorkspaceID).
+		and d.workspace_id = ?`, filters.WorkspaceID, filters.WorkspaceID).
 		Join(
 			"stub s ON d.stub_id = s.id",
 		)
@@ -867,6 +867,7 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 	)
 
 	if err != nil {
+		log.Println(err)
 		return common.CursorPaginationInfo[types.DeploymentWithRelated]{}, err
 	}
 
