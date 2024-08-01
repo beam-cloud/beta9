@@ -168,11 +168,11 @@ def main(channel: Channel):
             if not get_args_resp.ok:
                 raise InvalidFunctionArgumentsException
 
-            handler = FunctionHandler()
             payload: dict = _load_args(get_args_resp.args)
             args = payload.get("args") or []
             kwargs = payload.get("kwargs") or {}
 
+            handler = FunctionHandler()
             result = handler(context, *args, **kwargs)
         except BaseException as exc:
             print(traceback.format_exc())
