@@ -834,7 +834,10 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 
 func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
 	query := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).
-		Select("d.*").
+		Select(
+			"d.*",
+			"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
+		).
 		From("deployment d").
 		Join(`(
 			select name, max(version) as version, stub_type
@@ -842,7 +845,10 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 			where workspace_id = ? and deleted_at is null
 			group by name, stub_type
 		)
-		as latest on d.name = latest.name and d.stub_type = latest.stub_type and d.version = latest.version`, filters.WorkspaceID)
+		as latest on d.name = latest.name and d.stub_type = latest.stub_type and d.version = latest.version`, filters.WorkspaceID).
+		Join(
+			"stub s ON d.stub_id = s.id",
+		)
 
 	page, err := common.Paginate(
 		common.SquirrelCursorPaginator[types.DeploymentWithRelated]{
