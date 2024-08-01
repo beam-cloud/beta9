@@ -165,6 +165,7 @@ class Output(BaseAbstraction):
         Raises:
             OutputSaveError: An error indicating the output failed to save.
         """
+        path = Path(self.path)
         if self.path.is_dir():
             path = self.zip_dir(self.path)
 
