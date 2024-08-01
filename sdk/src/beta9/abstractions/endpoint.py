@@ -18,9 +18,9 @@ from ..clients.endpoint import (
     StartEndpointServeResponse,
     StopEndpointServeRequest,
 )
-from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..env import is_local
 from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from .mixins import DeployableMixin
 
 
 class Endpoint(RunnerAbstraction):
@@ -140,7 +140,9 @@ class Endpoint(RunnerAbstraction):
         return _CallableWrapper(func, self)
 
 
-class _CallableWrapper:
+class _CallableWrapper(DeployableMixin):
+    deployment_stub_type = ENDPOINT_DEPLOYMENT_STUB_TYPE
+
     def __init__(self, func: Callable, parent: Endpoint):
         self.func: Callable = func
         self.parent: Endpoint = parent
@@ -153,29 +155,6 @@ class _CallableWrapper:
 
     def local(self, *args, **kwargs) -> Any:
         return self.func(*args, **kwargs)
-
-    def deploy(self, name: str) -> bool:
-        name = name or self.parent.name
-        if not name or name == "":
-            terminal.error(
-                "You must specify an app name (either in the decorator or via the --name argument)."
-            )
-
-        if not self.parent.prepare_runtime(
-            func=self.func, stub_type=ENDPOINT_DEPLOYMENT_STUB_TYPE, force_create_stub=True
-        ):
-            return False
-
-        terminal.header("Deploying endpoint")
-        deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
-            DeployStubRequest(stub_id=self.parent.stub_id, name=name)
-        )
-
-        if deploy_response.ok:
-            terminal.header("Deployed 🎉")
-            self.parent.print_invocation_snippet(deploy_response.invoke_url)
-
-        return deploy_response.ok
 
     @with_grpc_error_handling
     def serve(self, timeout: int = 0):

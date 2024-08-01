@@ -17,10 +17,10 @@ from ..clients.function import (
     FunctionInvokeResponse,
     FunctionServiceStub,
 )
-from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..env import is_local
 from ..sync import FileSyncer
 from ..type import GpuType, GpuTypeAlias
+from .mixins import DeployableMixin
 
 
 class Function(RunnerAbstraction):
@@ -114,7 +114,9 @@ class Function(RunnerAbstraction):
         self._function_stub = value
 
 
-class _CallableWrapper:
+class _CallableWrapper(DeployableMixin):
+    deployment_stub_type = FUNCTION_DEPLOYMENT_STUB_TYPE
+
     def __init__(self, func: Callable, parent: Function) -> None:
         self.func: Callable = func
         self.parent: Function = parent
@@ -173,29 +175,6 @@ class _CallableWrapper:
 
     def serve(self, **kwargs):
         terminal.error("Serve has not yet been implemented for functions.")
-
-    def deploy(self, name: str) -> bool:
-        name = name or self.parent.name
-        if not name or name == "":
-            terminal.error(
-                "You must specify an app name (either in the decorator or via the --name argument)."
-            )
-
-        if not self.parent.prepare_runtime(
-            func=self.func, stub_type=FUNCTION_DEPLOYMENT_STUB_TYPE, force_create_stub=True
-        ):
-            return False
-
-        terminal.header("Deploying function")
-        deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
-            DeployStubRequest(stub_id=self.parent.stub_id, name=name)
-        )
-
-        if deploy_response.ok:
-            terminal.header("Deployed 🎉")
-            self.parent.print_invocation_snippet(deploy_response.invoke_url)
-
-        return deploy_response.ok
 
     def _format_args(self, args):
         if isinstance(args, tuple):
