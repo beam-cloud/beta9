@@ -1,3 +1,4 @@
+import os
 import shutil
 from types import ModuleType
 from typing import Any, Optional
@@ -48,6 +49,8 @@ class CLI:
             self.management_group.add_command(module.management)
 
     def check_config(self) -> None:
+        if os.getenv("CI"):
+            return
         if is_config_empty(self.settings.config_path):
             prompt_first_auth(self.settings)
 
