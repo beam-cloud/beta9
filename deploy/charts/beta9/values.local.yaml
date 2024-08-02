@@ -26,8 +26,8 @@ manifests:
       AWS_S3_BUCKET_NAME: logs
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
-      AWS_ENDPOINT_URL: http://localstack.beta9:4566
-      VICTORIA_LOGS_HOST: victoria-logs-single.beta9
+      AWS_ENDPOINT_URL: http://localstack:4566
+      VICTORIA_LOGS_HOST: victoria-logs-single
       VICTORIA_LOGS_PORT: "9428"
   - apiVersion: helm.cattle.io/v1
     kind: HelmChart
