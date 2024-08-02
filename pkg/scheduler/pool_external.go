@@ -407,6 +407,8 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		return nil, err
 	}
 
+	remoteConfig.Monitoring.FluentBit.Events.Endpoint = "http://beta9-fluent-bit.kube-system:9880"
+
 	// Serialize the AppConfig struct to JSON
 	configJson, err := json.MarshalIndent(remoteConfig, "", "  ")
 	if err == nil {
