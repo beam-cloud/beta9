@@ -121,7 +121,17 @@ class Image(BaseAbstraction):
         return self._stub
 
     def _sanitize_python_packages(self, packages: List[str]) -> List[str]:
-        return [p.replace(" ", "") for p in packages]
+        # https://pip.pypa.io/en/stable/reference/requirements-file-format/
+        prefix_exceptions = ["--", "-"]
+        sanitized = []
+        for p in packages:
+            if any(p.startswith(prefix) for prefix in prefix_exceptions):
+                sanitized.append(p)
+            elif p.startswith("#"):
+                continue
+            else:
+                sanitized.append(p.replace(" ", ""))
+        return sanitized
 
     def _load_requirements_file(self, path: str) -> List[str]:
         requirements_file = Path(path)
