@@ -267,7 +267,7 @@ type scoredWorker struct {
 	score  int32
 }
 
-// Constants used for scoring workers based on various attributes
+// Constants used for scoring workers
 const (
 	scoreAvailableWorker int32 = 10
 )
