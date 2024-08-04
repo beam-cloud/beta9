@@ -30,9 +30,9 @@ spec:
         - sh
         - -c
         - |
-          until nc -z postgresql.beta9 5432; do echo "Waiting on PostgreSQL..."; sleep 2; done;
-          until nc -z redis-master.beta9 6379; do echo "Waiting on Redis..."; sleep 2; done;
-          until nc -z juicefs-redis-master.beta9 6379; do echo "Waiting on Redis (JuiceFS)..."; sleep 2; done;
+          until nc -z postgresql 5432; do echo "Waiting on PostgreSQL..."; sleep 2; done;
+          until nc -z redis-master 6379; do echo "Waiting on Redis..."; sleep 2; done;
+          until nc -z juicefs-redis-master 6379; do echo "Waiting on Redis (JuiceFS)..."; sleep 2; done;
           echo "All systems ready!"
       containers:
       - command:
@@ -100,7 +100,7 @@ spec:
         - sh
         - -c
         - |
-          until nc -z redis-master.beta9 6379; do echo "Waiting on Redis..."; sleep 2; done;
+          until nc -z redis-master 6379; do echo "Waiting on Redis..."; sleep 2; done;
           echo "All systems ready!"
       containers:
       - name: proxy
