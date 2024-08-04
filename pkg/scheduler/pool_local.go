@@ -229,6 +229,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		TotalGpuCount: workerGpuCount,
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
+		Priority:      wpc.workerPool.Priority,
 	}
 }
 

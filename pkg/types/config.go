@@ -195,6 +195,7 @@ type WorkerPoolConfig struct {
 	PoolSizing           WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
 	DefaultMachineCost   float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
 	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
+	Priority             int32                             `key:"priority" json:"priority"`
 }
 
 type WorkerPoolJobSpecConfig struct {

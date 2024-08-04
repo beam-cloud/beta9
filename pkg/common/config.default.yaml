@@ -77,6 +77,7 @@ worker:
   pools:
     default:
       mode: local
+      priority: 1
       jobSpec:
         nodeSelector: {}
       poolSizing:
