@@ -1,3 +1,6 @@
+# This is null so that only the defaults at pkg/common/config.default.yaml are used.
+config: null
+
 images:
   gateway:
     repository: registry.localhost:5000/beta9-gateway
