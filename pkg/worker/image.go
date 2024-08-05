@@ -142,15 +142,16 @@ func blobfsAvailable(path string) bool {
 }
 
 func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
-	imageId := request.ImageId
-
-	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
-
 	f, err := newLogger(request)
 	if err != nil {
 		return err
 	}
 	defer f.logFile.Close()
+
+	imageId := request.ImageId
+	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
+
+	f.Log("starting to load image: %s", imageId)
 
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
 	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
@@ -178,7 +179,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 			elapsed := time.Since(startTime)
 
 			log.Printf("<%s> - blobfs cache took %v\n", request.ContainerId, elapsed)
-
+			f.Log("cache took %v", elapsed)
 		}
 	}
 
