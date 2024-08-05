@@ -5,6 +5,14 @@ global:
   annotations: {}
   nameOverride: beta9
 
+config:
+  worker:
+    imageRegistry: public.ecr.aws/n4e0e1y0
+    imagePVCName: ""
+  imageService:
+    runner:
+      baseImageRegistry: public.ecr.aws/n4e0e1y0
+
 images:
   gateway:
     repository: public.ecr.aws/n4e0e1y0/beta9-gateway
