@@ -85,7 +85,7 @@ ingress:
 serviceAccount:
   create: true
 persistence:
-  configHelm:
+  config-helm:
     enabled: true
     type: secret
     name: beta9-config-helm
