@@ -240,37 +240,70 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 
+func filterWorkersByPoolSelector(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	filteredWorkers := []*types.Worker{}
+	for _, worker := range workers {
+		if (request.PoolSelector != "" && worker.PoolName == request.PoolSelector) ||
+			(request.PoolSelector == "" && !worker.RequiresPoolSelector) {
+			filteredWorkers = append(filteredWorkers, worker)
+		}
+	}
+	return filteredWorkers
+}
+
+func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	filteredWorkers := []*types.Worker{}
+	for _, worker := range workers {
+		if worker.FreeCpu >= int64(request.Cpu) && worker.FreeMemory >= int64(request.Memory) &&
+			worker.Gpu == request.Gpu && worker.FreeGpuCount >= request.GpuCount {
+			filteredWorkers = append(filteredWorkers, worker)
+		}
+	}
+	return filteredWorkers
+}
+
+type scoredWorker struct {
+	worker *types.Worker
+	score  int32
+}
+
+// Constants used for scoring workers
+const (
+	scoreAvailableWorker int32 = 10
+)
+
 func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker, error) {
 	workers, err := s.workerRepo.GetAllWorkers()
 	if err != nil {
 		return nil, err
 	}
 
-	// Filter workers by pool selector
-	filteredWorkers := []*types.Worker{}
-	for _, worker := range workers {
-		// If pool selector is specified, and the worker has that pool name, include the worker
-		if (request.PoolSelector != "" && worker.PoolName == request.PoolSelector) ||
-			// If pool selector is not specified, and worker does not require a pool selector, include the worker
-			(request.PoolSelector == "" && !worker.RequiresPoolSelector) {
-			filteredWorkers = append(filteredWorkers, worker)
-		}
+	filteredWorkers := filterWorkersByPoolSelector(workers, request)     // Filter workers by pool selector
+	filteredWorkers = filterWorkersByResources(filteredWorkers, request) // Filter workers resource requirements
+
+	if len(filteredWorkers) == 0 {
+		return nil, &types.ErrNoSuitableWorkerFound{}
 	}
 
-	workers = filteredWorkers
+	// Score workers based on status and priority
+	scoredWorkers := []scoredWorker{}
+	for _, worker := range filteredWorkers {
+		score := int32(0)
 
-	// Sort workers: available first, then pending
-	sort.Slice(workers, func(i, j int) bool {
-		return workers[i].Status < workers[j].Status
+		if worker.Status == types.WorkerStatusAvailable {
+			score += scoreAvailableWorker
+		}
+
+		score += worker.Priority
+		scoredWorkers = append(scoredWorkers, scoredWorker{worker: worker, score: score})
+	}
+
+	// Select the worker with the highest score
+	sort.Slice(scoredWorkers, func(i, j int) bool {
+		return scoredWorkers[i].score > scoredWorkers[j].score
 	})
 
-	for _, worker := range workers {
-		if worker.FreeCpu >= int64(request.Cpu) && worker.FreeMemory >= int64(request.Memory) && worker.Gpu == request.Gpu && worker.FreeGpuCount >= request.GpuCount {
-			return worker, nil
-		}
-	}
-
-	return nil, &types.ErrNoSuitableWorkerFound{}
+	return scoredWorkers[0].worker, nil
 }
 
 const maxScheduleRetryCount = 3
