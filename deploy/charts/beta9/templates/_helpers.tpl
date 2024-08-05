@@ -86,7 +86,7 @@ serviceAccount:
   create: true
 persistence:
   config-helm:
-    enabled: true
+    enabled: {{ if .Values.config }}true{{ else }}false{{ end }}
     type: secret
     name: beta9-config-helm
     globalMounts:
