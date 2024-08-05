@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
@@ -163,22 +164,29 @@ class _CallableWrapper(DeployableMixin):
         ):
             return False
 
-        try:
-            with terminal.progress("Serving endpoint..."):
-                base_url = self.parent.settings.api_host
-                if not base_url.startswith(("http://", "https://")):
-                    base_url = f"http://{base_url}"
+        served = False
+        while True:
+            try:
+                with terminal.progress("Serving endpoint..."):
+                    if not served:
+                        served = True
+                        base_url = self.parent.settings.api_host
+                        if not base_url.startswith(("http://", "https://")):
+                            base_url = f"http://{base_url}"
 
-                self.parent.print_invocation_snippet(
-                    invocation_url=f"{base_url}/endpoint/id/{self.parent.stub_id}"
-                )
+                        self.parent.print_invocation_snippet(
+                            invocation_url=f"{base_url}/endpoint/id/{self.parent.stub_id}"
+                        )
 
-                return self._serve(
-                    dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout
-                )
+                        self._serve(
+                            dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout
+                        )
+                    else:
+                        while True:
+                            time.sleep(1)
 
-        except KeyboardInterrupt:
-            self._handle_serve_interrupt()
+            except KeyboardInterrupt:
+                self._handle_serve_interrupt()
 
     def _handle_serve_interrupt(self) -> None:
         response = "y"
@@ -192,12 +200,17 @@ class _CallableWrapper(DeployableMixin):
 
         if response == "y":
             terminal.header("Stopping serve container")
-            self.parent.endpoint_stub.stop_endpoint_serve(
+            res = self.parent.endpoint_stub.stop_endpoint_serve(
                 StopEndpointServeRequest(stub_id=self.parent.stub_id)
             )
-
-        terminal.print("Goodbye 👋")
-        os._exit(0)  # kills all threads immediately
+            if res.ok:
+                terminal.print("Stopped serve container")
+            else:
+                terminal.error("Failed to stop serve container")
+            terminal.print("Goodbye 👋")
+            os._exit(0)  # kills all threads immediately
+        else:
+            terminal.print("Continuing to serve 🫡")
 
     def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
         def notify(*_, **__):
