@@ -80,15 +80,9 @@ func NewRedisTaskQueueService(
 		return nil, err
 	}
 
-	configManager, err := common.NewConfigManager[types.AppConfig]()
-	if err != nil {
-		return nil, err
-	}
-	config := configManager.GetConfig()
-
 	tq := &RedisTaskQueue{
 		ctx:             ctx,
-		config:          config,
+		config:          opts.Config,
 		rdb:             opts.RedisClient,
 		scheduler:       opts.Scheduler,
 		stubConfigCache: common.NewSafeMap[*types.StubConfigV1](),
