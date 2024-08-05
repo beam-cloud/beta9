@@ -178,7 +178,6 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 
 			elapsed := time.Since(startTime)
 
-			log.Printf("<%s> - blobfs cache took %v\n", request.ContainerId, elapsed)
 			f.Log("cache took %v", elapsed)
 		}
 	}
