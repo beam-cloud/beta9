@@ -265,6 +265,7 @@ func (g *Gateway) registerServices() error {
 
 	// Register endpoint service
 	ws, err := endpoint.NewHTTPEndpointService(g.ctx, endpoint.EndpointServiceOpts{
+		Config:         g.Config,
 		ContainerRepo:  g.ContainerRepo,
 		BackendRepo:    g.BackendRepo,
 		TaskRepo:       g.TaskRepo,
