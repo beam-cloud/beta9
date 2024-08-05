@@ -266,17 +266,11 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
-	f, err := NewLogger(request)
-	if err != nil {
-		return err
-	}
-	defer f.logFile.Close()
-
 	// Pull image
-	f.Log("loading image: %s", request.ImageId)
-	err = s.imageClient.PullLazy(request)
+	log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
+	err := s.imageClient.PullLazy(request)
 	if err != nil && request.SourceImage != nil {
-		f.Log("did not find image in cache, pulling from source: %s", request.ImageId)
+		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
 		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
 		if err == nil {
 			err = s.imageClient.PullLazy(request)
@@ -284,11 +278,8 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 
 	if err != nil {
-		f.Log("failed to load image: %s, error: %v", request.ImageId, err)
 		return err
 	}
-	f.Log("successfully loaded image: %s", request.ImageId)
-	f.logFile.Close()
 
 	bindPort, err := GetRandomFreePort()
 	if err != nil {
