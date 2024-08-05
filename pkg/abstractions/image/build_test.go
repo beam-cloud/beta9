@@ -130,3 +130,23 @@ func TestExtractPackageName(t *testing.T) {
 		}
 	}
 }
+
+func TestGeneratePipInstallCommand(t *testing.T) {
+	testCases := []struct {
+		opts *BuildOpts
+		want string
+	}{
+		{
+			opts: &BuildOpts{
+				PythonPackages: []string{"--extra-index-url https://download.pytorch.org/whl/cu121", "numpy==1.18", "scipy>1.4", "pandas>=1.0,<2.0", "matplotlib<=2.2", "seaborn"},
+			},
+			want: ` -m pip install --root-user-action=ignore --extra-index-url https://download.pytorch.org/whl/cu121 "numpy==1.18" "scipy>1.4" "pandas>=1.0,<2.0" "matplotlib<=2.2" "seaborn"`,
+		},
+	}
+
+	for _, tc := range testCases {
+		b := &Builder{}
+		cmd := b.generatePipInstallCommand(tc.opts)
+		assert.Equal(t, tc.want, cmd)
+	}
+}

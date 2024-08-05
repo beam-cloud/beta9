@@ -50,6 +50,23 @@ type BuildOpts struct {
 	ForceRebuild       bool
 }
 
+func (o *BuildOpts) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "{")
+	fmt.Fprintf(&b, "  \"BaseImageRegistry\": %q,", o.BaseImageRegistry)
+	fmt.Fprintf(&b, "  \"BaseImageName\": %q,", o.BaseImageName)
+	fmt.Fprintf(&b, "  \"BaseImageTag\": %q,", o.BaseImageTag)
+	fmt.Fprintf(&b, "  \"BaseImageCreds\": %q,", o.BaseImageCreds)
+	fmt.Fprintf(&b, "  \"PythonVersion\": %q,", o.PythonVersion)
+	fmt.Fprintf(&b, "  \"PythonPackages\": %#v,", o.PythonPackages)
+	fmt.Fprintf(&b, "  \"Commands\": %#v,", o.Commands)
+	fmt.Fprintf(&b, "  \"ExistingImageUri\": %q,", o.ExistingImageUri)
+	fmt.Fprintf(&b, "  \"ExistingImageCreds\": %#v,", o.ExistingImageCreds)
+	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
+	fmt.Fprintf(&b, "}")
+	return b.String()
+}
+
 func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository) (*Builder, error) {
 	return &Builder{
 		config:        config,
@@ -232,7 +249,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
 	}
 
-	log.Printf("container <%v> building with options: %+v\n", containerId, opts)
+	log.Printf("container <%v> building with options: %s\n", containerId, opts)
 	startTime := time.Now()
 
 	// Detect if python3.x is installed in the container, if not install it
@@ -366,14 +383,27 @@ func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 }
 
 func (b *Builder) generatePipInstallCommand(opts *BuildOpts) string {
-	// Escape each package name individually
-	escapedPackages := make([]string, len(opts.PythonPackages))
-	for i, pkg := range opts.PythonPackages {
-		escapedPackages[i] = fmt.Sprintf("%q", pkg)
+	var flagLines []string
+	var packages []string
+	var flags = []string{"--", "-"}
+
+	for _, pkg := range opts.PythonPackages {
+		if hasAnyPrefix(pkg, flags) {
+			flagLines = append(flagLines, pkg)
+		} else {
+			packages = append(packages, fmt.Sprintf("%q", pkg))
+		}
 	}
 
-	packages := strings.Join(escapedPackages, " ")
-	return fmt.Sprintf("%s -m pip install --root-user-action=ignore %s", opts.PythonVersion, packages)
+	command := fmt.Sprintf("%s -m pip install --root-user-action=ignore", opts.PythonVersion)
+	if len(flagLines) > 0 {
+		command += " " + strings.Join(flagLines, " ")
+	}
+	if len(packages) > 0 {
+		command += " " + strings.Join(packages, " ")
+	}
+
+	return command
 }
 
 var imageNamePattern = regexp.MustCompile(
@@ -416,4 +446,13 @@ func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
 		Tag:      tag,
 		Digest:   digest,
 	}, nil
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return false
 }
