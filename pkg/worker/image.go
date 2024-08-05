@@ -11,13 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/abstractions/image"
-	common "github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/repository"
-	types "github.com/beam-cloud/beta9/pkg/types"
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/beam-cloud/clip/pkg/storage"
+	runc "github.com/beam-cloud/go-runc"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/moby/sys/mountinfo"
 	"github.com/opencontainers/umoci"
@@ -26,8 +24,10 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 
-	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
-	runc "github.com/beam-cloud/go-runc"
+	"github.com/beam-cloud/beta9/pkg/abstractions/image"
+	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
+	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
 const (
@@ -138,6 +138,12 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
+	f, err := NewLogger(request)
+	if err != nil {
+		return err
+	}
+	defer f.logFile.Close()
+
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
 	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
 		localCachePath = ""
@@ -152,7 +158,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 		if _, err := os.Stat(baseBlobFsContentPath); err == nil {
 			localCachePath = baseBlobFsContentPath
 		} else {
-			log.Printf("<%s> - blobfs cache entry not found for image<%s>, storing content nearby\n", request.ContainerId, imageId)
+			f.Log("cache miss for image: %s, storing content nearby", imageId)
 
 			// Otherwise, lets cache it in a nearby blobcache host
 			startTime := time.Now()
@@ -169,7 +175,6 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	}
 
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
-	var err error = nil
 
 	if _, err := os.Stat(remoteArchivePath); err != nil {
 		err = c.registry.Pull(context.TODO(), remoteArchivePath, imageId)
