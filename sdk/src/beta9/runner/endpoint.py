@@ -31,7 +31,7 @@ from ..logging import StdoutJsonInterceptor
 from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_method
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
-from .common import end_task_and_send_callback
+from .common import end_task_and_send_callback, is_asgi3
 
 
 class EndpointFilter(logging.Filter):
@@ -195,14 +195,9 @@ class EndpointManager:
                 task_id=None,
                 on_start_value=self.on_start_value,
             )
-            self.app = self.handler(
-                context
-            )  # TODO: check if this actually a valid asgi app somehow
-
-            # try:
-            #     verify_or_raise(self.app)
-            # except TypeError as e:
-            #     raise e
+            self.app = self.handler(context)
+            if not is_asgi3(self.app):
+                raise ValueError("Invalid ASGI app returned from handler")
 
             self.app.router.lifespan_context = self.lifespan
         else:

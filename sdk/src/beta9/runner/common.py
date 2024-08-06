@@ -269,3 +269,26 @@ def send_callback(
         print(f"Callback request took {time.time() - start} seconds")
     except BaseException:
         print(f"Unable to send callback: {traceback.format_exc()}")
+
+
+def has_asgi3_signature(func) -> bool:
+    sig = inspect.signature(func)
+    own_parameters = {name for name in sig.parameters if name != "self"}
+    return own_parameters == {"scope", "receive", "send"}
+
+
+def is_asgi3(app: Any) -> bool:
+    """Return whether 'app' corresponds to an ASGI3 callable."""
+    if inspect.isclass(app):
+        constructor = app.__init__
+        return has_asgi3_signature(constructor) and hasattr(app, "__await__")
+
+    if inspect.isfunction(app):
+        return inspect.iscoroutinefunction(app) and has_asgi3_signature(app)
+
+    try:
+        call = app.__call__
+    except AttributeError:
+        return False
+    else:
+        return inspect.iscoroutinefunction(call) and has_asgi3_signature(call)
