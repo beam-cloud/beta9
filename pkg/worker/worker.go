@@ -398,11 +398,14 @@ func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
 			if !exists {
 				return
 			}
-
-			// Endpoint already configured to ensure /health is successful only if all
-			resp, err := http.Get(fmt.Sprintf("0.0.0.0:%d/health", instance.Port))
-			if err == nil && resp.StatusCode == 200 {
-				break
+			ok := s.cedanaClient.HealthCheck(context.TODO(), request.ContainerId)
+			if ok {
+				// Endpoint already configured to ensure /health is successful only if all
+				// workers are ready, and at the same point to be checkpointed
+				resp, err := http.Get(fmt.Sprintf("0.0.0.0:%d/health", instance.Port))
+				if err == nil && resp.StatusCode == 200 {
+					break
+				}
 			}
 		}
 
