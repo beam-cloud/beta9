@@ -103,7 +103,7 @@ class FunctionContext:
         cls,
         *,
         config: Config,
-        task_id: str,
+        task_id: Optional[str],
         on_start_value: Optional[Any] = None,
     ) -> "FunctionContext":
         """

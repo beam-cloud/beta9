@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from gunicorn.app.base import Arbiter, BaseApplication
 from starlette.applications import Starlette
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 from uvicorn.workers import UvicornWorker
 
@@ -105,40 +106,6 @@ class TaskLifecycleData:
     override_callback_url: Optional[str] = None
 
 
-async def task_lifecycle(request: Request):
-    task_id = request.headers.get("X-TASK-ID")
-    if not task_id:
-        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Task ID missing")
-
-    print(f"Received task <{task_id}>")
-    start_response = request.app.state.gateway_stub.start_task(
-        StartTaskRequest(task_id=task_id, container_id=cfg.container_id)
-    )
-    if not start_response.ok:
-        raise HTTPException(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to start task"
-        )
-
-    task_lifecycle_data = TaskLifecycleData(
-        status=TaskStatus.Complete, result=None, override_callback_url=None
-    )
-    try:
-        yield task_lifecycle_data
-        print(f"Task <{task_id}> finished")
-    finally:
-        end_task_and_send_callback(
-            gateway_stub=request.app.state.gateway_stub,
-            payload=task_lifecycle_data.result,
-            end_task_request=EndTaskRequest(
-                task_id=task_id,
-                container_id=cfg.container_id,
-                keep_warm_seconds=cfg.keep_warm_seconds,
-                task_status=task_lifecycle_data.status,
-            ),
-            override_callback_url=task_lifecycle_data.override_callback_url,
-        )
-
-
 class OnStartMethodHandler:
     def __init__(self, worker):
         self._is_running = True
@@ -158,6 +125,52 @@ class OnStartMethodHandler:
             await asyncio.sleep(1)
 
 
+class TaskLifecycleMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path == "/health":
+            return await call_next(request)
+
+        task_id = request.headers.get("X-TASK-ID")
+        if not task_id:
+            raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Task ID missing")
+
+        with StdoutJsonInterceptor(task_id=task_id):
+            print(f"Received task <{task_id}>")
+            start_response = request.app.state.gateway_stub.start_task(
+                StartTaskRequest(task_id=task_id, container_id=cfg.container_id)
+            )
+            if not start_response.ok:
+                raise HTTPException(
+                    status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to start task"
+                )
+
+            task_lifecycle_data = TaskLifecycleData(
+                status=TaskStatus.Complete, result=None, override_callback_url=None
+            )
+
+            try:
+                request.state.task_lifecycle_data = task_lifecycle_data
+                response = await call_next(request)
+                print(f"Task <{task_id}> finished")
+                return response
+            finally:
+                end_task_and_send_callback(
+                    gateway_stub=request.app.state.gateway_stub,
+                    payload=task_lifecycle_data.result,
+                    end_task_request=EndTaskRequest(
+                        task_id=task_id,
+                        container_id=cfg.container_id,
+                        keep_warm_seconds=cfg.keep_warm_seconds,
+                        task_status=task_lifecycle_data.status,
+                    ),
+                    override_callback_url=task_lifecycle_data.override_callback_url,
+                )
+
+
+def get_task_lifecycle_data(request: Request):
+    return request.state.task_lifecycle_data
+
+
 class EndpointManager:
     @asynccontextmanager
     async def lifespan(self, _: FastAPI):
@@ -170,48 +183,60 @@ class EndpointManager:
         self.pid: int = os.getpid()
         self.exit_code: int = 0
 
-        print("STUB TYPE: ", cfg.stub_type)
-        if cfg.stub_type == "asgi/serve":
-            print("THIS IS AN ASGI APP!")
+        self.handler: FunctionHandler = FunctionHandler()
+        self.on_start_value = asyncio.run(OnStartMethodHandler(worker).start())
 
-        self.app = FastAPI(lifespan=self.lifespan)
+        self.is_asgi = "asgi" in cfg.stub_type
+        if self.is_asgi:
+            context = FunctionContext.new(
+                config=cfg,
+                task_id=None,
+                on_start_value=self.on_start_value,
+            )
+            self.app = self.handler(
+                context
+            )  # TODO: check if this actually a valid asgi app somehow
+            self.app.router.lifespan_context = self.lifespan
+        else:
+            self.app = FastAPI(lifespan=self.lifespan)
+
+        self.app.add_middleware(TaskLifecycleMiddleware)
 
         # Register signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)
-
-        # Load handler and execute on_start method
-        self.handler: FunctionHandler = FunctionHandler()
-        self.on_start_value = asyncio.run(OnStartMethodHandler(worker).start())
 
         @self.app.get("/health")
         async def health():
             return Response(status_code=HTTPStatus.OK)
 
-        @self.app.get("/")
-        @self.app.post("/")
-        async def function(
-            request: Request,
-            task_lifecycle_data: TaskLifecycleData = Depends(task_lifecycle),
-        ):
-            task_id = request.headers.get("X-TASK-ID")
-            payload = await request.json()
+        if not self.is_asgi:
 
-            status_code = HTTPStatus.OK
-            with StdoutJsonInterceptor(task_id=task_id):
+            @self.app.get("/")
+            @self.app.post("/")
+            async def function(
+                request: Request,
+                task_lifecycle_data: TaskLifecycleData = Depends(get_task_lifecycle_data),
+            ):
+                task_id = request.headers.get("X-TASK-ID")
+                payload = await request.json()
+
+                status_code = HTTPStatus.OK
                 task_lifecycle_data.result, err = await self._call_function(
                     task_id=task_id, payload=payload
                 )
                 if err:
                     task_lifecycle_data.status = TaskStatus.Error
 
-            if task_lifecycle_data.status == TaskStatus.Error:
-                status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+                if task_lifecycle_data.status == TaskStatus.Error:
+                    status_code = HTTPStatus.INTERNAL_SERVER_ERROR
 
-            task_lifecycle_data.override_callback_url = payload.get("kwargs", {}).get(
-                "callback_url"
-            )
+                task_lifecycle_data.override_callback_url = payload.get("kwargs", {}).get(
+                    "callback_url"
+                )
 
-            return self._create_response(body=task_lifecycle_data.result, status_code=status_code)
+                return self._create_response(
+                    body=task_lifecycle_data.result, status_code=status_code
+                )
 
     def _create_response(self, *, body: Any, status_code: int = HTTPStatus.OK) -> Response:
         if isinstance(body, Response):

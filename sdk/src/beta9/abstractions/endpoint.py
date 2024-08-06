@@ -189,7 +189,7 @@ class _CallableWrapper(DeployableMixin):
         self.func: Callable = func
         self.parent: Union[Endpoint, ASGI] = parent
 
-        if getattr(self.parent, "is_asgi"):
+        if getattr(self.parent, "is_asgi", None):
             self.deployment_stub_type = ASGI_DEPLOYMENT_STUB_TYPE
 
     def __call__(self, *args, **kwargs) -> Any:
@@ -205,7 +205,7 @@ class _CallableWrapper(DeployableMixin):
     def serve(self, timeout: int = 0):
         stub_type = ENDPOINT_SERVE_STUB_TYPE
 
-        if getattr(self.parent, "is_asgi"):
+        if getattr(self.parent, "is_asgi", None):
             stub_type = ASGI_SERVE_STUB_TYPE
 
         if not self.parent.prepare_runtime(
