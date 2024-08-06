@@ -213,6 +213,9 @@ const (
 	StubTypeEndpoint            string = "endpoint"
 	StubTypeEndpointDeployment  string = "endpoint/deployment"
 	StubTypeEndpointServe       string = "endpoint/serve"
+	StubTypeASGI                string = "asgi"
+	StubTypeASGIDeployment      string = "asgi/deployment"
+	StubTypeASGIServe           string = "asgi/serve"
 )
 
 type StubType string
