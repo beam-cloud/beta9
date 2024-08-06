@@ -2,7 +2,7 @@ clusterName: beta9
 debugMode: false
 database:
   postgres:
-    host: postgresql.beta9
+    host: postgresql
     port: 5432
     username: root
     password: password
@@ -11,7 +11,7 @@ database:
   redis:
     mode: single
     addrs:
-    - redis-master.beta9:6379
+    - redis-master:6379
     password:
     enableTLS: false
     insecureSkipVerify: false
@@ -22,8 +22,8 @@ storage:
   fsPath: /data
   objectPath: /data/objects
   juicefs:
-    redisURI: redis://juicefs-redis-master.beta9:6379/0
-    awsS3Bucket: http://localstack.beta9:4566/juicefs
+    redisURI: redis://juicefs-redis-master:6379/0
+    awsS3Bucket: http://localstack:4566/juicefs
     awsAccessKey: test
     awsSecretKey: test
     blockSize: 4096
@@ -31,7 +31,7 @@ storage:
     prefetch: 1
     bufferSize: 300
 gateway:
-  host: beta9-gateway.beta9
+  host: beta9-gateway
   externalURL: http://localhost:1994
   grpc:
     port: 1993
@@ -45,6 +45,8 @@ gateway:
       allowHeaders: "*"
       allowMethods: "*"
   shutdownTimeout: 180s
+  stubLimits:
+    memory: 32768
 imageService:
   cacheURL:
   localCacheEnabled: true
@@ -75,6 +77,7 @@ worker:
   pools:
     default:
       mode: local
+      priority: 1
       jobSpec:
         nodeSelector: {}
       poolSizing:
@@ -96,6 +99,7 @@ worker:
         minFreeCpu: 8000m
         minFreeGpu: 0
         minFreeMemory: 32Gi
+        sharedMemoryLimitPct: 100%
     # example gpu worker pool
     # nvidia:
     #   gpuType: A40
@@ -144,17 +148,18 @@ proxy:
   services:
   - name: redis
     localPort: 6379
-    destination: redis-master.beta9:6379
+    destination: redis-master:6379
   - name: juicefs-redis
     localPort: 6380
-    destination: juicefs-redis-master.beta9:6379
+    destination: juicefs-redis-master:6379
   - name: gateway-http
     localPort: 1994
-    destination: beta9-gateway.beta9:1994
+    destination: beta9-gateway:1994
   - name: gateway-grpc
     localPort: 1993
-    destination: beta9-gateway.beta9:1993
+    destination: beta9-gateway:1993
 monitoring:
+  containerMetricsInterval: 3s
   metricsCollector: prometheus
   prometheus:
     scrapeWorkers: true

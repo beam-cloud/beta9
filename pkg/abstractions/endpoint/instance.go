@@ -45,6 +45,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 		fmt.Sprintf("WORKERS=%d", i.StubConfig.Workers),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.StubConfig.KeepWarmSeconds),
 		fmt.Sprintf("PYTHON_VERSION=%s", i.StubConfig.PythonVersion),
+		fmt.Sprintf("CALLBACK_URL=%s", i.StubConfig.CallbackUrl),
 		fmt.Sprintf("TIMEOUT=%d", i.StubConfig.TaskPolicy.Timeout),
 	}
 

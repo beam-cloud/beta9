@@ -28,6 +28,7 @@ type DeploymentFilter struct {
 	CreatedAtStart string      `query:"created_at_start"`
 	CreatedAtEnd   string      `query:"created_at_end"`
 	Pagination     bool        `query:"pagination"`
+	SearchQuery    string      `query:"search_query"`
 }
 
 type TaskFilter struct {
@@ -48,4 +49,7 @@ type TaskFilter struct {
 type StubFilter struct {
 	WorkspaceID string      `query:"workspace_id"`
 	StubIds     StringSlice `query:"stub_ids"` // The query parameter name is "values"
+	StubTypes   StringSlice `query:"stub_types"`
+	Cursor      string      `query:"cursor"`
+	Pagination  bool        `query:"pagination"`
 }

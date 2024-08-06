@@ -265,6 +265,7 @@ class GetOrCreateStubRequest(betterproto.Message):
 class GetOrCreateStubResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     stub_id: str = betterproto.string_field(2)
+    err_msg: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -278,6 +279,7 @@ class DeployStubResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     deployment_id: str = betterproto.string_field(2)
     version: int = betterproto.uint32_field(3)
+    invoke_url: str = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -317,6 +319,17 @@ class StopDeploymentRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class StopDeploymentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteDeploymentRequest(betterproto.Message):
+    id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteDeploymentResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
 
@@ -394,6 +407,9 @@ class ListMachinesResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     machines: List["Machine"] = betterproto.message_field(3)
+    gpus: Dict[str, bool] = betterproto.map_field(
+        4, betterproto.TYPE_STRING, betterproto.TYPE_BOOL
+    )
 
 
 @dataclass(eq=False, repr=False)
@@ -556,6 +572,15 @@ class GatewayServiceStub(SyncServiceStub):
             StopDeploymentRequest,
             StopDeploymentResponse,
         )(stop_deployment_request)
+
+    def delete_deployment(
+        self, delete_deployment_request: "DeleteDeploymentRequest"
+    ) -> "DeleteDeploymentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DeleteDeployment",
+            DeleteDeploymentRequest,
+            DeleteDeploymentResponse,
+        )(delete_deployment_request)
 
     def list_pools(self, list_pools_request: "ListPoolsRequest") -> "ListPoolsResponse":
         return self._unary_unary(

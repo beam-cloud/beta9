@@ -32,7 +32,7 @@ type LocalKubernetesWorkerPoolController struct {
 	workerRepo repository.WorkerRepository
 }
 
-func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, workerPoolRepo repository.WorkerPoolRepository, providerRepo repository.ProviderRepository) (WorkerPoolController, error) {
+func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, providerRepo repository.ProviderRepository) (WorkerPoolController, error) {
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -54,7 +54,7 @@ func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.Ap
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, &workerPool, workerRepo, workerPoolRepo, providerRepo)
+	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
 	if err != nil {
 		log.Printf("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
 	}
@@ -229,6 +229,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		TotalGpuCount: workerGpuCount,
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
+		Priority:      wpc.workerPool.Priority,
 	}
 }
 
@@ -239,7 +240,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createJobInCluster(job *batchv1.
 
 func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
 	hostPathType := corev1.HostPathDirectoryOrCreate
-	sharedMemoryLimit := resource.MustParse(fmt.Sprintf("%dMi", workerMemory/2))
+	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPool.PoolSizing.SharedMemoryLimitPct, workerMemory)
 
 	tmpSizeLimit := resource.MustParse("30Gi")
 	volumes := []corev1.Volume{

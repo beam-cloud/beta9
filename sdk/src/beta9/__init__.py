@@ -1,4 +1,5 @@
 from . import env
+from .abstractions import experimental
 from .abstractions.container import Container
 from .abstractions.endpoint import Endpoint as endpoint
 from .abstractions.function import Function as function
@@ -24,4 +25,5 @@ __all__ = [
     "PythonVersion",
     "Output",
     "QueueDepthAutoscaler",
+    "experimental",
 ]

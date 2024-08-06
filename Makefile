@@ -23,6 +23,11 @@ k3d-up:
 k3d-down:
 	bash bin/k3d.sh down
 
+k3d-rebuild:
+	make k3d-down
+	make k3d-up
+	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
+
 gateway:
 	docker build . --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
 	docker push localhost:5001/beta9-gateway:$(tag)

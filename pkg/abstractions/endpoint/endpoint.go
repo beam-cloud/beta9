@@ -71,12 +71,6 @@ func NewHTTPEndpointService(
 	ctx context.Context,
 	opts EndpointServiceOpts,
 ) (EndpointService, error) {
-	configManager, err := common.NewConfigManager[types.AppConfig]()
-	if err != nil {
-		return nil, err
-	}
-	config := configManager.GetConfig()
-
 	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
 	if err != nil {
 		return nil, err
@@ -84,7 +78,7 @@ func NewHTTPEndpointService(
 
 	es := &HttpEndpointService{
 		ctx:               ctx,
-		config:            config,
+		config:            opts.Config,
 		rdb:               opts.RedisClient,
 		keyEventManager:   keyEventManager,
 		scheduler:         opts.Scheduler,

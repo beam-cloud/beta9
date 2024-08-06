@@ -13,7 +13,6 @@ from ..abstractions.base.runner import (
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
 from ..channel import with_grpc_error_handling
-from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..clients.taskqueue import (
     StartTaskQueueServeRequest,
     StartTaskQueueServeResponse,
@@ -25,6 +24,7 @@ from ..clients.taskqueue import (
 )
 from ..env import is_local
 from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from .mixins import DeployableMixin
 
 
 class TaskQueue(RunnerAbstraction):
@@ -75,9 +75,9 @@ class TaskQueue(RunnerAbstraction):
         name (Optional[str]):
             An optional name for this task_queue, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
-        autoscaler (Optional[Autoscaler]):
+        autoscaler (Autoscaler):
             Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
-            various autoscaling strategies (Defaults to QueueDepthAutoscaler())
+            various autoscaling strategies. Default is QueueDepthAutoscaler().
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -108,7 +108,7 @@ class TaskQueue(RunnerAbstraction):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
-        autoscaler: Optional[Autoscaler] = QueueDepthAutoscaler(),
+        autoscaler: Autoscaler = QueueDepthAutoscaler(),
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -143,7 +143,9 @@ class TaskQueue(RunnerAbstraction):
         return _CallableWrapper(func, self)
 
 
-class _CallableWrapper:
+class _CallableWrapper(DeployableMixin):
+    deployment_stub_type = TASKQUEUE_DEPLOYMENT_STUB_TYPE
+
     def __init__(self, func: Callable, parent: TaskQueue):
         self.func: Callable = func
         self.parent: TaskQueue = parent
@@ -159,35 +161,6 @@ class _CallableWrapper:
 
     def local(self, *args, **kwargs) -> Any:
         return self.func(*args, **kwargs)
-
-    def deploy(self, name: str) -> bool:
-        name = name or self.parent.name
-        if not name or name == "":
-            terminal.error(
-                "You must specify an app name (either in the decorator or via the --name argument)."
-            )
-
-        if not self.parent.prepare_runtime(
-            func=self.func, stub_type=TASKQUEUE_DEPLOYMENT_STUB_TYPE, force_create_stub=True
-        ):
-            return False
-
-        terminal.header("Deploying taskqueue")
-        deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
-            DeployStubRequest(stub_id=self.parent.stub_id, name=name)
-        )
-
-        if deploy_response.ok:
-            base_url = self.parent.settings.api_host
-            if not base_url.startswith(("http://", "https://")):
-                base_url = f"http://{base_url}"
-
-            terminal.header("Deployed 🎉")
-            self.parent.print_invocation_snippet(
-                invocation_url=f"{base_url}/taskqueue/{name}/v{deploy_response.version}"
-            )
-
-        return deploy_response.ok
 
     @with_grpc_error_handling
     def serve(self, timeout: int = 0) -> bool:

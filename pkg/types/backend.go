@@ -58,16 +58,17 @@ type VolumeWithRelated struct {
 }
 
 type Deployment struct {
-	Id          uint      `db:"id" json:"id"`
-	ExternalId  string    `db:"external_id" json:"external_id"`
-	Name        string    `db:"name" json:"name"`
-	Active      bool      `db:"active" json:"active"`
-	WorkspaceId uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
-	StubId      uint      `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
-	StubType    string    `db:"stub_type" json:"stub_type"`
-	Version     uint      `db:"version" json:"version"`
-	CreatedAt   time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
+	Id          uint         `db:"id" json:"id"`
+	ExternalId  string       `db:"external_id" json:"external_id"`
+	Name        string       `db:"name" json:"name"`
+	Active      bool         `db:"active" json:"active"`
+	WorkspaceId uint         `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
+	StubId      uint         `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
+	StubType    string       `db:"stub_type" json:"stub_type"`
+	Version     uint         `db:"version" json:"version"`
+	CreatedAt   time.Time    `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time    `db:"updated_at" json:"updated_at"`
+	DeletedAt   sql.NullTime `db:"deleted_at" json:"deleted_at"`
 }
 
 type DeploymentWithRelated struct {
@@ -128,8 +129,27 @@ type Task struct {
 
 type TaskWithRelated struct {
 	Task
-	Workspace Workspace `db:"workspace" json:"workspace"`
-	Stub      Stub      `db:"stub" json:"stub"`
+	Outputs   []TaskOutput `json:"outputs"`
+	Stats     TaskStats    `json:"stats"`
+	Workspace Workspace    `db:"workspace" json:"workspace"`
+	Stub      Stub         `db:"stub" json:"stub"`
+}
+
+func (t *TaskWithRelated) SanitizeStubConfig() error {
+	var stubConfig StubConfigV1
+	err := json.Unmarshal([]byte(t.Stub.Config), &stubConfig)
+	if err != nil {
+		return err
+	}
+
+	stubConfig.Secrets = []Secret{}
+
+	stubConfigBytes, err := json.Marshal(stubConfig)
+	if err != nil {
+		return err
+	}
+	t.Stub.Config = string(stubConfigBytes)
+	return nil
 }
 
 type TaskCountPerDeployment struct {
@@ -141,6 +161,17 @@ type TaskCountByTime struct {
 	Time         time.Time       `db:"time" json:"time"`
 	Count        uint            `count:"count" json:"count"`
 	StatusCounts json.RawMessage `db:"status_counts" json:"status_counts"`
+}
+
+type TaskOutput struct {
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	ExpiresIn uint32 `json:"expires_in"`
+}
+
+type TaskStats struct {
+	ActiveContainers uint32 `json:"active_containers"`
+	QueueDepth       uint32 `json:"queue_depth"`
 }
 
 type StubConfigV1 struct {
@@ -155,7 +186,7 @@ type StubConfigV1 struct {
 	Workers         uint         `json:"workers"`
 	Authorized      bool         `json:"authorized"`
 	Volumes         []*pb.Volume `json:"volumes"`
-	Secrets         []Secret     `json:"secrets"`
+	Secrets         []Secret     `json:"secrets,omitempty"`
 	Autoscaler      *Autoscaler  `json:"autoscaler"`
 	Experimental    Experimental `json:"experimental"`
 }
@@ -199,8 +230,12 @@ func (t StubType) IsDeployment() bool {
 	return strings.HasSuffix(string(t), "/deployment")
 }
 
+func (t StubType) Kind() string {
+	return strings.Split(string(t), "/")[0]
+}
+
 type Stub struct {
-	Id            uint      `db:"id" json:"id"`
+	Id            uint      `db:"id" json:"_"`
 	ExternalId    string    `db:"external_id" json:"external_id"`
 	Name          string    `db:"name" json:"name"`
 	Type          StubType  `db:"type" json:"type"`
@@ -210,6 +245,15 @@ type Stub struct {
 	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
 	CreatedAt     time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
+}
+
+func (s *Stub) UnmarshalConfig() (*StubConfigV1, error) {
+	var config *StubConfigV1
+	err := json.Unmarshal([]byte(s.Config), &config)
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
 }
 
 type StubWithRelated struct {

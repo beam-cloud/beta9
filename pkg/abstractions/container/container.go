@@ -145,6 +145,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
 		fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
 		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
+		fmt.Sprintf("CALLBACK_URL=%s", stubConfig.CallbackUrl),
 	}
 
 	env = append(secrets, env...)

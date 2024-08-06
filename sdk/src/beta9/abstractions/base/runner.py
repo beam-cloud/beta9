@@ -23,7 +23,7 @@ from ...clients.gateway import (
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import
 from ...sync import FileSyncer, SyncEventHandler
-from ...type import _AUTOSCALERS, Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from ...type import _AUTOSCALER_TYPES, Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -53,9 +53,9 @@ class RunnerAbstraction(BaseAbstraction):
         secrets: Optional[List[str]] = None,
         on_start: Optional[Callable] = None,
         callback_url: Optional[str] = None,
-        authorized: Optional[bool] = True,
+        authorized: bool = True,
         name: Optional[str] = None,
-        autoscaler: Optional[Autoscaler] = QueueDepthAutoscaler(),
+        autoscaler: Autoscaler = QueueDepthAutoscaler(),
     ) -> None:
         super().__init__()
 
@@ -95,15 +95,22 @@ class RunnerAbstraction(BaseAbstraction):
         self.settings: SDKSettings = get_settings()
         self.config_context: ConfigContext = get_config_context()
 
-    def print_invocation_snippet(self, invocation_url) -> None:
+    def print_invocation_snippet(self, invocation_url: str) -> None:
         """Print curl request to call deployed container URL"""
 
         terminal.header("Invocation details")
-        terminal.detail(f"""curl -X POST '{invocation_url}' \\
--H 'Connection: keep-alive' \\
--H 'Authorization: Bearer {self.config_context.token}' \\
--H 'Content-Type: application/json' \\
--d '{"{}"}'""")
+        commands = [
+            f"curl -X POST '{invocation_url}' \\",
+            "-H 'Connection: keep-alive' \\",
+            "-H 'Content-Type: application/json' \\",
+            *(
+                [f"-H 'Authorization: Bearer {self.config_context.token}' \\"]
+                if self.authorized
+                else []
+            ),
+            "-d '{}'",
+        ]
+        terminal.print("\n".join(commands), crop=False, overflow="ignore")
 
     def _parse_memory(self, memory_str: str) -> int:
         """Parse memory str (with units) to megabytes."""
@@ -174,7 +181,7 @@ class RunnerAbstraction(BaseAbstraction):
 
         module = inspect.getmodule(func)  # Determine module / function name
         if module:
-            module_file = os.path.basename(module.__file__)
+            module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
         else:
             module_name = "__main__"
@@ -291,8 +298,8 @@ class RunnerAbstraction(BaseAbstraction):
             terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
             return False
 
-        autoscaler_type = _AUTOSCALERS.get(type(self.autoscaler), None)
-        if autoscaler_type is None:
+        autoscaler_type = _AUTOSCALER_TYPES.get(type(self.autoscaler), "")
+        if not autoscaler_type:
             terminal.error(
                 f"Invalid Autoscaler class: {type(self.autoscaler).__name__}",
                 exit=False,
@@ -334,6 +341,10 @@ class RunnerAbstraction(BaseAbstraction):
                 self.stub_created = True
                 self.stub_id = stub_response.stub_id
             else:
+                if err := stub_response.err_msg:
+                    terminal.error(err, exit=False)
+                else:
+                    terminal.error("Failed to get or create stub", exit=False)
                 return False
 
         self.runtime_ready = True

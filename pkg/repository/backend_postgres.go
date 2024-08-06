@@ -18,9 +18,12 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
 )
+
+var PostgresDataError = pq.ErrorClass("22")
 
 type PostgresBackendRepository struct {
 	client *sqlx.DB
@@ -415,6 +418,36 @@ func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, exte
     `
 	err := r.client.GetContext(ctx, &taskWithRelated, query, externalId)
 	if err != nil {
+		if err, ok := err.(*pq.Error); ok && err.Code.Class() == PostgresDataError {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return &taskWithRelated, nil
+}
+
+func (r *PostgresBackendRepository) GetTaskByWorkspace(ctx context.Context, externalId string, workspace *types.Workspace) (*types.TaskWithRelated, error) {
+	var taskWithRelated types.TaskWithRelated
+	query := `
+	SELECT
+		w.external_id AS "workspace.external_id", w.name AS "workspace.name",
+		s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", t.*
+	FROM task t
+	JOIN workspace w ON t.workspace_id = w.id
+	JOIN stub s ON t.stub_id = s.id
+	WHERE
+		t.external_id = $1
+		AND w.id = $2;
+    `
+	err := r.client.GetContext(ctx, &taskWithRelated, query, externalId, workspace.Id)
+	if err != nil {
+		if err, ok := err.(*pq.Error); ok && err.Code.Class() == PostgresDataError {
+			return nil, nil
+		}
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
 		return nil, err
 	}
 
@@ -717,6 +750,15 @@ func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, works
 	return &volume, nil
 }
 
+func (c *PostgresBackendRepository) DeleteVolume(ctx context.Context, workspaceId uint, name string) error {
+	query := `DELETE FROM volume WHERE name = $1 AND workspace_id = $2;`
+	_, err := c.client.ExecContext(ctx, query, name, workspaceId)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *PostgresBackendRepository) ListVolumesWithRelated(ctx context.Context, workspaceId uint) ([]types.VolumeWithRelated, error) {
 	var volumes []types.VolumeWithRelated
 	query := `
@@ -736,18 +778,28 @@ func (c *PostgresBackendRepository) ListVolumesWithRelated(ctx context.Context, 
 
 // Deployment
 
-func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string) (*types.Deployment, error) {
-	var deployment types.Deployment
+func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string, filterDeleted bool) (*types.DeploymentWithRelated, error) {
+	var deploymentWithRelated types.DeploymentWithRelated
+
+	filterDeletedQuery := ""
+	if filterDeleted {
+		filterDeletedQuery = "AND d.deleted_at IS NULL "
+	}
 
 	query := `
-        SELECT id, external_id, name, active, workspace_id, stub_id, version, created_at, updated_at
-        FROM deployment
-        WHERE workspace_id = $1 AND name = $2 AND stub_type = $3
-        ORDER BY version DESC
+        SELECT
+            d.*,
+            s.external_id AS "stub.external_id",
+            s.name AS "stub.name",
+            s.config AS "stub.config"
+        FROM deployment d
+        JOIN stub s ON d.stub_id = s.id
+        WHERE d.workspace_id = $1 AND d.name = $2 AND d.stub_type = $3 ` + filterDeletedQuery + `
+        ORDER BY d.version DESC
         LIMIT 1;
     `
 
-	err := c.client.GetContext(ctx, &deployment, query, workspaceId, name, stubType)
+	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, name, stubType)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Return nil if no deployment found
@@ -755,7 +807,7 @@ func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Contex
 		return nil, err
 	}
 
-	return &deployment, nil
+	return &deploymentWithRelated, nil
 }
 
 func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint, stubType string) (*types.DeploymentWithRelated, error) {
@@ -768,17 +820,58 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
         JOIN stub s ON d.stub_id = s.id
-        WHERE d.workspace_id = $1 AND d.name = $2 AND d.version = $3 AND d.stub_type = $4
+        WHERE d.workspace_id = $1 AND d.name = $2 AND d.version = $3 AND d.stub_type = $4 and d.deleted_at IS NULL
         LIMIT 1;
     `
 
 	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, name, version, stubType)
 	if err != nil {
-		log.Println("err: ", err)
 		return nil, err
 	}
 
 	return &deploymentWithRelated, nil
+}
+
+func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
+	query := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).
+		Select(
+			"d.*",
+			"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
+		).
+		From("deployment d").
+		Join(`(
+			select name, max(version) as version, stub_type
+			from deployment
+			where workspace_id = ? and deleted_at is null
+			group by name, stub_type
+		)
+		as latest 
+		on d.name = latest.name
+		and d.stub_type = latest.stub_type
+		and d.version = latest.version
+		and d.workspace_id = ?`, filters.WorkspaceID, filters.WorkspaceID).
+		Join(
+			"stub s ON d.stub_id = s.id",
+		)
+
+	page, err := common.Paginate(
+		common.SquirrelCursorPaginator[types.DeploymentWithRelated]{
+			Client:          c.client,
+			SelectBuilder:   query,
+			SortOrder:       "DESC",
+			SortColumn:      "created_at",
+			SortQueryPrefix: "d",
+			PageSize:        10,
+		},
+		filters.Cursor,
+	)
+
+	if err != nil {
+		log.Println(err)
+		return common.CursorPaginationInfo[types.DeploymentWithRelated]{}, err
+	}
+
+	return *page, nil
 }
 
 func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Context, workspaceId uint, deploymentExternalId string) (*types.DeploymentWithRelated, error) {
@@ -791,12 +884,20 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
         JOIN stub s ON d.stub_id = s.id
-        WHERE d.workspace_id = $1 AND d.external_id = $2
+        WHERE d.workspace_id = $1 AND d.external_id = $2 and d.deleted_at IS NULL
         LIMIT 1;
     `
 
 	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, deploymentExternalId)
 	if err != nil {
+		if err, ok := err.(*pq.Error); ok && err.Code.Class() == PostgresDataError {
+			return nil, nil
+		}
+
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+
 		return nil, err
 	}
 
@@ -810,7 +911,9 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
 	).From("deployment d").
 		Join("workspace w ON d.workspace_id = w.id").
-		Join("stub s ON d.stub_id = s.id").OrderBy("d.created_at DESC")
+		Join("stub s ON d.stub_id = s.id").
+		Where("d.deleted_at IS NULL").
+		OrderBy("d.created_at DESC")
 
 	// Apply filters
 	qb = qb.Where(squirrel.Eq{"d.workspace_id": filters.WorkspaceID})
@@ -823,12 +926,16 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 		qb = qb.Where(squirrel.Eq{"d.stub_type": filters.StubType})
 	}
 
-	if filters.Name != "" {
-		if err := uuid.Validate(filters.Name); err == nil {
-			qb = qb.Where(squirrel.Eq{"d.external_id": filters.Name})
+	if filters.SearchQuery != "" {
+		if err := uuid.Validate(filters.SearchQuery); err == nil {
+			qb = qb.Where(squirrel.Eq{"d.external_id": filters.SearchQuery})
 		} else {
-			qb = qb.Where(squirrel.Like{"d.name": "%" + filters.Name + "%"})
+			qb = qb.Where(squirrel.Like{"d.name": "%" + filters.SearchQuery + "%"})
 		}
+	}
+
+	if filters.Name != "" {
+		qb = qb.Where(squirrel.Like{"d.name": filters.Name})
 	}
 
 	if filters.Active != nil {
@@ -929,6 +1036,10 @@ func (c *PostgresBackendRepository) listStubsQueryBuilder(filters types.StubFilt
 		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
 	}
 
+	if len(filters.StubTypes) > 0 {
+		qb = qb.Where(squirrel.Eq{"s.type": filters.StubTypes})
+	}
+
 	return qb
 }
 
@@ -949,11 +1060,31 @@ func (c *PostgresBackendRepository) ListStubs(ctx context.Context, filters types
 	return stubs, nil
 }
 
+func (c *PostgresBackendRepository) ListStubsPaginated(ctx context.Context, filters types.StubFilter) (common.CursorPaginationInfo[types.StubWithRelated], error) {
+	qb := c.listStubsQueryBuilder(filters)
+
+	page, err := common.Paginate(
+		common.SquirrelCursorPaginator[types.StubWithRelated]{
+			Client:          c.client,
+			SelectBuilder:   qb,
+			SortOrder:       "DESC",
+			SortColumn:      "created_at",
+			SortQueryPrefix: "s",
+			PageSize:        10,
+		},
+		filters.Cursor,
+	)
+	if err != nil {
+		return common.CursorPaginationInfo[types.StubWithRelated]{}, err
+	}
+	return *page, nil
+}
+
 func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error) {
 	query := `
 	UPDATE deployment
 	SET name = $3, active = $4, version = $5, updated_at = CURRENT_TIMESTAMP
-	WHERE id = $1 OR external_id = $2
+	WHERE id = $1 OR external_id = $2 and deleted_at IS NULL
 	RETURNING id, external_id, name, active, version, workspace_id, stub_id, stub_type, created_at, updated_at;
 	`
 
@@ -967,6 +1098,20 @@ func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deploy
 	}
 
 	return &updated, nil
+}
+
+func (r *PostgresBackendRepository) DeleteDeployment(ctx context.Context, deployment types.Deployment) error {
+	query := `
+	UPDATE deployment
+	SET deleted_at = CURRENT_TIMESTAMP
+	WHERE id = $1;
+	`
+
+	if _, err := r.client.ExecContext(ctx, query, deployment.Id); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *PostgresBackendRepository) GetConcurrencyLimit(ctx context.Context, concurrencyLimitId uint) (*types.ConcurrencyLimit, error) {

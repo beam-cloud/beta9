@@ -34,6 +34,7 @@ service GatewayService {
   // Deployments
   rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
   rpc StopDeployment(StopDeploymentRequest) returns (StopDeploymentResponse);
+  rpc DeleteDeployment(DeleteDeploymentRequest) returns (DeleteDeploymentResponse);
 
   // Pools
   rpc ListPools(ListPoolsRequest) returns (ListPoolsResponse);
@@ -226,6 +227,7 @@ message GetOrCreateStubRequest {
 message GetOrCreateStubResponse {
   bool ok = 1;
   string stub_id = 2;
+  string err_msg = 3;
 }
 
 message DeployStubRequest {
@@ -237,6 +239,7 @@ message DeployStubResponse {
   bool ok = 1;
   string deployment_id = 2;
   uint32 version = 3;
+  string invoke_url = 4;
 }
 
 message Deployment {
@@ -267,6 +270,13 @@ message ListDeploymentsResponse {
 message StopDeploymentRequest { string id = 1; }
 
 message StopDeploymentResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message DeleteDeploymentRequest { string id = 1; }
+
+message DeleteDeploymentResponse {
   bool ok = 1;
   string err_msg = 2;
 }
@@ -335,6 +345,7 @@ message ListMachinesResponse {
   bool ok = 1;
   string err_msg = 2;
   repeated Machine machines = 3;
+  map<string, bool> gpus = 4;
 }
 
 message CreateMachineRequest { string pool_name = 1; }

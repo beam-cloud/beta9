@@ -18,19 +18,28 @@ var (
 	defaultContainerLibrary     []string = []string{"/usr/lib/x86_64-linux-gnu", "/usr/lib/worker/x86_64-linux-gnu", "/usr/local/nvidia/lib64"}
 )
 
-type ContainerCudaManager struct {
+type GPUManager interface {
+	AssignGPUDevices(containerId string, gpuCount uint32) (*AssignedGpuDevices, error)
+	UnassignGPUDevices(containerId string)
+	InjectEnvVars(env []string, options *ContainerOptions) ([]string, bool)
+	InjectMounts(mounts []specs.Mount) []specs.Mount
+}
+
+type ContainerNvidiaManager struct {
 	gpuAllocationMap *common.SafeMap[[]int]
 	gpuCount         uint32
 	mu               sync.Mutex
 	statFunc         func(path string, stat *syscall.Stat_t) (err error)
+	infoClient       GPUInfoClient
 }
 
-func NewContainerCudaManager(gpuCount uint32) *ContainerCudaManager {
-	return &ContainerCudaManager{
+func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
+	return &ContainerNvidiaManager{
 		gpuAllocationMap: common.NewSafeMap[[]int](),
 		gpuCount:         gpuCount,
 		mu:               sync.Mutex{},
 		statFunc:         syscall.Stat,
+		infoClient:       &NvidiaInfoClient{},
 	}
 }
 
@@ -43,11 +52,11 @@ func (d *AssignedGpuDevices) String() string {
 	return d.visible
 }
 
-func (c *ContainerCudaManager) UnassignGpuDevices(containerId string) {
+func (c *ContainerNvidiaManager) UnassignGPUDevices(containerId string) {
 	c.gpuAllocationMap.Delete(containerId)
 }
 
-func (c *ContainerCudaManager) AssignGpuDevices(containerId string, gpuCount uint32) (*AssignedGpuDevices, error) {
+func (c *ContainerNvidiaManager) AssignGPUDevices(containerId string, gpuCount uint32) (*AssignedGpuDevices, error) {
 	gpuIds, err := c.chooseDevices(containerId, gpuCount)
 	if err != nil {
 		return nil, err
@@ -110,11 +119,9 @@ func (c *ContainerCudaManager) AssignGpuDevices(containerId string, gpuCount uin
 	}, nil
 }
 
-func (c *ContainerCudaManager) chooseDevices(containerId string, requestedGpuCount uint32) ([]int, error) {
+func (c *ContainerNvidiaManager) chooseDevices(containerId string, requestedGpuCount uint32) ([]int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	allocatedDevices := []int{}
 
 	currentAllocations := make(map[int]bool)
 	c.gpuAllocationMap.Range(func(_ string, value []int) bool {
@@ -124,26 +131,37 @@ func (c *ContainerCudaManager) chooseDevices(containerId string, requestedGpuCou
 		return true // Continue iteration
 	})
 
+	availableDevices, err := c.infoClient.AvailableGPUDevices()
+	if err != nil {
+		return nil, err
+	}
+
+	allocableDevices := []int{}
 	// Find available GPUs and allocate to the current container
-	for gpuId := 0; gpuId < int(c.gpuCount) && uint32(len(allocatedDevices)) < requestedGpuCount; gpuId++ {
-		if !currentAllocations[gpuId] {
-			allocatedDevices = append(allocatedDevices, gpuId)
+	if len(currentAllocations) < len(availableDevices) {
+		for _, gpuId := range availableDevices {
+			if !currentAllocations[gpuId] {
+				allocableDevices = append(allocableDevices, gpuId)
+			}
 		}
 	}
 
 	// Check if we managed to allocate the requested number of GPUs
-	if len(allocatedDevices) < int(requestedGpuCount) {
-		return nil, fmt.Errorf("not enough GPUs available, requested: %d, available: %d", requestedGpuCount, int(c.gpuCount)-len(currentAllocations))
+	if len(allocableDevices) < int(requestedGpuCount) {
+		return nil, fmt.Errorf("not enough GPUs available, requested: %d, allocable: %d out of %d", requestedGpuCount, int(c.gpuCount)-len(allocableDevices), len(availableDevices))
 	}
 
-	// Save the allocation in the SafeMap
-	c.gpuAllocationMap.Set(containerId, allocatedDevices)
+	// Allocate the requested number of GPUs
+	devicesToAllocate := allocableDevices[:requestedGpuCount]
 
-	return allocatedDevices, nil
+	// Save the allocation in the SafeMap
+	c.gpuAllocationMap.Set(containerId, devicesToAllocate)
+
+	return devicesToAllocate, nil
 }
 
 // getDeviceMajorNumber returns the major device number for the given device node path
-func (c *ContainerCudaManager) getDeviceMajorNumber(devicePath string) (*int64, error) {
+func (c *ContainerNvidiaManager) getDeviceMajorNumber(devicePath string) (*int64, error) {
 	stat := syscall.Stat_t{}
 	if err := c.statFunc(devicePath, &stat); err != nil {
 		return nil, err
@@ -154,7 +172,7 @@ func (c *ContainerCudaManager) getDeviceMajorNumber(devicePath string) (*int64, 
 }
 
 // getDeviceMinorNumber returns the minor device number for the given device node path
-func (c *ContainerCudaManager) getDeviceMinorNumber(devicePath string) (*int64, error) {
+func (c *ContainerNvidiaManager) getDeviceMinorNumber(devicePath string) (*int64, error) {
 	stat := syscall.Stat_t{}
 	if err := c.statFunc(devicePath, &stat); err != nil {
 		return nil, err
@@ -174,7 +192,7 @@ func minor(dev uint64) uint64 {
 	return (dev & 0xff) | ((dev >> 12) & 0xfff00)
 }
 
-func (c *ContainerCudaManager) InjectCudaEnvVars(env []string, options *ContainerOptions) ([]string, bool) {
+func (c *ContainerNvidiaManager) InjectEnvVars(env []string, options *ContainerOptions) ([]string, bool) {
 	existingCudaFound := false
 	cudaEnvVarNames := []string{
 		"NVIDIA_DRIVER_CAPABILITIES",
@@ -250,7 +268,7 @@ func (c *ContainerCudaManager) InjectCudaEnvVars(env []string, options *Containe
 	return env, existingCudaFound
 }
 
-func (c *ContainerCudaManager) InjectCudaMounts(mounts []specs.Mount) []specs.Mount {
+func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
 	cudaPaths := []string{fmt.Sprintf("/usr/local/cuda-%s", defaultContainerCudaVersion), "/usr/local/nvidia/lib64"}
 
 	for _, path := range cudaPaths {

@@ -24,9 +24,9 @@ const (
 )
 
 func NewOCIProvider(ctx context.Context, appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*OCIProvider, error) {
-	configProvider := common.NewRawConfigurationProvider(appConfig.Providers.OCIConfig.Tenancy,
-		appConfig.Providers.OCIConfig.UserId, appConfig.Providers.OCIConfig.Region, appConfig.Providers.OCIConfig.FingerPrint,
-		appConfig.Providers.OCIConfig.PrivateKey, common.String(appConfig.Providers.OCIConfig.PrivateKeyPassword),
+	configProvider := common.NewRawConfigurationProvider(appConfig.Providers.OCI.Tenancy,
+		appConfig.Providers.OCI.UserId, appConfig.Providers.OCI.Region, appConfig.Providers.OCI.FingerPrint,
+		appConfig.Providers.OCI.PrivateKey, common.String(appConfig.Providers.OCI.PrivateKeyPassword),
 	)
 
 	computeClient, err := core.NewComputeClientWithConfigurationProvider(configProvider)
@@ -42,7 +42,7 @@ func NewOCIProvider(ctx context.Context, appConfig types.AppConfig, providerRepo
 	ociProvider := &OCIProvider{
 		computeClient:  computeClient,
 		networkClient:  networkClient,
-		providerConfig: appConfig.Providers.OCIConfig,
+		providerConfig: appConfig.Providers.OCI,
 	}
 
 	baseProvider := NewExternalProvider(ctx, &ExternalProviderConfig{
@@ -223,7 +223,7 @@ curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dear
     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
     sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-apt-get update &&  apt-get install -y nvidia-container-toolkit nvidia-container-runtime jq nvidia-driver-470-server
+apt-get update &&  apt-get install -y nvidia-container-toolkit nvidia-container-runtime jq
 
 curl -L -o agent https://release.beam.cloud/agent/agent && \
 chmod +x agent && \\

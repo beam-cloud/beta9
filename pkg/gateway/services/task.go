@@ -18,10 +18,18 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
-	if err != nil || task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+	if err != nil {
 		return &pb.StartTaskResponse{
 			Ok: false,
 		}, nil
+	}
+
+	if task == nil {
+		return &pb.StartTaskResponse{Ok: false}, nil
+	}
+
+	if task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		return &pb.StartTaskResponse{Ok: false}, nil
 	}
 
 	task.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
@@ -48,10 +56,18 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
-	if err != nil || task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+	if err != nil {
 		return &pb.EndTaskResponse{
 			Ok: false,
 		}, nil
+	}
+
+	if task == nil {
+		return &pb.EndTaskResponse{Ok: false}, nil
+	}
+
+	if task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		return &pb.EndTaskResponse{Ok: false}, nil
 	}
 
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
@@ -135,8 +151,16 @@ func (gws *GatewayService) StopTasks(ctx context.Context, in *pb.StopTasksReques
 
 	for _, taskId := range in.TaskIds {
 		task, err := gws.backendRepo.GetTaskWithRelated(ctx, taskId)
-		if err != nil || task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		if err != nil {
 			return &pb.StopTasksResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+
+		if task == nil {
+			return &pb.StopTasksResponse{Ok: false, ErrMsg: "Task not found"}, nil
+		}
+
+		if task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+			return &pb.StopTasksResponse{Ok: false, ErrMsg: "Invalid workspace ID"}, nil
 		}
 
 		err = gws.stopTask(ctx, authInfo, task)

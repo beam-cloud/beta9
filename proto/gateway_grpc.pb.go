@@ -35,6 +35,7 @@ const (
 	GatewayService_DeployStub_FullMethodName           = "/gateway.GatewayService/DeployStub"
 	GatewayService_ListDeployments_FullMethodName      = "/gateway.GatewayService/ListDeployments"
 	GatewayService_StopDeployment_FullMethodName       = "/gateway.GatewayService/StopDeployment"
+	GatewayService_DeleteDeployment_FullMethodName     = "/gateway.GatewayService/DeleteDeployment"
 	GatewayService_ListPools_FullMethodName            = "/gateway.GatewayService/ListPools"
 	GatewayService_ListMachines_FullMethodName         = "/gateway.GatewayService/ListMachines"
 	GatewayService_CreateMachine_FullMethodName        = "/gateway.GatewayService/CreateMachine"
@@ -67,6 +68,7 @@ type GatewayServiceClient interface {
 	// Deployments
 	ListDeployments(ctx context.Context, in *ListDeploymentsRequest, opts ...grpc.CallOption) (*ListDeploymentsResponse, error)
 	StopDeployment(ctx context.Context, in *StopDeploymentRequest, opts ...grpc.CallOption) (*StopDeploymentResponse, error)
+	DeleteDeployment(ctx context.Context, in *DeleteDeploymentRequest, opts ...grpc.CallOption) (*DeleteDeploymentResponse, error)
 	// Pools
 	ListPools(ctx context.Context, in *ListPoolsRequest, opts ...grpc.CallOption) (*ListPoolsResponse, error)
 	// Machines
@@ -252,6 +254,15 @@ func (c *gatewayServiceClient) StopDeployment(ctx context.Context, in *StopDeplo
 	return out, nil
 }
 
+func (c *gatewayServiceClient) DeleteDeployment(ctx context.Context, in *DeleteDeploymentRequest, opts ...grpc.CallOption) (*DeleteDeploymentResponse, error) {
+	out := new(DeleteDeploymentResponse)
+	err := c.cc.Invoke(ctx, GatewayService_DeleteDeployment_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) ListPools(ctx context.Context, in *ListPoolsRequest, opts ...grpc.CallOption) (*ListPoolsResponse, error) {
 	out := new(ListPoolsResponse)
 	err := c.cc.Invoke(ctx, GatewayService_ListPools_FullMethodName, in, out, opts...)
@@ -314,6 +325,7 @@ type GatewayServiceServer interface {
 	// Deployments
 	ListDeployments(context.Context, *ListDeploymentsRequest) (*ListDeploymentsResponse, error)
 	StopDeployment(context.Context, *StopDeploymentRequest) (*StopDeploymentResponse, error)
+	DeleteDeployment(context.Context, *DeleteDeploymentRequest) (*DeleteDeploymentResponse, error)
 	// Pools
 	ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error)
 	// Machines
@@ -374,6 +386,9 @@ func (UnimplementedGatewayServiceServer) ListDeployments(context.Context, *ListD
 }
 func (UnimplementedGatewayServiceServer) StopDeployment(context.Context, *StopDeploymentRequest) (*StopDeploymentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StopDeployment not implemented")
+}
+func (UnimplementedGatewayServiceServer) DeleteDeployment(context.Context, *DeleteDeploymentRequest) (*DeleteDeploymentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteDeployment not implemented")
 }
 func (UnimplementedGatewayServiceServer) ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListPools not implemented")
@@ -696,6 +711,24 @@ func _GatewayService_StopDeployment_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_DeleteDeployment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteDeploymentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).DeleteDeployment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_DeleteDeployment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).DeleteDeployment(ctx, req.(*DeleteDeploymentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GatewayService_ListPools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListPoolsRequest)
 	if err := dec(in); err != nil {
@@ -834,6 +867,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StopDeployment",
 			Handler:    _GatewayService_StopDeployment_Handler,
+		},
+		{
+			MethodName: "DeleteDeployment",
+			Handler:    _GatewayService_DeleteDeployment_Handler,
 		},
 		{
 			MethodName: "ListPools",

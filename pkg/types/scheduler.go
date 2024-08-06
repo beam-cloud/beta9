@@ -27,6 +27,7 @@ type Worker struct {
 	MachineId            string       `json:"machine_id" redis:"machine_id"`
 	ResourceVersion      int64        `json:"resource_version" redis:"resource_version"`
 	RequiresPoolSelector bool         `json:"requires_pool_selector" redis:"requires_pool_selector"`
+	Priority             int32        `json:"priority" redis:"priority"`
 }
 
 type CapacityUpdateType int
@@ -65,21 +66,22 @@ type ContainerState struct {
 }
 
 type ContainerRequest struct {
-	ContainerId  string    `json:"container_id"`
-	EntryPoint   []string  `json:"entry_point"`
-	Env          []string  `json:"env"`
-	Cpu          int64     `json:"cpu"`
-	Memory       int64     `json:"memory"`
-	Gpu          string    `json:"gpu"`
-	GpuCount     uint32    `json:"gpu_count"`
-	SourceImage  *string   `json:"source_image"`
-	ImageId      string    `json:"image_id"`
-	StubId       string    `json:"stub_id"`
-	WorkspaceId  string    `json:"workspace_id"`
-	Timestamp    time.Time `json:"timestamp"`
-	Mounts       []Mount   `json:"mounts"`
-	RetryCount   int       `json:"retry_count"`
-	PoolSelector string    `json:"pool_selector"`
+	ContainerId      string    `json:"container_id"`
+	EntryPoint       []string  `json:"entry_point"`
+	Env              []string  `json:"env"`
+	Cpu              int64     `json:"cpu"`
+	Memory           int64     `json:"memory"`
+	Gpu              string    `json:"gpu"`
+	GpuCount         uint32    `json:"gpu_count"`
+	SourceImage      *string   `json:"source_image"`
+	SourceImageCreds string    `json:"source_image_creds"`
+	ImageId          string    `json:"image_id"`
+	StubId           string    `json:"stub_id"`
+	WorkspaceId      string    `json:"workspace_id"`
+	Timestamp        time.Time `json:"timestamp"`
+	Mounts           []Mount   `json:"mounts"`
+	RetryCount       int       `json:"retry_count"`
+	PoolSelector     string    `json:"pool_selector"`
   CheckpointEnabled bool `json:"checkpoint_enabled"`
 }
 

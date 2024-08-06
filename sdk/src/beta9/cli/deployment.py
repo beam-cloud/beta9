@@ -2,16 +2,19 @@ import importlib
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
 from .. import terminal
+from ..abstractions.mixins import DeployableMixin
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
+    DeleteDeploymentRequest,
+    DeleteDeploymentResponse,
     ListDeploymentsRequest,
     ListDeploymentsResponse,
     StopDeploymentRequest,
@@ -110,13 +113,13 @@ def create_deployment(service: ServiceClient, name: str, entrypoint: str):
 
     module = importlib.import_module(module_name)
 
-    user_func = getattr(module, func_name, None)
+    user_func: Optional[DeployableMixin] = getattr(module, func_name, None)
     if user_func is None:
         terminal.error(
             f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{func_name}'"
         )
 
-    if not user_func.deploy(name=name):  # type:ignore
+    if not user_func.deploy(name=name, context=service._config):  # type: ignore
         terminal.error("Deployment failed ☠️")
 
 
@@ -238,3 +241,31 @@ def stop_deployments(service: ServiceClient, deployment_ids: List[str]):
             continue
 
         terminal.print(f"Stopped {id}")
+
+
+@management.command(
+    name="delete",
+    help="Delete a deployment.",
+    epilog="""
+    Examples:
+
+        # Delete a deployment
+        {cli_name} deployment delete 5bd2e248-6d7c-417b-ac7b-0b92aa0a5572
+        \b
+     """,
+)
+@click.argument(
+    "deployment_id",
+    nargs=1,
+    type=click.STRING,
+    required=True,
+)
+@extraclick.pass_service_client
+def delete_deployment(service: ServiceClient, deployment_id: str):
+    res: DeleteDeploymentResponse
+    res = service.gateway.delete_deployment(DeleteDeploymentRequest(deployment_id))
+
+    if not res.ok:
+        terminal.error(res.err_msg)
+
+    terminal.print(f"Deleted {deployment_id}")

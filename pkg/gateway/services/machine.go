@@ -13,13 +13,21 @@ import (
 
 func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachinesRequest) (*pb.ListMachinesResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	gpus, err := gws.providerRepo.GetGPUAvailability(gws.appConfig.Worker.Pools)
+	if err != nil {
+		return nil, err
+	}
+
+	// Non-cluster admins only see GPU availability
 	if authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
 		return &pb.ListMachinesResponse{
-			Ok:     false,
-			ErrMsg: "This action is not permitted",
+			Ok:   true,
+			Gpus: gpus,
 		}, nil
 	}
 
+	// Cluster admins see all machines associated with a cluster
 	formattedMachines := []*pb.Machine{}
 	if in.PoolName != "" {
 		pool, ok := gws.appConfig.Worker.Pools[in.PoolName]
@@ -127,6 +135,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 
 	return &pb.ListMachinesResponse{
 		Ok:       true,
+		Gpus:     gpus,
 		Machines: formattedMachines,
 	}, nil
 }

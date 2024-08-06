@@ -116,37 +116,40 @@ func (t *TCPEventClientRepo) PushContainerRequestedEvent(request *types.Containe
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerScheduledEvent(containerID string, workerID string) {
+func (t *TCPEventClientRepo) PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest) {
 	t.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			Request:     *request,
 			Status:      types.EventContainerLifecycleScheduled,
 		},
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerStartedEvent(containerID string, workerID string) {
+func (t *TCPEventClientRepo) PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest) {
 	t.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			Request:     *request,
 			Status:      types.EventContainerLifecycleStarted,
 		},
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, workerID string) {
+func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest) {
 	t.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			Request:     *request,
 			Status:      types.EventContainerLifecycleStopped,
 		},
 	)
@@ -170,6 +173,20 @@ func (t *TCPEventClientRepo) PushWorkerStoppedEvent(workerID string) {
 		types.EventWorkerLifecycleSchema{
 			WorkerID: workerID,
 			Status:   types.EventWorkerLifecycleStopped,
+		},
+	)
+}
+
+func (t *TCPEventClientRepo) PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData) {
+	t.pushEvent(
+		types.EventContainerMetrics,
+		types.EventContainerMetricsSchemaVersion,
+		types.EventContainerMetricsSchema{
+			WorkerID:         workerID,
+			ContainerID:      request.ContainerId,
+			WorkspaceID:      request.WorkspaceId,
+			StubID:           request.StubId,
+			ContainerMetrics: metrics,
 		},
 	)
 }

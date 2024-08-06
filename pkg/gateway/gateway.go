@@ -19,10 +19,12 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/container"
+	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	dmap "github.com/beam-cloud/beta9/pkg/abstractions/map"
 	simplequeue "github.com/beam-cloud/beta9/pkg/abstractions/queue"
+
 	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -172,7 +174,7 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.Config)
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.Config)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.Config)
-	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.BackendRepo, g.TaskDispatcher, g.Config)
+	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.TaskRepo, g.ContainerRepo, g.BackendRepo, g.TaskDispatcher, g.Config)
 	apiv1.NewContainerGroup(g.baseRouteGroup.Group("/container", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.Config)
 	apiv1.NewStubGroup(g.baseRouteGroup.Group("/stub", authMiddleware), g.BackendRepo, g.Config)
 	apiv1.NewConcurrencyLimitGroup(g.baseRouteGroup.Group("/concurrency-limit", authMiddleware), g.BackendRepo, g.WorkspaceRepo)
@@ -263,6 +265,7 @@ func (g *Gateway) registerServices() error {
 
 	// Register endpoint service
 	ws, err := endpoint.NewHTTPEndpointService(g.ctx, endpoint.EndpointServiceOpts{
+		Config:         g.Config,
 		ContainerRepo:  g.ContainerRepo,
 		BackendRepo:    g.BackendRepo,
 		TaskRepo:       g.TaskRepo,
@@ -311,8 +314,15 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterOutputServiceServer(g.grpcServer, o)
 
 	// Register Secret service
-	ss := secret.NewSecretService(g.BackendRepo, g.rootRouteGroup)
-	pb.RegisterSecretServiceServer(g.grpcServer, ss)
+	secretService := secret.NewSecretService(g.BackendRepo, g.rootRouteGroup)
+	pb.RegisterSecretServiceServer(g.grpcServer, secretService)
+
+	// Register Signal service
+	signalService, err := _signal.NewRedisSignalService(g.RedisClient)
+	if err != nil {
+		return err
+	}
+	pb.RegisterSignalServiceServer(g.grpcServer, signalService)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService(g.Scheduler)

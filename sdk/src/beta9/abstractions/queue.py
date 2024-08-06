@@ -70,9 +70,6 @@ class SimpleQueue(BaseAbstraction):
         r = self.stub.simple_queue_size(SimpleQueueRequest(name=self.name))
         return r.size if r.ok else 0
 
-    def __del__(self):
-        super().__del__()
-
     def put(self, value: Any) -> bool:
         r: SimpleQueuePutResponse = self.stub.simple_queue_put(
             SimpleQueuePutRequest(name=self.name, value=cloudpickle.dumps(value))

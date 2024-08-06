@@ -40,7 +40,7 @@ type Worker struct {
 	imageMountPath       string
 	runcHandle           runc.Runc
 	runcServer           *RunCServer
-	containerCudaManager *ContainerCudaManager
+	containerCudaManager GPUManager
 	redisClient          *common.RedisClient
 	imageClient          *ImageClient
 	cedanaClient         *CedanaClient
@@ -136,7 +136,7 @@ func NewWorker() (*Worker, error) {
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
-	imageClient, err := NewImageClient(config.ImageService, workerId, workerRepo)
+	imageClient, err := NewImageClient(config, workerId, workerRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func NewWorker() (*Worker, error) {
 		gpuCount:             uint32(gpuCount),
 		runcHandle:           runc.Runc{},
 		runcServer:           runcServer,
-		containerCudaManager: NewContainerCudaManager(uint32(gpuCount)),
+		containerCudaManager: NewContainerNvidiaManager(uint32(gpuCount)),
 		redisClient:          redisClient,
 		podAddr:              podAddr,
 		imageClient:          imageClient,
@@ -273,7 +273,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	err := s.imageClient.PullLazy(request)
 	if err != nil && request.SourceImage != nil {
 		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerID, *request.SourceImage)
-		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, nil)
+		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
 		if err == nil {
 			err = s.imageClient.PullLazy(request)
 		}
@@ -282,9 +282,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-
-	// Every 30 seconds, update container status
-	go s.updateContainerStatus(request)
 
 	bindPort, err := GetRandomFreePort()
 	if err != nil {
@@ -513,7 +510,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	// De-allocate GPU devices so they are available for new containers
 	if request.Gpu != "" {
-		s.containerCudaManager.UnassignGpuDevices(containerId)
+		s.containerCudaManager.UnassignGPUDevices(containerId)
 	}
 
 	s.completedRequests <- request
@@ -597,8 +594,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 	s.containerInstances.Set(containerId, containerInstance)
 
+	// Every 30 seconds, update container status
+	go s.updateContainerStatus(request)
+
 	// Set worker hostname
-	hostname := fmt.Sprintf("%s:%d", s.podAddr, defaultWorkerServerPort)
+	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
 	s.containerRepo.SetWorkerAddress(request.ContainerId, hostname)
 
 	// Handle stdout/stderr from spawned container
@@ -652,22 +652,23 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 
 	// Log metrics
-	usageTrackingCompleteChan := make(chan bool)
-	go s.workerMetrics.EmitContainerUsage(request, usageTrackingCompleteChan)
-	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId)
-	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId) }()
+	containerCompleteCh := make(chan bool)
+	go s.workerMetrics.EmitContainerUsage(request, containerCompleteCh)
+	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId, request)
+	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId, request) }()
 
+	// Capture resource usage (cpu/mem/gpu)
 	pidChan := make(chan int, 1)
+	go s.collectAndSendContainerMetrics(request, spec, pidChan, containerCompleteCh)
 
 	// Invoke runc process (launch the container)
-	// This will return exit code 137 even if the container is stopped gracefully. We don't know why.
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
 		OutputWriter: containerInstance.OutputWriter,
 		ConfigPath:   configPath,
 		Started:      pidChan,
 	})
 
-	usageTrackingCompleteChan <- true
+	containerCompleteCh <- true
 
 	// Send last log message since the container has exited
 	outputChan <- common.OutputMsg{
@@ -748,14 +749,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart[0].Args = append(spec.Hooks.Prestart[0].Args, configPath, "prestart")
 
 		existingCudaFound := false
-		env, existingCudaFound = s.containerCudaManager.InjectCudaEnvVars(env, options)
+		env, existingCudaFound = s.containerCudaManager.InjectEnvVars(env, options)
 		if !existingCudaFound {
 			// If the container image does not have cuda libraries installed, mount cuda libs from the host
-			spec.Mounts = s.containerCudaManager.InjectCudaMounts(spec.Mounts)
+			spec.Mounts = s.containerCudaManager.InjectMounts(spec.Mounts)
 		}
 
 		// Assign n-number of GPUs to a container
-		assignedGpus, err := s.containerCudaManager.AssignGpuDevices(request.ContainerId, request.GpuCount)
+		assignedGpus, err := s.containerCudaManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
 		if err != nil {
 			return nil, err
 		}

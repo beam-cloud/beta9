@@ -55,3 +55,15 @@ type ProviderMachineState struct {
 	AutoConsolidate   bool          `json:"auto_consolidate" redis:"auto_consolidate"`
 	AgentVersion      string        `json:"agent_version" redis:"agent_version"`
 }
+
+type ProviderNotImplemented struct {
+	msg string
+}
+
+func (e *ProviderNotImplemented) Error() string {
+	return e.msg
+}
+
+func NewProviderNotImplemented() error {
+	return &ProviderNotImplemented{msg: "provider not implemented"}
+}

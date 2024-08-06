@@ -51,7 +51,9 @@ class BuildImageRequest(betterproto.Message):
     existing_image_uri: str = betterproto.string_field(4)
     """These parameters are used for an existing image"""
 
-    existing_image_creds: str = betterproto.string_field(5)
+    existing_image_creds: Dict[str, str] = betterproto.map_field(
+        5, betterproto.TYPE_STRING, betterproto.TYPE_STRING
+    )
 
 
 @dataclass(eq=False, repr=False)

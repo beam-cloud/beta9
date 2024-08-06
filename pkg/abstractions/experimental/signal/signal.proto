@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beta9/proto";
+
+package signal;
+
+service SignalService {
+  rpc SignalSet(SignalSetRequest) returns (SignalSetResponse) {}
+  rpc SignalClear(SignalClearRequest) returns (SignalClearResponse) {}
+  rpc SignalMonitor(SignalMonitorRequest)
+      returns (stream SignalMonitorResponse);
+}
+
+message SignalSetRequest {
+  string name = 1;
+  int64 ttl = 2;
+}
+message SignalSetResponse { bool ok = 1; }
+
+message SignalClearRequest { string name = 1; }
+message SignalClearResponse { bool ok = 1; }
+
+message SignalMonitorRequest { string name = 1; }
+message SignalMonitorResponse {
+  bool ok = 1;
+  bool set = 2;
+}

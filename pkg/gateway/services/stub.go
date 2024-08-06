@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -12,6 +13,13 @@ import (
 
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if in.Memory > int64(gws.appConfig.GatewayService.StubLimits.Memory) {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("Memory must be %dGiB or less.", gws.appConfig.GatewayService.StubLimits.Memory/1024),
+		}, nil
+	}
 
 	autoscaler := &types.Autoscaler{}
 	if in.Autoscaler.Type == "" {
@@ -105,7 +113,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
-	lastestDeployment, err := gws.backendRepo.GetLatestDeploymentByName(ctx, authInfo.Workspace.Id, in.Name, string(stub.Type))
+	lastestDeployment, err := gws.backendRepo.GetLatestDeploymentByName(ctx, authInfo.Workspace.Id, in.Name, string(stub.Type), false)
 	if err != nil {
 		return &pb.DeployStubResponse{
 			Ok: false,
@@ -124,11 +132,17 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
+	invokeURL := fmt.Sprintf("%s/%s/%s/v%d", gws.appConfig.GatewayService.ExternalURL, stub.Type.Kind(), in.Name, deployment.Version)
+	if stubConfig, err := stub.UnmarshalConfig(); err == nil && !stubConfig.Authorized {
+		invokeURL = fmt.Sprintf("%s/%s/%s/%s", gws.appConfig.GatewayService.ExternalURL, stub.Type.Kind(), "public", stub.ExternalId)
+	}
+
 	go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
 
 	return &pb.DeployStubResponse{
 		Ok:           true,
 		DeploymentId: deployment.ExternalId,
 		Version:      uint32(deployment.Version),
+		InvokeUrl:    invokeURL,
 	}, nil
 }

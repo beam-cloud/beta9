@@ -28,3 +28,5 @@ oci*
 .coverage
 .htmlcov
 okteto.yaml
+.vscode/launch.json
+pyrightconfig.json

@@ -9,18 +9,19 @@ import (
 )
 
 type AppConfig struct {
-	ClusterName    string               `key:"clusterName" json:"cluster_name"`
-	DebugMode      bool                 `key:"debugMode" json:"debug_mode"`
-	Database       DatabaseConfig       `key:"database" json:"database"`
-	GatewayService GatewayServiceConfig `key:"gateway" json:"gateway_service"`
-	ImageService   ImageServiceConfig   `key:"imageservice" json:"image_service"`
-	Storage        StorageConfig        `key:"storage" json:"storage"`
-	Worker         WorkerConfig         `key:"worker" json:"worker"`
-	Providers      ProviderConfig       `key:"providers" json:"providers"`
-	Tailscale      TailscaleConfig      `key:"tailscale" json:"tailscale"`
-	Proxy          ProxyConfig          `key:"proxy" json:"proxy"`
-	Monitoring     MonitoringConfig     `key:"monitoring" json:"monitoring"`
-	Checkpointing  CheckpointingConfig  `key:"checkpointing" json:"checkpointing"`
+	ClusterName    string                    `key:"clusterName" json:"cluster_name"`
+	DebugMode      bool                      `key:"debugMode" json:"debug_mode"`
+	Database       DatabaseConfig            `key:"database" json:"database"`
+	GatewayService GatewayServiceConfig      `key:"gateway" json:"gateway_service"`
+	ImageService   ImageServiceConfig        `key:"imageservice" json:"image_service"`
+	Storage        StorageConfig             `key:"storage" json:"storage"`
+	Worker         WorkerConfig              `key:"worker" json:"worker"`
+	Providers      ProviderConfig            `key:"providers" json:"providers"`
+	Tailscale      TailscaleConfig           `key:"tailscale" json:"tailscale"`
+	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
+	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
+	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
+	Checkpointing  CheckpointingConfig       `key:"checkpointing" json:"checkpointing"`
 }
 
 type DatabaseConfig struct {
@@ -84,6 +85,10 @@ type CORSConfig struct {
 	AllowedHeaders []string `key:"allowHeaders" json:"allow_headers"`
 }
 
+type StubLimits struct {
+	Memory uint64 `key:"memory" json:"memory"`
+}
+
 type GatewayServiceConfig struct {
 	Host            string        `key:"host" json:"host"`
 	ExternalHost    string        `key:"externalHost" json:"external_host"`
@@ -91,21 +96,21 @@ type GatewayServiceConfig struct {
 	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
 	HTTP            HTTPConfig    `key:"http" json:"http"`
 	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
+	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
 }
 
 type ImageServiceConfig struct {
-	CacheURL                       string                    `key:"cacheURL" json:"cache_url"`
-	BlobCache                      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
-	BlobCacheEnabled               bool                      `key:"blobCacheEnabled" json:"blob_cache_enabled"`
-	RegistryStore                  string                    `key:"registryStore" json:"registry_store"`
-	RegistryCredentialProviderName string                    `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
-	Registries                     ImageRegistriesConfig     `key:"registries" json:"registries"`
-	LocalCacheEnabled              bool                      `key:"localCacheEnabled" json:"local_cache_enabled"`
-	EnableTLS                      bool                      `key:"enableTLS" json:"enable_tls"`
-	BuildContainerCpu              int64                     `key:"buildContainerCpu" json:"build_container_cpu"`
-	BuildContainerMemory           int64                     `key:"buildContainerMemory" json:"build_container_memory"`
-	BuildContainerPoolSelector     string                    `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
-	Runner                         RunnerConfig              `key:"runner" json:"runner"`
+	CacheURL                       string                `key:"cacheURL" json:"cache_url"`
+	BlobCacheEnabled               bool                  `key:"blobCacheEnabled" json:"blob_cache_enabled"`
+	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
+	RegistryCredentialProviderName string                `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
+	Registries                     ImageRegistriesConfig `key:"registries" json:"registries"`
+	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
+	EnableTLS                      bool                  `key:"enableTLS" json:"enable_tls"`
+	BuildContainerCpu              int64                 `key:"buildContainerCpu" json:"build_container_cpu"`
+	BuildContainerMemory           int64                 `key:"buildContainerMemory" json:"build_container_memory"`
+	BuildContainerPoolSelector     string                `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
+	Runner                         RunnerConfig          `key:"runner" json:"runner"`
 }
 
 type ImageRegistriesConfig struct {
@@ -192,6 +197,7 @@ type WorkerPoolConfig struct {
 	PoolSizing           WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
 	DefaultMachineCost   float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
 	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
+	Priority             int32                             `key:"priority" json:"priority"`
 }
 
 type WorkerPoolJobSpecConfig struct {
@@ -217,6 +223,7 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 	MinFreeCPU            string `key:"minFreeCPU" json:"min_free_cpu"`
 	MinFreeMemory         string `key:"minFreeMemory" json:"min_free_memory"`
 	MinFreeGPU            string `key:"minFreeGPU" json:"min_free_gpu"`
+	SharedMemoryLimitPct  string `key:"sharedMemoryLimitPct" json:"shared_memory_limit_pct"`
 }
 
 type MachineProvider string
@@ -225,12 +232,18 @@ var (
 	ProviderEC2        MachineProvider = "ec2"
 	ProviderOCI        MachineProvider = "oci"
 	ProviderLambdaLabs MachineProvider = "lambda"
+	ProviderCrusoe     MachineProvider = "crusoe"
+	ProviderHydra      MachineProvider = "hydra"
+	ProviderGeneric    MachineProvider = "generic"
 )
 
 type ProviderConfig struct {
-	EC2Config        EC2ProviderConfig        `key:"ec2" json:"ec2"`
-	OCIConfig        OCIProviderConfig        `key:"oci" json:"oci"`
-	LambdaLabsConfig LambdaLabsProviderConfig `key:"lambda" json:"lambda"`
+	EC2        EC2ProviderConfig        `key:"ec2" json:"ec2"`
+	OCI        OCIProviderConfig        `key:"oci" json:"oci"`
+	LambdaLabs LambdaLabsProviderConfig `key:"lambda" json:"lambda"`
+	Crusoe     CrusoeProviderConfig     `key:"crusoe" json:"crusoe"`
+	Hydra      HydraProviderConfig      `key:"hydra" json:"hydra"`
+	Generic    GenericProviderConfig    `key:"generic" json:"generic"`
 }
 
 type ProviderAgentConfig struct {
@@ -272,6 +285,18 @@ type LambdaLabsProviderConfig struct {
 	Agent  ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
+type CrusoeProviderConfig struct {
+	Agent ProviderAgentConfig `key:"agent" json:"agent"`
+}
+
+type HydraProviderConfig struct {
+	Agent ProviderAgentConfig `key:"agent" json:"agent"`
+}
+
+type GenericProviderConfig struct {
+	Agent ProviderAgentConfig `key:"agent" json:"agent"`
+}
+
 type MetricsCollector string
 
 var (
@@ -280,10 +305,11 @@ var (
 )
 
 type MonitoringConfig struct {
-	MetricsCollector string           `key:"metricsCollector" json:"metrics_collector"`
-	Prometheus       PrometheusConfig `key:"prometheus" json:"prometheus"`
-	OpenMeter        OpenMeterConfig  `key:"openmeter" json:"openmeter"`
-	FluentBit        FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
+	MetricsCollector         string           `key:"metricsCollector" json:"metrics_collector"`
+	Prometheus               PrometheusConfig `key:"prometheus" json:"prometheus"`
+	OpenMeter                OpenMeterConfig  `key:"openmeter" json:"openmeter"`
+	FluentBit                FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
+	ContainerMetricsInterval time.Duration    `key:"containerMetricsInterval"`
 }
 
 type PrometheusConfig struct {

@@ -11,6 +11,8 @@ from ..clients.volume import (
     CopyPathRequest,
     CopyPathResponse,
     DeletePathRequest,
+    DeleteVolumeRequest,
+    DeleteVolumeResponse,
     GetOrCreateVolumeRequest,
     GetOrCreateVolumeResponse,
     ListPathRequest,
@@ -230,7 +232,6 @@ def rm(service: ServiceClient, remote_path: str):
         terminal.print(deleted, highlight=False, markup=False)
 
 
-
 @common.command(
     help="Move a file or directory to a new location within the same volume.",
     epilog="""
@@ -355,6 +356,19 @@ def create_volume(service: ServiceClient, name: str):
     type=click.STRING,
     required=True,
 )
-@click.confirmation_option("--force")
-def delete_volume(name: str):
-    terminal.error("Not implemented.")
+@extraclick.pass_service_client
+def delete_volume(service: ServiceClient, name: str):
+    terminal.warn(
+        "Any apps (functions, endpoints, taskqueue, etc) that\n"
+        "refer to this volume should be updated before it is deleted."
+    )
+
+    if terminal.prompt(text="Are you sure? (y/n)", default="n") not in ["y", "yes"]:
+        return
+
+    res: DeleteVolumeResponse
+    res = service.volume.delete_volume(DeleteVolumeRequest(name=name))
+
+    if not res.ok:
+        terminal.error(res.err_msg, exit=True)
+    terminal.success(f"Deleted volume {name}")

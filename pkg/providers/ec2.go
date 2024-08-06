@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsTypes "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -22,14 +23,14 @@ type EC2Provider struct {
 }
 
 func NewEC2Provider(ctx context.Context, appConfig types.AppConfig, providerRepo repository.ProviderRepository, workerRepo repository.WorkerRepository, tailscale *network.Tailscale) (*EC2Provider, error) {
-	cfg, err := common.GetAWSConfig(appConfig.Providers.EC2Config.AWSAccessKey, appConfig.Providers.EC2Config.AWSSecretKey, appConfig.Providers.EC2Config.AWSRegion, "")
+	cfg, err := common.GetAWSConfig(appConfig.Providers.EC2.AWSAccessKey, appConfig.Providers.EC2.AWSSecretKey, appConfig.Providers.EC2.AWSRegion, "")
 	if err != nil {
 		return nil, err
 	}
 
 	ec2Provider := &EC2Provider{
 		client:         ec2.NewFromConfig(cfg),
-		providerConfig: appConfig.Providers.EC2Config,
+		providerConfig: appConfig.Providers.EC2,
 	}
 
 	baseProvider := NewExternalProvider(ctx, &ExternalProviderConfig{

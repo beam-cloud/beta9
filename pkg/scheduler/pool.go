@@ -1,26 +1,33 @@
 package scheduler
 
 import (
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
-	Beta9WorkerLabelKey         string = "run.beam.cloud/role"
-	Beta9WorkerLabelValue       string = "worker"
-	Beta9WorkerJobPrefix        string = "worker"
-	Beta9WorkerLabelIDKey       string = "run.beam.cloud/worker-id"
-	Beta9WorkerLabelPoolNameKey string = "run.beam.cloud/worker-pool-name"
-	PrometheusPortKey           string = "prometheus.io/port"
-	PrometheusScrapeKey         string = "prometheus.io/scrape"
-	tmpVolumeName               string = "beta9-tmp"
-	logVolumeName               string = "beta9-logs"
-	imagesVolumeName            string = "beta9-images"
-	defaultContainerName        string = "worker"
-	defaultWorkerEntrypoint     string = "/usr/local/bin/worker"
-	defaultWorkerLogPath        string = "/var/log/worker"
-	defaultImagesPath           string = "/images"
+	Beta9WorkerLabelKey         string  = "run.beam.cloud/role"
+	Beta9WorkerLabelValue       string  = "worker"
+	Beta9WorkerJobPrefix        string  = "worker"
+	Beta9WorkerLabelIDKey       string  = "run.beam.cloud/worker-id"
+	Beta9WorkerLabelPoolNameKey string  = "run.beam.cloud/worker-pool-name"
+	PrometheusPortKey           string  = "prometheus.io/port"
+	PrometheusScrapeKey         string  = "prometheus.io/scrape"
+	tmpVolumeName               string  = "beta9-tmp"
+	logVolumeName               string  = "beta9-logs"
+	imagesVolumeName            string  = "beta9-images"
+	defaultContainerName        string  = "worker"
+	defaultWorkerEntrypoint     string  = "/usr/local/bin/worker"
+	defaultWorkerLogPath        string  = "/var/log/worker"
+	defaultImagesPath           string  = "/images"
+	defaultSharedMemoryPct      float32 = 0.5
 )
 
 type WorkerPoolController interface {
@@ -48,9 +55,8 @@ func GenerateWorkerId() string {
 func MonitorPoolSize(wpc WorkerPoolController,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerRepo repository.WorkerRepository,
-	workerPoolRepo repository.WorkerPoolRepository,
 	providerRepo repository.ProviderRepository) error {
-	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, workerPoolRepo, providerRepo)
+	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, providerRepo)
 	if err != nil {
 		return err
 	}
@@ -81,4 +87,28 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolCont
 	}
 
 	return capacity, nil
+}
+
+func calculateMemoryQuantity(percentStr string, memoryTotal int64) resource.Quantity {
+	percent, err := parseMemoryPercentage(percentStr)
+	if err != nil {
+		percent = defaultSharedMemoryPct
+	}
+
+	return resource.MustParse(fmt.Sprintf("%dMi", int64(float32(memoryTotal)*percent)))
+}
+
+func parseMemoryPercentage(percentStr string) (float32, error) {
+	ps := strings.TrimSuffix(percentStr, "%")
+
+	percent, err := strconv.ParseFloat(ps, 32)
+	if err != nil {
+		return 0, err
+	}
+
+	if percent <= 0 {
+		return 0, errors.New("percent must be greater than 0")
+	}
+
+	return float32(percent) / 100, nil
 }

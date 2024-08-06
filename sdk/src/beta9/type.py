@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Protocol, Union
+from typing import Dict, Literal, Type, Union
 
 
 class LifeCycleMethod(str, Enum):
@@ -82,6 +82,7 @@ class GpuType(str, Enum):
     A100_80 = "A100-80"
     H100 = "H100"
     A6000 = "A6000"
+    RTX4090 = "RTX4090"
 
 
 # Add GpuType str literals. Must copy/paste for now.
@@ -92,10 +93,11 @@ GpuTypeLiteral = Literal[
     "T4",
     "L4",
     "A10G",
-    "A100_40",
-    "A100_80",
+    "A100-40",
+    "A100-80",
     "H100",
     "A6000",
+    "RTX4090",
 ]
 
 GpuTypeAlias = Union[GpuType, GpuTypeLiteral]
@@ -106,17 +108,17 @@ DEFAULT_AUTOSCALER_MAX_CONTAINERS = 1
 DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER = 1
 
 
-class Autoscaler(Protocol):
+@dataclass
+class Autoscaler:
     max_containers: int = DEFAULT_AUTOSCALER_MAX_CONTAINERS
     tasks_per_container: int = DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER
 
 
 @dataclass
 class QueueDepthAutoscaler(Autoscaler):
-    max_containers: int
-    tasks_per_container: int
+    pass
 
 
-_AUTOSCALERS = {
+_AUTOSCALER_TYPES: Dict[Type[Autoscaler], str] = {
     QueueDepthAutoscaler: QUEUE_DEPTH_AUTOSCALER_TYPE,
 }
