@@ -18,26 +18,16 @@ func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGro
 	group := &endpointGroup{routeGroup: g, es: es}
 
 	g.POST("/id/:stubId", auth.WithAuth(group.endpointRequest))
-	g.POST("/id/:stubId/:subPath", auth.WithAuth(group.endpointRequest))
 	g.POST("/:deploymentName", auth.WithAuth(group.endpointRequest))
-	g.POST("/:deploymentName/:subPath", auth.WithAuth(group.endpointRequest))
 	g.POST("/:deploymentName/latest", auth.WithAuth(group.endpointRequest))
-	g.POST("/:deploymentName/latest/:subPath", auth.WithAuth(group.endpointRequest))
 	g.POST("/:deploymentName/v:version", auth.WithAuth(group.endpointRequest))
-	g.POST("/:deploymentName/v:version/:subPath", auth.WithAuth(group.endpointRequest))
 	g.POST("/public/:stubId", auth.WithAssumedStubAuth(group.endpointRequest, group.es.isPublic))
-	g.POST("/public/:stubId/:subPath", auth.WithAssumedStubAuth(group.endpointRequest, group.es.isPublic))
 
 	g.GET("/id/:stubId", auth.WithAuth(group.endpointRequest))
-	g.GET("/id/:stubId/:subPath", auth.WithAuth(group.endpointRequest))
 	g.GET("/:deploymentName", auth.WithAuth(group.endpointRequest))
-	g.GET("/:deploymentName/:subPath", auth.WithAuth(group.endpointRequest))
 	g.GET("/:deploymentName/latest", auth.WithAuth(group.endpointRequest))
-	g.GET("/:deploymentName/latest/:subPath", auth.WithAuth(group.endpointRequest))
 	g.GET("/:deploymentName/v:version", auth.WithAuth(group.endpointRequest))
-	g.GET("/:deploymentName/v:version/:subPath", auth.WithAuth(group.endpointRequest))
 	g.GET("/public/:stubId", auth.WithAssumedStubAuth(group.endpointRequest, group.es.isPublic))
-	g.GET("/public/:stubId/:subPath", auth.WithAssumedStubAuth(group.endpointRequest, group.es.isPublic))
 
 	return group
 }
