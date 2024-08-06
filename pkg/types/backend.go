@@ -161,7 +161,7 @@ type StubConfigV1 struct {
 }
 
 type Experimental struct {
-	CedanaCheckpointEnabled bool `json:"cedana_checkpoint_enabled"`
+	CheckpointEnabled bool `json:"checkpoint_enabled"`
 }
 
 type AutoscalerType string

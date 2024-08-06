@@ -74,6 +74,8 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 				*i.buffer.stubConfig,
 				i.Stub.ExternalId,
 			),
+			// CheckpointEnabled: i.StubConfig.Experimental.CheckpointEnabled,
+      CheckpointEnabled: true, // XXX: Hardcoded for testing
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers
