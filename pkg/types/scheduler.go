@@ -80,6 +80,7 @@ type ContainerRequest struct {
 	Mounts       []Mount   `json:"mounts"`
 	RetryCount   int       `json:"retry_count"`
 	PoolSelector string    `json:"pool_selector"`
+  CheckpointEnabled bool `json:"checkpoint_enabled"`
 }
 
 const ContainerExitCodeTtlS int = 300

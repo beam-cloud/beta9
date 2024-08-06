@@ -175,9 +175,11 @@ class EndpointManager:
         # to become ready first, while others wait on the lock. The client is expected to
         # call /checkpoint_done endpoint to signal that the checkpoint was done.
         # Once this worker handles a checkpoint_done request, it releases the lock and
-        # all workers proceed. The checkpoint barrier ensures that the first worker does not escape.
+        # all workers proceed. The checkpoint barrier at the end again ensures that the
+        # first worker does not escape.
 
         if cfg.checkpoint_enabled:
+            checkpointBarrier.wait()
             readyLock.acquire()
 
         @self.app.get("/health")
