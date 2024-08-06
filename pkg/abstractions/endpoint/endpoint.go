@@ -47,6 +47,7 @@ type HttpEndpointService struct {
 var (
 	endpointContainerPrefix                 string        = "endpoint"
 	endpointRoutePrefix                     string        = "/endpoint"
+	ASGIRoutePrefix                         string        = "/asgi"
 	endpointRequestTimeoutS                 int           = 300
 	endpointServeContainerTimeout           time.Duration = 10 * time.Minute
 	endpointServeContainerKeepaliveInterval time.Duration = 30 * time.Second
@@ -128,6 +129,7 @@ func NewHTTPEndpointService(
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(es.backendRepo)
 	registerEndpointRoutes(opts.RouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
+	registerASGIRoutes(opts.RouteGroup.Group(ASGIRoutePrefix, authMiddleware), es)
 
 	return es, nil
 }

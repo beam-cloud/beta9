@@ -17,6 +17,8 @@ from starlette.types import ASGIApp
 from uvicorn.workers import UvicornWorker
 
 from ..abstractions.base.runner import (
+    ASGI_SERVE_STUB_TYPE,
+    ASGI_STUB_TYPE,
     ENDPOINT_SERVE_STUB_TYPE,
 )
 from ..channel import runner_context
@@ -90,20 +92,13 @@ class GunicornApplication(BaseApplication):
             return
         except BaseException:
             logger.exception("Exiting worker due to startup error")
-            if cfg.stub_type == ENDPOINT_SERVE_STUB_TYPE:
+            if cfg.stub_type in [ENDPOINT_SERVE_STUB_TYPE, ASGI_SERVE_STUB_TYPE]:
                 return
 
             # We send SIGUSR1 to indicate to the gunicorn master that the server should shut down completely
             # since our asgi_app callable is erroring out.
             os.kill(os.getppid(), signal.SIGUSR1)
             os._exit(1)
-
-
-@dataclass
-class TaskLifecycleData:
-    status: TaskStatus
-    result: Any
-    override_callback_url: Optional[str] = None
 
 
 class OnStartMethodHandler:
@@ -123,6 +118,13 @@ class OnStartMethodHandler:
         while self._is_running:
             self._worker.notify()
             await asyncio.sleep(1)
+
+
+@dataclass
+class TaskLifecycleData:
+    status: TaskStatus
+    result: Any
+    override_callback_url: Optional[str] = None
 
 
 class TaskLifecycleMiddleware(BaseHTTPMiddleware):
@@ -186,8 +188,8 @@ class EndpointManager:
         self.handler: FunctionHandler = FunctionHandler()
         self.on_start_value = asyncio.run(OnStartMethodHandler(worker).start())
 
-        self.is_asgi = "asgi" in cfg.stub_type
-        if self.is_asgi:
+        self.is_asgi_stub = ASGI_STUB_TYPE in cfg.stub_type
+        if self.is_asgi_stub:
             context = FunctionContext.new(
                 config=cfg,
                 task_id=None,
@@ -196,6 +198,12 @@ class EndpointManager:
             self.app = self.handler(
                 context
             )  # TODO: check if this actually a valid asgi app somehow
+
+            # try:
+            #     verify_or_raise(self.app)
+            # except TypeError as e:
+            #     raise e
+
             self.app.router.lifespan_context = self.lifespan
         else:
             self.app = FastAPI(lifespan=self.lifespan)
@@ -209,34 +217,33 @@ class EndpointManager:
         async def health():
             return Response(status_code=HTTPStatus.OK)
 
-        if not self.is_asgi:
+        if self.is_asgi_stub:
+            return
 
-            @self.app.get("/")
-            @self.app.post("/")
-            async def function(
-                request: Request,
-                task_lifecycle_data: TaskLifecycleData = Depends(get_task_lifecycle_data),
-            ):
-                task_id = request.headers.get("X-TASK-ID")
-                payload = await request.json()
+        @self.app.get("/")
+        @self.app.post("/")
+        async def function(
+            request: Request,
+            task_lifecycle_data: TaskLifecycleData = Depends(get_task_lifecycle_data),
+        ):
+            task_id = request.headers.get("X-TASK-ID")
+            payload = await request.json()
 
-                status_code = HTTPStatus.OK
-                task_lifecycle_data.result, err = await self._call_function(
-                    task_id=task_id, payload=payload
-                )
-                if err:
-                    task_lifecycle_data.status = TaskStatus.Error
+            status_code = HTTPStatus.OK
+            task_lifecycle_data.result, err = await self._call_function(
+                task_id=task_id, payload=payload
+            )
+            if err:
+                task_lifecycle_data.status = TaskStatus.Error
 
-                if task_lifecycle_data.status == TaskStatus.Error:
-                    status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+            if task_lifecycle_data.status == TaskStatus.Error:
+                status_code = HTTPStatus.INTERNAL_SERVER_ERROR
 
-                task_lifecycle_data.override_callback_url = payload.get("kwargs", {}).get(
-                    "callback_url"
-                )
+            task_lifecycle_data.override_callback_url = payload.get("kwargs", {}).get(
+                "callback_url"
+            )
 
-                return self._create_response(
-                    body=task_lifecycle_data.result, status_code=status_code
-                )
+            return self._create_response(body=task_lifecycle_data.result, status_code=status_code)
 
     def _create_response(self, *, body: Any, status_code: int = HTTPStatus.OK) -> Response:
         if isinstance(body, Response):
