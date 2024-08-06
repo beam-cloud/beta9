@@ -6,8 +6,10 @@ from .. import terminal
 from ..abstractions.base.runner import (
     ASGI_DEPLOYMENT_STUB_TYPE,
     ASGI_SERVE_STUB_TYPE,
+    ASGI_STUB_TYPE,
     ENDPOINT_DEPLOYMENT_STUB_TYPE,
     ENDPOINT_SERVE_STUB_TYPE,
+    ENDPOINT_STUB_TYPE,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
@@ -185,12 +187,15 @@ class ASGI(Endpoint):
 class _CallableWrapper(DeployableMixin):
     deployment_stub_type = ENDPOINT_DEPLOYMENT_STUB_TYPE
 
+    base_stub_type = ENDPOINT_STUB_TYPE
+
     def __init__(self, func: Callable, parent: Union[Endpoint, ASGI]):
         self.func: Callable = func
         self.parent: Union[Endpoint, ASGI] = parent
 
         if getattr(self.parent, "is_asgi", None):
             self.deployment_stub_type = ASGI_DEPLOYMENT_STUB_TYPE
+            self.base_stub_type = ASGI_STUB_TYPE
 
     def __call__(self, *args, **kwargs) -> Any:
         if not is_local():
@@ -219,9 +224,8 @@ class _CallableWrapper(DeployableMixin):
                 if not base_url.startswith(("http://", "https://")):
                     base_url = f"http://{base_url}"
 
-                self.parent.print_invocation_snippet(
-                    invocation_url=f"{base_url}/endpoint/id/{self.parent.stub_id}"
-                )
+                invocation_url = f"{base_url}/{self.base_stub_type}/id/{self.parent.stub_id}"
+                self.parent.print_invocation_snippet(invocation_url=invocation_url)
 
                 return self._serve(
                     dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout
