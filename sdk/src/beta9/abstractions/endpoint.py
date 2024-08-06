@@ -172,7 +172,7 @@ class _CallableWrapper(DeployableMixin):
         while True:
             try:
                 while serve_thread.is_alive():
-                    serve_thread.join(timeout=10)
+                    serve_thread.join(timeout=0.1)
 
             except KeyboardInterrupt:
                 self._handle_serve_interrupt()
