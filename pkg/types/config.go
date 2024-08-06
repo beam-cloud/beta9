@@ -4,6 +4,7 @@ import (
 	"time"
 
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
+	cedana "github.com/cedana/cedana/types"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -20,6 +21,7 @@ type AppConfig struct {
 	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
 	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
+	Checkpointing  CheckpointingConfig       `key:"checkpointing" json:"checkpointing"`
 }
 
 type DatabaseConfig struct {
@@ -176,7 +178,7 @@ type WorkerConfig struct {
 	DefaultWorkerMemoryRequest int64                       `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
 	ImagePVCName               string                      `key:"imagePVCName" json:"image_pvc_name"`
 	AddWorkerTimeout           time.Duration               `key:"addWorkerTimeout" json:"add_worker_timeout"`
-	TerminationGracePeriod     int64                       `key:"terminationGracePeriod"`
+	TerminationGracePeriod     int64                       `key:"terminationGracePeriod" json:"termination_grace_period"`
 }
 
 type PoolMode string
@@ -360,4 +362,8 @@ type FluentBitEventConfig struct {
 	DialTimeout     time.Duration           `key:"dialTimeout" json:"dial_timeout"`
 	KeepAlive       time.Duration           `key:"keepAlive" json:"keep_alive"`
 	Mapping         []FluentBitEventMapping `key:"mapping" json:"mapping"`
+}
+
+type CheckpointingConfig struct {
+	Cedana cedana.Config `key:"cedana" json:"cedana"`
 }

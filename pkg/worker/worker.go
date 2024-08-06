@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -42,6 +43,7 @@ type Worker struct {
 	containerCudaManager GPUManager
 	redisClient          *common.RedisClient
 	imageClient          *ImageClient
+	cedanaClient         *CedanaClient
 	workerId             string
 	eventBus             *common.EventBus
 	containerInstances   *common.SafeMap[*ContainerInstance]
@@ -372,11 +374,66 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 	}
 }
 
+// TODO: might be better to just encapsulate this logic directly in the cedana client
+// as long as it has access to the containerInstances map, I think that's all it needs
+func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists {
+		return
+	}
+
+	// TODO: we need a reliable way to detect that the container is completely booted
+
+	start := time.Now()
+	timeout := time.Duration(time.Second * 120)
+	for time.Since(start) < timeout {
+		if s.cedanaClient == nil {
+			cedanaClient, err := NewCedanaClient(context.TODO())
+			if err != nil {
+				log.Printf("<%s> - failed to create cedana client: %v\n", request.ContainerId, err)
+			}
+			s.cedanaClient = cedanaClient
+		} else {
+			instance, exists = s.containerInstances.Get(request.ContainerId)
+			if !exists {
+				return
+			}
+			ok := s.cedanaClient.HealthCheck(context.TODO(), request.ContainerId)
+			if ok {
+				// Endpoint already configured to ensure /health is successful only if all
+				// workers are ready, and at the same point to be checkpointed
+				resp, err := http.Get(fmt.Sprintf("0.0.0.0:%d/health", instance.Port))
+				if err == nil && resp.StatusCode == 200 {
+					break
+				}
+			}
+		}
+
+		time.Sleep(time.Second)
+	}
+
+	err := s.cedanaClient.Checkpoint(context.TODO(), request.ContainerId)
+	if err != nil {
+		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
+	}
+
+	// Notify that the checkpoint was done
+	resp, err := http.Get(fmt.Sprintf("0.0.0.0:%d/checkpoint_done", instance.Port))
+	if err != nil || resp.StatusCode != 200 {
+		log.Printf("<%s> - failed to notify container of checkpoint: %v\n", request.ContainerId, err)
+	}
+}
+
 // Invoke a runc container using a predefined config spec
 func (s *Worker) SpawnAsync(request *types.ContainerRequest, bundlePath string, spec *specs.Spec) error {
 	outputChan := make(chan common.OutputMsg)
 
 	go s.containerWg.Add(1)
+
+	if request.CheckpointEnabled {
+		go s.createCheckpoint(request)
+	}
+
 	go s.spawn(request, bundlePath, spec, outputChan)
 
 	return nil
@@ -640,6 +697,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
+		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled),
 		"PYTHONUNBUFFERED=1",
 	}
 
@@ -711,6 +769,21 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	} else {
 		spec.Hooks.Prestart = nil
+	}
+
+	if request.CheckpointEnabled {
+		// XXX: Hook to spawn daemon inside the container. In later cedana versions, it should be possible
+		// to spawn and manage from the worker instead.
+		err = AddCedanaDaemonHook(request, &spec.Hooks.StartContainer, &s.config.Checkpointing.Cedana)
+		if err != nil {
+			log.Printf("failed to add cedana hook, checkpoint/restore unavailable: %v", err)
+		}
+
+		// XXX: Modify the entrypoint to start process using cedana. Won't be needed once daemon is started in
+		// worker as cedana will be able to checkpoint/restore the container directly.
+		originalArgsString := strings.Join(spec.Process.Args, " ")
+		// TODO: Use '-it' flag to keep STDIN open and attach pseudo-TTY
+		spec.Process.Args = []string{CedanaPath, "exec", originalArgsString, "-w", defaultContainerDirectory, "-i", request.ContainerId}
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
