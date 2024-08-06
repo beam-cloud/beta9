@@ -34,6 +34,7 @@ class Config:
     callback_url: Optional[str]
     task_id: Optional[str]
     bind_port: int
+    checkpoint_enabled: bool
 
     @classmethod
     def load_from_env(cls) -> "Config":
@@ -50,6 +51,7 @@ class Config:
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
+        checkpoint_enabled = os.getenv("CHECKPOINT_ENABLED", "false").lower() == "true"
 
         if workers <= 0:
             workers = 1
@@ -71,6 +73,7 @@ class Config:
             task_id=task_id,
             bind_port=bind_port,
             timeout=timeout,
+            checkpoint_enabled=checkpoint_enabled,
         )
 
 

@@ -3,6 +3,7 @@ import logging
 import os
 import signal
 import traceback
+from multiprocessing import Barrier, Lock
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Any, Dict, Optional, Tuple
@@ -27,6 +28,11 @@ from ..logging import StdoutJsonInterceptor
 from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_method
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
+
+
+CHECKPOINT_TIMEOUT = cfg.timeout  # not sure if this is the right value
+readyLock = Lock()
+checkpointBarrier = Barrier(cfg.workers, timeout=CHECKPOINT_TIMEOUT)
 
 
 class EndpointFilter(logging.Filter):
@@ -164,9 +170,28 @@ class EndpointManager:
         self.handler: FunctionHandler = FunctionHandler()
         self.on_start_value = asyncio.run(OnStartMethodHandler(worker).start())
 
+        # When checkpoint is enabled, we need to wait for all workers to be ready so they
+        # can be checkpointed together. This is achieved by allowing only a lead worker
+        # to become ready first, while others wait on the lock. The client is expected to
+        # call /checkpoint_done endpoint to signal that the checkpoint was done.
+        # Once this worker handles a checkpoint_done request, it releases the lock and
+        # all workers proceed. The checkpoint barrier ensures that the first worker does not escape.
+
+        if cfg.checkpoint_enabled:
+            readyLock.acquire()
+
         @self.app.get("/health")
         async def health():
             return Response(status_code=HTTPStatus.OK)
+
+        if cfg.checkpoint_enabled:
+            @self.app.get("/checkpoint_done")
+            async def checkpoint_done():
+                readyLock.release()
+                return Response(status_code=HTTPStatus.OK)
+
+        if cfg.checkpoint_enabled:
+            checkpointBarrier.wait()
 
         @self.app.get("/")
         @self.app.post("/")
@@ -248,6 +273,7 @@ if __name__ == "__main__":
         "loglevel": "info",
         "post_fork": GunicornApplication.post_fork_initialize,
         "timeout": cfg.timeout,
+        "preload_app": True,  # to share barrier between workers
     }
 
     GunicornApplication(Starlette(), options).run()
