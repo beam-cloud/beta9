@@ -783,7 +783,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		// worker as cedana will be able to checkpoint/restore the container directly.
 		originalArgsString := strings.Join(spec.Process.Args, " ")
 		// TODO: Use '-it' flag to keep STDIN open and attach pseudo-TTY
-		spec.Process.Args = []string{CedanaPath, "exec", originalArgsString, "-w", defaultContainerDirectory}
+		spec.Process.Args = []string{CedanaPath, "exec", originalArgsString, "-w", defaultContainerDirectory, "-i", request.ContainerId}
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
