@@ -105,7 +105,7 @@ func NewHTTPEndpointService(
 			stubId := e.Args["stub_id"].(string)
 			stubType := e.Args["stub_type"].(string)
 
-			if stubType != types.StubTypeEndpointDeployment {
+			if stubType != types.StubTypeEndpointDeployment && stubType != types.StubTypeASGIDeployment {
 				// Assume the callback succeeded to avoid retries
 				return true
 			}

@@ -169,6 +169,11 @@ class EndpointManager:
         self.logger = logger
         self.pid: int = os.getpid()
         self.exit_code: int = 0
+
+        print("STUB TYPE: ", cfg.stub_type)
+        if cfg.stub_type == "asgi/serve":
+            print("THIS IS AN ASGI APP!")
+
         self.app = FastAPI(lifespan=self.lifespan)
 
         # Register signal handlers

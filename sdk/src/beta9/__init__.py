@@ -1,6 +1,7 @@
 from . import env
 from .abstractions import experimental
 from .abstractions.container import Container
+from .abstractions.endpoint import ASGI as asgi
 from .abstractions.endpoint import Endpoint as endpoint
 from .abstractions.function import Function as function
 from .abstractions.image import Image
@@ -19,6 +20,7 @@ __all__ = [
     "task_queue",
     "function",
     "endpoint",
+    "asgi",
     "Container",
     "env",
     "GpuType",
