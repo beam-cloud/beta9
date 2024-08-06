@@ -5,7 +5,7 @@
 
 ---
 
-### **✨ The Open-Source Serverless GPU Container Runtime ✨**
+### **✨ Open Source Serverless Platform for AI Teams ✨**
 
 <p align="center">
   <a href="https://docs.beam.cloud">
