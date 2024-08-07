@@ -139,13 +139,14 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
-	c.logger.Log(request.ContainerId, request.StubId, "starting to load image: %s", imageId)
+	c.logger.Log(request.ContainerId, request.StubId, "loading image: %s", imageId)
 
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
 	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
 		localCachePath = ""
 	}
 
+	startTime := time.Now()
 	if c.config.BlobCache.BlobFs.Enabled && blobfsAvailable(baseBlobFsPath) && !isBuildContainer {
 		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
 		sourceOffset := int64(0)
@@ -155,21 +156,18 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 		if _, err := os.Stat(baseBlobFsContentPath); err == nil {
 			localCachePath = baseBlobFsContentPath
 		} else {
-			c.logger.Log(request.ContainerId, request.StubId, "cache miss for image: %s, storing content nearby", imageId)
+			c.logger.Log(request.ContainerId, request.StubId, "image <%s> not found in cache, caching nearby", imageId)
 
 			// Otherwise, lets cache it in a nearby blobcache host
-			startTime := time.Now()
 			_, err := c.cacheClient.StoreContentFromSource(sourcePath, sourceOffset)
 			if err == nil {
 				localCachePath = baseBlobFsContentPath
 			}
 
-			elapsed := time.Since(startTime)
-
-			log.Printf("<%s> - blobfs cache took %v\n", request.ContainerId, elapsed)
 		}
 	}
-	c.logger.Log(request.ContainerId, request.StubId, "loaded image: %s", imageId)
+	elapsed := time.Since(startTime)
+	c.logger.Log(request.ContainerId, request.StubId, "loaded image <%s>, took: %s", imageId, elapsed)
 
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 
