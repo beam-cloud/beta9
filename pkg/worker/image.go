@@ -23,7 +23,6 @@ import (
 	"github.com/opencontainers/umoci/oci/casext"
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	common "github.com/beam-cloud/beta9/pkg/common"
@@ -79,13 +78,7 @@ type ImageClient struct {
 	config             types.AppConfig
 	workerId           string
 	workerRepo         repository.WorkerRepository
-}
-
-type logger struct {
-	logFile     *os.File
-	logger      *logrus.Logger
-	fields      logrus.Fields
-	containerId string
+	logger             *ContainerLogger
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
@@ -117,6 +110,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepo reposito
 		workerId:           workerId,
 		workerRepo:         workerRepo,
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
+		logger:             &ContainerLogger{},
 	}
 
 	err = os.MkdirAll(c.imageBundlePath, os.ModePerm)
@@ -142,16 +136,10 @@ func blobfsAvailable(path string) bool {
 }
 
 func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
-	f, err := newLogger(request)
-	if err != nil {
-		return err
-	}
-	defer f.logFile.Close()
-
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
-	f.Log("starting to load image: %s", imageId)
+	c.logger.Log(request.ContainerId, request.StubId, "starting to load image: %s", imageId)
 
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
 	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
@@ -167,7 +155,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 		if _, err := os.Stat(baseBlobFsContentPath); err == nil {
 			localCachePath = baseBlobFsContentPath
 		} else {
-			f.Log("cache miss for image: %s, storing content nearby", imageId)
+			c.logger.Log(request.ContainerId, request.StubId, "cache miss for image: %s, storing content nearby", imageId)
 
 			// Otherwise, lets cache it in a nearby blobcache host
 			startTime := time.Now()
@@ -178,9 +166,10 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 
 			elapsed := time.Since(startTime)
 
-			f.Log("cache took %v", elapsed)
+			log.Printf("<%s> - blobfs cache took %v\n", request.ContainerId, elapsed)
 		}
 	}
+	c.logger.Log(request.ContainerId, request.StubId, "loaded image: %s", imageId)
 
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 
@@ -218,7 +207,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	}
 
 	// Get lock on image mount
-	err = c.workerRepo.SetImagePullLock(c.workerId, imageId)
+	err := c.workerRepo.SetImagePullLock(c.workerId, imageId)
 	if err != nil {
 		return err
 	}
@@ -416,30 +405,4 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 
 	log.Printf("Image <%v> push took %v\n", imageId, time.Since(startTime))
 	return nil
-}
-
-func (l *logger) Log(format string, args ...any) {
-	log.Print(fmt.Sprintf("<%s> - ", l.containerId) + fmt.Sprintf(format, args...))
-	l.logger.WithFields(l.fields).Infof(format, args...)
-}
-
-func newLogger(request *types.ContainerRequest) (*logger, error) {
-	logFile, err := openLogFile(request.ContainerId)
-	if err != nil {
-		return nil, err
-	}
-
-	f := logrus.New()
-	f.SetOutput(logFile)
-	f.SetFormatter(&logrus.JSONFormatter{TimestampFormat: time.RFC3339Nano})
-
-	return &logger{
-		logFile: logFile,
-		logger:  f,
-		fields: logrus.Fields{
-			"container_id": request.ContainerId,
-			"stub_id":      request.StubId,
-		},
-		containerId: request.ContainerId,
-	}, nil
 }

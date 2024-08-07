@@ -29,6 +29,30 @@ func (r *ContainerLogger) Read(containerId string, buffer []byte) (int64, error)
 	return 0, nil
 }
 
+func (r *ContainerLogger) Log(containerId, stubId string, format string, args ...any) error {
+	logFile, err := openLogFile(containerId)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+
+	// Create a new file logger
+	f := logrus.New()
+	f.SetOutput(logFile)
+	f.SetFormatter(&logrus.JSONFormatter{
+		TimestampFormat: time.RFC3339Nano,
+	})
+
+	log.Print(fmt.Sprintf("<%s> - ", containerId) + fmt.Sprintf(format, args...))
+	f.WithFields(logrus.Fields{
+		"container_id": containerId,
+		"stub_id":      stubId,
+	},
+	).Infof(format, args...)
+
+	return nil
+}
+
 func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common.OutputMsg) error {
 	logFile, err := openLogFile(containerId)
 	if err != nil {
