@@ -324,7 +324,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
-	containerUrl := fmt.Sprintf("http://%s", c.address)
+	containerUrl := fmt.Sprintf("http://%s/%s", c.address, req.ctx.Param("subPath"))
 	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, bytes.NewReader(requestBody))
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{

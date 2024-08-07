@@ -4,8 +4,12 @@ from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
+    ASGI_DEPLOYMENT_STUB_TYPE,
+    ASGI_SERVE_STUB_TYPE,
+    ASGI_STUB_TYPE,
     ENDPOINT_DEPLOYMENT_STUB_TYPE,
     ENDPOINT_SERVE_STUB_TYPE,
+    ENDPOINT_STUB_TYPE,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
@@ -140,12 +144,58 @@ class Endpoint(RunnerAbstraction):
         return _CallableWrapper(func, self)
 
 
+class ASGI(Endpoint):
+    def __init__(
+        self,
+        cpu: Union[int, float, str] = 1.0,
+        memory: Union[int, str] = 128,
+        gpu: GpuTypeAlias = GpuType.NoGPU,
+        image: Image = Image(),
+        timeout: int = 180,
+        workers: int = 1,
+        keep_warm_seconds: int = 180,
+        max_pending_tasks: int = 100,
+        on_start: Optional[Callable] = None,
+        volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
+        name: Optional[str] = None,
+        authorized: bool = True,
+        autoscaler: Autoscaler = QueueDepthAutoscaler(),
+        callback_url: Optional[str] = None,
+    ):
+        super().__init__(
+            cpu,
+            memory,
+            gpu,
+            image,
+            timeout,
+            workers,
+            keep_warm_seconds,
+            max_pending_tasks,
+            on_start,
+            volumes,
+            secrets,
+            name,
+            authorized,
+            autoscaler,
+            callback_url,
+        )
+
+        self.is_asgi = True
+
+
 class _CallableWrapper(DeployableMixin):
     deployment_stub_type = ENDPOINT_DEPLOYMENT_STUB_TYPE
 
-    def __init__(self, func: Callable, parent: Endpoint):
+    base_stub_type = ENDPOINT_STUB_TYPE
+
+    def __init__(self, func: Callable, parent: Union[Endpoint, ASGI]):
         self.func: Callable = func
-        self.parent: Endpoint = parent
+        self.parent: Union[Endpoint, ASGI] = parent
+
+        if getattr(self.parent, "is_asgi", None):
+            self.deployment_stub_type = ASGI_DEPLOYMENT_STUB_TYPE
+            self.base_stub_type = ASGI_STUB_TYPE
 
     def __call__(self, *args, **kwargs) -> Any:
         if not is_local():
@@ -158,8 +208,13 @@ class _CallableWrapper(DeployableMixin):
 
     @with_grpc_error_handling
     def serve(self, timeout: int = 0):
+        stub_type = ENDPOINT_SERVE_STUB_TYPE
+
+        if getattr(self.parent, "is_asgi", None):
+            stub_type = ASGI_SERVE_STUB_TYPE
+
         if not self.parent.prepare_runtime(
-            func=self.func, stub_type=ENDPOINT_SERVE_STUB_TYPE, force_create_stub=True
+            func=self.func, stub_type=stub_type, force_create_stub=True
         ):
             return False
 
@@ -169,9 +224,8 @@ class _CallableWrapper(DeployableMixin):
                 if not base_url.startswith(("http://", "https://")):
                     base_url = f"http://{base_url}"
 
-                self.parent.print_invocation_snippet(
-                    invocation_url=f"{base_url}/endpoint/id/{self.parent.stub_id}"
-                )
+                invocation_url = f"{base_url}/{self.base_stub_type}/id/{self.parent.stub_id}"
+                self.parent.print_invocation_snippet(invocation_url=invocation_url)
 
                 return self._serve(
                     dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout
