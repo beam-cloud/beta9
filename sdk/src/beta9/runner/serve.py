@@ -10,6 +10,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers.polling import PollingObserver
 
 from ..abstractions.base.runner import (
+    ASGI_SERVE_STUB_TYPE,
     ENDPOINT_SERVE_STUB_TYPE,
     FUNCTION_SERVE_STUB_TYPE,
     TASKQUEUE_SERVE_STUB_TYPE,
@@ -99,7 +100,7 @@ class ServeGateway:
 def _command() -> List[str]:
     command = []
 
-    if cfg.stub_type == ENDPOINT_SERVE_STUB_TYPE:
+    if cfg.stub_type in [ENDPOINT_SERVE_STUB_TYPE, ASGI_SERVE_STUB_TYPE]:
         command = [cfg.python_version, "-m", "beta9.runner.endpoint"]
     elif cfg.stub_type == TASKQUEUE_SERVE_STUB_TYPE:
         command = [cfg.python_version, "-m", "beta9.runner.taskqueue"]

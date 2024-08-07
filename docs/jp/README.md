@@ -5,10 +5,10 @@
 
 ---
 
-### **✨ オープンソースのサーバーレスGPUコンテナランタイム ✨**
+### **✨ オープンソースのサーバーレス GPU コンテナランタイム ✨**
 
 <p align="center">
-  <a href="https://docs.beta9.beam.cloud">
+  <a href="https://docs.beam.cloud">
     <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-purple">
   </a>
   <a href="https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g">
@@ -32,26 +32,26 @@
 
 # Beta9
 
-Beta9は、クラウドプロバイダー間でスケーラブルなサーバーレスGPUワークロードを実行するためのオープンソースプラットフォームです。
+Beta9 は、クラウドプロバイダー間でスケーラブルなサーバーレス GPU ワークロードを実行するためのオープンソースプラットフォームです。
 
 特徴:
 
-- GPU（またはCPU）コンテナを数千にスケールアウト
-- カスタムMLモデルの超高速コールドスタート
+- GPU（または CPU）コンテナを数千にスケールアウト
+- カスタム ML モデルの超高速コールドスタート
 - ゼロへの自動スケールで使用した分だけ支払い
 - モデルと関数の出力を保存するための柔軟な分散ストレージ
 - 複数のクラウドプロバイダー間でワークロードを分散
-- シンプルなPythonの抽象化を使用してタスクキューと関数を簡単にデプロイ
+- シンプルな Python の抽象化を使用してタスクキューと関数を簡単にデプロイ
 
-私たちは、[Beam](https://beam.cloud)でユーザー向けにAIアプリケーションを大規模に実行するために、社内でbeta9を使用しています。
+私たちは、[Beam](https://beam.cloud)でユーザー向けに AI アプリケーションを大規模に実行するために、社内で beta9 を使用しています。
 
 ## 使用例
 
 ### サーバーレス推論エンドポイント
 
-#### 任意のPython関数をデコレート
+#### 任意の Python 関数をデコレート
 
-```python 
+```python
 from beta9 import Image, endpoint
 
 
@@ -134,12 +134,12 @@ multiply.put(x=10)
 
 ## 仕組み
 
-Beta9は、リモートのサーバーレスコンテナを迅速に起動するように設計されています。これを可能にするいくつかの要素があります：
+Beta9 は、リモートのサーバーレスコンテナを迅速に起動するように設計されています。これを可能にするいくつかの要素があります：
 
-- S3/FUSEによってバックアップされたカスタムの遅延ローディングイメージフォーマット（[CLIP](https://github.com/beam-cloud/clip)）
-- 高速なRedisベースのコンテナスケジューリングエンジン
+- S3/FUSE によってバックアップされたカスタムの遅延ローディングイメージフォーマット（[CLIP](https://github.com/beam-cloud/clip)）
+- 高速な Redis ベースのコンテナスケジューリングエンジン
 - イメージとファイルをキャッシュするためのコンテンツアドレス指定ストレージ
-- カスタムのruncコンテナランタイム
+- カスタムの runc コンテナランタイム
 
 ![demo gif](sdk/docs/demo.gif)
 
@@ -147,19 +147,19 @@ Beta9は、リモートのサーバーレスコンテナを迅速に起動する
 
 ## Beam Cloud（推奨）
 
-最も迅速かつ信頼性の高い方法は、[Beam Cloud](https://beam.cloud)に無料でサインアップすることです。最初の10時間は無料で、その後は使用量に基づいて支払います。
+最も迅速かつ信頼性の高い方法は、[Beam Cloud](https://beam.cloud)に無料でサインアップすることです。最初の 10 時間は無料で、その後は使用量に基づいて支払います。
 
 ## オープンソースデプロイ（上級者向け）
 
-ローカルでBeta9を実行するか、[Helmチャート](https://github.com/beam-cloud/beta9/tree/main/deploy/charts/beta9)を使用して既存のKubernetesクラスターにデプロイすることができます。
+ローカルで Beta9 を実行するか、[Helm チャート](https://github.com/beam-cloud/beta9/tree/main/deploy/charts/beta9)を使用して既存の Kubernetes クラスターにデプロイすることができます。
 
 ### ローカル開発
 
 #### サーバーの設定
 
-k3dはローカル開発に使用されます。開始するにはDockerとMakeが必要です。
+k3d はローカル開発に使用されます。開始するには Docker と Make が必要です。
 
-完全自動化されたセットアップを使用するには、`setup` makeターゲットを実行します。
+完全自動化されたセットアップを使用するには、`setup` make ターゲットを実行します。
 
 > [!NOTE]
 > これにより、既にインストールされている可能性のある一部のツールが上書きされます。詳細については、[setup.sh](bin/setup.sh)を確認してください。
@@ -168,27 +168,27 @@ k3dはローカル開発に使用されます。開始するにはDockerとMake�
 make setup
 ```
 
-#### SDKの設定
+#### SDK の設定
 
-SDKはPythonで書かれています。Python 3.8以上が必要です。開始するには、`setup-sdk` makeターゲットを使用します。
+SDK は Python で書かれています。Python 3.8 以上が必要です。開始するには、`setup-sdk` make ターゲットを使用します。
 
 > [!NOTE]
-> これにより、Poetryパッケージマネージャーがインストールされます。
+> これにより、Poetry パッケージマネージャーがインストールされます。
 
 ```bash
 make setup-sdk
 ```
 
-#### SDKの使用
+#### SDK の使用
 
-サーバーとSDKの設定が完了したら、[こちら](sdk/README.md)のSDK readmeを確認してください。
+サーバーと SDK の設定が完了したら、[こちら](sdk/README.md)の SDK readme を確認してください。
 
 ## 貢献
 
 大きな貢献でも小さな貢献でも歓迎します！これらは私たちにとって最も役立つことです：
 
 - ロードマップの機能をランク付けする
-- PRを開く
+- PR を開く
 - [機能リクエスト](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=)または[バグレポート](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=bug-report.md&title=)を提出する
 
 ## コミュニティ＆サポート
