@@ -10,8 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/sirupsen/logrus"
+
+	"github.com/beam-cloud/beta9/pkg/common"
 )
 
 type ContainerLogMessage struct {
@@ -28,11 +29,34 @@ func (r *ContainerLogger) Read(containerId string, buffer []byte) (int64, error)
 	return 0, nil
 }
 
-func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common.OutputMsg) error {
-	logFilePath := path.Join(containerLogsPath, fmt.Sprintf("%s.log", containerId))
-	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+func (r *ContainerLogger) Log(containerId, stubId string, format string, args ...any) error {
+	logFile, err := openLogFile(containerId)
 	if err != nil {
-		return fmt.Errorf("failed to create container log file: %w", err)
+		return err
+	}
+	defer logFile.Close()
+
+	// Create a new file logger
+	f := logrus.New()
+	f.SetOutput(logFile)
+	f.SetFormatter(&logrus.JSONFormatter{
+		TimestampFormat: time.RFC3339Nano,
+	})
+
+	log.Print(fmt.Sprintf("<%s> - ", containerId) + fmt.Sprintf(format, args...))
+	f.WithFields(logrus.Fields{
+		"container_id": containerId,
+		"stub_id":      stubId,
+	},
+	).Infof(format, args...)
+
+	return nil
+}
+
+func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common.OutputMsg) error {
+	logFile, err := openLogFile(containerId)
+	if err != nil {
+		return err
 	}
 	defer logFile.Close()
 
@@ -105,4 +129,13 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 	}
 
 	return nil
+}
+
+func openLogFile(containerId string) (*os.File, error) {
+	logFilePath := path.Join(containerLogsPath, fmt.Sprintf("%s.log", containerId))
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create container log file: %w", err)
+	}
+	return logFile, nil
 }

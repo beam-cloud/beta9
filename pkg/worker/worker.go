@@ -262,15 +262,15 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
-	containerID := request.ContainerId
+	containerId := request.ContainerId
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Pull image
-	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, request.ImageId)
+	log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
 	err := s.imageClient.PullLazy(request)
 	if err != nil && request.SourceImage != nil {
-		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerID, *request.SourceImage)
+		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
 		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
 		if err == nil {
 			err = s.imageClient.PullLazy(request)
@@ -285,7 +285,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("<%s> - acquired port: %d\n", containerID, bindPort)
+	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
@@ -299,7 +299,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		return err
 	}
 
-	log.Printf("<%s> - successfully created spec from request.\n", containerID)
+	log.Printf("<%s> - successfully created spec from request.\n", containerId)
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the trigger type,
 	// Gateway will need to directly interact with this pod/container.
@@ -308,7 +308,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("<%s> - set container address.\n", containerID)
+	log.Printf("<%s> - set container address.\n", containerId)
 
 	// Start the container
 	err = s.SpawnAsync(request, bundlePath, spec)
@@ -316,7 +316,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		return err
 	}
 
-	log.Printf("<%s> - spawned successfully.\n", containerID)
+	log.Printf("<%s> - spawned successfully.\n", containerId)
 	return nil
 }
 

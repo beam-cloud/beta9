@@ -11,13 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/abstractions/image"
-	common "github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/repository"
-	types "github.com/beam-cloud/beta9/pkg/types"
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/beam-cloud/clip/pkg/storage"
+	runc "github.com/beam-cloud/go-runc"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/moby/sys/mountinfo"
 	"github.com/opencontainers/umoci"
@@ -26,8 +24,10 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 
-	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
-	runc "github.com/beam-cloud/go-runc"
+	"github.com/beam-cloud/beta9/pkg/abstractions/image"
+	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
+	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
 const (
@@ -78,6 +78,7 @@ type ImageClient struct {
 	config             types.AppConfig
 	workerId           string
 	workerRepo         repository.WorkerRepository
+	logger             *ContainerLogger
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
@@ -109,6 +110,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepo reposito
 		workerId:           workerId,
 		workerRepo:         workerRepo,
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
+		logger:             &ContainerLogger{},
 	}
 
 	err = os.MkdirAll(c.imageBundlePath, os.ModePerm)
@@ -135,14 +137,16 @@ func blobfsAvailable(path string) bool {
 
 func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	imageId := request.ImageId
-
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
+
+	c.logger.Log(request.ContainerId, request.StubId, "loading image: %s", imageId)
 
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
 	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
 		localCachePath = ""
 	}
 
+	startTime := time.Now()
 	if c.config.BlobCache.BlobFs.Enabled && blobfsAvailable(baseBlobFsPath) && !isBuildContainer {
 		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
 		sourceOffset := int64(0)
@@ -152,24 +156,20 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 		if _, err := os.Stat(baseBlobFsContentPath); err == nil {
 			localCachePath = baseBlobFsContentPath
 		} else {
-			log.Printf("<%s> - blobfs cache entry not found for image<%s>, storing content nearby\n", request.ContainerId, imageId)
+			c.logger.Log(request.ContainerId, request.StubId, "image <%s> not found in cache, caching nearby", imageId)
 
 			// Otherwise, lets cache it in a nearby blobcache host
-			startTime := time.Now()
 			_, err := c.cacheClient.StoreContentFromSource(sourcePath, sourceOffset)
 			if err == nil {
 				localCachePath = baseBlobFsContentPath
 			}
 
-			elapsed := time.Since(startTime)
-
-			log.Printf("<%s> - blobfs cache took %v\n", request.ContainerId, elapsed)
-
 		}
 	}
+	elapsed := time.Since(startTime)
+	c.logger.Log(request.ContainerId, request.StubId, "loaded image <%s>, took: %s", imageId, elapsed)
 
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
-	var err error = nil
 
 	if _, err := os.Stat(remoteArchivePath); err != nil {
 		err = c.registry.Pull(context.TODO(), remoteArchivePath, imageId)
@@ -205,7 +205,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	}
 
 	// Get lock on image mount
-	err = c.workerRepo.SetImagePullLock(c.workerId, imageId)
+	err := c.workerRepo.SetImagePullLock(c.workerId, imageId)
 	if err != nil {
 		return err
 	}
