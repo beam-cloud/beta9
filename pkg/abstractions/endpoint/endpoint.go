@@ -178,7 +178,6 @@ func (es *HttpEndpointService) forwardRequest(
 		})
 	}
 
-	// if asgi make empty payload
 	payload := &types.TaskPayload{}
 	if !instance.isASGI {
 		payload, err = task.SerializeHttpPayload(ctx)
