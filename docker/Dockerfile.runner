@@ -13,8 +13,9 @@ EOT
 
 ARG CEDANA_VERSION=0.9.215
 RUN <<EOT
+set -eux
 apt-get install -y libgpgme-dev
-curl -L -o cedana_amd64.deb https://github.com/cedana/cedana/releases/download/v0.9.215/cedana_${CEDANA_VERSION}_amd64.deb
+curl -L -o cedana_amd64.deb https://github.com/cedana/cedana/releases/download/v${CEDANA_VERSION}/cedana_${CEDANA_VERSION}_amd64.deb
 dpkg -i cedana_amd64.deb
 rm cedana_amd64.deb
 EOT
