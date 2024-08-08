@@ -8,17 +8,16 @@ import (
 	"net/http"
 	"time"
 
-	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
-	"github.com/beam-cloud/beta9/pkg/task"
+	"github.com/labstack/echo/v4"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
+	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/labstack/echo/v4"
-
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -179,11 +178,14 @@ func (es *HttpEndpointService) forwardRequest(
 		})
 	}
 
-	payload, err := task.SerializeHttpPayload(ctx)
-	if err != nil {
-		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error": err.Error(),
-		})
+	payload := &types.TaskPayload{}
+	if !instance.isASGI {
+		payload, err = task.SerializeHttpPayload(ctx)
+		if err != nil {
+			return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
 	}
 
 	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), authInfo, stubId, payload, types.TaskPolicy{
@@ -253,7 +255,11 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 		return nil, err
 	}
 
-	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig, es.tailscale, es.config.Tailscale)
+	if stub.Type.Kind() == types.StubTypeASGI {
+		instance.isASGI = true
+	}
+
+	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig, es.tailscale, es.config.Tailscale, instance.isASGI)
 
 	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance

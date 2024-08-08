@@ -7,10 +7,11 @@ import (
 	"math/rand"
 	"time"
 
-	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
-	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 func withAutoscaler(constructor func(i *endpointInstance) *abstractions.Autoscaler[*endpointInstance, *endpointAutoscalerSample]) func(*endpointInstance) {
@@ -28,6 +29,7 @@ func withEntryPoint(entryPoint func(instance *endpointInstance) []string) func(*
 type endpointInstance struct {
 	*abstractions.AutoscaledInstance
 	buffer *RequestBuffer
+	isASGI bool
 }
 
 func (i *endpointInstance) startContainers(containersToRun int) error {
