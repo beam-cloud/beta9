@@ -49,7 +49,6 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		"--cache-size", cacheSize,
 		"--prefetch", prefetch,
 		"--buffer-size", bufferSize,
-		"--no-bgjob",
 		"--no-usage-report",
 	)
 
