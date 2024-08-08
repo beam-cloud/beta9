@@ -14,13 +14,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
+
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
 )
 
 type request struct {
@@ -52,6 +53,8 @@ type RequestBuffer struct {
 	availableContainersLock sync.RWMutex
 
 	length atomic.Int32
+
+	isASGI bool
 }
 
 func NewRequestBuffer(
@@ -64,6 +67,7 @@ func NewRequestBuffer(
 	stubConfig *types.StubConfigV1,
 	tailscale *network.Tailscale,
 	tsConfig types.TailscaleConfig,
+	isASGI bool,
 ) *RequestBuffer {
 	b := &RequestBuffer{
 		ctx:                 ctx,
@@ -81,6 +85,8 @@ func NewRequestBuffer(
 
 		tailscale: tailscale,
 		tsConfig:  tsConfig,
+
+		isASGI: isASGI,
 	}
 
 	go b.discoverContainers()
@@ -314,9 +320,13 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	}
 
 	request := req.ctx.Request()
-	requestBody, err := json.Marshal(req.payload)
-	if err != nil {
-		return
+	requestBody := request.Body
+	if !rb.isASGI {
+		b, err := json.Marshal(req.payload)
+		if err != nil {
+			return
+		}
+		requestBody = io.NopCloser(bytes.NewReader(b))
 	}
 
 	httpClient, err := rb.getHttpClient(c.address)
@@ -325,7 +335,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	}
 
 	containerUrl := fmt.Sprintf("http://%s/%s", c.address, req.ctx.Param("subPath"))
-	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, bytes.NewReader(requestBody))
+	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, requestBody)
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
