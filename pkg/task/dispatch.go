@@ -167,44 +167,63 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 				}
 
 				if !heartbeat && claimed {
-					// Hit retry limit, cancel task and resolve
-					if taskMessage.Retries >= taskMessage.Policy.MaxRetries {
-						log.Printf("<dispatcher> hit retry limit, not reinserting task <%s> into queue: %s\n", taskMessage.TaskId, taskMessage.StubId)
-
-						err := task.Cancel(ctx, types.TaskExceededRetryLimit)
-						if err != nil {
-							log.Printf("<dispatcher> unable to cancel task: %s, %v\n", task.Metadata().TaskId, err)
-							continue
-						}
-
-						d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
-						continue
-					}
-
-					// Retry task
-					log.Printf("<dispatcher> missing heartbeat, reinserting task<%s:%s> into queue: %s\n",
-						taskMessage.WorkspaceName, taskMessage.TaskId, taskMessage.StubId)
-
-					taskMessage.Retries += 1
-					taskMessage.Timestamp = time.Now().Unix()
-
-					msg, err := taskMessage.Encode()
-					if err != nil {
-						continue
-					}
-
-					err = d.taskRepo.SetTaskState(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId, msg)
-					if err != nil {
-						continue
-					}
-
-					err = task.Retry(ctx)
-					if err != nil {
-						log.Printf("<dispatcher> retry failed: %+v\n", err)
-						continue
-					}
+					d.retryTask(ctx, task, taskMessage)
+					continue
 				}
 			}
 		}
 	}
+}
+
+func (d *Dispatcher) retryTask(ctx context.Context, task types.TaskInterface, taskMessage *types.TaskMessage) error {
+	err := d.taskRepo.SetTaskRetryLock(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+	if err != nil {
+		return err
+	}
+	defer d.taskRepo.RemoveTaskRetryLock(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+
+	// Hit retry limit, cancel task and resolve
+	if taskMessage.Retries >= taskMessage.Policy.MaxRetries {
+		log.Printf("<dispatcher> hit retry limit, not reinserting task <%s> into queue: %s\n", taskMessage.TaskId, taskMessage.StubId)
+
+		err = task.Cancel(ctx, types.TaskExceededRetryLimit)
+		if err != nil {
+			log.Printf("<dispatcher> unable to cancel task: %s, %v\n", task.Metadata().TaskId, err)
+			return err
+		}
+
+		return d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+	}
+
+	// Remove task claim so other replicas of Dispatcher don't try to retry the same task
+	err = d.taskRepo.RemoveTaskClaim(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+	if err != nil {
+		log.Printf("<dispatcher> failed to remove task claim: %s, %v\n", task.Metadata().TaskId, err)
+		return err
+	}
+
+	// Retry task
+	log.Printf("<dispatcher> missing heartbeat, reinserting task<%s:%s> into queue: %s\n",
+		taskMessage.WorkspaceName, taskMessage.TaskId, taskMessage.StubId)
+
+	taskMessage.Retries += 1
+	taskMessage.Timestamp = time.Now().Unix()
+
+	msg, err := taskMessage.Encode()
+	if err != nil {
+		return err
+	}
+
+	err = d.taskRepo.SetTaskState(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId, msg)
+	if err != nil {
+		return err
+	}
+
+	err = task.Retry(ctx)
+	if err != nil {
+		log.Printf("<dispatcher> retry failed: %+v\n", err)
+		return err
+	}
+
+	return nil
 }
