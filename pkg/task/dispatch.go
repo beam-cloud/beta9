@@ -195,6 +195,13 @@ func (d *Dispatcher) retryTask(ctx context.Context, task types.TaskInterface, ta
 		return d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 	}
 
+	// Remove task claim so other replicas of Dispatcher don't try to retry the same task
+	err = d.taskRepo.RemoveTaskClaim(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+	if err != nil {
+		log.Printf("<dispatcher> failed to remove task claim: %s, %v\n", task.Metadata().TaskId, err)
+		return err
+	}
+
 	// Retry task
 	log.Printf("<dispatcher> missing heartbeat, reinserting task<%s:%s> into queue: %s\n",
 		taskMessage.WorkspaceName, taskMessage.TaskId, taskMessage.StubId)

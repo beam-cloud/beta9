@@ -36,6 +36,23 @@ func (r *TaskRedisRepository) ClaimTask(ctx context.Context, workspaceName, stub
 	return nil
 }
 
+func (r *TaskRedisRepository) RemoveTaskClaim(ctx context.Context, workspaceName, stubId, taskId string) error {
+	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
+	claimIndexKey := common.RedisKeys.TaskClaimIndex(workspaceName, stubId)
+
+	err := r.rdb.Del(ctx, claimKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to remove task claim <%v>: %w", claimKey, err)
+	}
+
+	err = r.rdb.SRem(ctx, claimIndexKey, taskId).Err()
+	if err != nil {
+		return fmt.Errorf("failed to remove task from claim index <%v>: %w", claimIndexKey, err)
+	}
+
+	return nil
+}
+
 func (r *TaskRedisRepository) TasksClaimed(ctx context.Context, workspaceName, stubId string) (int, error) {
 	tasks, err := r.rdb.SMembers(ctx, common.RedisKeys.TaskClaimIndex(workspaceName, stubId)).Result()
 	if err != nil {
