@@ -1,4 +1,5 @@
 import os
+import signal
 import threading
 from typing import Any, Callable, List, Optional, Union
 
@@ -208,6 +209,9 @@ class _CallableWrapper(DeployableMixin):
 
     @with_grpc_error_handling
     def serve(self, timeout: int = 0):
+        signal.signal(signal.SIGINT, sigint_handler)
+        threading.current_thread().shutdown_flag = False
+
         stub_type = ENDPOINT_SERVE_STUB_TYPE
 
         if getattr(self.parent, "is_asgi", None):
@@ -218,40 +222,38 @@ class _CallableWrapper(DeployableMixin):
         ):
             return False
 
-        try:
-            with terminal.progress("Serving endpoint..."):
-                base_url = self.parent.settings.api_host
-                if not base_url.startswith(("http://", "https://")):
-                    base_url = f"http://{base_url}"
+        serve_thread = threading.Thread(
+            target=self._serve,
+            kwargs={"dir": os.getcwd(), "object_id": self.parent.object_id, "timeout": timeout},
+            daemon=True,
+        )
+        serve_thread.start()
 
-                invocation_url = f"{base_url}/{self.base_stub_type}/id/{self.parent.stub_id}"
-                self.parent.print_invocation_snippet(invocation_url=invocation_url)
-
-                return self._serve(
-                    dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout
-                )
-
-        except KeyboardInterrupt:
-            self._handle_serve_interrupt()
+        while serve_thread.is_alive():
+            serve_thread.join(0.1)
+            if threading.current_thread().shutdown_flag:
+                self._handle_serve_interrupt()
 
     def _handle_serve_interrupt(self) -> None:
         response = "y"
 
         try:
             response = terminal.prompt(
-                text="Would you like to stop the container? (y/n)", default="y"
+                text="\nWould you like to stop the container? (y/n)", default="y"
             )
         except KeyboardInterrupt:
             pass
 
-        if response == "y":
+        if response.lower() == "y":
             terminal.header("Stopping serve container")
             self.parent.endpoint_stub.stop_endpoint_serve(
                 StopEndpointServeRequest(stub_id=self.parent.stub_id)
             )
+            terminal.print("Goodbye 👋")
+            os._exit(0)  # kills all threads immediately
 
-        terminal.print("Goodbye 👋")
-        os._exit(0)  # kills all threads immediately
+        # reset flag if user decided not to stop serving
+        threading.current_thread().shutdown_flag = False
 
     def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
         def notify(*_, **__):
@@ -261,6 +263,13 @@ class _CallableWrapper(DeployableMixin):
                     timeout=timeout,
                 )
             )
+
+        base_url = self.parent.settings.api_host
+        if not base_url.startswith(("http://", "https://")):
+            base_url = f"http://{base_url}"
+
+        invocation_url = f"{base_url}/{self.base_stub_type}/id/{self.parent.stub_id}"
+        self.parent.print_invocation_snippet(invocation_url=invocation_url)
 
         threading.Thread(
             target=self.parent.sync_dir_to_workspace,
@@ -285,3 +294,7 @@ class _CallableWrapper(DeployableMixin):
             terminal.error("Serve container failed ❌")
 
         terminal.warn("Endpoint serve timed out. Container has been stopped.")
+
+
+def sigint_handler(signum, frame):
+    threading.current_thread().shutdown_flag = True
