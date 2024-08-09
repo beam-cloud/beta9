@@ -117,6 +117,8 @@ type TaskRepository interface {
 	IsClaimed(ctx context.Context, workspaceName, stubId, taskId string) (bool, error)
 	TasksClaimed(ctx context.Context, workspaceName, stubId string) (int, error)
 	TasksInFlight(ctx context.Context, workspaceName, stubId string) (int, error)
+	SetTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error
+	RemoveTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error
 }
 
 type ProviderRepository interface {

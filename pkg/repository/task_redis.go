@@ -127,3 +127,16 @@ func (r *TaskRedisRepository) GetTasksInFlight(ctx context.Context) ([]*types.Ta
 
 	return taskMessages, nil
 }
+
+func (r *TaskRedisRepository) SetTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error {
+	err := r.lock.Acquire(ctx, common.RedisKeys.TaskRetryLock(workspaceName, stubId, taskId), common.RedisLockOptions{TtlS: 300, Retries: 0})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *TaskRedisRepository) RemoveTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error {
+	return r.lock.Release(common.RedisKeys.TaskRetryLock(workspaceName, stubId, taskId))
+}
