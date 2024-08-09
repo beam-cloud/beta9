@@ -26,10 +26,11 @@ import (
 var PostgresDataError = pq.ErrorClass("22")
 
 type PostgresBackendRepository struct {
-	client *sqlx.DB
+	client    *sqlx.DB
+	eventRepo EventRepository
 }
 
-func NewBackendPostgresRepository(config types.PostgresConfig) (*PostgresBackendRepository, error) {
+func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository) (*PostgresBackendRepository, error) {
 	sslMode := "disable"
 	if config.EnableTLS {
 		sslMode = "require"
@@ -51,7 +52,8 @@ func NewBackendPostgresRepository(config types.PostgresConfig) (*PostgresBackend
 	}
 
 	repo := &PostgresBackendRepository{
-		client: db,
+		client:    db,
+		eventRepo: eventRepo,
 	}
 
 	if err := repo.migrate(); err != nil {
@@ -367,6 +369,17 @@ func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *type
 		return &types.Task{}, err
 	}
 
+	// NOTE: THIS IS JUST FOR TESTING PURPOSES
+	go func() {
+		task, err := r.GetTaskWithRelated(context.Background(), newTask.ExternalId)
+		if err != nil {
+			log.Printf("FAILED TO GET TASK WITH RELATED: %v", err)
+			return
+		}
+
+		r.eventRepo.PushTaskCreatedEvent(task)
+	}()
+
 	return &newTask, nil
 }
 
@@ -385,6 +398,17 @@ func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, externalId s
 		updatedTask.WorkspaceId, updatedTask.StubId); err != nil {
 		return &types.Task{}, err
 	}
+
+	// NOTE: THIS IS JUST FOR TESTING PURPOSES
+	go func() {
+		task, err := r.GetTaskWithRelated(context.Background(), externalId)
+		if err != nil {
+			log.Printf("FAILED TO GET TASK WITH RELATED: %v", err)
+			return
+		}
+
+		r.eventRepo.PushTaskUpdatedEvent(task)
+	}()
 
 	return &task, nil
 }

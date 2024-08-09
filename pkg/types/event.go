@@ -1,6 +1,10 @@
 package types
 
-import cloudevents "github.com/cloudevents/sdk-go/v2/event"
+import (
+	"time"
+
+	cloudevents "github.com/cloudevents/sdk-go/v2/event"
+)
 
 type EventSink = func(event []cloudevents.Event)
 
@@ -15,6 +19,25 @@ var (
 	EventStubDeploy         = "stub.deploy"
 	EventStubServe          = "stub.serve"
 	EventStubRun            = "stub.run"
+
+	/*
+		Stripe events utilize a format of <resource>.<action>
+		1.	<resource>: This indicates the type of object or resource that the event pertains to, such as payment_intent, invoice, customer, subscription, etc.
+		2.	<action>: This indicates the specific action or change that occurred with that resource, such as created, updated, deleted, succeeded, etc.
+
+		Usually this is past tense because it indicates something that has already happened.
+		stub.ran
+		stub.deployed
+		stub.served
+
+		container.lifecycle.updated
+		worker.lifecycle.updated
+
+		the container.metrics event is slightly different because they are snapshots of a resource not a change in state
+		we might need to altered this or rethink concept of an event
+	*/
+	EventTaskUpdated = "task.update"
+	EventTaskCreated = "task.created"
 )
 
 var (
@@ -92,4 +115,17 @@ type EventStubSchema struct {
 	StubType    StubType `json:"stub_type"`
 	WorkspaceID string   `json:"workspace_id"`
 	StubConfig  string   `json:"stub_config"`
+}
+
+var EventTaskSchemaVersion = "1.0"
+
+type EventTaskSchema struct {
+	ID          string     `json:"id"`
+	Status      TaskStatus `json:"status"`
+	ContainerID string     `json:"container_id"`
+	StartedAt   *time.Time `json:"started_at"`
+	EndedAt     *time.Time `json:"ended_at"`
+	WorkspaceID string     `json:"workspace_id"`
+	StubID      string     `json:"stub_id"`
+	CreatedAt   time.Time  `json:"created_at"`
 }

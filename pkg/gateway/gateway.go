@@ -85,7 +85,8 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
+	eventRepo := repository.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
+	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +119,6 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	eventRepo := repository.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)

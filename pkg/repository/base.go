@@ -149,6 +149,8 @@ type EventRepository interface {
 	PushDeployStubEvent(workspaceId string, stub *types.Stub)
 	PushServeStubEvent(workspaceId string, stub *types.Stub)
 	PushRunStubEvent(workspaceId string, stub *types.Stub)
+	PushTaskUpdatedEvent(task *types.TaskWithRelated)
+	PushTaskCreatedEvent(task *types.TaskWithRelated)
 }
 
 type MetricsRepository interface {
