@@ -347,6 +347,15 @@ func (r *PostgresBackendRepository) DeleteObjectByExternalId(ctx context.Context
 
 // Task
 
+func (r *PostgresBackendRepository) handleTaskEvent(taskId string, callback func(*types.TaskWithRelated)) {
+	task, err := r.GetTaskWithRelated(context.Background(), taskId)
+	if err != nil {
+		return
+	}
+
+	callback(task)
+}
+
 func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error) {
 	if params.TaskId == "" {
 		externalId, err := r.generateExternalId()
@@ -369,17 +378,7 @@ func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *type
 		return &types.Task{}, err
 	}
 
-	// NOTE: THIS IS JUST FOR TESTING PURPOSES
-	go func() {
-		task, err := r.GetTaskWithRelated(context.Background(), newTask.ExternalId)
-		if err != nil {
-			log.Printf("FAILED TO GET TASK WITH RELATED: %v", err)
-			return
-		}
-
-		r.eventRepo.PushTaskCreatedEvent(task)
-	}()
-
+	go r.handleTaskEvent(params.TaskId, r.eventRepo.PushTaskCreatedEvent)
 	return &newTask, nil
 }
 
@@ -399,17 +398,7 @@ func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, externalId s
 		return &types.Task{}, err
 	}
 
-	// NOTE: THIS IS JUST FOR TESTING PURPOSES
-	go func() {
-		task, err := r.GetTaskWithRelated(context.Background(), externalId)
-		if err != nil {
-			log.Printf("FAILED TO GET TASK WITH RELATED: %v", err)
-			return
-		}
-
-		r.eventRepo.PushTaskUpdatedEvent(task)
-	}()
-
+	go r.handleTaskEvent(externalId, r.eventRepo.PushTaskUpdatedEvent)
 	return &task, nil
 }
 

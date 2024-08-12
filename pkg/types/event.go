@@ -13,19 +13,16 @@ type EventClient interface {
 }
 
 var (
-	EventContainerLifecycle = "container.lifecycle"
-	EventContainerMetrics   = "container.metrics"
-	EventWorkerLifecycle    = "worker.lifecycle"
-	EventStubDeploy         = "stub.deploy"
-	EventStubServe          = "stub.serve"
-	EventStubRun            = "stub.run"
-
 	/*
 		Stripe events utilize a format of <resource>.<action>
 		1.	<resource>: This indicates the type of object or resource that the event pertains to, such as payment_intent, invoice, customer, subscription, etc.
 		2.	<action>: This indicates the specific action or change that occurred with that resource, such as created, updated, deleted, succeeded, etc.
+	*/
+	EventTaskUpdated = "task.updated"
+	EventTaskCreated = "task.created"
 
-		Usually this is past tense because it indicates something that has already happened.
+	/*
+		TODO: Requires updates
 		stub.ran
 		stub.deployed
 		stub.served
@@ -33,11 +30,15 @@ var (
 		container.lifecycle.updated
 		worker.lifecycle.updated
 
-		the container.metrics event is slightly different because they are snapshots of a resource not a change in state
-		we might need to altered this or rethink concept of an event
+		Need to update logic the locations that use these events
 	*/
-	EventTaskUpdated = "task.update"
-	EventTaskCreated = "task.created"
+
+	EventContainerLifecycle = "container.lifecycle"
+	EventContainerMetrics   = "container.metrics"
+	EventWorkerLifecycle    = "worker.lifecycle"
+	EventStubDeploy         = "stub.deploy"
+	EventStubServe          = "stub.serve"
+	EventStubRun            = "stub.run"
 )
 
 var (
