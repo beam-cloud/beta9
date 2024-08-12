@@ -75,7 +75,7 @@ class CLI:
         self.common_group = option(self.common_group)
 
 
-def load_cli(**kwargs: Any) -> CLI:
+def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli = CLI(**kwargs)
     cli.register(task)
     cli.register(deployment)
@@ -87,7 +87,9 @@ def load_cli(**kwargs: Any) -> CLI:
     cli.register(machine)
     cli.register(secret)
 
-    cli.check_config()
+    if check_config:
+        cli.check_config()
+
     cli.load_version()
 
     return cli
