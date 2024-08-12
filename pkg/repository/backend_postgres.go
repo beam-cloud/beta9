@@ -26,10 +26,11 @@ import (
 var PostgresDataError = pq.ErrorClass("22")
 
 type PostgresBackendRepository struct {
-	client *sqlx.DB
+	client    *sqlx.DB
+	eventRepo EventRepository
 }
 
-func NewBackendPostgresRepository(config types.PostgresConfig) (*PostgresBackendRepository, error) {
+func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository) (*PostgresBackendRepository, error) {
 	sslMode := "disable"
 	if config.EnableTLS {
 		sslMode = "require"
@@ -51,7 +52,8 @@ func NewBackendPostgresRepository(config types.PostgresConfig) (*PostgresBackend
 	}
 
 	repo := &PostgresBackendRepository{
-		client: db,
+		client:    db,
+		eventRepo: eventRepo,
 	}
 
 	if err := repo.migrate(); err != nil {
@@ -345,6 +347,15 @@ func (r *PostgresBackendRepository) DeleteObjectByExternalId(ctx context.Context
 
 // Task
 
+func (r *PostgresBackendRepository) handleTaskEvent(taskId string, callback func(*types.TaskWithRelated)) {
+	task, err := r.GetTaskWithRelated(context.Background(), taskId)
+	if err != nil {
+		return
+	}
+
+	callback(task)
+}
+
 func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error) {
 	if params.TaskId == "" {
 		externalId, err := r.generateExternalId()
@@ -367,6 +378,7 @@ func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *type
 		return &types.Task{}, err
 	}
 
+	go r.handleTaskEvent(params.TaskId, r.eventRepo.PushTaskCreatedEvent)
 	return &newTask, nil
 }
 
@@ -386,6 +398,7 @@ func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, externalId s
 		return &types.Task{}, err
 	}
 
+	go r.handleTaskEvent(externalId, r.eventRepo.PushTaskUpdatedEvent)
 	return &task, nil
 }
 

@@ -229,3 +229,53 @@ func (t *TCPEventClientRepo) PushRunStubEvent(workspaceId string, stub *types.St
 		},
 	)
 }
+
+func (t *TCPEventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
+	event := types.EventTaskSchema{
+		ID:          task.ExternalId,
+		Status:      task.Status,
+		ContainerID: task.ContainerId,
+		CreatedAt:   task.CreatedAt,
+		StubID:      task.Stub.ExternalId,
+		WorkspaceID: task.Workspace.ExternalId,
+	}
+
+	if task.StartedAt.Valid {
+		event.StartedAt = &task.StartedAt.Time
+	}
+
+	if task.EndedAt.Valid {
+		event.EndedAt = &task.EndedAt.Time
+	}
+
+	t.pushEvent(
+		types.EventTaskUpdated,
+		types.EventTaskSchemaVersion,
+		event,
+	)
+}
+
+func (t *TCPEventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
+	event := types.EventTaskSchema{
+		ID:          task.ExternalId,
+		Status:      task.Status,
+		ContainerID: task.ContainerId,
+		CreatedAt:   task.CreatedAt,
+		StubID:      task.Stub.ExternalId,
+		WorkspaceID: task.Workspace.ExternalId,
+	}
+
+	if task.StartedAt.Valid {
+		event.StartedAt = &task.StartedAt.Time
+	}
+
+	if task.EndedAt.Valid {
+		event.EndedAt = &task.EndedAt.Time
+	}
+
+	t.pushEvent(
+		types.EventTaskCreated,
+		types.EventTaskSchemaVersion,
+		event,
+	)
+}
