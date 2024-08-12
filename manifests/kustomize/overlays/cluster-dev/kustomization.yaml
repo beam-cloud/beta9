@@ -11,3 +11,53 @@ components:
 - ../../components/juicefs
 - ../../components/localstack
 - ../../components/beta9-gateway
+patches:
+# Disable Proxy
+- target:
+    kind: Deployment
+    name: beta9-proxy
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 0
+# Remove resources from monitoring components
+- target:
+    kind: StatefulSet
+    name: elasticsearch-master
+  patch: |-
+    - op: remove
+      path: /spec/template/spec/initContainers/0/resources
+    - op: remove
+      path: /spec/template/spec/initContainers/1/resources
+    - op: remove
+      path: /spec/template/spec/containers/0/resources
+- target:
+    kind: Deployment
+    name: elasticsearch-kibana
+  patch: |-
+    - op: remove
+      path: /spec/template/spec/initContainers/0/resources
+    - op: remove
+      path: /spec/template/spec/containers/0/resources
+# Disable unused monitoring components
+- target:
+    kind: Deployment
+    name: victoria-metrics-agent
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 0
+- target:
+    kind: StatefulSet
+    name: victoria-metrics-single
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 0
+- target:
+    kind: StatefulSet
+    name: victoria-logs-single
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 0
