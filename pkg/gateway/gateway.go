@@ -18,7 +18,9 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/container"
+	container_common "github.com/beam-cloud/beta9/pkg/abstractions/container/common"
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
+
 	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
@@ -288,7 +290,7 @@ func (g *Gateway) registerServices() error {
 	// Register container service
 	cs, err := container.NewContainerService(
 		g.ctx,
-		container.ContainerServiceOpts{
+		container_common.ContainerServiceOpts{
 			Config:        g.Config,
 			BackendRepo:   g.BackendRepo,
 			ContainerRepo: g.ContainerRepo,
