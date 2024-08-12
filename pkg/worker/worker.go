@@ -61,16 +61,17 @@ type Worker struct {
 }
 
 type ContainerInstance struct {
-	Id           string
-	StubId       string
-	BundlePath   string
-	Overlay      *common.ContainerOverlay
-	Spec         *specs.Spec
-	Err          error
-	ExitCode     int
-	Port         int
-	OutputWriter *common.OutputWriter
-	LogBuffer    *common.LogBuffer
+	Id             string
+	StubId         string
+	BundlePath     string
+	Overlay        *common.ContainerOverlay
+	Spec           *specs.Spec
+	Err            error
+	ExitCode       int
+	Port           int
+	OutputWriter   *common.OutputWriter
+	LogBuffer      *common.LogBuffer
+	NetworkManager *ContainerNetworkManager
 }
 
 type ContainerOptions struct {
@@ -290,11 +291,13 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
 
-	// Generate dynamic runc spec for this container
-	spec, err := s.specFromRequest(request, &ContainerOptions{
+	opts := &ContainerOptions{
 		BindPort:    bindPort,
 		InitialSpec: initialBundleSpec,
-	})
+	}
+
+	// Generate dynamic runc spec for this container
+	spec, err := s.specFromRequest(request, opts)
 	if err != nil {
 		return err
 	}
@@ -311,7 +314,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	log.Printf("<%s> - set container address.\n", containerId)
 
 	// Start the container
-	err = s.SpawnAsync(request, bundlePath, spec)
+	err = s.SpawnAsync(request, bundlePath, spec, opts)
 	if err != nil {
 		return err
 	}
@@ -373,11 +376,11 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 }
 
 // Invoke a runc container using a predefined config spec
-func (s *Worker) SpawnAsync(request *types.ContainerRequest, bundlePath string, spec *specs.Spec) error {
+func (s *Worker) SpawnAsync(request *types.ContainerRequest, bundlePath string, spec *specs.Spec, opts *ContainerOptions) error {
 	outputChan := make(chan common.OutputMsg)
 
 	go s.containerWg.Add(1)
-	go s.spawn(request, bundlePath, spec, outputChan)
+	go s.spawn(request, bundlePath, spec, outputChan, opts)
 
 	return nil
 }
@@ -504,7 +507,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 }
 
 // spawn a container using runc binary
-func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec *specs.Spec, outputChan chan common.OutputMsg) {
+func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec *specs.Spec, outputChan chan common.OutputMsg, opts *ContainerOptions) {
 	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
 	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
 
@@ -536,7 +539,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 				Success: false,
 			}
 		}),
-		LogBuffer: common.NewLogBuffer(),
+		LogBuffer:      common.NewLogBuffer(),
+		NetworkManager: NewContainerNetworkManager(containerId, opts.BindPort),
 	}
 	s.containerInstances.Set(containerId, containerInstance)
 
@@ -582,6 +586,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	defer containerInstance.Overlay.Cleanup()
 
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
+
+	// Setup container network namespace / device
+	err = containerInstance.NetworkManager.Setup(spec)
+	if err != nil {
+		log.Printf("<%s> failed to setup container network: %v", containerId, err)
+		containerErr = err
+		return
+	}
+
+	// Expose the bind port
+	containerInstance.NetworkManager.ExposePort(opts.BindPort)
 
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
