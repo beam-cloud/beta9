@@ -42,7 +42,7 @@ proxy:
 
 runner:
 	for target in py312 py311 py310 py39 py38; do \
-		docker build . --no-cache --target $$target -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:$$target-$(runnerTag); \
+		docker build . --no-cache --target $$target --platform=linux/amd64 -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:$$target-$(runnerTag); \
 		docker push localhost:5001/beta9-runner:$$target-$(runnerTag); \
 	done
 
