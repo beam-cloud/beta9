@@ -1,7 +1,6 @@
 package apiv1
 
 import (
-	"log/slog"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -106,7 +105,6 @@ func (g *TokenGroup) ToggleWorkspaceToken(ctx echo.Context) error {
 	extTokenId := ctx.Param("tokenId")
 	token, err := g.backendRepo.ToggleToken(ctx.Request().Context(), workspace.Id, extTokenId)
 	if err != nil {
-		slog.Error("Failed to toggle token", "error", err)
 		return HTTPInternalServerError("Failed to toggle token")
 	}
 
