@@ -13,7 +13,7 @@ type ContainerService interface {
 	ExecuteCommand(in *pb.CommandExecutionRequest, stream pb.ContainerService_ExecuteCommandServer) error
 }
 
-type ContainerServiceImpl struct {
+type _ContainerService struct {
 	pb.ContainerServiceServer
 }
 
@@ -26,7 +26,7 @@ func NewContainerService(
 		return nil, err
 	}
 
-	svc := ContainerServiceImpl{
+	svc := _ContainerService{
 		cmdService,
 	}
 
