@@ -26,7 +26,7 @@ func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, conf
 	g.PATCH("/admin/:workspaceId", auth.WithClusterAdminAuth(group.ClusterAdminUpdateAllWorkspaceTokens))
 	g.POST("/:workspaceId", auth.WithWorkspaceAuth(group.CreateWorkspaceToken))
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListWorkspaceTokens))
-	g.PATCH("/:workspaceId", auth.WithWorkspaceAuth(group.ToggleWorkspaceToken))
+	g.POST("/:workspaceId/:tokenId/toggle", auth.WithWorkspaceAuth(group.ToggleWorkspaceToken))
 
 	return group
 }
@@ -103,16 +103,7 @@ func (g *TokenGroup) ToggleWorkspaceToken(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid workspace ID")
 	}
 
-	body := make(map[string]any)
-	if err := ctx.Bind(&body); err != nil {
-		return HTTPBadRequest("Invalid request body")
-	}
-
-	extTokenId, ok := body["token_id"].(string)
-	if !ok {
-		return HTTPBadRequest("Failed to find token_id in request body")
-	}
-
+	extTokenId := ctx.Param("tokenId")
 	token, err := g.backendRepo.ToggleToken(ctx.Request().Context(), workspace.Id, extTokenId)
 	if err != nil {
 		slog.Error("Failed to toggle token", "error", err)
