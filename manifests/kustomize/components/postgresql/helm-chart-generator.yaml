@@ -39,7 +39,7 @@ valuesInline:
           cat /opt/bitnami/postgresql/conf/postgresql.conf | grep shared_preload_libraries
 
           # Set up pg_cron in main database
-          psql -Upostgres main << EOF
+          psql -Upostgres -d main <<EOF
           SHOW shared_preload_libraries;
           CREATE EXTENSION IF NOT EXISTS pg_cron;
           EOF
