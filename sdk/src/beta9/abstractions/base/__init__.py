@@ -59,7 +59,10 @@ def get_channel() -> Channel:
 
 class BaseAbstraction(ABC):
     def __init__(self) -> None:
-        self.loop: AbstractEventLoop = asyncio.get_event_loop()
+        try:
+            self.loop: AbstractEventLoop = asyncio.get_event_loop()
+        except RuntimeError:
+            self.loop: AbstractEventLoop = asyncio.new_event_loop()
 
     @property
     def channel(self) -> Channel:

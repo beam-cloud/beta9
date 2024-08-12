@@ -1,8 +1,10 @@
+import os
 from typing import List, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
     CONTAINER_STUB_TYPE,
+    BaseAbstraction,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
@@ -12,14 +14,49 @@ from ..clients.container import (
     CommandExecutionRequest,
     CommandExecutionResponse,
     ContainerServiceStub,
+    CreateTunnelRequest,
+    CreateTunnelResponse,
 )
+from ..env import is_local
 from ..sync import FileSyncer
 from ..type import GpuType, GpuTypeAlias
 
 
-class Container(RunnerAbstraction):
+class TunnelCannotRunLocallyError(Exception):
+    pass
+
+
+class Tunnel(BaseAbstraction):
+    def __init__(self) -> None:
+        super().__init__()
+        self._container_stub: Optional[ContainerServiceStub] = None
+
+    @property
+    def container_stub(self) -> ContainerServiceStub:
+        if not self._container_stub:
+            self._container_stub = ContainerServiceStub(self.channel)
+        return self._container_stub
+
+    @container_stub.setter
+    def container_stub(self, value: ContainerServiceStub) -> None:
+        self._container_stub = value
+
+    def open(self) -> str:
+        if is_local():
+            raise TunnelCannotRunLocallyError
+
+        container_id = os.environ["CONTAINER_ID"]
+
+        r: CreateTunnelResponse = self.container_stub.create_tunnel(
+            CreateTunnelRequest(container_id=container_id)
+        )
+
+        print(r.ok)
+
+
+class Command(RunnerAbstraction):
     """
-    Container allows you to run arbitrary commands in a remote container.
+    Command allows you to run arbitrary commands in a remote container.
 
     Parameters:
         cpu (Union[int, float, str]):
@@ -43,14 +80,15 @@ class Container(RunnerAbstraction):
 
     Example usage:
         ```
-        from beta9 import Image, Container
+        from beta9 import Image, container
 
 
-        def run_container():
+        def run_command():
             image = Image()
-            container = Container(cpu=2, memory=512, image=image)
-            exit_code = container.run((["python", "-c", "\"print('Hello, World!')\""]))
+            cmd = container.Command(cpu=2, memory=512, image=image)
+            exit_code = cmd.run((["python", "-c", "\"print('Hello, World!')\""]))
             print(exit_code)
+
         ```
     """
 
@@ -90,7 +128,7 @@ class Container(RunnerAbstraction):
 
     @with_grpc_error_handling
     def run(self, command: List[str]) -> int:
-        """Run a command in a container and return the exit code"""
+        """Run a command in a remote container and return the exit code"""
         if not self.prepare_runtime(
             stub_type=CONTAINER_STUB_TYPE,
         ):

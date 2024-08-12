@@ -13,9 +13,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-type ContainerTunnel struct {
-}
-
 type ContainerTunnelService struct {
 	pb.ContainerServiceServer
 	backendRepo     repository.BackendRepository
@@ -49,4 +46,10 @@ func NewContainerTunnelService(
 	}
 
 	return svc, nil
+}
+
+func (ts *ContainerTunnelService) CreateTunnel(ctx context.Context, in *pb.CreateTunnelRequest) (*pb.CreateTunnelResponse, error) {
+	return &pb.CreateTunnelResponse{
+		Ok: true,
+	}, nil
 }
