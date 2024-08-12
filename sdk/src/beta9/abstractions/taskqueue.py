@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import threading
 from typing import Any, Callable, List, Optional, Union
 
@@ -164,27 +165,25 @@ class _CallableWrapper(DeployableMixin):
 
     @with_grpc_error_handling
     def serve(self, timeout: int = 0) -> bool:
+        signal.signal(signal.SIGINT, sigint_handler)
+        threading.current_thread().shutdown_flag = False
+
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=TASKQUEUE_SERVE_STUB_TYPE, force_create_stub=True
         ):
             return False
 
-        try:
-            with terminal.progress("Serving taskqueue..."):
-                base_url = self.parent.settings.api_host
-                if not base_url.startswith(("http://", "https://")):
-                    base_url = f"http://{base_url}"
+        serve_thread = threading.Thread(
+            target=self._serve,
+            kwargs={"dir": os.getcwd(), "object_id": self.parent.object_id, "timeout": timeout},
+            daemon=True,
+        )
+        serve_thread.start()
 
-                self.parent.print_invocation_snippet(
-                    invocation_url=f"{base_url}/taskqueue/id/{self.parent.stub_id}"
-                )
-
-                return self._serve(
-                    dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout
-                )
-
-        except KeyboardInterrupt:
-            self._handle_serve_interrupt()
+        while serve_thread.is_alive():
+            serve_thread.join(timeout=0.1)
+            if threading.current_thread().shutdown_flag:
+                self._handle_serve_interrupt()
 
     def _handle_serve_interrupt(self) -> None:
         response = "y"
@@ -201,9 +200,11 @@ class _CallableWrapper(DeployableMixin):
             self.parent.taskqueue_stub.stop_task_queue_serve(
                 StopTaskQueueServeRequest(stub_id=self.parent.stub_id)
             )
+            terminal.print("Goodbye 👋")
+            os._exit(0)  # kills all threads immediately
 
-        terminal.print("Goodbye 👋")
-        os._exit(0)  # kills all threads immediately
+        # reset flag if user decided not to stop serving
+        threading.current_thread().shutdown_flag = False
 
     def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
         def notify(*_, **__):
@@ -213,6 +214,14 @@ class _CallableWrapper(DeployableMixin):
                     timeout=timeout,
                 )
             )
+
+        base_url = self.parent.settings.api_host
+        if not base_url.startswith(("http://", "https://")):
+            base_url = f"http://{base_url}"
+
+        self.parent.print_invocation_snippet(
+            invocation_url=f"{base_url}/taskqueue/id/{self.parent.stub_id}"
+        )
 
         threading.Thread(
             target=self.parent.sync_dir_to_workspace,
@@ -258,3 +267,7 @@ class _CallableWrapper(DeployableMixin):
 
         terminal.detail(f"Enqueued task: {r.task_id}")
         return True
+
+
+def sigint_handler(signum, frame):
+    threading.current_thread().shutdown_flag = True
