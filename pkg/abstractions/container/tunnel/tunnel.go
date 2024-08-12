@@ -2,6 +2,7 @@ package container_tunnel
 
 import (
 	"context"
+	"log"
 
 	pb "github.com/beam-cloud/beta9/proto"
 
@@ -49,6 +50,8 @@ func NewContainerTunnelService(
 }
 
 func (ts *ContainerTunnelService) CreateTunnel(ctx context.Context, in *pb.CreateTunnelRequest) (*pb.CreateTunnelResponse, error) {
+	log.Println("container ID: ", in.ContainerId)
+
 	return &pb.CreateTunnelResponse{
 		Ok: true,
 	}, nil
