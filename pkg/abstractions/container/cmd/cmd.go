@@ -62,6 +62,7 @@ func NewCmdContainerService(
 
 	return cs, nil
 }
+
 func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, stream pb.ContainerService_ExecuteCommandServer) error {
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 

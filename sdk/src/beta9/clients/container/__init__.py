@@ -39,14 +39,15 @@ class CommandExecutionResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class ContainerTaskStatusUpdateRequest(betterproto.Message):
-    task_id: str = betterproto.string_field(1)
-    status: str = betterproto.string_field(2)
+class CreateTunnelRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    ttl: int = betterproto.int64_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class ContainerTaskStatusUpdateResponse(betterproto.Message):
+class CreateTunnelResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
+    public_url: str = betterproto.string_field(2)
 
 
 class ContainerServiceStub(SyncServiceStub):
@@ -59,3 +60,12 @@ class ContainerServiceStub(SyncServiceStub):
             CommandExecutionResponse,
         )(command_execution_request):
             yield response
+
+    def create_tunnel(
+        self, create_tunnel_request: "CreateTunnelRequest"
+    ) -> "CreateTunnelResponse":
+        return self._unary_unary(
+            "/container.ContainerService/CreateTunnel",
+            CreateTunnelRequest,
+            CreateTunnelResponse,
+        )(create_tunnel_request)

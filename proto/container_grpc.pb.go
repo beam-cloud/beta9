@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion7
 
 const (
 	ContainerService_ExecuteCommand_FullMethodName = "/container.ContainerService/ExecuteCommand"
+	ContainerService_CreateTunnel_FullMethodName   = "/container.ContainerService/CreateTunnel"
 )
 
 // ContainerServiceClient is the client API for ContainerService service.
@@ -27,6 +28,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ContainerServiceClient interface {
 	ExecuteCommand(ctx context.Context, in *CommandExecutionRequest, opts ...grpc.CallOption) (ContainerService_ExecuteCommandClient, error)
+	CreateTunnel(ctx context.Context, in *CreateTunnelRequest, opts ...grpc.CallOption) (*CreateTunnelResponse, error)
 }
 
 type containerServiceClient struct {
@@ -69,11 +71,21 @@ func (x *containerServiceExecuteCommandClient) Recv() (*CommandExecutionResponse
 	return m, nil
 }
 
+func (c *containerServiceClient) CreateTunnel(ctx context.Context, in *CreateTunnelRequest, opts ...grpc.CallOption) (*CreateTunnelResponse, error) {
+	out := new(CreateTunnelResponse)
+	err := c.cc.Invoke(ctx, ContainerService_CreateTunnel_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ContainerServiceServer is the server API for ContainerService service.
 // All implementations must embed UnimplementedContainerServiceServer
 // for forward compatibility
 type ContainerServiceServer interface {
 	ExecuteCommand(*CommandExecutionRequest, ContainerService_ExecuteCommandServer) error
+	CreateTunnel(context.Context, *CreateTunnelRequest) (*CreateTunnelResponse, error)
 	mustEmbedUnimplementedContainerServiceServer()
 }
 
@@ -83,6 +95,9 @@ type UnimplementedContainerServiceServer struct {
 
 func (UnimplementedContainerServiceServer) ExecuteCommand(*CommandExecutionRequest, ContainerService_ExecuteCommandServer) error {
 	return status.Errorf(codes.Unimplemented, "method ExecuteCommand not implemented")
+}
+func (UnimplementedContainerServiceServer) CreateTunnel(context.Context, *CreateTunnelRequest) (*CreateTunnelResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateTunnel not implemented")
 }
 func (UnimplementedContainerServiceServer) mustEmbedUnimplementedContainerServiceServer() {}
 
@@ -118,13 +133,36 @@ func (x *containerServiceExecuteCommandServer) Send(m *CommandExecutionResponse)
 	return x.ServerStream.SendMsg(m)
 }
 
+func _ContainerService_CreateTunnel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateTunnelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerServiceServer).CreateTunnel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerService_CreateTunnel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerServiceServer).CreateTunnel(ctx, req.(*CreateTunnelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ContainerService_ServiceDesc is the grpc.ServiceDesc for ContainerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var ContainerService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "container.ContainerService",
 	HandlerType: (*ContainerServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateTunnel",
+			Handler:    _ContainerService_CreateTunnel_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "ExecuteCommand",
