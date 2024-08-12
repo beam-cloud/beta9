@@ -32,12 +32,17 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		autoscaler.TasksPerContainer = uint(in.Autoscaler.TasksPerContainer)
 	}
 
+	if in.Gpu != "" && in.GpuCount == 0 {
+		in.GpuCount = uint32(1)
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
-			Cpu:     in.Cpu,
-			Gpu:     types.GpuType(in.Gpu),
-			Memory:  in.Memory,
-			ImageId: in.ImageId,
+			Cpu:      in.Cpu,
+			Gpu:      types.GpuType(in.Gpu),
+			Memory:   in.Memory,
+			ImageId:  in.ImageId,
+			GpuCount: in.GpuCount,
 		},
 		Handler:       in.Handler,
 		OnStart:       in.OnStart,

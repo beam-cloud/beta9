@@ -259,6 +259,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     authorized: bool = betterproto.bool_field(20)
     secrets: List["SecretVar"] = betterproto.message_field(21)
     autoscaler: "Autoscaler" = betterproto.message_field(22)
+    gpu_count: int = betterproto.uint32_field(23)
 
 
 @dataclass(eq=False, repr=False)

@@ -34,7 +34,8 @@ service GatewayService {
   // Deployments
   rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
   rpc StopDeployment(StopDeploymentRequest) returns (StopDeploymentResponse);
-  rpc DeleteDeployment(DeleteDeploymentRequest) returns (DeleteDeploymentResponse);
+  rpc DeleteDeployment(DeleteDeploymentRequest)
+      returns (DeleteDeploymentResponse);
 
   // Pools
   rpc ListPools(ListPoolsRequest) returns (ListPoolsResponse);
@@ -222,6 +223,7 @@ message GetOrCreateStubRequest {
   bool authorized = 20;
   repeated SecretVar secrets = 21;
   Autoscaler autoscaler = 22;
+  uint32 gpu_count = 23;
 }
 
 message GetOrCreateStubResponse {
