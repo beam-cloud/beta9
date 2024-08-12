@@ -3,10 +3,11 @@ package apiv1
 import (
 	"net/http"
 
+	"github.com/labstack/echo/v4"
+
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/labstack/echo/v4"
 )
 
 type TokenGroup struct {
@@ -24,6 +25,7 @@ func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, conf
 	g.PATCH("/admin/:workspaceId", auth.WithClusterAdminAuth(group.ClusterAdminUpdateAllWorkspaceTokens))
 	g.POST("/:workspaceId", auth.WithWorkspaceAuth(group.CreateWorkspaceToken))
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListWorkspaceTokens))
+	g.POST("/:workspaceId/:tokenId/toggle", auth.WithWorkspaceAuth(group.ToggleWorkspaceToken))
 
 	return group
 }
@@ -91,4 +93,20 @@ func (g *TokenGroup) ListWorkspaceTokens(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, tokens)
+}
+
+func (g *TokenGroup) ToggleWorkspaceToken(ctx echo.Context) error {
+	workspaceId := ctx.Param("workspaceId")
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return HTTPBadRequest("Invalid workspace ID")
+	}
+
+	extTokenId := ctx.Param("tokenId")
+	token, err := g.backendRepo.ToggleToken(ctx.Request().Context(), workspace.Id, extTokenId)
+	if err != nil {
+		return HTTPInternalServerError("Failed to toggle token")
+	}
+
+	return ctx.JSON(http.StatusOK, token)
 }

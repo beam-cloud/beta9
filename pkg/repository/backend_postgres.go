@@ -12,15 +12,16 @@ import (
 	"strings"
 
 	"github.com/Masterminds/squirrel"
-	pkgCommon "github.com/beam-cloud/beta9/pkg/common"
-	_ "github.com/beam-cloud/beta9/pkg/repository/backend_postgres_migrations"
-	"github.com/beam-cloud/beta9/pkg/repository/common"
-	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
+
+	pkgCommon "github.com/beam-cloud/beta9/pkg/common"
+	_ "github.com/beam-cloud/beta9/pkg/repository/backend_postgres_migrations"
+	"github.com/beam-cloud/beta9/pkg/repository/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 var PostgresDataError = pq.ErrorClass("22")
@@ -248,6 +249,23 @@ func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId 
 	}
 
 	return tokens, nil
+}
+
+func (r *PostgresBackendRepository) ToggleToken(ctx context.Context, workspaceId uint, extTokenId string) (types.Token, error) {
+	query := `
+	UPDATE token
+	SET active = NOT active
+	WHERE external_id = $1 AND workspace_id = $2
+	RETURNING id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id;
+	`
+
+	var token types.Token
+	err := r.client.GetContext(ctx, &token, query, extTokenId, workspaceId)
+	if err != nil {
+		return types.Token{}, err
+	}
+
+	return token, nil
 }
 
 func (r *PostgresBackendRepository) RevokeTokenByExternalId(ctx context.Context, externalId string) error {
