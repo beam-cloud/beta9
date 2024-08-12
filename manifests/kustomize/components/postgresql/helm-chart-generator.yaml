@@ -13,16 +13,42 @@ skipTests: true
 valuesInline:
   nameOverride: *name
   fullnameOverride: *name
+  postgresqlSharedPreloadLibraries: pg_cron
   global:
     postgresql:
       auth:
+        postgresPassword: password
         username: root
         password: password
         database: main
+  image:
+    registry: public.ecr.aws
+    repository: n4e0e1y0/postgres
+    tag: 16.1
+    pullPolicy: IfNotPresent
   primary:
     extendedConfiguration: |
       max_connections=400
       shared_buffers='400MB'
+      cron.database_name='main'
+    initdb:
+      scripts:
+        create_extension.sh: |
+          #!/bin/sh
+          export PGPASSWORD=password
+          cat /opt/bitnami/postgresql/conf/postgresql.conf | grep shared_preload_libraries
+
+          # Set up pg_cron in main database
+          psql -Upostgres main << EOF
+          SHOW shared_preload_libraries;
+          CREATE EXTENSION IF NOT EXISTS pg_cron;
+          EOF
+
+          # Grant usage on the cron schema to both root and postgres users
+          psql -Upostgres -d main <<EOF
+          GRANT USAGE ON SCHEMA cron TO postgres;
+          GRANT USAGE ON SCHEMA cron TO root;
+          EOF
   volumePermissions:
     enabled: true
   persistence:
