@@ -43,9 +43,7 @@ func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
 		return HTTPInternalServerError("Unable to create token")
 	}
 
-	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"token": token.Key,
-	})
+	return ctx.JSON(http.StatusOK, token)
 }
 
 type ClusterAdminTokensRequestSerializer struct {
