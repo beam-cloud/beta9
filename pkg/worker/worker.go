@@ -387,8 +387,6 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 // TODO: might be better to just encapsulate this logic directly in the cedana client
 // as long as it has access to the containerInstances map, I think that's all it needs
 func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
-	instance, _ := s.containerInstances.Get(request.ContainerId)
-
 	// TODO: we need a reliable way to detect that the container is completely booted
 
 	log.Printf("<%s> - waiting for container to be ready for checkpoint\n", request.ContainerId)
