@@ -289,7 +289,6 @@ if __name__ == "__main__":
         "loglevel": "info",
         "post_fork": GunicornApplication.post_fork_initialize,
         "timeout": cfg.timeout,
-        # "preload_app": True,  # to share barrier between workers
     }
 
     GunicornApplication(Starlette(), options).run()
