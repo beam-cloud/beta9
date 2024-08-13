@@ -441,12 +441,6 @@ func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
 	}
 
 	log.Printf("<%s> - checkpoint done\n", request.ContainerId)
-
-	// Notify that the checkpoint was done
-	resp, err := http.Get(fmt.Sprintf("http://0.0.0.0:%d/checkpointed", instance.Port))
-	if err != nil || resp.StatusCode != 200 {
-		log.Printf("<%s> - failed to notify container of checkpoint: %v\n", request.ContainerId, err)
-	}
 }
 
 // Invoke a runc container using a predefined config spec

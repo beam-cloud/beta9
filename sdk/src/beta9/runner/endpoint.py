@@ -3,7 +3,7 @@ import logging
 import os
 import signal
 import traceback
-from multiprocessing import Barrier, Condition
+from multiprocessing import Value
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -33,8 +33,7 @@ from .common import end_task_and_send_callback
 
 
 CHECKPOINT_TIMEOUT = cfg.timeout  # XXX: not sure if this is the right value
-readyBarrier = Barrier(cfg.workers-1, timeout=CHECKPOINT_TIMEOUT)
-checkpointCondition = Condition()
+workersReady = Value("i", 0)
 
 
 class EndpointFilter(logging.Filter):
@@ -91,6 +90,10 @@ class GunicornApplication(BaseApplication):
 
             # Override the default starlette app
             worker.app.callable = asgi_app
+
+            with workersReady.get_lock():
+                workersReady.value += 1
+                print(f"Worker PID {worker.pid} is ready")
         except EOFError:
             return
         except BaseException:
@@ -187,24 +190,15 @@ class EndpointManager:
         # When checkpoint is enabled, we need to wait for all workers to be ready so they
         # can be checkpointed together.
 
-        if cfg.checkpoint_enabled:
-            readyBarrier.wait()
-
         @self.app.get("/health")
         async def health():
+            if cfg.checkpoint_enabled:
+                while True:
+                    with workersReady.get_lock():
+                        if workersReady.value == cfg.workers:
+                            break
+                        await asyncio.sleep(0.1)
             return Response(status_code=HTTPStatus.OK)
-
-        if cfg.checkpoint_enabled:
-            @self.app.get("/checkpointed")
-            async def checkpoint_done():
-                with checkpointCondition:
-                    checkpointCondition.notify_all()
-                return Response(status_code=HTTPStatus.OK)
-
-            print(f"Worker PID {worker.pid} waiting for checkpoint...")
-            with checkpointCondition:
-                checkpointCondition.wait()
-            print(f"Worker PID {worker.pid} proceeding after checkpoint...")
 
         @self.app.get("/")
         @self.app.post("/")
