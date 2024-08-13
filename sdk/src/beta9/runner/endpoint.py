@@ -3,7 +3,7 @@ import logging
 import os
 import signal
 import traceback
-from multiprocessing import Barrier, Lock
+from multiprocessing import Barrier, Condition
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -32,9 +32,9 @@ from ..type import LifeCycleMethod, TaskStatus
 from .common import end_task_and_send_callback
 
 
-CHECKPOINT_TIMEOUT = cfg.timeout  # not sure if this is the right value
-readyLock = Lock()
-checkpointBarrier = Barrier(cfg.workers, timeout=CHECKPOINT_TIMEOUT)
+CHECKPOINT_TIMEOUT = cfg.timeout  # XXX: not sure if this is the right value
+readyBarrier = Barrier(cfg.workers-1, timeout=CHECKPOINT_TIMEOUT)
+checkpointCondition = Condition()
 
 
 class EndpointFilter(logging.Filter):
@@ -185,29 +185,26 @@ class EndpointManager:
         self.on_start_value = asyncio.run(OnStartMethodHandler(worker).start())
 
         # When checkpoint is enabled, we need to wait for all workers to be ready so they
-        # can be checkpointed together. This is achieved by allowing only a lead worker
-        # to become ready first, while others wait on the lock. The client is expected to
-        # call /checkpoint_done endpoint to signal that the checkpoint was done.
-        # Once this worker handles a checkpoint_done request, it releases the lock and
-        # all workers proceed. The checkpoint barrier at the end again ensures that the
-        # first worker does not escape.
+        # can be checkpointed together.
 
         if cfg.checkpoint_enabled:
-            checkpointBarrier.wait()
-            readyLock.acquire()
+            readyBarrier.wait()
 
         @self.app.get("/health")
         async def health():
             return Response(status_code=HTTPStatus.OK)
 
         if cfg.checkpoint_enabled:
-            @self.app.get("/checkpoint_done")
+            @self.app.get("/checkpointed")
             async def checkpoint_done():
-                readyLock.release()
+                with checkpointCondition:
+                    checkpointCondition.notify_all()
                 return Response(status_code=HTTPStatus.OK)
 
-        if cfg.checkpoint_enabled:
-            checkpointBarrier.wait()
+            print(f"Worker PID {worker.pid} waiting for checkpoint...")
+            with checkpointCondition:
+                checkpointCondition.wait()
+            print(f"Worker PID {worker.pid} proceeding after checkpoint...")
 
         @self.app.get("/")
         @self.app.post("/")
@@ -298,7 +295,7 @@ if __name__ == "__main__":
         "loglevel": "info",
         "post_fork": GunicornApplication.post_fork_initialize,
         "timeout": cfg.timeout,
-        "preload_app": True,  # to share barrier between workers
+        # "preload_app": True,  # to share barrier between workers
     }
 
     GunicornApplication(Starlette(), options).run()

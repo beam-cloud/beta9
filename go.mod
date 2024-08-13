@@ -19,7 +19,7 @@ require (
 	github.com/beam-cloud/clip v0.0.0-20240606013643-20d5cfc38ac5
 	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
 	github.com/bsm/redislock v0.9.4
-	github.com/cedana/cedana v0.9.216-0.20240805235527-84f155f003da
+	github.com/cedana/cedana v0.9.218-0.20240812041128-c080f7d41efe
 	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/cloudevents/sdk-go/v2 v2.15.1
 	github.com/gofrs/uuid v4.4.0+incompatible
@@ -93,7 +93,7 @@ require (
 	github.com/bits-and-blooms/bitset v1.13.0 // indirect
 	github.com/briandowns/spinner v1.23.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/containerd/console v1.0.3 // indirect
+	github.com/containerd/console v1.0.4 // indirect
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.3 // indirect
 	github.com/cyphar/filepath-securejoin v0.2.5 // indirect
@@ -103,7 +103,7 @@ require (
 	github.com/dgraph-io/ristretto v0.1.1 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e // indirect
-	github.com/docker/docker v26.1.3+incompatible // indirect
+	github.com/docker/docker v26.1.4+incompatible // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dsnet/compress v0.0.2-0.20210315054119-f66993602bf5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -145,7 +145,7 @@ require (
 	github.com/jsimonetti/rtnetlink v1.4.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/karrick/godirwalk v1.17.0 // indirect
-	github.com/klauspost/compress v1.17.8 // indirect
+	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
 	github.com/knadh/koanf/maps v0.1.1 // indirect
 	github.com/kortschak/wol v0.0.0-20200729010619-da482cc4850a // indirect

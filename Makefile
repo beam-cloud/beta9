@@ -2,7 +2,7 @@ SHELL := /bin/bash
 tag := latest
 workerTag := latest
 runnerTag := latest
-cedanaTag := 0.9.217
+cedanaTag := 0.9.218
 
 setup:
 	bash bin/setup.sh
