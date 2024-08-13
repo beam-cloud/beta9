@@ -268,6 +268,12 @@ func (r *PostgresBackendRepository) ToggleToken(ctx context.Context, workspaceId
 	return token, nil
 }
 
+func (r *PostgresBackendRepository) DeleteToken(ctx context.Context, workspaceId uint, extTokenId string) error {
+	query := `DELETE FROM token WHERE external_id = $1 AND workspace_id = $2;`
+	_, err := r.client.ExecContext(ctx, query, extTokenId, workspaceId)
+	return err
+}
+
 func (r *PostgresBackendRepository) RevokeTokenByExternalId(ctx context.Context, externalId string) error {
 	updateQuery := `
     UPDATE token
