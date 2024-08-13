@@ -197,7 +197,7 @@ class EndpointManager:
                     with workersReady.get_lock():
                         if workersReady.value == cfg.workers:
                             break
-                        await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.1)
             return Response(status_code=HTTPStatus.OK)
 
         @self.app.get("/")
