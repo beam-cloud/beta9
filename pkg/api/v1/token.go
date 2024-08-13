@@ -26,7 +26,7 @@ func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, conf
 	g.POST("/:workspaceId", auth.WithWorkspaceAuth(group.CreateWorkspaceToken))
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListWorkspaceTokens))
 	g.POST("/:workspaceId/:tokenId/toggle", auth.WithWorkspaceAuth(group.ToggleWorkspaceToken))
-	g.DELETE("/:workspaceId/:tokenId", auth.WithWorkspaceAuth(group.ToggleWorkspaceToken))
+	g.DELETE("/:workspaceId/:tokenId", auth.WithWorkspaceAuth(group.DeleteWorkspaceToken))
 
 	return group
 }
