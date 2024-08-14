@@ -14,13 +14,14 @@ import (
 )
 
 const (
-	containerBridge string = "br0"
+	containerBridgeLinkName      string = "br0"
+	containerVethHostPrefix      string = "veth_h_"
+	containerVethContainerPrefix string = "veth_c_"
 )
 
 type ContainerNetworkManager struct {
 	containerId   string
 	namespace     string
-	bridge        string
 	vethHost      string
 	vethContainer string
 	containerPort int
@@ -28,17 +29,14 @@ type ContainerNetworkManager struct {
 }
 
 func NewContainerNetworkManager(containerId string, containerPort int) *ContainerNetworkManager {
-	truncatedId := containerId[len(containerId)-8:]
-
+	truncatedContainerId := containerId[len(containerId)-8:]
 	namespace := containerId
-	vethHost := fmt.Sprintf("veth_h_%s", truncatedId)
-	vethContainer := fmt.Sprintf("veth_c_%s", truncatedId)
-	bridge := containerBridge
+	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
+	vethContainer := fmt.Sprintf("%s%s", containerVethContainerPrefix, truncatedContainerId)
 
 	return &ContainerNetworkManager{
 		containerId:   containerId,
 		namespace:     namespace,
-		bridge:        bridge,
 		vethHost:      vethHost,
 		vethContainer: vethContainer,
 		containerPort: containerPort,
@@ -53,8 +51,6 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 	}
 	defer hostNS.Close()
 
-	nsPath := filepath.Join("/var/run/netns", m.namespace)
-
 	// Create a veth pair in the host namespace
 	err = createVethPair(m.vethHost, m.vethContainer)
 	if err != nil {
@@ -67,7 +63,7 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 		return err
 	}
 
-	if err := setupBridge(m.bridge, hostVeth); err != nil {
+	if err := setupBridge(containerBridgeLinkName, hostVeth); err != nil {
 		return err
 	}
 
@@ -90,7 +86,6 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 	if err != nil {
 		return err
 	}
-
 	err = netlink.LinkSetNsFd(containerVeth, int(newNs))
 	if err != nil {
 		return err
@@ -102,7 +97,6 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 		return err
 	}
 	defer netns.Set(hostNS) // Reset to the original namespace after setting up the container network
-
 	if err := configureContainerNetwork(containerVeth); err != nil {
 		return err
 	}
@@ -110,7 +104,7 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 	// Update the runc spec to use the new network namespace
 	spec.Linux.Namespaces = append(spec.Linux.Namespaces, specs.LinuxNamespace{
 		Type: specs.NetworkNamespace,
-		Path: nsPath,
+		Path: filepath.Join("/var/run/netns", m.namespace),
 	})
 
 	return nil
