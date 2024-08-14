@@ -153,6 +153,11 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 		return nil, err
 	}
 
+	bridge, err = netlink.LinkByName(bridgeName)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := netlink.LinkSetUp(bridge); err != nil {
 		return nil, err
 	}
