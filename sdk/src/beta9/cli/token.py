@@ -72,7 +72,6 @@ def list_tokens(
 
     table = Table(
         Column("ID"),
-        Column("External ID"),
         Column("Active"),
         Column("Reusable"),
         Column("Token Type"),
@@ -84,8 +83,7 @@ def list_tokens(
 
     for token in res.tokens:
         table.add_row(
-            str(token.id),
-            token.external_id,
+            token.token_id,
             "Yes" if token.active else "No",
             "Yes" if token.reusable else "No",
             token.token_type,
@@ -168,7 +166,7 @@ def delete_token(
 @extraclick.pass_service_client
 def toggle_token(
     service: ServiceClient,
-    token_id: int,
+    token_id: str,
 ):
     res: ToggleTokenResponse
     res = service.gateway.toggle_token(ToggleTokenRequest(external_id=token_id))
@@ -179,5 +177,7 @@ def toggle_token(
         token = res.token.to_dict(casing=Casing.SNAKE)
         if "active" not in token:
             token["active"] = False
-        terminal.success("Token toggled successfully.")
+        terminal.success(
+            f"Token {res.token.token_id} {"enabled" if  token["active"] else "disabled"}."
+        )
         terminal.print(token)

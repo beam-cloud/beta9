@@ -374,16 +374,14 @@ message DeleteMachineResponse {
 }
 
 message Token {
-  uint32 id = 1;
-  string external_id = 2;
-  string key = 3;
-  bool active = 4;
-  bool reusable = 5;
-  optional uint32 workspace_id = 6;
-  string token_type = 8;
-  google.protobuf.Timestamp created_at = 9;
-  google.protobuf.Timestamp updated_at = 10;
-  bool disabled_by_cluster_admin = 11;
+  string token_id = 1;
+  string key = 2;
+  bool active = 3;
+  bool reusable = 4;
+  optional uint32 workspace_id = 5;
+  string token_type = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
 }
 
 message ListTokensRequest {}
@@ -402,7 +400,7 @@ message CreateTokenResponse {
   Token token = 3;
 }
 
-message ToggleTokenRequest { string external_id = 1; }
+message ToggleTokenRequest { string token_id = 1; }
 
 message ToggleTokenResponse {
   bool ok = 1;
@@ -410,7 +408,7 @@ message ToggleTokenResponse {
   Token token = 3;
 }
 
-message DeleteTokenRequest { string external_id = 1; }
+message DeleteTokenRequest { string token_id = 1; }
 
 message DeleteTokenResponse {
   bool ok = 1;

@@ -32,16 +32,14 @@ func (gws *GatewayService) ListTokens(ctx context.Context, req *pb.ListTokensReq
 		updatedAt := *timestamppb.New(token.UpdatedAt)
 
 		t = append(t, &pb.Token{
-			Id:                     uint32(token.Id),
-			ExternalId:             token.ExternalId,
-			Key:                    token.Key,
-			Active:                 token.Active,
-			Reusable:               token.Reusable,
-			WorkspaceId:            &workspaceId,
-			TokenType:              token.TokenType,
-			CreatedAt:              timestamppb.New(token.CreatedAt),
-			UpdatedAt:              &updatedAt,
-			DisabledByClusterAdmin: token.DisabledByClusterAdmin,
+			TokenId:     token.ExternalId,
+			Key:         token.Key,
+			Active:      token.Active,
+			Reusable:    token.Reusable,
+			WorkspaceId: &workspaceId,
+			TokenType:   token.TokenType,
+			CreatedAt:   timestamppb.New(token.CreatedAt),
+			UpdatedAt:   &updatedAt,
 		})
 	}
 
@@ -68,16 +66,14 @@ func (gws *GatewayService) CreateToken(ctx context.Context, req *pb.CreateTokenR
 
 	return &pb.CreateTokenResponse{
 		Token: &pb.Token{
-			Id:                     uint32(token.Id),
-			ExternalId:             token.ExternalId,
-			Key:                    token.Key,
-			Active:                 token.Active,
-			Reusable:               token.Reusable,
-			WorkspaceId:            &workspaceId,
-			TokenType:              token.TokenType,
-			CreatedAt:              timestamppb.New(token.CreatedAt),
-			UpdatedAt:              &updatedAt,
-			DisabledByClusterAdmin: token.DisabledByClusterAdmin,
+			TokenId:     token.ExternalId,
+			Key:         token.Key,
+			Active:      token.Active,
+			Reusable:    token.Reusable,
+			WorkspaceId: &workspaceId,
+			TokenType:   token.TokenType,
+			CreatedAt:   timestamppb.New(token.CreatedAt),
+			UpdatedAt:   &updatedAt,
 		},
 		Ok: true,
 	}, nil
@@ -99,16 +95,14 @@ func (gws *GatewayService) ToggleToken(ctx context.Context, req *pb.ToggleTokenR
 
 	return &pb.ToggleTokenResponse{
 		Token: &pb.Token{
-			Id:                     uint32(token.Id),
-			ExternalId:             token.ExternalId,
-			Key:                    token.Key,
-			Active:                 token.Active,
-			Reusable:               token.Reusable,
-			WorkspaceId:            &workspaceId,
-			TokenType:              token.TokenType,
-			CreatedAt:              timestamppb.New(token.CreatedAt),
-			UpdatedAt:              &updatedAt,
-			DisabledByClusterAdmin: token.DisabledByClusterAdmin,
+			TokenId:     token.ExternalId,
+			Key:         token.Key,
+			Active:      token.Active,
+			Reusable:    token.Reusable,
+			WorkspaceId: &workspaceId,
+			TokenType:   token.TokenType,
+			CreatedAt:   timestamppb.New(token.CreatedAt),
+			UpdatedAt:   &updatedAt,
 		},
 		Ok: true,
 	}, nil

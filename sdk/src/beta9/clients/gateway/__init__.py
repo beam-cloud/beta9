@@ -438,16 +438,14 @@ class DeleteMachineResponse(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class Token(betterproto.Message):
-    id: int = betterproto.uint32_field(1)
-    external_id: str = betterproto.string_field(2)
-    key: str = betterproto.string_field(3)
-    active: bool = betterproto.bool_field(4)
-    reusable: bool = betterproto.bool_field(5)
-    workspace_id: Optional[int] = betterproto.uint32_field(6, optional=True)
-    token_type: str = betterproto.string_field(8)
-    created_at: datetime = betterproto.message_field(9)
-    updated_at: datetime = betterproto.message_field(10)
-    disabled_by_cluster_admin: bool = betterproto.bool_field(11)
+    token_id: str = betterproto.string_field(1)
+    key: str = betterproto.string_field(2)
+    active: bool = betterproto.bool_field(3)
+    reusable: bool = betterproto.bool_field(4)
+    workspace_id: Optional[int] = betterproto.uint32_field(5, optional=True)
+    token_type: str = betterproto.string_field(6)
+    created_at: datetime = betterproto.message_field(7)
+    updated_at: datetime = betterproto.message_field(8)
 
 
 @dataclass(eq=False, repr=False)
