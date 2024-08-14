@@ -1,11 +1,13 @@
 package worker
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -25,6 +27,7 @@ type ContainerNetworkManager struct {
 	namespace     string
 	vethHost      string
 	vethContainer string
+	defaultLink   netlink.Link
 	exposedPorts  map[int]int // Map of hostPort -> containerPort
 	ipt           *iptables.IPTables
 }
@@ -35,6 +38,11 @@ func NewContainerNetworkManager(containerId string) (*ContainerNetworkManager, e
 	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
 	vethContainer := fmt.Sprintf("%s%s", containerVethContainerPrefix, truncatedContainerId)
 
+	defaultLink, err := getDefaultInterface()
+	if err != nil {
+		return nil, err
+	}
+
 	ipt, err := iptables.New()
 	if err != nil {
 		return nil, err
@@ -42,6 +50,7 @@ func NewContainerNetworkManager(containerId string) (*ContainerNetworkManager, e
 
 	return &ContainerNetworkManager{
 		ipt:           ipt,
+		defaultLink:   defaultLink,
 		containerId:   containerId,
 		namespace:     namespace,
 		vethHost:      vethHost,
@@ -58,8 +67,7 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 	defer hostNS.Close()
 
 	// Create a veth pair in the host namespace
-	err = createVethPair(m.vethHost, m.vethContainer)
-	if err != nil {
+	if err = m.createVethPair(m.vethHost, m.vethContainer); err != nil {
 		return err
 	}
 
@@ -69,7 +77,7 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 		return err
 	}
 
-	if err := setupBridge(containerBridgeLinkName, hostVeth); err != nil {
+	if err := m.setupBridge(containerBridgeLinkName, hostVeth); err != nil {
 		return err
 	}
 
@@ -103,7 +111,7 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 		return err
 	}
 	defer netns.Set(hostNS) // Reset to the original namespace after setting up the container network
-	if err := configureContainerNetwork(containerVeth); err != nil {
+	if err := m.configureContainerNetwork(containerVeth); err != nil {
 		return err
 	}
 
@@ -116,9 +124,9 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 	return nil
 }
 
-func createVethPair(hostVethName, containerVethName string) error {
+func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {
 	link := &netlink.Veth{
-		LinkAttrs: netlink.LinkAttrs{Name: hostVethName},
+		LinkAttrs: netlink.LinkAttrs{Name: hostVethName, MTU: m.defaultLink.Attrs().MTU},
 		PeerName:  containerVethName,
 	}
 
@@ -129,9 +137,9 @@ func createVethPair(hostVethName, containerVethName string) error {
 	return nil
 }
 
-func setupBridge(bridgeName string, veth netlink.Link) error {
+func (m *ContainerNetworkManager) setupBridge(bridgeName string, veth netlink.Link) error {
 	bridge := &netlink.Bridge{
-		LinkAttrs: netlink.LinkAttrs{Name: bridgeName},
+		LinkAttrs: netlink.LinkAttrs{Name: bridgeName, MTU: m.defaultLink.Attrs().MTU},
 	}
 
 	if err := netlink.LinkAdd(bridge); err != nil && err != unix.EEXIST {
@@ -160,12 +168,31 @@ func setupBridge(bridgeName string, veth netlink.Link) error {
 		return err
 	}
 
+	// Allow containers to communicate with each other and the internet
+	// NAT outgoing traffic from the containers
+	if err := m.ipt.AppendUnique("nat", "POSTROUTING", "-s", "192.168.1.0/24", "-o", m.defaultLink.Attrs().Name, "-j", "MASQUERADE"); err != nil {
+		return err
+	}
+
+	// Allow forwarding of traffic from the bridge to the external network and back
+	if err := m.ipt.AppendUnique("filter", "FORWARD", "-i", bridgeName, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT"); err != nil {
+		return err
+	}
+
+	if err := m.ipt.AppendUnique("filter", "FORWARD", "-i", m.defaultLink.Attrs().Name, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
+		return err
+	}
+
+	// Allow forwarding of traffic between containers on the bridge
+	if err := m.ipt.AppendUnique("filter", "FORWARD", "-i", bridgeName, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func configureContainerNetwork(containerVeth netlink.Link) error {
-	// Set up the loopback interface
-	lo, err := netlink.LinkByName("lo")
+func (m *ContainerNetworkManager) configureContainerNetwork(containerVeth netlink.Link) error {
+	lo, err := netlink.LinkByName("lo") // Set up the loopback interface
 	if err != nil {
 		return fmt.Errorf("failed to get loopback interface: %v", err)
 	}
@@ -203,26 +230,8 @@ func (m *ContainerNetworkManager) TearDown() error {
 }
 
 func (m *ContainerNetworkManager) ExposePort(hostPort, containerPort int) error {
-	// Add NAT POSTROUTING rule
-	err := m.ipt.AppendUnique("nat", "POSTROUTING", "-s", "192.168.1.0/24", "-o", "br0", "-j", "MASQUERADE")
-	if err != nil {
-		return err
-	}
-
-	// Add FORWARD rule for bridge to vethHost
-	err = m.ipt.AppendUnique("filter", "FORWARD", "-i", "br0", "-o", m.vethHost, "-j", "ACCEPT")
-	if err != nil {
-		return err
-	}
-
-	// Add FORWARD rule for vethHost to bridge
-	err = m.ipt.AppendUnique("filter", "FORWARD", "-i", m.vethHost, "-o", "br0", "-j", "ACCEPT")
-	if err != nil {
-		return err
-	}
-
 	// Add NAT PREROUTING rule
-	err = m.ipt.AppendUnique("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("192.168.1.2:%d", containerPort))
+	err := m.ipt.AppendUnique("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("192.168.1.2:%d", containerPort))
 	if err != nil {
 		return err
 	}
@@ -263,6 +272,34 @@ func GetPodAddr() (string, error) {
 	}
 
 	return getIPFromEnv("POD_IP")
+}
+
+func getDefaultInterface() (netlink.Link, error) {
+	file, err := os.Open("/proc/net/route")
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	linkName := ""
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if fields[1] == "00000000" { // Destination of default route
+			linkName = fields[0]
+		}
+	}
+
+	if linkName == "" {
+		return nil, fmt.Errorf("default route not found")
+	}
+
+	link, err := netlink.LinkByName(linkName)
+	if err != nil {
+		return nil, err
+	}
+
+	return link, nil
 }
 
 // getIPFromEnv gets the IP address from an environment variable.
