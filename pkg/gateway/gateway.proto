@@ -386,21 +386,33 @@ message Token {
   bool disabled_by_cluster_admin = 11;
 }
 
-message ListTokensRequest { optional uint32 limit = 1; }
+message ListTokensRequest {}
 
 message ListTokensResponse {
-  repeated Token tokens = 1;
-  uint32 total = 2;
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Token tokens = 3;
 }
 
 message CreateTokenRequest {}
 
-message CreateTokenResponse { Token token = 1; }
+message CreateTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  Token token = 3;
+}
 
 message ToggleTokenRequest { string external_id = 1; }
 
-message ToggleTokenResponse { Token token = 1; }
+message ToggleTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  Token token = 3;
+}
 
 message DeleteTokenRequest { string external_id = 1; }
 
-message DeleteTokenResponse { bool success = 1; }
+message DeleteTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}

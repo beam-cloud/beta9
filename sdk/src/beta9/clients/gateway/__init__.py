@@ -452,13 +452,14 @@ class Token(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class ListTokensRequest(betterproto.Message):
-    limit: Optional[int] = betterproto.uint32_field(1, optional=True)
+    pass
 
 
 @dataclass(eq=False, repr=False)
 class ListTokensResponse(betterproto.Message):
-    tokens: List["Token"] = betterproto.message_field(1)
-    total: int = betterproto.uint32_field(2)
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    tokens: List["Token"] = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -468,7 +469,9 @@ class CreateTokenRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class CreateTokenResponse(betterproto.Message):
-    token: "Token" = betterproto.message_field(1)
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    token: "Token" = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -478,7 +481,9 @@ class ToggleTokenRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class ToggleTokenResponse(betterproto.Message):
-    token: "Token" = betterproto.message_field(1)
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    token: "Token" = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -488,7 +493,8 @@ class DeleteTokenRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class DeleteTokenResponse(betterproto.Message):
-    success: bool = betterproto.bool_field(1)
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
 
 
 class GatewayServiceStub(SyncServiceStub):

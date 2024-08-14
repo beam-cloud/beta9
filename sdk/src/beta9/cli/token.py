@@ -6,15 +6,26 @@ from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
-    ListDeploymentsRequest,
-    ListDeploymentsResponse,
+    CreateTokenRequest,
+    CreateTokenResponse,
+    DeleteTokenRequest,
+    DeleteTokenResponse,
+    ListTokensRequest,
+    ListTokensResponse,
+    ToggleTokenRequest,
+    ToggleTokenResponse,
 )
-from .extraclick import ClickManagementGroup
+from .extraclick import ClickCommonGroup, ClickManagementGroup
+
+
+@click.group(cls=ClickCommonGroup)
+def common(**_):
+    pass
 
 
 @click.group(
-    name="deployment",
-    help="Manage deployments.",
+    name="token",
+    help="Manage tokens.",
     cls=ClickManagementGroup,
 )
 def management():
@@ -23,72 +34,142 @@ def management():
 
 @management.command(
     name="list",
-    help="List all deployments.",
+    help="List all tokens.",
     epilog="""
     Examples:
 
-      # List the first 10 deployments
-      {cli_name} deployment list --limit 10
+      # List tokens
+      {cli_name} token list
 
-      # List deployments that are at version 9
-      {cli_name} deployment list --filter version=9
-
-      # List deployments that are not active
-      {cli_name} deployment list --filter active=false
-      {cli_name} deployment list --filter active=no
-
-      # List deployments and output in JSON format
-      {cli_name} deployment list --format json
+      # List tokens and output in JSON format
+      {cli_name} token list --format json
       \b
     """,
 )
 @click.option(
-    "--limit",
-    type=click.IntRange(1, 100),
-    default=20,
-    help="The number of deployments to fetch.",
+    "--format",
+    type=click.Choice(("table", "json")),
+    default="table",
+    show_default=True,
+    help="Change the format of the output.",
 )
 @extraclick.pass_service_client
-def list_deployments(
+def list_tokens(
     service: ServiceClient,
-    limit: int,
+    format: str,
 ):
-    
-    res: ListDeploymentsResponse
-    res = service.gateway.list_deployments(ListDeploymentsRequest(filter, limit))
+    res: ListTokensResponse
+    res = service.gateway.list_tokens(ListTokensRequest())
 
     if not res.ok:
         terminal.error(res.err_msg)
+        return
 
     if format == "json":
-        deployments = [d.to_dict(casing=Casing.SNAKE) for d in res.deployments]  # type:ignore
-        terminal.print_json(deployments)
+        tokens = [t.to_dict(casing=Casing.SNAKE) for t in res.tokens]  # type:ignore
+        terminal.print_json(tokens)
         return
 
     table = Table(
         Column("ID"),
-        Column("Name"),
+        Column("External ID"),
         Column("Active"),
-        Column("Version", justify="right"),
+        Column("Reusable"),
+        Column("Token Type"),
         Column("Created At"),
         Column("Updated At"),
-        Column("Stub Name"),
-        Column("Workspace Name"),
+        Column("Workspace ID"),
         box=box.SIMPLE,
     )
 
-    for deployment in res.deployments:
+    for token in res.tokens:
         table.add_row(
-            deployment.id,
-            deployment.name,
-            "Yes" if deployment.active else "No",
-            str(deployment.version),
-            terminal.humanize_date(deployment.created_at),
-            terminal.humanize_date(deployment.updated_at),
-            deployment.stub_name,
-            deployment.workspace_name,
+            str(token.id),
+            token.external_id,
+            "Yes" if token.active else "No",
+            "Yes" if token.reusable else "No",
+            token.token_type,
+            terminal.humanize_date(token.created_at),
+            terminal.humanize_date(token.updated_at),
+            str(token.workspace_id) if token.workspace_id else "N/A",
         )
 
     table.add_section()
-    table.add_row(f"[bold]{len(res.deployments)} items")
+    table.add_row(f"[bold]{len(res.tokens)} items")
     terminal.print(table)
+
+
+@management.command(
+    name="create",
+    help="Create a new token.",
+    epilog="""
+    Examples:
+
+      # Create a new token. 
+      {cli_name} token create
+
+      \b
+    """,
+)
+@extraclick.pass_service_client
+def create_token(
+    service: ServiceClient,
+):
+    res: CreateTokenResponse
+    res = service.gateway.create_token(CreateTokenRequest())
+
+    if not res.ok:
+        terminal.error(res.err_msg)
+    else:
+        terminal.success("Token created successfully.")
+        terminal.print(res.token.to_dict(casing=Casing.SNAKE))
+
+
+@management.command(
+    name="delete",
+    help="Delete a token.",
+    epilog="""
+    Examples:
+
+      # Delete a token. 
+      {cli_name} token delete 49554ce9-5861-4834-899b-ec301e5d8534
+
+      \b
+    """,
+)
+@extraclick.pass_service_client
+@click.argument("token_id", type=click.STRING)
+def delete_token(
+    service: ServiceClient,
+    token_id: str,
+):
+    res: DeleteTokenResponse
+    res = service.gateway.delete_token(DeleteTokenRequest(external_id=token_id))
+
+    if not res.ok:
+        terminal.error(res.err_msg)
+    else:
+        terminal.success("Deleted token.")
+
+
+@management.command(
+    name="toggle",
+    help="Toggle a token's active status.",
+)
+@click.argument("token_id", type=click.STRING)
+@extraclick.pass_service_client
+def toggle_token(
+    service: ServiceClient,
+    token_id: int,
+):
+    res: ToggleTokenResponse
+    res = service.gateway.toggle_token(ToggleTokenRequest(external_id=token_id))
+
+    if not res.ok:
+        terminal.error(res.err_msg)
+    else:
+        token = res.token.to_dict(casing=Casing.SNAKE)
+        if "active" not in token:
+            token["active"] = False
+        terminal.success("Token toggled successfully.")
+        terminal.print(token)
