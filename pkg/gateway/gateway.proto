@@ -34,7 +34,8 @@ service GatewayService {
   // Deployments
   rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
   rpc StopDeployment(StopDeploymentRequest) returns (StopDeploymentResponse);
-  rpc DeleteDeployment(DeleteDeploymentRequest) returns (DeleteDeploymentResponse);
+  rpc DeleteDeployment(DeleteDeploymentRequest)
+      returns (DeleteDeploymentResponse);
 
   // Pools
   rpc ListPools(ListPoolsRequest) returns (ListPoolsResponse);
@@ -43,6 +44,12 @@ service GatewayService {
   rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse);
   rpc CreateMachine(CreateMachineRequest) returns (CreateMachineResponse);
   rpc DeleteMachine(DeleteMachineRequest) returns (DeleteMachineResponse);
+
+  // Tokens
+  rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
+  rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
+  rpc ToggleToken(ToggleTokenRequest) returns (ToggleTokenResponse);
+  rpc DeleteToken(DeleteTokenRequest) returns (DeleteTokenResponse);
 }
 
 message AuthorizeRequest {}
@@ -362,6 +369,48 @@ message DeleteMachineRequest {
 }
 
 message DeleteMachineResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message Token {
+  string token_id = 1;
+  string key = 2;
+  bool active = 3;
+  bool reusable = 4;
+  optional uint32 workspace_id = 5;
+  string token_type = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message ListTokensRequest {}
+
+message ListTokensResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Token tokens = 3;
+}
+
+message CreateTokenRequest {}
+
+message CreateTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  Token token = 3;
+}
+
+message ToggleTokenRequest { string token_id = 1; }
+
+message ToggleTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  Token token = 3;
+}
+
+message DeleteTokenRequest { string token_id = 1; }
+
+message DeleteTokenResponse {
   bool ok = 1;
   string err_msg = 2;
 }

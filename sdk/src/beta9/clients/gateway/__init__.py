@@ -436,6 +436,65 @@ class DeleteMachineResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
 
 
+@dataclass(eq=False, repr=False)
+class Token(betterproto.Message):
+    token_id: str = betterproto.string_field(1)
+    key: str = betterproto.string_field(2)
+    active: bool = betterproto.bool_field(3)
+    reusable: bool = betterproto.bool_field(4)
+    workspace_id: Optional[int] = betterproto.uint32_field(5, optional=True)
+    token_type: str = betterproto.string_field(6)
+    created_at: datetime = betterproto.message_field(7)
+    updated_at: datetime = betterproto.message_field(8)
+
+
+@dataclass(eq=False, repr=False)
+class ListTokensRequest(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class ListTokensResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    tokens: List["Token"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class CreateTokenRequest(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class CreateTokenResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    token: "Token" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class ToggleTokenRequest(betterproto.Message):
+    token_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class ToggleTokenResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    token: "Token" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteTokenRequest(betterproto.Message):
+    token_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteTokenResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
 class GatewayServiceStub(SyncServiceStub):
     def authorize(self, authorize_request: "AuthorizeRequest") -> "AuthorizeResponse":
         return self._unary_unary(
@@ -615,3 +674,39 @@ class GatewayServiceStub(SyncServiceStub):
             DeleteMachineRequest,
             DeleteMachineResponse,
         )(delete_machine_request)
+
+    def list_tokens(
+        self, list_tokens_request: "ListTokensRequest"
+    ) -> "ListTokensResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListTokens",
+            ListTokensRequest,
+            ListTokensResponse,
+        )(list_tokens_request)
+
+    def create_token(
+        self, create_token_request: "CreateTokenRequest"
+    ) -> "CreateTokenResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CreateToken",
+            CreateTokenRequest,
+            CreateTokenResponse,
+        )(create_token_request)
+
+    def toggle_token(
+        self, toggle_token_request: "ToggleTokenRequest"
+    ) -> "ToggleTokenResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ToggleToken",
+            ToggleTokenRequest,
+            ToggleTokenResponse,
+        )(toggle_token_request)
+
+    def delete_token(
+        self, delete_token_request: "DeleteTokenRequest"
+    ) -> "DeleteTokenResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DeleteToken",
+            DeleteTokenRequest,
+            DeleteTokenResponse,
+        )(delete_token_request)
