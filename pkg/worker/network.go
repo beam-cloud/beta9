@@ -21,6 +21,9 @@ const (
 	containerBridgeLinkName      string = "br0"
 	containerVethHostPrefix      string = "veth_h_"
 	containerVethContainerPrefix string = "veth_c_"
+	containerSubnet              string = "192.168.1.0/24"
+	containerGatewayAddress      string = "192.168.1.1"
+	containerBridgeAddress       string = "192.168.1.1"
 )
 
 type ContainerNetworkManager struct {
@@ -106,7 +109,7 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) er
 		return err
 	}
 	defer netns.Set(hostNS) // Reset to the original namespace after setting up the container network
-	if err := m.configureContainerNetwork(containerVeth); err != nil {
+	if err := m.configureContainerNetwork(containerId, containerVeth); err != nil {
 		return err
 	}
 
@@ -147,7 +150,7 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string, veth netlink.Li
 
 	bridgeIP := &netlink.Addr{
 		IPNet: &net.IPNet{
-			IP:   net.ParseIP("192.168.1.1"),
+			IP:   net.ParseIP(containerBridgeAddress),
 			Mask: net.CIDRMask(24, 32),
 		},
 	}
@@ -165,7 +168,7 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string, veth netlink.Li
 
 	// Allow containers to communicate with each other and the internet
 	// NAT outgoing traffic from the containers
-	if err := m.ipt.AppendUnique("nat", "POSTROUTING", "-s", "192.168.1.0/24", "-o", m.defaultLink.Attrs().Name, "-j", "MASQUERADE"); err != nil {
+	if err := m.ipt.AppendUnique("nat", "POSTROUTING", "-s", containerSubnet, "-o", m.defaultLink.Attrs().Name, "-j", "MASQUERADE"); err != nil {
 		return err
 	}
 
@@ -186,14 +189,14 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string, veth netlink.Li
 	return nil
 }
 
-func (m *ContainerNetworkManager) configureContainerNetwork(containerVeth netlink.Link) error {
+func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link) error {
 	lo, err := netlink.LinkByName("lo") // Set up the loopback interface
 	if err != nil {
-		return fmt.Errorf("failed to get loopback interface: %v", err)
+		return err
 	}
 
 	if err := netlink.LinkSetUp(lo); err != nil {
-		return fmt.Errorf("failed to set up loopback interface: %v", err)
+		return err
 	}
 
 	// Set up the veth interface
@@ -201,11 +204,38 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerVeth netlin
 		return err
 	}
 
-	// Assign an IP address to the veth interface
-	ipAddr := &netlink.Addr{IPNet: &net.IPNet{
-		IP:   net.ParseIP("192.168.1.2"),
-		Mask: net.CIDRMask(24, 32),
-	}}
+	// See what ip addresses are already allocated
+	allocatedIpAddresses := map[string]bool{}
+	m.containerIps.Range(func(key string, value string) bool {
+		allocatedIpAddresses[value] = true
+		return true
+	})
+
+	_, ipNet, _ := net.ParseCIDR(containerSubnet)
+	var ipAddr *netlink.Addr = nil
+
+	for ip := ipNet.IP.Mask(ipNet.Mask); ipNet.Contains(ip); ip = nextIP(ip, 1) {
+		ipStr := ip.String()
+
+		// Skip the gateway address (i.e. 192.168.1.1)
+		if ipStr == containerBridgeAddress {
+			continue
+		}
+
+		if _, allocated := allocatedIpAddresses[ipStr]; !allocated && !ip.Equal(ipNet.IP) {
+			ipAddr = &netlink.Addr{
+				IPNet: &net.IPNet{
+					IP:   ip,
+					Mask: ipNet.Mask,
+				},
+			}
+			fmt.Printf("Assigned IP: %s\n", ipAddr.IPNet.IP.String())
+			break
+		}
+	}
+	if ipAddr == nil {
+		return errors.New("unable to assign IP address to container")
+	}
 
 	if err := netlink.AddrAdd(containerVeth, ipAddr); err != nil {
 		return err
@@ -214,10 +244,25 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerVeth netlin
 	// Add a default route
 	defaultRoute := &netlink.Route{
 		LinkIndex: containerVeth.Attrs().Index,
-		Gw:        net.ParseIP("192.168.1.1"),
+		Gw:        net.ParseIP(containerGatewayAddress),
 	}
 
+	// Store allocated IP address
+	m.containerIps.Set(containerId, ipAddr.String())
+
 	return netlink.RouteAdd(defaultRoute)
+}
+
+// Taken from: https://gist.github.com/udhos/b468fbfd376aa0b655b6b0c539a88c03
+func nextIP(ip net.IP, inc uint) net.IP {
+	i := ip.To4()
+	v := uint(i[0])<<24 + uint(i[1])<<16 + uint(i[2])<<8 + uint(i[3])
+	v += inc
+	v3 := byte(v & 0xFF)
+	v2 := byte((v >> 8) & 0xFF)
+	v1 := byte((v >> 16) & 0xFF)
+	v0 := byte((v >> 24) & 0xFF)
+	return net.IPv4(v0, v1, v2, v3)
 }
 
 func (m *ContainerNetworkManager) TearDown() error {
