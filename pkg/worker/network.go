@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/coreos/go-iptables/iptables"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
@@ -24,24 +25,29 @@ type ContainerNetworkManager struct {
 	namespace     string
 	vethHost      string
 	vethContainer string
-	containerPort int
 	exposedPorts  map[int]int // Map of hostPort -> containerPort
+	ipt           *iptables.IPTables
 }
 
-func NewContainerNetworkManager(containerId string, containerPort int) *ContainerNetworkManager {
+func NewContainerNetworkManager(containerId string) (*ContainerNetworkManager, error) {
 	truncatedContainerId := containerId[len(containerId)-8:]
 	namespace := containerId
 	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
 	vethContainer := fmt.Sprintf("%s%s", containerVethContainerPrefix, truncatedContainerId)
 
+	ipt, err := iptables.New()
+	if err != nil {
+		return nil, err
+	}
+
 	return &ContainerNetworkManager{
+		ipt:           ipt,
 		containerId:   containerId,
 		namespace:     namespace,
 		vethHost:      vethHost,
 		vethContainer: vethContainer,
-		containerPort: containerPort,
 		exposedPorts:  make(map[int]int),
-	}
+	}, nil
 }
 
 func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
@@ -171,8 +177,39 @@ func (m *ContainerNetworkManager) TearDown() error {
 	return nil
 }
 
-func (m *ContainerNetworkManager) ExposePort(hostPort int) error {
-	m.exposedPorts[hostPort] = m.containerPort
+func (m *ContainerNetworkManager) ExposePort(hostPort, containerPort int) error {
+	// Add NAT POSTROUTING rule
+	err := m.ipt.AppendUnique("nat", "POSTROUTING", "-s", "192.168.1.0/24", "-o", "br0", "-j", "MASQUERADE")
+	if err != nil {
+		return fmt.Errorf("failed to add POSTROUTING rule: %w", err)
+	}
+
+	// Add FORWARD rule for bridge to vethHost
+	err = m.ipt.AppendUnique("filter", "FORWARD", "-i", "br0", "-o", m.vethHost, "-j", "ACCEPT")
+	if err != nil {
+		return fmt.Errorf("failed to add FORWARD rule (bridge to vethHost): %w", err)
+	}
+
+	// Add FORWARD rule for vethHost to bridge
+	err = m.ipt.AppendUnique("filter", "FORWARD", "-i", m.vethHost, "-o", "br0", "-j", "ACCEPT")
+	if err != nil {
+		return fmt.Errorf("failed to add FORWARD rule (vethHost to bridge): %w", err)
+	}
+
+	// Add NAT PREROUTING rule
+	err = m.ipt.AppendUnique("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("192.168.1.2:%d", containerPort))
+	if err != nil {
+		return fmt.Errorf("failed to add PREROUTING rule: %w", err)
+	}
+
+	// Add FORWARD rule for the DNAT'd traffic
+	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", "192.168.1.2", "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
+	if err != nil {
+		return fmt.Errorf("failed to add FORWARD rule for DNAT'd traffic: %w", err)
+	}
+
+	// Store the mapping of exposed ports
+	m.exposedPorts[hostPort] = containerPort
 	return nil
 }
 

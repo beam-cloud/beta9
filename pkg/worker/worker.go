@@ -524,7 +524,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	// Create overlayfs for container
 	overlay := s.createOverlay(request, bundlePath)
 
-	// Add the container instance to the runningContainers map
+	// Create network manager for setting up container network
+	networkManager, err := NewContainerNetworkManager(containerId)
+	if err != nil {
+		log.Printf("<%s> failed to create container network manager: %v", containerId, err)
+		containerErr = err
+		return
+	}
+
 	containerInstance := &ContainerInstance{
 		Id:         containerId,
 		StubId:     request.StubId,
@@ -540,7 +547,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 			}
 		}),
 		LogBuffer:      common.NewLogBuffer(),
-		NetworkManager: NewContainerNetworkManager(containerId, opts.BindPort),
+		NetworkManager: networkManager,
 	}
 	s.containerInstances.Set(containerId, containerInstance)
 
@@ -577,17 +584,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}()
 
 	// Setup container overlay filesystem
-	err := containerInstance.Overlay.Setup()
+	err = containerInstance.Overlay.Setup()
 	if err != nil {
 		log.Printf("<%s> failed to setup overlay: %v", containerId, err)
 		containerErr = err
 		return
 	}
 	defer containerInstance.Overlay.Cleanup()
-
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
-	// Setup container network namespace / device
+	// Setup container network namespace / devices
 	err = containerInstance.NetworkManager.Setup(spec)
 	if err != nil {
 		log.Printf("<%s> failed to setup container network: %v", containerId, err)
@@ -596,7 +602,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 
 	// Expose the bind port
-	containerInstance.NetworkManager.ExposePort(opts.BindPort)
+	containerInstance.NetworkManager.ExposePort(opts.BindPort, opts.BindPort)
 
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
