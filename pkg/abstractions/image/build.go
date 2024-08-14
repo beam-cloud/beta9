@@ -327,6 +327,9 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 	if len(opts.ExistingImageCreds) > 0 && opts.ExistingImageUri != "" {
 		token, err := GetRegistryToken(opts)
 		if err != nil {
+			if outputChan != nil {
+				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+			}
 			return err
 		}
 		opts.BaseImageCreds = token
