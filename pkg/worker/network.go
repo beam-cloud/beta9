@@ -3,7 +3,6 @@ package worker
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -50,7 +49,7 @@ func NewContainerNetworkManager(containerId string, containerPort int) *Containe
 func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 	hostNS, err := netns.Get()
 	if err != nil {
-		log.Fatalf("Failed to get host namespace: %v", err)
+		return err
 	}
 	defer hostNS.Close()
 
@@ -72,12 +71,15 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 		return err
 	}
 
+	// Create a new namespace for the container
 	newNs, err := netns.NewNamed(m.namespace)
 	if err != nil {
 		return err
 	}
 	defer newNs.Close()
 
+	// By default, creating a new namespace automatically sets the current namespace
+	// to that newly created namespace. So we have to move back to host namespace.
 	err = netns.Set(hostNS)
 	if err != nil {
 		return err
@@ -94,12 +96,6 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 		return err
 	}
 
-	// Update the spec to use the new network namespace
-	spec.Linux.Namespaces = append(spec.Linux.Namespaces, specs.LinuxNamespace{
-		Type: specs.NetworkNamespace,
-		Path: nsPath,
-	})
-
 	// Configure the network inside the container's namespace
 	err = netns.Set(newNs)
 	if err != nil {
@@ -110,6 +106,12 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 	if err := configureContainerNetwork(containerVeth); err != nil {
 		return err
 	}
+
+	// Update the runc spec to use the new network namespace
+	spec.Linux.Namespaces = append(spec.Linux.Namespaces, specs.LinuxNamespace{
+		Type: specs.NetworkNamespace,
+		Path: nsPath,
+	})
 
 	return nil
 }
@@ -205,31 +207,6 @@ func GetPodAddr() (string, error) {
 	}
 
 	return getIPFromEnv("POD_IP")
-}
-
-// getIPFromInterface gets the IP address from a given interface.
-// Returns an error if the interface doesn't exist or no IP is found.
-func getIPFromInterface(ifname string) (string, error) {
-	iface, err := net.InterfaceByName(ifname)
-	if err != nil {
-		return "", err
-	}
-
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return "", err
-	}
-
-	if len(addrs) < 1 {
-		return "", fmt.Errorf("no ip addresses found on <%s> interface", ifname)
-	}
-
-	ip, _, err := net.ParseCIDR(addrs[0].String())
-	if err != nil {
-		return "", err
-	}
-
-	return ip.String(), nil
 }
 
 // getIPFromEnv gets the IP address from an environment variable.
