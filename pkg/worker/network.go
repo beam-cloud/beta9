@@ -236,7 +236,6 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 					Mask: ipNet.Mask,
 				},
 			}
-			fmt.Printf("Assigned IP: %s\n", ipAddr.IPNet.IP.String())
 			break
 		}
 	}
