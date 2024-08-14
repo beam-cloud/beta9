@@ -81,7 +81,7 @@ func (gws *GatewayService) CreateToken(ctx context.Context, req *pb.CreateTokenR
 
 func (gws *GatewayService) ToggleToken(ctx context.Context, req *pb.ToggleTokenRequest) (*pb.ToggleTokenResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	token, err := gws.backendRepo.ToggleToken(ctx, authInfo.Workspace.Id, req.ExternalId)
+	token, err := gws.backendRepo.ToggleToken(ctx, authInfo.Workspace.Id, req.TokenId)
 	if err != nil {
 		return &pb.ToggleTokenResponse{
 			Token:  &pb.Token{},
@@ -110,7 +110,7 @@ func (gws *GatewayService) ToggleToken(ctx context.Context, req *pb.ToggleTokenR
 
 func (gws *GatewayService) DeleteToken(ctx context.Context, req *pb.DeleteTokenRequest) (*pb.DeleteTokenResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	err := gws.backendRepo.DeleteToken(ctx, authInfo.Workspace.Id, req.ExternalId)
+	err := gws.backendRepo.DeleteToken(ctx, authInfo.Workspace.Id, req.TokenId)
 	if err != nil {
 		return &pb.DeleteTokenResponse{
 			Ok:     false,

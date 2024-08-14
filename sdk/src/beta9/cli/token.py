@@ -142,7 +142,7 @@ def delete_token(
     token_id: str,
 ):
     res: DeleteTokenResponse
-    res = service.gateway.delete_token(DeleteTokenRequest(external_id=token_id))
+    res = service.gateway.delete_token(DeleteTokenRequest(token_id=token_id))
 
     if not res.ok:
         terminal.error(res.err_msg)
@@ -169,7 +169,7 @@ def toggle_token(
     token_id: str,
 ):
     res: ToggleTokenResponse
-    res = service.gateway.toggle_token(ToggleTokenRequest(external_id=token_id))
+    res = service.gateway.toggle_token(ToggleTokenRequest(token_id=token_id))
 
     if not res.ok:
         terminal.error(res.err_msg)

@@ -474,7 +474,7 @@ class CreateTokenResponse(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class ToggleTokenRequest(betterproto.Message):
-    external_id: str = betterproto.string_field(1)
+    token_id: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
@@ -486,7 +486,7 @@ class ToggleTokenResponse(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class DeleteTokenRequest(betterproto.Message):
-    external_id: str = betterproto.string_field(1)
+    token_id: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
