@@ -142,19 +142,44 @@ func setupBridge(bridgeName string, veth netlink.Link) error {
 		return err
 	}
 
+	bridgeIP := &netlink.Addr{
+		IPNet: &net.IPNet{
+			IP:   net.ParseIP("192.168.1.1"),
+			Mask: net.CIDRMask(24, 32),
+		},
+	}
+	if err := netlink.AddrAdd(bridge, bridgeIP); err != nil {
+		return err
+	}
+
 	if err := netlink.LinkSetMaster(veth, bridge); err != nil {
 		return err
 	}
 
-	return netlink.LinkSetUp(veth)
+	if err := netlink.LinkSetUp(veth); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func configureContainerNetwork(containerVeth netlink.Link) error {
+	// Set up the loopback interface
+	lo, err := netlink.LinkByName("lo")
+	if err != nil {
+		return fmt.Errorf("failed to get loopback interface: %v", err)
+	}
+
+	if err := netlink.LinkSetUp(lo); err != nil {
+		return fmt.Errorf("failed to set up loopback interface: %v", err)
+	}
+
+	// Set up the veth interface
 	if err := netlink.LinkSetUp(containerVeth); err != nil {
 		return err
 	}
 
-	// Assign an IP address to the device
+	// Assign an IP address to the veth interface
 	ipAddr := &netlink.Addr{IPNet: &net.IPNet{
 		IP:   net.ParseIP("192.168.1.2"),
 		Mask: net.CIDRMask(24, 32),
@@ -181,31 +206,31 @@ func (m *ContainerNetworkManager) ExposePort(hostPort, containerPort int) error 
 	// Add NAT POSTROUTING rule
 	err := m.ipt.AppendUnique("nat", "POSTROUTING", "-s", "192.168.1.0/24", "-o", "br0", "-j", "MASQUERADE")
 	if err != nil {
-		return fmt.Errorf("failed to add POSTROUTING rule: %w", err)
+		return err
 	}
 
 	// Add FORWARD rule for bridge to vethHost
 	err = m.ipt.AppendUnique("filter", "FORWARD", "-i", "br0", "-o", m.vethHost, "-j", "ACCEPT")
 	if err != nil {
-		return fmt.Errorf("failed to add FORWARD rule (bridge to vethHost): %w", err)
+		return err
 	}
 
 	// Add FORWARD rule for vethHost to bridge
 	err = m.ipt.AppendUnique("filter", "FORWARD", "-i", m.vethHost, "-o", "br0", "-j", "ACCEPT")
 	if err != nil {
-		return fmt.Errorf("failed to add FORWARD rule (vethHost to bridge): %w", err)
+		return err
 	}
 
 	// Add NAT PREROUTING rule
 	err = m.ipt.AppendUnique("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("192.168.1.2:%d", containerPort))
 	if err != nil {
-		return fmt.Errorf("failed to add PREROUTING rule: %w", err)
+		return err
 	}
 
 	// Add FORWARD rule for the DNAT'd traffic
 	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", "192.168.1.2", "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
 	if err != nil {
-		return fmt.Errorf("failed to add FORWARD rule for DNAT'd traffic: %w", err)
+		return err
 	}
 
 	// Store the mapping of exposed ports
