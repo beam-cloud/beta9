@@ -14,9 +14,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const (
+	containerBridge string = "br0"
+)
+
 type ContainerNetworkManager struct {
 	containerId   string
 	namespace     string
+	bridge        string
 	vethHost      string
 	vethContainer string
 	containerPort int
@@ -24,13 +29,17 @@ type ContainerNetworkManager struct {
 }
 
 func NewContainerNetworkManager(containerId string, containerPort int) *ContainerNetworkManager {
-	namespace := "testns" // fmt.Sprintf("ns_%s", containerId)
-	vethHost := "veth_host"
-	vethContainer := "veth_container"
+	truncatedId := containerId[len(containerId)-8:]
+
+	namespace := containerId
+	vethHost := fmt.Sprintf("veth_h_%s", truncatedId)
+	vethContainer := fmt.Sprintf("veth_c_%s", truncatedId)
+	bridge := containerBridge
 
 	return &ContainerNetworkManager{
 		containerId:   containerId,
 		namespace:     namespace,
+		bridge:        bridge,
 		vethHost:      vethHost,
 		vethContainer: vethContainer,
 		containerPort: containerPort,
@@ -39,38 +48,50 @@ func NewContainerNetworkManager(containerId string, containerPort int) *Containe
 }
 
 func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
-	// Create a new network namespace for the container
+	hostNS, err := netns.Get()
+	if err != nil {
+		log.Fatalf("Failed to get host namespace: %v", err)
+	}
+	defer hostNS.Close()
+
 	nsPath := filepath.Join("/var/run/netns", m.namespace)
 
-	// Save the current (host) namespace
-	hostNs, err := netns.Get()
-	if err != nil {
-		return fmt.Errorf("failed to get host namespace: %v", err)
-	}
-	defer hostNs.Close()
-
 	// Create a veth pair in the host namespace
-	hostVeth, containerVeth, err := createVethPair(m.vethHost, m.vethContainer)
+	err = createVethPair(m.vethHost, m.vethContainer)
 	if err != nil {
-		return fmt.Errorf("failed to create veth pair: %v", err)
+		return err
 	}
 
 	// Set up the bridge in the host namespace and add the host side of the veth pair to it
-	bridgeName := "br0" // or any name you prefer
-	if err := setupBridge(bridgeName, hostVeth); err != nil {
-		return fmt.Errorf("failed to setup bridge: %v", err)
+	hostVeth, err := netlink.LinkByName(m.vethHost)
+	if err != nil {
+		return err
+	}
+
+	if err := setupBridge(m.bridge, hostVeth); err != nil {
+		return err
 	}
 
 	newNs, err := netns.NewNamed(m.namespace)
 	if err != nil {
-		return fmt.Errorf("failed to create network namespace: %v", err)
+		return err
 	}
 	defer newNs.Close()
 
+	err = netns.Set(hostNS)
+	if err != nil {
+		return err
+	}
+
 	// Move the container side of the veth pair into the new namespace
-	log.Printf("Moving interface %s to namespace %s", containerVeth.Attrs().Name, m.namespace)
-	if err := setLinkNamespace(containerVeth, newNs); err != nil {
-		return fmt.Errorf("failed to assign veth to namespace: %v", err)
+	containerVeth, err := netlink.LinkByName(m.vethContainer)
+	if err != nil {
+		return err
+	}
+
+	err = netlink.LinkSetNsFd(containerVeth, int(newNs))
+	if err != nil {
+		return err
 	}
 
 	// Update the spec to use the new network namespace
@@ -82,38 +103,31 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 	// Configure the network inside the container's namespace
 	err = netns.Set(newNs)
 	if err != nil {
-		return fmt.Errorf("failed to set namespace: %v", err)
+		return err
 	}
-	defer netns.Set(netns.None()) // Reset to the original namespace after configuration
+	defer netns.Set(hostNS) // Reset to the original namespace after setting up the container network
 
-	// if err := configureContainerNetwork(containerVeth); err != nil {
-	// 	return fmt.Errorf("failed to configure container network: %v", err)
-	// }
+	if err := configureContainerNetwork(containerVeth); err != nil {
+		return err
+	}
 
 	return nil
 }
 
-func createVethPair(hostVethName, containerVethName string) (*netlink.Veth, netlink.Link, error) {
-	hostVeth := &netlink.Veth{
+func createVethPair(hostVethName, containerVethName string) error {
+	link := &netlink.Veth{
 		LinkAttrs: netlink.LinkAttrs{Name: hostVethName},
 		PeerName:  containerVethName,
 	}
 
-	if err := netlink.LinkAdd(hostVeth); err != nil {
-		return nil, nil, err
+	if err := netlink.LinkAdd(link); err != nil {
+		return err
 	}
 
-	containerVeth, err := netlink.LinkByName(containerVethName)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get container veth: %v", err)
-	}
-
-	log.Println(containerVeth)
-
-	return hostVeth, containerVeth, nil
+	return nil
 }
 
-func setupBridge(bridgeName string, veth *netlink.Veth) error {
+func setupBridge(bridgeName string, veth netlink.Link) error {
 	bridge := &netlink.Bridge{
 		LinkAttrs: netlink.LinkAttrs{Name: bridgeName},
 	}
@@ -130,16 +144,15 @@ func setupBridge(bridgeName string, veth *netlink.Veth) error {
 		return err
 	}
 
-	return netlink.LinkSetUp(veth) // Bring up the host side of the veth pair
+	return netlink.LinkSetUp(veth)
 }
 
-func configureContainerNetwork(containerVeth *netlink.Veth) error {
-	// Set up the container's side of the veth pair
+func configureContainerNetwork(containerVeth netlink.Link) error {
 	if err := netlink.LinkSetUp(containerVeth); err != nil {
 		return err
 	}
 
-	// Assign an IP address (example 192.168.1.2/24)
+	// Assign an IP address to the device
 	ipAddr := &netlink.Addr{IPNet: &net.IPNet{
 		IP:   net.ParseIP("192.168.1.2"),
 		Mask: net.CIDRMask(24, 32),
@@ -152,18 +165,13 @@ func configureContainerNetwork(containerVeth *netlink.Veth) error {
 	// Add a default route
 	defaultRoute := &netlink.Route{
 		LinkIndex: containerVeth.Attrs().Index,
-		Gw:        net.ParseIP("192.168.1.1"), // Example gateway IP
+		Gw:        net.ParseIP("192.168.1.1"),
 	}
 
 	return netlink.RouteAdd(defaultRoute)
 }
 
-func setLinkNamespace(link netlink.Link, netns netns.NsHandle) error {
-	return netlink.LinkSetNsFd(link, int(netns))
-}
-
 func (m *ContainerNetworkManager) TearDown() error {
-	// Implement the tear down logic if needed
 	return nil
 }
 
