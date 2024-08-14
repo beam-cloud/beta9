@@ -178,6 +178,6 @@ def toggle_token(
         if "active" not in token:
             token["active"] = False
         terminal.success(
-            f"Token {res.token.token_id} {"enabled" if  token["active"] else "disabled"}."
+            f"Token {res.token.token_id} {'enabled' if  token['active'] else 'disabled'}."
         )
         terminal.print(token)
