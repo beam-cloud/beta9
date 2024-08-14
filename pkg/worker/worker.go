@@ -30,48 +30,48 @@ const (
 )
 
 type Worker struct {
-	cpuLimit             int64
-	memoryLimit          int64
-	gpuType              string
-	gpuCount             uint32
-	podAddr              string
-	podHostName          string
-	imageMountPath       string
-	runcHandle           runc.Runc
-	runcServer           *RunCServer
-	containerCudaManager GPUManager
-	redisClient          *common.RedisClient
-	imageClient          *ImageClient
-	workerId             string
-	eventBus             *common.EventBus
-	containerInstances   *common.SafeMap[*ContainerInstance]
-	containerLock        sync.Mutex
-	containerWg          sync.WaitGroup
-	containerRepo        repo.ContainerRepository
-	containerLogger      *ContainerLogger
-	workerMetrics        *WorkerMetrics
-	completedRequests    chan *types.ContainerRequest
-	stopContainerChan    chan stopContainerEvent
-	workerRepo           repo.WorkerRepository
-	eventRepo            repo.EventRepository
-	storage              storage.Storage
-	ctx                  context.Context
-	cancel               func()
-	config               types.AppConfig
+	cpuLimit                int64
+	memoryLimit             int64
+	gpuType                 string
+	gpuCount                uint32
+	podAddr                 string
+	podHostName             string
+	imageMountPath          string
+	runcHandle              runc.Runc
+	runcServer              *RunCServer
+	containerNetworkManager *ContainerNetworkManager
+	containerCudaManager    GPUManager
+	redisClient             *common.RedisClient
+	imageClient             *ImageClient
+	workerId                string
+	eventBus                *common.EventBus
+	containerInstances      *common.SafeMap[*ContainerInstance]
+	containerLock           sync.Mutex
+	containerWg             sync.WaitGroup
+	containerRepo           repo.ContainerRepository
+	containerLogger         *ContainerLogger
+	workerMetrics           *WorkerMetrics
+	completedRequests       chan *types.ContainerRequest
+	stopContainerChan       chan stopContainerEvent
+	workerRepo              repo.WorkerRepository
+	eventRepo               repo.EventRepository
+	storage                 storage.Storage
+	ctx                     context.Context
+	cancel                  func()
+	config                  types.AppConfig
 }
 
 type ContainerInstance struct {
-	Id             string
-	StubId         string
-	BundlePath     string
-	Overlay        *common.ContainerOverlay
-	Spec           *specs.Spec
-	Err            error
-	ExitCode       int
-	Port           int
-	OutputWriter   *common.OutputWriter
-	LogBuffer      *common.LogBuffer
-	NetworkManager *ContainerNetworkManager
+	Id           string
+	StubId       string
+	BundlePath   string
+	Overlay      *common.ContainerOverlay
+	Spec         *specs.Spec
+	Err          error
+	ExitCode     int
+	Port         int
+	OutputWriter *common.OutputWriter
+	LogBuffer    *common.LogBuffer
 }
 
 type ContainerOptions struct {
@@ -163,28 +163,34 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	containerNetworkManager, err := NewContainerNetworkManager()
+	if err != nil {
+		return nil, err
+	}
+
 	return &Worker{
-		ctx:                  ctx,
-		cancel:               cancel,
-		config:               config,
-		imageMountPath:       getImageMountPath(workerId),
-		cpuLimit:             cpuLimit,
-		memoryLimit:          memoryLimit,
-		gpuType:              gpuType,
-		gpuCount:             uint32(gpuCount),
-		runcHandle:           runc.Runc{},
-		runcServer:           runcServer,
-		containerCudaManager: NewContainerNvidiaManager(uint32(gpuCount)),
-		redisClient:          redisClient,
-		podAddr:              podAddr,
-		imageClient:          imageClient,
-		podHostName:          podHostName,
-		eventBus:             nil,
-		workerId:             workerId,
-		containerInstances:   containerInstances,
-		containerLock:        sync.Mutex{},
-		containerWg:          sync.WaitGroup{},
-		containerRepo:        containerRepo,
+		ctx:                     ctx,
+		cancel:                  cancel,
+		config:                  config,
+		imageMountPath:          getImageMountPath(workerId),
+		cpuLimit:                cpuLimit,
+		memoryLimit:             memoryLimit,
+		gpuType:                 gpuType,
+		gpuCount:                uint32(gpuCount),
+		runcHandle:              runc.Runc{},
+		runcServer:              runcServer,
+		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
+		containerNetworkManager: containerNetworkManager,
+		redisClient:             redisClient,
+		podAddr:                 podAddr,
+		imageClient:             imageClient,
+		podHostName:             podHostName,
+		eventBus:                nil,
+		workerId:                workerId,
+		containerInstances:      containerInstances,
+		containerLock:           sync.Mutex{},
+		containerWg:             sync.WaitGroup{},
+		containerRepo:           containerRepo,
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
 		},
@@ -524,14 +530,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	// Create overlayfs for container
 	overlay := s.createOverlay(request, bundlePath)
 
-	// Create network manager for setting up container network
-	networkManager, err := NewContainerNetworkManager(containerId)
-	if err != nil {
-		log.Printf("<%s> failed to create container network manager: %v", containerId, err)
-		containerErr = err
-		return
-	}
-
 	containerInstance := &ContainerInstance{
 		Id:         containerId,
 		StubId:     request.StubId,
@@ -546,8 +544,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 				Success: false,
 			}
 		}),
-		LogBuffer:      common.NewLogBuffer(),
-		NetworkManager: networkManager,
+		LogBuffer: common.NewLogBuffer(),
 	}
 	s.containerInstances.Set(containerId, containerInstance)
 
@@ -584,7 +581,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}()
 
 	// Setup container overlay filesystem
-	err = containerInstance.Overlay.Setup()
+	err := containerInstance.Overlay.Setup()
 	if err != nil {
 		log.Printf("<%s> failed to setup overlay: %v", containerId, err)
 		containerErr = err
@@ -594,7 +591,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
 	// Setup container network namespace / devices
-	err = containerInstance.NetworkManager.Setup(spec)
+	err = s.containerNetworkManager.Setup(containerId, spec)
 	if err != nil {
 		log.Printf("<%s> failed to setup container network: %v", containerId, err)
 		containerErr = err
@@ -602,7 +599,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 
 	// Expose the bind port
-	containerInstance.NetworkManager.ExposePort(opts.BindPort, opts.BindPort)
+	s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
 
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")

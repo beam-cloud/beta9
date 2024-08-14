@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/vishvananda/netlink"
@@ -23,21 +24,13 @@ const (
 )
 
 type ContainerNetworkManager struct {
-	containerId   string
-	namespace     string
-	vethHost      string
-	vethContainer string
-	defaultLink   netlink.Link
-	exposedPorts  map[int]int // Map of hostPort -> containerPort
-	ipt           *iptables.IPTables
+	defaultLink  netlink.Link
+	ipt          *iptables.IPTables
+	containerIps *common.SafeMap[string]
+	exposedPorts map[int]int // Map of hostPort -> containerPort
 }
 
-func NewContainerNetworkManager(containerId string) (*ContainerNetworkManager, error) {
-	truncatedContainerId := containerId[len(containerId)-8:]
-	namespace := containerId
-	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
-	vethContainer := fmt.Sprintf("%s%s", containerVethContainerPrefix, truncatedContainerId)
-
+func NewContainerNetworkManager() (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
 		return nil, err
@@ -49,17 +42,19 @@ func NewContainerNetworkManager(containerId string) (*ContainerNetworkManager, e
 	}
 
 	return &ContainerNetworkManager{
-		ipt:           ipt,
-		defaultLink:   defaultLink,
-		containerId:   containerId,
-		namespace:     namespace,
-		vethHost:      vethHost,
-		vethContainer: vethContainer,
-		exposedPorts:  make(map[int]int),
+		ipt:          ipt,
+		defaultLink:  defaultLink,
+		exposedPorts: make(map[int]int),
+		containerIps: common.NewSafeMap[string](),
 	}, nil
 }
 
-func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
+func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) error {
+	truncatedContainerId := containerId[len(containerId)-8:]
+	namespace := containerId
+	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
+	vethContainer := fmt.Sprintf("%s%s", containerVethContainerPrefix, truncatedContainerId)
+
 	hostNS, err := netns.Get()
 	if err != nil {
 		return err
@@ -67,12 +62,12 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 	defer hostNS.Close()
 
 	// Create a veth pair in the host namespace
-	if err = m.createVethPair(m.vethHost, m.vethContainer); err != nil {
+	if err = m.createVethPair(vethHost, vethContainer); err != nil {
 		return err
 	}
 
 	// Set up the bridge in the host namespace and add the host side of the veth pair to it
-	hostVeth, err := netlink.LinkByName(m.vethHost)
+	hostVeth, err := netlink.LinkByName(vethHost)
 	if err != nil {
 		return err
 	}
@@ -82,7 +77,7 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 	}
 
 	// Create a new namespace for the container
-	newNs, err := netns.NewNamed(m.namespace)
+	newNs, err := netns.NewNamed(namespace)
 	if err != nil {
 		return err
 	}
@@ -96,7 +91,7 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 	}
 
 	// Move the container side of the veth pair into the new namespace
-	containerVeth, err := netlink.LinkByName(m.vethContainer)
+	containerVeth, err := netlink.LinkByName(vethContainer)
 	if err != nil {
 		return err
 	}
@@ -118,7 +113,7 @@ func (m *ContainerNetworkManager) Setup(spec *specs.Spec) error {
 	// Update the runc spec to use the new network namespace
 	spec.Linux.Namespaces = append(spec.Linux.Namespaces, specs.LinuxNamespace{
 		Type: specs.NetworkNamespace,
-		Path: filepath.Join("/var/run/netns", m.namespace),
+		Path: filepath.Join("/var/run/netns", namespace),
 	})
 
 	return nil
@@ -229,15 +224,20 @@ func (m *ContainerNetworkManager) TearDown() error {
 	return nil
 }
 
-func (m *ContainerNetworkManager) ExposePort(hostPort, containerPort int) error {
+func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, containerPort int) error {
+	containerIp, exists := m.containerIps.Get(containerId)
+	if !exists {
+		return errors.New("container ip not found")
+	}
+
 	// Add NAT PREROUTING rule
-	err := m.ipt.AppendUnique("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("192.168.1.2:%d", containerPort))
+	err := m.ipt.AppendUnique("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
 	if err != nil {
 		return err
 	}
 
 	// Add FORWARD rule for the DNAT'd traffic
-	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", "192.168.1.2", "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
+	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
 	if err != nil {
 		return err
 	}
