@@ -155,6 +155,14 @@ def delete_token(
 @management.command(
     name="toggle",
     help="Toggle a token's active status.",
+    epilog="""
+    Examples:
+
+      # Toggle a token
+      {cli_name} token toggle 49554ce9-5861-4834-899b-ec301e5d8534
+
+      \b
+    """,
 )
 @click.argument("token_id", type=click.STRING)
 @extraclick.pass_service_client
