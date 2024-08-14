@@ -29,8 +29,8 @@ const (
 type ContainerNetworkManager struct {
 	defaultLink  netlink.Link
 	ipt          *iptables.IPTables
-	containerIps *common.SafeMap[string]
-	exposedPorts map[int]int // Map of hostPort -> containerPort
+	containerIps *common.SafeMap[string] // Map of containerId -> allocated IP address
+	exposedPorts map[int]int             // Map of hostPort -> containerPort
 }
 
 func NewContainerNetworkManager() (*ContainerNetworkManager, error) {
@@ -58,6 +58,7 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) er
 	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
 	vethContainer := fmt.Sprintf("%s%s", containerVethContainerPrefix, truncatedContainerId)
 
+	// Store default network namespace for later
 	hostNS, err := netns.Get()
 	if err != nil {
 		return err
@@ -74,8 +75,17 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) er
 	if err != nil {
 		return err
 	}
+	bridge, err := m.setupBridge(containerBridgeLinkName)
+	if err != nil {
+		return err
+	}
 
-	if err := m.setupBridge(containerBridgeLinkName, hostVeth); err != nil {
+	// Associate new veth on the host side with the bridge device
+	if err := netlink.LinkSetMaster(hostVeth, bridge); err != nil {
+		return err
+	}
+
+	if err := netlink.LinkSetUp(hostVeth); err != nil {
 		return err
 	}
 
@@ -103,23 +113,20 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) er
 		return err
 	}
 
-	// Configure the network inside the container's namespace
-	err = netns.Set(newNs)
-	if err != nil {
-		return err
-	}
-	defer netns.Set(hostNS) // Reset to the original namespace after setting up the container network
-	if err := m.configureContainerNetwork(containerId, containerVeth); err != nil {
-		return err
-	}
-
 	// Update the runc spec to use the new network namespace
 	spec.Linux.Namespaces = append(spec.Linux.Namespaces, specs.LinuxNamespace{
 		Type: specs.NetworkNamespace,
 		Path: filepath.Join("/var/run/netns", namespace),
 	})
 
-	return nil
+	// Configure the network inside the container's namespace
+	err = netns.Set(newNs)
+	if err != nil {
+		return err
+	}
+	defer netns.Set(hostNS) // Reset to the original namespace after setting up the container network
+
+	return m.configureContainerNetwork(containerId, containerVeth)
 }
 
 func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {
@@ -128,24 +135,26 @@ func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName
 		PeerName:  containerVethName,
 	}
 
-	if err := netlink.LinkAdd(link); err != nil {
-		return err
-	}
-
-	return nil
+	return netlink.LinkAdd(link)
 }
 
-func (m *ContainerNetworkManager) setupBridge(bridgeName string, veth netlink.Link) error {
-	bridge := &netlink.Bridge{
+func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, error) {
+	bridge, err := netlink.LinkByName(bridgeName)
+	if err == nil {
+		// Bridge is already set up, do nothing
+		return bridge, nil
+	}
+
+	bridge = &netlink.Bridge{
 		LinkAttrs: netlink.LinkAttrs{Name: bridgeName, MTU: m.defaultLink.Attrs().MTU},
 	}
 
 	if err := netlink.LinkAdd(bridge); err != nil && err != unix.EEXIST {
-		return err
+		return nil, err
 	}
 
 	if err := netlink.LinkSetUp(bridge); err != nil {
-		return err
+		return nil, err
 	}
 
 	bridgeIP := &netlink.Addr{
@@ -155,42 +164,34 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string, veth netlink.Li
 		},
 	}
 	if err := netlink.AddrAdd(bridge, bridgeIP); err != nil {
-		return err
-	}
-
-	if err := netlink.LinkSetMaster(veth, bridge); err != nil {
-		return err
-	}
-
-	if err := netlink.LinkSetUp(veth); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Allow containers to communicate with each other and the internet
 	// NAT outgoing traffic from the containers
 	if err := m.ipt.AppendUnique("nat", "POSTROUTING", "-s", containerSubnet, "-o", m.defaultLink.Attrs().Name, "-j", "MASQUERADE"); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Allow forwarding of traffic from the bridge to the external network and back
 	if err := m.ipt.AppendUnique("filter", "FORWARD", "-i", bridgeName, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT"); err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := m.ipt.AppendUnique("filter", "FORWARD", "-i", m.defaultLink.Attrs().Name, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Allow forwarding of traffic between containers on the bridge
 	if err := m.ipt.AppendUnique("filter", "FORWARD", "-i", bridgeName, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return bridge, err
 }
 
 func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link) error {
-	lo, err := netlink.LinkByName("lo") // Set up the loopback interface
+	lo, err := netlink.LinkByName("lo")
 	if err != nil {
 		return err
 	}
@@ -204,13 +205,14 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return err
 	}
 
-	// See what ip addresses are already allocated
+	// See what IP addresses are already allocated
 	allocatedIpAddresses := map[string]bool{}
 	m.containerIps.Range(func(key string, value string) bool {
 		allocatedIpAddresses[value] = true
 		return true
 	})
 
+	// Choose a few address that lies in containerSubnet
 	_, ipNet, _ := net.ParseCIDR(containerSubnet)
 	var ipAddr *netlink.Addr = nil
 
@@ -248,7 +250,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	}
 
 	// Store allocated IP address
-	m.containerIps.Set(containerId, ipAddr.String())
+	m.containerIps.Set(containerId, ipAddr.IP.String())
 
 	return netlink.RouteAdd(defaultRoute)
 }
@@ -319,6 +321,7 @@ func GetPodAddr() (string, error) {
 	return getIPFromEnv("POD_IP")
 }
 
+// getDefaultInterface returns the link that goes to the internet
 func getDefaultInterface() (netlink.Link, error) {
 	file, err := os.Open("/proc/net/route")
 	if err != nil {
