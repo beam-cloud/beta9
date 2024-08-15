@@ -273,7 +273,6 @@ func nextIP(ip net.IP, inc uint) net.IP {
 
 func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	truncatedContainerId := containerId[len(containerId)-8:]
-	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
 	vethContainer := fmt.Sprintf("%s%s", containerVethContainerPrefix, truncatedContainerId)
 	namespace := containerId
 
@@ -290,7 +289,6 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		return err
 	}
 	defer containerNS.Close()
-
 	if err := netns.Set(containerNS); err != nil {
 		return err
 	}
@@ -309,22 +307,7 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	}
 
 	// Switch back to host namespace
-	if err := netns.Set(hostNS); err != nil {
-		return err
-	}
-
-	// Delete host side veth
-	hostVeth, err := netlink.LinkByName(vethHost)
-	if err != nil {
-		return err
-	}
-
-	if err := netlink.LinkSetDown(hostVeth); err != nil {
-		return err
-	}
-	if err := netlink.LinkDel(hostVeth); err != nil {
-		return err
-	}
+	defer netns.Set(hostNS)
 
 	// Remove container namespace
 	if err := netns.DeleteNamed(namespace); err != nil {
@@ -332,7 +315,6 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	}
 
 	m.containerIps.Delete(containerId)
-
 	return nil
 }
 
