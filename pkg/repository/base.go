@@ -69,6 +69,7 @@ type BackendRepository interface {
 	ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error)
 	UpdateTokenAsClusterAdmin(ctx context.Context, tokenId string, disabled bool) error
 	ToggleToken(ctx context.Context, workspaceId uint, extTokenId string) (types.Token, error)
+	DeleteToken(ctx context.Context, workspaceId uint, extTokenId string) error
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
 	GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error)
 	GetTaskByWorkspace(ctx context.Context, externalId string, workspace *types.Workspace) (*types.TaskWithRelated, error)

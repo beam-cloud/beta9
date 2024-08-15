@@ -40,6 +40,10 @@ const (
 	GatewayService_ListMachines_FullMethodName         = "/gateway.GatewayService/ListMachines"
 	GatewayService_CreateMachine_FullMethodName        = "/gateway.GatewayService/CreateMachine"
 	GatewayService_DeleteMachine_FullMethodName        = "/gateway.GatewayService/DeleteMachine"
+	GatewayService_ListTokens_FullMethodName           = "/gateway.GatewayService/ListTokens"
+	GatewayService_CreateToken_FullMethodName          = "/gateway.GatewayService/CreateToken"
+	GatewayService_ToggleToken_FullMethodName          = "/gateway.GatewayService/ToggleToken"
+	GatewayService_DeleteToken_FullMethodName          = "/gateway.GatewayService/DeleteToken"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -75,6 +79,11 @@ type GatewayServiceClient interface {
 	ListMachines(ctx context.Context, in *ListMachinesRequest, opts ...grpc.CallOption) (*ListMachinesResponse, error)
 	CreateMachine(ctx context.Context, in *CreateMachineRequest, opts ...grpc.CallOption) (*CreateMachineResponse, error)
 	DeleteMachine(ctx context.Context, in *DeleteMachineRequest, opts ...grpc.CallOption) (*DeleteMachineResponse, error)
+	// Tokens
+	ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error)
+	CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error)
+	ToggleToken(ctx context.Context, in *ToggleTokenRequest, opts ...grpc.CallOption) (*ToggleTokenResponse, error)
+	DeleteToken(ctx context.Context, in *DeleteTokenRequest, opts ...grpc.CallOption) (*DeleteTokenResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -299,6 +308,42 @@ func (c *gatewayServiceClient) DeleteMachine(ctx context.Context, in *DeleteMach
 	return out, nil
 }
 
+func (c *gatewayServiceClient) ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error) {
+	out := new(ListTokensResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListTokens_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error) {
+	out := new(CreateTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreateToken_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ToggleToken(ctx context.Context, in *ToggleTokenRequest, opts ...grpc.CallOption) (*ToggleTokenResponse, error) {
+	out := new(ToggleTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ToggleToken_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) DeleteToken(ctx context.Context, in *DeleteTokenRequest, opts ...grpc.CallOption) (*DeleteTokenResponse, error) {
+	out := new(DeleteTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_DeleteToken_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
@@ -332,6 +377,11 @@ type GatewayServiceServer interface {
 	ListMachines(context.Context, *ListMachinesRequest) (*ListMachinesResponse, error)
 	CreateMachine(context.Context, *CreateMachineRequest) (*CreateMachineResponse, error)
 	DeleteMachine(context.Context, *DeleteMachineRequest) (*DeleteMachineResponse, error)
+	// Tokens
+	ListTokens(context.Context, *ListTokensRequest) (*ListTokensResponse, error)
+	CreateToken(context.Context, *CreateTokenRequest) (*CreateTokenResponse, error)
+	ToggleToken(context.Context, *ToggleTokenRequest) (*ToggleTokenResponse, error)
+	DeleteToken(context.Context, *DeleteTokenRequest) (*DeleteTokenResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -401,6 +451,18 @@ func (UnimplementedGatewayServiceServer) CreateMachine(context.Context, *CreateM
 }
 func (UnimplementedGatewayServiceServer) DeleteMachine(context.Context, *DeleteMachineRequest) (*DeleteMachineResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteMachine not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListTokens(context.Context, *ListTokensRequest) (*ListTokensResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTokens not implemented")
+}
+func (UnimplementedGatewayServiceServer) CreateToken(context.Context, *CreateTokenRequest) (*CreateTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateToken not implemented")
+}
+func (UnimplementedGatewayServiceServer) ToggleToken(context.Context, *ToggleTokenRequest) (*ToggleTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ToggleToken not implemented")
+}
+func (UnimplementedGatewayServiceServer) DeleteToken(context.Context, *DeleteTokenRequest) (*DeleteTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteToken not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -801,6 +863,78 @@ func _GatewayService_DeleteMachine_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_ListTokens_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTokensRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListTokens(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListTokens_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListTokens(ctx, req.(*ListTokensRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_CreateToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CreateToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CreateToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CreateToken(ctx, req.(*CreateTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ToggleToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ToggleTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ToggleToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ToggleToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ToggleToken(ctx, req.(*ToggleTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_DeleteToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).DeleteToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_DeleteToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).DeleteToken(ctx, req.(*DeleteTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -887,6 +1021,22 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteMachine",
 			Handler:    _GatewayService_DeleteMachine_Handler,
+		},
+		{
+			MethodName: "ListTokens",
+			Handler:    _GatewayService_ListTokens_Handler,
+		},
+		{
+			MethodName: "CreateToken",
+			Handler:    _GatewayService_CreateToken_Handler,
+		},
+		{
+			MethodName: "ToggleToken",
+			Handler:    _GatewayService_ToggleToken_Handler,
+		},
+		{
+			MethodName: "DeleteToken",
+			Handler:    _GatewayService_DeleteToken_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
