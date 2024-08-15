@@ -330,13 +330,10 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		return err
 	}
 
-	m.containerIps.Delete(containerId)
-
 	// Clean up iptables rules related to the container
 	exposedPorts, exists := m.exposedPorts.Get(containerId)
 	if exists {
 		containerIp, _ := m.containerIps.Get(containerId)
-
 		for hostPort, containerPort := range exposedPorts {
 			// Remove NAT PREROUTING rule
 			m.ipt.Delete("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
@@ -347,6 +344,8 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 
 		m.exposedPorts.Delete(containerId)
 	}
+
+	m.containerIps.Delete(containerId)
 
 	return nil
 }
@@ -380,7 +379,7 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 
 	exposedPorts[hostPort] = containerPort
 
-	// Store the mapping of exposed ports
+	// Store updated map of exposed ports
 	m.exposedPorts.Set(containerId, exposedPorts)
 	return nil
 }
