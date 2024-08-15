@@ -463,3 +463,75 @@ func (r *WorkerRedisRepository) SetImagePullLock(workerId, imageId string) error
 func (r *WorkerRedisRepository) RemoveImagePullLock(workerId, imageId string) error {
 	return r.lock.Release(common.RedisKeys.WorkerImageLock(workerId, imageId))
 }
+
+func (r *WorkerRedisRepository) GetContainerIps(workerId string) ([]string, error) {
+	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
+	worker, err := r.getWorkerFromKey(stateKey)
+	if err != nil {
+		return nil, err
+	}
+
+	namespace := worker.Id
+	if worker.MachineId != "" {
+		namespace = worker.MachineId
+	}
+
+	containerIps, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.WorkerNetworkIpIndex(namespace)).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	return containerIps, nil
+}
+
+func (r *WorkerRedisRepository) SetContainerIp(workerId string, containerId, containerIp string) error {
+	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
+	worker, err := r.getWorkerFromKey(stateKey)
+	if err != nil {
+		return err
+	}
+
+	namespace := worker.Id
+	if worker.MachineId != "" {
+		namespace = worker.MachineId
+	}
+
+	err = r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerNetworkLock(namespace), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	if err != nil {
+		return err
+	}
+	defer r.lock.Release(common.RedisKeys.WorkerNetworkLock(namespace))
+
+	err = r.rdb.SAdd(context.TODO(), common.RedisKeys.WorkerNetworkIpIndex(namespace), containerIp).Err()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *WorkerRedisRepository) RemoveContainerIp(workerId string, containerId, containerIp string) error {
+	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
+	worker, err := r.getWorkerFromKey(stateKey)
+	if err != nil {
+		return err
+	}
+
+	namespace := worker.Id
+	if worker.MachineId != "" {
+		namespace = worker.MachineId
+	}
+
+	err = r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerNetworkLock(namespace), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	if err != nil {
+		return err
+	}
+	defer r.lock.Release(common.RedisKeys.WorkerNetworkLock(namespace))
+
+	err = r.rdb.SRem(context.TODO(), common.RedisKeys.WorkerNetworkIpIndex(namespace), containerIp).Err()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

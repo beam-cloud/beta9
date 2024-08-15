@@ -156,7 +156,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	containerNetworkManager, err := NewContainerNetworkManager()
+	containerNetworkManager, err := NewContainerNetworkManager(workerId, workerRepo)
 	if err != nil {
 		return nil, err
 	}

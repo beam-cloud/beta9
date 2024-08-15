@@ -33,6 +33,8 @@ var (
 	workerPrefix                 string = "worker"
 	workerImageLock              string = "worker:%s:image:%s:lock"
 	workerContainerResourceUsage string = "worker:%s:container:%s:resource_usage"
+	workerNetworkLock            string = "worker:network:%s:lock"
+	workerNetworkIpIndex         string = "worker:network:%s:ip_index"
 )
 
 var (
@@ -169,6 +171,14 @@ func (rk *redisKeys) WorkerContainerResourceUsage(workerId string, containerId s
 
 func (rk *redisKeys) WorkerImageLock(workerId string, imageId string) string {
 	return fmt.Sprintf(workerImageLock, workerId, imageId)
+}
+
+func (rk *redisKeys) WorkerNetworkLock(namespace string) string {
+	return fmt.Sprintf(workerNetworkLock, namespace)
+}
+
+func (rk *redisKeys) WorkerNetworkIpIndex(namespace string) string {
+	return fmt.Sprintf(workerNetworkIpIndex, namespace)
 }
 
 // Task keys

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"sync"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/vishvananda/netlink"
@@ -31,12 +33,13 @@ const (
 type ContainerNetworkManager struct {
 	defaultLink  netlink.Link
 	ipt          *iptables.IPTables
-	containerIps *common.SafeMap[string]      // Map of containerId -> allocated IP address
 	exposedPorts *common.SafeMap[map[int]int] // Map of containerId -> exposed ports
 	mu           sync.Mutex
+	workerId     string
+	workerRepo   repository.WorkerRepository
 }
 
-func NewContainerNetworkManager() (*ContainerNetworkManager, error) {
+func NewContainerNetworkManager(workerId string, workerRepo repository.WorkerRepository) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
 		return nil, err
@@ -51,8 +54,9 @@ func NewContainerNetworkManager() (*ContainerNetworkManager, error) {
 		ipt:          ipt,
 		defaultLink:  defaultLink,
 		exposedPorts: common.NewSafeMap[map[int]int](),
-		containerIps: common.NewSafeMap[string](),
 		mu:           sync.Mutex{},
+		workerId:     workerId,
+		workerRepo:   workerRepo,
 	}, nil
 }
 
@@ -221,11 +225,17 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	}
 
 	// See what IP addresses are already allocated
-	allocatedIpAddresses := map[string]bool{}
-	m.containerIps.Range(func(key string, value string) bool {
-		allocatedIpAddresses[value] = true
-		return true
-	})
+	allocatedIpAddresses, err := m.workerRepo.GetContainerIps(m.workerId)
+	if err != nil {
+		return err
+	}
+
+	allocatedSet := make(map[string]bool, len(allocatedIpAddresses))
+	for _, ip := range allocatedIpAddresses {
+		allocatedSet[ip] = true
+	}
+
+	log.Println("allocated set: ", allocatedSet)
 
 	// Choose a few address that lies in containerSubnet
 	_, ipNet, _ := net.ParseCIDR(containerSubnet)
@@ -235,22 +245,29 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		ipStr := ip.String()
 
 		// Skip the gateway address (i.e. 192.168.1.1)
-		if ipStr == containerBridgeAddress {
+		if ipStr == containerBridgeAddress || ipStr == ipNet.IP.String() {
 			continue
 		}
 
-		if _, allocated := allocatedIpAddresses[ipStr]; !allocated && !ip.Equal(ipNet.IP) {
-			ipAddr = &netlink.Addr{
-				IPNet: &net.IPNet{
-					IP:   ip,
-					Mask: ipNet.Mask,
-				},
-			}
-			break
+		if _, allocated := allocatedSet[ipStr]; allocated {
+			continue
 		}
+
+		ipAddr = &netlink.Addr{
+			IPNet: &net.IPNet{
+				IP:   ip,
+				Mask: ipNet.Mask,
+			},
+		}
+		break
 	}
 	if ipAddr == nil {
 		return errors.New("unable to assign IP address to container")
+	}
+
+	// Store allocated IP address
+	if err := m.workerRepo.SetContainerIp(m.workerId, containerId, ipAddr.IP.String()); err != nil {
+		return err
 	}
 
 	if err := netlink.AddrAdd(containerVeth, ipAddr); err != nil {
@@ -262,9 +279,6 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		LinkIndex: containerVeth.Attrs().Index,
 		Gw:        net.ParseIP(containerGatewayAddress),
 	}
-
-	// Store allocated IP address
-	m.containerIps.Set(containerId, ipAddr.IP.String())
 
 	return netlink.RouteAdd(defaultRoute)
 }
@@ -330,57 +344,55 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		return err
 	}
 
-	// Clean up iptables rules related to the container
-	exposedPorts, exists := m.exposedPorts.Get(containerId)
-	if exists {
-		containerIp, _ := m.containerIps.Get(containerId)
-		for hostPort, containerPort := range exposedPorts {
-			// Remove NAT PREROUTING rule
-			m.ipt.Delete("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
+	// // Clean up iptables rules related to the container
+	// exposedPorts, exists := m.exposedPorts.Get(containerId)
+	// if exists {
+	// 	containerIp, _ := m.containerIps.Get(containerId)
+	// 	for hostPort, containerPort := range exposedPorts {
+	// 		// Remove NAT PREROUTING rule
+	// 		m.ipt.Delete("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
 
-			// Remove FORWARD rule for the DNAT'd traffic
-			m.ipt.Delete("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
-		}
+	// 		// Remove FORWARD rule for the DNAT'd traffic
+	// 		m.ipt.Delete("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
+	// 	}
 
-		m.exposedPorts.Delete(containerId)
-	}
+	// 	m.exposedPorts.Delete(containerId)
+	// }
 
-	m.containerIps.Delete(containerId)
-
-	return nil
+	return m.workerRepo.RemoveContainerIp(m.workerId, containerId, "ok")
 }
 
 func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, containerPort int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	containerIp, exists := m.containerIps.Get(containerId)
-	if !exists {
-		return errors.New("container ip not found")
-	}
+	// containerIp, exists := m.containerIps.Get(containerId)
+	// if !exists {
+	// 	return errors.New("container ip not found")
+	// }
 
-	// Add NAT PREROUTING rule
-	err := m.ipt.AppendUnique("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
-	if err != nil {
-		return err
-	}
+	// // Add NAT PREROUTING rule
+	// err := m.ipt.AppendUnique("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
+	// if err != nil {
+	// 	return err
+	// }
 
-	// Add FORWARD rule for the DNAT'd traffic
-	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
-	if err != nil {
-		return err
-	}
+	// // Add FORWARD rule for the DNAT'd traffic
+	// err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
+	// if err != nil {
+	// 	return err
+	// }
 
-	var exposedPorts map[int]int
-	exposedPorts, exists = m.exposedPorts.Get(containerId)
-	if !exists {
-		exposedPorts = make(map[int]int)
-	}
+	// var exposedPorts map[int]int
+	// exposedPorts, exists = m.exposedPorts.Get(containerId)
+	// if !exists {
+	// 	exposedPorts = make(map[int]int)
+	// }
 
-	exposedPorts[hostPort] = containerPort
+	// exposedPorts[hostPort] = containerPort
 
 	// Store updated map of exposed ports
-	m.exposedPorts.Set(containerId, exposedPorts)
+	// m.exposedPorts.Set(containerId, exposedPorts)
 	return nil
 }
 
