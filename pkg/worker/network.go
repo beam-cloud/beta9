@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -31,12 +30,11 @@ const (
 )
 
 type ContainerNetworkManager struct {
-	defaultLink  netlink.Link
-	ipt          *iptables.IPTables
-	exposedPorts *common.SafeMap[map[int]int] // Map of containerId -> exposed ports
-	mu           sync.Mutex
-	workerId     string
-	workerRepo   repository.WorkerRepository
+	defaultLink netlink.Link
+	ipt         *iptables.IPTables
+	mu          sync.Mutex
+	workerId    string
+	workerRepo  repository.WorkerRepository
 }
 
 func NewContainerNetworkManager(workerId string, workerRepo repository.WorkerRepository) (*ContainerNetworkManager, error) {
@@ -51,12 +49,11 @@ func NewContainerNetworkManager(workerId string, workerRepo repository.WorkerRep
 	}
 
 	return &ContainerNetworkManager{
-		ipt:          ipt,
-		defaultLink:  defaultLink,
-		exposedPorts: common.NewSafeMap[map[int]int](),
-		mu:           sync.Mutex{},
-		workerId:     workerId,
-		workerRepo:   workerRepo,
+		ipt:         ipt,
+		defaultLink: defaultLink,
+		mu:          sync.Mutex{},
+		workerId:    workerId,
+		workerRepo:  workerRepo,
 	}, nil
 }
 
@@ -344,6 +341,11 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		return err
 	}
 
+	// containerIp, err := m.workerRepo.GetContainerIp(m.workerId, containerId)
+	// if err != nil {
+	// 	return err
+	// }
+
 	// // Clean up iptables rules related to the container
 	// exposedPorts, exists := m.exposedPorts.Get(containerId)
 	// if exists {
@@ -359,17 +361,19 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	// 	m.exposedPorts.Delete(containerId)
 	// }
 
-	return m.workerRepo.RemoveContainerIp(m.workerId, containerId, "ok")
+	return m.workerRepo.RemoveContainerIp(m.workerId, containerId)
 }
 
 func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, containerPort int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// containerIp, exists := m.containerIps.Get(containerId)
-	// if !exists {
-	// 	return errors.New("container ip not found")
-	// }
+	containerIp, err := m.workerRepo.GetContainerIp(m.workerId, containerId)
+	if err != nil {
+		return err
+	}
+
+	log.Println("container Ip: ", containerIp)
 
 	// // Add NAT PREROUTING rule
 	// err := m.ipt.AppendUnique("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))

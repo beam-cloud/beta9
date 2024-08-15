@@ -28,8 +28,9 @@ type WorkerRepository interface {
 	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
 	SetImagePullLock(workerId, imageId string) error
 	RemoveImagePullLock(workerId, imageId string) error
+	GetContainerIp(workerId string, containerId string) (string, error)
 	SetContainerIp(workerId string, containerId, containerIp string) error
-	RemoveContainerIp(workerId string, containerId, containerIp string) error
+	RemoveContainerIp(workerId string, containerId string) error
 	GetContainerIps(workerId string) ([]string, error)
 }
 
