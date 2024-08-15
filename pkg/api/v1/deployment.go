@@ -1,15 +1,18 @@
 package apiv1
 
 import (
+	"fmt"
 	"net/http"
+	"path"
+
+	"github.com/labstack/echo/v4"
+	"k8s.io/utils/ptr"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/labstack/echo/v4"
-	"k8s.io/utils/ptr"
 )
 
 type DeploymentGroup struct {
@@ -40,6 +43,7 @@ func NewDeploymentGroup(
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListDeployments))
 	g.GET("/:workspaceId/latest", auth.WithWorkspaceAuth(group.ListLatestDeployments))
 	g.GET("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.RetrieveDeployment))
+	g.GET("/:workspaceId/download/:stubId", auth.WithWorkspaceAuth(group.DownloadDeploymentPackage))
 	g.POST("/:workspaceId/stop/:deploymentId/", auth.WithWorkspaceAuth(group.StopDeployment))
 	g.POST("/:workspaceId/stop-all-active-deployments", auth.WithClusterAdminAuth(group.StopAllActiveDeployments))
 	g.DELETE("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.DeleteDeployment))
@@ -179,6 +183,25 @@ func (g *DeploymentGroup) ListLatestDeployments(ctx echo.Context) error {
 	}
 }
 
+func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
+	stubId := ctx.Param("stubId")
+
+	extWorkspaceId := ctx.Param("workspaceId")
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), extWorkspaceId)
+	if err != nil {
+		return HTTPBadRequest("Invalid workspace ID")
+	}
+
+	object, err := g.backendRepo.GetObjectByExternalStubId(ctx.Request().Context(), stubId, workspace.Id)
+	if err != nil {
+		return HTTPInternalServerError("Failed to get object")
+	}
+	path := getPackagePath(workspace.Name, object.ExternalId)
+	fmt.Println(path)
+
+	return ctx.File(path)
+}
+
 func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRelated, ctx echo.Context) error {
 	for _, deployment := range deployments {
 		// Stop active containers
@@ -205,4 +228,8 @@ func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRela
 	}
 
 	return ctx.NoContent(http.StatusOK)
+}
+
+func getPackagePath(workspaceName, objectId string) string {
+	return path.Join("/data/objects/", workspaceName, objectId)
 }
