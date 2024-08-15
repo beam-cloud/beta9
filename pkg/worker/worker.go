@@ -434,6 +434,8 @@ func (s *Worker) processStopContainerEvents() {
 const ExitCodeSigterm = 143
 
 func (s *Worker) terminateContainer(containerId string, request *types.ContainerRequest, exitCode *int, containerErr *error) {
+	defer s.containerWg.Done()
+
 	if *exitCode < 0 {
 		*exitCode = 1
 	} else if *exitCode == ExitCodeSigterm {
@@ -444,8 +446,6 @@ func (s *Worker) terminateContainer(containerId string, request *types.Container
 	if err != nil {
 		log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
 	}
-
-	defer s.containerWg.Done()
 
 	s.clearContainer(containerId, request, time.Duration(s.config.Worker.TerminationGracePeriod)*time.Second, *exitCode)
 }
