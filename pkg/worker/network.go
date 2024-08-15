@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/coreos/go-iptables/iptables"
@@ -30,8 +31,9 @@ const (
 type ContainerNetworkManager struct {
 	defaultLink  netlink.Link
 	ipt          *iptables.IPTables
-	containerIps *common.SafeMap[string] // Map of containerId -> allocated IP address
-	exposedPorts map[int]int             // Map of hostPort -> containerPort
+	containerIps *common.SafeMap[string]      // Map of containerId -> allocated IP address
+	exposedPorts *common.SafeMap[map[int]int] // Map of containerId -> exposed ports
+	mu           sync.Mutex
 }
 
 func NewContainerNetworkManager() (*ContainerNetworkManager, error) {
@@ -48,12 +50,16 @@ func NewContainerNetworkManager() (*ContainerNetworkManager, error) {
 	return &ContainerNetworkManager{
 		ipt:          ipt,
 		defaultLink:  defaultLink,
-		exposedPorts: make(map[int]int),
+		exposedPorts: common.NewSafeMap[map[int]int](),
 		containerIps: common.NewSafeMap[string](),
+		mu:           sync.Mutex{},
 	}, nil
 }
 
 func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -276,6 +282,9 @@ func nextIP(ip net.IP, inc uint) net.IP {
 }
 
 func (m *ContainerNetworkManager) TearDown(containerId string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -314,7 +323,7 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	}
 
 	// Switch back to host namespace
-	defer netns.Set(hostNS)
+	netns.Set(hostNS)
 
 	// Remove container namespace
 	if err := netns.DeleteNamed(namespace); err != nil {
@@ -322,10 +331,30 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	}
 
 	m.containerIps.Delete(containerId)
+
+	// Clean up iptables rules related to the container
+	exposedPorts, exists := m.exposedPorts.Get(containerId)
+	if exists {
+		containerIp, _ := m.containerIps.Get(containerId)
+
+		for hostPort, containerPort := range exposedPorts {
+			// Remove NAT PREROUTING rule
+			m.ipt.Delete("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
+
+			// Remove FORWARD rule for the DNAT'd traffic
+			m.ipt.Delete("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
+		}
+
+		m.exposedPorts.Delete(containerId)
+	}
+
 	return nil
 }
 
 func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, containerPort int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	containerIp, exists := m.containerIps.Get(containerId)
 	if !exists {
 		return errors.New("container ip not found")
@@ -343,8 +372,16 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 		return err
 	}
 
+	var exposedPorts map[int]int
+	exposedPorts, exists = m.exposedPorts.Get(containerId)
+	if !exists {
+		exposedPorts = make(map[int]int)
+	}
+
+	exposedPorts[hostPort] = containerPort
+
 	// Store the mapping of exposed ports
-	m.exposedPorts[hostPort] = containerPort
+	m.exposedPorts.Set(containerId, exposedPorts)
 	return nil
 }
 
