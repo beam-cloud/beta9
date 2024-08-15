@@ -468,6 +468,12 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		s.containerCudaManager.UnassignGPUDevices(containerId)
 	}
 
+	// Tear down container network components
+	err := s.containerNetworkManager.TearDown(containerId)
+	if err != nil {
+		log.Printf("<%s> - failed to clean up container network: %v\n", containerId, err)
+	}
+
 	s.completedRequests <- request
 	s.containerLock.Unlock()
 
