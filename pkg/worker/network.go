@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
@@ -53,6 +54,9 @@ func NewContainerNetworkManager() (*ContainerNetworkManager, error) {
 }
 
 func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	truncatedContainerId := containerId[len(containerId)-8:]
 	namespace := containerId
 	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
@@ -272,6 +276,9 @@ func nextIP(ip net.IP, inc uint) net.IP {
 }
 
 func (m *ContainerNetworkManager) TearDown(containerId string) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	truncatedContainerId := containerId[len(containerId)-8:]
 	vethContainer := fmt.Sprintf("%s%s", containerVethContainerPrefix, truncatedContainerId)
 	namespace := containerId
