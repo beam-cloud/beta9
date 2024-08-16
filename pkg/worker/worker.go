@@ -156,12 +156,12 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	containerNetworkManager, err := NewContainerNetworkManager(workerId, workerRepo, containerRepo)
+	ctx, cancel := context.WithCancel(context.Background())
+	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepo, containerRepo)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
 
 	workerMetrics, err := NewWorkerMetrics(ctx, workerId, workerRepo, config.Monitoring)
 	if err != nil {

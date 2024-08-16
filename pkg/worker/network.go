@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -32,6 +33,7 @@ const (
 )
 
 type ContainerNetworkManager struct {
+	ctx           context.Context
 	defaultLink   netlink.Link
 	ipt           *iptables.IPTables
 	mu            sync.Mutex
@@ -40,7 +42,7 @@ type ContainerNetworkManager struct {
 	containerRepo repository.ContainerRepository
 }
 
-func NewContainerNetworkManager(workerId string, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository) (*ContainerNetworkManager, error) {
+func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
 		return nil, err
@@ -52,6 +54,7 @@ func NewContainerNetworkManager(workerId string, workerRepo repository.WorkerRep
 	}
 
 	m := &ContainerNetworkManager{
+		ctx:           ctx,
 		ipt:           ipt,
 		defaultLink:   defaultLink,
 		mu:            sync.Mutex{},
@@ -60,12 +63,7 @@ func NewContainerNetworkManager(workerId string, workerRepo repository.WorkerRep
 		containerRepo: containerRepo,
 	}
 
-	go func() {
-		for {
-			m.cleanupOrphanedNamespaces()
-			time.Sleep(containerNetworkCleanupInterval)
-		}
-	}()
+	go m.cleanupOrphanedNamespaces()
 
 	return m, nil
 }
@@ -292,26 +290,39 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 }
 
 func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	ticker := time.NewTicker(containerNetworkCleanupInterval)
+	defer ticker.Stop()
 
-	namespaces, err := listNamespaces("/var/run/netns")
-	if err != nil {
-		return
-	}
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			m.mu.Lock()
 
-	for _, namespace := range namespaces {
-		containerId := namespace // namespace is the same as containerId
-
-		// Check if the container still exists
-		_, err := m.containerRepo.GetContainerState(containerId)
-		if err != nil {
-			// Container state not found, so tear down the namespace and associated resources
-			log.Printf("network manager: orphaned namespace detected<%s>, cleaning up...\n", containerId)
-
-			if err := m.TearDown(containerId); err != nil {
-				log.Printf("network manager: error tearing down namespace<%s> - %v\n", containerId, err)
+			namespaces, err := listNamespaces("/var/run/netns")
+			if err != nil {
+				m.mu.Unlock()
+				log.Printf("network manager: error listing namespaces - %v\n", err)
+				continue
 			}
+
+			for _, namespace := range namespaces {
+				containerId := namespace // namespace is the same as containerId
+
+				// Check if the container still exists
+				_, err := m.containerRepo.GetContainerState(containerId)
+				if err != nil {
+					// Container state not found, so tear down the namespace and associated resources
+					log.Printf("network manager: orphaned namespace detected<%s>, cleaning up...\n", containerId)
+
+					if err := m.TearDown(containerId); err != nil {
+						log.Printf("network manager: error tearing down namespace<%s> - %v\n", containerId, err)
+					}
+				}
+			}
+
+			m.mu.Unlock()
 		}
 	}
 }
