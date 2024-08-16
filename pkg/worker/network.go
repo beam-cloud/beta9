@@ -27,7 +27,7 @@ const (
 	containerBridgeLinkName         string        = "b9_br0"
 	containerVethHostPrefix         string        = "b9_veth_h_"
 	containerVethContainerPrefix    string        = "b9_veth_c_"
-	containerSubnet                 string        = "192.168.1.0/24"
+	containerSubnet                 string        = "192.168.1.0/24" // TODO: replace with dynamic subnet
 	containerGatewayAddress         string        = "192.168.1.1"
 	containerBridgeAddress          string        = "192.168.1.1"
 	containerNetworkCleanupInterval time.Duration = time.Minute * 2
