@@ -458,7 +458,7 @@ func GetPodAddr() (string, error) {
 	return getIPFromEnv("POD_IP")
 }
 
-// getDefaultInterface returns the link that goes to the internet
+// getDefaultInterface returns the link that goes to the internet.
 func getDefaultInterface() (netlink.Link, error) {
 	file, err := os.Open("/proc/net/route")
 	if err != nil {
