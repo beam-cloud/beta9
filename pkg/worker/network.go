@@ -22,12 +22,13 @@ import (
 )
 
 const (
-	containerBridgeLinkName      string = "br0"
-	containerVethHostPrefix      string = "veth_h_"
-	containerVethContainerPrefix string = "veth_c_"
-	containerSubnet              string = "192.168.1.0/24"
-	containerGatewayAddress      string = "192.168.1.1"
-	containerBridgeAddress       string = "192.168.1.1"
+	containerBridgeLinkName         string        = "br0"
+	containerVethHostPrefix         string        = "veth_h_"
+	containerVethContainerPrefix    string        = "veth_c_"
+	containerSubnet                 string        = "192.168.1.0/24"
+	containerGatewayAddress         string        = "192.168.1.1"
+	containerBridgeAddress          string        = "192.168.1.1"
+	containerNetworkCleanupInterval time.Duration = time.Minute * 2
 )
 
 type ContainerNetworkManager struct {
@@ -59,11 +60,10 @@ func NewContainerNetworkManager(workerId string, workerRepo repository.WorkerRep
 		containerRepo: containerRepo,
 	}
 
-	// Start the cleanup goroutine
 	go func() {
 		for {
 			m.cleanupOrphanedNamespaces()
-			time.Sleep(30 * time.Second)
+			time.Sleep(containerNetworkCleanupInterval)
 		}
 	}()
 
@@ -295,7 +295,6 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// List all existing namespaces
 	namespaces, err := listNamespaces("/var/run/netns")
 	if err != nil {
 		return
@@ -304,14 +303,14 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 	for _, namespace := range namespaces {
 		containerId := namespace // namespace is the same as containerId
 
-		log.Println("namespace: ", namespace)
 		// Check if the container still exists
 		_, err := m.containerRepo.GetContainerState(containerId)
 		if err != nil {
-			// Container does not exist, so tear down the namespace and associated resources
-			log.Printf("Orphaned namespace detected: %s, performing cleanup...\n", containerId)
+			// Container state not found, so tear down the namespace and associated resources
+			log.Printf("network manager: orphaned namespace detected<%s>, cleaning up...\n", containerId)
+
 			if err := m.TearDown(containerId); err != nil {
-				log.Printf("Error tearing down namespace %s: %v\n", containerId, err)
+				log.Printf("network manager: error tearing down namespace<%s> - %v\n", containerId, err)
 			}
 		}
 	}
