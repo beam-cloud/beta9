@@ -341,25 +341,40 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		return err
 	}
 
-	// containerIp, err := m.workerRepo.GetContainerIp(m.workerId, containerId)
-	// if err != nil {
-	// 	return err
-	// }
+	containerIp, err := m.workerRepo.GetContainerIp(m.workerId, containerId)
+	if err != nil {
+		return err
+	}
 
-	// // Clean up iptables rules related to the container
-	// exposedPorts, exists := m.exposedPorts.Get(containerId)
-	// if exists {
-	// 	containerIp, _ := m.containerIps.Get(containerId)
-	// 	for hostPort, containerPort := range exposedPorts {
-	// 		// Remove NAT PREROUTING rule
-	// 		m.ipt.Delete("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
+	// Look up and remove iptables rules that reference the container IP
+	tables := []string{"nat", "filter"}
+	for _, table := range tables {
+		// Check PREROUTING chain (for DNAT)
+		rules, err := m.ipt.List(table, "PREROUTING")
+		if err != nil {
+			return err
+		}
+		for _, rule := range rules {
+			if strings.Contains(rule, containerIp) {
+				if err := m.ipt.Delete(table, "PREROUTING", strings.Fields(rule)[2:]...); err != nil {
+					return err
+				}
+			}
+		}
 
-	// 		// Remove FORWARD rule for the DNAT'd traffic
-	// 		m.ipt.Delete("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
-	// 	}
-
-	// 	m.exposedPorts.Delete(containerId)
-	// }
+		// Check FORWARD chain
+		rules, err = m.ipt.List(table, "FORWARD")
+		if err != nil {
+			return err
+		}
+		for _, rule := range rules {
+			if strings.Contains(rule, containerIp) {
+				if err := m.ipt.Delete(table, "FORWARD", strings.Fields(rule)[2:]...); err != nil {
+					return err
+				}
+			}
+		}
+	}
 
 	return m.workerRepo.RemoveContainerIp(m.workerId, containerId)
 }
@@ -373,30 +388,18 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 		return err
 	}
 
-	log.Println("container Ip: ", containerIp)
+	// Add NAT PREROUTING rule
+	err = m.ipt.AppendUnique("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
+	if err != nil {
+		return err
+	}
 
-	// // Add NAT PREROUTING rule
-	// err := m.ipt.AppendUnique("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
-	// if err != nil {
-	// 	return err
-	// }
+	// Add FORWARD rule for the DNAT'd traffic
+	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
+	if err != nil {
+		return err
+	}
 
-	// // Add FORWARD rule for the DNAT'd traffic
-	// err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
-	// if err != nil {
-	// 	return err
-	// }
-
-	// var exposedPorts map[int]int
-	// exposedPorts, exists = m.exposedPorts.Get(containerId)
-	// if !exists {
-	// 	exposedPorts = make(map[int]int)
-	// }
-
-	// exposedPorts[hostPort] = containerPort
-
-	// Store updated map of exposed ports
-	// m.exposedPorts.Set(containerId, exposedPorts)
 	return nil
 }
 
