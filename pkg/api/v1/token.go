@@ -25,6 +25,7 @@ func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, conf
 	g.PATCH("/admin/:workspaceId", auth.WithClusterAdminAuth(group.ClusterAdminUpdateAllWorkspaceTokens))
 	g.POST("/:workspaceId", auth.WithWorkspaceAuth(group.CreateWorkspaceToken))
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListWorkspaceTokens))
+	g.GET("/:workspaceId/signing-key", auth.WithWorkspaceAuth(group.GetSigningKey))
 	g.POST("/:workspaceId/:tokenId/toggle", auth.WithWorkspaceAuth(group.ToggleWorkspaceToken))
 	g.DELETE("/:workspaceId/:tokenId", auth.WithWorkspaceAuth(group.DeleteWorkspaceToken))
 
@@ -125,5 +126,17 @@ func (g *TokenGroup) DeleteWorkspaceToken(ctx echo.Context) error {
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"ok": true,
+	})
+}
+
+func (g *TokenGroup) GetSigningKey(ctx echo.Context) error {
+	workspaceId := ctx.Param("workspaceId")
+	workspace, err := g.backendRepo.GetWorkspaceByExternalIdWithSigningKey(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return HTTPBadRequest("Invalid workspace ID")
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]any{
+		"signing_key": workspace.SigningKey,
 	})
 }
