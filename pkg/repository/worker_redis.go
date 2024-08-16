@@ -497,7 +497,7 @@ func (r *WorkerRedisRepository) SetContainerIp(networkPrefix string, containerId
 }
 
 func (r *WorkerRedisRepository) SetNetworkLock(networkPrefix string, ttl, retries int) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerNetworkLock(networkPrefix), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerNetworkLock(networkPrefix), common.RedisLockOptions{TtlS: ttl, Retries: retries})
 	if err != nil {
 		return err
 	}
