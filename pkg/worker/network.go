@@ -523,6 +523,10 @@ func listNamespaces(netnsPath string) ([]string, error) {
 	var namespaces []string
 
 	err := filepath.Walk(netnsPath, func(path string, info os.FileInfo, err error) error {
+		if path == netnsPath {
+			return nil
+		}
+
 		if err != nil {
 			return err
 		}
