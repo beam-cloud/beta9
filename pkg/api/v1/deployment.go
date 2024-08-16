@@ -1,7 +1,6 @@
 package apiv1
 
 import (
-	"fmt"
 	"net/http"
 	"path"
 
@@ -197,7 +196,6 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to get object")
 	}
 	path := getPackagePath(workspace.Name, object.ExternalId)
-	fmt.Println(path)
 
 	return ctx.File(path)
 }
