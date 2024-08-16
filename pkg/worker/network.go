@@ -30,7 +30,7 @@ const (
 	containerSubnet                 string        = "192.168.1.0/24" // TODO: replace with dynamic subnet
 	containerGatewayAddress         string        = "192.168.1.1"
 	containerBridgeAddress          string        = "192.168.1.1"
-	containerNetworkCleanupInterval time.Duration = time.Minute * 2
+	containerNetworkCleanupInterval time.Duration = time.Minute * 1
 )
 
 type ContainerNetworkManager struct {
