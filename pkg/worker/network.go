@@ -82,6 +82,12 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 }
 
 func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) error {
+	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 3) // ttl=10s, retries=3
+	if err != nil {
+		return err
+	}
+	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -231,12 +237,6 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 }
 
 func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link) error {
-	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 3) // ttl=10s, retries=3
-	if err != nil {
-		return err
-	}
-	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
-
 	lo, err := netlink.LinkByName("lo")
 	if err != nil {
 		return err
