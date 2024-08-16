@@ -349,28 +349,20 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	// Look up and remove iptables rules that reference the container IP
 	tables := []string{"nat", "filter"}
 	for _, table := range tables {
-		// Check PREROUTING chain (for DNAT)
-		rules, err := m.ipt.List(table, "PREROUTING")
-		if err != nil {
-			return err
-		}
-		for _, rule := range rules {
-			if strings.Contains(rule, containerIp) {
-				if err := m.ipt.Delete(table, "PREROUTING", strings.Fields(rule)[2:]...); err != nil {
-					return err
-				}
-			}
-		}
+		chains := []string{"PREROUTING", "FORWARD"}
 
-		// Check FORWARD chain
-		rules, err = m.ipt.List(table, "FORWARD")
-		if err != nil {
-			return err
-		}
-		for _, rule := range rules {
-			if strings.Contains(rule, containerIp) {
-				if err := m.ipt.Delete(table, "FORWARD", strings.Fields(rule)[2:]...); err != nil {
-					return err
+		for _, chain := range chains {
+			// List rules in the chain
+			rules, err := m.ipt.List(table, chain)
+			if err != nil {
+				return err
+			}
+			for _, rule := range rules {
+				if strings.Contains(rule, containerIp) {
+					// Remove the rule
+					if err := m.ipt.Delete(table, chain, strings.Fields(rule)[2:]...); err != nil {
+						return err
+					}
 				}
 			}
 		}
