@@ -355,11 +355,11 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 			// List rules in the chain
 			rules, err := m.ipt.List(table, chain)
 			if err != nil {
-				return err
+				continue
 			}
+
 			for _, rule := range rules {
 				if strings.Contains(rule, containerIp) {
-					// Remove the rule
 					if err := m.ipt.Delete(table, chain, strings.Fields(rule)[2:]...); err != nil {
 						return err
 					}
