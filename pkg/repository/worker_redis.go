@@ -464,19 +464,8 @@ func (r *WorkerRedisRepository) RemoveImagePullLock(workerId, imageId string) er
 	return r.lock.Release(common.RedisKeys.WorkerImageLock(workerId, imageId))
 }
 
-func (r *WorkerRedisRepository) GetContainerIps(workerId string) ([]string, error) {
-	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
-	worker, err := r.getWorkerFromKey(stateKey)
-	if err != nil {
-		return nil, err
-	}
-
-	namespace := worker.Id
-	if worker.MachineId != "" {
-		namespace = worker.MachineId
-	}
-
-	containerIps, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.WorkerNetworkIpIndex(namespace)).Result()
+func (r *WorkerRedisRepository) GetContainerIps(networkPrefix string) ([]string, error) {
+	containerIps, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.WorkerNetworkIpIndex(networkPrefix)).Result()
 	if err != nil {
 		return nil, err
 	}
