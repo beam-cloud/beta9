@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/vishvananda/netlink"
@@ -37,9 +38,10 @@ type ContainerNetworkManager struct {
 	defaultLink   netlink.Link
 	ipt           *iptables.IPTables
 	mu            sync.Mutex
-	workerId      string
+	worker        *types.Worker
 	workerRepo    repository.WorkerRepository
 	containerRepo repository.ContainerRepository
+	networkPrefix string
 }
 
 func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository) (*ContainerNetworkManager, error) {
@@ -53,14 +55,25 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		return nil, err
 	}
 
+	worker, err := workerRepo.GetWorkerById(workerId)
+	if err != nil {
+		return nil, err
+	}
+
+	networkPrefix := worker.Id
+	if worker.MachineId != "" {
+		networkPrefix = worker.MachineId
+	}
+
 	m := &ContainerNetworkManager{
 		ctx:           ctx,
 		ipt:           ipt,
 		defaultLink:   defaultLink,
 		mu:            sync.Mutex{},
-		workerId:      workerId,
+		worker:        worker,
 		workerRepo:    workerRepo,
 		containerRepo: containerRepo,
+		networkPrefix: networkPrefix,
 	}
 
 	go m.cleanupOrphanedNamespaces()
@@ -218,6 +231,12 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 }
 
 func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link) error {
+	err := m.workerRepo.SetNetworkLock(m.networkPrefix)
+	if err != nil {
+		return err
+	}
+	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
+
 	lo, err := netlink.LinkByName("lo")
 	if err != nil {
 		return err
@@ -233,7 +252,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	}
 
 	// See what IP addresses are already allocated
-	allocatedIpAddresses, err := m.workerRepo.GetContainerIps(m.workerId)
+	allocatedIpAddresses, err := m.workerRepo.GetContainerIps(m.worker.Id)
 	if err != nil {
 		return err
 	}
@@ -272,7 +291,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	}
 
 	// Store allocated IP address
-	if err := m.workerRepo.SetContainerIp(m.workerId, containerId, ipAddr.IP.String()); err != nil {
+	if err := m.workerRepo.SetContainerIp(m.worker.Id, containerId, ipAddr.IP.String()); err != nil {
 		return err
 	}
 
@@ -340,6 +359,12 @@ func nextIP(ip net.IP, inc uint) net.IP {
 }
 
 func (m *ContainerNetworkManager) TearDown(containerId string) error {
+	err := m.workerRepo.SetNetworkLock(m.networkPrefix)
+	if err != nil {
+		return err
+	}
+	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -388,7 +413,7 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		return err
 	}
 
-	containerIp, err := m.workerRepo.GetContainerIp(m.workerId, containerId)
+	containerIp, err := m.workerRepo.GetContainerIp(m.networkPrefix, containerId)
 	if err != nil {
 		return err
 	}
@@ -415,14 +440,14 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		}
 	}
 
-	return m.workerRepo.RemoveContainerIp(m.workerId, containerId)
+	return m.workerRepo.RemoveContainerIp(m.networkPrefix, containerId)
 }
 
 func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, containerPort int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	containerIp, err := m.workerRepo.GetContainerIp(m.workerId, containerId)
+	containerIp, err := m.workerRepo.GetContainerIp(m.networkPrefix, containerId)
 	if err != nil {
 		return err
 	}

@@ -174,16 +174,16 @@ func (rk *redisKeys) WorkerImageLock(workerId string, imageId string) string {
 	return fmt.Sprintf(workerImageLock, workerId, imageId)
 }
 
-func (rk *redisKeys) WorkerNetworkLock(namespace string) string {
-	return fmt.Sprintf(workerNetworkLock, namespace)
+func (rk *redisKeys) WorkerNetworkLock(networkPrefix string) string {
+	return fmt.Sprintf(workerNetworkLock, networkPrefix)
 }
 
-func (rk *redisKeys) WorkerNetworkIpIndex(namespace string) string {
-	return fmt.Sprintf(workerNetworkIpIndex, namespace)
+func (rk *redisKeys) WorkerNetworkIpIndex(networkPrefix string) string {
+	return fmt.Sprintf(workerNetworkIpIndex, networkPrefix)
 }
 
-func (rk *redisKeys) WorkerNetworkContainerIp(namespace, containerId string) string {
-	return fmt.Sprintf(workerNetworkContainerIp, namespace, containerId)
+func (rk *redisKeys) WorkerNetworkContainerIp(networkPrefix, containerId string) string {
+	return fmt.Sprintf(workerNetworkContainerIp, networkPrefix, containerId)
 }
 
 // Task keys
