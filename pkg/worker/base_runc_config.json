@@ -159,8 +159,7 @@
 			"options": [
 				"nosuid",
 				"noexec",
-				"nodev",
-				"ro"
+				"nodev"
 			]
 		},
 		{
@@ -171,8 +170,7 @@
 				"nosuid",
 				"noexec",
 				"nodev",
-				"relatime",
-				"ro"
+				"relatime"
 			]
 		},
 		{
