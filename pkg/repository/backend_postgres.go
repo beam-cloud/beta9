@@ -345,6 +345,23 @@ func (r *PostgresBackendRepository) GetObjectByExternalId(ctx context.Context, e
 	return object, nil
 }
 
+func (r *PostgresBackendRepository) GetObjectByExternalStubId(ctx context.Context, stubId string, workspaceId uint) (types.Object, error) {
+	query := `
+	SELECT o.id, o.external_id, o.hash, o.size, o.created_at
+	FROM object o
+	INNER JOIN stub s ON o.id = s.object_id
+	WHERE s.external_id = $1 AND o.workspace_id = $2;
+	`
+
+	var object types.Object
+	err := r.client.GetContext(ctx, &object, query, stubId, workspaceId)
+	if err != nil {
+		return types.Object{}, err
+	}
+
+	return object, nil
+}
+
 func (r *PostgresBackendRepository) UpdateObjectSizeByExternalId(ctx context.Context, externalId string, size int) error {
 	query := `
 	UPDATE object
