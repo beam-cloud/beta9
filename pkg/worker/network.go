@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -231,8 +230,6 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	for _, ip := range allocatedIpAddresses {
 		allocatedSet[ip] = true
 	}
-
-	log.Println("allocated set: ", allocatedSet)
 
 	// Choose a few address that lies in containerSubnet
 	_, ipNet, _ := net.ParseCIDR(containerSubnet)
