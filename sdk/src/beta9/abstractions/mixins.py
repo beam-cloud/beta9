@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from typing import Callable, ClassVar, Optional
 
 from .. import terminal
 from ..clients.gateway import DeployStubRequest, DeployStubResponse
@@ -9,7 +9,9 @@ from .base.runner import RunnerAbstraction
 class DeployableMixin:
     func: Callable
     parent: RunnerAbstraction
-    deployment_stub_type: str
+    deployment_id: Optional[str] = None
+
+    deployment_stub_type: ClassVar[str]
 
     def _validate(self):
         if not hasattr(self, "func") or not isinstance(self.func, Callable):
@@ -21,11 +23,16 @@ class DeployableMixin:
         if not hasattr(self, "deployment_stub_type") or not self.deployment_stub_type:
             raise AttributeError("deployment_stub_type variable not set")
 
-    def deploy(self, name: Optional[str] = None, context: Optional[ConfigContext] = None) -> bool:
+    def deploy(
+        self,
+        name: Optional[str] = None,
+        context: Optional[ConfigContext] = None,
+        invocation_details_func: Optional[Callable[..., None]] = None,
+    ) -> bool:
         self._validate()
 
-        name = name or self.parent.name
-        if not name:
+        self.parent.name = name or self.parent.name
+        if not self.parent.name:
             terminal.error(
                 "You must specify an app name (either in the decorator or via the --name argument)."
             )
@@ -40,11 +47,16 @@ class DeployableMixin:
 
         terminal.header("Deploying")
         deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
-            DeployStubRequest(stub_id=self.parent.stub_id, name=name)  # type: ignore
+            DeployStubRequest(stub_id=self.parent.stub_id, name=self.parent.name)
         )
 
         if deploy_response.ok:
             terminal.header("Deployed 🎉")
-            self.parent.print_invocation_snippet(deploy_response.invoke_url)
+            if invocation_details_func:
+                invocation_details_func()
+            else:
+                self.parent.print_invocation_snippet(deploy_response.invoke_url)
+
+        self.deployment_id = deploy_response.deployment_id
 
         return deploy_response.ok

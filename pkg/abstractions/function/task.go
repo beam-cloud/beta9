@@ -24,7 +24,7 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 	}
 
 	taskId := t.msg.TaskId
-	containerId := t.fs.genContainerId(taskId)
+	containerId := t.fs.genContainerId(taskId, stub.Type.Kind())
 
 	t.containerId = containerId
 
@@ -54,7 +54,7 @@ func (t *FunctionTask) Retry(ctx context.Context) error {
 		return err
 	}
 
-	containerId := t.fs.genContainerId(taskId)
+	containerId := t.fs.genContainerId(taskId, stub.Type.Kind())
 	t.containerId = containerId
 
 	task.Status = types.TaskStatusRetry

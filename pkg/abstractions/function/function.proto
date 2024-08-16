@@ -13,6 +13,8 @@ service FunctionService {
       returns (FunctionSetResultResponse) {}
   rpc FunctionMonitor(FunctionMonitorRequest)
       returns (stream FunctionMonitorResponse);
+  rpc FunctionSchedule(FunctionScheduleRequest)
+      returns (FunctionScheduleResponse) {}
 }
 
 message FunctionInvokeRequest {
@@ -52,4 +54,16 @@ message FunctionMonitorResponse {
   bool cancelled = 2;
   bool complete = 3;
   bool timed_out = 4;
+}
+
+message FunctionScheduleRequest {
+  string stub_id = 1;
+  string when = 2;
+  string deployment_id = 3;
+}
+
+message FunctionScheduleResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string scheduled_job_id = 3;
 }
