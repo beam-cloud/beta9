@@ -231,7 +231,7 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 }
 
 func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link) error {
-	err := m.workerRepo.SetNetworkLock(m.networkPrefix)
+	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 3) // ttl=10s, retries=3
 	if err != nil {
 		return err
 	}
@@ -329,16 +329,28 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 			for _, namespace := range namespaces {
 				containerId := namespace // namespace is the same as containerId
 
-				// Check if the container still exists
-				_, err := m.containerRepo.GetContainerState(containerId)
-				if err != nil {
-					// Container state not found, so tear down the namespace and associated resources
-					log.Printf("network manager: orphaned namespace detected<%s>, cleaning up...\n", containerId)
-
-					if err := m.TearDown(containerId); err != nil {
-						log.Printf("network manager: error tearing down namespace<%s> - %v\n", containerId, err)
+				func() {
+					// Only allow one worker on this machine/worker handle the cleanup
+					// We have a secondary lock for the IP assignment, but we need this lock for the "container" level consistency
+					err = m.workerRepo.SetNetworkLock(m.networkPrefix+"-"+containerId, 10, 0) // ttl=10, retries=0
+					if err != nil {
+						return
 					}
-				}
+
+					defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
+
+					// Check if the container still exists
+					_, err := m.containerRepo.GetContainerState(containerId)
+					if err != nil {
+						// Container state not found, so tear down the namespace and associated resources
+						log.Printf("network manager: orphaned namespace detected<%s>, cleaning up...\n", containerId)
+
+						if err := m.TearDown(containerId); err != nil {
+							log.Printf("network manager: error tearing down namespace<%s> - %v\n", containerId, err)
+						}
+					}
+				}()
+
 			}
 
 			m.mu.Unlock()
@@ -359,7 +371,7 @@ func nextIP(ip net.IP, inc uint) net.IP {
 }
 
 func (m *ContainerNetworkManager) TearDown(containerId string) error {
-	err := m.workerRepo.SetNetworkLock(m.networkPrefix)
+	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 3) // ttl=10, retries=3
 	if err != nil {
 		return err
 	}

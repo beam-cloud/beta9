@@ -32,7 +32,7 @@ type WorkerRepository interface {
 	SetContainerIp(networkPrefix string, containerId, containerIp string) error
 	RemoveContainerIp(networkPrefix string, containerId string) error
 	GetContainerIps(networkPrefix string) ([]string, error)
-	SetNetworkLock(networkPrefix string) error
+	SetNetworkLock(networkPrefix string, ttl, retries int) error
 	RemoveNetworkLock(networkPrefix string) error
 }
 
