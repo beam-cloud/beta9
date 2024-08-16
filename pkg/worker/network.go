@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/coreos/go-iptables/iptables"
@@ -29,14 +31,15 @@ const (
 )
 
 type ContainerNetworkManager struct {
-	defaultLink netlink.Link
-	ipt         *iptables.IPTables
-	mu          sync.Mutex
-	workerId    string
-	workerRepo  repository.WorkerRepository
+	defaultLink   netlink.Link
+	ipt           *iptables.IPTables
+	mu            sync.Mutex
+	workerId      string
+	workerRepo    repository.WorkerRepository
+	containerRepo repository.ContainerRepository
 }
 
-func NewContainerNetworkManager(workerId string, workerRepo repository.WorkerRepository) (*ContainerNetworkManager, error) {
+func NewContainerNetworkManager(workerId string, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
 		return nil, err
@@ -47,13 +50,24 @@ func NewContainerNetworkManager(workerId string, workerRepo repository.WorkerRep
 		return nil, err
 	}
 
-	return &ContainerNetworkManager{
-		ipt:         ipt,
-		defaultLink: defaultLink,
-		mu:          sync.Mutex{},
-		workerId:    workerId,
-		workerRepo:  workerRepo,
-	}, nil
+	m := &ContainerNetworkManager{
+		ipt:           ipt,
+		defaultLink:   defaultLink,
+		mu:            sync.Mutex{},
+		workerId:      workerId,
+		workerRepo:    workerRepo,
+		containerRepo: containerRepo,
+	}
+
+	// Start the cleanup goroutine
+	go func() {
+		for {
+			m.cleanupOrphanedNamespaces()
+			time.Sleep(30 * time.Second)
+		}
+	}()
+
+	return m, nil
 }
 
 func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) error {
@@ -277,6 +291,32 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	return netlink.RouteAdd(defaultRoute)
 }
 
+func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// List all existing namespaces
+	namespaces, err := listNamespaces("/var/run/netns")
+	if err != nil {
+		return
+	}
+
+	for _, namespace := range namespaces {
+		containerId := namespace // namespace is the same as containerId
+
+		log.Println("namespace: ", namespace)
+		// Check if the container still exists
+		_, err := m.containerRepo.GetContainerState(containerId)
+		if err != nil {
+			// Container does not exist, so tear down the namespace and associated resources
+			log.Printf("Orphaned namespace detected: %s, performing cleanup...\n", containerId)
+			if err := m.TearDown(containerId); err != nil {
+				log.Printf("Error tearing down namespace %s: %v\n", containerId, err)
+			}
+		}
+	}
+}
+
 // Taken from: https://gist.github.com/udhos/b468fbfd376aa0b655b6b0c539a88c03
 func nextIP(ip net.IP, inc uint) net.IP {
 	i := ip.To4()
@@ -466,4 +506,27 @@ func getIPFromEnv(varName string) (string, error) {
 	}
 
 	return ip.String(), nil
+}
+
+// listNamespaces lists all valid network namespaces in the specified directory.
+func listNamespaces(netnsPath string) ([]string, error) {
+	var namespaces []string
+
+	err := filepath.Walk(netnsPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() {
+			nsHandle, err := netns.GetFromPath(path)
+			if err == nil {
+				defer nsHandle.Close()
+				namespaces = append(namespaces, info.Name())
+			}
+		}
+
+		return nil
+	})
+
+	return namespaces, err
 }
