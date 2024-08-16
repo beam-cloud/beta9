@@ -288,7 +288,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		return err
 	}
 
-	bindPort, err := GetRandomFreePort()
+	bindPort, err := getRandomFreePort()
 	if err != nil {
 		return err
 	}

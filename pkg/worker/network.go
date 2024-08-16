@@ -431,8 +431,8 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	return nil
 }
 
-// GetRandomFreePort chooses a random free port
-func GetRandomFreePort() (int, error) {
+// getRandomFreePort chooses a random free port
+func getRandomFreePort() (int, error) {
 	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
 	if err != nil {
 		return 0, err
