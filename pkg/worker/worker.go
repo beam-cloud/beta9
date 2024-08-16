@@ -769,6 +769,25 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		})
 	}
 
+	// Configure resolv.conf
+	resolvMount := specs.Mount{
+		Type:        "none",
+		Source:      "/workspace/resolv.conf",
+		Destination: "/etc/resolv.conf",
+		Options: []string{"ro",
+			"rbind",
+			"rprivate",
+			"nosuid",
+			"noexec",
+			"nodev"},
+	}
+
+	if s.config.Worker.ExposeLocalNetwork {
+		resolvMount.Source = "/etc/resolv.conf"
+	}
+
+	spec.Mounts = append(spec.Mounts, resolvMount)
+
 	return spec, nil
 }
 

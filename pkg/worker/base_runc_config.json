@@ -172,19 +172,6 @@
 			]
 		},
 		{
-			"destination": "/etc/resolv.conf",
-			"type": "bind",
-			"source": "/workspace/resolv.conf",
-			"options": [
-				"ro",
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"noexec",
-				"nodev"
-			]
-		},
-		{
 			"destination": "/usr/lib/worker/x86_64-linux-gnu",
 			"type": "bind",
 			"source": "/usr/lib/x86_64-linux-gnu",
