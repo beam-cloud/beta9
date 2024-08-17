@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -37,7 +36,6 @@ type ContainerNetworkManager struct {
 	ctx           context.Context
 	defaultLink   netlink.Link
 	ipt           *iptables.IPTables
-	mu            sync.Mutex
 	worker        *types.Worker
 	workerRepo    repository.WorkerRepository
 	containerRepo repository.ContainerRepository
@@ -69,7 +67,6 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		ctx:           ctx,
 		ipt:           ipt,
 		defaultLink:   defaultLink,
-		mu:            sync.Mutex{},
 		worker:        worker,
 		workerRepo:    workerRepo,
 		containerRepo: containerRepo,
@@ -87,9 +84,6 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) er
 		return err
 	}
 	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -373,9 +367,6 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	}
 	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -452,9 +443,6 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 }
 
 func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, containerPort int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	containerIp, err := m.workerRepo.GetContainerIp(m.networkPrefix, containerId)
 	if err != nil {
 		return err
