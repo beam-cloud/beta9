@@ -317,11 +317,8 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
-			m.mu.Lock()
-
 			namespaces, err := listNamespaces("/var/run/netns")
 			if err != nil {
-				m.mu.Unlock()
 				log.Printf("network manager: error listing namespaces - %v\n", err)
 				continue
 			}
@@ -337,7 +334,7 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 						return
 					}
 
-					defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
+					defer m.workerRepo.RemoveNetworkLock(m.networkPrefix + "-" + containerId)
 
 					// Check if the container still exists
 					_, err := m.containerRepo.GetContainerState(containerId)
@@ -349,11 +346,10 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 							log.Printf("network manager: error tearing down namespace<%s> - %v\n", containerId, err)
 						}
 					}
+
 				}()
 
 			}
-
-			m.mu.Unlock()
 		}
 	}
 }
