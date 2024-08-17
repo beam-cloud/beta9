@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -40,6 +41,7 @@ type ContainerNetworkManager struct {
 	workerRepo    repository.WorkerRepository
 	containerRepo repository.ContainerRepository
 	networkPrefix string
+	mu            sync.Mutex
 }
 
 func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository) (*ContainerNetworkManager, error) {
@@ -71,6 +73,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		workerRepo:    workerRepo,
 		containerRepo: containerRepo,
 		networkPrefix: networkPrefix,
+		mu:            sync.Mutex{},
 	}
 
 	go m.cleanupOrphanedNamespaces()
@@ -79,6 +82,9 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 }
 
 func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 3) // ttl=10s, retries=3
 	if err != nil {
 		return err
@@ -361,6 +367,9 @@ func nextIP(ip net.IP, inc uint) net.IP {
 }
 
 func (m *ContainerNetworkManager) TearDown(containerId string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 3) // ttl=10, retries=3
 	if err != nil {
 		return err
@@ -443,6 +452,9 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 }
 
 func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, containerPort int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	containerIp, err := m.workerRepo.GetContainerIp(m.networkPrefix, containerId)
 	if err != nil {
 		return err
