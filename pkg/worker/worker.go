@@ -782,7 +782,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			"nodev"},
 	}
 
-	if s.config.Worker.ExposeLocalNetwork {
+	if s.config.Worker.UseHostResolvConf {
 		resolvMount.Source = "/etc/resolv.conf"
 	}
 
