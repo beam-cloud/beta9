@@ -44,8 +44,10 @@ func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {
 	// Set some environment variables to simulate NVIDIA settings
 	os.Setenv("NVIDIA_DRIVER_CAPABILITIES", "all")
 	os.Setenv("NVIDIA_REQUIRE_CUDA", "cuda>=9.0")
+	os.Setenv("CUDA_HOME", "/usr/local/cuda-12.3")
 
 	expectedEnv := []string{
+		"CUDA_HOME=/usr/local/cuda-12.3",
 		"INITIAL=1",
 		"NVIDIA_DRIVER_CAPABILITIES=all",
 		"NVIDIA_REQUIRE_CUDA=cuda>=9.0",
