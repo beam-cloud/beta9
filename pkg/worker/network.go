@@ -3,6 +3,7 @@ package worker
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log"
@@ -171,9 +172,14 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) er
 }
 
 func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {
+
 	link := &netlink.Veth{
-		LinkAttrs: netlink.LinkAttrs{Name: hostVethName, MTU: m.defaultLink.Attrs().MTU},
-		PeerName:  containerVethName,
+		LinkAttrs: netlink.LinkAttrs{Name: hostVethName,
+			MTU:          m.defaultLink.Attrs().MTU,
+			HardwareAddr: generateUniqueMAC(),
+		},
+		PeerName:         containerVethName,
+		PeerHardwareAddr: generateUniqueMAC(),
 	}
 
 	return netlink.LinkAdd(link)
@@ -187,7 +193,11 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 	}
 
 	bridge = &netlink.Bridge{
-		LinkAttrs: netlink.LinkAttrs{Name: bridgeName, MTU: m.defaultLink.Attrs().MTU},
+		LinkAttrs: netlink.LinkAttrs{
+			Name:         bridgeName,
+			MTU:          m.defaultLink.Attrs().MTU,
+			HardwareAddr: generateUniqueMAC(),
+		},
 	}
 
 	if err := netlink.LinkAdd(bridge); err != nil && err != unix.EEXIST {
@@ -225,11 +235,6 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 	}
 
 	if err := m.ipt.AppendUnique("filter", "FORWARD", "-i", m.defaultLink.Attrs().Name, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
-		return nil, err
-	}
-
-	// Allow forwarding of traffic between containers on the bridge
-	if err := m.ipt.AppendUnique("filter", "FORWARD", "-i", bridgeName, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
 		return nil, err
 	}
 
@@ -380,41 +385,23 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	defer runtime.UnlockOSThread()
 
 	truncatedContainerId := containerId[len(containerId)-5:]
-	vethContainer := fmt.Sprintf("%s%s", containerVethContainerPrefix, truncatedContainerId)
+	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
 	namespace := containerId
 
-	// Store host namespace for later
-	hostNS, err := netns.Get()
-	if err != nil {
-		return err
-	}
-	defer hostNS.Close()
-
-	// Switch to container namespace
-	containerNS, err := netns.GetFromName(namespace)
-	if err != nil {
-		return err
-	}
-	defer containerNS.Close()
-	if err := netns.Set(containerNS); err != nil {
-		return err
-	}
-
-	containerVeth, err := netlink.LinkByName(vethContainer)
+	hostVeth, err := netlink.LinkByName(vethHost)
 	if err != nil {
 		return err
 	}
 
-	// Delete container side veth
-	if err := netlink.LinkSetDown(containerVeth); err != nil {
-		return err
-	}
-	if err := netlink.LinkDel(containerVeth); err != nil {
+	// Remove the veth from the bridge
+	if err := netlink.LinkSetNoMaster(hostVeth); err != nil {
 		return err
 	}
 
-	// Switch back to host namespace
-	netns.Set(hostNS)
+	// Immediately delete the veth without setting it down first
+	if err := netlink.LinkDel(hostVeth); err != nil {
+		return err
+	}
 
 	// Remove container namespace
 	if err := netns.DeleteNamed(namespace); err != nil {
@@ -576,4 +563,21 @@ func listNamespaces(netnsPath string) ([]string, error) {
 	})
 
 	return namespaces, err
+}
+
+// generateUniqueMAC generates a random MAC address with a specific OUI (Organizationally Unique Identifier).
+func generateUniqueMAC() net.HardwareAddr {
+	mac := make([]byte, 6)
+	_, err := rand.Read(mac)
+	if err != nil {
+		// Fall back to using a deterministic value in case of failure
+		// However, the chance of crypto/rand failing is extremely low
+		mac = []byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x00}
+	}
+
+	// Set the local bit (second least significant bit of the first byte)
+	// and unset the multicast bit (least significant bit of the first byte).
+	mac[0] = (mac[0] | 0x02) & 0xfe
+
+	return net.HardwareAddr(mac)
 }

@@ -459,9 +459,9 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}
 
 	// Tear down container network components
-	err := s.containerNetworkManager.TearDown(containerId)
+	err := s.containerNetworkManager.TearDown(request.ContainerId)
 	if err != nil {
-		log.Printf("<%s> - failed to clean up container network: %v\n", containerId, err)
+		log.Printf("<%s> - failed to clean up container network: %v\n", request.ContainerId, err)
 	}
 
 	s.completedRequests <- request
@@ -484,6 +484,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		if err != nil {
 			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
 		}
+
 	}()
 }
 
