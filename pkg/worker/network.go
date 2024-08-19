@@ -447,6 +447,12 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 		return err
 	}
 
+	// Add MASQUERADE rule for the outgoing traffic before DNAT rule
+	err = m.ipt.Insert("nat", "POSTROUTING", 1, "-s", containerIp, "-j", "MASQUERADE")
+	if err != nil {
+		return err
+	}
+
 	// Insert NAT PREROUTING rule at the top of the chain
 	err = m.ipt.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
 	if err != nil {
