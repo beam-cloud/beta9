@@ -470,29 +470,49 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		return err
 	}
 
-	// Look up and remove iptables rules that reference the container IP
+	// Calculate the corresponding IPv6 address
+	ip := net.ParseIP(containerIp)
+	ipv4LastOctet := int(ip.To4()[3])
+	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
+	ipv6Prefix := ipv6Net.IP.String()
+
+	// Allocate an IPv6 address using the last octet of the IPv4 address
+	ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
+
+	// Remove iptables and ip6tables rules
+	if err := m.removeIPTablesRules(containerIp, m.ipt); err != nil {
+		return err
+	}
+
+	if err := m.removeIPTablesRules(ipv6Address, m.ipt6); err != nil {
+		return err
+	}
+
+	return m.workerRepo.RemoveContainerIp(m.networkPrefix, containerId)
+}
+
+func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.IPTables) error {
 	tables := []string{"nat", "filter"}
 	for _, table := range tables {
 		chains := []string{"PREROUTING", "FORWARD"}
 
 		for _, chain := range chains {
 			// List rules in the chain
-			rules, err := m.ipt.List(table, chain)
+			rules, err := ipt.List(table, chain)
 			if err != nil {
 				continue
 			}
 
 			for _, rule := range rules {
-				if strings.Contains(rule, containerIp) {
-					if err := m.ipt.Delete(table, chain, strings.Fields(rule)[2:]...); err != nil {
+				if strings.Contains(rule, ip) {
+					if err := ipt.Delete(table, chain, strings.Fields(rule)[2:]...); err != nil {
 						return err
 					}
 				}
 			}
 		}
 	}
-
-	return m.workerRepo.RemoveContainerIp(m.networkPrefix, containerId)
+	return nil
 }
 
 func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, containerPort int) error {
