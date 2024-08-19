@@ -235,21 +235,10 @@ class _CallableWrapper(DeployableMixin):
             self._handle_serve_interrupt()
 
     def _handle_serve_interrupt(self) -> None:
-        response = "y"
-
-        try:
-            response = terminal.prompt(
-                text="Would you like to stop the container? (y/n)", default="y"
-            )
-        except KeyboardInterrupt:
-            pass
-
-        if response == "y":
-            terminal.header("Stopping serve container")
-            self.parent.endpoint_stub.stop_endpoint_serve(
-                StopEndpointServeRequest(stub_id=self.parent.stub_id)
-            )
-
+        terminal.header("Stopping serve container")
+        self.parent.endpoint_stub.stop_endpoint_serve(
+            StopEndpointServeRequest(stub_id=self.parent.stub_id)
+        )
         terminal.print("Goodbye 👋")
         os._exit(0)  # kills all threads immediately
 
