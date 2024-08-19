@@ -25,12 +25,16 @@ import (
 )
 
 const (
-	containerBridgeLinkName         string        = "b9_br0"
-	containerVethHostPrefix         string        = "b9_veth_h_"
-	containerVethContainerPrefix    string        = "b9_veth_c_"
-	containerSubnet                 string        = "192.168.1.0/24" // TODO: replace with dynamic subnet
-	containerGatewayAddress         string        = "192.168.1.1"
-	containerBridgeAddress          string        = "192.168.1.1"
+	containerBridgeLinkName      string = "b9_br0"
+	containerVethHostPrefix      string = "b9_veth_h_"
+	containerVethContainerPrefix string = "b9_veth_c_"
+	containerSubnet              string = "192.168.1.0/24" // TODO: replace with dynamic subnet
+	containerGatewayAddress      string = "192.168.1.1"
+	containerBridgeAddress       string = "192.168.1.1"
+	containerSubnetIPv6          string = "fd00:abcd::/64"
+	containerGatewayAddressIPv6  string = "fd00:abcd::1"
+	containerBridgeAddressIPv6   string = "fd00:abcd::1"
+
 	containerNetworkCleanupInterval time.Duration = time.Minute * 1
 )
 
@@ -38,6 +42,7 @@ type ContainerNetworkManager struct {
 	ctx           context.Context
 	defaultLink   netlink.Link
 	ipt           *iptables.IPTables
+	ipt6          *iptables.IPTables
 	worker        *types.Worker
 	workerRepo    repository.WorkerRepository
 	containerRepo repository.ContainerRepository
@@ -56,6 +61,12 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		return nil, err
 	}
 
+	// Initialize ip6tables for IPv6 support
+	ipt6, err := iptables.NewWithProtocol(iptables.ProtocolIPv6)
+	if err != nil {
+		return nil, err
+	}
+
 	worker, err := workerRepo.GetWorkerById(workerId)
 	if err != nil {
 		return nil, err
@@ -69,6 +80,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	m := &ContainerNetworkManager{
 		ctx:           ctx,
 		ipt:           ipt,
+		ipt6:          ipt6,
 		defaultLink:   defaultLink,
 		worker:        worker,
 		workerRepo:    workerRepo,
@@ -213,19 +225,37 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 		return nil, err
 	}
 
-	bridgeIP := &netlink.Addr{
+	bridgeIPv4 := &netlink.Addr{
 		IPNet: &net.IPNet{
 			IP:   net.ParseIP(containerBridgeAddress),
 			Mask: net.CIDRMask(24, 32),
 		},
 	}
-	if err := netlink.AddrAdd(bridge, bridgeIP); err != nil {
+	if err := netlink.AddrAdd(bridge, bridgeIPv4); err != nil {
+		return nil, err
+	}
+
+	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
+	bridgeIPv6 := &netlink.Addr{
+		IPNet: &net.IPNet{
+			IP:   net.ParseIP(containerBridgeAddressIPv6),
+			Mask: ipv6Net.Mask,
+		},
+	}
+	if err := netlink.AddrAdd(bridge, bridgeIPv6); err != nil {
 		return nil, err
 	}
 
 	// Allow containers to communicate with each other and the internet
-	// NAT outgoing traffic from the containers
+	// (NAT outgoing traffic from the containers)
+
+	// IPv4
 	if err := m.ipt.AppendUnique("nat", "POSTROUTING", "-s", containerSubnet, "-o", m.defaultLink.Attrs().Name, "-j", "MASQUERADE"); err != nil {
+		return nil, err
+	}
+
+	// IPv6
+	if err := m.ipt6.AppendUnique("nat", "POSTROUTING", "-s", containerSubnetIPv6, "-o", m.defaultLink.Attrs().Name, "-j", "MASQUERADE"); err != nil {
 		return nil, err
 	}
 
@@ -270,7 +300,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	// Choose a few address that lies in containerSubnet
 	_, ipNet, _ := net.ParseCIDR(containerSubnet)
 	var ipAddr *netlink.Addr = nil
-
+	var ipv4LastOctet int
 	for ip := ipNet.IP.Mask(ipNet.Mask); ipNet.Contains(ip); ip = nextIP(ip, 1) {
 		ipStr := ip.String()
 
@@ -289,28 +319,55 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 				Mask: ipNet.Mask,
 			},
 		}
+
+		// Extract the last octet of the IPv4 address
+		ipv4LastOctet = int(ip.To4()[3])
 		break
 	}
 	if ipAddr == nil {
 		return errors.New("unable to assign IP address to container")
 	}
 
-	// Store allocated IP address
-	if err := m.workerRepo.SetContainerIp(m.worker.Id, containerId, ipAddr.IP.String()); err != nil {
-		return err
-	}
-
 	if err := netlink.AddrAdd(containerVeth, ipAddr); err != nil {
 		return err
 	}
 
-	// Add a default route
+	// Add a default route (IPv4)
 	defaultRoute := &netlink.Route{
 		LinkIndex: containerVeth.Attrs().Index,
 		Gw:        net.ParseIP(containerGatewayAddress),
 	}
+	if err := netlink.RouteAdd(defaultRoute); err != nil {
+		return err
+	}
 
-	return netlink.RouteAdd(defaultRoute)
+	// Parse the IPv6 subnet
+	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
+	ipv6Prefix := ipv6Net.IP.String()
+
+	// Allocate an IPv6 address using the last octet of the IPv4 address
+	ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
+	ipv6Addr := &netlink.Addr{
+		IPNet: &net.IPNet{
+			IP:   net.ParseIP(ipv6Address),
+			Mask: ipv6Net.Mask,
+		},
+	}
+
+	if err := netlink.AddrAdd(containerVeth, ipv6Addr); err != nil {
+		return err
+	}
+
+	// Add a default route (IPv6)
+	defaultIPv6Route := &netlink.Route{
+		LinkIndex: containerVeth.Attrs().Index,
+		Gw:        net.ParseIP(containerGatewayAddress),
+	}
+	if err := netlink.RouteAdd(defaultIPv6Route); err != nil {
+		return err
+	}
+
+	return m.workerRepo.SetContainerIp(m.worker.Id, containerId, ipAddr.IP.String())
 }
 
 func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
@@ -447,20 +504,40 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 		return err
 	}
 
-	// Add MASQUERADE rule for the outgoing traffic before DNAT rule
-	err = m.ipt.Insert("nat", "POSTROUTING", 1, "-s", containerIp, "-j", "MASQUERADE")
-	if err != nil {
-		return err
+	// Extract the last octet from the IPv4 address (192.168.1.2 -> 2)
+	ip := net.ParseIP(containerIp)
+	if ip == nil {
+		return fmt.Errorf("invalid IPv4 address: %s", containerIp)
 	}
 
+	// Recreate the corresponding IPv6 address using the last octet
+	ipv4LastOctet := int(ip.To4()[3])
+	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
+	ipv6Prefix := ipv6Net.IP.String()
+	containerIp_IPv6 := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
+
 	// Insert NAT PREROUTING rule at the top of the chain
+	// IPv4
 	err = m.ipt.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
 	if err != nil {
 		return err
 	}
 
+	// IPv6
+	err = m.ipt6.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp_IPv6, containerPort))
+	if err != nil {
+		return err
+	}
+
 	// Add FORWARD rule for the DNAT'd traffic
+	// IPv4
 	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
+	if err != nil {
+		return err
+	}
+
+	// IPv6
+	err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp_IPv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
 	if err != nil {
 		return err
 	}
