@@ -361,7 +361,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	// Add a default route (IPv6)
 	defaultIPv6Route := &netlink.Route{
 		LinkIndex: containerVeth.Attrs().Index,
-		Gw:        net.ParseIP(containerGatewayAddress),
+		Gw:        net.ParseIP(containerGatewayAddressIPv6),
 	}
 	if err := netlink.RouteAdd(defaultIPv6Route); err != nil {
 		return err
@@ -524,7 +524,7 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	}
 
 	// IPv6
-	err = m.ipt6.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp_IPv6, containerPort))
+	err = m.ipt6.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", containerIp_IPv6, containerPort))
 	if err != nil {
 		return err
 	}
