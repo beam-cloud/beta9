@@ -114,6 +114,7 @@ worker:
     #     minFreeGpu:
     #     minFreeMemory:
   # global pool attributes
+  useHostResolvConf: true
   hostNetwork: false
   imageTag: latest
   imageName: beta9-worker
