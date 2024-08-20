@@ -62,7 +62,7 @@ type StubFilter struct {
 	Pagination  bool        `query:"pagination"`
 }
 
-func ParseFilterFromQueryFilters(out interface{}, queryFilters ...QueryFilter) {
+func ParseConditionFromQueryFilters(out interface{}, queryFilters ...QueryFilter) {
 	val := reflect.ValueOf(out).Elem()
 	typ := val.Type()
 

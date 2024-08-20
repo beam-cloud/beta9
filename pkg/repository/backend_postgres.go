@@ -754,28 +754,29 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 
 func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
 	var stub types.StubWithRelated
-
-	query := `
-	SELECT
-	    s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at,
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
+		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at,
 	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key",
-	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"
-	FROM stub s
-	JOIN workspace w ON s.workspace_id = w.id
-	LEFT JOIN object o ON s.object_id = o.id
-	WHERE s.external_id = $1
-	`
+	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"`,
+	).
+		From("stub s").
+		Join("workspace w ON s.workspace_id = w.id").
+		LeftJoin("object o ON s.object_id = o.id").
+		Where(squirrel.Eq{"s.external_id": externalId})
 
 	var stubFilters types.StubFilter
-	types.ParseFilterFromQueryFilters(&stubFilters, queryFilters...)
+	types.ParseConditionFromQueryFilters(&stubFilters, queryFilters...)
 
-	params := []interface{}{externalId}
 	if stubFilters.WorkspaceID != "" {
-		query += " AND w.external_id = $2"
-		params = append(params, stubFilters.WorkspaceID)
+		qb = qb.Where(squirrel.Eq{"w.external_id": stubFilters.WorkspaceID})
 	}
 
-	err := r.client.GetContext(ctx, &stub, query, params...)
+	query, args, err := qb.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	err = r.client.GetContext(ctx, &stub, query, args...)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
