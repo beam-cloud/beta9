@@ -63,9 +63,25 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	}
 
 	// Initialize ip6tables for IPv6 support
-	ipt6, err := iptables.NewWithProtocol(iptables.ProtocolIPv6)
+	var ipt6 *iptables.IPTables
+	ipt6, err = iptables.NewWithProtocol(iptables.ProtocolIPv6)
 	if err != nil {
 		return nil, err
+	}
+
+	// Initialize ip6tables for IPv6 support
+	ipt6Supported := true
+	ipt6, err = iptables.NewWithProtocol(iptables.ProtocolIPv6)
+	if err != nil {
+		log.Printf("network manager: IPv6 iptables initialization failed, falling back to IPv4 only: %v", err)
+		ipt6Supported = false
+	} else {
+		// Check if the ip6tables NAT table can be accessed
+		_, err := ipt6.List("nat", "POSTROUTING")
+		if err != nil {
+			log.Printf("network manager: IPv6 iptables NAT table not available, falling back to IPv4 only: %v", err)
+			ipt6Supported = false
+		}
 	}
 
 	worker, err := workerRepo.GetWorkerById(workerId)
@@ -91,6 +107,11 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		config:        config,
 	}
 
+	// Disable IPv6 if ip6tables is not supported
+	if !ipt6Supported {
+		m.ipt6 = nil
+	}
+
 	go m.cleanupOrphanedNamespaces()
 
 	return m, nil
@@ -99,12 +120,6 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 5) // ttl=10s, retries=3
-	if err != nil {
-		return err
-	}
-	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -200,6 +215,12 @@ func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName
 }
 
 func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, error) {
+	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 5) // ttl=10s, retries=5
+	if err != nil {
+		return nil, err
+	}
+	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
+
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err == nil {
 		// Bridge is already set up, do nothing
@@ -257,8 +278,10 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 	}
 
 	// IPv6
-	if err := m.ipt6.AppendUnique("nat", "POSTROUTING", "-s", containerSubnetIPv6, "-o", m.defaultLink.Attrs().Name, "-j", "MASQUERADE"); err != nil {
-		return nil, err
+	if m.ipt6 != nil {
+		if err := m.ipt6.AppendUnique("nat", "POSTROUTING", "-s", containerSubnetIPv6, "-o", m.defaultLink.Attrs().Name, "-j", "MASQUERADE"); err != nil {
+			return nil, err
+		}
 	}
 
 	// Allow forwarding of traffic from the bridge to the external network and back
@@ -274,6 +297,12 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 }
 
 func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link) error {
+	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 5) // ttl=10s, retries=5
+	if err != nil {
+		return err
+	}
+	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
+
 	lo, err := netlink.LinkByName("lo")
 	if err != nil {
 		return err
@@ -486,8 +515,10 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		return err
 	}
 
-	if err := m.removeIPTablesRules(ipv6Address, m.ipt6); err != nil {
-		return err
+	if m.ipt6 != nil {
+		if err := m.removeIPTablesRules(ipv6Address, m.ipt6); err != nil {
+			return err
+		}
 	}
 
 	return m.workerRepo.RemoveContainerIp(m.networkPrefix, containerId)
@@ -546,9 +577,11 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	}
 
 	// IPv6
-	err = m.ipt6.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", containerIp_IPv6, containerPort))
-	if err != nil {
-		return err
+	if m.ipt6 != nil {
+		err = m.ipt6.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", containerIp_IPv6, containerPort))
+		if err != nil {
+			return err
+		}
 	}
 
 	// Add FORWARD rule for the DNAT'd traffic
@@ -559,9 +592,11 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	}
 
 	// IPv6
-	err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp_IPv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
-	if err != nil {
-		return err
+	if m.ipt6 != nil {
+		err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp_IPv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
