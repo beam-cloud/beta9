@@ -92,7 +92,15 @@ RUN apt-get update && \
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends criu nvidia-container-toolkit-base nvidia-container-toolkit
-RUN apt-get install -y fuse3 libfuse3-dev
+RUN apt-get install -y fuse3 libfuse2 libfuse3-dev
+
+RUN curl -O https://s3.amazonaws.com/mountpoint-s3-release/1.8.0/x86_64/mount-s3-1.8.0-x86_64.tar.gz && \
+    mkdir mount-s3 && \
+    tar -xzf mount-s3-1.8.0-x86_64.tar.gz -C mount-s3 && \
+    mv mount-s3/bin/mount-s3 /usr/local/bin/ms3 && chmod +x /usr/local/bin/ms3 && \
+    rm -rf mount-s3 mount-s3-1.8.0-x86_64.tar.gz
+
+RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/mount-s3 -o /usr/local/bin/mount-s3 && chmod +x /usr/local/bin/mount-s3
 
 RUN apt-get remove -y curl gpg && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
@@ -108,4 +116,3 @@ COPY ./sdk/src/beta9 /workspace/sdk
 
 VOLUME "/usr/lib/x86_64-linux-gnu"
 VOLUME "/usr/lib/aarch64-linux-gnu"
-

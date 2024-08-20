@@ -32,7 +32,7 @@ gateway:
 	docker push localhost:5001/beta9-gateway:$(tag)
 
 worker:
-	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker build . --target final --build-arg BASE_STAGE=dev $$([ "$$(uname -s)" = "Darwin" ] && echo "--platform=linux/amd64") -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	bin/delete_workers.sh
 
