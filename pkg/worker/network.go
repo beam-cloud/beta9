@@ -253,15 +253,17 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 		return nil, err
 	}
 
-	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
-	bridgeIPv6 := &netlink.Addr{
-		IPNet: &net.IPNet{
-			IP:   net.ParseIP(containerBridgeAddressIPv6),
-			Mask: ipv6Net.Mask,
-		},
-	}
-	if err := netlink.AddrAdd(bridge, bridgeIPv6); err != nil {
-		return nil, err
+	if m.ipt6 != nil {
+		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
+		bridgeIPv6 := &netlink.Addr{
+			IPNet: &net.IPNet{
+				IP:   net.ParseIP(containerBridgeAddressIPv6),
+				Mask: ipv6Net.Mask,
+			},
+		}
+		if err := netlink.AddrAdd(bridge, bridgeIPv6); err != nil {
+			return nil, err
+		}
 	}
 
 	// Allow containers to communicate with each other and the internet
@@ -367,30 +369,32 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return err
 	}
 
-	// Parse the IPv6 subnet
-	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
-	ipv6Prefix := ipv6Net.IP.String()
+	if m.ipt6 != nil {
+		// Parse the IPv6 subnet
+		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
+		ipv6Prefix := ipv6Net.IP.String()
 
-	// Allocate an IPv6 address using the last octet of the IPv4 address
-	ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
-	ipv6Addr := &netlink.Addr{
-		IPNet: &net.IPNet{
-			IP:   net.ParseIP(ipv6Address),
-			Mask: ipv6Net.Mask,
-		},
-	}
+		// Allocate an IPv6 address using the last octet of the IPv4 address
+		ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
+		ipv6Addr := &netlink.Addr{
+			IPNet: &net.IPNet{
+				IP:   net.ParseIP(ipv6Address),
+				Mask: ipv6Net.Mask,
+			},
+		}
 
-	if err := netlink.AddrAdd(containerVeth, ipv6Addr); err != nil {
-		return err
-	}
+		if err := netlink.AddrAdd(containerVeth, ipv6Addr); err != nil {
+			return err
+		}
 
-	// Add a default route (IPv6)
-	defaultIPv6Route := &netlink.Route{
-		LinkIndex: containerVeth.Attrs().Index,
-		Gw:        net.ParseIP(containerGatewayAddressIPv6),
-	}
-	if err := netlink.RouteAdd(defaultIPv6Route); err != nil {
-		return err
+		// Add a default route (IPv6)
+		defaultIPv6Route := &netlink.Route{
+			LinkIndex: containerVeth.Attrs().Index,
+			Gw:        net.ParseIP(containerGatewayAddressIPv6),
+		}
+		if err := netlink.RouteAdd(defaultIPv6Route); err != nil {
+			return err
+		}
 	}
 
 	return m.workerRepo.SetContainerIp(m.networkPrefix, containerId, ipAddr.IP.String())
