@@ -74,6 +74,10 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	}
 
 	networkPrefix := os.Getenv("NETWORK_PREFIX")
+	if networkPrefix == "" {
+		return nil, errors.New("invalid network prefix")
+	}
+
 	m := &ContainerNetworkManager{
 		ctx:           ctx,
 		ipt:           ipt,
@@ -365,7 +369,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return err
 	}
 
-	return m.workerRepo.SetContainerIp(m.worker.Id, containerId, ipAddr.IP.String())
+	return m.workerRepo.SetContainerIp(m.networkPrefix, containerId, ipAddr.IP.String())
 }
 
 func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
