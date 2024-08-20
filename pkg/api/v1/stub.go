@@ -78,12 +78,10 @@ func (g *StubGroup) RetrieveStub(ctx echo.Context) error {
 	stubID := ctx.Param("stubId")
 	workspaceID := ctx.Param("workspaceId")
 
-	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceID)
-	if err != nil {
-		return HTTPInternalServerError("Failed to retrieve workspace")
-	}
-
-	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID, workspace.Id)
+	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID, types.QueryFilter{
+		Field: "workspace_id",
+		Value: workspaceID,
+	})
 	if err != nil {
 		return HTTPInternalServerError("Failed to retrieve stub")
 	} else if stub == nil {
