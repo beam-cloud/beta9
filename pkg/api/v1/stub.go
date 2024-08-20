@@ -76,17 +76,18 @@ func (g *StubGroup) ListStubs(ctx echo.Context) error {
 
 func (g *StubGroup) RetrieveStub(ctx echo.Context) error {
 	stubID := ctx.Param("stubId")
-	c, _ := ctx.(*auth.HttpAuthContext)
+	workspaceID := ctx.Param("workspaceId")
 
-	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID)
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceID)
+	if err != nil {
+		return HTTPInternalServerError("Failed to retrieve workspace")
+	}
+
+	stub, err := g.backendRepo.GetStubByExternalIdAndWorkspaceId(ctx.Request().Context(), stubID, workspace.Id)
 	if err != nil {
 		return HTTPInternalServerError("Failed to retrieve stub")
 	} else if stub == nil {
 		return HTTPNotFound()
-	}
-
-	if stub.Workspace.ExternalId != c.AuthInfo.Workspace.ExternalId && c.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return HTTPForbidden("You do not have permission to access this stub")
 	}
 
 	return ctx.JSON(http.StatusOK, stub)
