@@ -143,6 +143,7 @@ type ProviderRepository interface {
 	SetMachineLock(providerName, poolName, machineId string) error
 	RemoveMachineLock(providerName, poolName, machineId string) error
 	GetGPUAvailability(pools map[string]types.WorkerPoolConfig) (map[string]bool, error)
+	GetGPUCounts(pools map[string]types.WorkerPoolConfig) (map[string]int, error)
 }
 
 type TailscaleRepository interface {
