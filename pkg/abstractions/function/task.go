@@ -18,7 +18,7 @@ type FunctionTask struct {
 }
 
 func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) error {
-	stub, err := t.fs.backendRepo.GetStubByExternalId(ctx, t.msg.StubId)
+	stub, err := t.fs.backendRepo.GetStubByExternalId(ctx, t.msg.StubId, nil)
 	if err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 }
 
 func (t *FunctionTask) Retry(ctx context.Context) error {
-	stub, err := t.fs.backendRepo.GetStubByExternalId(ctx, t.msg.StubId)
+	stub, err := t.fs.backendRepo.GetStubByExternalId(ctx, t.msg.StubId, nil)
 	if err != nil {
 		return err
 	}

@@ -84,7 +84,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 	outputChan := make(chan common.OutputMsg)
 	keyEventChan := make(chan common.KeyEvent)
 
-	stub, err := cs.backendRepo.GetStubByExternalId(ctx, in.StubId)
+	stub, err := cs.backendRepo.GetStubByExternalId(ctx, in.StubId, nil)
 	if err != nil {
 		return err
 	}

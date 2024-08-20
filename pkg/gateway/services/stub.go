@@ -106,7 +106,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequest) (*pb.DeployStubResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	stub, err := gws.backendRepo.GetStubByExternalId(ctx, in.StubId)
+	stub, err := gws.backendRepo.GetStubByExternalId(ctx, in.StubId, nil)
 	if err != nil || stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
 		return &pb.DeployStubResponse{
 			Ok: false,

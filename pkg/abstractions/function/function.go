@@ -110,7 +110,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	}
 
 	go func() {
-		stub, err := fs.backendRepo.GetStubByExternalId(ctx, in.StubId)
+		stub, err := fs.backendRepo.GetStubByExternalId(ctx, in.StubId, nil)
 		if err != nil {
 			log.Printf("error getting stub: %v", err)
 			return
