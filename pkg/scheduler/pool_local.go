@@ -374,6 +374,14 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Name:  "BETA9_GATEWAY_PORT",
 			Value: fmt.Sprint(wpc.config.GatewayService.GRPC.Port),
 		},
+		{
+			Name: "NETWORK_PREFIX",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "spec.nodeName",
+				},
+			},
+		},
 	}
 
 	if len(wpc.workerPool.JobSpec.Env) > 0 {

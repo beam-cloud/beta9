@@ -157,7 +157,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepo, containerRepo)
+	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepo, containerRepo, config)
 	if err != nil {
 		cancel()
 		return nil, err

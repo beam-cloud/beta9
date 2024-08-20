@@ -48,9 +48,10 @@ type ContainerNetworkManager struct {
 	containerRepo repository.ContainerRepository
 	networkPrefix string
 	mu            sync.Mutex
+	config        types.AppConfig
 }
 
-func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository) (*ContainerNetworkManager, error) {
+func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, config types.AppConfig) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
 		return nil, err
@@ -72,11 +73,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		return nil, err
 	}
 
-	networkPrefix := worker.Id
-	if worker.MachineId != "" {
-		networkPrefix = worker.MachineId
-	}
-
+	networkPrefix := os.Getenv("NETWORK_PREFIX")
 	m := &ContainerNetworkManager{
 		ctx:           ctx,
 		ipt:           ipt,
@@ -87,6 +84,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		containerRepo: containerRepo,
 		networkPrefix: networkPrefix,
 		mu:            sync.Mutex{},
+		config:        config,
 	}
 
 	go m.cleanupOrphanedNamespaces()

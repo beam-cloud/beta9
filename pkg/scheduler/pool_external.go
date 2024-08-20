@@ -401,7 +401,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 			Name:  "TS_DEBUG_DISABLE_PORTLIST",
 			Value: "true",
 		},
-	}
+		{
+			Name:  "NETWORK_PREFIX",
+			Value: machineId,
+		}}
 
 	remoteConfig, err := providers.GetRemoteConfig(wpc.config, wpc.tailscale)
 	if err != nil {
