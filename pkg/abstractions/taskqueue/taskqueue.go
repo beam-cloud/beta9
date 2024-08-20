@@ -149,7 +149,7 @@ func (tq *RedisTaskQueue) getStubConfig(stubId string) (*types.StubConfigV1, err
 	config, exists := tq.stubConfigCache.Get(stubId)
 
 	if !exists {
-		stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId, nil)
+		stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId)
 		if err != nil {
 			return nil, err
 		}
@@ -505,7 +505,7 @@ func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...fun
 		return instance, nil
 	}
 
-	stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId, nil)
+	stub, err := tq.backendRepo.GetStubByExternalId(tq.ctx, stubId)
 	if err != nil {
 		return nil, errors.New("invalid stub id")
 	}

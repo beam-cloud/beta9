@@ -210,7 +210,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 		return instance, nil
 	}
 
-	stub, err := es.backendRepo.GetStubByExternalId(es.ctx, stubId, nil)
+	stub, err := es.backendRepo.GetStubByExternalId(es.ctx, stubId)
 	if err != nil {
 		return nil, errors.New("invalid stub id")
 	}
