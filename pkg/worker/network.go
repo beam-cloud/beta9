@@ -64,22 +64,17 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 
 	// Initialize ip6tables for IPv6 support
 	var ipt6 *iptables.IPTables
-	ipt6, err = iptables.NewWithProtocol(iptables.ProtocolIPv6)
-	if err != nil {
-		return nil, err
-	}
 
-	// Initialize ip6tables for IPv6 support
 	ipt6Supported := true
 	ipt6, err = iptables.NewWithProtocol(iptables.ProtocolIPv6)
 	if err != nil {
-		log.Printf("network manager: IPv6 iptables initialization failed, falling back to IPv4 only: %v", err)
+		log.Printf("network manager: IPv6 iptables initialization failed, falling back to IPv4 only: %v\n", err)
 		ipt6Supported = false
 	} else {
 		// Check if the ip6tables NAT table can be accessed
 		_, err := ipt6.List("nat", "POSTROUTING")
 		if err != nil {
-			log.Printf("network manager: IPv6 iptables NAT table not available, falling back to IPv4 only: %v", err)
+			log.Printf("network manager: IPv6 iptables NAT table not available, falling back to IPv4 only: %v\n", err)
 			ipt6Supported = false
 		}
 	}
