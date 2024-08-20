@@ -100,7 +100,7 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 3) // ttl=10s, retries=3
+	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 5) // ttl=10s, retries=3
 	if err != nil {
 		return err
 	}
@@ -289,7 +289,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	}
 
 	// See what IP addresses are already allocated
-	allocatedIpAddresses, err := m.workerRepo.GetContainerIps(m.worker.Id)
+	allocatedIpAddresses, err := m.workerRepo.GetContainerIps(m.networkPrefix)
 	if err != nil {
 		return err
 	}
