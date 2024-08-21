@@ -48,7 +48,7 @@ type TaskQueueServiceOpts struct {
 const (
 	taskQueueContainerPrefix                 string        = "taskqueue"
 	taskQueueRoutePrefix                     string        = "/taskqueue"
-	taskQueueDefaultTaskExpiration           int           = 10 * 2 // 2 hours
+	taskQueueDefaultTaskExpiration           int           = 3600 * 2 // 2 hours
 	taskQueueServeContainerKeepaliveInterval time.Duration = 30 * time.Second
 	taskQueueServeContainerTimeout           time.Duration = 10 * time.Minute
 )
