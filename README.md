@@ -5,7 +5,7 @@
 
 ---
 
-### **✨ Open Source Serverless Platform for AI Teams ✨**
+### **✨ The Open Serverless GPU Cloud ✨**
 
 <p align="center">
   <a href="https://docs.beam.cloud">
