@@ -103,6 +103,7 @@ const (
 	TaskStatusComplete  TaskStatus = "COMPLETE"
 	TaskStatusError     TaskStatus = "ERROR"
 	TaskStatusCancelled TaskStatus = "CANCELLED"
+	TaskStatusExpired   TaskStatus = "EXPIRED"
 	TaskStatusTimeout   TaskStatus = "TIMEOUT"
 	TaskStatusRetry     TaskStatus = "RETRY"
 )
