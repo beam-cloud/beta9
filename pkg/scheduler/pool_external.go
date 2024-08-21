@@ -405,18 +405,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 			Name:  "NETWORK_PREFIX",
 			Value: machineId,
 		},
-		{
-			Name: "IPTABLES_MODE",
-			ValueFrom: &corev1.EnvVarSource{
-				FieldRef: &corev1.ObjectFieldSelector{
-					FieldPath: "spec.nodeName",
-				},
-				ResourceFieldRef: &corev1.ResourceFieldSelector{
-					ContainerName: "node",
-					Resource:      "metadata.labels['iptables-mode']",
-				},
-			},
-		},
 	}
 
 	remoteConfig, err := providers.GetRemoteConfig(wpc.config, wpc.tailscale)
