@@ -62,17 +62,20 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		ipTablesMode = "legacy"
 	}
 
-	path := ""
+	ipv4Path := ""
+	ipv6Path := ""
 	switch ipTablesMode {
 	case "nftables":
-		path = "/usr/sbin/iptables-nft"
+		ipv4Path = "/usr/sbin/iptables-nft"
+		ipv6Path = "/usr/sbin/ip6tables-nft"
 	case "legacy":
 		fallthrough
 	default:
-		path = "/usr/sbin/iptables"
+		ipv4Path = "/usr/sbin/iptables"
+		ipv6Path = "/usr/sbin/ip6tables"
 	}
 
-	ipt, err := iptables.New(iptables.Path(path), iptables.IPFamily(iptables.ProtocolIPv4))
+	ipt, err := iptables.New(iptables.Path(ipv4Path), iptables.IPFamily(iptables.ProtocolIPv4))
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +84,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	var ipt6 *iptables.IPTables
 
 	ipt6Supported := true
-	ipt6, err = iptables.New(iptables.Path(path), iptables.IPFamily(iptables.ProtocolIPv6))
+	ipt6, err = iptables.New(iptables.Path(ipv6Path), iptables.IPFamily(iptables.ProtocolIPv6))
 	if err != nil {
 		log.Printf("network manager: IPv6 iptables initialization failed, falling back to IPv4 only: %v\n", err)
 		ipt6Supported = false
