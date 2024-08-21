@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -11,7 +12,7 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 )
 
-func (w *Worker) collectAndSendContainerMetrics(request *types.ContainerRequest, spec *specs.Spec, pidChan <-chan int, done chan bool) {
+func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, pidChan <-chan int) {
 	containerPid := <-pidChan
 	if containerPid == 0 {
 		return
@@ -24,7 +25,7 @@ func (w *Worker) collectAndSendContainerMetrics(request *types.ContainerRequest,
 
 	for {
 		select {
-		case <-done:
+		case <-ctx.Done():
 			return
 
 		case <-ticker.C:
