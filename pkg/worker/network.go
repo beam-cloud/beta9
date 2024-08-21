@@ -57,10 +57,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		return nil, err
 	}
 
-	ipTablesMode := os.Getenv("IPTABLES_MODE")
-	if ipTablesMode == "" {
-		ipTablesMode = "legacy"
-	}
+	ipTablesMode := detectIptablesMode()
 
 	ipv4Path := ""
 	ipv6Path := ""
@@ -128,6 +125,26 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	go m.cleanupOrphanedNamespaces()
 
 	return m, nil
+}
+
+// detectIptablesMode detects which iptables version is use on the host based on where the KUBE-FORWARD chain has been setup
+func detectIptablesMode() string {
+	iptNft, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path("/usr/sbin/iptables-nft"))
+	if err == nil {
+		if exists, _ := iptNft.ChainExists("filter", "KUBE-FORWARD"); exists {
+			return "nftables"
+		}
+	}
+
+	iptLegacy, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path("/usr/sbin/iptables-legacy"))
+	if err == nil {
+		if exists, _ := iptLegacy.ChainExists("filter", "KUBE-FORWARD"); exists {
+			return "legacy"
+		}
+	}
+
+	// Default to legacy if no KUBE-FORWARD chain found
+	return "legacy"
 }
 
 func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) error {
