@@ -136,6 +136,11 @@ func NewWorker() (*Worker, error) {
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
+	storage, err := storage.NewStorage(config.Storage)
+	if err != nil {
+		return nil, err
+	}
+
 	imageClient, err := NewImageClient(config, workerId, workerRepo)
 	if err != nil {
 		return nil, err
@@ -147,11 +152,6 @@ func NewWorker() (*Worker, error) {
 	}
 
 	err = runcServer.Start()
-	if err != nil {
-		return nil, err
-	}
-
-	storage, err := storage.NewStorage(config.Storage)
 	if err != nil {
 		return nil, err
 	}
