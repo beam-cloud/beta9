@@ -127,7 +127,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	return m, nil
 }
 
-// detectIptablesMode detects which iptables version is in use based on where the KUBE-FORWARD chain has been placed
+// detectIptablesMode detects which iptables version is use on the host based on where the KUBE-FORWARD chain has been setup
 func detectIptablesMode() string {
 	iptNft, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path("/usr/sbin/iptables-nft"))
 	if err == nil {
