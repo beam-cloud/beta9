@@ -367,6 +367,10 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Value: wpc.config.Worker.Namespace,
 		},
 		{
+			Name:  "IPTABLES_MODE",
+			Value: wpc.workerPool.IPTablesMode,
+		},
+		{
 			Name: "NETWORK_PREFIX",
 			ValueFrom: &corev1.EnvVarSource{
 				FieldRef: &corev1.ObjectFieldSelector{
