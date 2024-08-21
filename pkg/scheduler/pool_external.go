@@ -404,7 +404,12 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		{
 			Name:  "NETWORK_PREFIX",
 			Value: machineId,
-		}}
+		},
+		{
+			Name:  "IPTABLES_MODE",
+			Value: wpc.workerPool.IPTablesMode,
+		},
+	}
 
 	remoteConfig, err := providers.GetRemoteConfig(wpc.config, wpc.tailscale)
 	if err != nil {

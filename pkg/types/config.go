@@ -198,6 +198,7 @@ type WorkerPoolConfig struct {
 	DefaultMachineCost   float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
 	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
 	Priority             int32                             `key:"priority" json:"priority"`
+	IPTablesMode         string                            `key:"ipTablesMode" json:"iptables_mode"`
 }
 
 type WorkerPoolJobSpecConfig struct {
