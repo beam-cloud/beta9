@@ -43,7 +43,7 @@ Features:
 
 We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale.
 
-## Use-Cases
+## Use Cases
 
 ### Serverless Inference Endpoints
 
