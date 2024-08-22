@@ -165,6 +165,7 @@ type MountPointConfig struct {
 type WorkerConfig struct {
 	Pools                      map[string]WorkerPoolConfig `key:"pools" json:"pools"`
 	HostNetwork                bool                        `key:"hostNetwork" json:"host_network"`
+	UseGatewayServiceHostname  bool                        `key:"useGatewayServiceHostname" json:"use_gateway_service_hostname"`
 	UseHostResolvConf          bool                        `key:"useHostResolvConf" json:"use_host_resolv_conf"`
 	ImageTag                   string                      `key:"imageTag" json:"image_tag"`
 	ImageName                  string                      `key:"imageName" json:"image_name"`

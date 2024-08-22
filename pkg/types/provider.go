@@ -27,8 +27,10 @@ type ProviderMachine struct {
 type ProviderMachineMetrics struct {
 	TotalCpuAvailable    int     `json:"total_cpu_available" redis:"total_cpu_available"`
 	TotalMemoryAvailable int     `json:"total_memory_available" redis:"total_memory_available"`
+	TotalDiskSpaceBytes  int     `json:"total_disk_space_bytes" redis:"total_disk_space_bytes"`
 	CpuUtilizationPct    float64 `json:"cpu_utilization_pct" redis:"cpu_utilization_pct"`
 	MemoryUtilizationPct float64 `json:"memory_utilization_pct" redis:"memory_utilization_pct"`
+	TotalDiskFreeBytes   int     `json:"total_disk_free_bytes" redis:"total_disk_free_bytes"`
 	WorkerCount          int     `json:"worker_count" redis:"worker_count"`
 	ContainerCount       int     `json:"container_count" redis:"container_count"`
 	FreeGpuCount         int     `json:"free_gpu_count" redis:"free_gpu_count"`

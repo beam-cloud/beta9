@@ -136,6 +136,11 @@ func NewWorker() (*Worker, error) {
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
+	storage, err := storage.NewStorage(config.Storage)
+	if err != nil {
+		return nil, err
+	}
+
 	imageClient, err := NewImageClient(config, workerId, workerRepo)
 	if err != nil {
 		return nil, err
@@ -151,13 +156,8 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	storage, err := storage.NewStorage(config.Storage)
-	if err != nil {
-		return nil, err
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepo, containerRepo)
+	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepo, containerRepo, config)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -511,8 +511,11 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputChan chan common.OutputMsg, opts *ContainerOptions) {
+	ctx, cancel := context.WithCancel(s.ctx)
+
 	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
 	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
+	defer cancel()
 
 	var containerErr error = nil
 
@@ -618,14 +621,13 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Log metrics
-	containerCompleteCh := make(chan bool)
-	go s.workerMetrics.EmitContainerUsage(request, containerCompleteCh)
+	go s.workerMetrics.EmitContainerUsage(ctx, request)
 	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId, request) }()
 
 	// Capture resource usage (cpu/mem/gpu)
 	pidChan := make(chan int, 1)
-	go s.collectAndSendContainerMetrics(request, spec, pidChan, containerCompleteCh)
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pidChan)
 
 	// Invoke runc process (launch the container)
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
@@ -633,8 +635,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		ConfigPath:   configPath,
 		Started:      pidChan,
 	})
-
-	containerCompleteCh <- true
 
 	// Send last log message since the container has exited
 	outputChan <- common.OutputMsg{

@@ -51,7 +51,7 @@ func (wm *WorkerMetrics) metricsContainerDuration(request *types.ContainerReques
 }
 
 // Periodically send metrics to track container duration
-func (wm *WorkerMetrics) EmitContainerUsage(request *types.ContainerRequest, done chan bool) {
+func (wm *WorkerMetrics) EmitContainerUsage(ctx context.Context, request *types.ContainerRequest) {
 	cursorTime := time.Now()
 	ticker := time.NewTicker(types.ContainerDurationEmissionInterval)
 	defer ticker.Stop()
@@ -61,7 +61,7 @@ func (wm *WorkerMetrics) EmitContainerUsage(request *types.ContainerRequest, don
 		case <-ticker.C:
 			go wm.metricsContainerDuration(request, time.Since(cursorTime))
 			cursorTime = time.Now()
-		case <-done:
+		case <-ctx.Done():
 			// Consolidate any remaining time
 			go wm.metricsContainerDuration(request, time.Since(cursorTime))
 			return

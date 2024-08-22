@@ -48,23 +48,50 @@ type ContainerNetworkManager struct {
 	containerRepo repository.ContainerRepository
 	networkPrefix string
 	mu            sync.Mutex
+	config        types.AppConfig
 }
 
-func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository) (*ContainerNetworkManager, error) {
+func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, config types.AppConfig) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
 		return nil, err
 	}
 
-	ipt, err := iptables.New()
+	ipTablesMode := detectIptablesMode()
+
+	ipv4Path := ""
+	ipv6Path := ""
+	switch ipTablesMode {
+	case "nftables":
+		ipv4Path = "/usr/sbin/iptables-nft"
+		ipv6Path = "/usr/sbin/ip6tables-nft"
+	case "legacy":
+		fallthrough
+	default:
+		ipv4Path = "/usr/sbin/iptables"
+		ipv6Path = "/usr/sbin/ip6tables"
+	}
+
+	ipt, err := iptables.New(iptables.Path(ipv4Path), iptables.IPFamily(iptables.ProtocolIPv4))
 	if err != nil {
 		return nil, err
 	}
 
 	// Initialize ip6tables for IPv6 support
-	ipt6, err := iptables.NewWithProtocol(iptables.ProtocolIPv6)
+	var ipt6 *iptables.IPTables
+
+	ipt6Supported := true
+	ipt6, err = iptables.New(iptables.Path(ipv6Path), iptables.IPFamily(iptables.ProtocolIPv6))
 	if err != nil {
-		return nil, err
+		log.Printf("network manager: IPv6 iptables initialization failed, falling back to IPv4 only: %v\n", err)
+		ipt6Supported = false
+	} else {
+		// Check if the ip6tables NAT table can be accessed
+		_, err := ipt6.List("nat", "POSTROUTING")
+		if err != nil {
+			log.Printf("network manager: IPv6 iptables NAT table not available, falling back to IPv4 only: %v\n", err)
+			ipt6Supported = false
+		}
 	}
 
 	worker, err := workerRepo.GetWorkerById(workerId)
@@ -72,9 +99,9 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		return nil, err
 	}
 
-	networkPrefix := worker.Id
-	if worker.MachineId != "" {
-		networkPrefix = worker.MachineId
+	networkPrefix := os.Getenv("NETWORK_PREFIX")
+	if networkPrefix == "" {
+		return nil, errors.New("invalid network prefix")
 	}
 
 	m := &ContainerNetworkManager{
@@ -87,6 +114,12 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		containerRepo: containerRepo,
 		networkPrefix: networkPrefix,
 		mu:            sync.Mutex{},
+		config:        config,
+	}
+
+	// Disable IPv6 if ip6tables is not supported
+	if !ipt6Supported {
+		m.ipt6 = nil
 	}
 
 	go m.cleanupOrphanedNamespaces()
@@ -94,15 +127,29 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	return m, nil
 }
 
+// detectIptablesMode detects which iptables version is use on the host based on where the KUBE-FORWARD chain has been setup
+func detectIptablesMode() string {
+	iptNft, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path("/usr/sbin/iptables-nft"))
+	if err == nil {
+		if exists, _ := iptNft.ChainExists("filter", "KUBE-FORWARD"); exists {
+			return "nftables"
+		}
+	}
+
+	iptLegacy, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path("/usr/sbin/iptables-legacy"))
+	if err == nil {
+		if exists, _ := iptLegacy.ChainExists("filter", "KUBE-FORWARD"); exists {
+			return "legacy"
+		}
+	}
+
+	// Default to legacy if no KUBE-FORWARD chain found
+	return "legacy"
+}
+
 func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 3) // ttl=10s, retries=3
-	if err != nil {
-		return err
-	}
-	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -198,6 +245,12 @@ func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName
 }
 
 func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, error) {
+	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 5) // ttl=10s, retries=5
+	if err != nil {
+		return nil, err
+	}
+	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
+
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err == nil {
 		// Bridge is already set up, do nothing
@@ -235,15 +288,17 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 		return nil, err
 	}
 
-	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
-	bridgeIPv6 := &netlink.Addr{
-		IPNet: &net.IPNet{
-			IP:   net.ParseIP(containerBridgeAddressIPv6),
-			Mask: ipv6Net.Mask,
-		},
-	}
-	if err := netlink.AddrAdd(bridge, bridgeIPv6); err != nil {
-		return nil, err
+	if m.ipt6 != nil {
+		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
+		bridgeIPv6 := &netlink.Addr{
+			IPNet: &net.IPNet{
+				IP:   net.ParseIP(containerBridgeAddressIPv6),
+				Mask: ipv6Net.Mask,
+			},
+		}
+		if err := netlink.AddrAdd(bridge, bridgeIPv6); err != nil {
+			return nil, err
+		}
 	}
 
 	// Allow containers to communicate with each other and the internet
@@ -255,8 +310,10 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 	}
 
 	// IPv6
-	if err := m.ipt6.AppendUnique("nat", "POSTROUTING", "-s", containerSubnetIPv6, "-o", m.defaultLink.Attrs().Name, "-j", "MASQUERADE"); err != nil {
-		return nil, err
+	if m.ipt6 != nil {
+		if err := m.ipt6.AppendUnique("nat", "POSTROUTING", "-s", containerSubnetIPv6, "-o", m.defaultLink.Attrs().Name, "-j", "MASQUERADE"); err != nil {
+			return nil, err
+		}
 	}
 
 	// Allow forwarding of traffic from the bridge to the external network and back
@@ -272,6 +329,12 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 }
 
 func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link) error {
+	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 5) // ttl=10s, retries=5
+	if err != nil {
+		return err
+	}
+	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
+
 	lo, err := netlink.LinkByName("lo")
 	if err != nil {
 		return err
@@ -287,7 +350,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	}
 
 	// See what IP addresses are already allocated
-	allocatedIpAddresses, err := m.workerRepo.GetContainerIps(m.worker.Id)
+	allocatedIpAddresses, err := m.workerRepo.GetContainerIps(m.networkPrefix)
 	if err != nil {
 		return err
 	}
@@ -341,33 +404,35 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return err
 	}
 
-	// Parse the IPv6 subnet
-	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
-	ipv6Prefix := ipv6Net.IP.String()
+	if m.ipt6 != nil {
+		// Parse the IPv6 subnet
+		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
+		ipv6Prefix := ipv6Net.IP.String()
 
-	// Allocate an IPv6 address using the last octet of the IPv4 address
-	ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
-	ipv6Addr := &netlink.Addr{
-		IPNet: &net.IPNet{
-			IP:   net.ParseIP(ipv6Address),
-			Mask: ipv6Net.Mask,
-		},
+		// Allocate an IPv6 address using the last octet of the IPv4 address
+		ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
+		ipv6Addr := &netlink.Addr{
+			IPNet: &net.IPNet{
+				IP:   net.ParseIP(ipv6Address),
+				Mask: ipv6Net.Mask,
+			},
+		}
+
+		if err := netlink.AddrAdd(containerVeth, ipv6Addr); err != nil {
+			return err
+		}
+
+		// Add a default route (IPv6)
+		defaultIPv6Route := &netlink.Route{
+			LinkIndex: containerVeth.Attrs().Index,
+			Gw:        net.ParseIP(containerGatewayAddressIPv6),
+		}
+		if err := netlink.RouteAdd(defaultIPv6Route); err != nil {
+			return err
+		}
 	}
 
-	if err := netlink.AddrAdd(containerVeth, ipv6Addr); err != nil {
-		return err
-	}
-
-	// Add a default route (IPv6)
-	defaultIPv6Route := &netlink.Route{
-		LinkIndex: containerVeth.Attrs().Index,
-		Gw:        net.ParseIP(containerGatewayAddressIPv6),
-	}
-	if err := netlink.RouteAdd(defaultIPv6Route); err != nil {
-		return err
-	}
-
-	return m.workerRepo.SetContainerIp(m.worker.Id, containerId, ipAddr.IP.String())
+	return m.workerRepo.SetContainerIp(m.networkPrefix, containerId, ipAddr.IP.String())
 }
 
 func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
@@ -484,8 +549,10 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		return err
 	}
 
-	if err := m.removeIPTablesRules(ipv6Address, m.ipt6); err != nil {
-		return err
+	if m.ipt6 != nil {
+		if err := m.removeIPTablesRules(ipv6Address, m.ipt6); err != nil {
+			return err
+		}
 	}
 
 	return m.workerRepo.RemoveContainerIp(m.networkPrefix, containerId)
@@ -544,9 +611,11 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	}
 
 	// IPv6
-	err = m.ipt6.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", containerIp_IPv6, containerPort))
-	if err != nil {
-		return err
+	if m.ipt6 != nil {
+		err = m.ipt6.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", containerIp_IPv6, containerPort))
+		if err != nil {
+			return err
+		}
 	}
 
 	// Add FORWARD rule for the DNAT'd traffic
@@ -557,9 +626,11 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	}
 
 	// IPv6
-	err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp_IPv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
-	if err != nil {
-		return err
+	if m.ipt6 != nil {
+		err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp_IPv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

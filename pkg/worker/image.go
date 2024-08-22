@@ -88,11 +88,11 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepo reposito
 	}
 
 	var client *blobcache.BlobCacheClient = nil
-
 	if config.ImageService.BlobCacheEnabled {
 		client, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
 		if err != nil {
-			return nil, err
+			log.Printf("Unable to load blobcache client: %v\n", err)
+			client = nil
 		}
 	}
 

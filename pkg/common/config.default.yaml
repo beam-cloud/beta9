@@ -116,6 +116,7 @@ worker:
   # global pool attributes
   useHostResolvConf: true
   hostNetwork: false
+  useGatewayServiceHostname: true
   imageTag: latest
   imageName: beta9-worker
   imageRegistry: registry.localhost:5000
