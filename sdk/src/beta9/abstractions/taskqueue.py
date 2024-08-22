@@ -78,6 +78,9 @@ class TaskQueue(RunnerAbstraction):
         autoscaler (Autoscaler):
             Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
             various autoscaling strategies. Default is QueueDepthAutoscaler().
+        task_policy (TaskPolicy):
+            The task policy for the function. This helps manage the lifecycle of an individual task.
+            Setting values here will override timeout and retries.
     Example:
         ```python
         from beta9 import task_queue, Image

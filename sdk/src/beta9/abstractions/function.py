@@ -52,6 +52,10 @@ class Function(RunnerAbstraction):
         name (Optional[str]):
             An optional name for this function, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
+        task_policy (TaskPolicy):
+            The task policy for the function. This helps manage the lifecycle of an individual task.
+            Setting values here will override timeout and retries.
+
     Example:
         ```python
         from beta9 import function, Image

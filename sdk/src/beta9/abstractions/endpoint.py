@@ -77,6 +77,9 @@ class Endpoint(RunnerAbstraction):
             various autoscaling strategies (Defaults to QueueDepthAutoscaler())
         callback_url (Optional[str]):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        task_policy (TaskPolicy):
+            The task policy for the function. This helps manage the lifecycle of an individual task.
+            Setting values here will override timeout and retries.
     Example:
         ```python
         from beta9 import endpoint, Image
