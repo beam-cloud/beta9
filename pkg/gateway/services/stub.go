@@ -39,7 +39,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	if in.TaskPolicy.Expiration > 0 {
-		taskPolicy.Expiration = uint64(math.Min(float64(in.TaskPolicy.Expiration), float64(types.MaxTaskExpirationS)))
+		taskPolicy.Expiration = uint32(math.Min(float64(in.TaskPolicy.Expiration), float64(types.MaxTaskExpirationS)))
 	}
 
 	if in.TaskPolicy.MaxRetries > 0 {

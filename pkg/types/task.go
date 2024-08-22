@@ -115,7 +115,7 @@ type TaskPolicy struct {
 	MaxRetries uint      `json:"max_retries" redis:"max_retries"`
 	Timeout    int       `json:"timeout" redis:"timeout"`
 	Expires    time.Time `json:"expires" redis:"expires"`
-	Expiration uint64    `json:"expiration" redis:"expiration"`
+	Expiration uint32    `json:"expiration" redis:"expiration"`
 }
 
 type ErrExceededTaskLimit struct {
