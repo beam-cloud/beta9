@@ -296,13 +296,17 @@ class EndpointManager:
 
 
 if __name__ == "__main__":
+    timeout = cfg.timeout
+    if timeout == -1:
+        timeout = 0
+
     options = {
         "bind": [f"[::]:{cfg.bind_port}"],
         "workers": cfg.workers,
         "worker_class": "uvicorn.workers.UvicornWorker",
         "loglevel": "info",
         "post_fork": GunicornApplication.post_fork_initialize,
-        "timeout": cfg.timeout,
+        "timeout": timeout,
     }
 
     GunicornApplication(Starlette(), options).run()
