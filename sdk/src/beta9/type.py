@@ -119,6 +119,26 @@ class QueueDepthAutoscaler(Autoscaler):
     pass
 
 
+@dataclass
+class TaskPolicy:
+    """
+    Task policy for a function. This helps manages lifecycle of an individual task.
+
+    Parameters:
+        max_retries (int):
+            The maximum number of times a task will be retried if the container crashes. Default is 3.
+        timeout (int):
+            The maximum number of seconds a task can run before it times out.
+            Default is 3600. Set it to -1 to disable the timeout.
+        expiration (int):
+            The expiration time for a task in seconds. Must be greater than 0 and less than 24 hours (86400 seconds).
+    """
+
+    max_retries: int = 0
+    timeout: int = 0
+    expiration: int = 0
+
+
 _AUTOSCALER_TYPES: Dict[Type[Autoscaler], str] = {
     QueueDepthAutoscaler: QUEUE_DEPTH_AUTOSCALER_TYPE,
 }

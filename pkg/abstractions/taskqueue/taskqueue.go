@@ -183,7 +183,12 @@ func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stub
 	}
 
 	policy := stubConfig.TaskPolicy
-	policy.Expires = time.Now().Add(time.Duration(taskQueueDefaultTaskExpiration) * time.Second)
+	taskExpirationDuration := time.Duration(taskQueueDefaultTaskExpiration) * time.Second
+	if policy.Expiration > 0 {
+		taskExpirationDuration = time.Duration(policy.Expiration) * time.Second
+	}
+
+	policy.Expires = time.Now().Add(taskExpirationDuration)
 
 	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), authInfo, stubId, payload, policy)
 	if err != nil {

@@ -123,8 +123,23 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 }
 
 func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (types.TaskInterface, error) {
-	policy := types.DefaultTaskPolicy
-	policy.Expires = time.Now().Add(time.Duration(functionDefaultTaskExpiration) * time.Second)
+	stub, err := fs.backendRepo.GetStubByExternalId(ctx, stubId)
+	if err != nil {
+		return nil, err
+	}
+
+	config := types.StubConfigV1{}
+	err = json.Unmarshal([]byte(stub.Config), &config)
+	if err != nil {
+		return nil, err
+	}
+
+	policy := config.TaskPolicy
+	taskExpirationDuration := time.Duration(functionDefaultTaskExpiration) * time.Second
+	if policy.Expiration > 0 {
+		taskExpirationDuration = time.Duration(policy.Expiration) * time.Second
+	}
+	policy.Expires = time.Now().Add(taskExpirationDuration)
 
 	task, err := fs.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorFunction), authInfo, stubId, payload, policy)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -32,6 +33,23 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		autoscaler.TasksPerContainer = uint(in.Autoscaler.TasksPerContainer)
 	}
 
+	taskPolicy := types.TaskPolicy{
+		MaxRetries: uint(in.Retries),
+		Timeout:    int(in.Timeout),
+	}
+
+	if in.TaskPolicy.Expiration > 0 {
+		taskPolicy.Expiration = uint64(math.Min(float64(in.TaskPolicy.Expiration), float64(types.MaxTaskExpirationS)))
+	}
+
+	if in.TaskPolicy.MaxRetries > 0 {
+		taskPolicy.MaxRetries = uint(math.Min(float64(in.TaskPolicy.MaxRetries), float64(types.MaxTaskRetries)))
+	}
+
+	if in.TaskPolicy.Timeout > 0 || in.TaskPolicy.Timeout == -1 {
+		taskPolicy.Timeout = int(in.TaskPolicy.Timeout)
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:     in.Cpu,
@@ -39,14 +57,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Memory:  in.Memory,
 			ImageId: in.ImageId,
 		},
-		Handler:       in.Handler,
-		OnStart:       in.OnStart,
-		CallbackUrl:   in.CallbackUrl,
-		PythonVersion: in.PythonVersion,
-		TaskPolicy: types.TaskPolicy{
-			MaxRetries: uint(in.Retries),
-			Timeout:    int(in.Timeout),
-		},
+		Handler:         in.Handler,
+		OnStart:         in.OnStart,
+		CallbackUrl:     in.CallbackUrl,
+		PythonVersion:   in.PythonVersion,
+		TaskPolicy:      taskPolicy,
 		KeepWarmSeconds: uint(in.KeepWarmSeconds),
 		Workers:         uint(in.Workers),
 		MaxPendingTasks: uint(in.MaxPendingTasks),

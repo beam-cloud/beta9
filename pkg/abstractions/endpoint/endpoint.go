@@ -188,11 +188,17 @@ func (es *HttpEndpointService) forwardRequest(
 		}
 	}
 
-	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), authInfo, stubId, payload, types.TaskPolicy{
+	taskPolicy := types.TaskPolicy{
 		MaxRetries: 0,
 		Timeout:    instance.StubConfig.TaskPolicy.Timeout,
 		Expires:    time.Now().Add(time.Duration(endpointRequestTimeoutS) * time.Second),
-	})
+	}
+
+	if instance.StubConfig.TaskPolicy.Expiration > 0 {
+		taskPolicy.Expires = time.Now().Add(time.Duration(instance.StubConfig.TaskPolicy.Expiration) * time.Second)
+	}
+
+	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), authInfo, stubId, payload, taskPolicy)
 	if err != nil {
 		return err
 	}

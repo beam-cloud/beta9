@@ -23,7 +23,7 @@ from ..clients.taskqueue import (
     TaskQueueServiceStub,
 )
 from ..env import is_local
-from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
 from .mixins import DeployableMixin
 
 
@@ -109,6 +109,7 @@ class TaskQueue(RunnerAbstraction):
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
+        task_policy: TaskPolicy = TaskPolicy(),
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -126,6 +127,7 @@ class TaskQueue(RunnerAbstraction):
             secrets=secrets,
             name=name,
             autoscaler=autoscaler,
+            task_policy=task_policy,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
 

@@ -90,7 +90,7 @@ type TaskStatus string
 
 func (ts TaskStatus) IsCompleted() bool {
 	switch ts {
-	case TaskStatusComplete, TaskStatusCancelled, TaskStatusError, TaskStatusTimeout:
+	case TaskStatusComplete, TaskStatusCancelled, TaskStatusError, TaskStatusTimeout, TaskStatusExpired:
 		return true
 	default:
 		return false

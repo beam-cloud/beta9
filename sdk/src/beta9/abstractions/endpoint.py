@@ -23,7 +23,7 @@ from ..clients.endpoint import (
     StopEndpointServeRequest,
 )
 from ..env import is_local
-from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
 from .mixins import DeployableMixin
 
 
@@ -112,6 +112,7 @@ class Endpoint(RunnerAbstraction):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
+        task_policy: TaskPolicy = TaskPolicy(),
     ):
         super().__init__(
             cpu=cpu,
@@ -130,6 +131,7 @@ class Endpoint(RunnerAbstraction):
             authorized=authorized,
             autoscaler=autoscaler,
             callback_url=callback_url,
+            task_policy=task_policy,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None

@@ -19,7 +19,7 @@ from ..clients.function import (
 )
 from ..env import is_local
 from ..sync import FileSyncer
-from ..type import GpuType, GpuTypeAlias
+from ..type import GpuType, GpuTypeAlias, TaskPolicy
 from .mixins import DeployableMixin
 
 
@@ -83,6 +83,7 @@ class Function(RunnerAbstraction):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
+        task_policy: TaskPolicy = TaskPolicy(),
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -95,6 +96,7 @@ class Function(RunnerAbstraction):
             volumes=volumes,
             secrets=secrets,
             name=name,
+            task_policy=task_policy,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None
