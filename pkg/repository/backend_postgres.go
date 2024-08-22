@@ -1351,6 +1351,31 @@ func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context
 	return secret, nil
 }
 
+func (r *PostgresBackendRepository) ListSecretsDecrypted(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error) {
+	query := `SELECT id, external_id, name, value, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE workspace_id = $1;`
+
+	var secrets []types.Secret
+	err := r.client.SelectContext(ctx, &secrets, query, workspace.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range secrets {
+		secret, err := pkgCommon.Decrypt(signingKey, secrets[i].Value)
+		if err != nil {
+			return nil, err
+		}
+		secrets[i].Value = string(secret)
+	}
+
+	return secrets, nil
+}
+
 func (r *PostgresBackendRepository) ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error) {
 	query := `SELECT id, external_id, name, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE workspace_id = $1;`
 

@@ -35,6 +35,7 @@ type Builder struct {
 	registry      *common.ImageRegistry
 	containerRepo repository.ContainerRepository
 	tailscale     *network.Tailscale
+	backendRepo   repository.BackendRepository
 }
 
 type BuildOpts struct {
@@ -67,13 +68,14 @@ func (o *BuildOpts) String() string {
 	return b.String()
 }
 
-func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository) (*Builder, error) {
+func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository) (*Builder, error) {
 	return &Builder{
 		config:        config,
 		scheduler:     scheduler,
 		tailscale:     tailscale,
 		registry:      registry,
 		containerRepo: containerRepo,
+		backendRepo:   backendRepo,
 	}, nil
 }
 
@@ -140,6 +142,17 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 	}
 
+	// Add workspace secrets to the environment
+	secrets, err := b.backendRepo.ListSecretsDecrypted(ctx, authInfo.Workspace)
+	if err != nil {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
+		return err
+	}
+	env := []string{}
+	for _, secret := range secrets {
+		env = append(env, fmt.Sprintf("%s=%s", secret.Name, secret.Value))
+	}
+
 	baseImageId, err := b.GetImageId(&BuildOpts{
 		BaseImageRegistry: opts.BaseImageRegistry,
 		BaseImageName:     opts.BaseImageName,
@@ -168,7 +181,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	err = b.scheduler.Run(&types.ContainerRequest{
 		ContainerId:      containerId,
-		Env:              []string{},
+		Env:              env,
 		Cpu:              cpu,
 		Memory:           memory,
 		ImageId:          baseImageId,

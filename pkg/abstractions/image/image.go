@@ -4,13 +4,14 @@ import (
 	"context"
 	"log"
 
+	"github.com/pkg/errors"
+
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/pkg/errors"
 )
 
 type ImageService interface {
@@ -30,6 +31,7 @@ type ImageServiceOpts struct {
 	ContainerRepo repository.ContainerRepository
 	Scheduler     *scheduler.Scheduler
 	Tailscale     *network.Tailscale
+	BackendRepo   repository.BackendRepository
 }
 
 func NewRuncImageService(
@@ -41,7 +43,7 @@ func NewRuncImageService(
 		return nil, err
 	}
 
-	builder, err := NewBuilder(opts.Config, registry, opts.Scheduler, opts.Tailscale, opts.ContainerRepo)
+	builder, err := NewBuilder(opts.Config, registry, opts.Scheduler, opts.Tailscale, opts.ContainerRepo, opts.BackendRepo)
 	if err != nil {
 		return nil, err
 	}

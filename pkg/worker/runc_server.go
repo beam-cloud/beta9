@@ -15,13 +15,13 @@ import (
 	"syscall"
 	"time"
 
-	pb "github.com/beam-cloud/beta9/proto"
-
-	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/go-runc"
 	"github.com/google/shlex"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc"
+
+	common "github.com/beam-cloud/beta9/pkg/common"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 const (
@@ -98,7 +98,7 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 	}
 
 	process := s.baseConfigSpec.Process
-	process.Env = append(process.Env, "DEBIAN_FRONTEND=noninteractive")
+
 	process.Args = parsedCmd
 	process.Cwd = defaultWorkingDirectory
 
@@ -106,6 +106,10 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 	if !exists {
 		return &pb.RunCExecResponse{Ok: false}, nil
 	}
+
+	// Add env vars from the container instance to the process spec
+	process.Env = append(process.Env, instance.Spec.Process.Env...)
+	process.Env = append(process.Env, "DEBIAN_FRONTEND=noninteractive")
 
 	err = s.runcHandle.Exec(ctx, in.ContainerId, *process, &runc.ExecOpts{
 		OutputWriter: instance.OutputWriter,

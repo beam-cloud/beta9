@@ -114,6 +114,7 @@ type BackendRepository interface {
 	GetSecretByName(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error)
 	GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error)
 	ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error)
+	ListSecretsDecrypted(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error)
 	UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretId string, value string) (*types.Secret, error)
 	DeleteSecret(ctx context.Context, workspace *types.Workspace, secretName string) error
 }
