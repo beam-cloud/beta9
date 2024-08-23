@@ -2,7 +2,9 @@ package types
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -203,19 +205,21 @@ type Autoscaler struct {
 }
 
 const (
-	StubTypeFunction            string = "function"
-	StubTypeFunctionDeployment  string = "function/deployment"
-	StubTypeFunctionServe       string = "function/serve"
-	StubTypeContainer           string = "container"
-	StubTypeTaskQueue           string = "taskqueue"
-	StubTypeTaskQueueDeployment string = "taskqueue/deployment"
-	StubTypeTaskQueueServe      string = "taskqueue/serve"
-	StubTypeEndpoint            string = "endpoint"
-	StubTypeEndpointDeployment  string = "endpoint/deployment"
-	StubTypeEndpointServe       string = "endpoint/serve"
-	StubTypeASGI                string = "asgi"
-	StubTypeASGIDeployment      string = "asgi/deployment"
-	StubTypeASGIServe           string = "asgi/serve"
+	StubTypeFunction               string = "function"
+	StubTypeFunctionDeployment     string = "function/deployment"
+	StubTypeFunctionServe          string = "function/serve"
+	StubTypeContainer              string = "container"
+	StubTypeTaskQueue              string = "taskqueue"
+	StubTypeTaskQueueDeployment    string = "taskqueue/deployment"
+	StubTypeTaskQueueServe         string = "taskqueue/serve"
+	StubTypeEndpoint               string = "endpoint"
+	StubTypeEndpointDeployment     string = "endpoint/deployment"
+	StubTypeEndpointServe          string = "endpoint/serve"
+	StubTypeASGI                   string = "asgi"
+	StubTypeASGIDeployment         string = "asgi/deployment"
+	StubTypeASGIServe              string = "asgi/serve"
+	StubTypeScheduledJob           string = "schedule"
+	StubTypeScheduledJobDeployment string = "schedule/deployment"
 )
 
 type StubType string
@@ -326,4 +330,39 @@ type Secret struct {
 	Value         string    `db:"value" json:"value,omitempty"`
 	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id"`
 	LastUpdatedBy *uint     `db:"last_updated_by" json:"last_updated_by"`
+}
+
+type ScheduledJob struct {
+	Id         uint64 `db:"id"`
+	ExternalId string `db:"external_id"`
+
+	JobId    uint64              `db:"job_id"`
+	JobName  string              `db:"job_name"`
+	Schedule string              `db:"job_schedule"`
+	Payload  ScheduledJobPayload `db:"job_payload"`
+
+	StubId       uint         `db:"stub_id"`
+	DeploymentId uint         `db:"deployment_id"`
+	CreatedAt    time.Time    `db:"created_at"`
+	UpdatedAt    time.Time    `db:"updated_at"`
+	DeletedAt    sql.NullTime `db:"deleted_at"`
+}
+
+type ScheduledJobPayload struct {
+	StubId        string      `json:"stub_id"`
+	WorkspaceName string      `json:"workspace_name"`
+	TaskPayload   TaskPayload `json:"task_payload"`
+}
+
+func (p *ScheduledJobPayload) Scan(value interface{}) error {
+	bytes, ok := value.([]byte)
+	if !ok {
+		return fmt.Errorf("type assertion to []byte failed")
+	}
+
+	return json.Unmarshal(bytes, p)
+}
+
+func (p ScheduledJobPayload) Value() (driver.Value, error) {
+	return json.Marshal(p)
 }

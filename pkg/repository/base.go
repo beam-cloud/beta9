@@ -116,6 +116,11 @@ type BackendRepository interface {
 	ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error)
 	UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretId string, value string) (*types.Secret, error)
 	DeleteSecret(ctx context.Context, workspace *types.Workspace, secretName string) error
+	CreateScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) (*types.ScheduledJob, error)
+	DeleteScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) error
+	DeletePreviousScheduledJob(ctx context.Context, deployment *types.Deployment) error
+	GetScheduledJob(ctx context.Context, deploymentId uint) (*types.ScheduledJob, error)
+	ListenToChannel(ctx context.Context, channel string) (<-chan string, error)
 }
 
 type TaskRepository interface {

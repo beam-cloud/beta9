@@ -76,6 +76,20 @@ class FunctionMonitorResponse(betterproto.Message):
     timed_out: bool = betterproto.bool_field(4)
 
 
+@dataclass(eq=False, repr=False)
+class FunctionScheduleRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    when: str = betterproto.string_field(2)
+    deployment_id: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class FunctionScheduleResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    scheduled_job_id: str = betterproto.string_field(3)
+
+
 class FunctionServiceStub(SyncServiceStub):
     def function_invoke(
         self, function_invoke_request: "FunctionInvokeRequest"
@@ -114,3 +128,12 @@ class FunctionServiceStub(SyncServiceStub):
             FunctionMonitorResponse,
         )(function_monitor_request):
             yield response
+
+    def function_schedule(
+        self, function_schedule_request: "FunctionScheduleRequest"
+    ) -> "FunctionScheduleResponse":
+        return self._unary_unary(
+            "/function.FunctionService/FunctionSchedule",
+            FunctionScheduleRequest,
+            FunctionScheduleResponse,
+        )(function_schedule_request)

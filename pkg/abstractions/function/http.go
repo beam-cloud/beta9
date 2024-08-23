@@ -3,6 +3,7 @@ package function
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -34,12 +35,17 @@ func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
 	deploymentName := ctx.Param("deploymentName")
 	version := ctx.Param("version")
 
+	stubType := types.StubTypeFunctionDeployment
+	if strings.HasPrefix(ctx.Path(), scheduleRoutePrefix) {
+		stubType = types.StubTypeScheduledJobDeployment
+	}
+
 	if deploymentName != "" {
 		var deployment *types.DeploymentWithRelated
 
 		if version == "" {
 			var err error
-			deployment, err = g.fs.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, types.StubTypeFunctionDeployment, true)
+			deployment, err = g.fs.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, stubType, true)
 			if err != nil {
 				return apiv1.HTTPBadRequest("Invalid deployment")
 			}
@@ -49,7 +55,7 @@ func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
 				return apiv1.HTTPBadRequest("Invalid deployment version")
 			}
 
-			deployment, err = g.fs.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), types.StubTypeFunctionDeployment)
+			deployment, err = g.fs.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), stubType)
 			if err != nil {
 				return apiv1.HTTPBadRequest("Invalid deployment")
 			}
