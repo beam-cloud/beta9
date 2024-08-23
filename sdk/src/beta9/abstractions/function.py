@@ -5,8 +5,6 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
 import cloudpickle
-from croniter import croniter
-from typing_extensions import override
 
 from .. import terminal
 from ..abstractions.base.runner import (
@@ -215,7 +213,6 @@ class ScheduleWrapper(_CallableWrapper):
     base_stub_type = SCHEDULE_STUB_TYPE
     deployment_stub_type = SCHEDULE_DEPLOYMENT_STUB_TYPE
 
-    @override
     def deploy(self, *args: List[Any], **kwargs: Dict[str, Any]) -> bool:
         deployed = super().deploy(invocation_details_func=self.invocation_details, *args, **kwargs)
         if deployed:
@@ -232,6 +229,13 @@ class ScheduleWrapper(_CallableWrapper):
         return deployed
 
     def invocation_details(self) -> None:
+        """
+        Print the schedule details.
+
+        Used as an alternative view when deploying a scheduled function.
+        """
+        from croniter import croniter
+
         terminal.header("Schedule details")
         terminal.print(f"Schedule: {self.parent.when}")
         terminal.print("Upcoming:")
@@ -323,6 +327,5 @@ class Schedule(Function):
 
         self.when = when
 
-    @override
     def __call__(self, func) -> ScheduleWrapper:
         return ScheduleWrapper(func, self)
