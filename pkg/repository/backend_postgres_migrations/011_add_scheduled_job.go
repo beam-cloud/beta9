@@ -47,8 +47,7 @@ func upAddScheduleJob(ctx context.Context, tx *sql.Tx) error {
 			job_id int NOT NULL,
 			job_name varchar(255) CHECK (LENGTH(job_name) > 0) NOT NULL,
 			job_schedule varchar(255) NOT NULL CHECK (
-				LENGTH(job_schedule) > 0 AND
-				(array_length(regexp_split_to_array(job_schedule, ' '), 1) <= 5 OR job_schedule LIKE '@%')
+				COALESCE(array_length(string_to_array(job_schedule, ' '), 1), 0) = 5 OR job_schedule LIKE '@%'
 			),
 			job_payload jsonb,
 			deployment_id int REFERENCES deployment(id) NOT NULL,
