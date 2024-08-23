@@ -423,8 +423,6 @@ func (s *Worker) processStopContainerEvents() {
 			log.Printf("<%s> - unable to stop container: %v\n", event.ContainerId, err)
 
 			if strings.Contains(err.Error(), "container does not exist") {
-				log.Printf("<%s> - container does not exist, skipping further actions\n", event.ContainerId)
-
 				// In case container network is still around for some reason, get rid of it
 				s.containerNetworkManager.TearDown(event.ContainerId)
 				continue
