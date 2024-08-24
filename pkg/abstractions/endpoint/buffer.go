@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -253,7 +254,7 @@ func (rb *RequestBuffer) incrementRequestsInFlight(containerId string) error {
 		return err
 	}
 
-	err = rb.rdb.Expire(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId), time.Duration(endpointRequestTimeoutS)*time.Second).Err()
+	err = rb.rdb.Expire(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId), time.Duration(EndpointRequestTimeoutS)*time.Second).Err()
 	if err != nil {
 		return err
 	}
@@ -267,7 +268,7 @@ func (rb *RequestBuffer) decrementRequestsInFlight(containerId string) error {
 		return err
 	}
 
-	err = rb.rdb.Expire(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId), time.Duration(endpointRequestTimeoutS)*time.Second).Err()
+	err = rb.rdb.Expire(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId), time.Duration(EndpointRequestTimeoutS)*time.Second).Err()
 	if err != nil {
 		return err
 	}
@@ -334,8 +335,11 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(request.Context(), time.Duration(req.taskMessage.Policy.Timeout)*time.Second)
+	defer cancel()
+
 	containerUrl := fmt.Sprintf("http://%s/%s", c.address, req.ctx.Param("subPath"))
-	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, requestBody)
+	httpReq, err := http.NewRequestWithContext(ctx, request.Method, containerUrl, requestBody)
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
@@ -349,9 +353,16 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
-		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "Internal server error",
-		})
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			req.ctx.JSON(http.StatusRequestTimeout, map[string]interface{}{
+				"error": "Request timed out",
+			})
+		} else {
+			req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+				"error": "Internal server error",
+			})
+		}
 		req.done <- true
 		return
 	}

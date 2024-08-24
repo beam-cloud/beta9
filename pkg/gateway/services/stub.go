@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
+	"github.com/beam-cloud/beta9/pkg/abstractions/function"
+	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -33,23 +36,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		autoscaler.TasksPerContainer = uint(in.Autoscaler.TasksPerContainer)
 	}
 
-	taskPolicy := types.TaskPolicy{
-		MaxRetries: uint(in.Retries),
-		Timeout:    int(in.Timeout),
-	}
-
-	if in.TaskPolicy.Expiration > 0 {
-		taskPolicy.Expiration = uint32(math.Min(float64(in.TaskPolicy.Expiration), float64(types.MaxTaskExpirationS)))
-	}
-
-	if in.TaskPolicy.MaxRetries > 0 {
-		taskPolicy.MaxRetries = uint(math.Min(float64(in.TaskPolicy.MaxRetries), float64(types.MaxTaskRetries)))
-	}
-
-	if in.TaskPolicy.Timeout > 0 || in.TaskPolicy.Timeout == -1 {
-		taskPolicy.Timeout = int(in.TaskPolicy.Timeout)
-	}
-
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:     in.Cpu,
@@ -61,7 +47,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		OnStart:         in.OnStart,
 		CallbackUrl:     in.CallbackUrl,
 		PythonVersion:   in.PythonVersion,
-		TaskPolicy:      taskPolicy,
+		TaskPolicy:      gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),
 		KeepWarmSeconds: uint(in.KeepWarmSeconds),
 		Workers:         uint(in.Workers),
 		MaxPendingTasks: uint(in.MaxPendingTasks),
@@ -160,4 +146,30 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		Version:      uint32(deployment.Version),
 		InvokeUrl:    invokeURL,
 	}, nil
+}
+
+func (gws *GatewayService) configureTaskPolicy(policy *pb.TaskPolicy, stubType types.StubType) types.TaskPolicy {
+	p := types.TaskPolicy{
+		MaxRetries: uint(math.Min(float64(policy.MaxRetries), float64(types.MaxTaskRetries))),
+		Timeout:    int(policy.Timeout),
+		TTL:        uint32(math.Min(float64(policy.Ttl), float64(types.MaxTaskTTL))),
+	}
+
+	if stubType.Kind() == types.StubTypeEndpoint {
+		p.Timeout = int(math.Min(float64(policy.Timeout), float64(endpoint.EndpointRequestTimeoutS)))
+		if p.Timeout <= 0 {
+			p.Timeout = endpoint.EndpointRequestTimeoutS
+		}
+		p.MaxRetries = 0
+	} else if stubType.Kind() == types.StubTypeFunction {
+		if p.TTL == 0 {
+			p.TTL = uint32(function.FunctionDefaultTaskTTL)
+		}
+	} else if stubType.Kind() == types.StubTypeTaskQueue {
+		if p.TTL == 0 {
+			p.TTL = uint32(taskqueue.TaskQueueDefaultTaskTTL)
+		}
+	}
+
+	return p
 }

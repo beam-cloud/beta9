@@ -210,7 +210,7 @@ message Autoscaler {
 message TaskPolicy {
   int64 timeout = 1;
   uint32 max_retries = 2;
-  uint32 expiration = 3;
+  uint32 ttl = 3;
 }
 
 message GetOrCreateStubRequest {

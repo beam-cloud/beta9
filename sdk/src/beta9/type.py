@@ -130,13 +130,13 @@ class TaskPolicy:
         timeout (int):
             The maximum number of seconds a task can run before it times out.
             Default is 3600. Set it to -1 to disable the timeout.
-        expiration (int):
+        ttl (int):
             The expiration time for a task in seconds. Must be greater than 0 and less than 24 hours (86400 seconds).
     """
 
     max_retries: int = 0
     timeout: int = 0
-    expiration: int = 0
+    ttl: int = 0
 
 
 _AUTOSCALER_TYPES: Dict[Type[Autoscaler], str] = {

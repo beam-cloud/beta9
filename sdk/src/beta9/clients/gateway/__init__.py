@@ -240,7 +240,7 @@ class Autoscaler(betterproto.Message):
 class TaskPolicy(betterproto.Message):
     timeout: int = betterproto.int64_field(1)
     max_retries: int = betterproto.uint32_field(2)
-    expiration: int = betterproto.uint32_field(3)
+    ttl: int = betterproto.uint32_field(3)
 
 
 @dataclass(eq=False, repr=False)

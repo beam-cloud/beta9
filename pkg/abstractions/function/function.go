@@ -29,13 +29,14 @@ type FunctionService interface {
 }
 
 const (
+	FunctionDefaultTaskTTL int = 3600 * 12 // 12 hours
+
 	functionContainerPrefix         string        = "function"
 	functionRoutePrefix             string        = "/function"
 	defaultFunctionContainerCpu     int64         = 100
 	defaultFunctionContainerMemory  int64         = 128
 	functionArgsExpirationTimeout   time.Duration = 600 * time.Second
 	functionResultExpirationTimeout time.Duration = 600 * time.Second
-	functionDefaultTaskExpiration   int           = 3600 * 12 // 12 hours
 )
 
 type RunCFunctionService struct {
@@ -109,16 +110,6 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return err
 	}
 
-	go func() {
-		stub, err := fs.backendRepo.GetStubByExternalId(ctx, in.StubId)
-		if err != nil {
-			log.Printf("error getting stub: %v", err)
-			return
-		}
-
-		go fs.eventRepo.PushRunStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
-	}()
-
 	return fs.stream(ctx, stream, authInfo, task)
 }
 
@@ -135,17 +126,14 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 	}
 
 	policy := config.TaskPolicy
-	taskExpirationDuration := time.Duration(functionDefaultTaskExpiration) * time.Second
-	if policy.Expiration > 0 {
-		taskExpirationDuration = time.Duration(policy.Expiration) * time.Second
-	}
-	policy.Expires = time.Now().Add(taskExpirationDuration)
+	policy.Expires = time.Now().Add(time.Duration(policy.TTL) * time.Second)
 
 	task, err := fs.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorFunction), authInfo, stubId, payload, policy)
 	if err != nil {
 		return nil, err
 	}
 
+	go fs.eventRepo.PushRunStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
 	return task, err
 }
 

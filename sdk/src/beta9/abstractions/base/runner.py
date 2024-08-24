@@ -95,10 +95,12 @@ class RunnerAbstraction(BaseAbstraction):
         self.workers = workers
         self.keep_warm_seconds = keep_warm_seconds
         self.max_pending_tasks = max_pending_tasks
-        self.retries = retries
-        self.timeout = timeout
         self.autoscaler = autoscaler
-        self.task_policy = task_policy
+        self.task_policy = TaskPolicy(
+            max_retries=task_policy.max_retries or retries,
+            timeout=task_policy.timeout or timeout,
+            ttl=task_policy.ttl,
+        )
 
         if on_start is not None:
             self._map_callable_to_attr(attr="on_start", func=on_start)
@@ -333,8 +335,6 @@ class RunnerAbstraction(BaseAbstraction):
                     handler=self.handler,
                     on_start=self.on_start,
                     callback_url=self.callback_url,
-                    retries=self.retries,
-                    timeout=self.timeout,
                     keep_warm_seconds=self.keep_warm_seconds,
                     workers=self.workers,
                     max_pending_tasks=self.max_pending_tasks,
@@ -350,7 +350,7 @@ class RunnerAbstraction(BaseAbstraction):
                     task_policy=TaskPolicyProto(
                         max_retries=self.task_policy.max_retries,
                         timeout=self.task_policy.timeout,
-                        expiration=self.task_policy.expiration,
+                        ttl=self.task_policy.ttl,
                     ),
                 )
             )

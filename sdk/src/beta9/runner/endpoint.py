@@ -33,6 +33,8 @@ from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
 from .common import end_task_and_send_callback, is_asgi3
 
+MAX_ENDPOINT_TIMEOUT = 10 * 60  # 10 minutes
+
 
 class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -297,8 +299,10 @@ class EndpointManager:
 
 if __name__ == "__main__":
     timeout = cfg.timeout
-    if timeout == -1:
-        timeout = 0
+    if timeout <= 0:
+        timeout = MAX_ENDPOINT_TIMEOUT
+
+    timeout = min(timeout, MAX_ENDPOINT_TIMEOUT)
 
     options = {
         "bind": [f"[::]:{cfg.bind_port}"],
@@ -306,7 +310,7 @@ if __name__ == "__main__":
         "worker_class": "uvicorn.workers.UvicornWorker",
         "loglevel": "info",
         "post_fork": GunicornApplication.post_fork_initialize,
-        "timeout": timeout,
+        "timeout": cfg.timeout,
     }
 
     GunicornApplication(Starlette(), options).run()
