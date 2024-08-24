@@ -91,6 +91,7 @@ type GatewayServiceConfig struct {
 	Host            string        `key:"host" json:"host"`
 	ExternalHost    string        `key:"externalHost" json:"external_host"`
 	ExternalURL     string        `key:"externalURL" json:"external_url"`
+	Token           string        `key:"token" json:"token"`
 	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
 	HTTP            HTTPConfig    `key:"http" json:"http"`
 	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
@@ -157,9 +158,10 @@ type JuiceFSConfig struct {
 }
 
 type MountPointConfig struct {
-	AWSS3Bucket  string `key:"awsS3Bucket" json:"aws_s3_bucket"`
-	AWSAccessKey string `key:"awsAccessKey" json:"aws_access_key"`
-	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`
+	S3Bucket  string `json:"s3_bucket"`
+	AccessKey string `json:"access_key"`
+	SecretKey string `json:"secret_key"`
+	BucketURL string `json:"bucket_url"`
 }
 
 type WorkerConfig struct {

@@ -225,6 +225,21 @@ class Volume(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class CloudBucket(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    bucket_name: str = betterproto.string_field(2)
+    mount_path: str = betterproto.string_field(3)
+    config: "CloudBucketConfig" = betterproto.message_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class CloudBucketConfig(betterproto.Message):
+    access_key: str = betterproto.string_field(4)
+    secret: str = betterproto.string_field(5)
+    endpoint: str = betterproto.string_field(6)
+
+
+@dataclass(eq=False, repr=False)
 class SecretVar(betterproto.Message):
     name: str = betterproto.string_field(1)
 
@@ -253,12 +268,13 @@ class GetOrCreateStubRequest(betterproto.Message):
     workers: int = betterproto.uint32_field(13)
     max_pending_tasks: int = betterproto.uint32_field(15)
     volumes: List["Volume"] = betterproto.message_field(16)
-    force_create: bool = betterproto.bool_field(17)
-    on_start: str = betterproto.string_field(18)
-    callback_url: str = betterproto.string_field(19)
-    authorized: bool = betterproto.bool_field(20)
-    secrets: List["SecretVar"] = betterproto.message_field(21)
-    autoscaler: "Autoscaler" = betterproto.message_field(22)
+    cloud_buckets: List["CloudBucket"] = betterproto.message_field(17)
+    force_create: bool = betterproto.bool_field(18)
+    on_start: str = betterproto.string_field(19)
+    callback_url: str = betterproto.string_field(20)
+    authorized: bool = betterproto.bool_field(21)
+    secrets: List["SecretVar"] = betterproto.message_field(22)
+    autoscaler: "Autoscaler" = betterproto.message_field(23)
 
 
 @dataclass(eq=False, repr=False)
@@ -495,6 +511,21 @@ class DeleteTokenResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
 
 
+@dataclass(eq=False, repr=False)
+class GetSecretsRequest(betterproto.Message):
+    workspace_id: str = betterproto.string_field(1)
+    names: List[str] = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class GetSecretsResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    secrets: Dict[str, str] = betterproto.map_field(
+        3, betterproto.TYPE_STRING, betterproto.TYPE_STRING
+    )
+
+
 class GatewayServiceStub(SyncServiceStub):
     def authorize(self, authorize_request: "AuthorizeRequest") -> "AuthorizeResponse":
         return self._unary_unary(
@@ -710,3 +741,12 @@ class GatewayServiceStub(SyncServiceStub):
             DeleteTokenRequest,
             DeleteTokenResponse,
         )(delete_token_request)
+
+    def get_secrets(
+        self, get_secrets_request: "GetSecretsRequest"
+    ) -> "GetSecretsResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetSecrets",
+            GetSecretsRequest,
+            GetSecretsResponse,
+        )(get_secrets_request)

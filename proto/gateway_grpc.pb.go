@@ -44,6 +44,7 @@ const (
 	GatewayService_CreateToken_FullMethodName          = "/gateway.GatewayService/CreateToken"
 	GatewayService_ToggleToken_FullMethodName          = "/gateway.GatewayService/ToggleToken"
 	GatewayService_DeleteToken_FullMethodName          = "/gateway.GatewayService/DeleteToken"
+	GatewayService_GetSecrets_FullMethodName           = "/gateway.GatewayService/GetSecrets"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -84,6 +85,8 @@ type GatewayServiceClient interface {
 	CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error)
 	ToggleToken(ctx context.Context, in *ToggleTokenRequest, opts ...grpc.CallOption) (*ToggleTokenResponse, error)
 	DeleteToken(ctx context.Context, in *DeleteTokenRequest, opts ...grpc.CallOption) (*DeleteTokenResponse, error)
+	// Secrets
+	GetSecrets(ctx context.Context, in *GetSecretsRequest, opts ...grpc.CallOption) (*GetSecretsResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -344,6 +347,15 @@ func (c *gatewayServiceClient) DeleteToken(ctx context.Context, in *DeleteTokenR
 	return out, nil
 }
 
+func (c *gatewayServiceClient) GetSecrets(ctx context.Context, in *GetSecretsRequest, opts ...grpc.CallOption) (*GetSecretsResponse, error) {
+	out := new(GetSecretsResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetSecrets_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
@@ -382,6 +394,8 @@ type GatewayServiceServer interface {
 	CreateToken(context.Context, *CreateTokenRequest) (*CreateTokenResponse, error)
 	ToggleToken(context.Context, *ToggleTokenRequest) (*ToggleTokenResponse, error)
 	DeleteToken(context.Context, *DeleteTokenRequest) (*DeleteTokenResponse, error)
+	// Secrets
+	GetSecrets(context.Context, *GetSecretsRequest) (*GetSecretsResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -463,6 +477,9 @@ func (UnimplementedGatewayServiceServer) ToggleToken(context.Context, *ToggleTok
 }
 func (UnimplementedGatewayServiceServer) DeleteToken(context.Context, *DeleteTokenRequest) (*DeleteTokenResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteToken not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetSecrets(context.Context, *GetSecretsRequest) (*GetSecretsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSecrets not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -935,6 +952,24 @@ func _GatewayService_DeleteToken_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_GetSecrets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSecretsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetSecrets(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetSecrets_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetSecrets(ctx, req.(*GetSecretsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1037,6 +1072,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteToken",
 			Handler:    _GatewayService_DeleteToken_Handler,
+		},
+		{
+			MethodName: "GetSecrets",
+			Handler:    _GatewayService_GetSecrets_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

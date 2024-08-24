@@ -25,8 +25,9 @@ type ContainerResourceUsage struct {
 }
 
 type Mount struct {
-	LocalPath string `json:"local_path"`
-	MountPath string `json:"mount_path"`
-	LinkPath  string `json:"link_path"`
-	ReadOnly  bool   `json:"read_only"`
+	LocalPath        string            `json:"local_path"`
+	MountPath        string            `json:"mount_path"`
+	LinkPath         string            `json:"link_path"`
+	ReadOnly         bool              `json:"read_only"`
+	MountPointConfig *MountPointConfig `json:"mountpoint_config"`
 }

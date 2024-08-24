@@ -1,5 +1,6 @@
 from . import env
 from .abstractions import experimental
+from .abstractions.cloudbucket import CloudBucket, Credentials
 from .abstractions.container import Container
 from .abstractions.endpoint import ASGI as asgi
 from .abstractions.endpoint import Endpoint as endpoint
@@ -17,6 +18,8 @@ __all__ = [
     "Image",
     "Queue",
     "Volume",
+    "CloudBucket",
+    "Credentials",
     "task_queue",
     "function",
     "endpoint",

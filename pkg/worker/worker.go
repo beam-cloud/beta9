@@ -22,6 +22,7 @@ import (
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/proto"
 )
 
 const (
@@ -46,6 +47,7 @@ type Worker struct {
 	workerId                string
 	eventBus                *common.EventBus
 	containerInstances      *common.SafeMap[*ContainerInstance]
+	mountPoints             *common.SafeMap[[]*storage.MountPointStorage]
 	containerLock           sync.Mutex
 	containerWg             sync.WaitGroup
 	containerRepo           repo.ContainerRepository
@@ -55,6 +57,7 @@ type Worker struct {
 	stopContainerChan       chan stopContainerEvent
 	workerRepo              repo.WorkerRepository
 	eventRepo               repo.EventRepository
+	gatewayClient           *common.GatewayClient
 	storage                 storage.Storage
 	ctx                     context.Context
 	cancel                  func()
@@ -96,6 +99,7 @@ var (
 
 func NewWorker() (*Worker, error) {
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
+	mountPoints := common.NewSafeMap[[]*storage.MountPointStorage]()
 
 	gpuType := os.Getenv("GPU_TYPE")
 	workerId := os.Getenv("WORKER_ID")
@@ -169,6 +173,12 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	gatewayClient, err := common.NewGatewayClient(config.GatewayService)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
 	return &Worker{
 		ctx:                     ctx,
 		cancel:                  cancel,
@@ -189,6 +199,7 @@ func NewWorker() (*Worker, error) {
 		eventBus:                nil,
 		workerId:                workerId,
 		containerInstances:      containerInstances,
+		mountPoints:             mountPoints,
 		containerLock:           sync.Mutex{},
 		containerWg:             sync.WaitGroup{},
 		containerRepo:           containerRepo,
@@ -198,6 +209,7 @@ func NewWorker() (*Worker, error) {
 		workerMetrics:     workerMetrics,
 		workerRepo:        workerRepo,
 		eventRepo:         eventRepo,
+		gatewayClient:     gatewayClient,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
 		stopContainerChan: make(chan stopContainerEvent, 1000),
 		storage:           storage,
@@ -215,6 +227,7 @@ func (s *Worker) Run() error {
 	defer func() {
 		close(s.completedRequests)
 		close(s.stopContainerChan)
+		s.gatewayClient.Close()
 	}()
 
 	lastContainerRequest := time.Now()
@@ -293,6 +306,12 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		return err
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
+
+	// Setup external S3 mounts
+	err = s.createMountpoints(request)
+	if err != nil {
+		return err
+	}
 
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
@@ -521,6 +540,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	exitCode := -1
 	containerId := request.ContainerId
+
+	// Unmount external s3 buckets
+	defer func() {
+		s.removeMountPoints(containerId)
+	}()
 
 	// Clear out all files in the container's directory
 	defer func() {
@@ -758,7 +782,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			err := os.MkdirAll(m.LocalPath, 0755)
 			if err != nil {
 				log.Printf("<%s> - failed to create mount directory: %v\n", request.ContainerId, err)
-				continue
 			}
 		}
 
@@ -886,4 +909,56 @@ func (s *Worker) shutdown() error {
 	}
 
 	return errs
+}
+
+func (s *Worker) createMountpoints(request *types.ContainerRequest) error {
+	for _, m := range request.Mounts {
+		// Use mountpoint to mount the cloud bucket with the provided config
+		if m.MountPointConfig != nil {
+			// FIXME: We could potentially pool all secrets into a single gateway request and then do all the mounting after
+			res, err := s.gatewayClient.GetSecrets(s.ctx, &proto.GetSecretsRequest{
+				WorkspaceId: request.WorkspaceId,
+				Names:       []string{m.MountPointConfig.AccessKey, m.MountPointConfig.SecretKey, m.MountPointConfig.BucketURL},
+			})
+			if err != nil {
+				log.Printf("<%s> failed to collect secrets for cloud bucket: %v", request.ContainerId, err)
+			}
+
+			// De-reference secrets
+			m.MountPointConfig.AccessKey = res.Secrets[m.MountPointConfig.AccessKey]
+			m.MountPointConfig.SecretKey = res.Secrets[m.MountPointConfig.SecretKey]
+			m.MountPointConfig.BucketURL = res.Secrets[m.MountPointConfig.BucketURL]
+
+			mountPointS3, _ := storage.NewMountPointStorage(*m.MountPointConfig)
+			err = mountPointS3.Mount(m.LocalPath)
+			if err != nil {
+				log.Printf("<%s> failed to mount s3 bucket: %v", request.ContainerId, err)
+				return err
+			}
+
+			// FIXME: This is bad. It would be better to build a mountpoint manager handles this stuff
+			mountPoints, ok := s.mountPoints.Get(request.ContainerId)
+			if !ok {
+				mountPoints = []*storage.MountPointStorage{mountPointS3}
+			} else {
+				mountPoints = append(mountPoints, mountPointS3)
+			}
+			s.mountPoints.Set(request.ContainerId, mountPoints)
+		}
+	}
+
+	return nil
+}
+
+func (s *Worker) removeMountPoints(containerId string) {
+	mountPoints, ok := s.mountPoints.Get(containerId)
+	if !ok {
+		return
+	}
+
+	for _, m := range mountPoints {
+		if err := m.UnmountImplicit(); err != nil {
+			log.Printf("<%s> - failed to unmount external s3 bucket: %v\n", containerId, err)
+		}
+	}
 }

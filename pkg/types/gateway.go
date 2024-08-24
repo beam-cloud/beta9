@@ -15,6 +15,7 @@ const (
 	FailedContainerThreshold           int           = 1
 	RequestTimeoutDurationS            time.Duration = 175 * time.Second
 	ContainerVolumePath                string        = "/volumes"
+	ContainerCloudBucketPath           string        = "/tmp"
 )
 
 type ContainerEvent struct {
