@@ -1,7 +1,6 @@
 package abstractions
 
 import (
-	"log"
 	"path"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -31,7 +30,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspaceName string, 
 	}
 
 	for _, s := range config.CloudBuckets {
-		x := types.Mount{
+		mounts = append(mounts, types.Mount{
 			LocalPath: path.Join(types.ContainerCloudBucketPath, workspaceName, s.MountPath),
 			LinkPath:  path.Join(types.DefaultExtractedObjectPath, workspaceName, stubObjectId, s.MountPath),
 			MountPath: path.Join(types.ContainerVolumePath, s.MountPath),
@@ -42,9 +41,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspaceName string, 
 				SecretKey: s.Config.Secret,
 				BucketURL: s.Config.Endpoint,
 			},
-		}
-		log.Printf("MOUNTPOINT %+v\n", x)
-		mounts = append(mounts, x)
+		})
 	}
 
 	return mounts

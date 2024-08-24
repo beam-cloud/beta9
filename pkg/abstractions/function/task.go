@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -108,7 +107,6 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
-	log.Printf("STUBCONFIG: %+v", stubConfig)
 	mounts := abstractions.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
 		stub.Workspace.Name,
