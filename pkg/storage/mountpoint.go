@@ -42,6 +42,9 @@ func (s *MountPointStorage) Mount(localPath string) error {
 		s.config.S3Bucket,
 		localPath,
 		endpoint,
+		"--allow-other",
+		"--log-directory=/var/log/",
+		"--upload-checksums=off",
 	)
 
 	if s.config.AccessKey != "" || s.config.SecretKey != "" {

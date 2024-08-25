@@ -12,6 +12,7 @@ from ..abstractions.base.runner import (
     ENDPOINT_STUB_TYPE,
     RunnerAbstraction,
 )
+from ..abstractions.cloudbucket import CloudBucket
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
 from ..channel import with_grpc_error_handling
@@ -107,6 +108,7 @@ class Endpoint(RunnerAbstraction):
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         volumes: Optional[List[Volume]] = None,
+        cloud_buckets: Optional[List[CloudBucket]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
         authorized: bool = True,
@@ -125,6 +127,7 @@ class Endpoint(RunnerAbstraction):
             max_pending_tasks=max_pending_tasks,
             on_start=on_start,
             volumes=volumes,
+            cloud_buckets=cloud_buckets,
             secrets=secrets,
             name=name,
             authorized=authorized,
@@ -157,6 +160,7 @@ class ASGI(Endpoint):
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         volumes: Optional[List[Volume]] = None,
+        cloud_buckets: Optional[List[CloudBucket]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
         authorized: bool = True,
@@ -174,6 +178,7 @@ class ASGI(Endpoint):
             max_pending_tasks,
             on_start,
             volumes,
+            cloud_buckets,
             secrets,
             name,
             authorized,
