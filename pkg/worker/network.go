@@ -317,11 +317,11 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 	}
 
 	// Allow forwarding of traffic from the bridge to the external network and back
-	if err := m.ipt.AppendUnique("filter", "FORWARD", "-i", bridgeName, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT"); err != nil {
+	if err := m.ipt.InsertUnique("filter", "FORWARD", 1, "-i", bridgeName, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT"); err != nil {
 		return nil, err
 	}
 
-	if err := m.ipt.AppendUnique("filter", "FORWARD", "-i", m.defaultLink.Attrs().Name, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
+	if err := m.ipt.InsertUnique("filter", "FORWARD", 1, "-i", m.defaultLink.Attrs().Name, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
 		return nil, err
 	}
 
@@ -605,14 +605,14 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 
 	// Insert NAT PREROUTING rule at the top of the chain
 	// IPv4
-	err = m.ipt.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
+	err = m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
 	if err != nil {
 		return err
 	}
 
 	// IPv6
 	if m.ipt6 != nil {
-		err = m.ipt6.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", containerIp_IPv6, containerPort))
+		err = m.ipt6.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", containerIp_IPv6, containerPort))
 		if err != nil {
 			return err
 		}

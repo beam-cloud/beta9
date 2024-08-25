@@ -4,6 +4,7 @@ from .abstractions.container import Container
 from .abstractions.endpoint import ASGI as asgi
 from .abstractions.endpoint import Endpoint as endpoint
 from .abstractions.function import Function as function
+from .abstractions.function import Schedule as schedule
 from .abstractions.image import Image
 from .abstractions.map import Map
 from .abstractions.output import Output
@@ -28,5 +29,6 @@ __all__ = [
     "Output",
     "QueueDepthAutoscaler",
     "experimental",
+    "schedule",
     "TaskPolicy",
 ]
