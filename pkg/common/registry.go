@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	s3ImageRegistryStoreName = "s3"
+	S3ImageRegistryStore     = "s3"
+	LocalImageRegistryStore  = "local"
 	remoteImageFileExtension = "rclip"
 	localImageFileExtension  = "clip"
 )
@@ -31,9 +32,9 @@ func NewImageRegistry(config types.ImageServiceConfig) (*ImageRegistry, error) {
 	var err error
 	var store ObjectStore
 
-	var imageFileExtension string = "clip"
+	var imageFileExtension string = localImageFileExtension
 	switch config.RegistryStore {
-	case s3ImageRegistryStoreName:
+	case S3ImageRegistryStore:
 		imageFileExtension = remoteImageFileExtension
 		store, err = NewS3Store(config.Registries.S3)
 		if err != nil {
@@ -97,7 +98,6 @@ type S3Store struct {
 func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 	f, err := os.Open(localPath)
 	if err != nil {
-		log.Printf("error opening file<%s>: %v", localPath, err)
 		return err
 	}
 	defer f.Close()
@@ -195,7 +195,6 @@ type LocalObjectStore struct {
 func (s *LocalObjectStore) Put(ctx context.Context, localPath string, key string) error {
 	srcFile, err := os.Open(localPath)
 	if err != nil {
-		log.Printf("error opening file<%s>: %v", localPath, err)
 		return err
 	}
 	defer srcFile.Close()
@@ -203,14 +202,12 @@ func (s *LocalObjectStore) Put(ctx context.Context, localPath string, key string
 	destPath := filepath.Join(s.Path, key)
 	destFile, err := os.Create(destPath)
 	if err != nil {
-		log.Printf("error creating file<%s>: %v", destPath, err)
 		return err
 	}
 	defer destFile.Close()
 
 	_, err = io.Copy(destFile, srcFile)
 	if err != nil {
-		log.Printf("error copying file<%s>: %v", destPath, err)
 		return err
 	}
 
@@ -221,21 +218,18 @@ func (s *LocalObjectStore) Get(ctx context.Context, key string, localPath string
 	srcPath := filepath.Join(s.Path, key)
 	srcFile, err := os.Open(srcPath)
 	if err != nil {
-		log.Printf("error opening file<%s>: %v\n", localPath, err)
 		return err
 	}
 	defer srcFile.Close()
 
 	destFile, err := os.Create(localPath)
 	if err != nil {
-		log.Printf("error creating file<%s>: %v\n", localPath, err)
 		return err
 	}
 	defer destFile.Close()
 
 	_, err = io.Copy(destFile, srcFile)
 	if err != nil {
-		log.Printf("error copying file<%s>: %v\n", localPath, err)
 		return err
 	}
 
