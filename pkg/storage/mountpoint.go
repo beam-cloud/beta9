@@ -13,7 +13,7 @@ type MountPointStorage struct {
 	config   types.MountPointConfig
 }
 
-func NewMountPointStorage(config types.MountPointConfig) (*MountPointStorage, error) {
+func NewMountPointStorage(config types.MountPointConfig) (Storage, error) {
 	return &MountPointStorage{
 		config: config,
 	}, nil

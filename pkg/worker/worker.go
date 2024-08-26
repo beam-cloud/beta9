@@ -47,7 +47,7 @@ type Worker struct {
 	workerId                string
 	eventBus                *common.EventBus
 	containerInstances      *common.SafeMap[*ContainerInstance]
-	mountPointPaths             *common.SafeMap[[]string]
+	mountPointPaths         *common.SafeMap[[]string]
 	containerLock           sync.Mutex
 	containerWg             sync.WaitGroup
 	containerRepo           repo.ContainerRepository
@@ -199,7 +199,7 @@ func NewWorker() (*Worker, error) {
 		eventBus:                nil,
 		workerId:                workerId,
 		containerInstances:      containerInstances,
-		mountPointPaths:             mountPoints,
+		mountPointPaths:         mountPoints,
 		containerLock:           sync.Mutex{},
 		containerWg:             sync.WaitGroup{},
 		containerRepo:           containerRepo,
