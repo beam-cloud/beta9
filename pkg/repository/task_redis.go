@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -122,6 +123,19 @@ func (r *TaskRedisRepository) DeleteTaskState(ctx context.Context, workspaceName
 	})
 
 	return err
+}
+
+func (r *TaskRedisRepository) GetTaskState(ctx context.Context, workspaceName, stubId, taskId string) ([]byte, error) {
+	msg, err := r.rdb.Get(ctx, common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)).Bytes()
+	if err == nil {
+		return msg, err
+	}
+
+	if errors.Is(err, redis.Nil) {
+		return nil, nil
+	}
+
+	return nil, err
 }
 
 func (r *TaskRedisRepository) GetTasksInFlight(ctx context.Context) ([]*types.TaskMessage, error) {

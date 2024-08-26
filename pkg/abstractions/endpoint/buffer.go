@@ -50,6 +50,7 @@ type RequestBuffer struct {
 	rdb                     *common.RedisClient
 	containerRepo           repository.ContainerRepository
 	backendRepo             repository.BackendRepository
+	taskRepo                repository.TaskRepository
 	buffer                  *abstractions.RingBuffer[request]
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
@@ -67,6 +68,7 @@ func NewRequestBuffer(
 	size int,
 	containerRepo repository.ContainerRepository,
 	backendRepo repository.BackendRepository,
+	taskRepo repository.TaskRepository,
 	stubConfig *types.StubConfigV1,
 	tailscale *network.Tailscale,
 	tsConfig types.TailscaleConfig,
@@ -84,6 +86,7 @@ func NewRequestBuffer(
 		availableContainersLock: sync.RWMutex{},
 		containerRepo:           containerRepo,
 		backendRepo:             backendRepo,
+		taskRepo:                taskRepo,
 		httpClient:              &http.Client{},
 		length:                  atomic.Int32{},
 
@@ -119,17 +122,24 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPay
 			return nil
 		case <-done:
 			return nil
-		case <-time.After(1000 * time.Millisecond):
+		case <-time.After(100 * time.Millisecond):
 			{
-				task, err := rb.backendRepo.GetTask(rb.ctx, taskMessage.TaskId)
+				state, err := rb.taskRepo.GetTaskState(ctx.Request().Context(), rb.workspace.Name, rb.stubId, taskMessage.TaskId)
 				if err != nil {
 					return err
 				}
 
-				if task.Status == types.TaskStatusExpired {
-					return ctx.JSON(http.StatusRequestTimeout, map[string]interface{}{
-						"error": "Request expired",
-					})
+				if state == nil {
+					task, err := rb.backendRepo.GetTask(ctx.Request().Context(), taskMessage.TaskId)
+					if err != nil {
+						return err
+					}
+
+					if task.Status == types.TaskStatusExpired {
+						return ctx.JSON(http.StatusRequestTimeout, map[string]interface{}{
+							"error": "Request expired",
+						})
+					}
 				}
 			}
 		}

@@ -130,6 +130,7 @@ type TaskRepository interface {
 	ClaimTask(ctx context.Context, workspaceName, stubId, taskId, containerId string) error
 	RemoveTaskClaim(ctx context.Context, workspaceName, stubId, taskId string) error
 	IsClaimed(ctx context.Context, workspaceName, stubId, taskId string) (bool, error)
+	GetTaskState(ctx context.Context, workspaceName, stubId, taskId string) ([]byte, error)
 	TasksClaimed(ctx context.Context, workspaceName, stubId string) (int, error)
 	TasksInFlight(ctx context.Context, workspaceName, stubId string) (int, error)
 	SetTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error
