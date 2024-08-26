@@ -17,7 +17,6 @@ import (
 	"github.com/beam-cloud/clip/pkg/storage"
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/hanwen/go-fuse/v2/fuse"
-	"github.com/moby/sys/mountinfo"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
 	"github.com/opencontainers/umoci/oci/casext"
@@ -166,11 +165,11 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 
 		}
 	}
+
 	elapsed := time.Since(startTime)
 	c.logger.Log(request.ContainerId, request.StubId, "loaded image <%s>, took: %s", imageId, elapsed)
 
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
-
 	if _, err := os.Stat(remoteArchivePath); err != nil {
 		err = c.registry.Pull(context.TODO(), remoteArchivePath, imageId)
 		if err != nil {
@@ -191,11 +190,6 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 				SecretKey: c.config.ImageService.Registries.S3.SecretKey,
 			},
 		},
-	}
-
-	// Check if mount point is already in use
-	if mounted, _ := mountinfo.Mounted(mountOptions.MountPoint); mounted {
-		return nil
 	}
 
 	// Check if a fuse server exists for this imageId
@@ -363,7 +357,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 
 	var err error = nil
 	switch c.config.ImageService.RegistryStore {
-	case "s3":
+	case common.S3ImageRegistryStore:
 		err = clip.CreateAndUploadArchive(clip.CreateOptions{
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
@@ -380,7 +374,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 			Endpoint: c.config.ImageService.Registries.S3.Endpoint,
 			Key:      fmt.Sprintf("%s.clip", imageId),
 		})
-	case "local":
+	case common.LocalImageRegistryStore:
 		err = clip.CreateArchive(clip.CreateOptions{
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
