@@ -155,17 +155,18 @@ func (gws *GatewayService) configureTaskPolicy(policy *pb.TaskPolicy, stubType t
 		TTL:        uint32(math.Min(float64(policy.Ttl), float64(types.MaxTaskTTL))),
 	}
 
-	if stubType.Kind() == types.StubTypeEndpoint {
+	switch stubType.Kind() {
+	case types.StubTypeEndpoint:
 		p.Timeout = int(math.Min(float64(policy.Timeout), float64(endpoint.EndpointRequestTimeoutS)))
 		if p.Timeout <= 0 {
 			p.Timeout = endpoint.EndpointRequestTimeoutS
 		}
 		p.MaxRetries = 0
-	} else if stubType.Kind() == types.StubTypeFunction {
+	case types.StubTypeFunction:
 		if p.TTL == 0 {
 			p.TTL = uint32(function.FunctionDefaultTaskTTL)
 		}
-	} else if stubType.Kind() == types.StubTypeTaskQueue {
+	case types.StubTypeTaskQueue:
 		if p.TTL == 0 {
 			p.TTL = uint32(taskqueue.TaskQueueDefaultTaskTTL)
 		}
