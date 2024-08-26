@@ -49,6 +49,7 @@ type RequestBuffer struct {
 	workspace               *types.Workspace
 	rdb                     *common.RedisClient
 	containerRepo           repository.ContainerRepository
+	backendRepo             repository.BackendRepository
 	buffer                  *abstractions.RingBuffer[request]
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
@@ -65,6 +66,7 @@ func NewRequestBuffer(
 	stubId string,
 	size int,
 	containerRepo repository.ContainerRepository,
+	backendRepo repository.BackendRepository,
 	stubConfig *types.StubConfigV1,
 	tailscale *network.Tailscale,
 	tsConfig types.TailscaleConfig,
@@ -81,6 +83,7 @@ func NewRequestBuffer(
 
 		availableContainersLock: sync.RWMutex{},
 		containerRepo:           containerRepo,
+		backendRepo:             backendRepo,
 		httpClient:              &http.Client{},
 		length:                  atomic.Int32{},
 
@@ -116,7 +119,19 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPay
 			return nil
 		case <-done:
 			return nil
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(1000 * time.Millisecond):
+			{
+				task, err := rb.backendRepo.GetTask(rb.ctx, taskMessage.TaskId)
+				if err != nil {
+					return err
+				}
+
+				if task.Status == types.TaskStatusExpired {
+					return ctx.JSON(http.StatusRequestTimeout, map[string]interface{}{
+						"error": "Request expired",
+					})
+				}
+			}
 		}
 	}
 }
@@ -349,7 +364,8 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(request.Context(), time.Duration(req.taskMessage.Policy.Timeout)*time.Second)
+	// We don't want the request context to fail resources if the user's request disconnects. The task should complete unles it timesout
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.taskMessage.Policy.Timeout-1)*time.Second)
 	defer cancel()
 
 	containerUrl := fmt.Sprintf("http://%s/%s", c.address, req.ctx.Param("subPath"))
@@ -363,7 +379,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	}
 
 	httpReq.Header.Add("X-TASK-ID", req.taskMessage.TaskId) // Add task ID to header
-	go rb.heartBeat(req, c.id)                              // Send heartbeat via redis for duration of request
+	go rb.heartBeat(ctx, req, c.id)                         // Send heartbeat via redis for duration of request
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -415,8 +431,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 	}
 }
 
-func (rb *RequestBuffer) heartBeat(req request, containerId string) {
-	ctx := req.ctx.Request().Context()
+func (rb *RequestBuffer) heartBeat(ctx context.Context, req request, containerId string) {
 	ticker := time.NewTicker(endpointRequestHeartbeatInterval)
 	defer ticker.Stop()
 
