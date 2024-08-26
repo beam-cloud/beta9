@@ -504,21 +504,6 @@ class DeleteTokenResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
 
 
-@dataclass(eq=False, repr=False)
-class GetSecretsRequest(betterproto.Message):
-    workspace_id: str = betterproto.string_field(1)
-    names: List[str] = betterproto.string_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class GetSecretsResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    secrets: Dict[str, str] = betterproto.map_field(
-        3, betterproto.TYPE_STRING, betterproto.TYPE_STRING
-    )
-
-
 class GatewayServiceStub(SyncServiceStub):
     def authorize(self, authorize_request: "AuthorizeRequest") -> "AuthorizeResponse":
         return self._unary_unary(
@@ -734,12 +719,3 @@ class GatewayServiceStub(SyncServiceStub):
             DeleteTokenRequest,
             DeleteTokenResponse,
         )(delete_token_request)
-
-    def get_secrets(
-        self, get_secrets_request: "GetSecretsRequest"
-    ) -> "GetSecretsResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/GetSecrets",
-            GetSecretsRequest,
-            GetSecretsResponse,
-        )(get_secrets_request)

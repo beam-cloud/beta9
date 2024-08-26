@@ -22,7 +22,6 @@ import (
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
-	"github.com/beam-cloud/beta9/proto"
 )
 
 const (
@@ -57,7 +56,6 @@ type Worker struct {
 	stopContainerChan       chan stopContainerEvent
 	workerRepo              repo.WorkerRepository
 	eventRepo               repo.EventRepository
-	gatewayClient           *common.GatewayClient
 	storage                 storage.Storage
 	ctx                     context.Context
 	cancel                  func()
@@ -173,12 +171,6 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	gatewayClient, err := common.NewGatewayClient(config.GatewayService)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-
 	return &Worker{
 		ctx:                     ctx,
 		cancel:                  cancel,
@@ -209,7 +201,6 @@ func NewWorker() (*Worker, error) {
 		workerMetrics:     workerMetrics,
 		workerRepo:        workerRepo,
 		eventRepo:         eventRepo,
-		gatewayClient:     gatewayClient,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
 		stopContainerChan: make(chan stopContainerEvent, 1000),
 		storage:           storage,
@@ -227,7 +218,6 @@ func (s *Worker) Run() error {
 	defer func() {
 		close(s.completedRequests)
 		close(s.stopContainerChan)
-		s.gatewayClient.Close()
 	}()
 
 	lastContainerRequest := time.Now()
@@ -913,22 +903,8 @@ func (s *Worker) createMountpoints(request *types.ContainerRequest) error {
 	for _, m := range request.Mounts {
 		// Use mountpoint to mount the cloud bucket with the provided config
 		if m.MountPointConfig != nil {
-			// FIXME: We could potentially pool all secrets into a single gateway request and then do all the mounting after
-			res, err := s.gatewayClient.GetSecrets(s.ctx, &proto.GetSecretsRequest{
-				WorkspaceId: request.WorkspaceId,
-				Names:       []string{m.MountPointConfig.AccessKey, m.MountPointConfig.SecretKey, m.MountPointConfig.BucketURL},
-			})
-			if err != nil {
-				log.Printf("<%s> failed to collect secrets for cloud bucket: %v", request.ContainerId, err)
-			}
-
-			// De-reference secrets
-			m.MountPointConfig.AccessKey = res.Secrets[m.MountPointConfig.AccessKey]
-			m.MountPointConfig.SecretKey = res.Secrets[m.MountPointConfig.SecretKey]
-			m.MountPointConfig.BucketURL = res.Secrets[m.MountPointConfig.BucketURL]
-
 			mountPointS3, _ := storage.NewMountPointStorage(*m.MountPointConfig)
-			err = mountPointS3.Mount(m.LocalPath)
+			err := mountPointS3.Mount(m.LocalPath)
 			if err != nil {
 				log.Printf("<%s> failed to mount s3 bucket: %v", request.ContainerId, err)
 				return err

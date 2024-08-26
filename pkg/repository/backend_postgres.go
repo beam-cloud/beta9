@@ -1330,38 +1330,6 @@ func (r *PostgresBackendRepository) GetSecretByName(ctx context.Context, workspa
 	return &secret, nil
 }
 
-func (r *PostgresBackendRepository) GetSecretsByNamesDecrypted(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error) {
-	query, args, err := sqlx.In(`SELECT id, external_id, name, value, workspace_id, last_updated_by, created_at, updated_at 
-        FROM workspace_secret 
-        WHERE workspace_id = ? AND name IN (?)`, workspace.Id, names)
-	if err != nil {
-		return nil, err
-	}
-
-	query = r.client.Rebind(query)
-
-	var secrets []types.Secret
-	err = r.client.SelectContext(ctx, &secrets, query, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
-	if err != nil {
-		return nil, err
-	}
-
-	for i := range secrets {
-		secret, err := pkgCommon.Decrypt(signingKey, secrets[i].Value)
-		if err != nil {
-			return nil, err
-		}
-		secrets[i].Value = string(secret)
-	}
-
-	return secrets, nil
-}
-
 func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
 	secret, err := r.GetSecretByName(ctx, workspace, name)
 	if err != nil {

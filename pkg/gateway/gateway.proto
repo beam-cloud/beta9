@@ -50,9 +50,6 @@ service GatewayService {
   rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
   rpc ToggleToken(ToggleTokenRequest) returns (ToggleTokenResponse);
   rpc DeleteToken(DeleteTokenRequest) returns (DeleteTokenResponse);
-
-  // Secrets
-  rpc GetSecrets(GetSecretsRequest) returns (GetSecretsResponse);
 }
 
 message AuthorizeRequest {}
@@ -424,15 +421,4 @@ message DeleteTokenRequest { string token_id = 1; }
 message DeleteTokenResponse {
   bool ok = 1;
   string err_msg = 2;
-}
-
-message GetSecretsRequest {
-  string workspace_id = 1;
-  repeated string names = 2;
-}
-
-message GetSecretsResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  map<string, string> secrets = 3;
 }

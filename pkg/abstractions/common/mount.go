@@ -3,18 +3,24 @@ package abstractions
 import (
 	"path"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-func ConfigureContainerRequestMounts(stubObjectId string, workspaceName string, config types.StubConfigV1, stubId string) []types.Mount {
+func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Workspace, config types.StubConfigV1, stubId string) ([]types.Mount, error) {
+	signingKey, err := common.ParseSigningKey(*workspace.SigningKey)
+	if err != nil {
+		return nil, err
+	}
+
 	mounts := []types.Mount{
 		{
-			LocalPath: path.Join(types.DefaultExtractedObjectPath, workspaceName, stubObjectId),
+			LocalPath: path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId),
 			MountPath: types.WorkerUserCodeVolume,
 			ReadOnly:  true,
 		},
 		{
-			LocalPath: path.Join(types.DefaultOutputsPath, workspaceName, stubId),
+			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),
 			MountPath: types.WorkerUserOutputVolume,
 			ReadOnly:  false,
 		},
@@ -22,24 +28,29 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspaceName string, 
 
 	for _, v := range config.Volumes {
 		mount := types.Mount{
-			LocalPath: path.Join(types.DefaultVolumesPath, workspaceName, v.Id),
-			LinkPath:  path.Join(types.DefaultExtractedObjectPath, workspaceName, stubObjectId, v.MountPath),
+			LocalPath: path.Join(types.DefaultVolumesPath, workspace.Name, v.Id),
+			LinkPath:  path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId, v.MountPath),
 			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
 			ReadOnly:  false,
 		}
 
 		if v.Config != nil {
+			decryptedSecrets, err := common.DecryptAll(signingKey, []string{v.Config.AccessKey, v.Config.SecretKey, v.Config.BucketUrl})
+			if err != nil {
+				return nil, err
+			}
+
 			mount.MountPointConfig = &types.MountPointConfig{
 				S3Bucket:  v.Config.BucketName,
-				AccessKey: v.Config.AccessKey,
-				SecretKey: v.Config.SecretKey,
-				BucketURL: v.Config.BucketUrl,
+				AccessKey: decryptedSecrets[0],
+				SecretKey: decryptedSecrets[1],
+				BucketURL: decryptedSecrets[2],
 			}
-			mount.LocalPath = path.Join(types.DefaultExternalVolumesPath, workspaceName, v.Id)
+			mount.LocalPath = path.Join(types.DefaultExternalVolumesPath, workspace.Name, v.Id)
 		}
 
 		mounts = append(mounts, mount)
 	}
 
-	return mounts
+	return mounts, nil
 }

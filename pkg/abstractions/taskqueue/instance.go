@@ -36,6 +36,16 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		return err
 	}
 
+	mounts, err := abstractions.ConfigureContainerRequestMounts(
+		i.Stub.Object.ExternalId,
+		i.Workspace,
+		*i.StubConfig,
+		i.Stub.ExternalId,
+	)
+	if err != nil {
+		return err
+	}
+
 	env := []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
 		fmt.Sprintf("HANDLER=%s", i.StubConfig.Handler),
@@ -67,12 +77,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			StubId:      i.Stub.ExternalId,
 			WorkspaceId: i.Workspace.ExternalId,
 			EntryPoint:  i.EntryPoint,
-			Mounts: abstractions.ConfigureContainerRequestMounts(
-				i.Stub.Object.ExternalId,
-				i.Workspace.Name,
-				*i.StubConfig,
-				i.Stub.ExternalId,
-			),
+			Mounts:      mounts,
 		}
 
 		err := i.Scheduler.Run(runRequest)

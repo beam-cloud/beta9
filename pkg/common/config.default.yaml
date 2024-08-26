@@ -33,7 +33,6 @@ storage:
 gateway:
   host: beta9-gateway
   externalURL: http://localhost:1994
-  token: gabrqw3KESYJnBrFbi7advUKux5tZYxpoaTyrMkEE8kzXXqbLKMuyhupMIh8LQEuiN6fENRrxaSUE5vxqXos1A==
   grpc:
     port: 1993
     maxRecvMsgSize: 1024

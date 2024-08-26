@@ -73,7 +73,36 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Name:  secret.Name,
 			Value: secret.Value,
 		})
+	}
 
+	for i, volume := range in.Volumes {
+		if volume.Config != nil {
+			// De-reference secrets
+			accessKey, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, volume.Config.AccessKey)
+			if err != nil {
+				return &pb.GetOrCreateStubResponse{
+					Ok: false,
+				}, nil
+			}
+
+			secretKey, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, volume.Config.SecretKey)
+			if err != nil {
+				return &pb.GetOrCreateStubResponse{
+					Ok: false,
+				}, nil
+			}
+
+			bucketUrl, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, volume.Config.BucketUrl)
+			if err != nil {
+				return &pb.GetOrCreateStubResponse{
+					Ok: false,
+				}, nil
+			}
+
+			in.Volumes[i].Config.AccessKey = accessKey.Value
+			in.Volumes[i].Config.SecretKey = secretKey.Value
+			in.Volumes[i].Config.BucketUrl = bucketUrl.Value
+		}
 	}
 
 	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)

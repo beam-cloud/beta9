@@ -15,10 +15,6 @@ class VolumeConfig:
     Parameters:
         external (bool):
             Whether the volume is from an external provider.
-        name (str):
-            The name of the volume.
-        mount_path (str):
-            The path where the volume is mounted within the container environment.
         access_key (str):
             The S3 access key for the external provider.
         secret_key (str):
@@ -27,8 +23,6 @@ class VolumeConfig:
             The S3 endpoint for the external provider.
     """
 
-    name: str
-    mount_path: str
     access_key: str
     secret_key: str
     endpoint: Optional[str] = None
@@ -100,7 +94,7 @@ class Volume(BaseAbstraction):
         # FIXME: is the external flag necessary?
         if self.config.external:
             vol.config = VolumeConfigGateway(
-                bucket_name=self.config.name,
+                bucket_name=self.name,
                 access_key=self.config.access_key,
                 secret_key=self.config.secret_key,
                 bucket_url=self.config.endpoint,
