@@ -8,7 +8,6 @@ from watchdog.observers import Observer
 
 from ... import terminal
 from ...abstractions.base import BaseAbstraction
-from ...abstractions.cloudbucket import CloudBucket
 from ...abstractions.image import Image, ImageBuildResult
 from ...abstractions.volume import Volume
 from ...clients.gateway import Autoscaler as AutoscalerProto
@@ -54,7 +53,6 @@ class RunnerAbstraction(BaseAbstraction):
         retries: int = 3,
         timeout: int = 3600,
         volumes: Optional[List[Volume]] = None,
-        cloud_buckets: Optional[List[CloudBucket]] = None,
         secrets: Optional[List[str]] = None,
         on_start: Optional[Callable] = None,
         callback_url: Optional[str] = None,
@@ -84,7 +82,6 @@ class RunnerAbstraction(BaseAbstraction):
         self.memory = self._parse_memory(memory) if isinstance(memory, str) else memory
         self.gpu = gpu
         self.volumes = volumes or []
-        self.cloud_buckets = cloud_buckets or []
         self.secrets = [SecretVar(name=s) for s in (secrets or [])]
         self.workers = workers
         self.keep_warm_seconds = keep_warm_seconds
@@ -332,7 +329,6 @@ class RunnerAbstraction(BaseAbstraction):
                     workers=self.workers,
                     max_pending_tasks=self.max_pending_tasks,
                     volumes=[v.export() for v in self.volumes],
-                    cloud_buckets=[cb.export() for cb in self.cloud_buckets],
                     secrets=self.secrets,
                     force_create=force_create_stub,
                     authorized=self.authorized,

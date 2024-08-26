@@ -7,6 +7,7 @@ import (
 const (
 	DefaultExtractedObjectPath         string        = "/data/unpacked"
 	DefaultVolumesPath                 string        = "/data/volumes"
+	DefaultExternalVolumesPath         string        = "/data/external-volumes"
 	DefaultObjectPath                  string        = "/data/objects"
 	DefaultOutputsPath                 string        = "/data/outputs"
 	DefaultFilesystemName              string        = "beta9-fs"
@@ -15,7 +16,6 @@ const (
 	FailedContainerThreshold           int           = 1
 	RequestTimeoutDurationS            time.Duration = 175 * time.Second
 	ContainerVolumePath                string        = "/volumes"
-	ContainerCloudBucketPath           string        = "/tmp"
 )
 
 type ContainerEvent struct {

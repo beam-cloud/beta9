@@ -9,7 +9,6 @@ from ..abstractions.base.runner import (
     FUNCTION_STUB_TYPE,
     RunnerAbstraction,
 )
-from ..abstractions.cloudbucket import CloudBucket
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
 from ..channel import with_grpc_error_handling
@@ -48,8 +47,6 @@ class Function(RunnerAbstraction):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
         volumes (Optional[List[Volume]]):
             A list of storage volumes to be associated with the function. Default is [].
-        cloud_buckets (Optional[List[CloudBucket]]):
-            A list of cloud buckets to be associated with the function. Default is [].
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
         name (Optional[str]):
@@ -84,7 +81,6 @@ class Function(RunnerAbstraction):
         retries: int = 3,
         callback_url: Optional[str] = "",
         volumes: Optional[List[Volume]] = None,
-        cloud_buckets: Optional[List[CloudBucket]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
     ) -> None:
@@ -97,7 +93,6 @@ class Function(RunnerAbstraction):
             retries=retries,
             callback_url=callback_url,
             volumes=volumes,
-            cloud_buckets=cloud_buckets,
             secrets=secrets,
             name=name,
         )

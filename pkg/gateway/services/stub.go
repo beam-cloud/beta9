@@ -51,7 +51,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Workers:         uint(in.Workers),
 		MaxPendingTasks: uint(in.MaxPendingTasks),
 		Volumes:         in.Volumes,
-		CloudBuckets:    in.CloudBuckets,
 		Secrets:         []types.Secret{},
 		Authorized:      in.Authorized,
 		Autoscaler:      autoscaler,

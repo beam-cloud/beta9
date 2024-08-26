@@ -542,9 +542,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	containerId := request.ContainerId
 
 	// Unmount external s3 buckets
-	defer func() {
-		s.removeMountPoints(containerId)
-	}()
+	defer s.removeMountPoints(containerId)
 
 	// Clear out all files in the container's directory
 	defer func() {

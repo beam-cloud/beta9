@@ -186,7 +186,6 @@ type StubConfigV1 struct {
 	Workers         uint              `json:"workers"`
 	Authorized      bool              `json:"authorized"`
 	Volumes         []*pb.Volume      `json:"volumes"`
-	CloudBuckets    []*pb.CloudBucket `json:"cloud_buckets"`
 	Secrets         []Secret          `json:"secrets,omitempty"`
 	Autoscaler      *Autoscaler       `json:"autoscaler"`
 }

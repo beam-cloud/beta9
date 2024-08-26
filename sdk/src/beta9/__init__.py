@@ -1,6 +1,5 @@
 from . import env
 from .abstractions import experimental
-from .abstractions.cloudbucket import CloudBucket, Credentials
 from .abstractions.container import Container
 from .abstractions.endpoint import ASGI as asgi
 from .abstractions.endpoint import Endpoint as endpoint
@@ -10,7 +9,7 @@ from .abstractions.map import Map
 from .abstractions.output import Output
 from .abstractions.queue import SimpleQueue as Queue
 from .abstractions.taskqueue import TaskQueue as task_queue
-from .abstractions.volume import Volume
+from .abstractions.volume import Volume, VolumeConfig
 from .type import GpuType, PythonVersion, QueueDepthAutoscaler
 
 __all__ = [
@@ -18,8 +17,7 @@ __all__ = [
     "Image",
     "Queue",
     "Volume",
-    "CloudBucket",
-    "Credentials",
+    "VolumeConfig",
     "task_queue",
     "function",
     "endpoint",

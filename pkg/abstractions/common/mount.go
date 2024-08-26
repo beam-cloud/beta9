@@ -21,27 +21,24 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspaceName string, 
 	}
 
 	for _, v := range config.Volumes {
-		mounts = append(mounts, types.Mount{
+		mount := types.Mount{
 			LocalPath: path.Join(types.DefaultVolumesPath, workspaceName, v.Id),
 			LinkPath:  path.Join(types.DefaultExtractedObjectPath, workspaceName, stubObjectId, v.MountPath),
 			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
 			ReadOnly:  false,
-		})
-	}
+		}
 
-	for _, s := range config.CloudBuckets {
-		mounts = append(mounts, types.Mount{
-			LocalPath: path.Join(types.ContainerCloudBucketPath, workspaceName, s.MountPath),
-			LinkPath:  path.Join(types.DefaultExtractedObjectPath, workspaceName, stubObjectId, s.MountPath),
-			MountPath: path.Join(types.ContainerVolumePath, s.MountPath),
-			ReadOnly:  false,
-			MountPointConfig: &types.MountPointConfig{
-				S3Bucket:  s.BucketName,
-				AccessKey: s.Config.AccessKey,
-				SecretKey: s.Config.Secret,
-				BucketURL: s.Config.Endpoint,
-			},
-		})
+		if v.Config != nil {
+			mount.MountPointConfig = &types.MountPointConfig{
+				S3Bucket:  v.Config.BucketName,
+				AccessKey: v.Config.AccessKey,
+				SecretKey: v.Config.SecretKey,
+				BucketURL: v.Config.BucketUrl,
+			}
+			mount.LocalPath = path.Join(types.DefaultExternalVolumesPath, workspaceName, v.Id)
+		}
+
+		mounts = append(mounts, mount)
 	}
 
 	return mounts

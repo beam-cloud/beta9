@@ -222,21 +222,15 @@ class StopTasksResponse(betterproto.Message):
 class Volume(betterproto.Message):
     id: str = betterproto.string_field(1)
     mount_path: str = betterproto.string_field(2)
+    config: Optional["MountPointConfig"] = betterproto.message_field(3, optional=True)
 
 
 @dataclass(eq=False, repr=False)
-class CloudBucket(betterproto.Message):
-    id: str = betterproto.string_field(1)
-    bucket_name: str = betterproto.string_field(2)
-    mount_path: str = betterproto.string_field(3)
-    config: "CloudBucketConfig" = betterproto.message_field(4)
-
-
-@dataclass(eq=False, repr=False)
-class CloudBucketConfig(betterproto.Message):
-    access_key: str = betterproto.string_field(4)
-    secret: str = betterproto.string_field(5)
-    endpoint: str = betterproto.string_field(6)
+class MountPointConfig(betterproto.Message):
+    bucket_name: str = betterproto.string_field(1)
+    access_key: str = betterproto.string_field(2)
+    secret_key: str = betterproto.string_field(3)
+    bucket_url: str = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -266,15 +260,14 @@ class GetOrCreateStubRequest(betterproto.Message):
     timeout: int = betterproto.int64_field(11)
     keep_warm_seconds: float = betterproto.float_field(12)
     workers: int = betterproto.uint32_field(13)
-    max_pending_tasks: int = betterproto.uint32_field(15)
-    volumes: List["Volume"] = betterproto.message_field(16)
-    cloud_buckets: List["CloudBucket"] = betterproto.message_field(17)
-    force_create: bool = betterproto.bool_field(18)
-    on_start: str = betterproto.string_field(19)
-    callback_url: str = betterproto.string_field(20)
-    authorized: bool = betterproto.bool_field(21)
-    secrets: List["SecretVar"] = betterproto.message_field(22)
-    autoscaler: "Autoscaler" = betterproto.message_field(23)
+    max_pending_tasks: int = betterproto.uint32_field(14)
+    volumes: List["Volume"] = betterproto.message_field(15)
+    force_create: bool = betterproto.bool_field(16)
+    on_start: str = betterproto.string_field(17)
+    callback_url: str = betterproto.string_field(18)
+    authorized: bool = betterproto.bool_field(19)
+    secrets: List["SecretVar"] = betterproto.message_field(20)
+    autoscaler: "Autoscaler" = betterproto.message_field(21)
 
 
 @dataclass(eq=False, repr=False)

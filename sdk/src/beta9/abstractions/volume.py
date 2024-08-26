@@ -1,12 +1,42 @@
+from dataclasses import dataclass
 from typing import Optional
 
 from ..abstractions.base import BaseAbstraction
-from ..clients.gateway import Volume as VolumeConfig
+from ..clients.gateway import MountPointConfig as VolumeConfigGateway
+from ..clients.gateway import Volume as VolumeGateway
 from ..clients.volume import GetOrCreateVolumeRequest, GetOrCreateVolumeResponse, VolumeServiceStub
 
 
+@dataclass
+class VolumeConfig:
+    """
+    Configuration for a volume.
+
+    Parameters:
+        external (bool):
+            Whether the volume is from an external provider.
+        name (str):
+            The name of the volume.
+        mount_path (str):
+            The path where the volume is mounted within the container environment.
+        access_key (str):
+            The S3 access key for the external provider.
+        secret_key (str):
+            The S3 secret key for the external provider.
+        endpoint (Optional[str]):
+            The S3 endpoint for the external provider.
+    """
+
+    name: str
+    mount_path: str
+    access_key: str
+    secret_key: str
+    endpoint: Optional[str] = None
+    external: bool = False
+
+
 class Volume(BaseAbstraction):
-    def __init__(self, name: str, mount_path: str) -> None:
+    def __init__(self, name: str, mount_path: str, config: Optional[VolumeConfig] = None) -> None:
         """
         Creates a Volume instance.
 
@@ -17,6 +47,8 @@ class Volume(BaseAbstraction):
                 The name of the volume, a descriptive identifier for the data volume.
             mount_path (str):
                 The path where the volume is mounted within the container environment.
+            config (Optional[VolumeConfig]):
+                Optional configuration for the volume if it is from an external provider.
 
         Example:
             ```python
@@ -32,6 +64,7 @@ class Volume(BaseAbstraction):
         self.ready = False
         self.volume_id = None
         self.mount_path = mount_path
+        self.config = config
         self._stub: Optional[VolumeServiceStub] = None
 
     @property
@@ -45,6 +78,9 @@ class Volume(BaseAbstraction):
         self._stub = value
 
     def get_or_create(self) -> bool:
+        if self.config.external:
+            return True
+
         resp: GetOrCreateVolumeResponse
         resp = self.stub.get_or_create_volume(GetOrCreateVolumeRequest(name=self.name))
 
@@ -56,7 +92,18 @@ class Volume(BaseAbstraction):
         return False
 
     def export(self):
-        return VolumeConfig(
+        vol = VolumeGateway(
             id=self.volume_id,
             mount_path=self.mount_path,
         )
+
+        # FIXME: is the external flag necessary?
+        if self.config.external:
+            vol.config = VolumeConfigGateway(
+                bucket_name=self.config.name,
+                access_key=self.config.access_key,
+                secret_key=self.config.secret_key,
+                bucket_url=self.config.endpoint,
+            )
+
+        return vol
