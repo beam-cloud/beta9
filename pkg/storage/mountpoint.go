@@ -11,7 +11,6 @@ import (
 type MountPointStorage struct {
 	mountCmd *exec.Cmd
 	config   types.MountPointConfig
-	path     string
 }
 
 func NewMountPointStorage(config types.MountPointConfig) (*MountPointStorage, error) {
@@ -67,12 +66,7 @@ func (s *MountPointStorage) Format(fsName string) error {
 }
 
 func (s *MountPointStorage) Unmount(localPath string) error {
-	s.path = localPath
-	return s.UnmountImplicit()
-}
-
-func (s *MountPointStorage) UnmountImplicit() error {
-	cmd := exec.Command("umount", s.path)
+	cmd := exec.Command("umount", localPath)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -80,5 +74,4 @@ func (s *MountPointStorage) UnmountImplicit() error {
 	}
 
 	return nil
-
 }

@@ -47,7 +47,7 @@ type Worker struct {
 	workerId                string
 	eventBus                *common.EventBus
 	containerInstances      *common.SafeMap[*ContainerInstance]
-	mountPoints             *common.SafeMap[[]*storage.MountPointStorage]
+	mountPointPaths             *common.SafeMap[[]string]
 	containerLock           sync.Mutex
 	containerWg             sync.WaitGroup
 	containerRepo           repo.ContainerRepository
@@ -99,7 +99,7 @@ var (
 
 func NewWorker() (*Worker, error) {
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
-	mountPoints := common.NewSafeMap[[]*storage.MountPointStorage]()
+	mountPoints := common.NewSafeMap[[]string]()
 
 	gpuType := os.Getenv("GPU_TYPE")
 	workerId := os.Getenv("WORKER_ID")
@@ -199,7 +199,7 @@ func NewWorker() (*Worker, error) {
 		eventBus:                nil,
 		workerId:                workerId,
 		containerInstances:      containerInstances,
-		mountPoints:             mountPoints,
+		mountPointPaths:             mountPoints,
 		containerLock:           sync.Mutex{},
 		containerWg:             sync.WaitGroup{},
 		containerRepo:           containerRepo,
@@ -936,14 +936,13 @@ func (s *Worker) createMountpoints(request *types.ContainerRequest) error {
 				return err
 			}
 
-			// FIXME: This is bad. It would be better to build a mountpoint manager handles this stuff
-			mountPoints, ok := s.mountPoints.Get(request.ContainerId)
+			mountPointPaths, ok := s.mountPointPaths.Get(request.ContainerId)
 			if !ok {
-				mountPoints = []*storage.MountPointStorage{mountPointS3}
+				mountPointPaths = []string{m.LocalPath}
 			} else {
-				mountPoints = append(mountPoints, mountPointS3)
+				mountPointPaths = append(mountPointPaths, m.LocalPath)
 			}
-			s.mountPoints.Set(request.ContainerId, mountPoints)
+			s.mountPointPaths.Set(request.ContainerId, mountPointPaths)
 		}
 	}
 
@@ -951,13 +950,14 @@ func (s *Worker) createMountpoints(request *types.ContainerRequest) error {
 }
 
 func (s *Worker) removeMountPoints(containerId string) {
-	mountPoints, ok := s.mountPoints.Get(containerId)
+	mountPointS3, _ := storage.NewMountPointStorage(types.MountPointConfig{})
+	mountPointPaths, ok := s.mountPointPaths.Get(containerId)
 	if !ok {
 		return
 	}
 
-	for _, m := range mountPoints {
-		if err := m.UnmountImplicit(); err != nil {
+	for _, m := range mountPointPaths {
+		if err := mountPointS3.Unmount(m); err != nil {
 			log.Printf("<%s> - failed to unmount external s3 bucket: %v\n", containerId, err)
 		}
 	}
