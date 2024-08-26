@@ -23,14 +23,16 @@ class VolumeConfig:
             The S3 endpoint for the external provider.
     """
 
-    access_key: str
-    secret_key: str
+    access_key: Optional[str] = None
+    secret_key: Optional[str] = None
     endpoint: Optional[str] = None
     external: bool = False
 
 
 class Volume(BaseAbstraction):
-    def __init__(self, name: str, mount_path: str, config: Optional[VolumeConfig] = None) -> None:
+    def __init__(
+        self, name: str, mount_path: str, config: VolumeConfig = VolumeConfig(external=False)
+    ) -> None:
         """
         Creates a Volume instance.
 
