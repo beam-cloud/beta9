@@ -67,13 +67,13 @@ func Decrypt(secretKey []byte, ciphertext64 string) (string, error) {
 
 // DecryptAll decrypts all the given secrets in the order they are given.
 func DecryptAll(signingKey []byte, secrets []string) ([]string, error) {
-	decrypted := []string{}
-	for _, secret := range secrets {
+	decrypted := make([]string, len(secrets))
+	for i, secret := range secrets {
 		decryptedSecret, err := Decrypt(signingKey, secret)
 		if err != nil {
 			return nil, err
 		}
-		decrypted = append(decrypted, decryptedSecret)
+		decrypted[i] = decryptedSecret
 	}
 	return decrypted, nil
 }
