@@ -762,8 +762,6 @@ func (m *ContainerNetworkManager) listContainerIdsFromIptables() ([]string, erro
 		containerIds = append(containerIds, id)
 	}
 
-	log.Println("containerIds: ", containerIds)
-
 	return containerIds, nil
 }
 
