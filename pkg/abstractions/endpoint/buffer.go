@@ -302,6 +302,20 @@ func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
 	return client, nil
 }
 
+func (rb *RequestBuffer) handleRequestError(req request, err error) {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		req.ctx.JSON(http.StatusRequestTimeout, map[string]interface{}{
+			"error": "Request timed out",
+		})
+	} else {
+		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "Internal server error",
+		})
+	}
+	req.done <- true
+}
+
 func (rb *RequestBuffer) handleHttpRequest(req request) {
 	rb.availableContainersLock.RLock()
 	if len(rb.availableContainers) == 0 {
@@ -353,17 +367,7 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			req.ctx.JSON(http.StatusRequestTimeout, map[string]interface{}{
-				"error": "Request timed out",
-			})
-		} else {
-			req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-				"error": "Internal server error",
-			})
-		}
-		req.done <- true
+		rb.handleRequestError(req, err)
 		return
 	}
 
