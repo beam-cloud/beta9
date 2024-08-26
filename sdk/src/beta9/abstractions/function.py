@@ -48,6 +48,8 @@ class Function(RunnerAbstraction):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
         volumes (Optional[List[Volume]]):
             A list of storage volumes to be associated with the function. Default is [].
+        cloud_buckets (Optional[List[CloudBucket]]):
+            A list of cloud buckets to be associated with the function. Default is [].
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
         name (Optional[str]):

@@ -46,6 +46,8 @@ class Endpoint(RunnerAbstraction):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Volume]]):
             A list of volumes to be mounted to the endpoint. Default is None.
+        cloud_buckets (Optional[List[CloudBucket]]):
+            A list of cloud buckets to be mounted to the endpoint. Default is None.
         timeout (Optional[int]):
             The maximum number of seconds a task can run before it times out.
             Default is 3600. Set it to -1 to disable the timeout.

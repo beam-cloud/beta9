@@ -30,9 +30,26 @@ class CloudBucket(BaseAbstraction):
 
         Example:
             ```python
-            from beta9 import CloudBucket, Credentials
+            from beta9 import CloudBucket, Credentials, function
 
-            TODO: fill this out
+            cloud_bucket = CloudBucket(
+                name="my-bucket",
+                mount_path="./my-bucket",
+                credentials=Credentials(
+                    access_key="access",
+                    secret="secret",
+                    endpoint="https://s3.amazonaws.com",
+                ),
+            )
+
+            @function(cloud_buckets=[cloud_bucket])
+            def my_function(x: int):
+
+                # my_function will have access to the bucket at ./my-bucket
+                with open("./my-bucket/my-file.txt", "r") as f:
+                    print(f.read())
+
+                return x + 1
             ```
 
         """
