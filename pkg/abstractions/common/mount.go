@@ -8,7 +8,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-const defaultExternalVolumesPath string = "/data/external-volumes"
+const defaultExternalVolumesPath string = "/tmp/external-volumes"
 
 func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Workspace, config types.StubConfigV1, stubId string) ([]types.Mount, error) {
 	signingKey, err := common.ParseSigningKey(*workspace.SigningKey)
