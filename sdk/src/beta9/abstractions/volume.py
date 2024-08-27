@@ -150,5 +150,6 @@ class CloudBucket(Volume):
             secret_key=self.config.secret_key,
             endpoint_url=self.config.endpoint,
             region=self.config.region,
+            read_only=self.config.read_only,
         )
         return vol
