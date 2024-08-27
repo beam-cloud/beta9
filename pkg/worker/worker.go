@@ -20,7 +20,6 @@ import (
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
-	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -41,12 +40,12 @@ type Worker struct {
 	runcServer              *RunCServer
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
+	storageManager          *StorageManager
 	redisClient             *common.RedisClient
 	imageClient             *ImageClient
 	workerId                string
 	eventBus                *common.EventBus
 	containerInstances      *common.SafeMap[*ContainerInstance]
-	mountPointPaths         *common.SafeMap[[]string]
 	containerLock           sync.Mutex
 	containerWg             sync.WaitGroup
 	containerRepo           repo.ContainerRepository
@@ -56,7 +55,6 @@ type Worker struct {
 	stopContainerChan       chan stopContainerEvent
 	workerRepo              repo.WorkerRepository
 	eventRepo               repo.EventRepository
-	storage                 storage.Storage
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
@@ -97,7 +95,6 @@ var (
 
 func NewWorker() (*Worker, error) {
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
-	mountPoints := common.NewSafeMap[[]string]()
 
 	gpuType := os.Getenv("GPU_TYPE")
 	workerId := os.Getenv("WORKER_ID")
@@ -138,11 +135,6 @@ func NewWorker() (*Worker, error) {
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
-	storage, err := storage.NewStorage(config.Storage)
-	if err != nil {
-		return nil, err
-	}
-
 	imageClient, err := NewImageClient(config, workerId, workerRepo)
 	if err != nil {
 		return nil, err
@@ -171,6 +163,12 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	storageMountManager, err := NewStorageManager(config.Storage)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
 	return &Worker{
 		ctx:                     ctx,
 		cancel:                  cancel,
@@ -185,13 +183,13 @@ func NewWorker() (*Worker, error) {
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		redisClient:             redisClient,
+		storageManager:          storageMountManager,
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
 		podHostName:             podHostName,
 		eventBus:                nil,
 		workerId:                workerId,
 		containerInstances:      containerInstances,
-		mountPointPaths:         mountPoints,
 		containerLock:           sync.Mutex{},
 		containerWg:             sync.WaitGroup{},
 		containerRepo:           containerRepo,
@@ -203,7 +201,6 @@ func NewWorker() (*Worker, error) {
 		eventRepo:         eventRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
 		stopContainerChan: make(chan stopContainerEvent, 1000),
-		storage:           storage,
 	}, nil
 }
 
@@ -297,8 +294,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
-	// Setup external S3 mounts
-	err = s.createMountpoints(request)
+	err = s.storageManager.SetupContainerStorage(request.ContainerId, request.Mounts)
 	if err != nil {
 		return err
 	}
@@ -538,7 +534,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	containerId := request.ContainerId
 
 	// Unmount external s3 buckets
-	defer s.removeMountPoints(containerId)
+	defer s.storageManager.RemoveContainerStorage(containerId)
 
 	// Clear out all files in the container's directory
 	defer func() {
@@ -886,10 +882,9 @@ func (s *Worker) shutdown() error {
 	}
 
 	s.cancel()
-
-	err := s.storage.Unmount(s.config.Storage.FilesystemPath)
+	err := s.storageManager.RemoveWorkerStorage()
 	if err != nil {
-		errs = errors.Join(errs, fmt.Errorf("failed to unmount storage: %v", err))
+		errs = errors.Join(errs, err)
 	}
 
 	err = s.imageClient.Cleanup()
@@ -903,42 +898,4 @@ func (s *Worker) shutdown() error {
 	}
 
 	return errs
-}
-
-func (s *Worker) createMountpoints(request *types.ContainerRequest) error {
-	for _, m := range request.Mounts {
-		// Use mountpoint to mount the cloud bucket with the provided config
-		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
-			mountPointS3, _ := storage.NewMountPointStorage(*m.MountPointConfig)
-			err := mountPointS3.Mount(m.LocalPath)
-			if err != nil {
-				log.Printf("<%s> failed to mount s3 bucket: %v", request.ContainerId, err)
-				return err
-			}
-
-			mountPointPaths, ok := s.mountPointPaths.Get(request.ContainerId)
-			if !ok {
-				mountPointPaths = []string{m.LocalPath}
-			} else {
-				mountPointPaths = append(mountPointPaths, m.LocalPath)
-			}
-			s.mountPointPaths.Set(request.ContainerId, mountPointPaths)
-		}
-	}
-
-	return nil
-}
-
-func (s *Worker) removeMountPoints(containerId string) {
-	mountPointS3, _ := storage.NewMountPointStorage(types.MountPointConfig{})
-	mountPointPaths, ok := s.mountPointPaths.Get(containerId)
-	if !ok {
-		return
-	}
-
-	for _, m := range mountPointPaths {
-		if err := mountPointS3.Unmount(m); err != nil {
-			log.Printf("<%s> - failed to unmount external s3 bucket: %v\n", containerId, err)
-		}
-	}
 }

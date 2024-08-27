@@ -21,13 +21,11 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 			LocalPath: path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId),
 			MountPath: types.WorkerUserCodeVolume,
 			ReadOnly:  true,
-			MountType: storage.StorageModeJuiceFS,
 		},
 		{
 			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),
 			MountPath: types.WorkerUserOutputVolume,
 			ReadOnly:  false,
-			MountType: storage.StorageModeJuiceFS,
 		},
 	}
 
@@ -37,7 +35,6 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 			LinkPath:  path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId, v.MountPath),
 			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
 			ReadOnly:  false,
-			MountType: storage.StorageModeJuiceFS,
 		}
 
 		if v.Config != nil {

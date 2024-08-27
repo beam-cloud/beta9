@@ -8,6 +8,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/proto"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -75,39 +76,12 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		})
 	}
 
-	for i, volume := range in.Volumes {
-		if volume.Config != nil {
-			// De-reference secrets
-			accessKey, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, volume.Config.AccessKey)
-			if err != nil {
-				return &pb.GetOrCreateStubResponse{
-					Ok:     false,
-					ErrMsg: fmt.Sprintf("Failed to get secret %s", volume.Config.AccessKey),
-				}, nil
-			}
-			in.Volumes[i].Config.AccessKey = accessKey.Value
-
-			secretKey, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, volume.Config.SecretKey)
-			if err != nil {
-				return &pb.GetOrCreateStubResponse{
-					Ok:     false,
-					ErrMsg: fmt.Sprintf("Failed to get secret %s", volume.Config.SecretKey),
-				}, nil
-			}
-			in.Volumes[i].Config.SecretKey = secretKey.Value
-
-			// Check for optional bucket url
-			if volume.Config.BucketUrl != "" {
-				bucketUrl, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, volume.Config.BucketUrl)
-				if err != nil {
-					return &pb.GetOrCreateStubResponse{
-						Ok:     false,
-						ErrMsg: fmt.Sprintf("Failed to get secret %s", volume.Config.BucketUrl),
-					}, nil
-				}
-				in.Volumes[i].Config.BucketUrl = bucketUrl.Value
-			}
-		}
+	err := gws.configureVolumes(ctx, in.Volumes, authInfo.Workspace)
+	if err != nil {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
 	}
 
 	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
@@ -179,4 +153,34 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		Version:      uint32(deployment.Version),
 		InvokeUrl:    invokeURL,
 	}, nil
+}
+
+func (gws *GatewayService) configureVolumes(ctx context.Context, volumes []*proto.Volume, workspace *types.Workspace) error {
+	for i, volume := range volumes {
+		if volume.Config != nil {
+			// De-reference secrets
+			accessKey, err := gws.backendRepo.GetSecretByName(ctx, workspace, volume.Config.AccessKey)
+			if err != nil {
+				return fmt.Errorf("failed to get secret %s", volume.Config.AccessKey)
+			}
+			volumes[i].Config.AccessKey = accessKey.Value
+
+			secretKey, err := gws.backendRepo.GetSecretByName(ctx, workspace, volume.Config.SecretKey)
+			if err != nil {
+				return fmt.Errorf("failed to get secret %s", volume.Config.SecretKey)
+			}
+			volumes[i].Config.SecretKey = secretKey.Value
+
+			// Check for optional bucket url
+			if volume.Config.BucketUrl != "" {
+				bucketUrl, err := gws.backendRepo.GetSecretByName(ctx, workspace, volume.Config.BucketUrl)
+				if err != nil {
+					return fmt.Errorf("failed to get secret %s", volume.Config.BucketUrl)
+				}
+				volumes[i].Config.BucketUrl = bucketUrl.Value
+			}
+		}
+	}
+
+	return nil
 }

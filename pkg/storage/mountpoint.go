@@ -34,7 +34,6 @@ func (s *MountPointStorage) Mount(localPath string) error {
 		}
 	}
 
-	// FIXME: cache? https://github.com/awslabs/mountpoint-s3/blob/main/doc/CONFIGURATION.md#caching-configuration
 	cmdArgs := []string{s.config.S3Bucket, localPath, "--allow-other", "--log-directory=/var/log/", "--upload-checksums=off"}
 	if s.config.BucketURL != "" {
 		cmdArgs = append(cmdArgs, fmt.Sprintf("--endpoint-url=%s", s.config.BucketURL))
