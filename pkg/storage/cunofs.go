@@ -28,13 +28,13 @@ func NewCunoFsStorage(config types.CunoFSConfig) (Storage, error) {
 
 func (s *CunoFsStorage) Mount(localPath string) error {
 	log.Printf("CunoFS filesystem mounting to: '%s'\n", localPath)
-	os.MkdirAll(localPath, 0755)
 	s.mountCmd = exec.Command(
 		"cuno",
 		"mount",
 		localPath,
 		"--root",
 		fmt.Sprintf("s3://%s", s.config.S3BucketName),
+		"--mkdir",
 	)
 
 	// Start the mount command in the background
