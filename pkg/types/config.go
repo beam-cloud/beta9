@@ -162,6 +162,7 @@ type CunoFSConfig struct {
 	S3AccessKey   string `key:"s3AccessKey" json:"s3_access_key"`
 	S3SecretKey   string `key:"s3SecretKey" json:"s3_secret_key"`
 	S3EndpointUrl string `key:"s3EndpointURL" json:"s3_endpoint_url"`
+	S3BucketName  string `key:"s3BucketName" json:"s3_bucket_name"`
 }
 
 type MountPointConfig struct {
