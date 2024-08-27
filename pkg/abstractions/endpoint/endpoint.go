@@ -260,7 +260,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 		instance.isASGI = true
 	}
 
-	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, es.backendRepo, es.taskRepo, stubConfig, es.tailscale, es.config.Tailscale, instance.isASGI)
+	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig, es.tailscale, es.config.Tailscale, instance.isASGI)
 
 	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance

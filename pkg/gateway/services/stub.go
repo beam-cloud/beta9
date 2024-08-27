@@ -162,6 +162,7 @@ func (gws *GatewayService) configureTaskPolicy(policy *pb.TaskPolicy, stubType t
 			p.Timeout = endpoint.EndpointRequestTimeoutS
 		}
 		p.MaxRetries = 0
+		p.TTL = math.MaxUint32 // No TTL for endpoint tasks
 	case types.StubTypeFunction:
 		if p.TTL == 0 {
 			p.TTL = uint32(function.FunctionDefaultTaskTTL)
