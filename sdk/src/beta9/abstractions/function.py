@@ -25,7 +25,7 @@ from ..clients.function import (
 )
 from ..env import is_local
 from ..sync import FileSyncer
-from ..type import GpuType, GpuTypeAlias
+from ..type import GpuType, GpuTypeAlias, TaskPolicy
 from .mixins import DeployableMixin
 
 
@@ -58,6 +58,9 @@ class Function(RunnerAbstraction):
         name (Optional[str]):
             An optional name for this function, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
+        task_policy (TaskPolicy):
+            The task policy for the function. This helps manage the lifecycle of an individual task.
+            Setting values here will override timeout and retries.
     Example:
         ```python
         from beta9 import function, Image
@@ -89,6 +92,7 @@ class Function(RunnerAbstraction):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
+        task_policy: TaskPolicy = TaskPolicy(),
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -101,6 +105,7 @@ class Function(RunnerAbstraction):
             volumes=volumes,
             secrets=secrets,
             name=name,
+            task_policy=task_policy,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None

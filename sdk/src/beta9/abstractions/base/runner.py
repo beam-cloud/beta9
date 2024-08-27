@@ -20,10 +20,18 @@ from ...clients.gateway import (
     ReplaceObjectContentResponse,
     SecretVar,
 )
+from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import
 from ...sync import FileSyncer, SyncEventHandler
-from ...type import _AUTOSCALER_TYPES, Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from ...type import (
+    _AUTOSCALER_TYPES,
+    Autoscaler,
+    GpuType,
+    GpuTypeAlias,
+    QueueDepthAutoscaler,
+    TaskPolicy,
+)
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -61,6 +69,7 @@ class RunnerAbstraction(BaseAbstraction):
         authorized: bool = True,
         name: Optional[str] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
+        task_policy: TaskPolicy = TaskPolicy(),
     ) -> None:
         super().__init__()
 
@@ -88,9 +97,12 @@ class RunnerAbstraction(BaseAbstraction):
         self.workers = workers
         self.keep_warm_seconds = keep_warm_seconds
         self.max_pending_tasks = max_pending_tasks
-        self.retries = retries
-        self.timeout = timeout
         self.autoscaler = autoscaler
+        self.task_policy = TaskPolicy(
+            max_retries=task_policy.max_retries or retries,
+            timeout=task_policy.timeout or timeout,
+            ttl=task_policy.ttl,
+        )
 
         if on_start is not None:
             self._map_callable_to_attr(attr="on_start", func=on_start)
@@ -325,8 +337,6 @@ class RunnerAbstraction(BaseAbstraction):
                     handler=self.handler,
                     on_start=self.on_start,
                     callback_url=self.callback_url,
-                    retries=self.retries,
-                    timeout=self.timeout,
                     keep_warm_seconds=self.keep_warm_seconds,
                     workers=self.workers,
                     max_pending_tasks=self.max_pending_tasks,
@@ -338,6 +348,11 @@ class RunnerAbstraction(BaseAbstraction):
                         type=autoscaler_type,
                         max_containers=self.autoscaler.max_containers,
                         tasks_per_container=self.autoscaler.tasks_per_container,
+                    ),
+                    task_policy=TaskPolicyProto(
+                        max_retries=self.task_policy.max_retries,
+                        timeout=self.task_policy.timeout,
+                        ttl=self.task_policy.ttl,
                     ),
                 )
             )

@@ -217,6 +217,12 @@ message Autoscaler {
   uint32 tasks_per_container = 3;
 }
 
+message TaskPolicy {
+  int64 timeout = 1;
+  uint32 max_retries = 2;
+  uint32 ttl = 3;
+}
+
 message GetOrCreateStubRequest {
   string object_id = 1;
   string image_id = 2;
@@ -239,6 +245,7 @@ message GetOrCreateStubRequest {
   bool authorized = 20;
   repeated SecretVar secrets = 21;
   Autoscaler autoscaler = 22;
+  TaskPolicy task_policy = 23;
 }
 
 message GetOrCreateStubResponse {

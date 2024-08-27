@@ -166,7 +166,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 					continue
 				}
 
-				if !heartbeat && claimed {
+				if !heartbeat {
 					d.retryTask(ctx, task, taskMessage)
 					continue
 				}
