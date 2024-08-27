@@ -41,7 +41,7 @@ type Worker struct {
 	runcServer              *RunCServer
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
-	containerMountManager   *containerMountManager
+	containerMountManager   *ContainerMountManager
 	redisClient             *common.RedisClient
 	imageClient             *ImageClient
 	workerId                string

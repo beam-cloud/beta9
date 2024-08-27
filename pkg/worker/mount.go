@@ -8,18 +8,18 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-type containerMountManager struct {
+type ContainerMountManager struct {
 	mountPointPaths *common.SafeMap[[]string]
 }
 
-func NewContainerMountManager() *containerMountManager {
-	return &containerMountManager{
+func NewContainerMountManager() *ContainerMountManager {
+	return &ContainerMountManager{
 		mountPointPaths: common.NewSafeMap[[]string](),
 	}
 }
 
 // SetupContainerMounts initializes any external storage for a container
-func (c *containerMountManager) SetupContainerMounts(containerId string, mounts []types.Mount) error {
+func (c *ContainerMountManager) SetupContainerMounts(containerId string, mounts []types.Mount) error {
 	for _, m := range mounts {
 		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
 			err := c.setupMountPointS3(containerId, m)
@@ -34,7 +34,7 @@ func (c *containerMountManager) SetupContainerMounts(containerId string, mounts 
 }
 
 // RemoveContainerMounts removes all mounts for a container
-func (c *containerMountManager) RemoveContainerMounts(containerId string) {
+func (c *ContainerMountManager) RemoveContainerMounts(containerId string) {
 	mountPointPaths, ok := c.mountPointPaths.Get(containerId)
 	if !ok {
 		return
@@ -50,7 +50,7 @@ func (c *containerMountManager) RemoveContainerMounts(containerId string) {
 	c.mountPointPaths.Delete(containerId)
 }
 
-func (c *containerMountManager) setupMountPointS3(containerId string, m types.Mount) error {
+func (c *ContainerMountManager) setupMountPointS3(containerId string, m types.Mount) error {
 	mountPointS3, _ := storage.NewMountPointStorage(*m.MountPointConfig)
 
 	err := mountPointS3.Mount(m.LocalPath)
