@@ -92,7 +92,12 @@ RUN apt-get update && \
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends criu nvidia-container-toolkit-base nvidia-container-toolkit
-RUN apt-get install -y fuse3 libfuse3-dev
+RUN apt-get install -y fuse3 libfuse3-dev libfuse-dev bash-completion
+
+RUN if [ "$(uname -m)" = "x86_64" ]; then \
+    curl -L https://beam-runner-python-deps.s3.amazonaws.com/cuno_1.2.6_amd64_glibc.deb -o /tmp/cuno_1.2.6_amd64_glibc.deb && \
+    apt-get install -y /tmp/cuno_1.2.6_amd64_glibc.deb && rm /tmp/cuno_1.2.6_amd64_glibc.deb; \
+    fi
 
 RUN apt-get remove -y curl gpg && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
