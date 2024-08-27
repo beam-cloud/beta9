@@ -153,6 +153,13 @@ func (gws *GatewayService) DeleteDeployment(ctx context.Context, in *pb.DeleteDe
 
 func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRelated, ctx context.Context) error {
 	for _, deployment := range deployments {
+		// Stop scheduled job. To re-enable, a new deployment must be created
+		if deployment.StubType == types.StubTypeScheduledJobDeployment {
+			if scheduledJob, err := gws.backendRepo.GetScheduledJob(ctx, deployment.Id); err == nil {
+				gws.backendRepo.DeleteScheduledJob(ctx, scheduledJob)
+			}
+		}
+
 		// Stop active containers
 		containers, err := gws.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
 		if err == nil {
