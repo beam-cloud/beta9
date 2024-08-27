@@ -908,7 +908,7 @@ func (s *Worker) shutdown() error {
 func (s *Worker) createMountpoints(request *types.ContainerRequest) error {
 	for _, m := range request.Mounts {
 		// Use mountpoint to mount the cloud bucket with the provided config
-		if m.MountType == types.MountTypeMountPoint && m.MountPointConfig != nil {
+		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
 			mountPointS3, _ := storage.NewMountPointStorage(*m.MountPointConfig)
 			err := mountPointS3.Mount(m.LocalPath)
 			if err != nil {

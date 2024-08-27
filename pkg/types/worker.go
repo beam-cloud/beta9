@@ -13,8 +13,6 @@ const (
 
 const (
 	BuildContainerPrefix string = "build-"
-	MountTypeJuiceFS     string = "juicefs"
-	MountTypeMountPoint  string = "mountpoint"
 )
 
 type ContainerResourceUsage struct {

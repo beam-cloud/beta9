@@ -4,6 +4,7 @@ import (
 	"path"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -20,13 +21,13 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 			LocalPath: path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId),
 			MountPath: types.WorkerUserCodeVolume,
 			ReadOnly:  true,
-			MountType: types.MountTypeJuiceFS,
+			MountType: storage.StorageModeJuiceFS,
 		},
 		{
 			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),
 			MountPath: types.WorkerUserOutputVolume,
 			ReadOnly:  false,
-			MountType: types.MountTypeJuiceFS,
+			MountType: storage.StorageModeJuiceFS,
 		},
 	}
 
@@ -36,7 +37,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 			LinkPath:  path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId, v.MountPath),
 			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
 			ReadOnly:  false,
-			MountType: types.MountTypeJuiceFS,
+			MountType: storage.StorageModeJuiceFS,
 		}
 
 		if v.Config != nil {
@@ -58,7 +59,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 				mount.MountPointConfig.BucketURL = decryptedSecrets[2]
 			}
 			mount.LocalPath = path.Join(defaultExternalVolumesPath, workspace.Name, v.Id)
-			mount.MountType = types.MountTypeMountPoint
+			mount.MountType = storage.StorageModeMountPoint
 		}
 
 		mounts = append(mounts, mount)
