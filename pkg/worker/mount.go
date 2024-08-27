@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -9,27 +8,18 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-type StorageManager struct {
+type containerMountManager struct {
 	mountPointPaths *common.SafeMap[[]string]
-	workerStorage   storage.Storage
-	config          types.StorageConfig
 }
 
-func NewStorageManager(config types.StorageConfig) (*StorageManager, error) {
-	workerStorage, err := storage.NewStorage(config)
-	if err != nil {
-		return nil, err
-	}
-
-	return &StorageManager{
+func NewContainerMountManager() *containerMountManager {
+	return &containerMountManager{
 		mountPointPaths: common.NewSafeMap[[]string](),
-		workerStorage:   workerStorage,
-		config:          config,
-	}, nil
+	}
 }
 
-// SetupContainerStorage initializes any external storage for a container
-func (smm *StorageManager) SetupContainerStorage(containerId string, mounts []types.Mount) error {
+// SetupContainerMounts initializes any external storage for a container
+func (smm *containerMountManager) SetupContainerMounts(containerId string, mounts []types.Mount) error {
 	for _, m := range mounts {
 		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
 			err := smm.setupMountPointS3(containerId, m)
@@ -43,8 +33,8 @@ func (smm *StorageManager) SetupContainerStorage(containerId string, mounts []ty
 	return nil
 }
 
-// RemoveContainerStorage removes all mounts for a container
-func (smm *StorageManager) RemoveContainerStorage(containerId string) {
+// RemoveContainerMounts removes all mounts for a container
+func (smm *containerMountManager) RemoveContainerMounts(containerId string) {
 	mountPointPaths, ok := smm.mountPointPaths.Get(containerId)
 	if !ok {
 		return
@@ -60,18 +50,7 @@ func (smm *StorageManager) RemoveContainerStorage(containerId string) {
 	smm.mountPointPaths.Delete(containerId)
 }
 
-// RemoveWorkerStorage removes all mounts for a worker
-func (smm *StorageManager) RemoveWorkerStorage() error {
-
-	err := smm.workerStorage.Unmount(smm.config.FilesystemPath)
-	if err != nil {
-		return fmt.Errorf("failed to unmount storage: %v", err)
-	}
-
-	return nil
-}
-
-func (smm *StorageManager) setupMountPointS3(containerId string, m types.Mount) error {
+func (smm *containerMountManager) setupMountPointS3(containerId string, m types.Mount) error {
 	mountPointS3, _ := storage.NewMountPointStorage(*m.MountPointConfig)
 
 	err := mountPointS3.Mount(m.LocalPath)

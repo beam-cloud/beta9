@@ -20,6 +20,7 @@ import (
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -40,7 +41,7 @@ type Worker struct {
 	runcServer              *RunCServer
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
-	storageManager          *StorageManager
+	storageManager          *containerMountManager
 	redisClient             *common.RedisClient
 	imageClient             *ImageClient
 	workerId                string
@@ -55,6 +56,7 @@ type Worker struct {
 	stopContainerChan       chan stopContainerEvent
 	workerRepo              repo.WorkerRepository
 	eventRepo               repo.EventRepository
+	storage                 storage.Storage
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
@@ -135,6 +137,11 @@ func NewWorker() (*Worker, error) {
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
+	storage, err := storage.NewStorage(config.Storage)
+	if err != nil {
+		return nil, err
+	}
+
 	imageClient, err := NewImageClient(config, workerId, workerRepo)
 	if err != nil {
 		return nil, err
@@ -163,12 +170,6 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	storageMountManager, err := NewStorageManager(config.Storage)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-
 	return &Worker{
 		ctx:                     ctx,
 		cancel:                  cancel,
@@ -183,7 +184,7 @@ func NewWorker() (*Worker, error) {
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		redisClient:             redisClient,
-		storageManager:          storageMountManager,
+		storageManager:          NewContainerMountManager(),
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
 		podHostName:             podHostName,
@@ -201,6 +202,7 @@ func NewWorker() (*Worker, error) {
 		eventRepo:         eventRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
 		stopContainerChan: make(chan stopContainerEvent, 1000),
+		storage:           storage,
 	}, nil
 }
 
@@ -294,7 +296,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
-	err = s.storageManager.SetupContainerStorage(request.ContainerId, request.Mounts)
+	err = s.storageManager.SetupContainerMounts(request.ContainerId, request.Mounts)
 	if err != nil {
 		return err
 	}
@@ -534,7 +536,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	containerId := request.ContainerId
 
 	// Unmount external s3 buckets
-	defer s.storageManager.RemoveContainerStorage(containerId)
+	defer s.storageManager.RemoveContainerMounts(containerId)
 
 	// Clear out all files in the container's directory
 	defer func() {
@@ -882,9 +884,9 @@ func (s *Worker) shutdown() error {
 	}
 
 	s.cancel()
-	err := s.storageManager.RemoveWorkerStorage()
+	err := s.storage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
-		errs = errors.Join(errs, err)
+		errs = errors.Join(errs, fmt.Errorf("failed to unmount storage: %v", err))
 	}
 
 	err = s.imageClient.Cleanup()
