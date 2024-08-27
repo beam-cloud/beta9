@@ -170,7 +170,7 @@ func (t *FunctionTask) Cancel(ctx context.Context, reason types.TaskCancellation
 
 	switch reason {
 	case types.TaskExpired:
-		task.Status = types.TaskStatusTimeout
+		task.Status = types.TaskStatusExpired
 	case types.TaskExceededRetryLimit:
 		task.Status = types.TaskStatusError
 	default:

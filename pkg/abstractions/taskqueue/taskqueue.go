@@ -46,9 +46,10 @@ type TaskQueueServiceOpts struct {
 }
 
 const (
+	TaskQueueDefaultTaskTTL int = 3600 * 2 // 2 hours
+
 	taskQueueContainerPrefix                 string        = "taskqueue"
 	taskQueueRoutePrefix                     string        = "/taskqueue"
-	taskQueueDefaultTaskExpiration           int           = 3600 * 2 // 2 hours
 	taskQueueServeContainerKeepaliveInterval time.Duration = 30 * time.Second
 	taskQueueServeContainerTimeout           time.Duration = 10 * time.Minute
 )
@@ -183,7 +184,7 @@ func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stub
 	}
 
 	policy := stubConfig.TaskPolicy
-	policy.Expires = time.Now().Add(time.Duration(taskQueueDefaultTaskExpiration) * time.Second)
+	policy.Expires = time.Now().Add(time.Duration(policy.TTL) * time.Second)
 
 	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), authInfo, stubId, payload, policy)
 	if err != nil {

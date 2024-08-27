@@ -23,7 +23,7 @@ from ..clients.taskqueue import (
     TaskQueueServiceStub,
 )
 from ..env import is_local
-from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
 from .mixins import DeployableMixin
 
 
@@ -78,6 +78,9 @@ class TaskQueue(RunnerAbstraction):
         autoscaler (Autoscaler):
             Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
             various autoscaling strategies. Default is QueueDepthAutoscaler().
+        task_policy (TaskPolicy):
+            The task policy for the function. This helps manage the lifecycle of an individual task.
+            Setting values here will override timeout and retries.
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -109,6 +112,7 @@ class TaskQueue(RunnerAbstraction):
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
+        task_policy: TaskPolicy = TaskPolicy(),
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -126,6 +130,7 @@ class TaskQueue(RunnerAbstraction):
             secrets=secrets,
             name=name,
             autoscaler=autoscaler,
+            task_policy=task_policy,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
 

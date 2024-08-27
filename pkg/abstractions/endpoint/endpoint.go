@@ -44,10 +44,11 @@ type HttpEndpointService struct {
 }
 
 var (
+	EndpointRequestTimeoutS int    = 600 // 10 minutes
+	ASGIRoutePrefix         string = "/asgi"
+
 	endpointContainerPrefix                 string        = "endpoint"
 	endpointRoutePrefix                     string        = "/endpoint"
-	ASGIRoutePrefix                         string        = "/asgi"
-	endpointRequestTimeoutS                 int           = 300
 	endpointServeContainerTimeout           time.Duration = 10 * time.Minute
 	endpointServeContainerKeepaliveInterval time.Duration = 30 * time.Second
 	endpointRequestHeartbeatInterval        time.Duration = 30 * time.Second
@@ -191,7 +192,7 @@ func (es *HttpEndpointService) forwardRequest(
 	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), authInfo, stubId, payload, types.TaskPolicy{
 		MaxRetries: 0,
 		Timeout:    instance.StubConfig.TaskPolicy.Timeout,
-		Expires:    time.Now().Add(time.Duration(endpointRequestTimeoutS) * time.Second),
+		Expires:    time.Now().Add(time.Duration(instance.StubConfig.TaskPolicy.TTL) * time.Second),
 	})
 	if err != nil {
 		return err

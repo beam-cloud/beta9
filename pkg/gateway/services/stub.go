@@ -4,7 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 
+	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
+	"github.com/beam-cloud/beta9/pkg/abstractions/function"
+	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -39,14 +43,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Memory:  in.Memory,
 			ImageId: in.ImageId,
 		},
-		Handler:       in.Handler,
-		OnStart:       in.OnStart,
-		CallbackUrl:   in.CallbackUrl,
-		PythonVersion: in.PythonVersion,
-		TaskPolicy: types.TaskPolicy{
-			MaxRetries: uint(in.Retries),
-			Timeout:    int(in.Timeout),
-		},
+		Handler:         in.Handler,
+		OnStart:         in.OnStart,
+		CallbackUrl:     in.CallbackUrl,
+		PythonVersion:   in.PythonVersion,
+		TaskPolicy:      gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),
 		KeepWarmSeconds: uint(in.KeepWarmSeconds),
 		Workers:         uint(in.Workers),
 		MaxPendingTasks: uint(in.MaxPendingTasks),
@@ -145,4 +146,37 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		Version:      uint32(deployment.Version),
 		InvokeUrl:    invokeURL,
 	}, nil
+}
+
+func (gws *GatewayService) configureTaskPolicy(policy *pb.TaskPolicy, stubType types.StubType) types.TaskPolicy {
+	p := types.TaskPolicy{
+		MaxRetries: uint(math.Min(float64(policy.MaxRetries), float64(types.MaxTaskRetries))),
+		Timeout:    int(policy.Timeout),
+		TTL:        uint32(math.Min(float64(policy.Ttl), float64(types.MaxTaskTTL))),
+	}
+
+	switch stubType.Kind() {
+	case types.StubTypeASGI:
+		fallthrough
+	case types.StubTypeEndpoint:
+		p.Timeout = int(math.Min(float64(policy.Timeout), float64(endpoint.EndpointRequestTimeoutS)))
+		if p.Timeout <= 0 {
+			p.Timeout = endpoint.EndpointRequestTimeoutS
+		}
+		p.MaxRetries = 0
+		p.TTL = math.MaxUint32 // No TTL for endpoint tasks
+
+	case types.StubTypeScheduledJob:
+		fallthrough
+	case types.StubTypeFunction:
+		if p.TTL == 0 {
+			p.TTL = uint32(function.FunctionDefaultTaskTTL)
+		}
+	case types.StubTypeTaskQueue:
+		if p.TTL == 0 {
+			p.TTL = uint32(taskqueue.TaskQueueDefaultTaskTTL)
+		}
+	}
+
+	return p
 }

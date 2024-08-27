@@ -23,7 +23,7 @@ from ..clients.endpoint import (
     StopEndpointServeRequest,
 )
 from ..env import is_local
-from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
 from .mixins import DeployableMixin
 
 
@@ -77,6 +77,9 @@ class Endpoint(RunnerAbstraction):
             various autoscaling strategies (Defaults to QueueDepthAutoscaler())
         callback_url (Optional[str]):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        task_policy (TaskPolicy):
+            The task policy for the function. This helps manage the lifecycle of an individual task.
+            Setting values here will override timeout and retries.
     Example:
         ```python
         from beta9 import endpoint, Image
@@ -112,6 +115,7 @@ class Endpoint(RunnerAbstraction):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
+        task_policy: TaskPolicy = TaskPolicy(),
     ):
         super().__init__(
             cpu=cpu,
@@ -130,6 +134,7 @@ class Endpoint(RunnerAbstraction):
             authorized=authorized,
             autoscaler=autoscaler,
             callback_url=callback_url,
+            task_policy=task_policy,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None

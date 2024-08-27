@@ -237,6 +237,13 @@ class Autoscaler(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class TaskPolicy(betterproto.Message):
+    timeout: int = betterproto.int64_field(1)
+    max_retries: int = betterproto.uint32_field(2)
+    ttl: int = betterproto.uint32_field(3)
+
+
+@dataclass(eq=False, repr=False)
 class GetOrCreateStubRequest(betterproto.Message):
     object_id: str = betterproto.string_field(1)
     image_id: str = betterproto.string_field(2)
@@ -259,6 +266,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     authorized: bool = betterproto.bool_field(20)
     secrets: List["SecretVar"] = betterproto.message_field(21)
     autoscaler: "Autoscaler" = betterproto.message_field(22)
+    task_policy: "TaskPolicy" = betterproto.message_field(23)
 
 
 @dataclass(eq=False, repr=False)
