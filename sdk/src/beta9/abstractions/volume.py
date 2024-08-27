@@ -109,7 +109,6 @@ class Volume(BaseAbstraction):
             mount_path=self.mount_path,
         )
 
-        # FIXME: is the external flag necessary?
         if self.config.external:
             vol.config = VolumeConfigGateway(
                 bucket_name=self.name,

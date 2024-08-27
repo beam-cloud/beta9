@@ -40,7 +40,11 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 		}
 
 		if v.Config != nil {
-			decryptedSecrets, err := common.DecryptAllSecrets(signingKey, []string{v.Config.AccessKey, v.Config.SecretKey, v.Config.BucketUrl})
+			secrets := []string{v.Config.AccessKey, v.Config.SecretKey}
+			if v.Config.BucketUrl != "" {
+				secrets = append(secrets, v.Config.BucketUrl)
+			}
+			decryptedSecrets, err := common.DecryptAllSecrets(signingKey, secrets)
 			if err != nil {
 				return nil, err
 			}
@@ -49,7 +53,9 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 				S3Bucket:  v.Config.BucketName,
 				AccessKey: decryptedSecrets[0],
 				SecretKey: decryptedSecrets[1],
-				BucketURL: decryptedSecrets[2],
+			}
+			if v.Config.BucketUrl != "" {
+				mount.MountPointConfig.BucketURL = decryptedSecrets[2]
 			}
 			mount.LocalPath = path.Join(defaultExternalVolumesPath, workspace.Name, v.Id)
 			mount.MountType = types.MountTypeMountPoint

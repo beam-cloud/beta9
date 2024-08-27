@@ -8,6 +8,10 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+const (
+	mountpointBinary = "ms3"
+)
+
 type MountPointStorage struct {
 	mountCmd *exec.Cmd
 	config   types.MountPointConfig
@@ -30,21 +34,13 @@ func (s *MountPointStorage) Mount(localPath string) error {
 		}
 	}
 
-	endpoint := ""
+	// FIXME: cache? https://github.com/awslabs/mountpoint-s3/blob/main/doc/CONFIGURATION.md#caching-configuration
+	cmdArgs := []string{s.config.S3Bucket, localPath, "--allow-other", "--log-directory=/var/log/", "--upload-checksums=off"}
 	if s.config.BucketURL != "" {
-		endpoint = fmt.Sprintf("--endpoint-url=%s", s.config.BucketURL)
+		cmdArgs = append(cmdArgs, fmt.Sprintf("--endpoint-url=%s", s.config.BucketURL))
 	}
 
-	// FIXME: cache? https://github.com/awslabs/mountpoint-s3/blob/main/doc/CONFIGURATION.md#caching-configuration
-	s.mountCmd = exec.Command(
-		"ms3",
-		s.config.S3Bucket,
-		localPath,
-		endpoint,
-		"--allow-other",
-		"--log-directory=/var/log/",
-		"--upload-checksums=off",
-	)
+	s.mountCmd = exec.Command(mountpointBinary, cmdArgs...)
 
 	if s.config.AccessKey != "" || s.config.SecretKey != "" {
 		s.mountCmd.Env = append(s.mountCmd.Env,
