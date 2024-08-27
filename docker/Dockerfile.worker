@@ -80,7 +80,7 @@ ENV DEBIAN_FRONTEND="noninteractive"
 WORKDIR /workspace
 
 RUN apt-get update && \
-    apt-get install -y curl gpg && \
+    apt-get install -y curl gpg wget && \
     curl -fsSL https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04/Release.key | gpg --dearmor -o /usr/share/keyrings/criu.gpg && \
     echo 'deb [signed-by=/usr/share/keyrings/criu.gpg] https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04 /' > /etc/apt/sources.list.d/criu.list && \
     curl -fsSL https://nvidia.github.io/nvidia-container-runtime/gpgkey | apt-key add - && \
@@ -92,7 +92,12 @@ RUN apt-get update && \
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends criu nvidia-container-toolkit-base nvidia-container-toolkit
-RUN apt-get install -y fuse3 libfuse3-dev
+RUN apt-get install -y fuse3 libfuse3-dev libfuse-dev bash-completion
+
+RUN if [ "$(uname -m)" = "x86_64" ]; then \
+    curl -L https://beam-runner-python-deps.s3.amazonaws.com/cuno_1.2.6_amd64_glibc.deb -o /workspace/cuno_1.2.6_amd64_glibc.deb && \
+    apt-get install -y /workspace/cuno_1.2.6_amd64_glibc.deb && rm /workspace/cuno_1.2.6_amd64_glibc.deb; \
+    fi
 
 RUN apt-get remove -y curl gpg && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
