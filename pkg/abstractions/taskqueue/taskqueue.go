@@ -46,7 +46,7 @@ type TaskQueueServiceOpts struct {
 }
 
 const (
-	TaskQueueDefaultTaskTTL int = 3600 * 2 // 2 hours
+	DefaultTaskQueueDefaultTaskTTL int = 3600 * 2 // 2 hours
 
 	taskQueueContainerPrefix                 string        = "taskqueue"
 	taskQueueRoutePrefix                     string        = "/taskqueue"
