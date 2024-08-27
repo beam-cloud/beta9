@@ -7,7 +7,6 @@ import (
 const (
 	DefaultExtractedObjectPath         string        = "/data/unpacked"
 	DefaultVolumesPath                 string        = "/data/volumes"
-	DefaultExternalVolumesPath         string        = "/data/external-volumes"
 	DefaultObjectPath                  string        = "/data/objects"
 	DefaultOutputsPath                 string        = "/data/outputs"
 	DefaultFilesystemName              string        = "beta9-fs"

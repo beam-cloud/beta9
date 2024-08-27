@@ -7,6 +7,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+const defaultExternalVolumesPath string = "/data/external-volumes"
+
 func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Workspace, config types.StubConfigV1, stubId string) ([]types.Mount, error) {
 	signingKey, err := common.ParseSigningKey(*workspace.SigningKey)
 	if err != nil {
@@ -35,7 +37,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 		}
 
 		if v.Config != nil {
-			decryptedSecrets, err := common.DecryptAll(signingKey, []string{v.Config.AccessKey, v.Config.SecretKey, v.Config.BucketUrl})
+			decryptedSecrets, err := common.DecryptAllSecrets(signingKey, []string{v.Config.AccessKey, v.Config.SecretKey, v.Config.BucketUrl})
 			if err != nil {
 				return nil, err
 			}
@@ -46,7 +48,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 				SecretKey: decryptedSecrets[1],
 				BucketURL: decryptedSecrets[2],
 			}
-			mount.LocalPath = path.Join(types.DefaultExternalVolumesPath, workspace.Name, v.Id)
+			mount.LocalPath = path.Join(defaultExternalVolumesPath, workspace.Name, v.Id)
 		}
 
 		mounts = append(mounts, mount)
