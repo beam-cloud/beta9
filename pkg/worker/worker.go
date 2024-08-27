@@ -41,6 +41,7 @@ type Worker struct {
 	runcServer              *RunCServer
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
+	containerMountManager   *ContainerMountManager
 	redisClient             *common.RedisClient
 	imageClient             *ImageClient
 	workerId                string
@@ -183,6 +184,7 @@ func NewWorker() (*Worker, error) {
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		redisClient:             redisClient,
+		containerMountManager:   NewContainerMountManager(),
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
 		podHostName:             podHostName,
@@ -293,6 +295,11 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		return err
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
+
+	err = s.containerMountManager.SetupContainerMounts(request.ContainerId, request.Mounts)
+	if err != nil {
+		return err
+	}
 
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
@@ -527,6 +534,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	exitCode := -1
 	containerId := request.ContainerId
+
+	// Unmount external s3 buckets
+	defer s.containerMountManager.RemoveContainerMounts(containerId)
 
 	// Clear out all files in the container's directory
 	defer func() {
@@ -764,7 +774,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			err := os.MkdirAll(m.LocalPath, 0755)
 			if err != nil {
 				log.Printf("<%s> - failed to create mount directory: %v\n", request.ContainerId, err)
-				continue
 			}
 		}
 
@@ -875,7 +884,6 @@ func (s *Worker) shutdown() error {
 	}
 
 	s.cancel()
-
 	err := s.storage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to unmount storage: %v", err))

@@ -166,9 +166,12 @@ type CunoFSConfig struct {
 }
 
 type MountPointConfig struct {
-	AWSS3Bucket  string `key:"awsS3Bucket" json:"aws_s3_bucket"`
-	AWSAccessKey string `key:"awsAccessKey" json:"aws_access_key"`
-	AWSSecretKey string `key:"awsSecretKey" json:"aws_secret_key"`
+	S3Bucket    string `json:"s3_bucket"`
+	AccessKey   string `json:"access_key"`
+	SecretKey   string `json:"secret_key"`
+	EndpointURL string `json:"bucket_url"`
+	Region      string `json:"region"`
+	ReadOnly    bool   `json:"read_only"`
 }
 
 type WorkerConfig struct {

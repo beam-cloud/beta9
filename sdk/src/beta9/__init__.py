@@ -10,7 +10,7 @@ from .abstractions.map import Map
 from .abstractions.output import Output
 from .abstractions.queue import SimpleQueue as Queue
 from .abstractions.taskqueue import TaskQueue as task_queue
-from .abstractions.volume import Volume
+from .abstractions.volume import CloudBucket, CloudBucketConfig, Volume
 from .type import GpuType, PythonVersion, QueueDepthAutoscaler, TaskPolicy
 
 __all__ = [
@@ -18,6 +18,8 @@ __all__ = [
     "Image",
     "Queue",
     "Volume",
+    "CloudBucket",
+    "CloudBucketConfig",
     "task_queue",
     "function",
     "endpoint",

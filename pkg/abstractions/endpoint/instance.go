@@ -38,6 +38,16 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 		return err
 	}
 
+	mounts, err := abstractions.ConfigureContainerRequestMounts(
+		i.Stub.Object.ExternalId,
+		i.Workspace,
+		*i.buffer.stubConfig,
+		i.Stub.ExternalId,
+	)
+	if err != nil {
+		return err
+	}
+
 	env := []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
 		fmt.Sprintf("HANDLER=%s", i.StubConfig.Handler),
@@ -60,6 +70,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 
 	for c := 0; c < containersToRun; c++ {
 		containerId := i.genContainerId()
+
 		runRequest := &types.ContainerRequest{
 			ContainerId: containerId,
 			Env:         env,
@@ -71,12 +82,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			StubId:      i.Stub.ExternalId,
 			WorkspaceId: i.Workspace.ExternalId,
 			EntryPoint:  i.EntryPoint,
-			Mounts: abstractions.ConfigureContainerRequestMounts(
-				i.Stub.Object.ExternalId,
-				i.Workspace.Name,
-				*i.buffer.stubConfig,
-				i.Stub.ExternalId,
-			),
+			Mounts:      mounts,
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers
