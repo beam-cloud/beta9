@@ -41,7 +41,7 @@ type Worker struct {
 	runcServer              *RunCServer
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
-	storageManager          *containerMountManager
+	containerMountManager   *containerMountManager
 	redisClient             *common.RedisClient
 	imageClient             *ImageClient
 	workerId                string
@@ -184,7 +184,7 @@ func NewWorker() (*Worker, error) {
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		redisClient:             redisClient,
-		storageManager:          NewContainerMountManager(),
+		containerMountManager:   NewContainerMountManager(),
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
 		podHostName:             podHostName,
@@ -296,7 +296,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
-	err = s.storageManager.SetupContainerMounts(request.ContainerId, request.Mounts)
+	err = s.containerMountManager.SetupContainerMounts(request.ContainerId, request.Mounts)
 	if err != nil {
 		return err
 	}
@@ -536,7 +536,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	containerId := request.ContainerId
 
 	// Unmount external s3 buckets
-	defer s.storageManager.RemoveContainerMounts(containerId)
+	defer s.containerMountManager.RemoveContainerMounts(containerId)
 
 	// Clear out all files in the container's directory
 	defer func() {
