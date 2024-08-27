@@ -20,11 +20,13 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 			LocalPath: path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId),
 			MountPath: types.WorkerUserCodeVolume,
 			ReadOnly:  true,
+			MountType: types.MountTypeJuiceFS,
 		},
 		{
 			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),
 			MountPath: types.WorkerUserOutputVolume,
 			ReadOnly:  false,
+			MountType: types.MountTypeJuiceFS,
 		},
 	}
 
@@ -34,6 +36,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 			LinkPath:  path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId, v.MountPath),
 			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
 			ReadOnly:  false,
+			MountType: types.MountTypeJuiceFS,
 		}
 
 		if v.Config != nil {
@@ -49,6 +52,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 				BucketURL: decryptedSecrets[2],
 			}
 			mount.LocalPath = path.Join(defaultExternalVolumesPath, workspace.Name, v.Id)
+			mount.MountType = types.MountTypeMountPoint
 		}
 
 		mounts = append(mounts, mount)

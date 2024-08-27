@@ -13,6 +13,8 @@ const (
 
 const (
 	BuildContainerPrefix string = "build-"
+	MountTypeJuiceFS     string = "juicefs"
+	MountTypeMountPoint  string = "mountpoint"
 )
 
 type ContainerResourceUsage struct {
@@ -29,5 +31,6 @@ type Mount struct {
 	MountPath        string            `json:"mount_path"`
 	LinkPath         string            `json:"link_path"`
 	ReadOnly         bool              `json:"read_only"`
+	MountType        string            `json:"mount_type"`
 	MountPointConfig *MountPointConfig `json:"mountpoint_config"`
 }
