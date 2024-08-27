@@ -149,15 +149,6 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 				}
 
 				if !claimed {
-					if time.Now().After(taskMessage.Policy.Expires) {
-						err = task.Cancel(ctx, types.TaskExpired)
-						if err != nil {
-							log.Printf("<dispatcher> unable to cancel task: %s, %v\n", task.Metadata().TaskId, err)
-						}
-
-						d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
-					}
-
 					continue
 				}
 
