@@ -23,6 +23,7 @@ const (
 	FunctionService_FunctionGetArgs_FullMethodName   = "/function.FunctionService/FunctionGetArgs"
 	FunctionService_FunctionSetResult_FullMethodName = "/function.FunctionService/FunctionSetResult"
 	FunctionService_FunctionMonitor_FullMethodName   = "/function.FunctionService/FunctionMonitor"
+	FunctionService_FunctionSchedule_FullMethodName  = "/function.FunctionService/FunctionSchedule"
 )
 
 // FunctionServiceClient is the client API for FunctionService service.
@@ -33,6 +34,7 @@ type FunctionServiceClient interface {
 	FunctionGetArgs(ctx context.Context, in *FunctionGetArgsRequest, opts ...grpc.CallOption) (*FunctionGetArgsResponse, error)
 	FunctionSetResult(ctx context.Context, in *FunctionSetResultRequest, opts ...grpc.CallOption) (*FunctionSetResultResponse, error)
 	FunctionMonitor(ctx context.Context, in *FunctionMonitorRequest, opts ...grpc.CallOption) (FunctionService_FunctionMonitorClient, error)
+	FunctionSchedule(ctx context.Context, in *FunctionScheduleRequest, opts ...grpc.CallOption) (*FunctionScheduleResponse, error)
 }
 
 type functionServiceClient struct {
@@ -125,6 +127,15 @@ func (x *functionServiceFunctionMonitorClient) Recv() (*FunctionMonitorResponse,
 	return m, nil
 }
 
+func (c *functionServiceClient) FunctionSchedule(ctx context.Context, in *FunctionScheduleRequest, opts ...grpc.CallOption) (*FunctionScheduleResponse, error) {
+	out := new(FunctionScheduleResponse)
+	err := c.cc.Invoke(ctx, FunctionService_FunctionSchedule_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FunctionServiceServer is the server API for FunctionService service.
 // All implementations must embed UnimplementedFunctionServiceServer
 // for forward compatibility
@@ -133,6 +144,7 @@ type FunctionServiceServer interface {
 	FunctionGetArgs(context.Context, *FunctionGetArgsRequest) (*FunctionGetArgsResponse, error)
 	FunctionSetResult(context.Context, *FunctionSetResultRequest) (*FunctionSetResultResponse, error)
 	FunctionMonitor(*FunctionMonitorRequest, FunctionService_FunctionMonitorServer) error
+	FunctionSchedule(context.Context, *FunctionScheduleRequest) (*FunctionScheduleResponse, error)
 	mustEmbedUnimplementedFunctionServiceServer()
 }
 
@@ -151,6 +163,9 @@ func (UnimplementedFunctionServiceServer) FunctionSetResult(context.Context, *Fu
 }
 func (UnimplementedFunctionServiceServer) FunctionMonitor(*FunctionMonitorRequest, FunctionService_FunctionMonitorServer) error {
 	return status.Errorf(codes.Unimplemented, "method FunctionMonitor not implemented")
+}
+func (UnimplementedFunctionServiceServer) FunctionSchedule(context.Context, *FunctionScheduleRequest) (*FunctionScheduleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FunctionSchedule not implemented")
 }
 func (UnimplementedFunctionServiceServer) mustEmbedUnimplementedFunctionServiceServer() {}
 
@@ -243,6 +258,24 @@ func (x *functionServiceFunctionMonitorServer) Send(m *FunctionMonitorResponse) 
 	return x.ServerStream.SendMsg(m)
 }
 
+func _FunctionService_FunctionSchedule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FunctionScheduleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FunctionServiceServer).FunctionSchedule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FunctionService_FunctionSchedule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FunctionServiceServer).FunctionSchedule(ctx, req.(*FunctionScheduleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FunctionService_ServiceDesc is the grpc.ServiceDesc for FunctionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -257,6 +290,10 @@ var FunctionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "FunctionSetResult",
 			Handler:    _FunctionService_FunctionSetResult_Handler,
+		},
+		{
+			MethodName: "FunctionSchedule",
+			Handler:    _FunctionService_FunctionSchedule_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -317,11 +317,11 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 	}
 
 	// Allow forwarding of traffic from the bridge to the external network and back
-	if err := m.ipt.AppendUnique("filter", "FORWARD", "-i", bridgeName, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT"); err != nil {
+	if err := m.ipt.InsertUnique("filter", "FORWARD", 1, "-i", bridgeName, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT"); err != nil {
 		return nil, err
 	}
 
-	if err := m.ipt.AppendUnique("filter", "FORWARD", "-i", m.defaultLink.Attrs().Name, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
+	if err := m.ipt.InsertUnique("filter", "FORWARD", 1, "-i", m.defaultLink.Attrs().Name, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
 		return nil, err
 	}
 
@@ -444,15 +444,13 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
-			namespaces, err := listNamespaces("/var/run/netns")
+			containerIds, err := m.listContainerIdsFromIptables()
 			if err != nil {
-				log.Printf("network manager: error listing namespaces - %v\n", err)
+				log.Printf("network manager: error listing container ids - %v\n", err)
 				continue
 			}
 
-			for _, namespace := range namespaces {
-				containerId := namespace // namespace is the same as containerId
-
+			for _, containerId := range containerIds {
 				func() {
 					// Only allow one worker on this machine/worker handle the cleanup
 					// We have a secondary lock for the IP assignment, but we need this lock for the "container" level consistency
@@ -464,8 +462,8 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 					defer m.workerRepo.RemoveNetworkLock(m.networkPrefix + "-" + containerId)
 
 					// Check if the container still exists
-					_, err := m.containerRepo.GetContainerState(containerId)
-					if err != nil {
+					var notFoundErr *types.ErrContainerStateNotFound
+					if _, err := m.containerRepo.GetContainerState(containerId); err != nil && errors.As(err, &notFoundErr) {
 						// Container state not found, so tear down the namespace and associated resources
 						log.Printf("network manager: orphaned namespace detected<%s>, cleaning up...\n", containerId)
 
@@ -525,11 +523,6 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		return err
 	}
 
-	// Remove container namespace
-	if err := netns.DeleteNamed(namespace); err != nil {
-		return err
-	}
-
 	containerIp, err := m.workerRepo.GetContainerIp(m.networkPrefix, containerId)
 	if err != nil {
 		return err
@@ -555,6 +548,10 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		}
 	}
 
+	// Delete container namespace don't bother handling
+	// the error because the namespace is likely to be gone at this point
+	netns.DeleteNamed(namespace)
+
 	return m.workerRepo.RemoveContainerIp(m.networkPrefix, containerId)
 }
 
@@ -572,7 +569,14 @@ func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.I
 
 			for _, rule := range rules {
 				if strings.Contains(rule, ip) {
-					if err := ipt.Delete(table, chain, strings.Fields(rule)[2:]...); err != nil {
+					parts := strings.Fields(rule)
+
+					// Remove any double quotes
+					for i, part := range parts {
+						parts[i] = strings.ReplaceAll(part, `"`, "")
+					}
+
+					if err := ipt.Delete(table, chain, parts[2:]...); err != nil {
 						return err
 					}
 				}
@@ -603,16 +607,20 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	ipv6Prefix := ipv6Net.IP.String()
 	containerIp_IPv6 := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
 
+	truncatedContainerId := containerId[len(containerId)-5:]
+	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
+	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
+
 	// Insert NAT PREROUTING rule at the top of the chain
 	// IPv4
-	err = m.ipt.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort))
+	err = m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort), "-m", "comment", "--comment", comment)
 	if err != nil {
 		return err
 	}
 
 	// IPv6
 	if m.ipt6 != nil {
-		err = m.ipt6.Insert("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", containerIp_IPv6, containerPort))
+		err = m.ipt6.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", containerIp_IPv6, containerPort), "-m", "comment", "--comment", comment)
 		if err != nil {
 			return err
 		}
@@ -620,14 +628,14 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 
 	// Add FORWARD rule for the DNAT'd traffic
 	// IPv4
-	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
+	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", comment)
 	if err != nil {
 		return err
 	}
 
 	// IPv6
 	if m.ipt6 != nil {
-		err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp_IPv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT")
+		err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp_IPv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", comment)
 		if err != nil {
 			return err
 		}
@@ -712,31 +720,49 @@ func getIPFromEnv(varName string) (string, error) {
 	return ip.String(), nil
 }
 
-// listNamespaces lists all valid network namespaces in the specified directory.
-func listNamespaces(netnsPath string) ([]string, error) {
-	var namespaces []string
+func (m *ContainerNetworkManager) listContainerIdsFromIptables() ([]string, error) {
+	containerIdsSet := make(map[string]struct{})
 
-	err := filepath.Walk(netnsPath, func(path string, info os.FileInfo, err error) error {
-		if path == netnsPath {
-			return nil
-		}
+	rules, err := m.ipt.List("nat", "PREROUTING")
+	if err != nil {
+		return nil, err
+	}
 
-		if err != nil {
-			return err
-		}
-
-		if !info.IsDir() {
-			nsHandle, err := netns.GetFromPath(path)
-			if err == nil {
-				defer nsHandle.Close()
-				namespaces = append(namespaces, info.Name())
+	for _, rule := range rules {
+		if strings.Contains(rule, containerVethHostPrefix) {
+			parts := strings.Split(rule, ":")
+			if len(parts) > 1 {
+				containerId := strings.Fields(parts[1])[0]
+				containerId = strings.TrimRight(containerId, `\"`)
+				containerIdsSet[containerId] = struct{}{}
 			}
 		}
+	}
 
-		return nil
-	})
+	if m.ipt6 != nil {
+		rules6, err := m.ipt6.List("nat", "PREROUTING")
+		if err != nil {
+			return nil, err
+		}
 
-	return namespaces, err
+		for _, rule := range rules6 {
+			if strings.Contains(rule, containerVethHostPrefix) {
+				parts := strings.Split(rule, ":")
+				if len(parts) > 1 {
+					containerId := strings.Fields(parts[1])[0]
+					containerId = strings.TrimRight(containerId, `\"`)
+					containerIdsSet[containerId] = struct{}{}
+				}
+			}
+		}
+	}
+
+	containerIds := make([]string, 0, len(containerIdsSet))
+	for id := range containerIdsSet {
+		containerIds = append(containerIds, id)
+	}
+
+	return containerIds, nil
 }
 
 // generateUniqueMAC generates a random MAC address with a specific OUI (Organizationally Unique Identifier).

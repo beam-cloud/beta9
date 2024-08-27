@@ -10,6 +10,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/google/uuid"
@@ -24,20 +25,22 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+const (
+	ScheduledJobsChannel                = "jobs"
+	listenToChannelPingInterval         = 10 * time.Second
+	listenToChannelMinReconnectInterval = 1 * time.Second
+	listenToChannelMaxReconnectInterval = 10 * time.Second
+)
+
 var PostgresDataError = pq.ErrorClass("22")
 
-type PostgresBackendRepository struct {
-	client    *sqlx.DB
-	eventRepo EventRepository
-}
-
-func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository) (*PostgresBackendRepository, error) {
+func GenerateDSN(config types.PostgresConfig) string {
 	sslMode := "disable"
 	if config.EnableTLS {
 		sslMode = "require"
 	}
 
-	dsn := fmt.Sprintf(
+	return fmt.Sprintf(
 		"host=%s user=%s password=%s dbname=%s port=%d sslmode=%s TimeZone=%s",
 		config.Host,
 		config.Username,
@@ -47,6 +50,17 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 		sslMode,
 		config.TimeZone,
 	)
+}
+
+type PostgresBackendRepository struct {
+	client    *sqlx.DB
+	config    types.PostgresConfig
+	eventRepo EventRepository
+}
+
+func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository) (*PostgresBackendRepository, error) {
+	dsn := GenerateDSN(config)
+
 	db, err := sqlx.Connect("postgres", dsn)
 	if err != nil {
 		return nil, err
@@ -54,6 +68,7 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 
 	repo := &PostgresBackendRepository{
 		client:    db,
+		config:    config,
 		eventRepo: eventRepo,
 	}
 
@@ -913,7 +928,7 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 			where workspace_id = ? and deleted_at is null
 			group by name, stub_type
 		)
-		as latest 
+		as latest
 		on d.name = latest.name
 		and d.stub_type = latest.stub_type
 		and d.version = latest.version
@@ -1397,4 +1412,128 @@ func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace 
 	}
 
 	return &secret, nil
+}
+
+func (r *PostgresBackendRepository) CreateScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) (*types.ScheduledJob, error) {
+	payloadJSON, err := json.Marshal(scheduledJob.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal scheduled job payload: %v", err)
+	}
+
+	if matched, _ := regexp.MatchString(`@reboot|@restart`, scheduledJob.Schedule); matched {
+		return nil, fmt.Errorf("invalid schedule: %s", scheduledJob.Schedule)
+	}
+
+	var jobId *uint64
+	query := `SELECT cron.schedule($1, $2, 'NOTIFY ' || $3 || ', ''' || $4 || '''');`
+	if err := r.client.GetContext(ctx, &jobId, query, scheduledJob.JobName, scheduledJob.Schedule, ScheduledJobsChannel, payloadJSON); err != nil {
+		return nil, err
+	}
+
+	var s types.ScheduledJob
+	query = `
+	INSERT INTO scheduled_job (job_id, job_name, job_schedule, job_payload, deployment_id, stub_id)
+	VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+	RETURNING id, external_id, job_id, job_schedule, job_payload, stub_id, created_at, updated_at, deleted_at;
+	`
+	if err := r.client.GetContext(ctx, &s, query, jobId, scheduledJob.JobName, scheduledJob.Schedule, payloadJSON, scheduledJob.DeploymentId, scheduledJob.StubId); err != nil {
+		r.unscheduleCron(ctx, *jobId)
+		return nil, err
+	}
+
+	return &s, nil
+}
+
+func (r *PostgresBackendRepository) GetScheduledJob(ctx context.Context, deploymentId uint) (*types.ScheduledJob, error) {
+	var scheduledJob types.ScheduledJob
+	query := `
+	SELECT sj.*
+	FROM scheduled_job sj
+	JOIN cron.job j ON sj.job_id = j.jobid
+	JOIN deployment d ON sj.deployment_id = d.id
+	WHERE sj.deployment_id = $1 AND sj.deleted_at IS NULL;
+	`
+	err := r.client.GetContext(ctx, &scheduledJob, query, deploymentId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &scheduledJob, nil
+}
+
+func (r *PostgresBackendRepository) DeleteScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) error {
+	updateQuery := `
+	UPDATE scheduled_job
+	SET deleted_at = CURRENT_TIMESTAMP
+	WHERE id = $1;
+	`
+	if _, err := r.client.ExecContext(ctx, updateQuery, scheduledJob.Id); err != nil {
+		return err
+	}
+
+	if err := r.unscheduleCron(ctx, scheduledJob.JobId); err != nil {
+		return fmt.Errorf("failed to unschedule job: %v", err)
+	}
+
+	return nil
+}
+
+func (r *PostgresBackendRepository) unscheduleCron(ctx context.Context, jobId uint64) error {
+	unscheduleQuery := `SELECT cron.unschedule($1::integer);`
+	if _, err := r.client.ExecContext(ctx, unscheduleQuery, jobId); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *PostgresBackendRepository) DeletePreviousScheduledJob(ctx context.Context, deployment *types.Deployment) error {
+	// Get previous deployment if exists
+	if previousDeployment, err := r.GetDeploymentByNameAndVersion(ctx, deployment.WorkspaceId, deployment.Name, deployment.Version-1, deployment.StubType); err == nil {
+		// Found previous deployment. Get scheduled job of previous deployment.
+		if previousScheduledJob, err := r.GetScheduledJob(ctx, previousDeployment.Id); err == nil {
+			// Found previous scheduled job. Delete it.
+			return r.DeleteScheduledJob(ctx, previousScheduledJob)
+		}
+	}
+
+	return nil
+}
+
+func (r *PostgresBackendRepository) ListenToChannel(ctx context.Context, channel string) (<-chan string, error) {
+	dsn := GenerateDSN(r.config)
+
+	listener := pq.NewListener(dsn, listenToChannelMinReconnectInterval, listenToChannelMaxReconnectInterval, func(ev pq.ListenerEventType, err error) {
+		if err != nil {
+			log.Println("failed to create new listener:", err)
+		}
+	})
+
+	if err := listener.Listen(channel); err != nil {
+		return nil, err
+	}
+
+	ch := make(chan string)
+
+	go func() {
+		defer func() {
+			close(ch)
+			listener.Unlisten(channel)
+			listener.Close()
+		}()
+
+		for {
+			select {
+			case n := <-listener.Notify:
+				if n != nil {
+					ch <- n.Extra
+				}
+			case <-time.After(listenToChannelPingInterval):
+				listener.Ping()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return ch, nil
 }

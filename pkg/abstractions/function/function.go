@@ -29,8 +29,8 @@ type FunctionService interface {
 }
 
 const (
-	functionContainerPrefix         string        = "function"
 	functionRoutePrefix             string        = "/function"
+	scheduleRoutePrefix             string        = "/schedule"
 	defaultFunctionContainerCpu     int64         = 100
 	defaultFunctionContainerMemory  int64         = 128
 	functionArgsExpirationTimeout   time.Duration = 600 * time.Second
@@ -40,6 +40,7 @@ const (
 
 type RunCFunctionService struct {
 	pb.UnimplementedFunctionServiceServer
+	ctx             context.Context
 	taskDispatcher  *task.Dispatcher
 	backendRepo     repository.BackendRepository
 	taskRepo        repository.TaskRepository
@@ -75,6 +76,7 @@ func NewRuncFunctionService(ctx context.Context,
 	}
 
 	fs := &RunCFunctionService{
+		ctx:             ctx,
 		config:          opts.Config,
 		backendRepo:     opts.BackendRepo,
 		taskRepo:        opts.TaskRepo,
@@ -94,6 +96,9 @@ func NewRuncFunctionService(ctx context.Context,
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(fs.backendRepo)
 	registerFunctionRoutes(fs.routeGroup.Group(functionRoutePrefix, authMiddleware), fs)
+	registerFunctionRoutes(fs.routeGroup.Group(scheduleRoutePrefix, authMiddleware), fs)
+
+	go fs.listenForScheduledJobs()
 
 	return fs, nil
 }
@@ -350,16 +355,91 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 	}
 }
 
-func (fs *RunCFunctionService) genContainerId(taskId string) string {
-	return fmt.Sprintf("%s-%s-%s", functionContainerPrefix, taskId, uuid.New().String()[:8])
+func (fs *RunCFunctionService) genContainerId(taskId, stubType string) string {
+	return fmt.Sprintf("%s-%s-%s", stubType, taskId, uuid.New().String()[:8])
+}
+
+func (fs *RunCFunctionService) FunctionSchedule(ctx context.Context, req *pb.FunctionScheduleRequest) (*pb.FunctionScheduleResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	stub, err := fs.backendRepo.GetStubByExternalId(ctx, req.StubId)
+	if err != nil {
+		return &pb.FunctionScheduleResponse{Ok: false, ErrMsg: "Unable to get stub"}, nil
+	}
+
+	currentDeployment, err := fs.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, req.DeploymentId)
+	if err != nil {
+		return &pb.FunctionScheduleResponse{Ok: false, ErrMsg: "Unable to find associated deployment"}, nil
+	}
+
+	if err := fs.backendRepo.DeletePreviousScheduledJob(ctx, &currentDeployment.Deployment); err != nil {
+		return &pb.FunctionScheduleResponse{Ok: false, ErrMsg: "Unable to delete previous scheduled job"}, nil
+	}
+
+	job, err := fs.backendRepo.CreateScheduledJob(ctx, &types.ScheduledJob{
+		JobName:      fmt.Sprintf("%v-%v", currentDeployment.Name, stub.ExternalId),
+		Schedule:     req.When,
+		DeploymentId: currentDeployment.Id,
+		StubId:       stub.Id,
+		Payload: types.ScheduledJobPayload{
+			StubId:        stub.ExternalId,
+			WorkspaceName: authInfo.Workspace.Name,
+		},
+	})
+	if err != nil {
+		return &pb.FunctionScheduleResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+
+	return &pb.FunctionScheduleResponse{
+		Ok:             true,
+		ScheduledJobId: job.ExternalId,
+	}, nil
+}
+
+func (fs *RunCFunctionService) listenForScheduledJobs() {
+	log.Printf("Listening for scheduled jobs on channel: <%v>\n", repository.ScheduledJobsChannel)
+	for {
+		select {
+		case <-fs.ctx.Done():
+			return
+		default:
+			messages, err := fs.backendRepo.ListenToChannel(fs.ctx, repository.ScheduledJobsChannel)
+			if err != nil {
+				log.Println("Failed to listen to scheduled job channel:", err)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			lock := common.NewRedisLock(fs.rdb)
+			for message := range messages {
+				var payload types.ScheduledJobPayload
+				if err := json.Unmarshal([]byte(message), &payload); err != nil {
+					log.Println("Failed to unmarshal scheduled job payload:", err)
+					continue
+				}
+
+				if err := lock.Acquire(fs.ctx, Keys.FunctionScheduledJobLock(payload.StubId), common.RedisLockOptions{TtlS: 10, Retries: 0}); err != nil {
+					continue
+				}
+
+				authInfo := &auth.AuthInfo{Workspace: &types.Workspace{Name: payload.WorkspaceName}}
+				if _, err = fs.invoke(fs.ctx, authInfo, payload.StubId, &payload.TaskPayload); err != nil {
+					log.Println("Failed to invoke scheduled job:", err)
+				}
+
+				lock.Release(Keys.FunctionScheduledJobLock(payload.StubId))
+			}
+		}
+	}
 }
 
 // Redis keys
 var (
-	functionPrefix    string = "function"
-	functionArgs      string = "function:%s:%s:args"
-	functionResult    string = "function:%s:%s:result"
-	functionHeartbeat string = "function:%s:%s:heartbeat"
+	functionPrefix            string = "function"
+	functionArgs              string = "function:%s:%s:args"
+	functionResult            string = "function:%s:%s:result"
+	functionHeartbeat         string = "function:%s:%s:heartbeat"
+	functionScheduledJobsLock string = "function:scheduled_jobs_lock:%s"
 )
 
 var Keys = &keys{}
@@ -380,4 +460,8 @@ func (k *keys) FunctionResult(workspaceName, taskId string) string {
 
 func (k *keys) FunctionHeartbeat(workspaceName, taskId string) string {
 	return fmt.Sprintf(functionHeartbeat, workspaceName, taskId)
+}
+
+func (k *keys) FunctionScheduledJobLock(stubId string) string {
+	return fmt.Sprintf(functionScheduledJobsLock, stubId)
 }
