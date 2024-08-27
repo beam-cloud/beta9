@@ -298,22 +298,13 @@ class EndpointManager:
 
 
 if __name__ == "__main__":
-    timeout = cfg.timeout
-    if timeout <= 0:
-        timeout = MAX_ENDPOINT_TIMEOUT
-
-    timeout = min(timeout, MAX_ENDPOINT_TIMEOUT)
-    print(f"Setting timeout to {timeout} seconds")
-
     options = {
         "bind": [f"[::]:{cfg.bind_port}"],
         "workers": cfg.workers,
         "worker_class": "uvicorn.workers.UvicornWorker",
         "loglevel": "info",
         "post_fork": GunicornApplication.post_fork_initialize,
-        # Add 1 second to timeouts to ensure the request context times out before the Gunicorn worker.
-        # A Gunicorn worker timeout triggers a pod restart, resulting in a 500 error instead of a timeout error.
-        "timeout": cfg.timeout + 1,
+        "timeout": cfg.timeout,
     }
 
     GunicornApplication(Starlette(), options).run()
