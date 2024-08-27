@@ -33,8 +33,6 @@ from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
 from .common import end_task_and_send_callback, is_asgi3
 
-MAX_ENDPOINT_TIMEOUT = 10 * 60  # 10 minutes
-
 
 class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
