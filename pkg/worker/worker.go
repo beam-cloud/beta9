@@ -285,7 +285,6 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerId := request.ContainerId
-
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Pull image
