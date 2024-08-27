@@ -114,13 +114,16 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
-	c.logger.Log(request.ContainerId, request.StubId, "loading image: %s", imageId)
+	c.logger.Log(request.ContainerId, request.StubId, "Loading image: %s", imageId)
 
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
 	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
 		localCachePath = ""
 	}
 
+	// If we have a valid cache client, attempt to cache entirety of the image
+	// in memory (in a nearby region). If a remote cache is available, this supercedes
+	// the local cache - which is basically just downloading the image to disk
 	startTime := time.Now()
 	if (c.cacheClient != nil && fileCacheAvailable()) && !isBuildContainer {
 		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
@@ -142,7 +145,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	}
 
 	elapsed := time.Since(startTime)
-	c.logger.Log(request.ContainerId, request.StubId, "loaded image <%s>, took: %s", imageId, elapsed)
+	c.logger.Log(request.ContainerId, request.StubId, "Loaded image <%s>, took: %s", imageId, elapsed)
 
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 	if _, err := os.Stat(remoteArchivePath); err != nil {

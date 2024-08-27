@@ -150,14 +150,9 @@ func NewWorker() (*Worker, error) {
 		if err != nil {
 			log.Printf("[WARNING] Cache unavailable, performance may be degraded: %+v\n", err)
 		}
-
 	}
 
-	fileCacheManager, err := NewFileCacheManager(config, cacheClient)
-	if err != nil {
-		return nil, err
-	}
-
+	fileCacheManager := NewFileCacheManager(config, cacheClient)
 	imageClient, err := NewImageClient(config, workerId, workerRepo, fileCacheManager)
 	if err != nil {
 		return nil, err

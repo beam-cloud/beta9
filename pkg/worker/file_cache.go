@@ -17,11 +17,11 @@ type FileCacheManager struct {
 	client *blobcache.BlobCacheClient
 }
 
-func NewFileCacheManager(config types.AppConfig, client *blobcache.BlobCacheClient) (*FileCacheManager, error) {
+func NewFileCacheManager(config types.AppConfig, client *blobcache.BlobCacheClient) *FileCacheManager {
 	return &FileCacheManager{
 		config: config,
 		client: client,
-	}, nil
+	}
 }
 
 func (cm *FileCacheManager) GetClient() *blobcache.BlobCacheClient {
