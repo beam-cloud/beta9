@@ -156,6 +156,7 @@ func (gws *GatewayService) configureTaskPolicy(policy *pb.TaskPolicy, stubType t
 	}
 
 	switch stubType.Kind() {
+	case types.StubTypeASGI:
 	case types.StubTypeEndpoint:
 		p.Timeout = int(math.Min(float64(policy.Timeout), float64(endpoint.EndpointRequestTimeoutS)))
 		if p.Timeout <= 0 {
@@ -163,6 +164,8 @@ func (gws *GatewayService) configureTaskPolicy(policy *pb.TaskPolicy, stubType t
 		}
 		p.MaxRetries = 0
 		p.TTL = math.MaxUint32 // No TTL for endpoint tasks
+
+	case types.StubTypeScheduledJob:
 	case types.StubTypeFunction:
 		if p.TTL == 0 {
 			p.TTL = uint32(function.FunctionDefaultTaskTTL)
