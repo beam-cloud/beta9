@@ -1,7 +1,5 @@
 FROM golang:1.22-bullseye AS base
 
-WORKDIR /workspace
-
 RUN apt-get update && \
     apt-get install -y --no-install-recommends fuse3
 
@@ -18,8 +16,8 @@ RUN apt-get install -y libfuse2 libfuse-dev bash-completion && \
     rm -vf mountpoint.deb
 
 RUN if [ "$(uname -m)" = "x86_64" ]; then \
-    curl -L https://beam-runner-python-deps.s3.amazonaws.com/cuno_1.2.6_amd64_glibc.deb -o /workspace/cuno_1.2.6_amd64_glibc.deb && \
-    apt-get install -y /workspace/cuno_1.2.6_amd64_glibc.deb && rm /workspace/cuno_1.2.6_amd64_glibc.deb; \
+    curl -L https://beam-runner-python-deps.s3.amazonaws.com/cuno_1.2.6_amd64_glibc.deb -o /tmp/cuno_1.2.6_amd64_glibc.deb && \
+    apt-get install -y /tmp/cuno_1.2.6_amd64_glibc.deb && rm /tmp/cuno_1.2.6_amd64_glibc.deb; \
     fi
 
 # Target used in development environments
