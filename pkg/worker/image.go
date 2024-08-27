@@ -37,7 +37,6 @@ const (
 var (
 	baseImageCachePath string = "/images/cache"
 	baseImageMountPath string = "/images/mnt/%s"
-	baseBlobFsPath     string = "/cache"
 )
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
@@ -80,25 +79,16 @@ type ImageClient struct {
 	logger             *ContainerLogger
 }
 
-func NewImageClient(config types.AppConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
+func NewImageClient(config types.AppConfig, workerId string, workerRepo repository.WorkerRepository, fileCacheManager *FileCacheManager) (*ImageClient, error) {
 	registry, err := common.NewImageRegistry(config.ImageService)
 	if err != nil {
 		return nil, err
 	}
 
-	var client *blobcache.BlobCacheClient = nil
-	if config.ImageService.BlobCacheEnabled {
-		client, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
-		if err != nil {
-			log.Printf("Unable to load blobcache client: %v\n", err)
-			client = nil
-		}
-	}
-
 	c := &ImageClient{
 		config:             config,
 		registry:           registry,
-		cacheClient:        client,
+		cacheClient:        fileCacheManager.GetClient(),
 		imageBundlePath:    imageBundlePath,
 		imageCachePath:     getImageCachePath(),
 		imageMountPath:     getImageMountPath(workerId),
@@ -120,20 +110,6 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepo reposito
 	return c, nil
 }
 
-func blobfsAvailable(path string) bool {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return false
-	}
-
-	// Check if it's a valid mount point
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return false
-	}
-
-	return stat.Type != 0
-}
-
 func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
@@ -146,12 +122,12 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	}
 
 	startTime := time.Now()
-	if c.config.BlobCache.BlobFs.Enabled && blobfsAvailable(baseBlobFsPath) && !isBuildContainer {
+	if (c.cacheClient != nil && fileCacheAvailable()) && !isBuildContainer {
 		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
 		sourceOffset := int64(0)
 
-		// If the image archive is already cached in blobcache, then we can use that as the local cache path
-		baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseBlobFsPath, sourcePath)
+		// If the image archive is already cached in memory (in blobcache), then we can use that as the local cache path
+		baseBlobFsContentPath := fmt.Sprintf("%s/%s", BaseFileCachePath, sourcePath)
 		if _, err := os.Stat(baseBlobFsContentPath); err == nil {
 			localCachePath = baseBlobFsContentPath
 		} else {
@@ -162,7 +138,6 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 			if err == nil {
 				localCachePath = baseBlobFsContentPath
 			}
-
 		}
 	}
 

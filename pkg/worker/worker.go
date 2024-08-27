@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 
@@ -39,6 +40,7 @@ type Worker struct {
 	imageMountPath          string
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
+	fileCacheManager        *FileCacheManager
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
 	containerMountManager   *ContainerMountManager
@@ -142,7 +144,21 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	imageClient, err := NewImageClient(config, workerId, workerRepo)
+	var cacheClient *blobcache.BlobCacheClient = nil
+	if config.Worker.BlobCacheEnabled {
+		cacheClient, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
+		if err != nil {
+			log.Printf("[WARNING] Cache unavailable, performance may be degraded: %+v\n", err)
+		}
+
+	}
+
+	fileCacheManager, err := NewFileCacheManager(config, cacheClient)
+	if err != nil {
+		return nil, err
+	}
+
+	imageClient, err := NewImageClient(config, workerId, workerRepo, fileCacheManager)
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +197,7 @@ func NewWorker() (*Worker, error) {
 		gpuCount:                uint32(gpuCount),
 		runcHandle:              runc.Runc{},
 		runcServer:              runcServer,
+		fileCacheManager:        fileCacheManager,
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		redisClient:             redisClient,
