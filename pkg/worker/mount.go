@@ -19,10 +19,10 @@ func NewContainerMountManager() *containerMountManager {
 }
 
 // SetupContainerMounts initializes any external storage for a container
-func (smm *containerMountManager) SetupContainerMounts(containerId string, mounts []types.Mount) error {
+func (c *containerMountManager) SetupContainerMounts(containerId string, mounts []types.Mount) error {
 	for _, m := range mounts {
 		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
-			err := smm.setupMountPointS3(containerId, m)
+			err := c.setupMountPointS3(containerId, m)
 			if err != nil {
 				log.Printf("<%s> failed to mount s3 bucket with mountpoint-s3: %v", containerId, err)
 				return err
@@ -34,8 +34,8 @@ func (smm *containerMountManager) SetupContainerMounts(containerId string, mount
 }
 
 // RemoveContainerMounts removes all mounts for a container
-func (smm *containerMountManager) RemoveContainerMounts(containerId string) {
-	mountPointPaths, ok := smm.mountPointPaths.Get(containerId)
+func (c *containerMountManager) RemoveContainerMounts(containerId string) {
+	mountPointPaths, ok := c.mountPointPaths.Get(containerId)
 	if !ok {
 		return
 	}
@@ -47,10 +47,10 @@ func (smm *containerMountManager) RemoveContainerMounts(containerId string) {
 		}
 	}
 
-	smm.mountPointPaths.Delete(containerId)
+	c.mountPointPaths.Delete(containerId)
 }
 
-func (smm *containerMountManager) setupMountPointS3(containerId string, m types.Mount) error {
+func (c *containerMountManager) setupMountPointS3(containerId string, m types.Mount) error {
 	mountPointS3, _ := storage.NewMountPointStorage(*m.MountPointConfig)
 
 	err := mountPointS3.Mount(m.LocalPath)
@@ -58,13 +58,13 @@ func (smm *containerMountManager) setupMountPointS3(containerId string, m types.
 		return err
 	}
 
-	mountPointPaths, ok := smm.mountPointPaths.Get(containerId)
+	mountPointPaths, ok := c.mountPointPaths.Get(containerId)
 	if !ok {
 		mountPointPaths = []string{m.LocalPath}
 	} else {
 		mountPointPaths = append(mountPointPaths, m.LocalPath)
 	}
-	smm.mountPointPaths.Set(containerId, mountPointPaths)
+	c.mountPointPaths.Set(containerId, mountPointPaths)
 
 	return nil
 }

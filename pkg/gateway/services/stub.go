@@ -8,7 +8,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/beam-cloud/beta9/proto"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -155,7 +154,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	}, nil
 }
 
-func (gws *GatewayService) configureVolumes(ctx context.Context, volumes []*proto.Volume, workspace *types.Workspace) error {
+func (gws *GatewayService) configureVolumes(ctx context.Context, volumes []*pb.Volume, workspace *types.Workspace) error {
 	for i, volume := range volumes {
 		if volume.Config != nil {
 			// De-reference secrets
@@ -170,15 +169,6 @@ func (gws *GatewayService) configureVolumes(ctx context.Context, volumes []*prot
 				return fmt.Errorf("failed to get secret %s", volume.Config.SecretKey)
 			}
 			volumes[i].Config.SecretKey = secretKey.Value
-
-			// Check for optional bucket url
-			if volume.Config.BucketUrl != "" {
-				bucketUrl, err := gws.backendRepo.GetSecretByName(ctx, workspace, volume.Config.BucketUrl)
-				if err != nil {
-					return fmt.Errorf("failed to get secret %s", volume.Config.BucketUrl)
-				}
-				volumes[i].Config.BucketUrl = bucketUrl.Value
-			}
 		}
 	}
 

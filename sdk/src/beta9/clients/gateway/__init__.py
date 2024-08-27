@@ -230,7 +230,9 @@ class MountPointConfig(betterproto.Message):
     bucket_name: str = betterproto.string_field(1)
     access_key: str = betterproto.string_field(2)
     secret_key: str = betterproto.string_field(3)
-    bucket_url: str = betterproto.string_field(4)
+    endpoint_url: str = betterproto.string_field(4)
+    region: str = betterproto.string_field(5)
+    read_only: bool = betterproto.bool_field(6)
 
 
 @dataclass(eq=False, repr=False)

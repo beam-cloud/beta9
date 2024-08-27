@@ -34,11 +34,7 @@ func (s *MountPointStorage) Mount(localPath string) error {
 		}
 	}
 
-	cmdArgs := []string{s.config.S3Bucket, localPath, "--allow-other", "--log-directory=/var/log/", "--upload-checksums=off"}
-	if s.config.BucketURL != "" {
-		cmdArgs = append(cmdArgs, fmt.Sprintf("--endpoint-url=%s", s.config.BucketURL))
-	}
-
+	cmdArgs := newMountpointCmdArgs(s, localPath)
 	s.mountCmd = exec.Command(mountpointBinary, cmdArgs...)
 
 	if s.config.AccessKey != "" || s.config.SecretKey != "" {
@@ -69,4 +65,22 @@ func (s *MountPointStorage) Unmount(localPath string) error {
 	}
 
 	return nil
+}
+
+func newMountpointCmdArgs(s *MountPointStorage, localPath string) []string {
+	cmdArgs := []string{s.config.S3Bucket, localPath, "--allow-other", "--log-directory=/var/log/", "--upload-checksums=off"}
+	if s.config.ReadOnly {
+		cmdArgs = append(cmdArgs, "--read-only")
+	} else {
+		cmdArgs = append(cmdArgs, "--allow-delete", "--allow-overwrite")
+	}
+
+	if s.config.EndpointURL != "" {
+		cmdArgs = append(cmdArgs, fmt.Sprintf("--endpoint-url=%s", s.config.EndpointURL))
+	}
+
+	if s.config.Region != "" {
+		cmdArgs = append(cmdArgs, fmt.Sprintf("--region=%s", s.config.Region))
+	}
+	return cmdArgs
 }
