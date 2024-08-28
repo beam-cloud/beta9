@@ -1,3 +1,4 @@
+import os
 import shutil
 from types import ModuleType
 from typing import Any, Optional
@@ -7,7 +8,7 @@ import grpc
 
 from ..channel import handle_grpc_error, prompt_first_auth
 from ..config import SDKSettings, is_config_empty, set_settings
-from . import config, container, deployment, machine, pool, secret, serve, task, volume
+from . import config, container, deployment, machine, pool, secret, serve, task, token, volume
 from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCollection
 
 click.formatting.FORCED_WIDTH = shutil.get_terminal_size().columns
@@ -48,6 +49,8 @@ class CLI:
             self.management_group.add_command(module.management)
 
     def check_config(self) -> None:
+        if os.getenv("CI"):
+            return
         if is_config_empty(self.settings.config_path):
             prompt_first_auth(self.settings)
 
@@ -72,7 +75,7 @@ class CLI:
         self.common_group = option(self.common_group)
 
 
-def load_cli(**kwargs: Any) -> CLI:
+def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli = CLI(**kwargs)
     cli.register(task)
     cli.register(deployment)
@@ -83,8 +86,11 @@ def load_cli(**kwargs: Any) -> CLI:
     cli.register(container)
     cli.register(machine)
     cli.register(secret)
+    cli.register(token)
 
-    cli.check_config()
+    if check_config:
+        cli.check_config()
+
     cli.load_version()
 
     return cli

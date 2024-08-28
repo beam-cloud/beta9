@@ -33,6 +33,9 @@ var (
 	workerPrefix                 string = "worker"
 	workerImageLock              string = "worker:%s:image:%s:lock"
 	workerContainerResourceUsage string = "worker:%s:container:%s:resource_usage"
+	workerNetworkLock            string = "worker:network:%s:lock"
+	workerNetworkIpIndex         string = "worker:network:%s:ip_index"
+	workerNetworkContainerIp     string = "worker:network:%s:container_ip:%s"
 )
 
 var (
@@ -43,6 +46,7 @@ var (
 	taskEntry       string = "task:%s:%s:%s"
 	taskClaim       string = "task:%s:%s:%s:claim"
 	taskCancel      string = "task:%s:%s:%s:cancel"
+	taskRetryLock   string = "task:%s:%s:%s:retry_lock"
 )
 
 var (
@@ -170,6 +174,18 @@ func (rk *redisKeys) WorkerImageLock(workerId string, imageId string) string {
 	return fmt.Sprintf(workerImageLock, workerId, imageId)
 }
 
+func (rk *redisKeys) WorkerNetworkLock(networkPrefix string) string {
+	return fmt.Sprintf(workerNetworkLock, networkPrefix)
+}
+
+func (rk *redisKeys) WorkerNetworkIpIndex(networkPrefix string) string {
+	return fmt.Sprintf(workerNetworkIpIndex, networkPrefix)
+}
+
+func (rk *redisKeys) WorkerNetworkContainerIp(networkPrefix, containerId string) string {
+	return fmt.Sprintf(workerNetworkContainerIp, networkPrefix, containerId)
+}
+
 // Task keys
 func (rk *redisKeys) TaskPrefix() string {
 	return taskPrefix
@@ -197,6 +213,10 @@ func (rk *redisKeys) TaskEntry(workspaceName, stubId, taskId string) string {
 
 func (rk *redisKeys) TaskClaim(workspaceName, stubId, taskId string) string {
 	return fmt.Sprintf(taskClaim, workspaceName, stubId, taskId)
+}
+
+func (rk *redisKeys) TaskRetryLock(workspaceName, stubId, taskId string) string {
+	return fmt.Sprintf(taskRetryLock, workspaceName, stubId, taskId)
 }
 
 // Workspace keys

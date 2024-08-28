@@ -13,7 +13,12 @@ from typing import Any, Callable, Optional, Union
 import requests
 from starlette.responses import Response
 
-from ..clients.gateway import GatewayServiceStub, SignPayloadRequest, SignPayloadResponse
+from ..clients.gateway import (
+    EndTaskRequest,
+    GatewayServiceStub,
+    SignPayloadRequest,
+    SignPayloadResponse,
+)
 from ..exceptions import RunnerException
 
 USER_CODE_VOLUME = "/mnt/code"
@@ -98,7 +103,7 @@ class FunctionContext:
         cls,
         *,
         config: Config,
-        task_id: str,
+        task_id: Optional[str],
         on_start_value: Optional[Any] = None,
     ) -> "FunctionContext":
         """
@@ -188,13 +193,44 @@ def execute_lifecycle_method(name: str) -> Union[Any, None]:
         raise RunnerException()
 
 
+def end_task_and_send_callback(
+    *,
+    gateway_stub: GatewayServiceStub,
+    payload: Any,
+    end_task_request: EndTaskRequest,
+    override_callback_url: Optional[str] = None,
+):
+    resp = gateway_stub.end_task(end_task_request)
+
+    send_callback(
+        gateway_stub=gateway_stub,
+        context=FunctionContext.new(
+            config=config,
+            task_id=end_task_request.task_id,
+            on_start_value=None,
+        ),
+        payload=payload,
+        task_status=end_task_request.task_status,
+        override_callback_url=override_callback_url,
+    )
+
+    return resp
+
+
 def send_callback(
-    *, gateway_stub: GatewayServiceStub, context: FunctionContext, payload: Any, task_status: str
+    *,
+    gateway_stub: GatewayServiceStub,
+    context: FunctionContext,
+    payload: Any,
+    task_status: str,
+    override_callback_url: Optional[str] = None,
 ) -> None:
     """
     Send a signed callback request to an external host defined by the user
     """
-    if context.callback_url == "" or context.callback_url is None:
+
+    callback_url = override_callback_url or context.callback_url
+    if not callback_url:
         return
 
     body = {}
@@ -213,7 +249,7 @@ def send_callback(
         SignPayloadRequest(payload=bytes(json.dumps(body), "utf-8"))
     )
 
-    print(f"Sending data to callback: {context.callback_url}")
+    print(f"Sending data to callback: {callback_url}")
     headers = {}
     headers = {
         **headers,
@@ -226,10 +262,33 @@ def send_callback(
     try:
         start = time.time()
         if use_json:
-            requests.post(context.callback_url, json=body, headers=headers)
+            requests.post(callback_url, json=body, headers=headers)
         else:
-            requests.post(context.callback_url, data=body, headers=headers)
+            requests.post(callback_url, data=body, headers=headers)
 
         print(f"Callback request took {time.time() - start} seconds")
     except BaseException:
         print(f"Unable to send callback: {traceback.format_exc()}")
+
+
+def has_asgi3_signature(func) -> bool:
+    sig = inspect.signature(func)
+    own_parameters = {name for name in sig.parameters if name != "self"}
+    return own_parameters == {"scope", "receive", "send"}
+
+
+def is_asgi3(app: Any) -> bool:
+    """Return whether 'app' corresponds to an ASGI3 callable."""
+    if inspect.isclass(app):
+        constructor = app.__init__
+        return has_asgi3_signature(constructor) and hasattr(app, "__await__")
+
+    if inspect.isfunction(app):
+        return inspect.iscoroutinefunction(app) and has_asgi3_signature(app)
+
+    try:
+        call = app.__call__
+    except AttributeError:
+        return False
+    else:
+        return inspect.iscoroutinefunction(call) and has_asgi3_signature(call)

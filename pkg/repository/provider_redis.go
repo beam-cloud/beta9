@@ -339,3 +339,35 @@ func (r *ProviderRedisRepository) SetMachineLock(providerName, poolName, machine
 func (r *ProviderRedisRepository) RemoveMachineLock(providerName, poolName, machineId string) error {
 	return r.lock.Release(common.RedisKeys.ProviderMachineLock(providerName, poolName, machineId))
 }
+
+func (r *ProviderRedisRepository) GetGPUAvailability(pools map[string]types.WorkerPoolConfig) (map[string]bool, error) {
+	gpuAvailability := map[string]bool{}
+
+	for poolName, pool := range pools {
+		if pool.Provider == nil {
+			continue
+		}
+
+		// When GPU already found and is available, skip looking for it in another pool
+		if isAvailable, ok := gpuAvailability[pool.GPUType]; ok && isAvailable {
+			continue
+		}
+
+		// Initialize availability of GPU
+		gpuAvailability[pool.GPUType] = false
+
+		machines, err := r.ListAllMachines(string(*pool.Provider), poolName, false)
+		if err != nil {
+			return nil, err
+		}
+
+		// Update availability of GPU based on machine states
+		for _, machine := range machines {
+			if machine.Metrics != nil {
+				gpuAvailability[machine.State.Gpu] = machine.Metrics.FreeGpuCount > 0
+			}
+		}
+	}
+
+	return gpuAvailability, nil
+}

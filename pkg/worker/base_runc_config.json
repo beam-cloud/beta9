@@ -22,7 +22,6 @@
 			"bounding": [
 				"CAP_AUDIT_WRITE",
 				"CAP_KILL",
-				"CAP_NET_BIND_SERVICE",
 				"CAP_NET_RAW",
 				"CAP_CHOWN",
 				"CAP_DAC_OVERRIDE",
@@ -35,7 +34,6 @@
 			"effective": [
 				"CAP_AUDIT_WRITE",
 				"CAP_KILL",
-				"CAP_NET_BIND_SERVICE",
 				"CAP_NET_RAW",
 				"CAP_CHOWN",
 				"CAP_DAC_OVERRIDE",
@@ -48,7 +46,6 @@
 			"permitted": [
 				"CAP_AUDIT_WRITE",
 				"CAP_KILL",
-				"CAP_NET_BIND_SERVICE",
 				"CAP_NET_RAW",
 				"CAP_CHOWN",
 				"CAP_DAC_OVERRIDE",
@@ -61,7 +58,6 @@
 			"ambient": [
 				"CAP_AUDIT_WRITE",
 				"CAP_KILL",
-				"CAP_NET_BIND_SERVICE",
 				"CAP_NET_RAW",
 				"CAP_CHOWN",
 				"CAP_DAC_OVERRIDE",
@@ -173,19 +169,6 @@
 				"nodev",
 				"relatime",
 				"ro"
-			]
-		},
-		{
-			"destination": "/etc/resolv.conf",
-			"type": "bind",
-			"source": "/etc/resolv.conf",
-			"options": [
-				"ro",
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"noexec",
-				"nodev"
 			]
 		},
 		{
@@ -310,6 +293,126 @@
 		},
 		{
 			"destination": "/usr/local/lib/python3.12/dist-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.8/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.8/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.9/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.9/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.10/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.10/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.11/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.11/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.12/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.12/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": [

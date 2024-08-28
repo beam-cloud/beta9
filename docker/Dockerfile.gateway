@@ -1,4 +1,4 @@
-FROM golang:1.22-bullseye as base
+FROM golang:1.22-bullseye AS base
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends fuse3
@@ -6,7 +6,7 @@ RUN apt-get update && \
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 
-RUN apt-get install -y libfuse2 && \
+RUN apt-get install -y libfuse2 libfuse-dev bash-completion && \
     export ARCH="$(dpkg --print-architecture)" && \
     if [ "$ARCH" = "amd64" ]; then \
         ARCH="x86_64"; \
@@ -15,9 +15,13 @@ RUN apt-get install -y libfuse2 && \
     dpkg -i mountpoint.deb && \
     rm -vf mountpoint.deb
 
+RUN if [ "$(uname -m)" = "x86_64" ]; then \
+    curl -L https://beam-runner-python-deps.s3.amazonaws.com/cuno_1.2.6_amd64_glibc.deb -o /tmp/cuno_1.2.6_amd64_glibc.deb && \
+    apt-get install -y /tmp/cuno_1.2.6_amd64_glibc.deb && rm /tmp/cuno_1.2.6_amd64_glibc.deb; \
+    fi
 
 # Target used in development environments
-FROM base as build
+FROM base AS build
 
 WORKDIR /workspace
 

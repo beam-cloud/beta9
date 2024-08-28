@@ -7,10 +7,11 @@ import (
 	"math/rand"
 	"time"
 
-	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
-	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 func withAutoscaler(constructor func(i *endpointInstance) *abstractions.Autoscaler[*endpointInstance, *endpointAutoscalerSample]) func(*endpointInstance) {
@@ -28,10 +29,21 @@ func withEntryPoint(entryPoint func(instance *endpointInstance) []string) func(*
 type endpointInstance struct {
 	*abstractions.AutoscaledInstance
 	buffer *RequestBuffer
+	isASGI bool
 }
 
 func (i *endpointInstance) startContainers(containersToRun int) error {
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, *i.buffer.stubConfig)
+	if err != nil {
+		return err
+	}
+
+	mounts, err := abstractions.ConfigureContainerRequestMounts(
+		i.Stub.Object.ExternalId,
+		i.Workspace,
+		*i.buffer.stubConfig,
+		i.Stub.ExternalId,
+	)
 	if err != nil {
 		return err
 	}
@@ -45,6 +57,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 		fmt.Sprintf("WORKERS=%d", i.StubConfig.Workers),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.StubConfig.KeepWarmSeconds),
 		fmt.Sprintf("PYTHON_VERSION=%s", i.StubConfig.PythonVersion),
+		fmt.Sprintf("CALLBACK_URL=%s", i.StubConfig.CallbackUrl),
 		fmt.Sprintf("TIMEOUT=%d", i.StubConfig.TaskPolicy.Timeout),
 	}
 
@@ -57,6 +70,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 
 	for c := 0; c < containersToRun; c++ {
 		containerId := i.genContainerId()
+
 		runRequest := &types.ContainerRequest{
 			ContainerId: containerId,
 			Env:         env,
@@ -68,12 +82,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			StubId:      i.Stub.ExternalId,
 			WorkspaceId: i.Workspace.ExternalId,
 			EntryPoint:  i.EntryPoint,
-			Mounts: abstractions.ConfigureContainerRequestMounts(
-				i.Stub.Object.ExternalId,
-				i.Workspace.Name,
-				*i.buffer.stubConfig,
-				i.Stub.ExternalId,
-			),
+			Mounts:      mounts,
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers

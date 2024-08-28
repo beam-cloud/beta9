@@ -3,62 +3,103 @@ package image
 import (
 	"testing"
 
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestExtractImageNameAndTag(t *testing.T) {
-	b := &Builder{}
-
 	tests := []struct {
-		imageURI      string
-		expected      BaseImage
-		expectedError error
+		ref          string
+		wantTag      string
+		wantDigest   string
+		wantRepo     string
+		wantRegistry string
 	}{
 		{
-			imageURI: "docker.io/registry1/docker-image:v1",
-			expected: BaseImage{
-				SourceRegistry: "docker.io/registry1",
-				ImageName:      "docker-image",
-				ImageTag:       "v1",
-			},
-			expectedError: nil,
+			ref: "",
 		},
 		{
-			imageURI: "docker.io/registry1/docker-image",
-			expected: BaseImage{
-				SourceRegistry: "docker.io/registry1",
-				ImageName:      "docker-image",
-				ImageTag:       "latest",
-			},
-			expectedError: nil,
+			ref:          "nginx",
+			wantTag:      "latest",
+			wantRepo:     "nginx",
+			wantRegistry: "docker.io",
 		},
 		{
-			imageURI:      "",
-			expected:      BaseImage{},
-			expectedError: errors.New("invalid image URI format"),
+			ref:          "docker.io/nginx",
+			wantTag:      "latest",
+			wantRepo:     "nginx",
+			wantRegistry: "docker.io",
 		},
 		{
-			imageURI: "ubuntu:22.04",
-			expected: BaseImage{
-				SourceRegistry: "docker.io",
-				ImageName:      "ubuntu",
-				ImageTag:       "22.04",
-			},
-			expectedError: nil,
+			ref:          "docker.io/nginx:1.25.3",
+			wantTag:      "1.25.3",
+			wantRepo:     "nginx",
+			wantRegistry: "docker.io",
+		},
+		{
+			ref:          "docker.io/nginx:latest",
+			wantTag:      "latest",
+			wantRepo:     "nginx",
+			wantRegistry: "docker.io",
+		},
+		{
+			ref:          "docker.io/nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04",
+			wantTag:      "12.4.1-cudnn-runtime-ubuntu22.04",
+			wantRepo:     "nvidia/cuda",
+			wantRegistry: "docker.io",
+		},
+		{
+			ref:          "nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04",
+			wantTag:      "12.4.1-cudnn-runtime-ubuntu22.04",
+			wantRepo:     "nvidia/cuda",
+			wantRegistry: "docker.io",
+		},
+		{
+			ref:          "nvidia/cuda@sha256:2fcc4280646484290cc50dce5e65f388dd04352b07cbe89a635703bd1f9aedb6",
+			wantDigest:   "sha256:2fcc4280646484290cc50dce5e65f388dd04352b07cbe89a635703bd1f9aedb6",
+			wantRepo:     "nvidia/cuda",
+			wantRegistry: "docker.io",
+		},
+		{
+			ref:          "registry.localhost:5000/beta9-runner:py311-latest",
+			wantTag:      "py311-latest",
+			wantRepo:     "beta9-runner",
+			wantRegistry: "registry.localhost:5000",
+		},
+		{
+			ref:          "111111111111.dkr.ecr.us-east-1.amazonaws.com/myapp:latest",
+			wantTag:      "latest",
+			wantRepo:     "myapp",
+			wantRegistry: "111111111111.dkr.ecr.us-east-1.amazonaws.com",
+		},
+		{
+			ref:          "111111111111.dkr.ecr.us-east-1.amazonaws.com/myapp/service:latest",
+			wantTag:      "latest",
+			wantRepo:     "myapp/service",
+			wantRegistry: "111111111111.dkr.ecr.us-east-1.amazonaws.com",
+		},
+		{
+			ref:          "nvcr.io/nim/meta/llama-3.1-8b-instruct:1.1.0",
+			wantTag:      "1.1.0",
+			wantRepo:     "meta/llama-3.1-8b-instruct",
+			wantRegistry: "nvcr.io",
 		},
 	}
 
-	for _, tt := range tests {
-		result, err := b.extractImageNameAndTag(tt.imageURI)
-		assert.Equal(t, tt.expected, result)
+	for _, test := range tests {
+		t.Run(test.ref, func(t *testing.T) {
+			image, err := ExtractImageNameAndTag(test.ref)
+			if test.ref == "" {
+				assert.Error(t, err)
+				return
+			} else {
+				assert.NoError(t, err)
+			}
 
-		if tt.expectedError != nil {
-			assert.NotNil(t, err)
-			assert.Equal(t, tt.expectedError.Error(), err.Error())
-		} else {
-			assert.Nil(t, err)
-		}
+			assert.Equal(t, test.wantTag, image.Tag)
+			assert.Equal(t, test.wantDigest, image.Digest)
+			assert.Equal(t, test.wantRepo, image.Repo)
+			assert.Equal(t, test.wantRegistry, image.Registry)
+		})
 	}
 }
 
@@ -87,5 +128,25 @@ func TestExtractPackageName(t *testing.T) {
 		if output != tc.expected {
 			t.Errorf("extractPackageName(%q) = %q; expected %q", tc.input, output, tc.expected)
 		}
+	}
+}
+
+func TestGeneratePipInstallCommand(t *testing.T) {
+	testCases := []struct {
+		opts *BuildOpts
+		want string
+	}{
+		{
+			opts: &BuildOpts{
+				PythonPackages: []string{"--extra-index-url https://download.pytorch.org/whl/cu121", "numpy==1.18", "scipy>1.4", "pandas>=1.0,<2.0", "matplotlib<=2.2", "seaborn"},
+			},
+			want: ` -m pip install --root-user-action=ignore --extra-index-url https://download.pytorch.org/whl/cu121 "numpy==1.18" "scipy>1.4" "pandas>=1.0,<2.0" "matplotlib<=2.2" "seaborn"`,
+		},
+	}
+
+	for _, tc := range testCases {
+		b := &Builder{}
+		cmd := b.generatePipInstallCommand(tc.opts)
+		assert.Equal(t, tc.want, cmd)
 	}
 }

@@ -24,7 +24,7 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 	}
 
 	taskId := t.msg.TaskId
-	containerId := t.fs.genContainerId(taskId)
+	containerId := t.fs.genContainerId(taskId, stub.Type.Kind())
 
 	t.containerId = containerId
 
@@ -54,7 +54,7 @@ func (t *FunctionTask) Retry(ctx context.Context) error {
 		return err
 	}
 
-	containerId := t.fs.genContainerId(taskId)
+	containerId := t.fs.genContainerId(taskId, stub.Type.Kind())
 	t.containerId = containerId
 
 	task.Status = types.TaskStatusRetry
@@ -107,12 +107,15 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
-	mounts := abstractions.ConfigureContainerRequestMounts(
+	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
-		stub.Workspace.Name,
+		&stub.Workspace,
 		stubConfig,
 		stub.ExternalId,
 	)
+	if err != nil {
+		return err
+	}
 
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(
 		&stub.Workspace,
@@ -170,7 +173,7 @@ func (t *FunctionTask) Cancel(ctx context.Context, reason types.TaskCancellation
 
 	switch reason {
 	case types.TaskExpired:
-		task.Status = types.TaskStatusTimeout
+		task.Status = types.TaskStatusExpired
 	case types.TaskExceededRetryLimit:
 		task.Status = types.TaskStatusError
 	default:

@@ -65,6 +65,19 @@ func Decrypt(secretKey []byte, ciphertext64 string) (string, error) {
 	return string(plaintext), nil
 }
 
+// DecryptAllSecrets decrypts all the given secrets in the order they are given.
+func DecryptAllSecrets(signingKey []byte, secrets []string) ([]string, error) {
+	decrypted := make([]string, len(secrets))
+	for i, secret := range secrets {
+		decryptedSecret, err := Decrypt(signingKey, secret)
+		if err != nil {
+			return nil, err
+		}
+		decrypted[i] = decryptedSecret
+	}
+	return decrypted, nil
+}
+
 func ParseSigningKey(signingKey string) ([]byte, error) {
 	secret := signingKey[len("sk_"):]
 	return base64.StdEncoding.DecodeString(secret)

@@ -310,32 +310,38 @@ class TaskQueueWorker:
                     task_status = TaskStatus.Error
                 finally:
                     duration = time.time() - start_time
-                    complete_task_response: TaskQueueCompleteResponse = (
-                        taskqueue_stub.task_queue_complete(
-                            TaskQueueCompleteRequest(
-                                task_id=task.id,
-                                stub_id=config.stub_id,
-                                task_duration=duration,
-                                task_status=task_status,
-                                container_id=config.container_id,
-                                container_hostname=config.container_hostname,
-                                keep_warm_seconds=config.keep_warm_seconds,
+
+                    try:
+                        # TODO: add retries / the ability to recreate the channel dynamically if connection to gateway fails
+                        complete_task_response: TaskQueueCompleteResponse = (
+                            taskqueue_stub.task_queue_complete(
+                                TaskQueueCompleteRequest(
+                                    task_id=task.id,
+                                    stub_id=config.stub_id,
+                                    task_duration=duration,
+                                    task_status=task_status,
+                                    container_id=config.container_id,
+                                    container_hostname=config.container_hostname,
+                                    keep_warm_seconds=config.keep_warm_seconds,
+                                )
                             )
                         )
-                    )
+                        if not complete_task_response.ok:
+                            raise RunnerException("Unable to end task")
 
-                    if not complete_task_response.ok:
-                        raise RunnerException("Unable to end task")
+                        print(f"Task completed <{task.id}>, took {duration}s")
 
-                    monitor_task.cancel()
-                    print(f"Task completed <{task.id}>, took {duration}s")
-
-                    send_callback(
-                        gateway_stub=gateway_stub,
-                        context=context,
-                        payload=result or {},
-                        task_status=task_status,
-                    )  # Send callback to callback_url, if defined
+                        send_callback(
+                            gateway_stub=gateway_stub,
+                            context=context,
+                            payload=result or {},
+                            task_status=task_status,
+                            override_callback_url=kwargs.get("callback_url"),
+                        )  # Send callback to callback_url, if defined
+                    except BaseException:
+                        print(traceback.format_exc())
+                    finally:
+                        monitor_task.cancel()
 
 
 if __name__ == "__main__":

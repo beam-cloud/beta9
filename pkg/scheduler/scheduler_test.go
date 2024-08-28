@@ -49,7 +49,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		metricsRepo: nil,
 	}
 
-	workerPoolManager := NewWorkerPoolManager(repo.NewWorkerPoolRedisRepository(rdb))
+	workerPoolManager := NewWorkerPoolManager()
 	for name, pool := range config.Worker.Pools {
 		workerPoolManager.SetPool(name, pool, &LocalWorkerPoolControllerForTest{
 			name:       name,
@@ -542,6 +542,64 @@ func TestRequiresPoolSelectorWorker(t *testing.T) {
 	assert.Equal(t, int64(1000), updatedWorker.FreeMemory)
 	assert.Equal(t, "", updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusAvailable, updatedWorker.Status)
+}
+
+func TestPoolPriority(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	assert.NotNil(t, wb)
+
+	newWorkerWithLowPriority := &types.Worker{
+		Id:         "worker1",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    2000,
+		FreeMemory: 2000,
+		Gpu:        "",
+		PoolName:   "cpu",
+		Priority:   0,
+	}
+
+	newWorkerWithHigherPriority := &types.Worker{
+		Id:         "worker2",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    2000,
+		FreeMemory: 2000,
+		Gpu:        "",
+		PoolName:   "cpu2",
+		Priority:   1,
+	}
+
+	err = wb.workerRepo.AddWorker(newWorkerWithLowPriority)
+	assert.Nil(t, err)
+
+	err = wb.workerRepo.AddWorker(newWorkerWithHigherPriority)
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		Cpu:    1000,
+		Memory: 1000,
+		Gpu:    "",
+	}
+
+	// Select a worker for the request, this one should land on worker2
+	// since it has higher priority
+	worker, err := wb.selectWorker(request)
+	assert.Nil(t, err)
+	assert.Equal(t, newWorkerWithHigherPriority.Id, worker.Id)
+
+	err = wb.scheduleRequest(worker, request)
+	assert.Nil(t, err)
+
+	secondRequest := &types.ContainerRequest{
+		Cpu:    2000,
+		Memory: 2000,
+		Gpu:    "",
+	}
+
+	// Select a worker for the second request, this one should land on worker1
+	worker, err = wb.selectWorker(secondRequest)
+	assert.Nil(t, err)
+	assert.Equal(t, newWorkerWithLowPriority.Id, worker.Id)
 }
 
 func TestSelectBuildWorker(t *testing.T) {

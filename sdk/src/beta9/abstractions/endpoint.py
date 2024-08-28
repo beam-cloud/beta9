@@ -4,8 +4,12 @@ from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
+    ASGI_DEPLOYMENT_STUB_TYPE,
+    ASGI_SERVE_STUB_TYPE,
+    ASGI_STUB_TYPE,
     ENDPOINT_DEPLOYMENT_STUB_TYPE,
     ENDPOINT_SERVE_STUB_TYPE,
+    ENDPOINT_STUB_TYPE,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
@@ -18,9 +22,9 @@ from ..clients.endpoint import (
     StartEndpointServeResponse,
     StopEndpointServeRequest,
 )
-from ..clients.gateway import DeployStubRequest, DeployStubResponse
 from ..env import is_local
-from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
+from .mixins import DeployableMixin
 
 
 class Endpoint(RunnerAbstraction):
@@ -71,6 +75,11 @@ class Endpoint(RunnerAbstraction):
         autoscaler (Optional[Autoscaler]):
             Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
             various autoscaling strategies (Defaults to QueueDepthAutoscaler())
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        task_policy (TaskPolicy):
+            The task policy for the function. This helps manage the lifecycle of an individual task.
+            Setting values here will override timeout and retries.
     Example:
         ```python
         from beta9 import endpoint, Image
@@ -103,8 +112,10 @@ class Endpoint(RunnerAbstraction):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
-        authorized: Optional[bool] = True,
-        autoscaler: Optional[Autoscaler] = QueueDepthAutoscaler(),
+        authorized: bool = True,
+        autoscaler: Autoscaler = QueueDepthAutoscaler(),
+        callback_url: Optional[str] = None,
+        task_policy: TaskPolicy = TaskPolicy(),
     ):
         super().__init__(
             cpu=cpu,
@@ -122,6 +133,8 @@ class Endpoint(RunnerAbstraction):
             name=name,
             authorized=authorized,
             autoscaler=autoscaler,
+            callback_url=callback_url,
+            task_policy=task_policy,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
@@ -136,10 +149,58 @@ class Endpoint(RunnerAbstraction):
         return _CallableWrapper(func, self)
 
 
-class _CallableWrapper:
-    def __init__(self, func: Callable, parent: Endpoint):
+class ASGI(Endpoint):
+    def __init__(
+        self,
+        cpu: Union[int, float, str] = 1.0,
+        memory: Union[int, str] = 128,
+        gpu: GpuTypeAlias = GpuType.NoGPU,
+        image: Image = Image(),
+        timeout: int = 180,
+        workers: int = 1,
+        keep_warm_seconds: int = 180,
+        max_pending_tasks: int = 100,
+        on_start: Optional[Callable] = None,
+        volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
+        name: Optional[str] = None,
+        authorized: bool = True,
+        autoscaler: Autoscaler = QueueDepthAutoscaler(),
+        callback_url: Optional[str] = None,
+    ):
+        super().__init__(
+            cpu,
+            memory,
+            gpu,
+            image,
+            timeout,
+            workers,
+            keep_warm_seconds,
+            max_pending_tasks,
+            on_start,
+            volumes,
+            secrets,
+            name,
+            authorized,
+            autoscaler,
+            callback_url,
+        )
+
+        self.is_asgi = True
+
+
+class _CallableWrapper(DeployableMixin):
+    deployment_stub_type = ENDPOINT_DEPLOYMENT_STUB_TYPE
+
+    base_stub_type = ENDPOINT_STUB_TYPE
+
+    def __init__(self, func: Callable, parent: Union[Endpoint, ASGI]):
         self.func: Callable = func
-        self.parent: Endpoint = parent
+        self.parent: Union[Endpoint, ASGI] = parent
+
+        if getattr(self.parent, "is_asgi", None):
+            self.deployment_stub_type = ASGI_DEPLOYMENT_STUB_TYPE
+            self.base_stub_type = ASGI_STUB_TYPE
 
     def __call__(self, *args, **kwargs) -> Any:
         if not is_local():
@@ -150,39 +211,15 @@ class _CallableWrapper:
     def local(self, *args, **kwargs) -> Any:
         return self.func(*args, **kwargs)
 
-    def deploy(self, name: str) -> bool:
-        name = name or self.parent.name
-        if not name or name == "":
-            terminal.error(
-                "You must specify an app name (either in the decorator or via the --name argument)."
-            )
-
-        if not self.parent.prepare_runtime(
-            func=self.func, stub_type=ENDPOINT_DEPLOYMENT_STUB_TYPE, force_create_stub=True
-        ):
-            return False
-
-        terminal.header("Deploying endpoint")
-        deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
-            DeployStubRequest(stub_id=self.parent.stub_id, name=name)
-        )
-
-        if deploy_response.ok:
-            base_url = self.parent.settings.api_host
-            if not base_url.startswith(("http://", "https://")):
-                base_url = f"http://{base_url}"
-
-            terminal.header("Deployed 🎉")
-            self.parent.print_invocation_snippet(
-                invocation_url=f"{base_url}/endpoint/{name}/v{deploy_response.version}"
-            )
-
-        return deploy_response.ok
-
     @with_grpc_error_handling
     def serve(self, timeout: int = 0):
+        stub_type = ENDPOINT_SERVE_STUB_TYPE
+
+        if getattr(self.parent, "is_asgi", None):
+            stub_type = ASGI_SERVE_STUB_TYPE
+
         if not self.parent.prepare_runtime(
-            func=self.func, stub_type=ENDPOINT_SERVE_STUB_TYPE, force_create_stub=True
+            func=self.func, stub_type=stub_type, force_create_stub=True
         ):
             return False
 
@@ -192,9 +229,8 @@ class _CallableWrapper:
                 if not base_url.startswith(("http://", "https://")):
                     base_url = f"http://{base_url}"
 
-                self.parent.print_invocation_snippet(
-                    invocation_url=f"{base_url}/endpoint/id/{self.parent.stub_id}"
-                )
+                invocation_url = f"{base_url}/{self.base_stub_type}/id/{self.parent.stub_id}"
+                self.parent.print_invocation_snippet(invocation_url=invocation_url)
 
                 return self._serve(
                     dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout
@@ -204,21 +240,10 @@ class _CallableWrapper:
             self._handle_serve_interrupt()
 
     def _handle_serve_interrupt(self) -> None:
-        response = "y"
-
-        try:
-            response = terminal.prompt(
-                text="Would you like to stop the container? (y/n)", default="y"
-            )
-        except KeyboardInterrupt:
-            pass
-
-        if response == "y":
-            terminal.header("Stopping serve container")
-            self.parent.endpoint_stub.stop_endpoint_serve(
-                StopEndpointServeRequest(stub_id=self.parent.stub_id)
-            )
-
+        terminal.header("Stopping serve container")
+        self.parent.endpoint_stub.stop_endpoint_serve(
+            StopEndpointServeRequest(stub_id=self.parent.stub_id)
+        )
         terminal.print("Goodbye 👋")
         os._exit(0)  # kills all threads immediately
 

@@ -1,6 +1,9 @@
 package types
 
-import "strings"
+import (
+	"reflect"
+	"strings"
+)
 
 type BaseFilter struct {
 	Limit  uint32 `query:"limit"`
@@ -16,6 +19,11 @@ func (s *StringSlice) UnmarshalParam(src string) error {
 	return nil
 }
 
+type QueryFilter struct {
+	Field string
+	Value interface{}
+}
+
 type DeploymentFilter struct {
 	BaseFilter
 	StubIds        StringSlice `query:"stub_ids"`
@@ -28,6 +36,7 @@ type DeploymentFilter struct {
 	CreatedAtStart string      `query:"created_at_start"`
 	CreatedAtEnd   string      `query:"created_at_end"`
 	Pagination     bool        `query:"pagination"`
+	SearchQuery    string      `query:"search_query"`
 }
 
 type TaskFilter struct {
@@ -48,4 +57,38 @@ type TaskFilter struct {
 type StubFilter struct {
 	WorkspaceID string      `query:"workspace_id"`
 	StubIds     StringSlice `query:"stub_ids"` // The query parameter name is "values"
+	StubTypes   StringSlice `query:"stub_types"`
+	Cursor      string      `query:"cursor"`
+	Pagination  bool        `query:"pagination"`
+}
+
+func ParseConditionFromQueryFilters(out interface{}, queryFilters ...QueryFilter) {
+	val := reflect.ValueOf(out).Elem()
+	typ := val.Type()
+
+	fieldMap := make(map[string]string)
+	for i := 0; i < val.NumField(); i++ {
+		fieldMap[typ.Field(i).Tag.Get("query")] = typ.Field(i).Name
+	}
+
+	for _, queryFilter := range queryFilters {
+		name, ok := fieldMap[queryFilter.Field]
+		if !ok {
+			continue
+		}
+
+		field := val.FieldByName(name)
+		if !field.IsValid() || !field.CanSet() {
+			continue // TODO: Need to figure out a way to parse StringSlice
+		}
+
+		switch field.Kind() {
+		case reflect.String:
+			field.SetString(queryFilter.Value.(string))
+		case reflect.Uint:
+			field.SetUint(queryFilter.Value.(uint64))
+		case reflect.Bool:
+			field.SetBool(queryFilter.Value.(bool))
+		}
+	}
 }

@@ -28,17 +28,16 @@ const (
 )
 
 type ExternalWorkerPoolController struct {
-	ctx            context.Context
-	name           string
-	config         types.AppConfig
-	provider       providers.Provider
-	tailscale      *network.Tailscale
-	backendRepo    repository.BackendRepository
-	workerPool     types.WorkerPoolConfig
-	workerRepo     repository.WorkerRepository
-	workerPoolRepo repository.WorkerPoolRepository
-	providerName   *types.MachineProvider
-	providerRepo   repository.ProviderRepository
+	ctx          context.Context
+	name         string
+	config       types.AppConfig
+	provider     providers.Provider
+	tailscale    *network.Tailscale
+	backendRepo  repository.BackendRepository
+	workerPool   types.WorkerPoolConfig
+	workerRepo   repository.WorkerRepository
+	providerName *types.MachineProvider
+	providerRepo repository.ProviderRepository
 }
 
 func NewExternalWorkerPoolController(
@@ -47,7 +46,6 @@ func NewExternalWorkerPoolController(
 	workerPoolName string,
 	backendRepo repository.BackendRepository,
 	workerRepo repository.WorkerRepository,
-	workerPoolRepo repository.WorkerPoolRepository,
 	providerRepo repository.ProviderRepository,
 	tailscale *network.Tailscale,
 	providerName *types.MachineProvider) (WorkerPoolController, error) {
@@ -61,6 +59,12 @@ func NewExternalWorkerPoolController(
 		provider, err = providers.NewOCIProvider(ctx, config, providerRepo, workerRepo, tailscale)
 	case types.ProviderLambdaLabs:
 		provider, err = providers.NewLambdaLabsProvider(ctx, config, providerRepo, workerRepo, tailscale)
+	case types.ProviderCrusoe:
+		provider, err = providers.NewCrusoeProvider(ctx, config, providerRepo, workerRepo, tailscale)
+	case types.ProviderHydra:
+		provider, err = providers.NewHydraProvider(ctx, config, providerRepo, workerRepo, tailscale)
+	case types.ProviderGeneric:
+		provider, err = providers.NewGenericProvider(ctx, config, providerRepo, workerRepo, tailscale)
 	default:
 		return nil, errors.New("invalid provider name")
 	}
@@ -70,21 +74,20 @@ func NewExternalWorkerPoolController(
 
 	workerPool := config.Worker.Pools[workerPoolName]
 	wpc := &ExternalWorkerPoolController{
-		ctx:            ctx,
-		name:           workerPoolName,
-		config:         config,
-		workerPool:     workerPool,
-		backendRepo:    backendRepo,
-		workerRepo:     workerRepo,
-		workerPoolRepo: workerPoolRepo,
-		providerName:   providerName,
-		providerRepo:   providerRepo,
-		tailscale:      tailscale,
-		provider:       provider,
+		ctx:          ctx,
+		name:         workerPoolName,
+		config:       config,
+		workerPool:   workerPool,
+		backendRepo:  backendRepo,
+		workerRepo:   workerRepo,
+		providerName: providerName,
+		providerRepo: providerRepo,
+		tailscale:    tailscale,
+		provider:     provider,
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, &workerPool, workerRepo, workerPoolRepo, providerRepo)
+	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
 	if err != nil {
 		log.Printf("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
 	}
@@ -291,12 +294,6 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 			SecurityContext: &corev1.SecurityContext{
 				Privileged: ptr.To(true),
 			},
-			Ports: []corev1.ContainerPort{
-				{
-					Name:          "metrics",
-					ContainerPort: int32(wpc.config.Monitoring.Prometheus.Port),
-				},
-			},
 			Env:          env,
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
 			Resources:    resources,
@@ -352,6 +349,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		TotalGpuCount: workerGpuCount,
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
+		Priority:      wpc.workerPool.Priority,
 	}, nil
 }
 
@@ -399,12 +397,23 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 			Name:  "POD_HOSTNAME",
 			Value: podHostname,
 		},
+		{
+			Name:  "TS_DEBUG_DISABLE_PORTLIST",
+			Value: "true",
+		},
+		{
+			Name:  "NETWORK_PREFIX",
+			Value: machineId,
+		},
 	}
 
 	remoteConfig, err := providers.GetRemoteConfig(wpc.config, wpc.tailscale)
 	if err != nil {
 		return nil, err
 	}
+
+	// TODO: Once we set up dynamic secrets updating in agents, we can remove this
+	remoteConfig.Monitoring.FluentBit.Events.Endpoint = "http://beta9-fluent-bit.kube-system:9880"
 
 	// Serialize the AppConfig struct to JSON
 	configJson, err := json.MarshalIndent(remoteConfig, "", "  ")
@@ -420,7 +429,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 
 func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
 	hostPathType := corev1.HostPathDirectoryOrCreate
-	sharedMemoryLimit := resource.MustParse(fmt.Sprintf("%dMi", workerMemory/2))
+	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPool.PoolSizing.SharedMemoryLimitPct, workerMemory)
 
 	tmpSizeLimit := resource.MustParse("30Gi")
 	return []corev1.Volume{

@@ -22,6 +22,7 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 	}
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId)) // Allows workspace admins to list stubs specific to their workspace
+	g.GET("/:workspaceId/:stubId", auth.WithWorkspaceAuth(group.RetrieveStub))   // Allows workspace admins to retrieve a specific stub
 	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                        // Allows cluster admins to list all stubs
 
 	return group
@@ -32,27 +33,61 @@ func (g *StubGroup) ListStubsByWorkspaceId(ctx echo.Context) error {
 
 	var filters types.StubFilter
 	if err := ctx.Bind(&filters); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode query parameters")
+		return HTTPBadRequest("Failed to decode query parameters")
 	}
 
 	filters.WorkspaceID = workspaceID
 
-	if stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), filters); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list stubs")
+	if filters.Pagination {
+		if stubs, err := g.backendRepo.ListStubsPaginated(ctx.Request().Context(), filters); err != nil {
+			return HTTPInternalServerError("Failed to list stubs")
+		} else {
+			return ctx.JSON(http.StatusOK, stubs)
+		}
 	} else {
-		return ctx.JSON(http.StatusOK, stubs)
+		if stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), filters); err != nil {
+			return HTTPInternalServerError("Failed to list stubs")
+		} else {
+			return ctx.JSON(http.StatusOK, stubs)
+		}
 	}
 }
 
 func (g *StubGroup) ListStubs(ctx echo.Context) error {
 	var filters types.StubFilter
 	if err := ctx.Bind(&filters); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Failed to decode query parameters")
+		return HTTPBadRequest("Failed to decode query parameters")
 	}
 
-	if stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), filters); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list stubs")
+	if filters.Pagination {
+		if stubs, err := g.backendRepo.ListStubsPaginated(ctx.Request().Context(), filters); err != nil {
+			return HTTPInternalServerError("Failed to list stubs")
+		} else {
+			return ctx.JSON(http.StatusOK, stubs)
+		}
 	} else {
-		return ctx.JSON(http.StatusOK, stubs)
+		if stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), filters); err != nil {
+			return HTTPInternalServerError("Failed to list stubs")
+		} else {
+			return ctx.JSON(http.StatusOK, stubs)
+		}
 	}
+}
+
+func (g *StubGroup) RetrieveStub(ctx echo.Context) error {
+	stubID := ctx.Param("stubId")
+	workspaceID := ctx.Param("workspaceId")
+
+	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID, types.QueryFilter{
+		Field: "workspace_id",
+		Value: workspaceID,
+	})
+	if err != nil {
+		return HTTPInternalServerError("Failed to retrieve stub")
+	} else if stub == nil {
+		return HTTPNotFound()
+	}
+
+	return ctx.JSON(http.StatusOK, stub)
+
 }

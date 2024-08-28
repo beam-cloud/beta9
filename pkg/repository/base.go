@@ -28,6 +28,12 @@ type WorkerRepository interface {
 	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
 	SetImagePullLock(workerId, imageId string) error
 	RemoveImagePullLock(workerId, imageId string) error
+	GetContainerIp(networkPrefix string, containerId string) (string, error)
+	SetContainerIp(networkPrefix string, containerId, containerIp string) error
+	RemoveContainerIp(networkPrefix string, containerId string) error
+	GetContainerIps(networkPrefix string) ([]string, error)
+	SetNetworkLock(networkPrefix string, ttl, retries int) error
+	RemoveNetworkLock(networkPrefix string) error
 }
 
 type ContainerRepository interface {
@@ -61,6 +67,7 @@ type BackendRepository interface {
 	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error)
 	GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error)
 	GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error)
+	GetObjectByExternalStubId(ctx context.Context, stubId string, workspaceId uint) (types.Object, error)
 	UpdateObjectSizeByExternalId(ctx context.Context, externalId string, size int) error
 	DeleteObjectByExternalId(ctx context.Context, externalId string) error
 	CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error)
@@ -68,8 +75,11 @@ type BackendRepository interface {
 	RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error)
 	ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error)
 	UpdateTokenAsClusterAdmin(ctx context.Context, tokenId string, disabled bool) error
+	ToggleToken(ctx context.Context, workspaceId uint, extTokenId string) (types.Token, error)
+	DeleteToken(ctx context.Context, workspaceId uint, extTokenId string) error
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
 	GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error)
+	GetTaskByWorkspace(ctx context.Context, externalId string, workspace *types.Workspace) (*types.TaskWithRelated, error)
 	CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error)
 	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error)
 	DeleteTask(ctx context.Context, externalId string) error
@@ -79,18 +89,22 @@ type BackendRepository interface {
 	AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error)
 	GetTaskCountPerDeployment(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountPerDeployment, error)
 	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool) (types.Stub, error)
-	GetStubByExternalId(ctx context.Context, externalId string) (*types.StubWithRelated, error)
+	GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error)
 	GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
 	GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
+	DeleteVolume(ctx context.Context, workspaceId uint, name string) error
 	ListVolumesWithRelated(ctx context.Context, workspaceId uint) ([]types.VolumeWithRelated, error)
 	ListDeploymentsWithRelated(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error)
+	ListLatestDeploymentsWithRelatedPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error)
 	ListDeploymentsPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error)
-	GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string) (*types.Deployment, error)
+	GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string, filterDeleted bool) (*types.DeploymentWithRelated, error)
 	GetDeploymentByExternalId(ctx context.Context, workspaceId uint, deploymentExternalId string) (*types.DeploymentWithRelated, error)
 	GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint, stubType string) (*types.DeploymentWithRelated, error)
 	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error)
 	UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error)
+	DeleteDeployment(ctx context.Context, deployment types.Deployment) error
 	ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error)
+	ListStubsPaginated(ctx context.Context, filters types.StubFilter) (common.CursorPaginationInfo[types.StubWithRelated], error)
 	GetConcurrencyLimit(ctx context.Context, concurrenyLimitId uint) (*types.ConcurrencyLimit, error)
 	GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error)
 	DeleteConcurrencyLimit(ctx context.Context, workspaceId types.Workspace) error
@@ -102,15 +116,11 @@ type BackendRepository interface {
 	ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error)
 	UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretId string, value string) (*types.Secret, error)
 	DeleteSecret(ctx context.Context, workspace *types.Workspace, secretName string) error
-}
-
-type WorkerPoolRepository interface {
-	GetPool(name string) (*types.WorkerPoolConfig, error)
-	GetPools() ([]types.WorkerPoolConfig, error)
-	SetPool(name string, pool types.WorkerPoolConfig) error
-	RemovePool(name string) error
-	SetPoolLock(name string) error
-	RemovePoolLock(name string) error
+	CreateScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) (*types.ScheduledJob, error)
+	DeleteScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) error
+	DeletePreviousScheduledJob(ctx context.Context, deployment *types.Deployment) error
+	GetScheduledJob(ctx context.Context, deploymentId uint) (*types.ScheduledJob, error)
+	ListenToChannel(ctx context.Context, channel string) (<-chan string, error)
 }
 
 type TaskRepository interface {
@@ -118,9 +128,12 @@ type TaskRepository interface {
 	DeleteTaskState(ctx context.Context, workspaceName, stubId, taskId string) error
 	GetTasksInFlight(ctx context.Context) ([]*types.TaskMessage, error)
 	ClaimTask(ctx context.Context, workspaceName, stubId, taskId, containerId string) error
+	RemoveTaskClaim(ctx context.Context, workspaceName, stubId, taskId string) error
 	IsClaimed(ctx context.Context, workspaceName, stubId, taskId string) (bool, error)
 	TasksClaimed(ctx context.Context, workspaceName, stubId string) (int, error)
 	TasksInFlight(ctx context.Context, workspaceName, stubId string) (int, error)
+	SetTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error
+	RemoveTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error
 }
 
 type ProviderRepository interface {
@@ -134,6 +147,7 @@ type ProviderRepository interface {
 	ListAllMachines(providerName, poolName string, useLock bool) ([]*types.ProviderMachine, error)
 	SetMachineLock(providerName, poolName, machineId string) error
 	RemoveMachineLock(providerName, poolName, machineId string) error
+	GetGPUAvailability(pools map[string]types.WorkerPoolConfig) (map[string]bool, error)
 }
 
 type TailscaleRepository interface {
@@ -143,14 +157,17 @@ type TailscaleRepository interface {
 
 type EventRepository interface {
 	PushContainerRequestedEvent(request *types.ContainerRequest)
-	PushContainerScheduledEvent(containerID string, workerID string)
-	PushContainerStartedEvent(containerID string, workerID string)
-	PushContainerStoppedEvent(containerID string, workerID string)
+	PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest)
+	PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest)
+	PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest)
+	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
 	PushDeployStubEvent(workspaceId string, stub *types.Stub)
 	PushServeStubEvent(workspaceId string, stub *types.Stub)
 	PushRunStubEvent(workspaceId string, stub *types.Stub)
+	PushTaskUpdatedEvent(task *types.TaskWithRelated)
+	PushTaskCreatedEvent(task *types.TaskWithRelated)
 }
 
 type MetricsRepository interface {

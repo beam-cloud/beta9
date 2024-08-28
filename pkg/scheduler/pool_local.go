@@ -32,7 +32,7 @@ type LocalKubernetesWorkerPoolController struct {
 	workerRepo repository.WorkerRepository
 }
 
-func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, workerPoolRepo repository.WorkerPoolRepository, providerRepo repository.ProviderRepository) (WorkerPoolController, error) {
+func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, providerRepo repository.ProviderRepository) (WorkerPoolController, error) {
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -54,7 +54,7 @@ func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.Ap
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, &workerPool, workerRepo, workerPoolRepo, providerRepo)
+	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
 	if err != nil {
 		log.Printf("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
 	}
@@ -229,6 +229,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		TotalGpuCount: workerGpuCount,
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
+		Priority:      wpc.workerPool.Priority,
 	}
 }
 
@@ -239,7 +240,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createJobInCluster(job *batchv1.
 
 func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
 	hostPathType := corev1.HostPathDirectoryOrCreate
-	sharedMemoryLimit := resource.MustParse(fmt.Sprintf("%dMi", workerMemory/2))
+	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPool.PoolSizing.SharedMemoryLimitPct, workerMemory)
 
 	tmpSizeLimit := resource.MustParse("30Gi")
 	volumes := []corev1.Volume{
@@ -366,13 +367,37 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Value: wpc.config.Worker.Namespace,
 		},
 		{
-			Name:  "BETA9_GATEWAY_HOST",
-			Value: wpc.config.GatewayService.Host,
+			Name: "NETWORK_PREFIX",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "spec.nodeName",
+				},
+			},
 		},
-		{
-			Name:  "BETA9_GATEWAY_PORT",
-			Value: fmt.Sprint(wpc.config.GatewayService.GRPC.Port),
-		},
+	}
+
+	if wpc.config.Worker.UseGatewayServiceHostname {
+		envVars = append(envVars, []corev1.EnvVar{
+			{
+				Name:  "BETA9_GATEWAY_HOST",
+				Value: wpc.config.GatewayService.Host,
+			},
+			{
+				Name:  "BETA9_GATEWAY_PORT",
+				Value: fmt.Sprint(wpc.config.GatewayService.GRPC.Port),
+			},
+		}...)
+	} else {
+		envVars = append(envVars, []corev1.EnvVar{
+			{
+				Name:  "BETA9_GATEWAY_HOST",
+				Value: wpc.config.GatewayService.ExternalHost,
+			},
+			{
+				Name:  "BETA9_GATEWAY_PORT",
+				Value: "443",
+			},
+		}...)
 	}
 
 	if len(wpc.workerPool.JobSpec.Env) > 0 {

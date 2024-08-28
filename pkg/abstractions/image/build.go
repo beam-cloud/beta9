@@ -11,16 +11,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/mitchellh/hashstructure/v2"
+	"github.com/pkg/errors"
+
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
-
-	"github.com/google/uuid"
-	"github.com/mitchellh/hashstructure/v2"
-	"github.com/pkg/errors"
 )
 
 const (
@@ -41,12 +41,30 @@ type BuildOpts struct {
 	BaseImageRegistry  string
 	BaseImageName      string
 	BaseImageTag       string
+	BaseImageCreds     string
 	PythonVersion      string
 	PythonPackages     []string
 	Commands           []string
 	ExistingImageUri   string
-	ExistingImageCreds *string
+	ExistingImageCreds map[string]string
 	ForceRebuild       bool
+}
+
+func (o *BuildOpts) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "{")
+	fmt.Fprintf(&b, "  \"BaseImageRegistry\": %q,", o.BaseImageRegistry)
+	fmt.Fprintf(&b, "  \"BaseImageName\": %q,", o.BaseImageName)
+	fmt.Fprintf(&b, "  \"BaseImageTag\": %q,", o.BaseImageTag)
+	fmt.Fprintf(&b, "  \"BaseImageCreds\": %q,", o.BaseImageCreds)
+	fmt.Fprintf(&b, "  \"PythonVersion\": %q,", o.PythonVersion)
+	fmt.Fprintf(&b, "  \"PythonPackages\": %#v,", o.PythonPackages)
+	fmt.Fprintf(&b, "  \"Commands\": %#v,", o.Commands)
+	fmt.Fprintf(&b, "  \"ExistingImageUri\": %q,", o.ExistingImageUri)
+	fmt.Fprintf(&b, "  \"ExistingImageCreds\": %#v,", o.ExistingImageCreds)
+	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
+	fmt.Fprintf(&b, "}")
+	return b.String()
 }
 
 func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository) (*Builder, error) {
@@ -97,9 +115,17 @@ func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 }
 
 type BaseImage struct {
-	SourceRegistry string
-	ImageName      string
-	ImageTag       string
+	Registry string
+	Repo     string
+	Tag      string
+	Digest   string
+}
+
+func (i *BaseImage) String() string {
+	if i.Digest != "" {
+		return fmt.Sprintf("%s/%s@%s", i.Registry, i.Repo, i.Digest)
+	}
+	return fmt.Sprintf("%s/%s:%s", i.Registry, i.Repo, i.Tag)
 }
 
 // Build user image
@@ -141,15 +167,16 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	err = b.scheduler.Run(&types.ContainerRequest{
-		ContainerId:  containerId,
-		Env:          []string{},
-		Cpu:          cpu,
-		Memory:       memory,
-		ImageId:      baseImageId,
-		SourceImage:  &sourceImage,
-		WorkspaceId:  authInfo.Workspace.ExternalId,
-		EntryPoint:   []string{"tail", "-f", "/dev/null"},
-		PoolSelector: b.config.ImageService.BuildContainerPoolSelector,
+		ContainerId:      containerId,
+		Env:              []string{},
+		Cpu:              cpu,
+		Memory:           memory,
+		ImageId:          baseImageId,
+		SourceImage:      &sourceImage,
+		SourceImageCreds: opts.BaseImageCreds,
+		WorkspaceId:      authInfo.Workspace.ExternalId,
+		EntryPoint:       []string{"tail", "-f", "/dev/null"},
+		PoolSelector:     b.config.ImageService.BuildContainerPoolSelector,
 	})
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
@@ -222,7 +249,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
 	}
 
-	log.Printf("container <%v> building with options: %+v\n", containerId, opts)
+	log.Printf("container <%v> building with options: %s\n", containerId, opts)
 	startTime := time.Now()
 
 	// Detect if python3.x is installed in the container, if not install it
@@ -289,7 +316,7 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Using custom base image: %s\n", opts.ExistingImageUri)}
 	}
 
-	baseImage, err := b.extractImageNameAndTag(opts.ExistingImageUri)
+	baseImage, err := ExtractImageNameAndTag(opts.ExistingImageUri)
 	if err != nil {
 		if outputChan != nil {
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
@@ -297,9 +324,20 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 		return err
 	}
 
-	opts.BaseImageRegistry = baseImage.SourceRegistry
-	opts.BaseImageName = baseImage.ImageName
-	opts.BaseImageTag = baseImage.ImageTag
+	if len(opts.ExistingImageCreds) > 0 && opts.ExistingImageUri != "" {
+		token, err := GetRegistryToken(opts)
+		if err != nil {
+			if outputChan != nil {
+				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+			}
+			return err
+		}
+		opts.BaseImageCreds = token
+	}
+
+	opts.BaseImageRegistry = baseImage.Registry
+	opts.BaseImageName = baseImage.Repo
+	opts.BaseImageTag = baseImage.Tag
 
 	// Override any specified python packages with base requirements (to ensure we have what need in the image)
 	baseRequirementsSlice := strings.Split(strings.TrimSpace(basePythonRequirements), "\n")
@@ -331,36 +369,6 @@ func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
 }
 
-// Extracts the image name and tag from a given Docker image URI.
-// Returns an error if the URI is invalid.
-func (b *Builder) extractImageNameAndTag(imageURI string) (BaseImage, error) {
-	re := regexp.MustCompile(`^(([^/]+/[^/]+)/)?([^:]+):?(.*)$`)
-	matches := re.FindStringSubmatch(imageURI)
-
-	if matches == nil {
-		return BaseImage{}, errors.New("invalid image URI format")
-	}
-
-	// Use default source registry if not specified
-	sourceRegistry := "docker.io"
-	if matches[2] != "" {
-		sourceRegistry = matches[2]
-	}
-
-	imageName := matches[3]
-	imageTag := "latest"
-
-	if matches[4] != "" {
-		imageTag = matches[4]
-	}
-
-	return BaseImage{
-		SourceRegistry: sourceRegistry,
-		ImageName:      imageName,
-		ImageTag:       imageTag,
-	}, nil
-}
-
 func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common gcc curl git"
 	components := []string{
@@ -378,12 +386,76 @@ func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 }
 
 func (b *Builder) generatePipInstallCommand(opts *BuildOpts) string {
-	// Escape each package name individually
-	escapedPackages := make([]string, len(opts.PythonPackages))
-	for i, pkg := range opts.PythonPackages {
-		escapedPackages[i] = fmt.Sprintf("%q", pkg)
+	var flagLines []string
+	var packages []string
+	var flags = []string{"--", "-"}
+
+	for _, pkg := range opts.PythonPackages {
+		if hasAnyPrefix(pkg, flags) {
+			flagLines = append(flagLines, pkg)
+		} else {
+			packages = append(packages, fmt.Sprintf("%q", pkg))
+		}
 	}
 
-	packages := strings.Join(escapedPackages, " ")
-	return fmt.Sprintf("%s -m pip install --root-user-action=ignore %s", opts.PythonVersion, packages)
+	command := fmt.Sprintf("%s -m pip install --root-user-action=ignore", opts.PythonVersion)
+	if len(flagLines) > 0 {
+		command += " " + strings.Join(flagLines, " ")
+	}
+	if len(packages) > 0 {
+		command += " " + strings.Join(packages, " ")
+	}
+
+	return command
+}
+
+var imageNamePattern = regexp.MustCompile(
+	`^` + // Assert position at the start of the string
+		`(?:(?P<Registry>(?:(?:localhost|[\w.-]+(?:\.[\w.-]+)+)(?::\d+)?)|[\w]+:\d+)\/)?` + // Optional registry, which can be localhost, a domain with optional port, or a simple registry with port
+		`(?P<Namespace>(?:[a-z0-9]+(?:(?:[._]|__|[-]*)[a-z0-9]+)*)\/)*` + // Optional namespace, which can contain multiple segments separated by slashes
+		`(?P<Repo>[a-z0-9][-a-z0-9._]+)` + // Required repository name, must start with alphanumeric and can contain alphanumerics, hyphens, dots, and underscores
+		`(?::(?P<Tag>[\w][\w.-]{0,127}))?` + // Optional tag, which starts with a word character and can contain word characters, dots, and hyphens
+		`(?:@(?P<Digest>[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9A-Fa-f]{32,}))?` + // Optional digest, which is a hash algorithm followed by a colon and a hexadecimal hash
+		`$`, // Assert position at the end of the string
+)
+
+func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
+	matches := imageNamePattern.FindStringSubmatch(imageRef)
+	if matches == nil {
+		return BaseImage{}, errors.New("invalid image URI format")
+	}
+
+	result := make(map[string]string)
+	for i, name := range imageNamePattern.SubexpNames() {
+		if i > 0 && name != "" {
+			result[name] = matches[i]
+		}
+	}
+
+	registry := result["Registry"]
+	if registry == "" {
+		registry = "docker.io"
+	}
+
+	repo := result["Namespace"] + result["Repo"]
+	tag, digest := result["Tag"], result["Digest"]
+	if tag == "" && digest == "" {
+		tag = "latest"
+	}
+
+	return BaseImage{
+		Registry: registry,
+		Repo:     repo,
+		Tag:      tag,
+		Digest:   digest,
+	}, nil
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return false
 }

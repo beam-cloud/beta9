@@ -197,23 +197,52 @@ func (o *OutputRedisService) statOutput(ctx context.Context, workspaceName, task
 }
 
 func (o *OutputRedisService) setPublicURL(ctx context.Context, workspaceName, taskId, outputId, filename string, expires uint32) (string, error) {
-	task, err := o.backendRepo.GetTaskWithRelated(ctx, taskId)
-	if err != nil {
-		return "", err
-	}
-
-	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(workspaceName), task.Stub.ExternalId, task.ExternalId, outputId, filepath.Base(filename))
-
-	err = o.rdb.Set(ctx, Keys.outputPublicURL(outputId), fullPath, time.Duration(expires)*time.Second).Err()
-	if err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("%v/output/id/%v", o.config.GatewayService.ExternalURL, outputId), nil
+	return SetPublicURL(ctx, o.config, o.backendRepo, o.rdb, workspaceName, taskId, outputId, filename, expires)
 }
 
 func (o *OutputRedisService) getPublicURL(id string) (string, error) {
 	return o.rdb.Get(context.TODO(), Keys.outputPublicURL(id)).Result()
+}
+
+func SetPublicURL(ctx context.Context, config types.AppConfig, backendRepo repository.BackendRepository, redisClient *common.RedisClient, workspaceName, taskId, outputId, filename string, expires uint32) (string, error) {
+	task, err := backendRepo.GetTaskWithRelated(ctx, taskId)
+	if err != nil {
+		return "", err
+	}
+
+	fullPath := GetTaskOutputPath(workspaceName, task, outputId, filename)
+	if err = redisClient.Set(ctx, Keys.outputPublicURL(outputId), fullPath, time.Duration(expires)*time.Second).Err(); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%v/output/id/%v", config.GatewayService.ExternalURL, outputId), nil
+}
+
+func GetTaskOutputRootPath(workspaceName string, task *types.TaskWithRelated) string {
+	return filepath.Join(types.DefaultOutputsPath, workspaceName, task.Stub.ExternalId, task.ExternalId)
+}
+
+func GetTaskOutputPath(workspaceName string, task *types.TaskWithRelated, outputId string, filename string) string {
+	return filepath.Join(types.DefaultOutputsPath, workspaceName, task.Stub.ExternalId, task.ExternalId, outputId, filepath.Base(filename))
+}
+
+func GetTaskOutputFiles(workspaceName string, task *types.TaskWithRelated) map[string]string {
+	outputPath := GetTaskOutputRootPath(workspaceName, task)
+
+	filePaths := map[string]string{}
+	filepath.WalkDir(outputPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil && os.IsNotExist(err) {
+			return nil
+		}
+		if !d.IsDir() {
+			outputId := filepath.Base(filepath.Dir(path))
+			fileName := filepath.Base(path)
+			filePaths[outputId] = fileName
+		}
+		return nil
+	})
+
+	return filePaths
 }
 
 // Redis keys

@@ -7,28 +7,26 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/abstractions/image"
-	common "github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/repository"
-	types "github.com/beam-cloud/beta9/pkg/types"
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/beam-cloud/clip/pkg/storage"
+	runc "github.com/beam-cloud/go-runc"
 	"github.com/hanwen/go-fuse/v2/fuse"
-	"github.com/moby/sys/mountinfo"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
 	"github.com/opencontainers/umoci/oci/casext"
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 
-	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
-	runc "github.com/beam-cloud/go-runc"
+	"github.com/beam-cloud/beta9/pkg/abstractions/image"
+	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
+	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
 const (
@@ -39,6 +37,7 @@ const (
 var (
 	baseImageCachePath string = "/images/cache"
 	baseImageMountPath string = "/images/mnt/%s"
+	baseBlobFsPath     string = "/cache"
 )
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
@@ -75,23 +74,24 @@ type ImageClient struct {
 	commandTimeout     int
 	debug              bool
 	creds              string
-	config             types.ImageServiceConfig
+	config             types.AppConfig
 	workerId           string
 	workerRepo         repository.WorkerRepository
+	logger             *ContainerLogger
 }
 
-func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
-	registry, err := common.NewImageRegistry(config)
+func NewImageClient(config types.AppConfig, workerId string, workerRepo repository.WorkerRepository) (*ImageClient, error) {
+	registry, err := common.NewImageRegistry(config.ImageService)
 	if err != nil {
 		return nil, err
 	}
 
 	var client *blobcache.BlobCacheClient = nil
-
-	if config.BlobCacheEnabled {
+	if config.ImageService.BlobCacheEnabled {
 		client, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
 		if err != nil {
-			return nil, err
+			log.Printf("Unable to load blobcache client: %v\n", err)
+			client = nil
 		}
 	}
 
@@ -109,6 +109,7 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 		workerId:           workerId,
 		workerRepo:         workerRepo,
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
+		logger:             &ContainerLogger{},
 	}
 
 	err = os.MkdirAll(c.imageBundlePath, os.ModePerm)
@@ -119,19 +120,56 @@ func NewImageClient(config types.ImageServiceConfig, workerId string, workerRepo
 	return c, nil
 }
 
+func blobfsAvailable(path string) bool {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return false
+	}
+
+	// Check if it's a valid mount point
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return false
+	}
+
+	return stat.Type != 0
+}
+
 func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	imageId := request.ImageId
-
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
+	c.logger.Log(request.ContainerId, request.StubId, "loading image: %s", imageId)
+
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
-	if !c.config.LocalCacheEnabled && !isBuildContainer {
+	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
 		localCachePath = ""
 	}
 
-	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
-	var err error = nil
+	startTime := time.Now()
+	if c.config.BlobCache.BlobFs.Enabled && blobfsAvailable(baseBlobFsPath) && !isBuildContainer {
+		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
+		sourceOffset := int64(0)
 
+		// If the image archive is already cached in blobcache, then we can use that as the local cache path
+		baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseBlobFsPath, sourcePath)
+		if _, err := os.Stat(baseBlobFsContentPath); err == nil {
+			localCachePath = baseBlobFsContentPath
+		} else {
+			c.logger.Log(request.ContainerId, request.StubId, "image <%s> not found in cache, caching nearby", imageId)
+
+			// Otherwise, lets cache it in a nearby blobcache host
+			_, err := c.cacheClient.StoreContentFromSource(sourcePath, sourceOffset)
+			if err == nil {
+				localCachePath = baseBlobFsContentPath
+			}
+
+		}
+	}
+
+	elapsed := time.Since(startTime)
+	c.logger.Log(request.ContainerId, request.StubId, "loaded image <%s>, took: %s", imageId, elapsed)
+
+	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 	if _, err := os.Stat(remoteArchivePath); err != nil {
 		err = c.registry.Pull(context.TODO(), remoteArchivePath, imageId)
 		if err != nil {
@@ -148,15 +186,10 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 		ContentCacheAvailable: c.cacheClient != nil,
 		Credentials: storage.ClipStorageCredentials{
 			S3: &storage.S3ClipStorageCredentials{
-				AccessKey: c.config.Registries.S3.AccessKey,
-				SecretKey: c.config.Registries.S3.SecretKey,
+				AccessKey: c.config.ImageService.Registries.S3.AccessKey,
+				SecretKey: c.config.ImageService.Registries.S3.SecretKey,
 			},
 		},
-	}
-
-	// Check if mount point is already in use
-	if mounted, _ := mountinfo.Mounted(mountOptions.MountPoint); mounted {
-		return nil
 	}
 
 	// Check if a fuse server exists for this imageId
@@ -166,7 +199,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	}
 
 	// Get lock on image mount
-	err = c.workerRepo.SetImagePullLock(c.workerId, imageId)
+	err := c.workerRepo.SetImagePullLock(c.workerId, imageId)
 	if err != nil {
 		return err
 	}
@@ -193,16 +226,26 @@ func (c *ImageClient) Cleanup() error {
 		return true // Continue iteration
 	})
 
+	if c.config.BlobCache.BlobFs.Enabled {
+		err := c.cacheClient.Cleanup()
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
-func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds *string) error {
-	baseImage, err := extractImageNameAndTag(sourceImage)
+func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds string) error {
+	baseImage, err := image.ExtractImageNameAndTag(sourceImage)
 	if err != nil {
 		return err
 	}
 
-	dest := fmt.Sprintf("oci:%s:%s", baseImage.ImageName, baseImage.ImageTag)
+	baseTmpBundlePath := filepath.Join(c.imageBundlePath, baseImage.Repo)
+	os.MkdirAll(baseTmpBundlePath, 0755)
+
+	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
 
 	args = append(args, c.args(creds)...)
@@ -219,18 +262,16 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 
 	status, err := runc.Monitor.Wait(cmd, ec)
 	if err == nil && status != 0 {
-		log.Printf("unable to copy base image: %v -> %v", sourceImage, dest)
+		return fmt.Errorf("unable to copy image: %v", cmd.String())
 	}
 
-	tmpBundlePath := filepath.Join(c.imageBundlePath, imageId)
-	err = c.unpack(baseImage.ImageName, baseImage.ImageTag, tmpBundlePath)
+	tmpBundlePath := filepath.Join(baseTmpBundlePath, imageId)
+	err = c.unpack(baseImage.Repo, baseImage.Tag, tmpBundlePath)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}
 
-	defer func() {
-		os.RemoveAll(tmpBundlePath)
-	}()
+	defer os.RemoveAll(baseTmpBundlePath)
 
 	return c.Archive(ctx, tmpBundlePath, imageId, nil)
 }
@@ -242,10 +283,10 @@ func (c *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
 	return runc.Monitor.Start(cmd)
 }
 
-func (c *ImageClient) args(creds *string) (out []string) {
-	if creds != nil && *creds != "" {
-		out = append(out, "--src-creds", *creds)
-	} else if creds != nil && *creds == "" {
+func (c *ImageClient) args(creds string) (out []string) {
+	if creds != "" {
+		out = append(out, "--src-creds", creds)
+	} else if creds == "" {
 		out = append(out, "--src-no-creds")
 	} else if c.creds != "" {
 		out = append(out, "--src-creds", c.creds)
@@ -255,7 +296,7 @@ func (c *ImageClient) args(creds *string) (out []string) {
 		out = append(out, "--command-timeout", fmt.Sprintf("%d", c.commandTimeout))
 	}
 
-	if !c.config.EnableTLS {
+	if !c.config.ImageService.EnableTLS {
 		out = append(out, []string{"--src-tls-verify=false", "--dest-tls-verify=false"}...)
 	}
 
@@ -315,25 +356,25 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}()
 
 	var err error = nil
-	switch c.config.RegistryStore {
-	case "s3":
+	switch c.config.ImageService.RegistryStore {
+	case common.S3ImageRegistryStore:
 		err = clip.CreateAndUploadArchive(clip.CreateOptions{
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
 			Credentials: storage.ClipStorageCredentials{
 				S3: &storage.S3ClipStorageCredentials{
-					AccessKey: c.config.Registries.S3.AccessKey,
-					SecretKey: c.config.Registries.S3.SecretKey,
+					AccessKey: c.config.ImageService.Registries.S3.AccessKey,
+					SecretKey: c.config.ImageService.Registries.S3.SecretKey,
 				},
 			},
 			ProgressChan: progressChan,
 		}, &clipCommon.S3StorageInfo{
-			Bucket:   c.config.Registries.S3.BucketName,
-			Region:   c.config.Registries.S3.Region,
-			Endpoint: c.config.Registries.S3.Endpoint,
+			Bucket:   c.config.ImageService.Registries.S3.BucketName,
+			Region:   c.config.ImageService.Registries.S3.Region,
+			Endpoint: c.config.ImageService.Registries.S3.Endpoint,
 			Key:      fmt.Sprintf("%s.clip", imageId),
 		})
-	case "local":
+	case common.LocalImageRegistryStore:
 		err = clip.CreateArchive(clip.CreateOptions{
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
@@ -356,29 +397,4 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 
 	log.Printf("Image <%v> push took %v\n", imageId, time.Since(startTime))
 	return nil
-}
-
-var imageNamePattern = regexp.MustCompile(`^(?:(.*?)\/)?(?:([^\/:]+)\/)?([^\/:]+)(?::([^\/:]+))?$`)
-
-func extractImageNameAndTag(sourceImage string) (image.BaseImage, error) {
-	matches := imageNamePattern.FindStringSubmatch(sourceImage)
-	if matches == nil {
-		return image.BaseImage{}, errors.New("invalid image URI format")
-	}
-
-	registry, name, tag := matches[1], matches[3], matches[4]
-
-	if registry == "" {
-		registry = "docker.io"
-	}
-
-	if tag == "" {
-		tag = "latest"
-	}
-
-	return image.BaseImage{
-		SourceRegistry: registry,
-		ImageName:      name,
-		ImageTag:       tag,
-	}, nil
 }

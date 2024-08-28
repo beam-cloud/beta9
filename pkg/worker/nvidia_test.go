@@ -11,13 +11,40 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
-func TestInjectCudaEnvVarsNoCudaInImage(t *testing.T) {
-	manager := NewContainerCudaManager(4)
+type GPUInfoClientForTest struct {
+	GpuCount int
+}
+
+func NewContainerNvidiaManagerForTest(gpuCount int) GPUManager {
+	manager := NewContainerNvidiaManager(uint32(gpuCount))
+	gpuManager := manager.(*ContainerNvidiaManager)
+	gpuManager.infoClient = &GPUInfoClientForTest{GpuCount: gpuCount}
+	gpuManager.statFunc = mockStat
+
+	return gpuManager
+}
+
+func (c *GPUInfoClientForTest) AvailableGPUDevices() ([]int, error) {
+	gpus := []int{}
+	for i := 0; i < c.GpuCount; i++ {
+		gpus = append(gpus, i)
+	}
+
+	return gpus, nil
+}
+
+func (c *GPUInfoClientForTest) GetGPUMemoryUsage(gpuId int) (GPUMemoryUsageStats, error) {
+	return GPUMemoryUsageStats{}, nil
+}
+
+func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {
+	manager := NewContainerNvidiaManager(4)
 	initialEnv := []string{"INITIAL=1"}
 
 	// Set some environment variables to simulate NVIDIA settings
 	os.Setenv("NVIDIA_DRIVER_CAPABILITIES", "all")
 	os.Setenv("NVIDIA_REQUIRE_CUDA", "cuda>=9.0")
+	os.Setenv("CUDA_HOME", "/usr/local/cuda-12.3")
 
 	expectedEnv := []string{
 		"INITIAL=1",
@@ -28,11 +55,12 @@ func TestInjectCudaEnvVarsNoCudaInImage(t *testing.T) {
 		"NV_CUDA_CUDART_VERSION=",
 		"CUDA_VERSION=",
 		"GPU_TYPE=",
+		"CUDA_HOME=/usr/local/cuda-12.3",
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.3/bin:$PATH",
 		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.3/targets/x86_64-linux/lib:$LD_LIBRARY_PATH",
 	}
 
-	resultEnv, _ := manager.InjectCudaEnvVars(initialEnv, &ContainerOptions{
+	resultEnv, _ := manager.InjectEnvVars(initialEnv, &ContainerOptions{
 		InitialSpec: &specs.Spec{
 			Process: &specs.Process{},
 		},
@@ -42,8 +70,8 @@ func TestInjectCudaEnvVarsNoCudaInImage(t *testing.T) {
 	}
 }
 
-func TestInjectCudaEnvVarsExistingCudaInImage(t *testing.T) {
-	manager := NewContainerCudaManager(4)
+func TestInjectNvidiaEnvVarsExistingCudaInImage(t *testing.T) {
+	manager := NewContainerNvidiaManager(4)
 	initialEnv := []string{"INITIAL=1"}
 
 	// Set some environment variables to simulate NVIDIA settings
@@ -59,7 +87,7 @@ func TestInjectCudaEnvVarsExistingCudaInImage(t *testing.T) {
 		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-11.8/targets/x86_64-linux/lib:$LD_LIBRARY_PATH",
 	}
 
-	resultEnv, _ := manager.InjectCudaEnvVars(initialEnv, &ContainerOptions{
+	resultEnv, _ := manager.InjectEnvVars(initialEnv, &ContainerOptions{
 		InitialSpec: &specs.Spec{
 			Process: &specs.Process{Env: []string{"NVIDIA_REQUIRE_CUDA=", "CUDA_VERSION=11.8.2"}},
 		},
@@ -76,11 +104,11 @@ func TestInjectCudaEnvVarsExistingCudaInImage(t *testing.T) {
 	}
 }
 
-func TestInjectCudaMounts(t *testing.T) {
-	manager := NewContainerCudaManager(4)
+func TestInjectNvidiaMounts(t *testing.T) {
+	manager := NewContainerNvidiaManager(4)
 	initialMounts := []specs.Mount{{Type: "bind", Source: "/src", Destination: "/dst"}}
 
-	resultMounts := manager.InjectCudaMounts(initialMounts)
+	resultMounts := manager.InjectMounts(initialMounts)
 	if len(resultMounts) != len(initialMounts) {
 		t.Errorf("Expected %d mounts, got %d", len(initialMounts)+2, len(resultMounts))
 	}
@@ -93,13 +121,13 @@ func mockStat(path string, stat *syscall.Stat_t) error {
 	return nil
 }
 
-func TestAssignAndUnassignGpuDevices(t *testing.T) {
-	manager := NewContainerCudaManager(4) // Assume a machine with 4 GPUs
-	manager.statFunc = mockStat
-
+func TestAssignAndUnassignGPUDevices(t *testing.T) {
+	// Assume a machine with 4 GPUs
+	manager := NewContainerNvidiaManagerForTest(4)
 	// Assign 2 GPUs to a container
 	gpuCount := 2
-	assignedDevices, err := manager.AssignGpuDevices("container1", uint32(gpuCount))
+
+	assignedDevices, err := manager.AssignGPUDevices("container1", uint32(gpuCount))
 	if err != nil {
 		t.Fatalf("Failed to assign GPU devices: %v", err)
 	}
@@ -114,59 +142,59 @@ func TestAssignAndUnassignGpuDevices(t *testing.T) {
 	}
 
 	// Unassign the GPUs from the container
-	manager.UnassignGpuDevices("container1")
+	manager.UnassignGPUDevices("container1")
 
 	// Try to assign 4 GPUs to another container, should succeed since the first 2 are unassigned
-	_, err = manager.AssignGpuDevices("container2", 4)
+	_, err = manager.AssignGPUDevices("container2", 4)
 	if err != nil {
 		t.Errorf("Failed to assign GPU devices to container2 after unassigning from container1: %v", err)
 	}
 }
 
 func TestAssignMoreGPUsThanAvailable(t *testing.T) {
-	manager := NewContainerCudaManager(4) // Assume a machine with 4 GPUs
-	manager.statFunc = mockStat
+	manager := NewContainerNvidiaManagerForTest(4) // Assume a machine with 4 GPUs
+	// manager.statFunc = mockStat
 
 	// Attempt to assign 5 GPUs to a container, which exceeds the available count
-	_, err := manager.AssignGpuDevices("container1", 5)
+	_, err := manager.AssignGPUDevices("container1", 5)
 	if err == nil {
 		t.Errorf("Expected an error when requesting more GPUs than available, but got none")
 	}
 }
 
 func TestAssignGPUsToMultipleContainers(t *testing.T) {
-	manager := NewContainerCudaManager(4) // Assume a machine with 4 GPUs
-	manager.statFunc = mockStat
+	manager := NewContainerNvidiaManagerForTest(4) // Assume a machine with 4 GPUs
 
 	// Assign 2 GPUs to the first container
-	_, err := manager.AssignGpuDevices("container1", 2)
+	_, err := manager.AssignGPUDevices("container1", 2)
 	if err != nil {
 		t.Fatalf("Failed to assign GPUs to container1: %v", err)
 	}
 
 	// Attempt to assign 2 more GPUs to a second container
-	_, err = manager.AssignGpuDevices("container2", 2)
+	_, err = manager.AssignGPUDevices("container2", 2)
 	if err != nil {
 		t.Errorf("Failed to assign GPUs to container2: %v", err)
 	}
 
 	// Attempt to assign 1 more GPU to a third container, should fail
-	_, err = manager.AssignGpuDevices("container3", 1)
+	_, err = manager.AssignGPUDevices("container3", 1)
 	if err == nil {
 		t.Errorf("Expected failure when assigning GPUs to container3, but got none")
 	}
 }
 
 func TestAssignGPUsStatFail(t *testing.T) {
-	manager := NewContainerCudaManager(4)
-
+	manager := NewContainerNvidiaManagerForTest(4)
+	gpuManager := manager.(*ContainerNvidiaManager)
 	// Override syscall.Stat to simulate failure
-	manager.statFunc = func(path string, stat *syscall.Stat_t) error {
+
+	gpuManager.statFunc = func(path string, stat *syscall.Stat_t) error {
 		return fmt.Errorf("mock stat error")
 	}
 
 	// Attempt to assign GPUs should fail due to statFunc error
-	_, err := manager.AssignGpuDevices("container1", 2)
+	_, err := manager.AssignGPUDevices("container1", 2)
 	if err == nil {
 		t.Errorf("Expected error due to stat failure, but got none")
 	}

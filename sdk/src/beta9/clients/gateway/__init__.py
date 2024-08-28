@@ -222,6 +222,17 @@ class StopTasksResponse(betterproto.Message):
 class Volume(betterproto.Message):
     id: str = betterproto.string_field(1)
     mount_path: str = betterproto.string_field(2)
+    config: Optional["MountPointConfig"] = betterproto.message_field(3, optional=True)
+
+
+@dataclass(eq=False, repr=False)
+class MountPointConfig(betterproto.Message):
+    bucket_name: str = betterproto.string_field(1)
+    access_key: str = betterproto.string_field(2)
+    secret_key: str = betterproto.string_field(3)
+    endpoint_url: str = betterproto.string_field(4)
+    region: str = betterproto.string_field(5)
+    read_only: bool = betterproto.bool_field(6)
 
 
 @dataclass(eq=False, repr=False)
@@ -234,6 +245,13 @@ class Autoscaler(betterproto.Message):
     type: str = betterproto.string_field(1)
     max_containers: int = betterproto.uint32_field(2)
     tasks_per_container: int = betterproto.uint32_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class TaskPolicy(betterproto.Message):
+    timeout: int = betterproto.int64_field(1)
+    max_retries: int = betterproto.uint32_field(2)
+    ttl: int = betterproto.uint32_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -259,12 +277,14 @@ class GetOrCreateStubRequest(betterproto.Message):
     authorized: bool = betterproto.bool_field(20)
     secrets: List["SecretVar"] = betterproto.message_field(21)
     autoscaler: "Autoscaler" = betterproto.message_field(22)
+    task_policy: "TaskPolicy" = betterproto.message_field(23)
 
 
 @dataclass(eq=False, repr=False)
 class GetOrCreateStubResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     stub_id: str = betterproto.string_field(2)
+    err_msg: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -278,6 +298,7 @@ class DeployStubResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     deployment_id: str = betterproto.string_field(2)
     version: int = betterproto.uint32_field(3)
+    invoke_url: str = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -317,6 +338,17 @@ class StopDeploymentRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class StopDeploymentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteDeploymentRequest(betterproto.Message):
+    id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteDeploymentResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
 
@@ -394,6 +426,9 @@ class ListMachinesResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     machines: List["Machine"] = betterproto.message_field(3)
+    gpus: Dict[str, bool] = betterproto.map_field(
+        4, betterproto.TYPE_STRING, betterproto.TYPE_BOOL
+    )
 
 
 @dataclass(eq=False, repr=False)
@@ -416,6 +451,65 @@ class DeleteMachineRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class DeleteMachineResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class Token(betterproto.Message):
+    token_id: str = betterproto.string_field(1)
+    key: str = betterproto.string_field(2)
+    active: bool = betterproto.bool_field(3)
+    reusable: bool = betterproto.bool_field(4)
+    workspace_id: Optional[int] = betterproto.uint32_field(5, optional=True)
+    token_type: str = betterproto.string_field(6)
+    created_at: datetime = betterproto.message_field(7)
+    updated_at: datetime = betterproto.message_field(8)
+
+
+@dataclass(eq=False, repr=False)
+class ListTokensRequest(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class ListTokensResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    tokens: List["Token"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class CreateTokenRequest(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class CreateTokenResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    token: "Token" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class ToggleTokenRequest(betterproto.Message):
+    token_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class ToggleTokenResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    token: "Token" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteTokenRequest(betterproto.Message):
+    token_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteTokenResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
 
@@ -557,6 +651,15 @@ class GatewayServiceStub(SyncServiceStub):
             StopDeploymentResponse,
         )(stop_deployment_request)
 
+    def delete_deployment(
+        self, delete_deployment_request: "DeleteDeploymentRequest"
+    ) -> "DeleteDeploymentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DeleteDeployment",
+            DeleteDeploymentRequest,
+            DeleteDeploymentResponse,
+        )(delete_deployment_request)
+
     def list_pools(self, list_pools_request: "ListPoolsRequest") -> "ListPoolsResponse":
         return self._unary_unary(
             "/gateway.GatewayService/ListPools",
@@ -590,3 +693,39 @@ class GatewayServiceStub(SyncServiceStub):
             DeleteMachineRequest,
             DeleteMachineResponse,
         )(delete_machine_request)
+
+    def list_tokens(
+        self, list_tokens_request: "ListTokensRequest"
+    ) -> "ListTokensResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListTokens",
+            ListTokensRequest,
+            ListTokensResponse,
+        )(list_tokens_request)
+
+    def create_token(
+        self, create_token_request: "CreateTokenRequest"
+    ) -> "CreateTokenResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CreateToken",
+            CreateTokenRequest,
+            CreateTokenResponse,
+        )(create_token_request)
+
+    def toggle_token(
+        self, toggle_token_request: "ToggleTokenRequest"
+    ) -> "ToggleTokenResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ToggleToken",
+            ToggleTokenRequest,
+            ToggleTokenResponse,
+        )(toggle_token_request)
+
+    def delete_token(
+        self, delete_token_request: "DeleteTokenRequest"
+    ) -> "DeleteTokenResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DeleteToken",
+            DeleteTokenRequest,
+            DeleteTokenResponse,
+        )(delete_token_request)

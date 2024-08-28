@@ -2,7 +2,9 @@ package types
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -58,16 +60,17 @@ type VolumeWithRelated struct {
 }
 
 type Deployment struct {
-	Id          uint      `db:"id" json:"id"`
-	ExternalId  string    `db:"external_id" json:"external_id"`
-	Name        string    `db:"name" json:"name"`
-	Active      bool      `db:"active" json:"active"`
-	WorkspaceId uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
-	StubId      uint      `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
-	StubType    string    `db:"stub_type" json:"stub_type"`
-	Version     uint      `db:"version" json:"version"`
-	CreatedAt   time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
+	Id          uint         `db:"id" json:"id"`
+	ExternalId  string       `db:"external_id" json:"external_id"`
+	Name        string       `db:"name" json:"name"`
+	Active      bool         `db:"active" json:"active"`
+	WorkspaceId uint         `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
+	StubId      uint         `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
+	StubType    string       `db:"stub_type" json:"stub_type"`
+	Version     uint         `db:"version" json:"version"`
+	CreatedAt   time.Time    `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time    `db:"updated_at" json:"updated_at"`
+	DeletedAt   sql.NullTime `db:"deleted_at" json:"deleted_at"`
 }
 
 type DeploymentWithRelated struct {
@@ -89,7 +92,7 @@ type TaskStatus string
 
 func (ts TaskStatus) IsCompleted() bool {
 	switch ts {
-	case TaskStatusComplete, TaskStatusCancelled, TaskStatusError, TaskStatusTimeout:
+	case TaskStatusComplete, TaskStatusCancelled, TaskStatusError, TaskStatusTimeout, TaskStatusExpired:
 		return true
 	default:
 		return false
@@ -102,6 +105,7 @@ const (
 	TaskStatusComplete  TaskStatus = "COMPLETE"
 	TaskStatusError     TaskStatus = "ERROR"
 	TaskStatusCancelled TaskStatus = "CANCELLED"
+	TaskStatusExpired   TaskStatus = "EXPIRED"
 	TaskStatusTimeout   TaskStatus = "TIMEOUT"
 	TaskStatusRetry     TaskStatus = "RETRY"
 )
@@ -128,8 +132,27 @@ type Task struct {
 
 type TaskWithRelated struct {
 	Task
-	Workspace Workspace `db:"workspace" json:"workspace"`
-	Stub      Stub      `db:"stub" json:"stub"`
+	Outputs   []TaskOutput `json:"outputs"`
+	Stats     TaskStats    `json:"stats"`
+	Workspace Workspace    `db:"workspace" json:"workspace"`
+	Stub      Stub         `db:"stub" json:"stub"`
+}
+
+func (t *TaskWithRelated) SanitizeStubConfig() error {
+	var stubConfig StubConfigV1
+	err := json.Unmarshal([]byte(t.Stub.Config), &stubConfig)
+	if err != nil {
+		return err
+	}
+
+	stubConfig.Secrets = []Secret{}
+
+	stubConfigBytes, err := json.Marshal(stubConfig)
+	if err != nil {
+		return err
+	}
+	t.Stub.Config = string(stubConfigBytes)
+	return nil
 }
 
 type TaskCountPerDeployment struct {
@@ -141,6 +164,17 @@ type TaskCountByTime struct {
 	Time         time.Time       `db:"time" json:"time"`
 	Count        uint            `count:"count" json:"count"`
 	StatusCounts json.RawMessage `db:"status_counts" json:"status_counts"`
+}
+
+type TaskOutput struct {
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	ExpiresIn uint32 `json:"expires_in"`
+}
+
+type TaskStats struct {
+	ActiveContainers uint32 `json:"active_containers"`
+	QueueDepth       uint32 `json:"queue_depth"`
 }
 
 type StubConfigV1 struct {
@@ -155,7 +189,7 @@ type StubConfigV1 struct {
 	Workers         uint         `json:"workers"`
 	Authorized      bool         `json:"authorized"`
 	Volumes         []*pb.Volume `json:"volumes"`
-	Secrets         []Secret     `json:"secrets"`
+	Secrets         []Secret     `json:"secrets,omitempty"`
 	Autoscaler      *Autoscaler  `json:"autoscaler"`
 	Experimental    Experimental `json:"experimental"`
 }
@@ -177,16 +211,21 @@ type Autoscaler struct {
 }
 
 const (
-	StubTypeFunction            string = "function"
-	StubTypeFunctionDeployment  string = "function/deployment"
-	StubTypeFunctionServe       string = "function/serve"
-	StubTypeContainer           string = "container"
-	StubTypeTaskQueue           string = "taskqueue"
-	StubTypeTaskQueueDeployment string = "taskqueue/deployment"
-	StubTypeTaskQueueServe      string = "taskqueue/serve"
-	StubTypeEndpoint            string = "endpoint"
-	StubTypeEndpointDeployment  string = "endpoint/deployment"
-	StubTypeEndpointServe       string = "endpoint/serve"
+	StubTypeFunction               string = "function"
+	StubTypeFunctionDeployment     string = "function/deployment"
+	StubTypeFunctionServe          string = "function/serve"
+	StubTypeContainer              string = "container"
+	StubTypeTaskQueue              string = "taskqueue"
+	StubTypeTaskQueueDeployment    string = "taskqueue/deployment"
+	StubTypeTaskQueueServe         string = "taskqueue/serve"
+	StubTypeEndpoint               string = "endpoint"
+	StubTypeEndpointDeployment     string = "endpoint/deployment"
+	StubTypeEndpointServe          string = "endpoint/serve"
+	StubTypeASGI                   string = "asgi"
+	StubTypeASGIDeployment         string = "asgi/deployment"
+	StubTypeASGIServe              string = "asgi/serve"
+	StubTypeScheduledJob           string = "schedule"
+	StubTypeScheduledJobDeployment string = "schedule/deployment"
 )
 
 type StubType string
@@ -199,8 +238,12 @@ func (t StubType) IsDeployment() bool {
 	return strings.HasSuffix(string(t), "/deployment")
 }
 
+func (t StubType) Kind() string {
+	return strings.Split(string(t), "/")[0]
+}
+
 type Stub struct {
-	Id            uint      `db:"id" json:"id"`
+	Id            uint      `db:"id" json:"_"`
 	ExternalId    string    `db:"external_id" json:"external_id"`
 	Name          string    `db:"name" json:"name"`
 	Type          StubType  `db:"type" json:"type"`
@@ -210,6 +253,15 @@ type Stub struct {
 	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
 	CreatedAt     time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
+}
+
+func (s *Stub) UnmarshalConfig() (*StubConfigV1, error) {
+	var config *StubConfigV1
+	err := json.Unmarshal([]byte(s.Config), &config)
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
 }
 
 type StubWithRelated struct {
@@ -284,4 +336,39 @@ type Secret struct {
 	Value         string    `db:"value" json:"value,omitempty"`
 	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id"`
 	LastUpdatedBy *uint     `db:"last_updated_by" json:"last_updated_by"`
+}
+
+type ScheduledJob struct {
+	Id         uint64 `db:"id"`
+	ExternalId string `db:"external_id"`
+
+	JobId    uint64              `db:"job_id"`
+	JobName  string              `db:"job_name"`
+	Schedule string              `db:"job_schedule"`
+	Payload  ScheduledJobPayload `db:"job_payload"`
+
+	StubId       uint         `db:"stub_id"`
+	DeploymentId uint         `db:"deployment_id"`
+	CreatedAt    time.Time    `db:"created_at"`
+	UpdatedAt    time.Time    `db:"updated_at"`
+	DeletedAt    sql.NullTime `db:"deleted_at"`
+}
+
+type ScheduledJobPayload struct {
+	StubId        string      `json:"stub_id"`
+	WorkspaceName string      `json:"workspace_name"`
+	TaskPayload   TaskPayload `json:"task_payload"`
+}
+
+func (p *ScheduledJobPayload) Scan(value interface{}) error {
+	bytes, ok := value.([]byte)
+	if !ok {
+		return fmt.Errorf("type assertion to []byte failed")
+	}
+
+	return json.Unmarshal(bytes, p)
+}
+
+func (p ScheduledJobPayload) Value() (driver.Value, error) {
+	return json.Marshal(p)
 }

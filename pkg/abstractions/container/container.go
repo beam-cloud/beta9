@@ -125,12 +125,15 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		stubConfig.Runtime.Memory = defaultContainerMemory
 	}
 
-	mounts := abstractions.ConfigureContainerRequestMounts(
+	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
-		authInfo.Workspace.Name,
+		authInfo.Workspace,
 		stubConfig,
 		stub.ExternalId,
 	)
+	if err != nil {
+		return err
+	}
 
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(
 		authInfo.Workspace,
@@ -145,6 +148,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
 		fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
 		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
+		fmt.Sprintf("CALLBACK_URL=%s", stubConfig.CallbackUrl),
 	}
 
 	env = append(secrets, env...)

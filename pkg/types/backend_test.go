@@ -13,12 +13,15 @@ func TestIsServe(t *testing.T) {
 		{StubType(StubTypeFunctionServe), true},
 		{StubType(StubTypeTaskQueueServe), true},
 		{StubType(StubTypeEndpointServe), true},
+		{StubType(StubTypeASGIServe), true},
 		{StubType(StubTypeFunctionDeployment), false},
 		{StubType(StubTypeTaskQueueDeployment), false},
 		{StubType(StubTypeEndpointDeployment), false},
+		{StubType(StubTypeASGIDeployment), false},
 		{StubType(StubTypeFunction), false},
 		{StubType(StubTypeTaskQueue), false},
 		{StubType(StubTypeEndpoint), false},
+		{StubType(StubTypeASGI), false},
 	}
 
 	for _, tt := range tests {
@@ -39,12 +42,15 @@ func TestIsDeployment(t *testing.T) {
 		{StubType(StubTypeFunctionDeployment), true},
 		{StubType(StubTypeTaskQueueDeployment), true},
 		{StubType(StubTypeEndpointDeployment), true},
+		{StubType(StubTypeASGIDeployment), true},
 		{StubType(StubTypeFunctionServe), false},
 		{StubType(StubTypeTaskQueueServe), false},
 		{StubType(StubTypeEndpointServe), false},
+		{StubType(StubTypeASGIServe), false},
 		{StubType(StubTypeFunction), false},
 		{StubType(StubTypeTaskQueue), false},
 		{StubType(StubTypeEndpoint), false},
+		{StubType(StubTypeASGI), false},
 	}
 
 	for _, tt := range tests {

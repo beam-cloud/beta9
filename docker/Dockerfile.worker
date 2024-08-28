@@ -86,17 +86,39 @@ RUN apt-get update && \
     curl -fsSL https://nvidia.github.io/nvidia-container-runtime/gpgkey | apt-key add - && \
     curl -s -L https://nvidia.github.io/nvidia-docker/ubuntu20.04/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list \
     curl -fsSL https://nvidia.github.io/nvidia-container-runtime/ubuntu20.04/nvidia-container-runtime.list | tee /etc/apt/sources.list.d/nvidia-container-runtime.list && \
-    apt-get update
+    apt-get update && \
+    apt-get install psmisc
 
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends criu nvidia-container-toolkit-base nvidia-container-toolkit
-RUN apt-get install -y fuse3 libfuse3-dev
+
+RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
+
+ARG TARGETARCH
+
+ENV MOUNT_S3_URL_ARM64="https://s3.amazonaws.com/mountpoint-s3-release/1.8.0/arm64/mount-s3-1.8.0-arm64.tar.gz"
+ENV MOUNT_S3_URL_AMD64="https://s3.amazonaws.com/mountpoint-s3-release/1.8.0/x86_64/mount-s3-1.8.0-x86_64.tar.gz"
+
+RUN MOUNT_S3_URL=$(if [ "$TARGETARCH" = "arm64" ]; then echo $MOUNT_S3_URL_ARM64; else echo $MOUNT_S3_URL_AMD64; fi) && \
+    curl -O $MOUNT_S3_URL && \
+    TARBALL=$(basename $MOUNT_S3_URL) && \
+    mkdir mount-s3 && \
+    tar -xzf $TARBALL -C mount-s3 && \
+    mv mount-s3/bin/mount-s3 /usr/local/bin/ms3 && chmod +x /usr/local/bin/ms3 && \
+    rm -rf mount-s3 $TARBALL
+
+
+RUN if [ "$(uname -m)" = "x86_64" ]; then \
+    curl -L https://beam-runner-python-deps.s3.amazonaws.com/cuno_1.2.6_amd64_glibc.deb -o /tmp/cuno_1.2.6_amd64_glibc.deb && \
+    apt-get install -y /tmp/cuno_1.2.6_amd64_glibc.deb && rm /tmp/cuno_1.2.6_amd64_glibc.deb; \
+    fi
 
 RUN apt-get remove -y curl gpg && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
     rm -rf /var/lib/apt/lists/* /var/log/*
 
+RUN echo "nameserver 8.8.8.8" > /workspace/resolv.conf
 COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
 COPY --from=skopeo /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=skopeo /workspace/default-policy.json /etc/containers/policy.json

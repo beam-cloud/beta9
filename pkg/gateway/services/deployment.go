@@ -91,32 +91,97 @@ func (gws *GatewayService) StopDeployment(ctx context.Context, in *pb.StopDeploy
 		}, nil
 	}
 
-	// Stop active containers
-	containers, err := gws.containerRepo.GetActiveContainersByStubId(deploymentWithRelated.Stub.ExternalId)
-	if err == nil {
-		for _, container := range containers {
-			gws.scheduler.Stop(container.ContainerId)
-		}
-	}
-
-	// Disable deployment
-	deploymentWithRelated.Active = false
-	_, err = gws.backendRepo.UpdateDeployment(ctx, deploymentWithRelated.Deployment)
-	if err != nil {
+	if deploymentWithRelated == nil {
 		return &pb.StopDeploymentResponse{
 			Ok:     false,
-			ErrMsg: "Unable to update deployment",
+			ErrMsg: "Deployment not found",
 		}, nil
 	}
 
-	// Publish reload instance event
-	eventBus := common.NewEventBus(gws.redisClient)
-	eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
-		"stub_id":   deploymentWithRelated.Stub.ExternalId,
-		"stub_type": deploymentWithRelated.StubType,
-	}})
+	// Stop deployment
+	if err := gws.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx); err != nil {
+		return &pb.StopDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unable to stop deployment",
+		}, nil
+	}
 
 	return &pb.StopDeploymentResponse{
 		Ok: true,
 	}, nil
+}
+
+func (gws *GatewayService) DeleteDeployment(ctx context.Context, in *pb.DeleteDeploymentRequest) (*pb.DeleteDeploymentResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	// Get deployment
+	deploymentWithRelated, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, in.Id)
+	if err != nil {
+		return &pb.DeleteDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unable to get deployment",
+		}, nil
+	}
+
+	if deploymentWithRelated == nil {
+		return &pb.DeleteDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Deployment not found",
+		}, nil
+	}
+
+	// Stop deployment first
+	if err := gws.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx); err != nil {
+		return &pb.DeleteDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unable to stop deployment",
+		}, nil
+	}
+
+	// Delete deployment
+	if err := gws.backendRepo.DeleteDeployment(ctx, deploymentWithRelated.Deployment); err != nil {
+		return &pb.DeleteDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unable to delete deployment",
+		}, nil
+	}
+
+	return &pb.DeleteDeploymentResponse{
+		Ok: true,
+	}, nil
+}
+
+func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRelated, ctx context.Context) error {
+	for _, deployment := range deployments {
+		// Stop scheduled job. To re-enable, a new deployment must be created
+		if deployment.StubType == types.StubTypeScheduledJobDeployment {
+			if scheduledJob, err := gws.backendRepo.GetScheduledJob(ctx, deployment.Id); err == nil {
+				gws.backendRepo.DeleteScheduledJob(ctx, scheduledJob)
+			}
+		}
+
+		// Stop active containers
+		containers, err := gws.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
+		if err == nil {
+			for _, container := range containers {
+				gws.scheduler.Stop(container.ContainerId)
+			}
+		}
+
+		// Disable deployment
+		deployment.Active = false
+		_, err = gws.backendRepo.UpdateDeployment(ctx, deployment.Deployment)
+		if err != nil {
+			return err
+		}
+
+		// Publish reload instance event
+		eventBus := common.NewEventBus(gws.redisClient)
+		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
+			"stub_id":   deployment.Stub.ExternalId,
+			"stub_type": deployment.StubType,
+		}})
+	}
+
+	return nil
 }

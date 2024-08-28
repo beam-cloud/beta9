@@ -199,6 +199,12 @@ func TestParseGPUType(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "valid gpu rtx4090",
+			gpuType: "RTX4090",
+			wantVal: types.GPU_RTX4090,
+			wantErr: false,
+		},
+		{
 			name:    "invalid gpu a100_80 (with underscore)",
 			gpuType: "A100_80",
 			wantVal: types.GPUType(""),

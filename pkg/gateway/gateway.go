@@ -10,35 +10,34 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
-	"github.com/beam-cloud/beta9/pkg/abstractions/secret"
-	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/labstack/echo-contrib/pprof"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/container"
+	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
+	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	dmap "github.com/beam-cloud/beta9/pkg/abstractions/map"
-	simplequeue "github.com/beam-cloud/beta9/pkg/abstractions/queue"
-	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
-	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
-	"github.com/beam-cloud/beta9/pkg/network"
-	metrics "github.com/beam-cloud/beta9/pkg/repository/metrics"
-
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
-
 	output "github.com/beam-cloud/beta9/pkg/abstractions/output"
+	simplequeue "github.com/beam-cloud/beta9/pkg/abstractions/queue"
+	"github.com/beam-cloud/beta9/pkg/abstractions/secret"
+	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
 	volume "github.com/beam-cloud/beta9/pkg/abstractions/volume"
+	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	gatewayservices "github.com/beam-cloud/beta9/pkg/gateway/services"
+	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	metrics "github.com/beam-cloud/beta9/pkg/repository/metrics"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/storage"
+	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -83,7 +82,8 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres)
+	eventRepo := repository.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
+	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,6 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	eventRepo := repository.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)
@@ -172,7 +171,7 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.Config)
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.Config)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.Config)
-	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.BackendRepo, g.TaskDispatcher, g.Config)
+	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.TaskRepo, g.ContainerRepo, g.BackendRepo, g.TaskDispatcher, g.Config)
 	apiv1.NewContainerGroup(g.baseRouteGroup.Group("/container", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.Config)
 	apiv1.NewStubGroup(g.baseRouteGroup.Group("/stub", authMiddleware), g.BackendRepo, g.Config)
 	apiv1.NewConcurrencyLimitGroup(g.baseRouteGroup.Group("/concurrency-limit", authMiddleware), g.BackendRepo, g.WorkspaceRepo)
@@ -263,6 +262,7 @@ func (g *Gateway) registerServices() error {
 
 	// Register endpoint service
 	ws, err := endpoint.NewHTTPEndpointService(g.ctx, endpoint.EndpointServiceOpts{
+		Config:         g.Config,
 		ContainerRepo:  g.ContainerRepo,
 		BackendRepo:    g.BackendRepo,
 		TaskRepo:       g.TaskRepo,
@@ -311,8 +311,15 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterOutputServiceServer(g.grpcServer, o)
 
 	// Register Secret service
-	ss := secret.NewSecretService(g.BackendRepo, g.rootRouteGroup)
-	pb.RegisterSecretServiceServer(g.grpcServer, ss)
+	secretService := secret.NewSecretService(g.BackendRepo, g.rootRouteGroup)
+	pb.RegisterSecretServiceServer(g.grpcServer, secretService)
+
+	// Register Signal service
+	signalService, err := _signal.NewRedisSignalService(g.RedisClient)
+	if err != nil {
+		return err
+	}
+	pb.RegisterSignalServiceServer(g.grpcServer, signalService)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService(g.Scheduler)

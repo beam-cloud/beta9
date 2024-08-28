@@ -30,35 +30,37 @@ const (
 )
 
 type Worker struct {
-	cpuLimit             int64
-	memoryLimit          int64
-	gpuType              string
-	gpuCount             uint32
-	podAddr              string
-	podHostName          string
-	imageMountPath       string
-	runcHandle           runc.Runc
-	runcServer           *RunCServer
-	containerCudaManager *ContainerCudaManager
-	redisClient          *common.RedisClient
-	imageClient          *ImageClient
-	cedanaClient         *CedanaClient
-	workerId             string
-	eventBus             *common.EventBus
-	containerInstances   *common.SafeMap[*ContainerInstance]
-	containerLock        sync.Mutex
-	containerWg          sync.WaitGroup
-	containerRepo        repo.ContainerRepository
-	containerLogger      *ContainerLogger
-	workerMetrics        *WorkerMetrics
-	completedRequests    chan *types.ContainerRequest
-	stopContainerChan    chan stopContainerEvent
-	workerRepo           repo.WorkerRepository
-	eventRepo            repo.EventRepository
-	storage              storage.Storage
-	ctx                  context.Context
-	cancel               func()
-	config               types.AppConfig
+	cpuLimit                int64
+	memoryLimit             int64
+	gpuType                 string
+	gpuCount                uint32
+	podAddr                 string
+	podHostName             string
+	imageMountPath          string
+	runcHandle              runc.Runc
+	runcServer              *RunCServer
+	cedanaClient            *CedanaClient
+	containerNetworkManager *ContainerNetworkManager
+	containerCudaManager    GPUManager
+	containerMountManager   *ContainerMountManager
+	redisClient             *common.RedisClient
+	imageClient             *ImageClient
+	workerId                string
+	eventBus                *common.EventBus
+	containerInstances      *common.SafeMap[*ContainerInstance]
+	containerLock           sync.Mutex
+	containerWg             sync.WaitGroup
+	containerRepo           repo.ContainerRepository
+	containerLogger         *ContainerLogger
+	workerMetrics           *WorkerMetrics
+	completedRequests       chan *types.ContainerRequest
+	stopContainerChan       chan stopContainerEvent
+	workerRepo              repo.WorkerRepository
+	eventRepo               repo.EventRepository
+	storage                 storage.Storage
+	ctx                     context.Context
+	cancel                  func()
+	config                  types.AppConfig
 }
 
 type ContainerInstance struct {
@@ -75,6 +77,7 @@ type ContainerInstance struct {
 }
 
 type ContainerOptions struct {
+	BundlePath  string
 	BindPort    int
 	InitialSpec *specs.Spec
 }
@@ -135,7 +138,12 @@ func NewWorker() (*Worker, error) {
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
-	imageClient, err := NewImageClient(config.ImageService, workerId, workerRepo)
+	storage, err := storage.NewStorage(config.Storage)
+	if err != nil {
+		return nil, err
+	}
+
+	imageClient, err := NewImageClient(config, workerId, workerRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -150,12 +158,12 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	storage, err := storage.NewStorage(config.Storage)
+	ctx, cancel := context.WithCancel(context.Background())
+	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepo, containerRepo, config)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
 
 	workerMetrics, err := NewWorkerMetrics(ctx, workerId, workerRepo, config.Monitoring)
 	if err != nil {
@@ -172,28 +180,30 @@ func NewWorker() (*Worker, error) {
 	}
 
 	return &Worker{
-		ctx:                  ctx,
-		cancel:               cancel,
-		config:               config,
-		imageMountPath:       getImageMountPath(workerId),
-		cpuLimit:             cpuLimit,
-		memoryLimit:          memoryLimit,
-		gpuType:              gpuType,
-		gpuCount:             uint32(gpuCount),
-		runcHandle:           runc.Runc{},
-		runcServer:           runcServer,
-		containerCudaManager: NewContainerCudaManager(uint32(gpuCount)),
-		redisClient:          redisClient,
-		podAddr:              podAddr,
-		imageClient:          imageClient,
-		cedanaClient:         cedanaClient,
-		podHostName:          podHostName,
-		eventBus:             nil,
-		workerId:             workerId,
-		containerInstances:   containerInstances,
-		containerLock:        sync.Mutex{},
-		containerWg:          sync.WaitGroup{},
-		containerRepo:        containerRepo,
+		ctx:                     ctx,
+		cancel:                  cancel,
+		config:                  config,
+		imageMountPath:          getImageMountPath(workerId),
+		cpuLimit:                cpuLimit,
+		memoryLimit:             memoryLimit,
+		gpuType:                 gpuType,
+		gpuCount:                uint32(gpuCount),
+		runcHandle:              runc.Runc{},
+		runcServer:              runcServer,
+		cedanaClient:            cedanaClient,
+		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
+		containerNetworkManager: containerNetworkManager,
+		redisClient:             redisClient,
+		containerMountManager:   NewContainerMountManager(),
+		podAddr:                 podAddr,
+		imageClient:             imageClient,
+		podHostName:             podHostName,
+		eventBus:                nil,
+		workerId:                workerId,
+		containerInstances:      containerInstances,
+		containerLock:           sync.Mutex{},
+		containerWg:             sync.WaitGroup{},
+		containerRepo:           containerRepo,
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
 		},
@@ -272,64 +282,67 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
-	containerID := request.ContainerId
+	containerId := request.ContainerId
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Pull image
-	log.Printf("<%s> - lazy-pulling image: %s\n", containerID, request.ImageId)
+	log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
 	err := s.imageClient.PullLazy(request)
 	if err != nil && request.SourceImage != nil {
-		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerID, *request.SourceImage)
-		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, nil)
+		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
+		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
 		if err == nil {
 			err = s.imageClient.PullLazy(request)
 		}
 	}
-
 	if err != nil {
 		return err
 	}
 
-	// Every 30 seconds, update container status
-	go s.updateContainerStatus(request)
-
-	bindPort, err := GetRandomFreePort()
+	bindPort, err := getRandomFreePort()
 	if err != nil {
 		return err
 	}
-	log.Printf("<%s> - acquired port: %d\n", containerID, bindPort)
+	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
+
+	err = s.containerMountManager.SetupContainerMounts(request.ContainerId, request.Mounts)
+	if err != nil {
+		return err
+	}
 
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
 
-	// Generate dynamic runc spec for this container
-	spec, err := s.specFromRequest(request, &ContainerOptions{
+	opts := &ContainerOptions{
+		BundlePath:  bundlePath,
 		BindPort:    bindPort,
 		InitialSpec: initialBundleSpec,
-	})
+	}
+
+	// Generate dynamic runc spec for this container
+	spec, err := s.specFromRequest(request, opts)
 	if err != nil {
 		return err
 	}
+	log.Printf("<%s> - successfully created spec from request.\n", containerId)
 
-	log.Printf("<%s> - successfully created spec from request.\n", containerID)
-
-	// Set an address (ip:port) for the pod/container in Redis. Depending on the trigger type,
-	// Gateway will need to directly interact with this pod/container.
+	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
+	// gateway may need to directly interact with this pod/container.
 	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, bindPort)
 	err = s.containerRepo.SetContainerAddress(request.ContainerId, containerAddr)
 	if err != nil {
 		return err
 	}
-	log.Printf("<%s> - set container address.\n", containerID)
+	log.Printf("<%s> - set container address.\n", containerId)
+
+	outputChan := make(chan common.OutputMsg)
+	go s.containerWg.Add(1)
 
 	// Start the container
-	err = s.SpawnAsync(request, bundlePath, spec)
-	if err != nil {
-		return err
-	}
+	go s.spawn(request, spec, outputChan, opts)
 
-	log.Printf("<%s> - spawned successfully.\n", containerID)
+	log.Printf("<%s> - spawned successfully.\n", containerId)
 	return nil
 }
 
@@ -493,6 +506,12 @@ func (s *Worker) processStopContainerEvents() {
 		if err != nil {
 			log.Printf("<%s> - unable to stop container: %v\n", event.ContainerId, err)
 
+			if strings.Contains(err.Error(), "container does not exist") {
+				// In case container network is still around for some reason, get rid of it
+				s.containerNetworkManager.TearDown(event.ContainerId)
+				continue
+			}
+
 			s.stopContainerChan <- event
 			time.Sleep(time.Second)
 			continue
@@ -505,6 +524,8 @@ func (s *Worker) processStopContainerEvents() {
 const ExitCodeSigterm = 143
 
 func (s *Worker) terminateContainer(containerId string, request *types.ContainerRequest, exitCode *int, containerErr *error) {
+	defer s.containerWg.Done()
+
 	if *exitCode < 0 {
 		*exitCode = 1
 	} else if *exitCode == ExitCodeSigterm {
@@ -516,8 +537,6 @@ func (s *Worker) terminateContainer(containerId string, request *types.Container
 		log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
 	}
 
-	defer s.containerWg.Done()
-
 	s.clearContainer(containerId, request, time.Duration(s.config.Worker.TerminationGracePeriod)*time.Second, *exitCode)
 }
 
@@ -526,7 +545,13 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	// De-allocate GPU devices so they are available for new containers
 	if request.Gpu != "" {
-		s.containerCudaManager.UnassignGpuDevices(containerId)
+		s.containerCudaManager.UnassignGPUDevices(containerId)
+	}
+
+	// Tear down container network components
+	err := s.containerNetworkManager.TearDown(request.ContainerId)
+	if err != nil {
+		log.Printf("<%s> - failed to clean up container network: %v\n", request.ContainerId, err)
 	}
 
 	s.completedRequests <- request
@@ -549,6 +574,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		if err != nil {
 			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
 		}
+
 	}()
 }
 
@@ -574,14 +600,20 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 }
 
 // spawn a container using runc binary
-func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec *specs.Spec, outputChan chan common.OutputMsg) {
+func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputChan chan common.OutputMsg, opts *ContainerOptions) {
+	ctx, cancel := context.WithCancel(s.ctx)
+
 	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
 	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
+	defer cancel()
 
 	var containerErr error = nil
 
 	exitCode := -1
 	containerId := request.ContainerId
+
+	// Unmount external s3 buckets
+	defer s.containerMountManager.RemoveContainerMounts(containerId)
 
 	// Clear out all files in the container's directory
 	defer func() {
@@ -589,13 +621,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}()
 
 	// Create overlayfs for container
-	overlay := s.createOverlay(request, bundlePath)
+	overlay := s.createOverlay(request, opts.BundlePath)
 
-	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
 		Id:         containerId,
 		StubId:     request.StubId,
-		BundlePath: bundlePath,
+		BundlePath: opts.BundlePath,
 		Overlay:    overlay,
 		Spec:       spec,
 		ExitCode:   -1,
@@ -610,8 +641,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 	s.containerInstances.Set(containerId, containerInstance)
 
+	// Every 30 seconds, update container status
+	go s.updateContainerStatus(request)
+
 	// Set worker hostname
-	hostname := fmt.Sprintf("%s:%d", s.podAddr, defaultWorkerServerPort)
+	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
 	s.containerRepo.SetWorkerAddress(request.ContainerId, hostname)
 
 	// Handle stdout/stderr from spawned container
@@ -647,8 +681,23 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 		return
 	}
 	defer containerInstance.Overlay.Cleanup()
-
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
+
+	// Setup container network namespace / devices
+	err = s.containerNetworkManager.Setup(containerId, spec)
+	if err != nil {
+		log.Printf("<%s> failed to setup container network: %v", containerId, err)
+		containerErr = err
+		return
+	}
+
+	// Expose the bind port
+	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
+	if err != nil {
+		log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
+		containerErr = err
+		return
+	}
 
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
@@ -665,22 +714,20 @@ func (s *Worker) spawn(request *types.ContainerRequest, bundlePath string, spec 
 	}
 
 	// Log metrics
-	usageTrackingCompleteChan := make(chan bool)
-	go s.workerMetrics.EmitContainerUsage(request, usageTrackingCompleteChan)
-	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId)
-	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId) }()
+	go s.workerMetrics.EmitContainerUsage(ctx, request)
+	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId, request)
+	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId, request) }()
 
+	// Capture resource usage (cpu/mem/gpu)
 	pidChan := make(chan int, 1)
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pidChan)
 
 	// Invoke runc process (launch the container)
-	// This will return exit code 137 even if the container is stopped gracefully. We don't know why.
-	exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
+	exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
 		OutputWriter: containerInstance.OutputWriter,
 		ConfigPath:   configPath,
 		Started:      pidChan,
 	})
-
-	usageTrackingCompleteChan <- true
 
 	// Send last log message since the container has exited
 	outputChan <- common.OutputMsg{
@@ -760,14 +807,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart[0].Args = append(spec.Hooks.Prestart[0].Args, configPath, "prestart")
 
 		existingCudaFound := false
-		env, existingCudaFound = s.containerCudaManager.InjectCudaEnvVars(env, options)
+		env, existingCudaFound = s.containerCudaManager.InjectEnvVars(env, options)
 		if !existingCudaFound {
 			// If the container image does not have cuda libraries installed, mount cuda libs from the host
-			spec.Mounts = s.containerCudaManager.InjectCudaMounts(spec.Mounts)
+			spec.Mounts = s.containerCudaManager.InjectMounts(spec.Mounts)
 		}
 
 		// Assign n-number of GPUs to a container
-		assignedGpus, err := s.containerCudaManager.AssignGpuDevices(request.ContainerId, request.GpuCount)
+		assignedGpus, err := s.containerCudaManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
 		if err != nil {
 			return nil, err
 		}
@@ -804,7 +851,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			err := os.MkdirAll(m.LocalPath, 0755)
 			if err != nil {
 				log.Printf("<%s> - failed to create mount directory: %v\n", request.ContainerId, err)
-				continue
 			}
 		}
 
@@ -815,6 +861,25 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			Options:     []string{"rbind", mode},
 		})
 	}
+
+	// Configure resolv.conf
+	resolvMount := specs.Mount{
+		Type:        "none",
+		Source:      "/workspace/resolv.conf",
+		Destination: "/etc/resolv.conf",
+		Options: []string{"ro",
+			"rbind",
+			"rprivate",
+			"nosuid",
+			"noexec",
+			"nodev"},
+	}
+
+	if s.config.Worker.UseHostResolvConf {
+		resolvMount.Source = "/etc/resolv.conf"
+	}
+
+	spec.Mounts = append(spec.Mounts, resolvMount)
 
 	return spec, nil
 }
@@ -896,7 +961,6 @@ func (s *Worker) shutdown() error {
 	}
 
 	s.cancel()
-
 	err := s.storage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to unmount storage: %v", err))

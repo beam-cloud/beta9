@@ -91,6 +91,8 @@ func ParseGPUType(gpu interface{}) (types.GPUType, error) {
 		return types.GPU_H100, nil
 	case string(types.GPU_A6000):
 		return types.GPU_A6000, nil
+	case string(types.GPU_RTX4090):
+		return types.GPU_RTX4090, nil
 	default:
 		return types.GPUType(""), errors.New("invalid gpu type")
 	}

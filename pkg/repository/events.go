@@ -116,37 +116,40 @@ func (t *TCPEventClientRepo) PushContainerRequestedEvent(request *types.Containe
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerScheduledEvent(containerID string, workerID string) {
+func (t *TCPEventClientRepo) PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest) {
 	t.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			Request:     *request,
 			Status:      types.EventContainerLifecycleScheduled,
 		},
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerStartedEvent(containerID string, workerID string) {
+func (t *TCPEventClientRepo) PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest) {
 	t.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			Request:     *request,
 			Status:      types.EventContainerLifecycleStarted,
 		},
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, workerID string) {
+func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest) {
 	t.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			Request:     *request,
 			Status:      types.EventContainerLifecycleStopped,
 		},
 	)
@@ -170,6 +173,20 @@ func (t *TCPEventClientRepo) PushWorkerStoppedEvent(workerID string) {
 		types.EventWorkerLifecycleSchema{
 			WorkerID: workerID,
 			Status:   types.EventWorkerLifecycleStopped,
+		},
+	)
+}
+
+func (t *TCPEventClientRepo) PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData) {
+	t.pushEvent(
+		types.EventContainerMetrics,
+		types.EventContainerMetricsSchemaVersion,
+		types.EventContainerMetricsSchema{
+			WorkerID:         workerID,
+			ContainerID:      request.ContainerId,
+			WorkspaceID:      request.WorkspaceId,
+			StubID:           request.StubId,
+			ContainerMetrics: metrics,
 		},
 	)
 }
@@ -210,5 +227,55 @@ func (t *TCPEventClientRepo) PushRunStubEvent(workspaceId string, stub *types.St
 			StubConfig:  stub.Config,
 			WorkspaceID: workspaceId,
 		},
+	)
+}
+
+func (t *TCPEventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
+	event := types.EventTaskSchema{
+		ID:          task.ExternalId,
+		Status:      task.Status,
+		ContainerID: task.ContainerId,
+		CreatedAt:   task.CreatedAt,
+		StubID:      task.Stub.ExternalId,
+		WorkspaceID: task.Workspace.ExternalId,
+	}
+
+	if task.StartedAt.Valid {
+		event.StartedAt = &task.StartedAt.Time
+	}
+
+	if task.EndedAt.Valid {
+		event.EndedAt = &task.EndedAt.Time
+	}
+
+	t.pushEvent(
+		types.EventTaskUpdated,
+		types.EventTaskSchemaVersion,
+		event,
+	)
+}
+
+func (t *TCPEventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
+	event := types.EventTaskSchema{
+		ID:          task.ExternalId,
+		Status:      task.Status,
+		ContainerID: task.ContainerId,
+		CreatedAt:   task.CreatedAt,
+		StubID:      task.Stub.ExternalId,
+		WorkspaceID: task.Workspace.ExternalId,
+	}
+
+	if task.StartedAt.Valid {
+		event.StartedAt = &task.StartedAt.Time
+	}
+
+	if task.EndedAt.Valid {
+		event.EndedAt = &task.EndedAt.Time
+	}
+
+	t.pushEvent(
+		types.EventTaskCreated,
+		types.EventTaskSchemaVersion,
+		event,
 	)
 }

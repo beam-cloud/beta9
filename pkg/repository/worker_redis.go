@@ -12,6 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 type WorkerRedisRepository struct {
@@ -148,28 +149,30 @@ func (r *WorkerRedisRepository) getWorkers(useLock bool) ([]*types.Worker, error
 		return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
 	}
 
+	if !useLock {
+		workers, err := r.getWorkersFromKeys(keys)
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
+		}
+
+		return workers, nil
+	}
+
 	for _, key := range keys {
 		workerId := strings.Split(key, ":")[3]
 
-		if useLock {
-			err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
-			if err != nil {
-				continue
-			}
+		err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+		if err != nil {
+			continue
 		}
 
 		w, err := r.getWorkerFromKey(key)
 		if err != nil {
-			if useLock {
-				r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
-			}
+			r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
 			continue
 		}
 
-		if useLock {
-			r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
-		}
-
+		r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
 		workers = append(workers, w)
 	}
 
@@ -195,6 +198,43 @@ func (r *WorkerRedisRepository) GetWorkerById(workerId string) (*types.Worker, e
 	}
 
 	return r.getWorkerFromKey(key)
+}
+
+func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Worker, error) {
+	pipe := r.rdb.Pipeline()
+	cmds := make([]*redis.MapStringStringCmd, len(keys))
+
+	// Fetch all workers at once using a pipeline
+	for i, key := range keys {
+		cmds[i] = pipe.HGetAll(context.TODO(), key)
+	}
+
+	_, err := pipe.Exec(context.TODO())
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute pipeline: %v", err)
+	}
+
+	var workers []*types.Worker
+	for i, cmd := range cmds {
+		res, err := cmd.Result()
+		if err != nil || len(res) == 0 {
+			// If there is an error or the result is empty, remove the key from the index
+			indexKey := common.RedisKeys.SchedulerWorkerIndex()
+			r.rdb.SRem(context.TODO(), indexKey, keys[i]).Err()
+			continue
+		}
+
+		workerId := strings.Split(keys[i], ":")[len(strings.Split(keys[i], ":"))-1]
+		worker := &types.Worker{Id: workerId}
+
+		if err = common.ToStruct(res, worker); err != nil {
+			return nil, fmt.Errorf("failed to deserialize worker state <%v>: %v", keys[i], err)
+		}
+
+		workers = append(workers, worker)
+	}
+
+	return workers, nil
 }
 
 func (r *WorkerRedisRepository) getWorkerFromKey(key string) (*types.Worker, error) {
@@ -422,4 +462,67 @@ func (r *WorkerRedisRepository) SetImagePullLock(workerId, imageId string) error
 
 func (r *WorkerRedisRepository) RemoveImagePullLock(workerId, imageId string) error {
 	return r.lock.Release(common.RedisKeys.WorkerImageLock(workerId, imageId))
+}
+
+func (r *WorkerRedisRepository) GetContainerIps(networkPrefix string) ([]string, error) {
+	containerIps, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.WorkerNetworkIpIndex(networkPrefix)).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	return containerIps, nil
+}
+
+func (r *WorkerRedisRepository) GetContainerIp(networkPrefix string, containerId string) (string, error) {
+	containerIp, err := r.rdb.Get(context.TODO(), common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, containerId)).Result()
+	if err != nil {
+		return "", err
+	}
+
+	return containerIp, nil
+}
+
+func (r *WorkerRedisRepository) SetContainerIp(networkPrefix string, containerId, containerIp string) error {
+	err := r.rdb.Set(context.TODO(), common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, containerId), containerIp, 0).Err()
+	if err != nil {
+		return err
+	}
+
+	err = r.rdb.SAdd(context.TODO(), common.RedisKeys.WorkerNetworkIpIndex(networkPrefix), containerIp).Err()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *WorkerRedisRepository) SetNetworkLock(networkPrefix string, ttl, retries int) error {
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerNetworkLock(networkPrefix), common.RedisLockOptions{TtlS: ttl, Retries: retries})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *WorkerRedisRepository) RemoveNetworkLock(networkPrefix string) error {
+	return r.lock.Release(common.RedisKeys.WorkerNetworkLock(networkPrefix))
+}
+
+func (r *WorkerRedisRepository) RemoveContainerIp(networkPrefix string, containerId string) error {
+	containerIp, err := r.rdb.Get(context.TODO(), common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, containerId)).Result()
+	if err != nil {
+		return err
+	}
+
+	err = r.rdb.Del(context.TODO(), common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, containerId), containerIp).Err()
+	if err != nil {
+		return err
+	}
+
+	err = r.rdb.SRem(context.TODO(), common.RedisKeys.WorkerNetworkIpIndex(networkPrefix), containerIp).Err()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

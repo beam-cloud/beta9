@@ -3,9 +3,11 @@ package common
 import (
 	_ "embed"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/knadh/koanf/parsers/json"
 	"github.com/knadh/koanf/parsers/yaml"
@@ -26,48 +28,58 @@ type ConfigLoaderFunc func(k *koanf.Koanf) error
 // manipulation of configuration data for various types. It includes a Koanf
 // instance ('kf') for managing configuration settings.
 type ConfigManager[T any] struct {
-	kf           *koanf.Koanf
-	configFormat ConfigFormat
+	kf  *koanf.Koanf
+	tag string
 }
 
-// NewConfigManager creates a new instance of the ConfigManager[T] type for
-// managing configuration of type 'T'. It initializes the ConfigManager with
-// the specified 'T' type, loads a default configuration, and optionally loads
-// a user configuration if the 'CONFIG_PATH' environment variable is provided.
-// If debug mode is enabled, it prints the current configuration.
+// NewConfigManager creates a new instance of the ConfigManager[T].
+// It initializes a Koanf instance and loads the default configuration.
+// It then loads the configuration from the /etc/beta9.d/ directory and
+// the user-specified configuration file from CONFIG_PATH. If the
+// CONFIG_JSON environment variable is set, it loads the configuration
+// from the JSON string. If debug mode is enabled, it prints the current
+// configuration.
 func NewConfigManager[T any]() (*ConfigManager[T], error) {
-	configFormat := YAMLConfigFormat
-
 	// Initialize a ConfigManager[T] with the specified 'T' type.
 	cm := &ConfigManager[T]{
-		kf:           koanf.New("."),
-		configFormat: configFormat,
+		kf:  koanf.New("."),
+		tag: "key",
 	}
 
-	// Load default configuration
+	// Load default configuration from embedded variable
 	err := cm.LoadConfig(YAMLConfigFormat, rawbytes.Provider(defaultConfig))
 	if err != nil {
 		return nil, err
 	}
 
-	// Load user configuration if provided
+	// Attempt to load configuration from path in CONFIG_PATH
 	cp := os.Getenv("CONFIG_PATH")
 	ce := filepath.Ext(cp)
 	if cp != "" && ce != "" {
 		if err := cm.LoadConfig(ConfigFormat(ce), file.Provider(cp)); err != nil {
 			return nil, err
 		}
-
-		configFormat = ConfigFormat(ce)
 	}
 
-	// Attempt to load configuration from CONFIG_JSON if it's not empty
+	// Attempt to load configs from /etc/beta9.d/
+	for ext := range parserMap {
+		if matches, err := filepath.Glob(fmt.Sprintf("/etc/beta9.d/*%s", ext)); err == nil {
+			sort.Strings(matches)
+			for _, path := range matches {
+				if err := cm.LoadConfig(ext, file.Provider(path)); err != nil {
+					log.Printf("Failed to load config %s: %v\n", path, err)
+				}
+			}
+		}
+	}
+
+	// Attempt to load configuration from string in CONFIG_JSON
 	configJson := os.Getenv("CONFIG_JSON")
 	if configJson != "" {
 		if err := cm.LoadConfig(JSONConfigFormat, rawbytes.Provider([]byte(configJson))); err != nil {
-			log.Printf("Error loading configuration from CONFIG_JSON: %v", err)
+			log.Printf("Error loading configuration from CONFIG_JSON: %v\n", err)
 		} else {
-			configFormat = JSONConfigFormat
+			cm.tag = "json"
 		}
 	}
 
@@ -77,7 +89,6 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 		log.Println(cm.Print())
 	}
 
-	cm.configFormat = configFormat
 	return cm, nil
 }
 
@@ -92,15 +103,7 @@ func (cm *ConfigManager[T]) Print() string {
 func (cm *ConfigManager[T]) GetConfig() T {
 	var c T
 
-	tag := "key"
-	switch cm.configFormat {
-	case YAMLConfigFormat:
-		tag = "key"
-	case JSONConfigFormat:
-		tag = "json"
-	}
-
-	err := cm.kf.UnmarshalWithConf("", &c, koanf.UnmarshalConf{Tag: tag, FlatPaths: false})
+	err := cm.kf.UnmarshalWithConf("", &c, koanf.UnmarshalConf{Tag: cm.tag, FlatPaths: false})
 	if err != nil {
 		log.Fatal("failed to unmarshal config")
 	}

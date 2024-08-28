@@ -5,10 +5,10 @@
 
 ---
 
-### **✨ The Open-Source Serverless GPU Container Runtime ✨**
+### **✨ The Open Serverless GPU Cloud ✨**
 
 <p align="center">
-  <a href="https://docs.beta9.beam.cloud">
+  <a href="https://docs.beam.cloud">
     <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-purple">
   </a>
   <a href="https://join.slack.com/t/beam-89x5025/shared_invite/zt-1ye1jzgg2-cGpMKuoXZJiT3oSzgPmN8g">
@@ -32,7 +32,7 @@
 
 # Beta9
 
-Beta9 makes it easy for developers to run serverless functions on cloud GPUs. 
+Beta9 makes it easy for developers to run serverless functions on cloud GPUs.
 
 Features:
 
@@ -43,13 +43,13 @@ Features:
 
 We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale.
 
-## Use-Cases
+## Use Cases
 
 ### Serverless Inference Endpoints
 
 #### Decorate Any Python Function
 
-```python 
+```python
 from beta9 import Image, endpoint
 
 
@@ -200,6 +200,6 @@ If you need support, you can reach out through any of these channels:
 
 ## Thanks to Our Contributors
 
-<a href="https://github.com/slai-labs/get-beam/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=slai-labs/get-beam" />
+<a href="https://github.com/beam-cloud/beta9/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=beam-cloud/beta9" />
 </a>

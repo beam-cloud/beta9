@@ -53,6 +53,17 @@ class GetOrCreateVolumeResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class DeleteVolumeRequest(betterproto.Message):
+    name: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteVolumeResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
 class PathInfo(betterproto.Message):
     path: str = betterproto.string_field(1)
     size: int = betterproto.uint64_field(2)
@@ -131,6 +142,15 @@ class VolumeServiceStub(SyncServiceStub):
             GetOrCreateVolumeRequest,
             GetOrCreateVolumeResponse,
         )(get_or_create_volume_request)
+
+    def delete_volume(
+        self, delete_volume_request: "DeleteVolumeRequest"
+    ) -> "DeleteVolumeResponse":
+        return self._unary_unary(
+            "/volume.VolumeService/DeleteVolume",
+            DeleteVolumeRequest,
+            DeleteVolumeResponse,
+        )(delete_volume_request)
 
     def list_volumes(
         self, list_volumes_request: "ListVolumesRequest"

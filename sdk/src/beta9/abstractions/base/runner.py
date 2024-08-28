@@ -20,20 +20,33 @@ from ...clients.gateway import (
     ReplaceObjectContentResponse,
     SecretVar,
 )
+from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import
 from ...sync import FileSyncer, SyncEventHandler
-from ...type import _AUTOSCALERS, Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from ...type import (
+    _AUTOSCALER_TYPES,
+    Autoscaler,
+    GpuType,
+    GpuTypeAlias,
+    QueueDepthAutoscaler,
+    TaskPolicy,
+)
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
 TASKQUEUE_STUB_TYPE = "taskqueue"
 ENDPOINT_STUB_TYPE = "endpoint"
+ASGI_STUB_TYPE = "asgi"
+SCHEDULE_STUB_TYPE = "schedule"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
+ASGI_DEPLOYMENT_STUB_TYPE = "asgi/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
+SCHEDULE_DEPLOYMENT_STUB_TYPE = "schedule/deployment"
 TASKQUEUE_SERVE_STUB_TYPE = "taskqueue/serve"
 ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
+ASGI_SERVE_STUB_TYPE = "asgi/serve"
 FUNCTION_SERVE_STUB_TYPE = "function/serve"
 
 
@@ -53,9 +66,10 @@ class RunnerAbstraction(BaseAbstraction):
         secrets: Optional[List[str]] = None,
         on_start: Optional[Callable] = None,
         callback_url: Optional[str] = None,
-        authorized: Optional[bool] = True,
+        authorized: bool = True,
         name: Optional[str] = None,
-        autoscaler: Optional[Autoscaler] = QueueDepthAutoscaler(),
+        autoscaler: Autoscaler = QueueDepthAutoscaler(),
+        task_policy: TaskPolicy = TaskPolicy(),
     ) -> None:
         super().__init__()
 
@@ -83,9 +97,12 @@ class RunnerAbstraction(BaseAbstraction):
         self.workers = workers
         self.keep_warm_seconds = keep_warm_seconds
         self.max_pending_tasks = max_pending_tasks
-        self.retries = retries
-        self.timeout = timeout
         self.autoscaler = autoscaler
+        self.task_policy = TaskPolicy(
+            max_retries=task_policy.max_retries or retries,
+            timeout=task_policy.timeout or timeout,
+            ttl=task_policy.ttl,
+        )
 
         if on_start is not None:
             self._map_callable_to_attr(attr="on_start", func=on_start)
@@ -95,15 +112,22 @@ class RunnerAbstraction(BaseAbstraction):
         self.settings: SDKSettings = get_settings()
         self.config_context: ConfigContext = get_config_context()
 
-    def print_invocation_snippet(self, invocation_url) -> None:
+    def print_invocation_snippet(self, invocation_url: str) -> None:
         """Print curl request to call deployed container URL"""
 
         terminal.header("Invocation details")
-        terminal.detail(f"""curl -X POST '{invocation_url}' \\
--H 'Connection: keep-alive' \\
--H 'Authorization: Bearer {self.config_context.token}' \\
--H 'Content-Type: application/json' \\
--d '{"{}"}'""")
+        commands = [
+            f"curl -X POST '{invocation_url}' \\",
+            "-H 'Connection: keep-alive' \\",
+            "-H 'Content-Type: application/json' \\",
+            *(
+                [f"-H 'Authorization: Bearer {self.config_context.token}' \\"]
+                if self.authorized
+                else []
+            ),
+            "-d '{}'",
+        ]
+        terminal.print("\n".join(commands), crop=False, overflow="ignore")
 
     def _parse_memory(self, memory_str: str) -> int:
         """Parse memory str (with units) to megabytes."""
@@ -174,7 +198,7 @@ class RunnerAbstraction(BaseAbstraction):
 
         module = inspect.getmodule(func)  # Determine module / function name
         if module:
-            module_file = os.path.basename(module.__file__)
+            module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
         else:
             module_name = "__main__"
@@ -291,8 +315,8 @@ class RunnerAbstraction(BaseAbstraction):
             terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
             return False
 
-        autoscaler_type = _AUTOSCALERS.get(type(self.autoscaler), None)
-        if autoscaler_type is None:
+        autoscaler_type = _AUTOSCALER_TYPES.get(type(self.autoscaler), "")
+        if not autoscaler_type:
             terminal.error(
                 f"Invalid Autoscaler class: {type(self.autoscaler).__name__}",
                 exit=False,
@@ -313,8 +337,6 @@ class RunnerAbstraction(BaseAbstraction):
                     handler=self.handler,
                     on_start=self.on_start,
                     callback_url=self.callback_url,
-                    retries=self.retries,
-                    timeout=self.timeout,
                     keep_warm_seconds=self.keep_warm_seconds,
                     workers=self.workers,
                     max_pending_tasks=self.max_pending_tasks,
@@ -327,6 +349,11 @@ class RunnerAbstraction(BaseAbstraction):
                         max_containers=self.autoscaler.max_containers,
                         tasks_per_container=self.autoscaler.tasks_per_container,
                     ),
+                    task_policy=TaskPolicyProto(
+                        max_retries=self.task_policy.max_retries,
+                        timeout=self.task_policy.timeout,
+                        ttl=self.task_policy.ttl,
+                    ),
                 )
             )
 
@@ -334,6 +361,10 @@ class RunnerAbstraction(BaseAbstraction):
                 self.stub_created = True
                 self.stub_id = stub_response.stub_id
             else:
+                if err := stub_response.err_msg:
+                    terminal.error(err, exit=False)
+                else:
+                    terminal.error("Failed to get or create stub", exit=False)
                 return False
 
         self.runtime_ready = True

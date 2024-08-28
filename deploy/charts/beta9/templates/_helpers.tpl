@@ -38,6 +38,8 @@ networkpolicies:
 controllers:
   gateway:
     type: deployment
+    annotations:
+      secret-hash: {{ include "sha256sum" (toYaml .Values.config) }}
     containers:
       main:
         command:
@@ -82,6 +84,15 @@ ingress:
     controller: gateway
 serviceAccount:
   create: true
+persistence:
+  config-helm:
+    enabled: {{ if .Values.config }}true{{ else }}false{{ end }}
+    type: secret
+    name: beta9-config-helm
+    globalMounts:
+    - path: /etc/beta9.d/config.yaml
+      subPath: config.yaml
+      readOnly: true
 {{- end -}}
 
 
@@ -90,4 +101,9 @@ serviceAccount:
 metadata:
   labels:
     {{ include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
+{{- end -}}
+
+
+{{- define "sha256sum" -}}
+{{- printf "%s" (. | sha256sum) | quote -}}
 {{- end -}}

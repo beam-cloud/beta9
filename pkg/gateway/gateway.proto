@@ -34,6 +34,8 @@ service GatewayService {
   // Deployments
   rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
   rpc StopDeployment(StopDeploymentRequest) returns (StopDeploymentResponse);
+  rpc DeleteDeployment(DeleteDeploymentRequest)
+      returns (DeleteDeploymentResponse);
 
   // Pools
   rpc ListPools(ListPoolsRequest) returns (ListPoolsResponse);
@@ -42,6 +44,12 @@ service GatewayService {
   rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse);
   rpc CreateMachine(CreateMachineRequest) returns (CreateMachineResponse);
   rpc DeleteMachine(DeleteMachineRequest) returns (DeleteMachineResponse);
+
+  // Tokens
+  rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
+  rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
+  rpc ToggleToken(ToggleTokenRequest) returns (ToggleTokenResponse);
+  rpc DeleteToken(DeleteTokenRequest) returns (DeleteTokenResponse);
 }
 
 message AuthorizeRequest {}
@@ -189,6 +197,16 @@ message StopTasksResponse {
 message Volume {
   string id = 1;
   string mount_path = 2;
+  optional MountPointConfig config = 3;
+}
+
+message MountPointConfig {
+  string bucket_name = 1;
+  string access_key = 2;
+  string secret_key = 3;
+  string endpoint_url = 4;
+  string region = 5;
+  bool read_only = 6;
 }
 
 message SecretVar { string name = 1; }
@@ -197,6 +215,12 @@ message Autoscaler {
   string type = 1;
   uint32 max_containers = 2;
   uint32 tasks_per_container = 3;
+}
+
+message TaskPolicy {
+  int64 timeout = 1;
+  uint32 max_retries = 2;
+  uint32 ttl = 3;
 }
 
 message GetOrCreateStubRequest {
@@ -221,11 +245,13 @@ message GetOrCreateStubRequest {
   bool authorized = 20;
   repeated SecretVar secrets = 21;
   Autoscaler autoscaler = 22;
+  TaskPolicy task_policy = 23;
 }
 
 message GetOrCreateStubResponse {
   bool ok = 1;
   string stub_id = 2;
+  string err_msg = 3;
 }
 
 message DeployStubRequest {
@@ -237,6 +263,7 @@ message DeployStubResponse {
   bool ok = 1;
   string deployment_id = 2;
   uint32 version = 3;
+  string invoke_url = 4;
 }
 
 message Deployment {
@@ -267,6 +294,13 @@ message ListDeploymentsResponse {
 message StopDeploymentRequest { string id = 1; }
 
 message StopDeploymentResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message DeleteDeploymentRequest { string id = 1; }
+
+message DeleteDeploymentResponse {
   bool ok = 1;
   string err_msg = 2;
 }
@@ -335,6 +369,7 @@ message ListMachinesResponse {
   bool ok = 1;
   string err_msg = 2;
   repeated Machine machines = 3;
+  map<string, bool> gpus = 4;
 }
 
 message CreateMachineRequest { string pool_name = 1; }
@@ -351,6 +386,48 @@ message DeleteMachineRequest {
 }
 
 message DeleteMachineResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message Token {
+  string token_id = 1;
+  string key = 2;
+  bool active = 3;
+  bool reusable = 4;
+  optional uint32 workspace_id = 5;
+  string token_type = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message ListTokensRequest {}
+
+message ListTokensResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Token tokens = 3;
+}
+
+message CreateTokenRequest {}
+
+message CreateTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  Token token = 3;
+}
+
+message ToggleTokenRequest { string token_id = 1; }
+
+message ToggleTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  Token token = 3;
+}
+
+message DeleteTokenRequest { string token_id = 1; }
+
+message DeleteTokenResponse {
   bool ok = 1;
   string err_msg = 2;
 }

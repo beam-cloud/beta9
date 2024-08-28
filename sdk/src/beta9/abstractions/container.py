@@ -14,6 +14,7 @@ from ..clients.container import (
     ContainerServiceStub,
 )
 from ..sync import FileSyncer
+from ..type import GpuType, GpuTypeAlias
 
 
 class Container(RunnerAbstraction):
@@ -26,7 +27,7 @@ class Container(RunnerAbstraction):
         memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
             MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
-        gpu (Union[GpuType, str]):
+        gpu (GpuTypeAlias):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
         image (Union[Image, dict]):
@@ -37,6 +38,8 @@ class Container(RunnerAbstraction):
             A list of secrets that are injected into the container as environment variables. Default is [].
         name (Optional[str]):
             A name for the container. Default is None.
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
 
     Example usage:
         ```
@@ -55,13 +58,20 @@ class Container(RunnerAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: str = "",
+        gpu: GpuTypeAlias = GpuType.NoGPU,
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        callback_url: Optional[str] = None,
     ) -> None:
         super().__init__(
-            cpu=cpu, memory=memory, gpu=gpu, image=image, volumes=volumes, secrets=secrets
+            cpu=cpu,
+            memory=memory,
+            gpu=gpu,
+            image=image,
+            volumes=volumes,
+            secrets=secrets,
+            callback_url=callback_url,
         )
 
         self.task_id = ""

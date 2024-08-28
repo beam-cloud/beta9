@@ -3,7 +3,12 @@ package gatewayservices
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"math"
 
+	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
+	"github.com/beam-cloud/beta9/pkg/abstractions/function"
+	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -12,6 +17,13 @@ import (
 
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if in.Memory > int64(gws.appConfig.GatewayService.StubLimits.Memory) {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("Memory must be %dGiB or less.", gws.appConfig.GatewayService.StubLimits.Memory/1024),
+		}, nil
+	}
 
 	autoscaler := &types.Autoscaler{}
 	if in.Autoscaler.Type == "" {
@@ -31,14 +43,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Memory:  in.Memory,
 			ImageId: in.ImageId,
 		},
-		Handler:       in.Handler,
-		OnStart:       in.OnStart,
-		CallbackUrl:   in.CallbackUrl,
-		PythonVersion: in.PythonVersion,
-		TaskPolicy: types.TaskPolicy{
-			MaxRetries: uint(in.Retries),
-			Timeout:    int(in.Timeout),
-		},
+		Handler:         in.Handler,
+		OnStart:         in.OnStart,
+		CallbackUrl:     in.CallbackUrl,
+		PythonVersion:   in.PythonVersion,
+		TaskPolicy:      gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),
 		KeepWarmSeconds: uint(in.KeepWarmSeconds),
 		Workers:         uint(in.Workers),
 		MaxPendingTasks: uint(in.MaxPendingTasks),
@@ -65,7 +74,14 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Name:  secret.Name,
 			Value: secret.Value,
 		})
+	}
 
+	err := gws.configureVolumes(ctx, in.Volumes, authInfo.Workspace)
+	if err != nil {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
 	}
 
 	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
@@ -105,7 +121,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
-	lastestDeployment, err := gws.backendRepo.GetLatestDeploymentByName(ctx, authInfo.Workspace.Id, in.Name, string(stub.Type))
+	lastestDeployment, err := gws.backendRepo.GetLatestDeploymentByName(ctx, authInfo.Workspace.Id, in.Name, string(stub.Type), false)
 	if err != nil {
 		return &pb.DeployStubResponse{
 			Ok: false,
@@ -124,11 +140,71 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
+	invokeURL := fmt.Sprintf("%s/%s/%s/v%d", gws.appConfig.GatewayService.ExternalURL, stub.Type.Kind(), in.Name, deployment.Version)
+	if stubConfig, err := stub.UnmarshalConfig(); err == nil && !stubConfig.Authorized {
+		invokeURL = fmt.Sprintf("%s/%s/%s/%s", gws.appConfig.GatewayService.ExternalURL, stub.Type.Kind(), "public", stub.ExternalId)
+	}
+
 	go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
 
 	return &pb.DeployStubResponse{
 		Ok:           true,
 		DeploymentId: deployment.ExternalId,
 		Version:      uint32(deployment.Version),
+		InvokeUrl:    invokeURL,
 	}, nil
+}
+
+func (gws *GatewayService) configureVolumes(ctx context.Context, volumes []*pb.Volume, workspace *types.Workspace) error {
+	for i, volume := range volumes {
+		if volume.Config != nil {
+			// De-reference secrets
+			accessKey, err := gws.backendRepo.GetSecretByName(ctx, workspace, volume.Config.AccessKey)
+			if err != nil {
+				return fmt.Errorf("failed to get secret %s", volume.Config.AccessKey)
+			}
+			volumes[i].Config.AccessKey = accessKey.Value
+
+			secretKey, err := gws.backendRepo.GetSecretByName(ctx, workspace, volume.Config.SecretKey)
+			if err != nil {
+				return fmt.Errorf("failed to get secret %s", volume.Config.SecretKey)
+			}
+			volumes[i].Config.SecretKey = secretKey.Value
+		}
+	}
+
+	return nil
+}
+
+func (gws *GatewayService) configureTaskPolicy(policy *pb.TaskPolicy, stubType types.StubType) types.TaskPolicy {
+	p := types.TaskPolicy{
+		MaxRetries: uint(math.Min(float64(policy.MaxRetries), float64(types.MaxTaskRetries))),
+		Timeout:    int(policy.Timeout),
+		TTL:        uint32(math.Min(float64(policy.Ttl), float64(types.MaxTaskTTL))),
+	}
+
+	switch stubType.Kind() {
+	case types.StubTypeASGI:
+		fallthrough
+	case types.StubTypeEndpoint:
+		p.Timeout = int(math.Min(float64(policy.Timeout), float64(endpoint.EndpointRequestTimeoutS)))
+		if p.Timeout <= 0 {
+			p.Timeout = endpoint.EndpointRequestTimeoutS
+		}
+		p.MaxRetries = 0
+		p.TTL = math.MaxUint32 // No TTL for endpoint tasks
+
+	case types.StubTypeScheduledJob:
+		fallthrough
+	case types.StubTypeFunction:
+		if p.TTL == 0 {
+			p.TTL = uint32(function.FunctionDefaultTaskTTL)
+		}
+	case types.StubTypeTaskQueue:
+		if p.TTL == 0 {
+			p.TTL = uint32(taskqueue.TaskQueueDefaultTaskTTL)
+		}
+	}
+
+	return p
 }

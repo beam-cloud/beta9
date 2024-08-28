@@ -8,17 +8,16 @@ import (
 	"net/http"
 	"time"
 
-	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
-	"github.com/beam-cloud/beta9/pkg/task"
+	"github.com/labstack/echo/v4"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
+	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/labstack/echo/v4"
-
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -45,9 +44,11 @@ type HttpEndpointService struct {
 }
 
 var (
+	EndpointRequestTimeoutS int    = 600 // 10 minutes
+	ASGIRoutePrefix         string = "/asgi"
+
 	endpointContainerPrefix                 string        = "endpoint"
 	endpointRoutePrefix                     string        = "/endpoint"
-	endpointRequestTimeoutS                 int           = 300
 	endpointServeContainerTimeout           time.Duration = 10 * time.Minute
 	endpointServeContainerKeepaliveInterval time.Duration = 30 * time.Second
 	endpointRequestHeartbeatInterval        time.Duration = 30 * time.Second
@@ -71,12 +72,6 @@ func NewHTTPEndpointService(
 	ctx context.Context,
 	opts EndpointServiceOpts,
 ) (EndpointService, error) {
-	configManager, err := common.NewConfigManager[types.AppConfig]()
-	if err != nil {
-		return nil, err
-	}
-	config := configManager.GetConfig()
-
 	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
 	if err != nil {
 		return nil, err
@@ -84,7 +79,7 @@ func NewHTTPEndpointService(
 
 	es := &HttpEndpointService{
 		ctx:               ctx,
-		config:            config,
+		config:            opts.Config,
 		rdb:               opts.RedisClient,
 		keyEventManager:   keyEventManager,
 		scheduler:         opts.Scheduler,
@@ -111,7 +106,7 @@ func NewHTTPEndpointService(
 			stubId := e.Args["stub_id"].(string)
 			stubType := e.Args["stub_type"].(string)
 
-			if stubType != types.StubTypeEndpointDeployment {
+			if stubType != types.StubTypeEndpointDeployment && stubType != types.StubTypeASGIDeployment {
 				// Assume the callback succeeded to avoid retries
 				return true
 			}
@@ -134,6 +129,7 @@ func NewHTTPEndpointService(
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(es.backendRepo)
 	registerEndpointRoutes(opts.RouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
+	registerASGIRoutes(opts.RouteGroup.Group(ASGIRoutePrefix, authMiddleware), es)
 
 	return es, nil
 }
@@ -183,17 +179,20 @@ func (es *HttpEndpointService) forwardRequest(
 		})
 	}
 
-	payload, err := task.SerializeHttpPayload(ctx)
-	if err != nil {
-		return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error": err.Error(),
-		})
+	payload := &types.TaskPayload{}
+	if !instance.isASGI {
+		payload, err = task.SerializeHttpPayload(ctx)
+		if err != nil {
+			return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
 	}
 
 	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), authInfo, stubId, payload, types.TaskPolicy{
 		MaxRetries: 0,
 		Timeout:    instance.StubConfig.TaskPolicy.Timeout,
-		Expires:    time.Now().Add(time.Duration(endpointRequestTimeoutS) * time.Second),
+		Expires:    time.Now().Add(time.Duration(instance.StubConfig.TaskPolicy.TTL) * time.Second),
 	})
 	if err != nil {
 		return err
@@ -257,7 +256,11 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 		return nil, err
 	}
 
-	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig, es.tailscale, es.config.Tailscale)
+	if stub.Type.Kind() == types.StubTypeASGI {
+		instance.isASGI = true
+	}
+
+	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig, es.tailscale, es.config.Tailscale, instance.isASGI)
 
 	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Protocol, Union
+from typing import Dict, Literal, Type, Union
 
 
 class LifeCycleMethod(str, Enum):
@@ -82,6 +82,7 @@ class GpuType(str, Enum):
     A100_80 = "A100-80"
     H100 = "H100"
     A6000 = "A6000"
+    RTX4090 = "RTX4090"
 
 
 # Add GpuType str literals. Must copy/paste for now.
@@ -92,10 +93,11 @@ GpuTypeLiteral = Literal[
     "T4",
     "L4",
     "A10G",
-    "A100_40",
-    "A100_80",
+    "A100-40",
+    "A100-80",
     "H100",
     "A6000",
+    "RTX4090",
 ]
 
 GpuTypeAlias = Union[GpuType, GpuTypeLiteral]
@@ -106,17 +108,38 @@ DEFAULT_AUTOSCALER_MAX_CONTAINERS = 1
 DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER = 1
 
 
-class Autoscaler(Protocol):
+@dataclass
+class Autoscaler:
     max_containers: int = DEFAULT_AUTOSCALER_MAX_CONTAINERS
     tasks_per_container: int = DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER
 
 
 @dataclass
 class QueueDepthAutoscaler(Autoscaler):
-    max_containers: int
-    tasks_per_container: int
+    pass
 
 
-_AUTOSCALERS = {
+@dataclass
+class TaskPolicy:
+    """
+    Task policy for a function. This helps manages lifecycle of an individual task.
+
+    Parameters:
+        max_retries (int):
+            The maximum number of times a task will be retried if the container crashes. Default is 3.
+        timeout (int):
+            The maximum number of seconds a task can run before it times out.
+            Default depends on the abstraction that you are using.
+            Set it to -1 to disable the timeout (this does not disable timeout for endpoints).
+        ttl (int):
+            The expiration time for a task in seconds. Must be greater than 0 and less than 24 hours (86400 seconds).
+    """
+
+    max_retries: int = 0
+    timeout: int = 0
+    ttl: int = 0
+
+
+_AUTOSCALER_TYPES: Dict[Type[Autoscaler], str] = {
     QueueDepthAutoscaler: QUEUE_DEPTH_AUTOSCALER_TYPE,
 }

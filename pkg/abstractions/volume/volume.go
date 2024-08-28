@@ -24,6 +24,7 @@ import (
 type VolumeService interface {
 	pb.VolumeServiceServer
 	GetOrCreateVolume(ctx context.Context, in *pb.GetOrCreateVolumeRequest) (*pb.GetOrCreateVolumeResponse, error)
+	DeleteVolume(ctx context.Context, in *pb.DeleteVolumeRequest) (*pb.DeleteVolumeResponse, error)
 	ListPath(ctx context.Context, in *pb.ListPathRequest) (*pb.ListPathResponse, error)
 	DeletePath(ctx context.Context, in *pb.DeletePathRequest) (*pb.DeletePathResponse, error)
 	MovePath(ctx context.Context, in *pb.MovePathRequest) (*pb.MovePathResponse, error)
@@ -84,6 +85,21 @@ func (vs *GlobalVolumeService) GetOrCreateVolume(ctx context.Context, in *pb.Get
 			WorkspaceId:   authInfo.Workspace.ExternalId,
 			WorkspaceName: authInfo.Workspace.Name,
 		},
+	}, nil
+}
+
+func (vs *GlobalVolumeService) DeleteVolume(ctx context.Context, in *pb.DeleteVolumeRequest) (*pb.DeleteVolumeResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if err := vs.deleteVolume(ctx, authInfo.Workspace, in.Name); err != nil {
+		return &pb.DeleteVolumeResponse{
+			Ok:     false,
+			ErrMsg: "Unable to delete volume",
+		}, nil
+	}
+
+	return &pb.DeleteVolumeResponse{
+		Ok: true,
 	}, nil
 }
 
@@ -223,6 +239,24 @@ func (vs *GlobalVolumeService) getOrCreateVolume(ctx context.Context, workspace 
 	}
 
 	return volume, nil
+}
+
+func (vs *GlobalVolumeService) deleteVolume(ctx context.Context, workspace *types.Workspace, volumeName string) error {
+	volume, err := vs.backendRepo.GetVolume(ctx, workspace.Id, volumeName)
+	if err != nil {
+		return err
+	}
+
+	volumeDir, _, err := GetVolumePaths(workspace.Name, volume.ExternalId, "")
+	if err != nil {
+		return err
+	}
+
+	if err := os.RemoveAll(volumeDir); err != nil {
+		return err
+	}
+
+	return vs.backendRepo.DeleteVolume(ctx, volume.WorkspaceId, volume.Name)
 }
 
 func (vs *GlobalVolumeService) listVolumes(ctx context.Context, workspace *types.Workspace) ([]types.VolumeWithRelated, error) {

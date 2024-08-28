@@ -1,16 +1,20 @@
 import datetime
 import sys
 from contextlib import contextmanager
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Generator, Literal, Optional, Sequence, Tuple
 
 import rich
+import rich.columns
 import rich.control
 import rich.status
+import rich.traceback
 from rich.console import Console
 from rich.control import STRIP_CONTROL_CODES as _STRIP_CONTROL_CODES
 from rich.markup import escape
 from rich.progress import open as _progress_open
 from rich.text import Text
+
+from . import env
 
 # Fixes printing carriage returns and backspaces
 # https://github.com/Textualize/rich/issues/3260
@@ -19,6 +23,9 @@ for i in (8, 13):
         _STRIP_CONTROL_CODES.remove(i)
         rich.control.strip_control_codes.__defaults__ = ({c: None for c in _STRIP_CONTROL_CODES},)
 
+
+if env.is_local():
+    rich.traceback.install()
 
 _console = Console()
 
@@ -69,9 +76,9 @@ def url(text: str) -> None:
 
 
 @contextmanager
-def progress(task_name: str):
-    with _console.status(task_name, spinner="dots", spinner_style="white"):
-        yield
+def progress(task_name: str) -> Generator[rich.status.Status, None, None]:
+    with _console.status(task_name, spinner="dots", spinner_style="white") as s:
+        yield s
 
 
 def progress_open(file, mode, **kwargs):
@@ -82,7 +89,7 @@ def progress_open(file, mode, **kwargs):
         **kwargs,
     )
 
-    if "description" in options:
+    if "description" in options and options["description"]:
         options["description"] = escape(f"[{options['description']}]")
 
     return _progress_open(file, mode, **options)  # type:ignore
@@ -116,11 +123,19 @@ def humanize_date(d: datetime.datetime) -> str:
         return f"{s // 3600} hours ago"
 
 
-def humanize_memory(m: float) -> str:
-    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+def humanize_memory(m: float, base: Literal[2, 10] = 2) -> str:
+    if base not in [2, 10]:
+        raise ValueError("Base must be 2 (binary) or 10 (decimal)")
+
+    factor = 1024 if base == 2 else 1000
+    units = (
+        ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+        if base == 2
+        else ["B", "KB", "MB", "GB", "TB", "PB"]
+    )
     index = 0
-    while m >= 1024 and index < len(units) - 1:
-        m /= 1024
+    while m >= factor and index < len(units) - 1:
+        m /= factor
         index += 1
     return f"{m:.2f} {units[index]}"
 
