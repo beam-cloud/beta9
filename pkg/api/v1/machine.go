@@ -5,13 +5,14 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/labstack/echo/v4"
+
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/labstack/echo/v4"
 )
 
 type MachineGroup struct {
@@ -28,6 +29,7 @@ func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, 
 		config:       config,
 	}
 
+	g.GET("/:workspaceId/gpus", auth.WithWorkspaceAuth(group.GPUCounts))
 	g.POST("/register", group.RegisterMachine)
 	return group
 }
@@ -96,4 +98,13 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"config": remoteConfig,
 	})
+}
+
+func (g *MachineGroup) GPUCounts(ctx echo.Context) error {
+	gpuCounts, err := g.providerRepo.GetGPUCounts(g.config.Worker.Pools)
+	if err != nil {
+		return HTTPInternalServerError("Unable to list GPUs")
+	}
+
+	return ctx.JSON(http.StatusOK, gpuCounts)
 }

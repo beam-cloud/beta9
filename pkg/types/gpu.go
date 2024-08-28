@@ -18,3 +18,7 @@ const (
 
 	NO_GPU GPUType = "NO_GPU"
 )
+
+func AllGPUTypes() []GPUType {
+	return []GPUType{GPU_A10G, GPU_A100_40, GPU_A100_80, GPU_L4, GPU_T4, GPU_H100, GPU_A6000, GPU_RTX4090}
+}

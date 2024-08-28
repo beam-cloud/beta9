@@ -74,7 +74,14 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Name:  secret.Name,
 			Value: secret.Value,
 		})
+	}
 
+	err := gws.configureVolumes(ctx, in.Volumes, authInfo.Workspace)
+	if err != nil {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
 	}
 
 	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
@@ -146,6 +153,27 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		Version:      uint32(deployment.Version),
 		InvokeUrl:    invokeURL,
 	}, nil
+}
+
+func (gws *GatewayService) configureVolumes(ctx context.Context, volumes []*pb.Volume, workspace *types.Workspace) error {
+	for i, volume := range volumes {
+		if volume.Config != nil {
+			// De-reference secrets
+			accessKey, err := gws.backendRepo.GetSecretByName(ctx, workspace, volume.Config.AccessKey)
+			if err != nil {
+				return fmt.Errorf("failed to get secret %s", volume.Config.AccessKey)
+			}
+			volumes[i].Config.AccessKey = accessKey.Value
+
+			secretKey, err := gws.backendRepo.GetSecretByName(ctx, workspace, volume.Config.SecretKey)
+			if err != nil {
+				return fmt.Errorf("failed to get secret %s", volume.Config.SecretKey)
+			}
+			volumes[i].Config.SecretKey = secretKey.Value
+		}
+	}
+
+	return nil
 }
 
 func (gws *GatewayService) configureTaskPolicy(policy *pb.TaskPolicy, stubType types.StubType) types.TaskPolicy {

@@ -107,12 +107,15 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
-	mounts := abstractions.ConfigureContainerRequestMounts(
+	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
-		stub.Workspace.Name,
+		&stub.Workspace,
 		stubConfig,
 		stub.ExternalId,
 	)
+	if err != nil {
+		return err
+	}
 
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(
 		&stub.Workspace,

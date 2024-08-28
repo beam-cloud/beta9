@@ -222,6 +222,17 @@ class StopTasksResponse(betterproto.Message):
 class Volume(betterproto.Message):
     id: str = betterproto.string_field(1)
     mount_path: str = betterproto.string_field(2)
+    config: Optional["MountPointConfig"] = betterproto.message_field(3, optional=True)
+
+
+@dataclass(eq=False, repr=False)
+class MountPointConfig(betterproto.Message):
+    bucket_name: str = betterproto.string_field(1)
+    access_key: str = betterproto.string_field(2)
+    secret_key: str = betterproto.string_field(3)
+    endpoint_url: str = betterproto.string_field(4)
+    region: str = betterproto.string_field(5)
+    read_only: bool = betterproto.bool_field(6)
 
 
 @dataclass(eq=False, repr=False)
