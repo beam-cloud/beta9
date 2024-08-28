@@ -253,7 +253,7 @@ func (rb *RequestBuffer) incrementRequestsInFlight(containerId string) error {
 		return err
 	}
 
-	err = rb.rdb.Expire(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId), time.Duration(EndpointRequestTimeoutS)*time.Second).Err()
+	err = rb.rdb.Expire(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId), time.Duration(rb.stubConfig.TaskPolicy.Timeout)*time.Second).Err()
 	if err != nil {
 		return err
 	}
@@ -267,7 +267,7 @@ func (rb *RequestBuffer) decrementRequestsInFlight(containerId string) error {
 		return err
 	}
 
-	err = rb.rdb.Expire(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId), time.Duration(EndpointRequestTimeoutS)*time.Second).Err()
+	err = rb.rdb.Expire(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId), time.Duration(rb.stubConfig.TaskPolicy.Timeout)*time.Second).Err()
 	if err != nil {
 		return err
 	}
