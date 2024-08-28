@@ -33,7 +33,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		if concurrencyLimit.GPULimit <= 0 {
 			return &pb.GetOrCreateStubResponse{
 				Ok:     false,
-				ErrMsg: "GPU concurrency limit is 0. A payment method is required to deploy with GPUs.",
+				ErrMsg: "GPU concurrency limit is 0.",
 			}, nil
 		}
 	}
