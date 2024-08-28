@@ -20,7 +20,7 @@ dpkg -i criu_3.19-4_amd64.deb
 rm criu_3.19-4_amd64.deb
 EOT
 
-ARG CEDANA_VERSION=0.9.215
+ARG CEDANA_VERSION=0.9.219
 RUN <<EOT
 set -eux
 apt-get install -y libgpgme-dev
