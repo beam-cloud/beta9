@@ -2,81 +2,105 @@ package worker
 
 import (
 	"context"
-	"crypto/tls"
-	"strings"
+	"time"
+
+	api "github.com/cedana/cedana/api/services/task"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
+)
+
+const (
+	Address                    = "0.0.0.0:8080"
+	defaultStartDeadline       = 10 * time.Second
+	defaultCheckpointDeadline  = 2 * time.Minute
+	defaultRestoreDeadline     = 2 * time.Minute
+	defaultHealthCheckDeadline = 10 * time.Second
+	CedanaPath                 = "/usr/bin/cedana"
 )
 
 type CedanaClient struct {
-	ServiceUrl   string
-	ServiceToken string
-	conn         *grpc.ClientConn
-	// client       pb.CedanaClient
+	conn    *grpc.ClientConn
+	service api.TaskServiceClient
 }
 
-func NewCedanaClient(serviceUrl, serviceToken string) (*CedanaClient, error) {
-	client := &CedanaClient{
-		ServiceUrl:   serviceUrl,
-		ServiceToken: serviceToken,
-	}
-
-	err := client.connect()
+func NewCedanaClient(ctx context.Context) (*CedanaClient, error) {
+	var opts []grpc.DialOption
+	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	taskConn, err := grpc.NewClient(Address, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	return client, nil
-}
+	taskClient := api.NewTaskServiceClient(taskConn)
 
-func (c *CedanaClient) connect() error {
-	grpcOption := grpc.WithTransportCredentials(insecure.NewCredentials())
-
-	isTLS := strings.HasSuffix(c.ServiceUrl, "443")
-	if isTLS {
-		h2creds := credentials.NewTLS(&tls.Config{NextProtos: []string{"h2"}})
-		grpcOption = grpc.WithTransportCredentials(h2creds)
+	client := &CedanaClient{
+		service: taskClient,
+		conn:    taskConn,
 	}
 
-	var dialOpts = []grpc.DialOption{grpcOption}
-
-	maxMessageSize := 1024 * 1024 * 1024 // 1Gi
-	if c.ServiceToken != "" {
-		dialOpts = append(dialOpts, grpc.WithUnaryInterceptor(AuthInterceptor(c.ServiceToken)),
-			grpc.WithDefaultCallOptions(
-				grpc.MaxCallRecvMsgSize(maxMessageSize),
-				grpc.MaxCallSendMsgSize(maxMessageSize),
-			))
-	}
-
-	conn, err := grpc.Dial(c.ServiceUrl, dialOpts...)
-	if err != nil {
-		return err
-	}
-
-	c.conn = conn
-	// c.client = pb.NewCedanaClient(conn)
-	return nil
+	return client, err
 }
 
 func (c *CedanaClient) Close() error {
 	return c.conn.Close()
 }
 
-func AuthInterceptor(token string) grpc.UnaryClientInterceptor {
-	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		newCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-		return invoker(newCtx, method, req, reply, cc, opts...)
-	}
-}
+func (c *CedanaClient) Start(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultStartDeadline)
+	defer cancel()
 
-func (c *CedanaClient) Checkpoint(containerId string) error {
+	args := &api.StartArgs{}
+	_, err := c.service.Start(ctx, args)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
-// func (c *CedanaClient) Available(containerId string) (*pb.CedanaAvailableResponse, error) {
-// 	return resp, nil
-// }
+func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultCheckpointDeadline)
+	defer cancel()
+
+	args := api.DumpArgs{
+		Type:           api.CRType_LOCAL,
+		JID:            containerId,
+		TcpEstablished: true,
+		// Dump dir taken from config
+	}
+	_, err := c.service.Dump(ctx, &args)
+	// TODO gather metrics from response
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *CedanaClient) Restore(ctx context.Context, containerId string) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultCheckpointDeadline)
+	defer cancel()
+
+	args := &api.RestoreArgs{
+		Type:           api.CRType_LOCAL,
+		JID:            containerId,
+		TcpEstablished: true,
+	}
+	_, err := c.service.Restore(ctx, args)
+	// TODO gather metrics from response
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *CedanaClient) DetailedHealthCheck(ctx context.Context) (*api.DetailedHealthCheckResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultHealthCheckDeadline)
+	defer cancel()
+
+	resp, err := c.service.DetailedHealthCheck(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}

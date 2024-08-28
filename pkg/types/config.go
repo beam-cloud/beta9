@@ -4,6 +4,7 @@ import (
 	"time"
 
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
+	cedana "github.com/cedana/cedana/types"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -20,7 +21,7 @@ type AppConfig struct {
 	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
 	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
-	Cedana         CedanaConfig              `key:"cedana" json:"cedana"`
+	Checkpointing  CheckpointingConfig       `key:"checkpointing" json:"checkpointing"`
 }
 
 type DatabaseConfig struct {
@@ -377,8 +378,6 @@ type FluentBitEventConfig struct {
 	Mapping         []FluentBitEventMapping `key:"mapping" json:"mapping"`
 }
 
-type CedanaConfig struct {
-	Enabled  bool   `key:"enabled" json:"enabled"`
-	HostName string `key:"hostname" json:"hostname"`
-	// TODO: not sure what we need here... authtoken, maybe some sort of checkpoint settings, etc.
+type CheckpointingConfig struct {
+	Cedana cedana.Config `key:"cedana" json:"cedana"`
 }

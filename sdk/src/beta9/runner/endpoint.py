@@ -6,6 +6,7 @@ import traceback
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from http import HTTPStatus
+from multiprocessing import Value
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -32,6 +33,9 @@ from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
 from .common import end_task_and_send_callback, is_asgi3
+
+CHECKPOINT_TIMEOUT = cfg.timeout  # XXX: not sure if this is the right value
+workersReady = Value("i", 0)
 
 
 class EndpointFilter(logging.Filter):
@@ -88,6 +92,10 @@ class GunicornApplication(BaseApplication):
 
             # Override the default starlette app
             worker.app.callable = asgi_app
+
+            with workersReady.get_lock():
+                workersReady.value += 1
+                print(f"Worker PID {worker.pid} is ready")
         except EOFError:
             return
         except BaseException:
@@ -210,6 +218,12 @@ class EndpointManager:
 
         @self.app.get("/health")
         async def health():
+            if cfg.checkpoint_enabled:
+                while True:
+                    with workersReady.get_lock():
+                        if workersReady.value == cfg.workers:
+                            break
+                    await asyncio.sleep(0.1)
             return Response(status_code=HTTPStatus.OK)
 
         if self.is_asgi_stub:
