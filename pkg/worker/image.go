@@ -130,7 +130,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 		sourceOffset := int64(0)
 
 		// If the image archive is already cached in memory (in blobcache), then we can use that as the local cache path
-		baseBlobFsContentPath := fmt.Sprintf("%s/%s", BaseFileCachePath, sourcePath)
+		baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
 		if _, err := os.Stat(baseBlobFsContentPath); err == nil {
 			localCachePath = baseBlobFsContentPath
 		} else {

@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	BaseFileCachePath string = "/cache"
+	baseFileCachePath string = "/cache"
 )
 
 type FileCacheManager struct {
@@ -40,13 +40,13 @@ func (cm *FileCacheManager) CacheFiles() {
 }
 
 func fileCacheAvailable() bool {
-	if _, err := os.Stat(BaseFileCachePath); os.IsNotExist(err) {
+	if _, err := os.Stat(baseFileCachePath); os.IsNotExist(err) {
 		return false
 	}
 
 	// Check if it's a valid mount point
 	var stat syscall.Statfs_t
-	if err := syscall.Statfs(BaseFileCachePath, &stat); err != nil {
+	if err := syscall.Statfs(baseFileCachePath, &stat); err != nil {
 		return false
 	}
 
