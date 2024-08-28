@@ -29,7 +29,7 @@ type FunctionService interface {
 }
 
 const (
-	DefaultFunctionTaskTTL int = 3600 * 12 // 12 hours
+	DefaultFunctionTaskTTL uint32 = 3600 * 12 // 12 hours
 
 	functionRoutePrefix             string        = "/function"
 	scheduleRoutePrefix             string        = "/schedule"
@@ -131,6 +131,10 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 	}
 
 	policy := config.TaskPolicy
+	if policy.TTL == 0 {
+		// This is required for backward compatibility since older functions do not have a TTL set which defaults to 0
+		policy.TTL = DefaultFunctionTaskTTL
+	}
 	policy.Expires = time.Now().Add(time.Duration(policy.TTL) * time.Second)
 
 	task, err := fs.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorFunction), authInfo, stubId, payload, policy)
