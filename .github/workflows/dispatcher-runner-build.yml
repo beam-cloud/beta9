@@ -1,0 +1,53 @@
+name: Build and release Custom Runner Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'image tag'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build_and_release_worker:
+    environment: Release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['py38', 'py39', 'py310', 'py311', 'py312']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        with:
+          mask-password: 'true'
+          registry-type: public
+
+      - name: Build and push Docker image for ${{ matrix.python-version }}
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./docker/Dockerfile.runner
+          push: true
+          tags:  ${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.python-version }}-${{ inputs.tag }}
+          target: ${{ matrix.python-version }}
+          load: false
+          registry: ${{ steps.login-ecr.outputs.registry }}
+          repository: ${{ steps.login-ecr.outputs.registry }}/beta9-runner
+          add_git_labels: true
+          tag_with_ref: true
