@@ -860,10 +860,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		// TODO: kill daemon when container is stopped
 
 		// Add C/R capabilities
-		spec.Process.Capabilities.Bounding = append(spec.Process.Capabilities.Bounding, "CAP_CHECKPOINT_RESTORE")
-		spec.Process.Capabilities.Effective = append(spec.Process.Capabilities.Effective, "CAP_CHECKPOINT_RESTORE")
-		spec.Process.Capabilities.Permitted = append(spec.Process.Capabilities.Permitted, "CAP_CHECKPOINT_RESTORE")
-		spec.Process.Capabilities.Ambient = append(spec.Process.Capabilities.Inheritable, "CAP_CHECKPOINT_RESTORE")
+		spec.Process.Capabilities.Bounding = append(spec.Process.Capabilities.Bounding, "CAP_SYS_ADMIN")
+		spec.Process.Capabilities.Effective = append(spec.Process.Capabilities.Effective, "CAP_SYS_ADMIN")
+		spec.Process.Capabilities.Permitted = append(spec.Process.Capabilities.Permitted, "CAP_SYS_ADMIN")
+		spec.Process.Capabilities.Ambient = append(spec.Process.Capabilities.Ambient, "CAP_SYS_ADMIN")
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
