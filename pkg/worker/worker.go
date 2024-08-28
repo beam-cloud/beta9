@@ -184,7 +184,6 @@ func NewWorker() (*Worker, error) {
 		gpuCount:                uint32(gpuCount),
 		runcHandle:              runc.Runc{},
 		runcServer:              runcServer,
-		cedanaClient:            cedanaClient,
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		redisClient:             redisClient,
@@ -300,6 +299,15 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
+	if request.CheckpointEnabled {
+		cedanaClient, err := NewCedanaClient(context.TODO())
+		if err != nil {
+			log.Printf("<%s> - C/R unavailable, failed to create cedana client: %v\n", containerId, err)
+		} else {
+			s.cedanaClient = cedanaClient
+		}
+	}
+
 	err = s.containerMountManager.SetupContainerMounts(request.ContainerId, request.Mounts)
 	if err != nil {
 		return err
@@ -308,7 +316,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if request.CheckpointEnabled {
 		cedanaClient, err := NewCedanaClient(context.TODO())
 		if err != nil {
-			log.Printf("<%s> - C/R unavailable, failed to create cedana client: %v\n", containerID, err)
+			log.Printf("<%s> - C/R unavailable, failed to create cedana client: %v\n", containerId, err)
 		} else {
 			s.cedanaClient = cedanaClient
 		}
@@ -344,6 +352,11 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 	// Start the container
 	go s.spawn(request, spec, outputChan, opts)
+
+	log.Printf("<%s> - checkpoint enabled: %t\n", request.ContainerId, request.CheckpointEnabled)
+	if request.CheckpointEnabled && s.cedanaClient != nil {
+		go s.createCheckpoint(request)
+	}
 
 	log.Printf("<%s> - spawned successfully.\n", containerId)
 	return nil
@@ -456,23 +469,6 @@ func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
 	}
 
 	log.Printf("<%s> - checkpoint done\n", request.ContainerId)
-}
-
-// Invoke a runc container using a predefined config spec
-func (s *Worker) SpawnAsync(request *types.ContainerRequest, bundlePath string, spec *specs.Spec) error {
-	outputChan := make(chan common.OutputMsg)
-
-	go s.containerWg.Add(1)
-
-	log.Printf("<%s> - checkpoint enabled: %t\n", request.ContainerId, request.CheckpointEnabled)
-
-	if request.CheckpointEnabled && s.cedanaClient != nil {
-		go s.createCheckpoint(request)
-	}
-
-	go s.spawn(request, bundlePath, spec, outputChan)
-
-	return nil
 }
 
 // stopContainer stops a running container by containerId, if it exists on this worker
