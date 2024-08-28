@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -46,7 +47,9 @@ func (s *MountPointStorage) Mount(localPath string) error {
 
 	output, err := s.mountCmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("error: %+v, %s", err, string(output))
+		// Cleanup the temporary mountpoint directory if the mount fails
+		errors.Join(err, os.RemoveAll(localPath))
+		return fmt.Errorf("%+v, %s", err, string(output))
 	}
 
 	return nil
@@ -62,6 +65,11 @@ func (s *MountPointStorage) Unmount(localPath string) error {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("error executing mount-s3 umount: %v, output: %s", err, string(output))
+	}
+
+	err = os.RemoveAll(localPath)
+	if err != nil {
+		return fmt.Errorf("error removing mountpoint directory: %v", err)
 	}
 
 	return nil

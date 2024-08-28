@@ -24,7 +24,6 @@ func (c *ContainerMountManager) SetupContainerMounts(containerId string, mounts 
 		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
 			err := c.setupMountPointS3(containerId, m)
 			if err != nil {
-				log.Printf("<%s> failed to mount s3 bucket with mountpoint-s3: %v", containerId, err)
 				return err
 			}
 		}

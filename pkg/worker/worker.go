@@ -296,11 +296,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
-	err = s.containerMountManager.SetupContainerMounts(request.ContainerId, request.Mounts)
-	if err != nil {
-		return err
-	}
-
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
 
@@ -325,6 +320,11 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		return err
 	}
 	log.Printf("<%s> - set container address.\n", containerId)
+
+	err = s.containerMountManager.SetupContainerMounts(request.ContainerId, request.Mounts)
+	if err != nil {
+		s.containerLogger.Log(request.ContainerId, request.StubId, fmt.Sprintf("failed to setup container mounts: %v", err))
+	}
 
 	outputChan := make(chan common.OutputMsg)
 	go s.containerWg.Add(1)
