@@ -29,7 +29,7 @@ type FunctionService interface {
 }
 
 const (
-	DefaultFunctionDefaultTaskTTL int = 3600 * 12 // 12 hours
+	DefaultFunctionTaskTTL int = 3600 * 12 // 12 hours
 
 	functionRoutePrefix             string        = "/function"
 	scheduleRoutePrefix             string        = "/schedule"

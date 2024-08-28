@@ -170,11 +170,11 @@ func (gws *GatewayService) configureTaskPolicy(policy *pb.TaskPolicy, stubType t
 		fallthrough
 	case types.StubTypeFunction:
 		if p.TTL == 0 {
-			p.TTL = uint32(function.DefaultFunctionDefaultTaskTTL)
+			p.TTL = uint32(function.DefaultFunctionTaskTTL)
 		}
 	case types.StubTypeTaskQueue:
 		if p.TTL == 0 {
-			p.TTL = uint32(taskqueue.DefaultTaskQueueDefaultTaskTTL)
+			p.TTL = uint32(taskqueue.DefaultTaskQueueTaskTTL)
 		}
 	}
 

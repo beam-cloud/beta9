@@ -45,7 +45,7 @@ type HttpEndpointService struct {
 
 var (
 	DefaultEndpointRequestTimeoutS int    = 600  // 10 minutes
-	DefaultEndpointRequestTTL      int    = 7200 // 2 hours
+	DefaultEndpointRequestTTL      int    = 1200 // 20 minutes
 	ASGIRoutePrefix                string = "/asgi"
 
 	endpointContainerPrefix                 string        = "endpoint"
