@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -756,7 +757,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
 
 	// Add bind mounts to runc spec
-	for _, m := range request.Mounts {
+	for i, m := range request.Mounts {
 		mode := "rw"
 		if m.ReadOnly {
 			mode = "ro"
@@ -767,6 +768,12 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			if err != nil {
 				log.Printf("unable to symlink volume: %v", err)
 			}
+		}
+
+		// Add containerId to local mount path for mountpoint storage
+		if m.MountType == storage.StorageModeMountPoint {
+			m.LocalPath = path.Join(m.LocalPath, request.ContainerId)
+			request.Mounts[i].LocalPath = m.LocalPath
 		}
 
 		// If the local mount path does not exist, create it
