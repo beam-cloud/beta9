@@ -192,17 +192,17 @@ func (gws *GatewayService) configureTaskPolicy(policy *pb.TaskPolicy, stubType t
 			p.Timeout = endpoint.DefaultEndpointRequestTimeoutS
 		}
 		p.MaxRetries = 0
-		p.TTL = uint32(endpoint.DefaultEndpointRequestTTL) // Endpoints should still transition to expire from pending if it never runs
+		p.TTL = endpoint.DefaultEndpointRequestTTL // Endpoints should still transition to expire from pending if it never runs
 
 	case types.StubTypeScheduledJob:
 		fallthrough
 	case types.StubTypeFunction:
 		if p.TTL == 0 {
-			p.TTL = uint32(function.DefaultFunctionTaskTTL)
+			p.TTL = function.DefaultFunctionTaskTTL
 		}
 	case types.StubTypeTaskQueue:
 		if p.TTL == 0 {
-			p.TTL = uint32(taskqueue.DefaultTaskQueueTaskTTL)
+			p.TTL = taskqueue.DefaultTaskQueueTaskTTL
 		}
 	}
 

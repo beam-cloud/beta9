@@ -45,7 +45,7 @@ type HttpEndpointService struct {
 
 var (
 	DefaultEndpointRequestTimeoutS int    = 600  // 10 minutes
-	DefaultEndpointRequestTTL      int    = 1200 // 20 minutes
+	DefaultEndpointRequestTTL      uint32 = 1200 // 20 minutes
 	ASGIRoutePrefix                string = "/asgi"
 
 	endpointContainerPrefix                 string        = "endpoint"
@@ -190,10 +190,16 @@ func (es *HttpEndpointService) forwardRequest(
 		}
 	}
 
+	// Needed for backwards compatibility
+	ttl := instance.StubConfig.TaskPolicy.TTL
+	if ttl == 0 {
+		ttl = DefaultEndpointRequestTTL
+	}
+
 	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), authInfo, stubId, payload, types.TaskPolicy{
 		MaxRetries: 0,
 		Timeout:    instance.StubConfig.TaskPolicy.Timeout,
-		Expires:    time.Now().Add(time.Duration(instance.StubConfig.TaskPolicy.TTL) * time.Second),
+		Expires:    time.Now().Add(time.Duration(ttl) * time.Second),
 	})
 	if err != nil {
 		return err
