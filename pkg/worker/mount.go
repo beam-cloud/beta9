@@ -2,6 +2,7 @@ package worker
 
 import (
 	"log"
+	"path"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/storage"
@@ -19,10 +20,14 @@ func NewContainerMountManager() *ContainerMountManager {
 }
 
 // SetupContainerMounts initializes any external storage for a container
-func (c *ContainerMountManager) SetupContainerMounts(containerId string, mounts []types.Mount) error {
-	for _, m := range mounts {
+func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerRequest) error {
+	for i, m := range request.Mounts {
 		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
-			err := c.setupMountPointS3(containerId, m)
+			// Add containerId to local mount path for mountpoint storage
+			m.LocalPath = path.Join(m.LocalPath, request.ContainerId)
+			request.Mounts[i].LocalPath = m.LocalPath
+
+			err := c.setupMountPointS3(request.ContainerId, m)
 			if err != nil {
 				return err
 			}

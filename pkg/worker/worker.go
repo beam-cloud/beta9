@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -306,6 +305,11 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		InitialSpec: initialBundleSpec,
 	}
 
+	err = s.containerMountManager.SetupContainerMounts(request)
+	if err != nil {
+		s.containerLogger.Log(request.ContainerId, request.StubId, fmt.Sprintf("failed to setup container mounts: %v", err))
+	}
+
 	// Generate dynamic runc spec for this container
 	spec, err := s.specFromRequest(request, opts)
 	if err != nil {
@@ -321,11 +325,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		return err
 	}
 	log.Printf("<%s> - set container address.\n", containerId)
-
-	err = s.containerMountManager.SetupContainerMounts(request.ContainerId, request.Mounts)
-	if err != nil {
-		s.containerLogger.Log(request.ContainerId, request.StubId, fmt.Sprintf("failed to setup container mounts: %v", err))
-	}
 
 	outputChan := make(chan common.OutputMsg)
 	go s.containerWg.Add(1)
@@ -757,7 +756,22 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
 
 	// Add bind mounts to runc spec
-	for i, m := range request.Mounts {
+	for _, m := range request.Mounts {
+
+		// Skip mountpoint storage if the local path does not exist (mounting failed)
+		if m.MountType == storage.StorageModeMountPoint {
+			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
+				continue
+			}
+		} else {
+			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
+				err := os.MkdirAll(m.LocalPath, 0755)
+				if err != nil {
+					log.Printf("<%s> - failed to create mount directory: %v\n", request.ContainerId, err)
+				}
+			}
+		}
+
 		mode := "rw"
 		if m.ReadOnly {
 			mode = "ro"
@@ -767,20 +781,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			err = forceSymlink(m.MountPath, m.LinkPath)
 			if err != nil {
 				log.Printf("unable to symlink volume: %v", err)
-			}
-		}
-
-		// Add containerId to local mount path for mountpoint storage
-		if m.MountType == storage.StorageModeMountPoint {
-			m.LocalPath = path.Join(m.LocalPath, request.ContainerId)
-			request.Mounts[i].LocalPath = m.LocalPath
-		}
-
-		// If the local mount path does not exist, create it
-		if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
-			err := os.MkdirAll(m.LocalPath, 0755)
-			if err != nil {
-				log.Printf("<%s> - failed to create mount directory: %v\n", request.ContainerId, err)
 			}
 		}
 
