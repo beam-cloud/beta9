@@ -36,6 +36,13 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		autoscaler.TasksPerContainer = uint(in.Autoscaler.TasksPerContainer)
 	}
 
+	if in.TaskPolicy == nil {
+		in.TaskPolicy = &pb.TaskPolicy{
+			MaxRetries: in.Retries,
+			Timeout:    in.Timeout,
+		}
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:     in.Cpu,
