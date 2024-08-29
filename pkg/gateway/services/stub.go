@@ -23,14 +23,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	if in.Gpu != "" {
 		concurrencyLimit, err := gws.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, authInfo.Workspace.ExternalId)
-		if err != nil {
-			return &pb.GetOrCreateStubResponse{
-				Ok:     false,
-				ErrMsg: "Failed to get concurrency limit for workspace",
-			}, nil
-		}
-
-		if concurrencyLimit.GPULimit <= 0 {
+		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
 			return &pb.GetOrCreateStubResponse{
 				Ok:     false,
 				ErrMsg: "GPU concurrency limit is 0.",
