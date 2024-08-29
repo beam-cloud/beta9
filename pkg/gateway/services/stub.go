@@ -25,6 +25,16 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
+	if in.Gpu != "" {
+		concurrencyLimit, err := gws.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, authInfo.Workspace.ExternalId)
+		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
+			return &pb.GetOrCreateStubResponse{
+				Ok:     false,
+				ErrMsg: "GPU concurrency limit is 0.",
+			}, nil
+		}
+	}
+
 	autoscaler := &types.Autoscaler{}
 	if in.Autoscaler.Type == "" {
 		autoscaler.Type = types.QueueDepthAutoscaler
