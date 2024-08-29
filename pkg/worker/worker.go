@@ -878,7 +878,7 @@ func (s *Worker) startup() error {
 
 	err = os.MkdirAll(containerLogsPath, os.ModePerm)
 	if err != nil {
-		return fmt.Errorf("failed to create logs directory: %w", err)
+		return fmt.Errorf("failed to create logs directory: %v", err)
 	}
 
 	go s.eventRepo.PushWorkerStartedEvent(s.workerId)
