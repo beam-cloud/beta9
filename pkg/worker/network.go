@@ -509,18 +509,16 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	namespace := containerId
 
 	hostVeth, err := netlink.LinkByName(vethHost)
-	if err != nil {
-		return err
-	}
+	if err == nil {
+		// Remove the veth from the bridge
+		if err := netlink.LinkSetNoMaster(hostVeth); err != nil {
+			return err
+		}
 
-	// Remove the veth from the bridge
-	if err := netlink.LinkSetNoMaster(hostVeth); err != nil {
-		return err
-	}
-
-	// Immediately delete the veth without setting it down first
-	if err := netlink.LinkDel(hostVeth); err != nil {
-		return err
+		// Immediately delete the veth without setting it down first
+		if err := netlink.LinkDel(hostVeth); err != nil {
+			return err
+		}
 	}
 
 	containerIp, err := m.workerRepo.GetContainerIp(m.networkPrefix, containerId)
