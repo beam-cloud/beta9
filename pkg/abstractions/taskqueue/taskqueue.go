@@ -303,11 +303,13 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}, nil
 	}
 
-	err = tq.rdb.SetEx(ctx, Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
-	if err != nil {
-		return &pb.TaskQueueCompleteResponse{
-			Ok: false,
-		}, nil
+	if in.KeepWarmSeconds > 0 {
+		err = tq.rdb.SetEx(ctx, Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
+		if err != nil {
+			return &pb.TaskQueueCompleteResponse{
+				Ok: false,
+			}, nil
+		}
 	}
 
 	err = tq.rdb.Del(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId)).Err()
