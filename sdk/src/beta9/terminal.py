@@ -31,7 +31,7 @@ _console = Console()
 
 
 def header(text: str, subtext: str = "") -> None:
-    header_text = f"[bold white]=> {text}[/bold white]"
+    header_text = f"[bold violet]=> {text}[/bold violet]"
     _console.print(header_text, subtext)
 
 
