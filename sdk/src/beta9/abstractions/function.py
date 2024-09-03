@@ -23,7 +23,7 @@ from ..clients.function import (
     FunctionScheduleRequest,
     FunctionServiceStub,
 )
-from ..env import is_local
+from ..env import called_on_import, is_local
 from ..sync import FileSyncer
 from ..type import GpuType, GpuTypeAlias, TaskPolicy
 from .mixins import DeployableMixin
@@ -135,6 +135,9 @@ class _CallableWrapper(DeployableMixin):
 
     @with_grpc_error_handling
     def __call__(self, *args, **kwargs) -> Any:
+        if called_on_import():
+            return
+
         if not is_local():
             return self.local(*args, **kwargs)
 
