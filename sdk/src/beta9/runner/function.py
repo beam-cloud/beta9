@@ -2,6 +2,7 @@ import json
 import os
 import time
 import traceback
+from concurrent import futures
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from typing import Optional
 
@@ -129,7 +130,8 @@ def main(channel: Channel):
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
     task_id = config.task_id
 
-    with StdoutJsonInterceptor(task_id=task_id), ThreadPoolExecutor() as thread_pool:
+    thread_pool = ThreadPoolExecutor()
+    with StdoutJsonInterceptor(task_id=task_id):
         container_id = config.container_id
         container_hostname = config.container_hostname
         if not task_id:
@@ -155,6 +157,7 @@ def main(channel: Channel):
             function_stub=function_stub,
             gateway_stub=gateway_stub,
         )
+        futures.thread._threads_queues.clear()
 
         task_status = TaskStatus.Complete
         error: Optional[BaseException] = None
@@ -183,7 +186,6 @@ def main(channel: Channel):
             set_result_resp: FunctionSetResultResponse = function_stub.function_set_result(
                 FunctionSetResultRequest(task_id=task_id, result=pickled_result)
             )
-
             if not set_result_resp.ok:
                 raise RunnerException("Unable to set function result")
 

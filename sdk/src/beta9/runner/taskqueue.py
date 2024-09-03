@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import traceback
+from concurrent import futures
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from multiprocessing import Event, Process, set_start_method
 from multiprocessing.synchronize import Event as TEvent
@@ -268,6 +269,7 @@ class TaskQueueWorker:
         # Load handler and execute on_start method
         handler = FunctionHandler()
         on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
+        thread_pool = ThreadPoolExecutor()
 
         print(f"Worker[{self.worker_index}] ready")
         while True:
@@ -276,7 +278,7 @@ class TaskQueueWorker:
                 time.sleep(TASK_POLLING_INTERVAL)
                 continue
 
-            with StdoutJsonInterceptor(task_id=task.id), ThreadPoolExecutor() as thread_pool:
+            with StdoutJsonInterceptor(task_id=task.id):
                 print(f"Running task <{task.id}>")
 
                 context = FunctionContext.new(
@@ -294,6 +296,7 @@ class TaskQueueWorker:
                     taskqueue_stub=taskqueue_stub,
                     gateway_stub=gateway_stub,
                 )
+                futures.thread._threads_queues.clear()
 
                 start_time = time.time()
                 task_status = TaskStatus.Complete
