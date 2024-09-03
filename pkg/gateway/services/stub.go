@@ -178,13 +178,13 @@ func (gws *GatewayService) configureVolumes(ctx context.Context, volumes []*pb.V
 			// De-reference secrets
 			accessKey, err := gws.backendRepo.GetSecretByName(ctx, workspace, volume.Config.AccessKey)
 			if err != nil {
-				return fmt.Errorf("failed to get secret %s", volume.Config.AccessKey)
+				return fmt.Errorf("Failed to get secret: %s", volume.Config.AccessKey)
 			}
 			volumes[i].Config.AccessKey = accessKey.Value
 
 			secretKey, err := gws.backendRepo.GetSecretByName(ctx, workspace, volume.Config.SecretKey)
 			if err != nil {
-				return fmt.Errorf("failed to get secret %s", volume.Config.SecretKey)
+				return fmt.Errorf("Failed to get secret: %s", volume.Config.SecretKey)
 			}
 			volumes[i].Config.SecretKey = secretKey.Value
 		}
