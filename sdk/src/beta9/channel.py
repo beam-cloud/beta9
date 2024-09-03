@@ -183,7 +183,6 @@ def runner_context():
         yield channel
     except RunnerException as exc:
         exit_code = exc.code
-        raise
     except SystemExit as exc:
         exit_code = exc.code
         raise

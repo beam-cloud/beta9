@@ -8,6 +8,7 @@ import time
 import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import wraps
 from typing import Any, Callable, Optional, Union
 
 import requests
@@ -193,6 +194,32 @@ def execute_lifecycle_method(name: str) -> Union[Any, None]:
         raise RunnerException()
 
 
+# TODO: add retry behavior directly in dynamically generated GRPC stubs
+def retry_grpc_call(
+    *, exception_to_check: Exception, tries: int = 4, delay: int = 5, backoff: int = 2
+) -> Any:
+    def _retry_decorator(f):
+        @wraps(f)
+        def f_to_retry(*args, **kwargs):
+            mtries, mdelay = tries, delay
+
+            while mtries > 1:
+                try:
+                    return f(*args, **kwargs)
+                except exception_to_check:
+                    print(f"Unexpected GRPC error, retrying in {mdelay} seconds...")
+                    time.sleep(mdelay)
+                    mtries -= 1
+                    mdelay *= backoff
+
+            return f(*args, **kwargs)
+
+        return f_to_retry
+
+    return _retry_decorator
+
+
+@retry_grpc_call(exception_to_check=BaseException, tries=4, delay=5, backoff=2)
 def end_task_and_send_callback(
     *,
     gateway_stub: GatewayServiceStub,
