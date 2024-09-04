@@ -187,19 +187,19 @@ func (as *TCPContainerAppService) getOrCreateAppInstance(stubId string, options 
 
 	// Create base autoscaled instance
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(as.ctx, &abstractions.AutoscaledInstanceConfig{
-		Name:            fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
-		Rdb:             as.rdb,
-		Stub:            stub,
-		StubConfig:      stubConfig,
-		Object:          &stub.Object,
-		Workspace:       &stub.Workspace,
-		Token:           token,
-		Scheduler:       as.scheduler,
-		ContainerRepo:   as.containerRepo,
-		BackendRepo:     as.backendRepo,
-		InstanceLockKey: Keys.appInstanceLock(stub.Workspace.Name, stubId),
-		// StartContainersFunc: instance.startContainers,
-		// StopContainersFunc:  instance.stopContainers,
+		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
+		Rdb:                 as.rdb,
+		Stub:                stub,
+		StubConfig:          stubConfig,
+		Object:              &stub.Object,
+		Workspace:           &stub.Workspace,
+		Token:               token,
+		Scheduler:           as.scheduler,
+		ContainerRepo:       as.containerRepo,
+		BackendRepo:         as.backendRepo,
+		InstanceLockKey:     Keys.appInstanceLock(stub.Workspace.Name, stubId),
+		StartContainersFunc: instance.startContainers,
+		StopContainersFunc:  instance.stopContainers,
 	})
 	if err != nil {
 		return nil, err
