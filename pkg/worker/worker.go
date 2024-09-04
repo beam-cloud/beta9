@@ -147,18 +147,20 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	runcServer, err := NewRunCServer(containerInstances, imageClient)
+	ctx, cancel := context.WithCancel(context.Background())
+	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepo, containerRepo, config)
 	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	runcServer, err := NewRunCServer(containerInstances, imageClient, containerNetworkManager)
+	if err != nil {
+		cancel()
 		return nil, err
 	}
 
 	err = runcServer.Start()
-	if err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepo, containerRepo, config)
 	if err != nil {
 		cancel()
 		return nil, err

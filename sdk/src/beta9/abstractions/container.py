@@ -41,14 +41,14 @@ class Tunnel(BaseAbstraction):
     def container_stub(self, value: ContainerServiceStub) -> None:
         self._container_stub = value
 
-    def open(self) -> str:
+    def open(self, *, port: int) -> str:
         if is_local():
             raise TunnelCannotRunLocallyError
 
         container_id = os.environ["CONTAINER_ID"]
 
         r: CreateTunnelResponse = self.container_stub.create_tunnel(
-            CreateTunnelRequest(container_id=container_id)
+            CreateTunnelRequest(container_id=container_id, port=port)
         )
 
         print(r.ok)

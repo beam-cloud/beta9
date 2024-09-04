@@ -32,12 +32,13 @@ type RunCServer struct {
 	runcHandle     runc.Runc
 	baseConfigSpec specs.Spec
 	pb.UnimplementedRunCServiceServer
-	containerInstances *common.SafeMap[*ContainerInstance]
-	imageClient        *ImageClient
-	port               int
+	containerInstances      *common.SafeMap[*ContainerInstance]
+	containerNetworkManager *ContainerNetworkManager
+	imageClient             *ImageClient
+	port                    int
 }
 
-func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], imageClient *ImageClient) (*RunCServer, error) {
+func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], imageClient *ImageClient, containerNetworkManager *ContainerNetworkManager) (*RunCServer, error) {
 	var baseConfigSpec specs.Spec
 	specTemplate := strings.TrimSpace(string(baseRuncConfigRaw))
 	err := json.Unmarshal([]byte(specTemplate), &baseConfigSpec)
@@ -46,10 +47,11 @@ func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], image
 	}
 
 	return &RunCServer{
-		runcHandle:         runc.Runc{},
-		baseConfigSpec:     baseConfigSpec,
-		containerInstances: containerInstances,
-		imageClient:        imageClient,
+		runcHandle:              runc.Runc{},
+		baseConfigSpec:          baseConfigSpec,
+		containerInstances:      containerInstances,
+		imageClient:             imageClient,
+		containerNetworkManager: containerNetworkManager,
 	}, nil
 }
 
@@ -243,4 +245,21 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 
 	close(doneChan)
 	return err
+}
+
+func (s *RunCServer) RunCExposePort(ctx context.Context, in *pb.RunCExposePortRequest) (*pb.RunCExposePortResponse, error) {
+	_, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCExposePortResponse{Ok: false}, nil
+	}
+
+	freePort, err := getRandomFreePort()
+	if err != nil {
+		return &pb.RunCExposePortResponse{Ok: false}, nil
+	}
+
+	err = s.containerNetworkManager.ExposePort(in.ContainerId, freePort, int(in.Port))
+	return &pb.RunCExposePortResponse{
+		Ok: err == nil,
+	}, nil
 }

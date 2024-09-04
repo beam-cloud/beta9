@@ -24,7 +24,8 @@ message CommandExecutionResponse {
 
 message CreateTunnelRequest {
   string container_id = 1;
-  int64 ttl = 2;
+  uint32 port = 2;
+  int64 ttl = 3;
 }
 
 message CreateTunnelResponse {

@@ -41,7 +41,8 @@ class CommandExecutionResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class CreateTunnelRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
-    ttl: int = betterproto.int64_field(2)
+    port: int = betterproto.uint32_field(2)
+    ttl: int = betterproto.int64_field(3)
 
 
 @dataclass(eq=False, repr=False)

@@ -17,10 +17,8 @@ import (
 )
 
 type request struct {
-	ctx         echo.Context
-	payload     *types.TaskPayload
-	taskMessage *types.TaskMessage
-	done        chan bool
+	ctx  echo.Context
+	done chan bool
 }
 
 type container struct {
@@ -83,10 +81,8 @@ func NewConnectionBuffer(
 func (cb *ConnectionBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPayload, taskMessage *types.TaskMessage) error {
 	done := make(chan bool)
 	cb.buffer.Push(request{
-		ctx:         ctx,
-		done:        done,
-		payload:     payload,
-		taskMessage: taskMessage,
+		ctx:  ctx,
+		done: done,
 	})
 
 	cb.length.Add(1)

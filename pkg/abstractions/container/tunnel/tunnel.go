@@ -2,11 +2,12 @@ package container_tunnel
 
 import (
 	"context"
-	"log"
+	"time"
 
 	pb "github.com/beam-cloud/beta9/proto"
 
 	container_common "github.com/beam-cloud/beta9/pkg/abstractions/container/common"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -33,6 +34,7 @@ func NewContainerTunnelService(
 	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
 	if err != nil {
 		return nil, err
+
 	}
 
 	svc := &ContainerTunnelService{
@@ -50,9 +52,46 @@ func NewContainerTunnelService(
 }
 
 func (ts *ContainerTunnelService) CreateTunnel(ctx context.Context, in *pb.CreateTunnelRequest) (*pb.CreateTunnelResponse, error) {
-	log.Println("container ID: ", in.ContainerId)
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	hostname, err := ts.containerRepo.GetWorkerAddress(in.ContainerId)
+	if err != nil {
+		return &pb.CreateTunnelResponse{
+			Ok: false,
+		}, nil
+	}
+
+	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, ts.tailscale, ts.config.Tailscale)
+	if err != nil {
+		return &pb.CreateTunnelResponse{
+			Ok: false,
+		}, nil
+	}
+	defer conn.Close()
+
+	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
+	if err != nil {
+		return &pb.CreateTunnelResponse{
+			Ok: false,
+		}, nil
+	}
+	defer client.Close()
+
+	r, err := client.ExposePort(in.ContainerId, in.Port)
+	if err != nil {
+		return &pb.CreateTunnelResponse{
+			Ok: false,
+		}, nil
+	}
+
+	if r.Ok {
+		err := ts.rdb.Set(ctx, container_common.Keys.ContainerTunnelAddress(authInfo.Workspace.Name, in.ContainerId), "itismy", 0).Err()
+		if err != nil {
+			return &pb.CreateTunnelResponse{Ok: false}, nil
+		}
+	}
 
 	return &pb.CreateTunnelResponse{
-		Ok: true,
+		Ok: r.Ok,
 	}, nil
 }
