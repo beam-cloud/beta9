@@ -134,7 +134,7 @@ def create_context(config_path: Path, **kwargs):
     contexts = load_config(config_path)
 
     if name := kwargs.get("name"):
-        if name in contexts:
+        if name in contexts and contexts[name].is_valid():
             text = f"Context '{name}' already exists. Overwrite?"
             if terminal.prompt(text=text, default="n").lower() in ["n", "no"]:
                 return

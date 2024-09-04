@@ -68,6 +68,9 @@ class ConfigContext:
             return True
         return False
 
+    def is_valid(self) -> bool:
+        return all([self.token, self.gateway_host, self.gateway_port])
+
 
 def set_settings(s: Optional[SDKSettings] = None) -> None:
     if s is None:
@@ -134,9 +137,9 @@ def is_config_empty(path: Optional[Union[Path, str]] = None) -> bool:
 
 
 def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
-    config = load_config()
-    if name in config:
-        return config[name]
+    contexts = load_config()
+    if name in contexts:
+        return contexts[name]
 
     gateway_host = os.getenv("BETA9_GATEWAY_HOST", None)
     gateway_port = os.getenv("BETA9_GATEWAY_PORT", None)
@@ -150,8 +153,9 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
         )
 
     terminal.header(f"Context '{name}' does not exist. Let's try setting it up.")
-    _, config = prompt_for_config_context(name=name)
-    return config
+    contexts[name] = prompt_for_config_context(name=name, require_token=True)[1]
+    save_config(contexts)
+    return contexts[name]
 
 
 def prompt_for_config_context(
@@ -174,17 +178,17 @@ def prompt_for_config_context(
     )
 
     try:
-        while not (name := prompt_name()) or not isinstance(name, str):
+        while not name and not (name := prompt_name()):
             terminal.warn("Name is invalid.")
 
         if settings.use_defaults_in_prompt:
-            gateway_host = DEFAULT_GATEWAY_HOST
-            gateway_port = DEFAULT_GATEWAY_PORT
+            gateway_host = settings.gateway_host
+            gateway_port = settings.gateway_port
         else:
             while not (gateway_host := prompt_gateway_host()) or not validate_ip_or_dns(
                 gateway_host
             ):
-                terminal.warn("Gateway host is invalid.")
+                terminal.warn("Gateway host is invalid or unreachable.")
 
             while not (gateway_port := prompt_gateway_port()) or not validate_port(gateway_port):
                 terminal.warn("Gateway port is invalid.")
