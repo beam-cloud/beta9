@@ -1,9 +1,11 @@
 import os
-from typing import List, Optional, Union
+from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
     CONTAINER_STUB_TYPE,
+    ENDPOINT_DEPLOYMENT_STUB_TYPE,
+    ENDPOINT_STUB_TYPE,
     BaseAbstraction,
     RunnerAbstraction,
 )
@@ -20,6 +22,7 @@ from ..clients.container import (
 from ..env import is_local
 from ..sync import FileSyncer
 from ..type import GpuType, GpuTypeAlias
+from .mixins import DeployableMixin
 
 
 class TunnelCannotRunLocallyError(Exception):
@@ -160,3 +163,102 @@ class Command(RunnerAbstraction):
 
         terminal.header("Command execution complete 🎉")
         return last_response.exit_code
+
+
+class App(RunnerAbstraction):
+    """
+    App allows you to deploy arbitrary containers.
+
+    Parameters:
+        cpu (Union[int, float, str]):
+            The number of CPU cores allocated to the container. Default is 1.0.
+        memory (Union[int, str]):
+            The amount of memory allocated to the container. It should be specified in
+            MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
+        gpu (GpuTypeAlias):
+            The type or name of the GPU device to be used for GPU-accelerated tasks. If not
+            applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
+        image (Union[Image, dict]):
+            The container image used for the task execution. Default is [Image](#image).
+        volumes (Optional[List[Volume]]):
+            A list of volumes to be mounted to the container. Default is None.
+        secrets (Optional[List[str]):
+            A list of secrets that are injected into the container as environment variables. Default is [].
+        name (Optional[str]):
+            A name for the container. Default is None.
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+
+    Example usage:
+        ```
+        from beta9 import Image, container
+
+        ```
+    """
+
+    def __init__(
+        self,
+        cpu: Union[int, float, str] = 1.0,
+        memory: Union[int, str] = 128,
+        gpu: GpuTypeAlias = GpuType.NoGPU,
+        image: Image = Image(),
+        volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
+        callback_url: Optional[str] = None,
+    ) -> None:
+        super().__init__(
+            cpu=cpu,
+            memory=memory,
+            gpu=gpu,
+            image=image,
+            volumes=volumes,
+            secrets=secrets,
+            callback_url=callback_url,
+        )
+
+        self.task_id = ""
+        self._container_stub: Optional[ContainerServiceStub] = None
+        self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
+
+    @property
+    def stub(self) -> ContainerServiceStub:
+        if not self._container_stub:
+            self._container_stub = ContainerServiceStub(self.channel)
+        return self._container_stub
+
+    @stub.setter
+    def stub(self, value: ContainerServiceStub) -> None:
+        self._container_stub = value
+
+    def __call__(self, func):
+        return _CallableWrapper(func, self)
+
+
+class _CallableWrapper(DeployableMixin):
+    deployment_stub_type = ENDPOINT_DEPLOYMENT_STUB_TYPE
+    base_stub_type = ENDPOINT_STUB_TYPE
+
+    def __init__(self, func: Callable, parent: Union[App]):
+        self.func: Callable = func
+        self.parent: Union[App] = parent
+
+    def __call__(self, *args, **kwargs) -> Any:
+        if not is_local():
+            return self.local(*args, **kwargs)
+
+        raise NotImplementedError("Direct calls to Apps are not supported.")
+
+    def local(self, *args, **kwargs) -> Any:
+        return self.func(*args, **kwargs)
+
+    @with_grpc_error_handling
+    def serve(self, timeout: int = 0):
+        pass
+
+
+class AppConfig:
+    def entry_point(args: List[str]):
+        return []
+
+    def expose_port(port: int):
+        return 8080

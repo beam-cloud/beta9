@@ -221,6 +221,9 @@ const (
 	StubTypeASGIServe              string = "asgi/serve"
 	StubTypeScheduledJob           string = "schedule"
 	StubTypeScheduledJobDeployment string = "schedule/deployment"
+	StubTypeApp                    string = "app"
+	StubTypeAppDeployment          string = "app/deployment"
+	StubTypeAppServe               string = "app/serve"
 )
 
 type StubType string
