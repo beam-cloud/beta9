@@ -390,6 +390,8 @@ def in_jupyter() -> bool:
 
 def gather_executed_cells() -> str:
     try:
+        from IPython import get_ipython
+
         with open(get_ipython().kernel.session.config["IPKernelApp"]["connection_file"], "r") as f:
             notebook_path = json.loads(f.read())["jupyter_session"]
 
