@@ -30,16 +30,16 @@
 
 </div>
 
-### Beta9 is an open source platform for running multi-cloud GPU workloads
+## What is Beta9?
 
-- Run workloads on any VM, anywhere
-- Read files at the edge from your local filesystem using distributed, cross-region storage
-- Add VMs from any cloud using a single cURL command
-- Manage your fleet of hardware with CLI tools
-- Connect your fleet of GPUs using a Tailscale-powered service mesh
+Beta9 is an open source container orchestrator, designed for running GPU workloads across different cloud environments in different regions.
+
+- Connect VMs to your cluster with a single cURL command
+- Read large files at the edge using distributed, cross-region storage
+- Manage your fleet of GPUs using a Tailscale-powered service mesh
 - Run workloads using a friendly Python interface
 
-## Usage
+## How does it work?
 
 ### Provision GPUs Anywhere
 
@@ -61,9 +61,11 @@ sudo ./agent --token "AUTH_TOKEN" \
   --provider-name "lambda"
 ```
 
-You can ssh into a VM and paste that cURL command to register the machine to your cluster.
+You can run this install script on your VM to connect it to your cluster.
 
 ### Manage Your GPU Fleet
+
+Manage your distributed cross-region GPU cluster using a centralized control plane.
 
 ```sh
 $ beta9 machine list
@@ -72,6 +74,7 @@ $ beta9 machine list
 |----------|---------|------------|---------|------------|-------------|
 | edc9c2d2 | 30,000m | 222.16 GiB | A10G    | registered | lambda-a10g |
 | d87ad026 | 30,000m | 216.25 GiB | A100-40 | registered | gcp-a100-40 |
+
 ```
 
 ### Run Workloads in Python
@@ -94,7 +97,7 @@ You can run Beta9 locally, or in an existing Kubernetes cluster using our [Helm 
 
 ### Setting Up the Server
 
-k3d is used for local development. You'll need Docker to get started.
+k3d is used for local development. You'll need Docker and Tailscale to get started.
 
 To use our fully automated setup, run the `setup` make target.
 
