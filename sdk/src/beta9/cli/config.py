@@ -140,7 +140,7 @@ def create_context(config_path: Path, **kwargs):
                 return
 
     # Prompt user for context settings
-    name, context = prompt_for_config_context(**kwargs)
+    name, context = prompt_for_config_context(require_token=True, **kwargs)
 
     # Save context to config
     contexts[name] = context

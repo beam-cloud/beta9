@@ -43,6 +43,7 @@ class SDKSettings:
     api_host: str = DEFAULT_API_HOST
     config_path: Path = Path("~/.beta9/config.ini").expanduser()
     ascii_logo: str = DEFAULT_ASCII_LOGO
+    use_defaults_in_prompt: bool = False
 
     def __post_init__(self, **kwargs):
         if p := os.getenv("CONFIG_PATH"):
@@ -158,13 +159,13 @@ def prompt_for_config_context(
     token: Optional[str] = None,
     gateway_host: Optional[str] = None,
     gateway_port: Optional[int] = None,
+    require_token: bool = False,
 ) -> Tuple[str, ConfigContext]:
     settings = get_settings()
 
     prompt_name = functools.partial(
         terminal.prompt, text="Context Name", default=name or DEFAULT_CONTEXT_NAME
     )
-    # TODO: validate host by talking to gateway?
     prompt_gateway_host = functools.partial(
         terminal.prompt, text="Gateway Host", default=gateway_host or settings.gateway_host
     )
@@ -174,15 +175,25 @@ def prompt_for_config_context(
 
     try:
         while not (name := prompt_name()) or not isinstance(name, str):
-            pass
+            terminal.warn("Name is invalid.")
 
-        while not (gateway_host := prompt_gateway_host()) or not validate_ip_or_dns(gateway_host):
-            pass
+        if settings.use_defaults_in_prompt:
+            gateway_host = DEFAULT_GATEWAY_HOST
+            gateway_port = DEFAULT_GATEWAY_PORT
+        else:
+            while not (gateway_host := prompt_gateway_host()) or not validate_ip_or_dns(
+                gateway_host
+            ):
+                terminal.warn("Gateway host is invalid.")
 
-        while not (gateway_port := prompt_gateway_port()) or not validate_port(gateway_port):
-            pass
+            while not (gateway_port := prompt_gateway_port()) or not validate_port(gateway_port):
+                terminal.warn("Gateway port is invalid.")
 
-        token = terminal.prompt(text="Token", default=None)
+        if require_token:
+            while not (token := terminal.prompt(text="Token", default=None)) or len(token) < 64:
+                terminal.warn("Token is invalid.")
+        else:
+            token = terminal.prompt(text="Token", default=None)
 
     except (KeyboardInterrupt, EOFError):
         os._exit(1)
