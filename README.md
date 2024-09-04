@@ -5,7 +5,7 @@
 
 ---
 
-### **✨ Run GPU Workloads Across Multiple Clouds ✨**
+### Run GPU Workloads Across Multiple Clouds
 
 <p align="center">
   <a href="https://docs.beam.cloud">
@@ -34,9 +34,9 @@
 
 - Run workloads on any VM, anywhere
 - Read files at the edge from your local filesystem using distributed, cross-region storage
-- Connect your fleet of GPUs using a Tailscale-powered service mesh
-- Provision new VMs from any cloud using a single cURL command
+- Add VMs from any cloud using a single cURL command
 - Manage your fleet of hardware with CLI tools
+- Connect your fleet of GPUs using a Tailscale-powered service mesh
 - Run workloads using a friendly Python interface
 
 ## Usage
@@ -94,7 +94,7 @@ You can run Beta9 locally, or in an existing Kubernetes cluster using our [Helm 
 
 ### Setting Up the Server
 
-k3d is used for local development. You'll need Docker and Make to get started.
+k3d is used for local development. You'll need Docker to get started.
 
 To use our fully automated setup, run the `setup` make target.
 
@@ -124,7 +124,6 @@ After you've setup the server and SDK, check out the SDK readme [here](sdk/READM
 
 We welcome contributions big or small. These are the most helpful things for us:
 
-- Raise [issues or bugs](https://github.com/beam-cloud/issues)
 - Submit a [feature request](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) or [bug report](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=bug-report.md&title=)
 - Open a PR with a new feature or improvement
 
