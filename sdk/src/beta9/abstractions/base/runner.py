@@ -1,5 +1,4 @@
 import inspect
-import json
 import os
 import time
 import uuid
@@ -50,6 +49,7 @@ TASKQUEUE_SERVE_STUB_TYPE = "taskqueue/serve"
 ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
 ASGI_SERVE_STUB_TYPE = "asgi/serve"
 FUNCTION_SERVE_STUB_TYPE = "function/serve"
+TMP_FILE_PREFIX = "tmp_beta9"
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -199,12 +199,12 @@ class RunnerAbstraction(BaseAbstraction):
             return
 
         module = inspect.getmodule(func)  # Determine module / function name
-        if in_jupyter():
-            module_file = gather_executed_cells()
-            module_name = module_file.split("/")[-1].rstrip(".py")
-        elif module:
+        if hasattr(module, "__file__"):
             module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
+        elif in_jupyter():
+            module_file = create_tmp_jupyter_file(module._ih)
+            module_name = module_file.split("/")[-1].rstrip(".py")
         else:
             module_name = "__main__"
 
@@ -307,7 +307,7 @@ class RunnerAbstraction(BaseAbstraction):
                 self.object_id = sync_result.object_id
 
                 for file in os.listdir("./"):
-                    if file.startswith("tmp_beta9_"):
+                    if file.startswith(TMP_FILE_PREFIX):
                         os.remove(file)
             else:
                 terminal.error("File sync failed", exit=False)
@@ -386,32 +386,16 @@ def in_jupyter() -> bool:
 
         shell = get_ipython().__class__.__name__
         return shell == "ZMQInteractiveShell"
-    except NameError:
+    except (NameError, ImportError):
         return False
 
 
-def gather_executed_cells() -> str:
-    try:
-        from IPython import get_ipython
+def create_tmp_jupyter_file(input_history: List[str]) -> str:
+    tmp_file_path = f"./{TMP_FILE_PREFIX}_{uuid.uuid4()}.py"
+    with open(tmp_file_path, "w") as f:
+        for code in input_history:
+            if isinstance(code, list):
+                code = "".join(code)
+            f.write(code + "\n\n")
 
-        with open(get_ipython().kernel.session.config["IPKernelApp"]["connection_file"], "r") as f:
-            notebook_path = json.loads(f.read())["jupyter_session"]
-
-        with open(notebook_path, "r", encoding="utf-8") as f:
-            notebook_json = json.load(f)
-
-        executed_cells = []
-        for cell in notebook_json.get("cells", []):
-            if cell.get("cell_type") == "code" and cell.get("execution_count") is not None:
-                executed_cells.append(cell.get("source", ""))
-
-        tmp_file_path = f"./tmp_beta9_{uuid.uuid4()}.py"
-        with open(tmp_file_path, "w") as f:
-            for code in executed_cells:
-                if isinstance(code, list):
-                    code = "".join(code)
-                f.write(code + "\n\n")
-
-        return tmp_file_path
-    except NameError:
-        return ""
+    return tmp_file_path
