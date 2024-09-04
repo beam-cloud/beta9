@@ -68,6 +68,9 @@ class ConfigContext:
             return True
         return False
 
+    def is_valid(self) -> bool:
+        return all([self.token, self.gateway_host, self.gateway_port])
+
 
 def set_settings(s: Optional[SDKSettings] = None) -> None:
     if s is None:
@@ -175,7 +178,7 @@ def prompt_for_config_context(
     )
 
     try:
-        while not name and (name := prompt_name()):
+        while not name and not (name := prompt_name()):
             terminal.warn("Name is invalid.")
 
         if settings.use_defaults_in_prompt:
