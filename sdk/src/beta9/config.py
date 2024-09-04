@@ -178,8 +178,8 @@ def prompt_for_config_context(
             terminal.warn("Name is invalid.")
 
         if settings.use_defaults_in_prompt:
-            gateway_host = DEFAULT_GATEWAY_HOST
-            gateway_port = DEFAULT_GATEWAY_PORT
+            gateway_host = settings.gateway_host
+            gateway_port = settings.gateway_port
         else:
             while not (gateway_host := prompt_gateway_host()) or not validate_ip_or_dns(
                 gateway_host
