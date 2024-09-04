@@ -97,7 +97,7 @@ You can run Beta9 locally, or in an existing Kubernetes cluster using our [Helm 
 
 ### Setting Up the Server
 
-k3d is used for local development. You'll need Docker and Tailscale to get started.
+k3d is used for local development. You'll need Docker to get started.
 
 To use our fully automated setup, run the `setup` make target.
 
