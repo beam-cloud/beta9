@@ -401,13 +401,13 @@ def gather_executed_cells() -> str:
             if cell.get("cell_type") == "code" and cell.get("execution_count") is not None:
                 executed_cells.append(cell.get("source", ""))
 
-        temp_file_path = f"./tmp_beta9_{uuid.uuid4()}.py"
-        with open(temp_file_path, "w") as f:
+        tmp_file_path = f"./tmp_beta9_{uuid.uuid4()}.py"
+        with open(tmp_file_path, "w") as f:
             for code in executed_cells:
                 if isinstance(code, list):
                     code = "".join(code)
                 f.write(code + "\n\n")
 
-        return temp_file_path
+        return tmp_file_path
     except NameError:
         return ""
