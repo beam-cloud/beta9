@@ -2,12 +2,11 @@ package container_app
 
 import (
 	"context"
-	"net/http"
+	"io"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/labstack/echo/v4"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -16,8 +15,9 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-type request struct {
-	ctx  echo.Context
+type tcpConnection struct {
+	src  net.Conn
+	dst  net.Conn
 	done chan bool
 }
 
@@ -29,7 +29,6 @@ type container struct {
 
 type ConnectionBuffer struct {
 	ctx                     context.Context
-	httpClient              *http.Client
 	tailscale               *network.Tailscale
 	tsConfig                types.TailscaleConfig
 	stubId                  string
@@ -37,7 +36,7 @@ type ConnectionBuffer struct {
 	workspace               *types.Workspace
 	rdb                     *common.RedisClient
 	containerRepo           repository.ContainerRepository
-	buffer                  *abstractions.RingBuffer[request]
+	buffer                  *abstractions.RingBuffer[tcpConnection]
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
 
@@ -61,25 +60,24 @@ func NewConnectionBuffer(
 		workspace:               workspace,
 		stubId:                  stubId,
 		stubConfig:              stubConfig,
-		buffer:                  abstractions.NewRingBuffer[request](size),
+		buffer:                  abstractions.NewRingBuffer[tcpConnection](size),
 		availableContainers:     []container{},
 		availableContainersLock: sync.RWMutex{},
 		containerRepo:           containerRepo,
-		httpClient:              &http.Client{},
 		length:                  atomic.Int32{},
 		tailscale:               tailscale,
 		tsConfig:                tsConfig,
 	}
 
-	go b.processRequests()
-
+	go b.processConnections()
 	return b
 }
 
-func (cb *ConnectionBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPayload, taskMessage *types.TaskMessage) error {
+func (cb *ConnectionBuffer) ForwardConnection(src, dst net.Conn) error {
 	done := make(chan bool)
-	cb.buffer.Push(request{
-		ctx:  ctx,
+	cb.buffer.Push(tcpConnection{
+		src:  src,
+		dst:  dst,
 		done: done,
 	})
 
@@ -99,25 +97,55 @@ func (cb *ConnectionBuffer) ForwardRequest(ctx echo.Context, payload *types.Task
 	}
 }
 
-func (cb *ConnectionBuffer) processRequests() {
+func (cb *ConnectionBuffer) processConnections() {
 	for {
 		select {
 		case <-cb.ctx.Done():
 			return
 		default:
-			req, ok := cb.buffer.Pop()
+			tcpConn, ok := cb.buffer.Pop()
 			if !ok {
 				time.Sleep(time.Millisecond * 100)
 				continue
 			}
 
-			if req.ctx.Request().Context().Err() != nil {
-				// Context has been cancelled
+			if tcpConn.src == nil || tcpConn.dst == nil {
 				continue
 			}
 
-			// go cb.handleHttpRequest(req)
+			go cb.handleTCPConnection(tcpConn)
 		}
+	}
+}
+
+func (cb *ConnectionBuffer) handleTCPConnection(tcpConn tcpConnection) {
+	defer func() {
+		tcpConn.src.Close()
+		tcpConn.dst.Close()
+	}()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Bidirectional copying from src <-> dst
+	go func() {
+		defer wg.Done()
+		cb.copyData(tcpConn.src, tcpConn.dst)
+	}()
+	go func() {
+		defer wg.Done()
+		cb.copyData(tcpConn.dst, tcpConn.src)
+	}()
+
+	wg.Wait()
+
+	tcpConn.done <- true
+}
+
+func (cb *ConnectionBuffer) copyData(src, dst net.Conn) {
+	_, err := io.Copy(dst, src)
+	if err != nil {
+		// Handle the error if necessary, e.g., log it
 	}
 }
 
