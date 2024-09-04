@@ -18,7 +18,7 @@ import (
 
 type appInstance struct {
 	*abstractions.AutoscaledInstance
-	// buffer *RequestBuffer
+	buffer *ConnectionBuffer
 }
 
 func (i *appInstance) startContainers(containersToRun int) error {

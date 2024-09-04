@@ -56,21 +56,19 @@ func NewConnectionBuffer(
 	tsConfig types.TailscaleConfig,
 ) *ConnectionBuffer {
 	b := &ConnectionBuffer{
-		ctx:                 ctx,
-		rdb:                 rdb,
-		workspace:           workspace,
-		stubId:              stubId,
-		stubConfig:          stubConfig,
-		buffer:              abstractions.NewRingBuffer[request](size),
-		availableContainers: []container{},
-
+		ctx:                     ctx,
+		rdb:                     rdb,
+		workspace:               workspace,
+		stubId:                  stubId,
+		stubConfig:              stubConfig,
+		buffer:                  abstractions.NewRingBuffer[request](size),
+		availableContainers:     []container{},
 		availableContainersLock: sync.RWMutex{},
 		containerRepo:           containerRepo,
 		httpClient:              &http.Client{},
 		length:                  atomic.Int32{},
-
-		tailscale: tailscale,
-		tsConfig:  tsConfig,
+		tailscale:               tailscale,
+		tsConfig:                tsConfig,
 	}
 
 	go b.processRequests()

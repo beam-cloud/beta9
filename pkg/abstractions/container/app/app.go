@@ -205,7 +205,7 @@ func (as *TCPContainerAppService) getOrCreateAppInstance(stubId string, options 
 		return nil, err
 	}
 
-	// instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, as.rdb, &stub.Workspace, stubId, requestBufferSize, as.containerRepo, stubConfig, as.tailscale, as.config.Tailscale)
+	instance.buffer = NewConnectionBuffer(autoscaledInstance.Ctx, as.rdb, &stub.Workspace, stubId, requestBufferSize, as.containerRepo, stubConfig, as.tailscale, as.config.Tailscale)
 
 	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance
