@@ -18,7 +18,7 @@ import (
 type tcpConnection struct {
 	src  net.Conn
 	dst  net.Conn
-	done chan bool
+	done chan struct{}
 }
 
 type container struct {
@@ -70,11 +70,12 @@ func NewConnectionBuffer(
 	}
 
 	go b.processConnections()
+
 	return b
 }
 
 func (cb *ConnectionBuffer) ForwardConnection(src, dst net.Conn) error {
-	done := make(chan bool)
+	done := make(chan struct{})
 	cb.buffer.Push(tcpConnection{
 		src:  src,
 		dst:  dst,
@@ -82,18 +83,13 @@ func (cb *ConnectionBuffer) ForwardConnection(src, dst net.Conn) error {
 	})
 
 	cb.length.Add(1)
-	defer func() {
-		cb.length.Add(-1)
-	}()
+	defer cb.length.Add(-1)
 
-	for {
-		select {
-		case <-cb.ctx.Done():
-			return nil
-		case <-done:
-			return nil
-		case <-time.After(100 * time.Millisecond):
-		}
+	select {
+	case <-cb.ctx.Done():
+		return nil
+	case <-done:
+		return nil
 	}
 }
 
@@ -105,7 +101,7 @@ func (cb *ConnectionBuffer) processConnections() {
 		default:
 			tcpConn, ok := cb.buffer.Pop()
 			if !ok {
-				time.Sleep(time.Millisecond * 100)
+				time.Sleep(time.Millisecond * 10)
 				continue
 			}
 
@@ -122,31 +118,42 @@ func (cb *ConnectionBuffer) handleTCPConnection(tcpConn tcpConnection) {
 	defer func() {
 		tcpConn.src.Close()
 		tcpConn.dst.Close()
+		close(tcpConn.done)
 	}()
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// Bidirectional copying from src <-> dst
+	srcReader := newBufferedReader(tcpConn.src)
+	dstWriter := newBufferedWriter(tcpConn.dst)
+
+	dstReader := newBufferedReader(tcpConn.dst)
+	srcWriter := newBufferedWriter(tcpConn.src)
+
 	go func() {
 		defer wg.Done()
-		cb.copyData(tcpConn.src, tcpConn.dst)
+		cb.copyData(srcReader, dstWriter)
 	}()
 	go func() {
 		defer wg.Done()
-		cb.copyData(tcpConn.dst, tcpConn.src)
+		cb.copyData(dstReader, srcWriter)
 	}()
 
 	wg.Wait()
-
-	tcpConn.done <- true
 }
 
-func (cb *ConnectionBuffer) copyData(src, dst net.Conn) {
-	_, err := io.Copy(dst, src)
+func (cb *ConnectionBuffer) copyData(src io.Reader, dst io.Writer) {
+	_, err := io.CopyBuffer(dst, src, make([]byte, 32*1024)) // Use a 32KB buffer for better performance
 	if err != nil {
-		// Handle the error if necessary, e.g., log it
 	}
+}
+
+func newBufferedReader(conn net.Conn) io.Reader {
+	return io.LimitReader(conn, 64*1024)
+}
+
+func newBufferedWriter(conn net.Conn) io.Writer {
+	return io.MultiWriter(conn)
 }
 
 func (cb *ConnectionBuffer) Length() int {
