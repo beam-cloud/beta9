@@ -116,11 +116,11 @@ def _monitor_task(
             backoff *= 2
             retry += 1
 
-        except CancelledError:
+        except (CancelledError, ValueError):
             return
 
         except BaseException:
-            print("Unexpected error occurred in task monitor")
+            print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
             os._exit(0)
 
 
