@@ -184,7 +184,7 @@ def prompt_for_config_context(
             while not (gateway_host := prompt_gateway_host()) or not validate_ip_or_dns(
                 gateway_host
             ):
-                terminal.warn("Gateway host is invalid.")
+                terminal.warn("Gateway host is invalid or unreachable.")
 
             while not (gateway_port := prompt_gateway_port()) or not validate_port(gateway_port):
                 terminal.warn("Gateway port is invalid.")
