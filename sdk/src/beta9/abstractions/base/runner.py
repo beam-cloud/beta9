@@ -382,6 +382,8 @@ class RunnerAbstraction(BaseAbstraction):
 
 def in_jupyter() -> bool:
     try:
+        from IPython import get_ipython
+
         shell = get_ipython().__class__.__name__
         return shell == "ZMQInteractiveShell"
     except NameError:
