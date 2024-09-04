@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 import click
 
 from ..abstractions import base as base_abstraction
-from ..channel import ServiceClient
+from ..channel import ServiceClient, with_grpc_error_handling
 from ..clients.gateway import (
     StringList,
 )
@@ -173,6 +173,7 @@ def pass_service_client(func: Callable):
 
     @config_context_option
     @functools.wraps(func)
+    @with_grpc_error_handling
     def decorator(context: Optional[str] = None, *args, **kwargs):
         ctx = click.get_current_context()
 
