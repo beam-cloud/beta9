@@ -847,7 +847,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		}
 		originalArgs := "\"" + strings.Join(spec.Process.Args, " ") + "\""
 		// TODO: Detect and pass in --cuda flag
-		cedanaArgs := fmt.Sprintf("%s daemon start --gpu-enabled=%t --config='%s' & criu check & %s exec %s -w %s -i %s --attach",
+		cedanaArgs := fmt.Sprintf("%s daemon start --gpu-enabled=%t --config='%s' & %s exec %s -w %s -i %s --attach",
 			CedanaPath,
 			request.Gpu != "",
 			configJSON,
@@ -859,11 +859,58 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Process.Env = append(spec.Process.Env, "CEDANA_CLI_WAIT_FOR_READY=true")
 		// TODO: kill daemon when container is stopped
 
-		// Add C/R capabilities
-		spec.Process.Capabilities.Bounding = append(spec.Process.Capabilities.Bounding, "CAP_SYS_ADMIN")
-		spec.Process.Capabilities.Effective = append(spec.Process.Capabilities.Effective, "CAP_SYS_ADMIN")
-		spec.Process.Capabilities.Permitted = append(spec.Process.Capabilities.Permitted, "CAP_SYS_ADMIN")
-		spec.Process.Capabilities.Ambient = append(spec.Process.Capabilities.Ambient, "CAP_SYS_ADMIN")
+		// Add privileged capabilities for C/R
+		// XXX: Probably more than we need for now. Anyways won't be needed in future when running
+		// cedana as a daemon in the worker instead.
+		capabilities := []string{
+			"CAP_CHOWN",
+			"CAP_DAC_OVERRIDE",
+			"CAP_DAC_READ_SEARCH",
+			"CAP_FOWNER",
+			"CAP_FSETID",
+			"CAP_KILL",
+			"CAP_SETGID",
+			"CAP_SETUID",
+			"CAP_SETPCAP",
+			"CAP_LINUX_IMMUTABLE",
+			"CAP_NET_BIND_SERVICE",
+			"CAP_NET_BROADCAST",
+			"CAP_NET_ADMIN",
+			"CAP_NET_RAW",
+			"CAP_IPC_LOCK",
+			"CAP_IPC_OWNER",
+			"CAP_SYS_MODULE",
+			"CAP_SYS_RAWIO",
+			"CAP_SYS_CHROOT",
+			"CAP_SYS_PTRACE",
+			"CAP_SYS_PACCT",
+			"CAP_SYS_ADMIN",
+			"CAP_SYS_BOOT",
+			"CAP_SYS_NICE",
+			"CAP_SYS_RESOURCE",
+			"CAP_SYS_TIME",
+			"CAP_SYS_TTY_CONFIG",
+			"CAP_MKNOD",
+			"CAP_LEASE",
+			"CAP_AUDIT_WRITE",
+			"CAP_AUDIT_CONTROL",
+			"CAP_SETFCAP",
+			"CAP_MAC_OVERRIDE",
+			"CAP_MAC_ADMIN",
+			"CAP_SYSLOG",
+			"CAP_WAKE_ALARM",
+			"CAP_BLOCK_SUSPEND",
+			"CAP_AUDIT_READ",
+			"CAP_PERFMON",
+			"CAP_BPF",
+			"CAP_CHECKPOINT_RESTORE",
+		}
+
+		spec.Process.Capabilities.Bounding = append(spec.Process.Capabilities.Bounding, capabilities...)
+		spec.Process.Capabilities.Effective = append(spec.Process.Capabilities.Effective, capabilities...)
+		spec.Process.Capabilities.Inheritable = append(spec.Process.Capabilities.Inheritable, capabilities...)
+		spec.Process.Capabilities.Permitted = append(spec.Process.Capabilities.Permitted, capabilities...)
+		spec.Process.Capabilities.Ambient = append(spec.Process.Capabilities.Ambient, capabilities...)
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
