@@ -74,11 +74,14 @@ func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
 }
 
 func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-
 	filters, err := g.preprocessFilters(ctx)
 	if err != nil {
 		return err
+	}
+
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), ctx.Param("workspaceId"))
+	if err != nil {
+		return HTTPBadRequest("Invalid workspace ID")
 	}
 
 	if tasks, err := g.backendRepo.ListTasksWithRelatedPaginated(ctx.Request().Context(), *filters); err != nil {
@@ -86,8 +89,8 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 	} else {
 		for i := range tasks.Data {
 			tasks.Data[i].SanitizeStubConfig()
-			g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, &tasks.Data[i])
-			g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, &tasks.Data[i])
+			g.addOutputsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
+			g.addStatsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
 		}
 		return ctx.JSON(http.StatusOK, tasks)
 	}
