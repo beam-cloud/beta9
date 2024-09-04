@@ -1,6 +1,8 @@
 import inspect
+import json
 import os
 import time
+import uuid
 from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
 
@@ -197,7 +199,10 @@ class RunnerAbstraction(BaseAbstraction):
             return
 
         module = inspect.getmodule(func)  # Determine module / function name
-        if module:
+        if in_jupyter():
+            module_file = gather_executed_cells()
+            module_name = module_file.split("/")[-1].rstrip(".py")
+        elif module:
             module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
         else:
@@ -300,6 +305,10 @@ class RunnerAbstraction(BaseAbstraction):
             if sync_result.success:
                 self.files_synced = True
                 self.object_id = sync_result.object_id
+
+                for file in os.listdir("./"):
+                    if file.startswith("tmp_beta9_"):
+                        os.remove(file)
             else:
                 terminal.error("File sync failed", exit=False)
                 return False
@@ -369,3 +378,36 @@ class RunnerAbstraction(BaseAbstraction):
 
         self.runtime_ready = True
         return True
+
+
+def in_jupyter() -> bool:
+    try:
+        shell = get_ipython().__class__.__name__
+        return shell == "ZMQInteractiveShell"
+    except NameError:
+        return False
+
+
+def gather_executed_cells() -> str:
+    try:
+        with open(get_ipython().kernel.session.config["IPKernelApp"]["connection_file"], "r") as f:
+            notebook_path = json.loads(f.read())["jupyter_session"]
+
+        with open(notebook_path, "r", encoding="utf-8") as f:
+            notebook_json = json.load(f)
+
+        executed_cells = []
+        for cell in notebook_json.get("cells", []):
+            if cell.get("cell_type") == "code" and cell.get("execution_count") is not None:
+                executed_cells.append(cell.get("source", ""))
+
+        temp_file_path = f"./tmp_beta9_{uuid.uuid4()}.py"
+        with open(temp_file_path, "w") as f:
+            for code in executed_cells:
+                if isinstance(code, list):
+                    code = "".join(code)
+                f.write(code + "\n\n")
+
+        return temp_file_path
+    except NameError:
+        return ""
