@@ -473,9 +473,13 @@ func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dstAddre
 		return err
 	}
 
-	wsDst, _, err := websocket.DefaultDialer.Dial(dstAddress, nil)
+	wsDst, resp, err := websocket.DefaultDialer.Dial(dstAddress, nil)
 	if err != nil {
 		return err
+	}
+
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	wg := sync.WaitGroup{}
