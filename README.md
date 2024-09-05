@@ -37,6 +37,7 @@ Beta9 is an open source container orchestrator, designed for running GPU workloa
 - Connect VMs to your cluster with a single cURL command
 - Read large files at the edge using distributed, cross-region storage
 - Manage your fleet of GPUs using a Tailscale-powered service mesh
+- Securely run workloads with end-to-end encryption through WireGuard
 - Run workloads using a friendly Python interface
 
 ## How does it work?
