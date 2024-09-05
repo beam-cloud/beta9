@@ -17,6 +17,7 @@ import (
 
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	var warning string
 
 	if in.Memory > int64(gws.appConfig.GatewayService.StubLimits.Memory) {
 		return &pb.GetOrCreateStubResponse{
@@ -32,6 +33,18 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 				Ok:     false,
 				ErrMsg: "GPU concurrency limit is 0.",
 			}, nil
+		}
+
+		gpuCounts, err := gws.providerRepo.GetGPUCounts(gws.appConfig.Worker.Pools)
+		if err != nil {
+			return &pb.GetOrCreateStubResponse{
+				Ok:     false,
+				ErrMsg: "Failed to get GPU counts.",
+			}, nil
+		}
+
+		if gpuCounts[in.Gpu] <= 1 {
+			warning = fmt.Sprintf("GPU capacity for %s is currently low.", in.Gpu)
 		}
 	}
 
@@ -123,8 +136,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	return &pb.GetOrCreateStubResponse{
-		Ok:     err == nil,
-		StubId: stub.ExternalId,
+		Ok:      err == nil,
+		StubId:  stub.ExternalId,
+		WarnMsg: warning,
 	}, nil
 }
 
