@@ -29,7 +29,7 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 			var workspace *types.Workspace
 
 			token, workspace, err := workspaceRepo.AuthorizeToken(tokenKey)
-			if err != nil || token == nil || workspace == nil {
+			if err != nil {
 				token, workspace, err = backendRepo.AuthorizeToken(c.Request().Context(), tokenKey)
 				if err != nil {
 					return echo.NewHTTPError(http.StatusUnauthorized)

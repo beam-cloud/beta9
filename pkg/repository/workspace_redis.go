@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -68,7 +69,7 @@ func (wr *WorkspaceRedisRepository) AuthorizeToken(token string) (*types.Token, 
 	}
 
 	if res == "" {
-		return nil, nil, nil
+		return nil, nil, errors.New("token not found")
 	}
 
 	info := &AuthInfo{}
