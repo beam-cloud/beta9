@@ -324,9 +324,10 @@ func (rb *RequestBuffer) handleWSRequest(req request) {
 		return
 	}
 
+	defer rb.afterRequest(req, c.id)
+
 	err = proxyWebsocketConnection(req.ctx.Response().Writer, req.ctx.Request(), fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")))
 	if err != nil {
-		req.done <- true
 		return
 	}
 }
