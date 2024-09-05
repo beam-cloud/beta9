@@ -18,7 +18,7 @@ func NewWorkspaceRedisRepository(r *common.RedisClient) WorkspaceRepository {
 	return &WorkspaceRedisRepository{rdb: r}
 }
 
-var CACHED_TOKEN_TTL_S = 600 // 10 minutes
+const cachedTokenTTLS = 600 // 10 minutes
 
 func (wr *WorkspaceRedisRepository) GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error) {
 	key := common.RedisKeys.WorkspaceConcurrencyLimit(workspaceId)
@@ -81,7 +81,7 @@ func (wr *WorkspaceRedisRepository) AuthorizeToken(token string) (*types.Token, 
 	return info.Token, info.Workspace, nil
 }
 
-func (wr *WorkspaceRedisRepository) CacheAuthorizationToken(token *types.Token, workspace *types.Workspace) error {
+func (wr *WorkspaceRedisRepository) SetAuthorizationToken(token *types.Token, workspace *types.Workspace) error {
 	bytes, err := json.Marshal(AuthInfo{
 		Workspace: workspace,
 		Token:     token,
@@ -91,7 +91,7 @@ func (wr *WorkspaceRedisRepository) CacheAuthorizationToken(token *types.Token, 
 	}
 
 	tokenKey := common.RedisKeys.WorkspaceAuthorizedToken(token.Key)
-	err = wr.rdb.Set(context.Background(), tokenKey, bytes, time.Duration(CACHED_TOKEN_TTL_S)*time.Second).Err()
+	err = wr.rdb.Set(context.Background(), tokenKey, bytes, time.Duration(cachedTokenTTLS)*time.Second).Err()
 	if err != nil {
 		return err
 	}

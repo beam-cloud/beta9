@@ -61,7 +61,6 @@ var (
 	workspaceConcurrencyLimit        string = "workspace:concurrency_limit:%s"
 	workspaceConcurrencyLimitLock    string = "workspace:concurrency_limit:lock:%s"
 	workspaceAuthorizedToken         string = "workspace:authorization:token:%s"
-	workspaceAuthorizedWorkspace     string = "workspace:authorization:workspace:%s"
 )
 
 var (
@@ -240,10 +239,6 @@ func (rk *redisKeys) WorkspaceVolumePathDownloadToken(token string) string {
 
 func (rl *redisKeys) WorkspaceAuthorizedToken(token string) string {
 	return fmt.Sprintf(workspaceAuthorizedToken, token)
-}
-
-func (rl *redisKeys) WorkspaceAuthorizedWorkspace(workspaceId string) string {
-	return fmt.Sprintf(workspaceAuthorizedWorkspace, workspaceId)
 }
 
 // WorkerPool keys

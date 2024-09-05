@@ -35,7 +35,7 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 					return echo.NewHTTPError(http.StatusUnauthorized)
 				}
 
-				err = workspaceRepo.CacheAuthorizationToken(token, workspace)
+				err = workspaceRepo.SetAuthorizationToken(token, workspace)
 				if err != nil {
 					return echo.NewHTTPError(http.StatusInternalServerError)
 				}

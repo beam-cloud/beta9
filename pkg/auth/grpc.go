@@ -63,7 +63,7 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 			return nil, false
 		}
 
-		err = ai.workspaceRepo.CacheAuthorizationToken(token, workspace)
+		err = ai.workspaceRepo.SetAuthorizationToken(token, workspace)
 		if err != nil {
 			return nil, false
 		}
