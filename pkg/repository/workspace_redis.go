@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -15,6 +16,8 @@ type WorkspaceRedisRepository struct {
 func NewWorkspaceRedisRepository(r *common.RedisClient) WorkspaceRepository {
 	return &WorkspaceRedisRepository{rdb: r}
 }
+
+var CACHED_TOKEN_TTL_S = 600 // 10 minutes
 
 func (wr *WorkspaceRedisRepository) GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error) {
 	key := common.RedisKeys.WorkspaceConcurrencyLimit(workspaceId)
@@ -45,6 +48,49 @@ func (wr *WorkspaceRedisRepository) SetConcurrencyLimitByWorkspaceId(workspaceId
 	}
 
 	err = wr.rdb.Expire(context.Background(), key, time.Duration(cachedConcurrencyLimitTtl)*time.Second).Err()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+type AuthInfo struct {
+	Workspace *types.Workspace
+	Token     *types.Token
+}
+
+func (wr *WorkspaceRedisRepository) AuthorizeToken(token string) (*types.Token, *types.Workspace, error) {
+	tokenKey := common.RedisKeys.WorkspaceAuthorizedToken(token)
+	res, err := wr.rdb.Get(context.Background(), tokenKey).Result()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if res == "" {
+		return nil, nil, nil
+	}
+
+	info := &AuthInfo{}
+	err = json.Unmarshal([]byte(res), &info)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return info.Token, info.Workspace, nil
+}
+
+func (wr *WorkspaceRedisRepository) CacheAuthorizationToken(token *types.Token, workspace *types.Workspace) error {
+	bytes, err := json.Marshal(AuthInfo{
+		Workspace: workspace,
+		Token:     token,
+	})
+	if err != nil {
+		return err
+	}
+
+	tokenKey := common.RedisKeys.WorkspaceAuthorizedToken(token.Key)
+	err = wr.rdb.Set(context.Background(), tokenKey, bytes, time.Duration(CACHED_TOKEN_TTL_S)*time.Second).Err()
 	if err != nil {
 		return err
 	}

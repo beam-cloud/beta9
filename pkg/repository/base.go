@@ -57,6 +57,8 @@ type ContainerRepository interface {
 type WorkspaceRepository interface {
 	GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error)
 	SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error
+	AuthorizeToken(string) (*types.Token, *types.Workspace, error)
+	CacheAuthorizationToken(*types.Token, *types.Workspace) error
 }
 
 type BackendRepository interface {

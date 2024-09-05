@@ -14,9 +14,10 @@ import (
 )
 
 type MockDetails struct {
-	backendRepo  repository.BackendRepository
-	mock         sqlmock.Sqlmock
-	tokenForTest types.Token
+	backendRepo   repository.BackendRepository
+	workspaceRepo repository.WorkspaceRepository
+	mock          sqlmock.Sqlmock
+	tokenForTest  types.Token
 }
 
 func addTokenRow(
@@ -65,10 +66,17 @@ func mockBackendWithValidToken() MockDetails {
 		UpdatedAt:   time.Now(),
 	}
 
+	mockRedis, err := repository.NewRedisClientForTest()
+	if err != nil {
+		panic(err)
+	}
+	workspaceRepo := repository.NewWorkspaceRedisRepositoryForTest(mockRedis)
+
 	return MockDetails{
-		backendRepo:  backendRepo,
-		mock:         mock,
-		tokenForTest: tokenForTest,
+		backendRepo:   backendRepo,
+		workspaceRepo: workspaceRepo,
+		mock:          mock,
+		tokenForTest:  tokenForTest,
 	}
 }
 
@@ -76,7 +84,7 @@ func TestAuthMiddleWare(t *testing.T) {
 	mockDetails := mockBackendWithValidToken()
 
 	e := echo.New()
-	e.Use(AuthMiddleware(mockDetails.backendRepo))
+	e.Use(AuthMiddleware(mockDetails.backendRepo, mockDetails.workspaceRepo))
 
 	// 1. Test with valid token
 	e.GET("/", func(ctx echo.Context) error {
@@ -151,7 +159,7 @@ func TestAuthMiddleWare(t *testing.T) {
 func TestWithAuth(t *testing.T) {
 	mockDetails := mockBackendWithValidToken()
 	e := echo.New()
-	e.Use(AuthMiddleware(mockDetails.backendRepo))
+	e.Use(AuthMiddleware(mockDetails.backendRepo, mockDetails.workspaceRepo))
 
 	e.GET("/", WithAuth(func(c echo.Context) error {
 		cc, ok := c.(*HttpAuthContext)
@@ -221,7 +229,7 @@ func TestWithAuth(t *testing.T) {
 func TestWithWorkspaceAuth(t *testing.T) {
 	mockDetails := mockBackendWithValidToken()
 	e := echo.New()
-	e.Use(AuthMiddleware(mockDetails.backendRepo))
+	e.Use(AuthMiddleware(mockDetails.backendRepo, mockDetails.workspaceRepo))
 
 	e.GET("/:workspaceId", WithWorkspaceAuth(func(c echo.Context) error {
 		if c.(*HttpAuthContext).AuthInfo.Token.TokenType == types.TokenTypeClusterAdmin {
@@ -325,7 +333,7 @@ func TestWithWorkspaceAuth(t *testing.T) {
 func TestWithClusterAdminAuth(t *testing.T) {
 	mockDetails := mockBackendWithValidToken()
 	e := echo.New()
-	e.Use(AuthMiddleware(mockDetails.backendRepo))
+	e.Use(AuthMiddleware(mockDetails.backendRepo, mockDetails.workspaceRepo))
 
 	e.GET("/", WithClusterAdminAuth(func(c echo.Context) error {
 		assert.NotNil(t, c.(*HttpAuthContext).AuthInfo.Token)

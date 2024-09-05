@@ -51,14 +51,14 @@ type VolumePathTokenData struct {
 
 var volumeRoutePrefix string = "/volume"
 
-func NewGlobalVolumeService(backendRepo repository.BackendRepository, rdb *common.RedisClient, routeGroup *echo.Group) (VolumeService, error) {
+func NewGlobalVolumeService(backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, rdb *common.RedisClient, routeGroup *echo.Group) (VolumeService, error) {
 	gvs := &GlobalVolumeService{
 		backendRepo: backendRepo,
 		rdb:         rdb,
 	}
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(backendRepo)
+	authMiddleware := auth.AuthMiddleware(backendRepo, workspaceRepo)
 	registerVolumeRoutes(routeGroup.Group(volumeRoutePrefix, authMiddleware), gvs)
 
 	return gvs, nil

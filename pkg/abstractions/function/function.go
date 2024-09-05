@@ -44,6 +44,7 @@ type RunCFunctionService struct {
 	ctx             context.Context
 	taskDispatcher  *task.Dispatcher
 	backendRepo     repository.BackendRepository
+	workspaceRepo   repository.WorkspaceRepository
 	taskRepo        repository.TaskRepository
 	containerRepo   repository.ContainerRepository
 	scheduler       *scheduler.Scheduler
@@ -59,6 +60,7 @@ type FunctionServiceOpts struct {
 	Config         types.AppConfig
 	RedisClient    *common.RedisClient
 	BackendRepo    repository.BackendRepository
+	WorkspaceRepo  repository.WorkspaceRepository
 	TaskRepo       repository.TaskRepository
 	ContainerRepo  repository.ContainerRepository
 	Scheduler      *scheduler.Scheduler
@@ -80,6 +82,7 @@ func NewRuncFunctionService(ctx context.Context,
 		ctx:             ctx,
 		config:          opts.Config,
 		backendRepo:     opts.BackendRepo,
+		workspaceRepo:   opts.WorkspaceRepo,
 		taskRepo:        opts.TaskRepo,
 		containerRepo:   opts.ContainerRepo,
 		scheduler:       opts.Scheduler,
@@ -95,7 +98,7 @@ func NewRuncFunctionService(ctx context.Context,
 	fs.taskDispatcher.Register(string(types.ExecutorFunction), fs.functionTaskFactory)
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(fs.backendRepo)
+	authMiddleware := auth.AuthMiddleware(fs.backendRepo, fs.workspaceRepo)
 	registerFunctionRoutes(fs.routeGroup.Group(functionRoutePrefix, authMiddleware), fs)
 	registerFunctionRoutes(fs.routeGroup.Group(scheduleRoutePrefix, authMiddleware), fs)
 
