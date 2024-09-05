@@ -132,10 +132,11 @@ type Task struct {
 
 type TaskWithRelated struct {
 	Task
-	Outputs   []TaskOutput `json:"outputs"`
-	Stats     TaskStats    `json:"stats"`
-	Workspace Workspace    `db:"workspace" json:"workspace"`
-	Stub      Stub         `db:"stub" json:"stub"`
+	Deployment Deployment   `db:"deployment" json:"deployment"`
+	Outputs    []TaskOutput `json:"outputs"`
+	Stats      TaskStats    `json:"stats"`
+	Workspace  Workspace    `db:"workspace" json:"workspace"`
+	Stub       Stub         `db:"stub" json:"stub"`
 }
 
 func (t *TaskWithRelated) SanitizeStubConfig() error {
