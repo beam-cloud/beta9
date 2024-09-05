@@ -1,7 +1,7 @@
 import inspect
 import os
+import tempfile
 import time
-import uuid
 from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
 
@@ -49,7 +49,6 @@ TASKQUEUE_SERVE_STUB_TYPE = "taskqueue/serve"
 ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
 ASGI_SERVE_STUB_TYPE = "asgi/serve"
 FUNCTION_SERVE_STUB_TYPE = "function/serve"
-TMP_FILE_PREFIX = "tmp_beta9"
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -113,6 +112,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.settings: SDKSettings = get_settings()
         self.config_context: ConfigContext = get_config_context()
+        self.tmp_files: List[tempfile.NamedTemporaryFile] = []
 
     def print_invocation_snippet(self, invocation_url: str) -> None:
         """Print curl request to call deployed container URL"""
@@ -203,13 +203,18 @@ class RunnerAbstraction(BaseAbstraction):
             module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
         elif in_jupyter():
-            module_file = create_tmp_jupyter_file(module._ih)
-            module_name = module_file.split("/")[-1].rstrip(".py")
+            tmp_file = create_tmp_jupyter_file(module._ih)
+            module_name = tmp_file.name.split("/")[-1].removesuffix(".py")
+            self.tmp_files.append(tmp_file)
         else:
             module_name = "__main__"
 
         function_name = func.__name__
         setattr(self, attr, f"{module_name}:{function_name}")
+
+    def remove_tmp_files(self) -> None:
+        for tmp_file in self.tmp_files:
+            tmp_file.close()
 
     def _sync_content(
         self,
@@ -301,14 +306,11 @@ class RunnerAbstraction(BaseAbstraction):
 
         if not self.files_synced:
             sync_result = self.syncer.sync()
+            self.remove_tmp_files()
 
             if sync_result.success:
                 self.files_synced = True
                 self.object_id = sync_result.object_id
-
-                for file in os.listdir("./"):
-                    if file.startswith(TMP_FILE_PREFIX):
-                        os.remove(file)
             else:
                 terminal.error("File sync failed", exit=False)
                 return False
@@ -390,12 +392,13 @@ def in_jupyter() -> bool:
         return False
 
 
-def create_tmp_jupyter_file(input_history: List[str]) -> str:
-    tmp_file_path = f"./{TMP_FILE_PREFIX}_{uuid.uuid4()}.py"
-    with open(tmp_file_path, "w") as f:
-        for code in input_history:
-            if isinstance(code, list):
-                code = "".join(code)
-            f.write(code + "\n\n")
+def create_tmp_jupyter_file(input_history: List[str]) -> tempfile.NamedTemporaryFile:
+    tmp_file = tempfile.NamedTemporaryFile(mode="w+", dir=".", suffix=".py")
+    for code in input_history:
+        if isinstance(code, list):
+            code = "".join(code)
+        tmp_file.write(code + "\n\n")
 
-    return tmp_file_path
+    tmp_file.flush()
+
+    return tmp_file
