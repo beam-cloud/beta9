@@ -161,6 +161,14 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 
 	version := uint(1)
 	if lastestDeployment != nil {
+		if stub.Type == types.StubType(types.StubTypeScheduledJobDeployment) {
+			if err := gws.stopDeployments([]types.DeploymentWithRelated{*lastestDeployment}, ctx); err != nil {
+				return &pb.DeployStubResponse{
+					Ok: false,
+				}, nil
+			}
+		}
+
 		version = lastestDeployment.Version + 1
 	}
 
