@@ -375,13 +375,6 @@ func ToStruct(m map[string]string, out interface{}) error {
 					}
 					field.SetInt(val)
 				}
-			case reflect.Uint:
-				val, err := strconv.ParseUint(v, 10, 64)
-				if err != nil {
-					val = 0
-				}
-
-				field.SetUint(val)
 			case reflect.Uint32:
 				val, err := strconv.ParseUint(v, 10, 32)
 				if err != nil {
