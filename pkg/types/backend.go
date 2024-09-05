@@ -12,14 +12,14 @@ import (
 )
 
 type Workspace struct {
-	Id                 uint              `db:"id" json:"id,omitempty" redis:"id"`
-	ExternalId         string            `db:"external_id" json:"external_id" redis:"external_id"`
-	Name               string            `db:"name" json:"name" redis:"name"`
-	CreatedAt          time.Time         `db:"created_at" json:"created_at,omitempty" redis:"created_at"`
-	UpdatedAt          time.Time         `db:"updated_at" json:"updated_at,omitempty" redis:"updated_at"`
-	SigningKey         *string           `db:"signing_key" json:"signing_key" redis:"signing_key"`
-	ConcurrencyLimitId *uint             `db:"concurrency_limit_id" json:"concurrency_limit_id,omitempty" redis:"concurrency_limit_id"`
-	ConcurrencyLimit   *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit" redis:"concurrency_limit"`
+	Id                 uint              `db:"id" json:"id,omitempty"`
+	ExternalId         string            `db:"external_id" json:"external_id"`
+	Name               string            `db:"name" json:"name"`
+	CreatedAt          time.Time         `db:"created_at" json:"created_at,omitempty"`
+	UpdatedAt          time.Time         `db:"updated_at" json:"updated_at,omitempty"`
+	SigningKey         *string           `db:"signing_key" json:"signing_key"`
+	ConcurrencyLimitId *uint             `db:"concurrency_limit_id" json:"concurrency_limit_id,omitempty"`
+	ConcurrencyLimit   *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit"`
 }
 
 const (
@@ -30,18 +30,18 @@ const (
 )
 
 type Token struct {
-	Id          uint       `db:"id" json:"id" redis:"id"`
-	ExternalId  string     `db:"external_id" json:"external_id" redis:"external_id"`
-	Key         string     `db:"key" json:"key" redis:"key"`
-	Active      bool       `db:"active" json:"active" redis:"active"`
-	Reusable    bool       `db:"reusable" json:"reusable" redis:"reusable"`
-	WorkspaceId *uint      `db:"workspace_id" json:"workspace_id,omitempty" redis:"workspace_id"` // Foreign key to Workspace
-	Workspace   *Workspace `db:"workspace" json:"workspace,omitempty" redis:"workspace"`          // Pointer to associated Workspace
-	TokenType   string     `db:"token_type" json:"token_type" redis:"token_type"`
-	CreatedAt   time.Time  `db:"created_at" json:"created_at" redis:"created_at"`
-	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at" redis:"updated_at"`
+	Id          uint       `db:"id" json:"id"`
+	ExternalId  string     `db:"external_id" json:"external_id"`
+	Key         string     `db:"key" json:"key"`
+	Active      bool       `db:"active" json:"active"`
+	Reusable    bool       `db:"reusable" json:"reusable"`
+	WorkspaceId *uint      `db:"workspace_id" json:"workspace_id,omitempty"` // Foreign key to Workspace
+	Workspace   *Workspace `db:"workspace" json:"workspace,omitempty"`       // Pointer to associated Workspace
+	TokenType   string     `db:"token_type" json:"token_type"`
+	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
 
-	DisabledByClusterAdmin bool `db:"disabled_by_cluster_admin" json:"disabled_by_cluster_admin" redis:"disabled_by_cluster_admin"`
+	DisabledByClusterAdmin bool `db:"disabled_by_cluster_admin" json:"disabled_by_cluster_admin"`
 }
 
 type Volume struct {
