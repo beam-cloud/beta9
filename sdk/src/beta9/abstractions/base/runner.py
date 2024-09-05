@@ -360,6 +360,8 @@ class RunnerAbstraction(BaseAbstraction):
             if stub_response.ok:
                 self.stub_created = True
                 self.stub_id = stub_response.stub_id
+                if stub_response.warn_msg:
+                    terminal.warn(stub_response.warn_msg)
             else:
                 if err := stub_response.err_msg:
                     terminal.error(err, exit=False)

@@ -252,6 +252,7 @@ message GetOrCreateStubResponse {
   bool ok = 1;
   string stub_id = 2;
   string err_msg = 3;
+  string warn_msg = 4;
 }
 
 message DeployStubRequest {
