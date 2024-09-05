@@ -35,6 +35,7 @@ type HttpEndpointService struct {
 	keyEventManager   *common.KeyEventManager
 	scheduler         *scheduler.Scheduler
 	backendRepo       repository.BackendRepository
+	workspaceRepo     repository.WorkspaceRepository
 	containerRepo     repository.ContainerRepository
 	eventRepo         repository.EventRepository
 	taskRepo          repository.TaskRepository
@@ -60,6 +61,7 @@ type EndpointServiceOpts struct {
 	Config         types.AppConfig
 	RedisClient    *common.RedisClient
 	BackendRepo    repository.BackendRepository
+	WorkspaceRepo  repository.WorkspaceRepository
 	TaskRepo       repository.TaskRepository
 	ContainerRepo  repository.ContainerRepository
 	Scheduler      *scheduler.Scheduler
@@ -85,6 +87,7 @@ func NewHTTPEndpointService(
 		keyEventManager:   keyEventManager,
 		scheduler:         opts.Scheduler,
 		backendRepo:       opts.BackendRepo,
+		workspaceRepo:     opts.WorkspaceRepo,
 		containerRepo:     opts.ContainerRepo,
 		taskRepo:          opts.TaskRepo,
 		endpointInstances: common.NewSafeMap[*endpointInstance](),
@@ -128,7 +131,7 @@ func NewHTTPEndpointService(
 	es.taskDispatcher.Register(string(types.ExecutorEndpoint), es.endpointTaskFactory)
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(es.backendRepo)
+	authMiddleware := auth.AuthMiddleware(es.backendRepo, es.workspaceRepo)
 	registerEndpointRoutes(opts.RouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
 	registerASGIRoutes(opts.RouteGroup.Group(ASGIRoutePrefix, authMiddleware), es)
 

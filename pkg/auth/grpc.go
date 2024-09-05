@@ -28,11 +28,13 @@ func AuthInfoFromContext(ctx context.Context) (*AuthInfo, bool) {
 type AuthInterceptor struct {
 	unauthenticatedMethods map[string]bool
 	backendRepo            repository.BackendRepository
+	workspaceRepo          repository.WorkspaceRepository
 }
 
-func NewAuthInterceptor(backendRepo repository.BackendRepository) *AuthInterceptor {
+func NewAuthInterceptor(backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository) *AuthInterceptor {
 	return &AuthInterceptor{
-		backendRepo: backendRepo,
+		backendRepo:   backendRepo,
+		workspaceRepo: workspaceRepo,
 		unauthenticatedMethods: map[string]bool{
 			"/gateway.GatewayService/Authorize": true,
 		},
@@ -50,9 +52,21 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 	}
 
 	tokenKey := strings.TrimPrefix(md["authorization"][0], "Bearer ")
-	token, workspace, err := ai.backendRepo.AuthorizeToken(context.TODO(), tokenKey)
-	if err != nil {
-		return nil, false
+
+	var token *types.Token
+	var workspace *types.Workspace
+
+	token, workspace, err := ai.workspaceRepo.AuthorizeToken(tokenKey)
+	if err != nil || token == nil || workspace == nil {
+		token, workspace, err := ai.backendRepo.AuthorizeToken(context.TODO(), tokenKey)
+		if err != nil {
+			return nil, false
+		}
+
+		err = ai.workspaceRepo.SetAuthorizationToken(token, workspace)
+		if err != nil {
+			return nil, false
+		}
 	}
 
 	if !token.Active || token.DisabledByClusterAdmin {

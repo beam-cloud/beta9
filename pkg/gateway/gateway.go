@@ -163,7 +163,7 @@ func (g *Gateway) initHttp() error {
 		Handler: h2c.NewHandler(e, &http2.Server{}),
 	}
 
-	authMiddleware := auth.AuthMiddleware(g.BackendRepo)
+	authMiddleware := auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)
 	g.baseRouteGroup = e.Group(apiv1.HttpServerBaseRoute)
 	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
 
@@ -181,7 +181,7 @@ func (g *Gateway) initHttp() error {
 }
 
 func (g *Gateway) initGrpc() error {
-	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo)
+	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo, g.WorkspaceRepo)
 
 	serverOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(authInterceptor.Unary()),
@@ -229,6 +229,7 @@ func (g *Gateway) registerServices() error {
 		Config:         g.Config,
 		RedisClient:    g.RedisClient,
 		BackendRepo:    g.BackendRepo,
+		WorkspaceRepo:  g.WorkspaceRepo,
 		TaskRepo:       g.TaskRepo,
 		ContainerRepo:  g.ContainerRepo,
 		Scheduler:      g.Scheduler,
@@ -247,6 +248,7 @@ func (g *Gateway) registerServices() error {
 		Config:         g.Config,
 		RedisClient:    g.RedisClient,
 		BackendRepo:    g.BackendRepo,
+		WorkspaceRepo:  g.WorkspaceRepo,
 		TaskRepo:       g.TaskRepo,
 		ContainerRepo:  g.ContainerRepo,
 		Scheduler:      g.Scheduler,
@@ -265,6 +267,7 @@ func (g *Gateway) registerServices() error {
 		Config:         g.Config,
 		ContainerRepo:  g.ContainerRepo,
 		BackendRepo:    g.BackendRepo,
+		WorkspaceRepo:  g.WorkspaceRepo,
 		TaskRepo:       g.TaskRepo,
 		RedisClient:    g.RedisClient,
 		Scheduler:      g.Scheduler,
@@ -279,7 +282,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterEndpointServiceServer(g.grpcServer, ws)
 
 	// Register volume service
-	vs, err := volume.NewGlobalVolumeService(g.BackendRepo, g.RedisClient, g.rootRouteGroup)
+	vs, err := volume.NewGlobalVolumeService(g.BackendRepo, g.WorkspaceRepo, g.RedisClient, g.rootRouteGroup)
 	if err != nil {
 		return err
 	}
@@ -311,7 +314,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterOutputServiceServer(g.grpcServer, o)
 
 	// Register Secret service
-	secretService := secret.NewSecretService(g.BackendRepo, g.rootRouteGroup)
+	secretService := secret.NewSecretService(g.BackendRepo, g.WorkspaceRepo, g.rootRouteGroup)
 	pb.RegisterSecretServiceServer(g.grpcServer, secretService)
 
 	// Register Signal service
