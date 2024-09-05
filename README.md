@@ -5,7 +5,7 @@
 
 ---
 
-### **✨ The Open Serverless GPU Cloud ✨**
+### Run GPU Workloads Across Multiple Clouds
 
 <p align="center">
   <a href="https://docs.beam.cloud">
@@ -30,133 +30,74 @@
 
 </div>
 
-# Beta9
+## What is Beta9?
 
-Beta9 makes it easy for developers to run serverless functions on cloud GPUs.
+Beta9 is an open source container orchestrator, designed for running GPU workloads across different cloud environments in different regions.
 
-Features:
+- Connect VMs to your cluster with a single cURL command
+- Read large files at the edge using distributed, cross-region storage
+- Manage your fleet of GPUs using a Tailscale-powered service mesh
+- Run workloads using a friendly Python interface
 
-- Run Python functions on thousands of GPUs in the cloud
-- Automatically scale up and scale down resources
-- Flexible: run workloads on the public cloud or your own hardware
-- Built for AI: store model weights in distributed storage and deploy custom models with ultra-fast, serverless cold starts
+## How does it work?
 
-We use beta9 internally at [Beam](https://beam.cloud) to run AI applications for users at scale.
+### Provision GPUs Anywhere
 
-## Use Cases
+Connect any GPU to your cluster with one CLI command and a cURL.
 
-### Serverless Inference Endpoints
+```sh
+$ beta9 machine create --pool lambda-a100-40
 
-#### Decorate Any Python Function
+=> Created machine with ID: '9541cbd2'. Use the following command to setup the node:
 
-```python
-from beta9 import Image, endpoint
-
-
-@endpoint(
-    cpu=1,
-    memory="16Gi",
-    gpu="T4",
-    image=Image(
-        python_packages=[
-            "vllm==0.4.1",
-        ],  # These dependencies will be installed in your remote container
-    ),
-)
-def predict():
-    from vllm import LLM
-
-    prompts = ["The future of AI is"]
-    llm = LLM(model="facebook/opt-125m")
-    output = llm.generate(prompts)[0]
-
-    return {"prediction": output.outputs[0].text}
+#!/bin/bash
+sudo curl -L -o agent https://release.beam.cloud/agent/agent && \
+sudo chmod +x agent && \
+sudo ./agent --token "AUTH_TOKEN" \
+  --machine-id "9541cbd2" \
+  --tailscale-url "" \
+  --tailscale-auth "AUTH_TOKEN" \
+  --pool-name "lambda-a100-40" \
+  --provider-name "lambda"
 ```
 
-#### Deploy It to the Cloud
+You can run this install script on your VM to connect it to your cluster.
 
-```bash
-$ beta9 deploy app.py:predict --name llm-inference
+### Manage Your GPU Fleet
 
-=> Building image
-=> Using cached image
-=> Deploying endpoint
-=> Deployed 🎉
-=> Invocation details
+Manage your distributed cross-region GPU cluster using a centralized control plane.
 
-curl -X POST 'https://app.beam.cloud/endpoint/llm-inference/v1' \
--H 'Authorization: Bearer [YOUR_AUTH_TOKEN]' \
--d '{}'
+```sh
+$ beta9 machine list
+
+| ID       | CPU     | Memory     | GPU     | Status     | Pool        |
+|----------|---------|------------|---------|------------|-------------|
+| edc9c2d2 | 30,000m | 222.16 GiB | A10G    | registered | lambda-a10g |
+| d87ad026 | 30,000m | 216.25 GiB | A100-40 | registered | gcp-a100-40 |
+
 ```
 
-### Fan-Out Workloads to Hundreds of Containers
+### Run Workloads in Python
+
+Offload any workload to your remote machines by adding a Python decorator to your code.
 
 ```python
 from beta9 import function
 
-# This decorator allows you to parallelize this function
-# across multiple remote containers
-@function(cpu=1, memory=128)
+
+# This will run on a remote A100-40 in your cluster
+@function(cpu=1, memory=128, gpu="A100-40")
 def square(i: int):
     return i**2
-
-
-def main():
-    numbers = list(range(100))
-    squared = []
-
-    # Run a remote container for every item in list
-    for result in square.map(numbers):
-        squared.append(result)
 ```
 
-### Enqueue Async Jobs
-
-```python
-from beta9 import task_queue, Image
-
-
-@task_queue(
-    cpu=1.0,
-    memory=128,
-    gpu="T4",
-    image=Image(python_packages=["torch"]),
-    keep_warm_seconds=1000,
-)
-def multiply(x):
-    result = x * 2
-    return {"result": result}
-
-# Manually insert task into the queue
-multiply.put(x=10)
-```
-
-## How It Works
-
-Beta9 is designed for launching remote serverless containers quickly. There are a few things that make this possible:
-
-- A custom, lazy loading image format ([CLIP](https://github.com/beam-cloud/clip)) backed by S3/FUSE
-- A fast, redis-based container scheduling engine
-- Content-addressed storage for caching images and files
-- A custom runc container runtime
-
-![demo gif](sdk/docs/demo.gif)
-
-# Get Started
-
-## Beam Cloud (Recommended)
-
-The fastest and most reliable way to get started is by signing up for our managed service, [Beam Cloud](https://beam.cloud). Your first 10 hours of usage are free, and afterwards you pay based on usage.
-
-## Open-Source Deploy (Advanced)
+# Local Installation
 
 You can run Beta9 locally, or in an existing Kubernetes cluster using our [Helm chart](https://github.com/beam-cloud/beta9/tree/main/deploy/charts/beta9).
 
-### Local Development
+### Setting Up the Server
 
-#### Setting Up the Server
-
-k3d is used for local development. You'll need Docker and Make to get started.
+k3d is used for local development. You'll need Docker to get started.
 
 To use our fully automated setup, run the `setup` make target.
 
@@ -167,7 +108,7 @@ To use our fully automated setup, run the `setup` make target.
 make setup
 ```
 
-#### Setting Up the SDK
+### Setting Up the SDK
 
 The SDK is written in Python. You'll need Python 3.8 or higher. Use the `setup-sdk` make target to get started.
 
@@ -178,17 +119,16 @@ The SDK is written in Python. You'll need Python 3.8 or higher. Use the `setup-s
 make setup-sdk
 ```
 
-#### Using the SDK
+### Using the SDK
 
 After you've setup the server and SDK, check out the SDK readme [here](sdk/README.md).
 
 ## Contributing
 
-We welcome contributions, big or small! These are the most helpful things for us:
+We welcome contributions big or small. These are the most helpful things for us:
 
-- Rank features in our roadmap
-- Open a PR
 - Submit a [feature request](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) or [bug report](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=bug-report.md&title=)
+- Open a PR with a new feature or improvement
 
 ## Community & Support
 
