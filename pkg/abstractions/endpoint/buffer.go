@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
 
@@ -137,7 +138,11 @@ func (rb *RequestBuffer) processRequests() {
 				continue
 			}
 
-			go rb.handleHttpRequest(req)
+			if req.ctx.IsWebSocket() {
+				go rb.handleWSRequest(req)
+			} else {
+				go rb.handleHttpRequest(req)
+			}
 		}
 	}
 }
@@ -301,6 +306,31 @@ func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
 	return client, nil
 }
 
+func (rb *RequestBuffer) handleWSRequest(req request) {
+	rb.availableContainersLock.RLock()
+	if len(rb.availableContainers) == 0 {
+		rb.availableContainersLock.RUnlock()
+		rb.buffer.Push(req)
+		return
+	}
+
+	// Select an available container to forward the request to (whichever one has the lowest # of inflight requests)
+	// Basically least-connections load balancing
+	c := rb.availableContainers[0]
+	rb.availableContainersLock.RUnlock()
+
+	err := rb.incrementRequestsInFlight(c.id)
+	if err != nil {
+		return
+	}
+
+	err = proxyWebsocketConnection(req.ctx.Response().Writer, req.ctx.Request(), fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")))
+	if err != nil {
+		req.done <- true
+		return
+	}
+}
+
 func (rb *RequestBuffer) handleHttpRequest(req request) {
 	rb.availableContainersLock.RLock()
 	if len(rb.availableContainers) == 0 {
@@ -433,4 +463,45 @@ func (rb *RequestBuffer) afterRequest(req request, containerId string) {
 		1,
 		time.Duration(rb.stubConfig.KeepWarmSeconds)*time.Second,
 	)
+}
+
+func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dstAddress string) error {
+	upgrader := websocket.Upgrader{}
+
+	wsSrc, err := upgrader.Upgrade(w, req, nil)
+	if err != nil {
+		return err
+	}
+
+	wsDst, _, err := websocket.DefaultDialer.Dial(dstAddress, nil)
+	if err != nil {
+		return err
+	}
+
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+
+	go forwardWsMessages(wsSrc, wsDst, &wg)
+	go forwardWsMessages(wsDst, wsSrc, &wg)
+
+	wg.Wait()
+	return nil
+}
+
+func forwardWsMessages(wsFrom *websocket.Conn, wsTo *websocket.Conn, wg *sync.WaitGroup) {
+	defer wsFrom.Close() // Close the connection if 1 of the 2 connections is closed. That way we will close the other one as well
+	defer wsTo.Close()
+	defer wg.Done()
+
+	for {
+		messageType, br, err := wsFrom.ReadMessage()
+		if err != nil {
+			return
+		}
+
+		err = wsTo.WriteMessage(messageType, br)
+		if err != nil {
+			return
+		}
+	}
 }
