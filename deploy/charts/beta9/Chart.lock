@@ -1,6 +1,6 @@
 dependencies:
 - name: common
-  repository: https://bjw-s.github.io/helm-charts
+  repository: https://bernd-schorgers.github.io/helm-charts
   version: 2.5.0
 - name: beam-blobcache-chart
   repository: oci://public.ecr.aws/n4e0e1y0
@@ -29,5 +29,5 @@ dependencies:
 - name: fluent-bit
   repository: https://fluent.github.io/helm-charts
   version: 0.43.0
-digest: sha256:dc432b87ab30e7560e1993ac54acdbefa0ac733d7f1e398bde7b1c82571b96e2
-generated: "2024-05-23T16:01:54.154116-04:00"
+digest: sha256:530c861bbdd3e45a7c5a88d2090ca84bc81e11c9d8b43324f59b8f6715e30840
+generated: "2024-09-06T14:58:09.169794-04:00"
