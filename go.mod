@@ -25,6 +25,7 @@ require (
 	github.com/gofrs/uuid v4.4.0+incompatible
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.1
 	github.com/hanwen/go-fuse/v2 v2.5.1
 	github.com/jmoiron/sqlx v1.3.5
 	github.com/knadh/koanf/parsers/json v0.1.0
