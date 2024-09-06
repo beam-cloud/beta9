@@ -78,6 +78,10 @@ func (wr *WorkspaceRedisRepository) AuthorizeToken(token string) (*types.Token, 
 		return nil, nil, err
 	}
 
+	if info.Token == nil || info.Workspace == nil {
+		return nil, nil, errors.New("token not found")
+	}
+
 	return info.Token, info.Workspace, nil
 }
 
