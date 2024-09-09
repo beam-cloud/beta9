@@ -43,7 +43,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			}, nil
 		}
 
-		if gpuCounts[in.Gpu] <= 1 {
+		if gpuCounts[in.Gpu] <= 1 && in.Gpu != types.GPU_T4.String() {
 			warning = fmt.Sprintf("GPU capacity for %s is currently low.", in.Gpu)
 		}
 	}
