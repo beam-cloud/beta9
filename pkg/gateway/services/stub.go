@@ -43,7 +43,8 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			}, nil
 		}
 
-		if gpuCounts[in.Gpu] <= 1 {
+		// T4s are currently in a different pool than other GPUs and won't show up in gpu counts
+		if gpuCounts[in.Gpu] <= 1 && in.Gpu != types.GPU_T4.String() {
 			warning = fmt.Sprintf("GPU capacity for %s is currently low.", in.Gpu)
 		}
 	}
