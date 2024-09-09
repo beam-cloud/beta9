@@ -219,13 +219,13 @@ class Image(BaseAbstraction):
 
     def add_commands(self, commands: Sequence[str]) -> "Image":
         """
-        Adds a shell command that will be executed when building the image.
+        Add shell commands that will be executed when building the image.
 
-        These commands will be executed at the end of the image build. They will be executed in the
+        These will be executed at the end of the image build and in the
         order they are added.
 
         Parameters:
-            command: The shell command to execute.
+            commands: The shell commands to execute.
 
         Returns:
             Image: The Image object.
@@ -236,14 +236,13 @@ class Image(BaseAbstraction):
 
     def add_python_packages(self, packages: Sequence[str]) -> "Image":
         """
-        Adds a python package install command to the list of commands that will be executed
-        when building the image.
+        Add python packages that will be installed when building the image.
 
-        These commands will be executed at the end of the image build. They will be executed in the
+        These will be executed at the end of the image build and in the
         order they are added.
 
         Parameters:
-            package: The Python package to add.
+            packages: The Python packages to add. Valid package names are: numpy, pandas==2.2.2, etc.
 
         Returns:
             Image: The Image object.
