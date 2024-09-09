@@ -62,6 +62,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		PythonVersion:     in.PythonVersion,
 		PythonPackages:    in.PythonPackages,
 		Commands:          in.Commands,
+		ContainerCommands: convertContainerCommands(in.ContainerCommands),
 		ExistingImageUri:  in.ExistingImageUri,
 	}
 
@@ -91,6 +92,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		PythonVersion:      in.PythonVersion,
 		PythonPackages:     in.PythonPackages,
 		Commands:           in.Commands,
+		ContainerCommands:  convertContainerCommands(in.ContainerCommands),
 		ExistingImageUri:   in.ExistingImageUri,
 		ExistingImageCreds: in.ExistingImageCreds,
 	}
@@ -121,4 +123,15 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 	log.Println("build completed successfully")
 	return nil
+}
+
+func convertContainerCommands(containerCommands []*pb.ContainerCommand) []ContainerCommand {
+	commands := make([]ContainerCommand, len(containerCommands))
+	for i, c := range containerCommands {
+		commands[i] = ContainerCommand{
+			Command: c.Command,
+			Type:    c.Type,
+		}
+	}
+	return commands
 }
