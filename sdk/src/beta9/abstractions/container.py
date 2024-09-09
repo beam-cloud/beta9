@@ -1,11 +1,13 @@
 import os
+import threading
 from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
+    APP_DEPLOYMENT_STUB_TYPE,
+    APP_SERVE_STUB_TYPE,
+    APP_STUB_TYPE,
     CONTAINER_STUB_TYPE,
-    ENDPOINT_DEPLOYMENT_STUB_TYPE,
-    ENDPOINT_STUB_TYPE,
     BaseAbstraction,
     RunnerAbstraction,
 )
@@ -186,9 +188,6 @@ class App(RunnerAbstraction):
             A list of secrets that are injected into the container as environment variables. Default is [].
         name (Optional[str]):
             A name for the container. Default is None.
-        callback_url (Optional[str]):
-            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
-
     Example usage:
         ```
         from beta9 import Image, container
@@ -204,7 +203,6 @@ class App(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
-        callback_url: Optional[str] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -213,7 +211,6 @@ class App(RunnerAbstraction):
             image=image,
             volumes=volumes,
             secrets=secrets,
-            callback_url=callback_url,
         )
 
         self.task_id = ""
@@ -235,8 +232,8 @@ class App(RunnerAbstraction):
 
 
 class _CallableWrapper(DeployableMixin):
-    deployment_stub_type = ENDPOINT_DEPLOYMENT_STUB_TYPE
-    base_stub_type = ENDPOINT_STUB_TYPE
+    deployment_stub_type = APP_DEPLOYMENT_STUB_TYPE
+    base_stub_type = APP_STUB_TYPE
 
     def __init__(self, func: Callable, parent: Union[App]):
         self.func: Callable = func
@@ -253,7 +250,68 @@ class _CallableWrapper(DeployableMixin):
 
     @with_grpc_error_handling
     def serve(self, timeout: int = 0):
-        pass
+        stub_type = APP_SERVE_STUB_TYPE
+        if not self.parent.prepare_runtime(
+            func=self.func, stub_type=stub_type, force_create_stub=True
+        ):
+            return False
+
+        try:
+            with terminal.progress("Serving app..."):
+                base_url = self.parent.settings.api_host
+                if not base_url.startswith(("http://", "https://")):
+                    base_url = f"http://{base_url}"
+
+                invocation_url = f"{base_url}/{self.base_stub_type}/id/{self.parent.stub_id}"
+                self.parent.print_invocation_snippet(invocation_url=invocation_url)
+
+                return self._serve(
+                    dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout
+                )
+
+        except KeyboardInterrupt:
+            self._handle_serve_interrupt()
+
+    def _handle_serve_interrupt(self) -> None:
+        terminal.header("Stopping serve container")
+        self.parent._container_stub.stop_endpoint_serve(
+            StopEndpointServeRequest(stub_id=self.parent.stub_id)
+        )
+        terminal.print("Goodbye 👋")
+        os._exit(0)  # kills all threads immediately
+
+    def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
+        def notify(*_, **__):
+            self.parent.endpoint_stub.endpoint_serve_keep_alive(
+                EndpointServeKeepAliveRequest(
+                    stub_id=self.parent.stub_id,
+                    timeout=timeout,
+                )
+            )
+
+        threading.Thread(
+            target=self.parent.sync_dir_to_workspace,
+            kwargs={"dir": dir, "object_id": object_id, "on_event": notify},
+            daemon=True,
+        ).start()
+
+        r: Optional[StartEndpointServeResponse] = None
+        for r in self.parent.endpoint_stub.start_endpoint_serve(
+            StartEndpointServeRequest(
+                stub_id=self.parent.stub_id,
+                timeout=timeout,
+            )
+        ):
+            if r.output != "":
+                terminal.detail(r.output, end="")
+
+            if r.done or r.exit_code != 0:
+                break
+
+        if r is None or not r.done or r.exit_code != 0:
+            terminal.error("Serve container failed ❌")
+
+        terminal.warn("App serve timed out. Container has been stopped.")
 
 
 class AppConfig:

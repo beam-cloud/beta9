@@ -22,8 +22,8 @@ import (
 
 type ContainerAppService interface {
 	pb.ContainerServiceServer
-	// StartEndpointServe(in *pb.StartEndpointServeRequest, stream pb.EndpointService_StartEndpointServeServer) error
-	// StopEndpointServe(ctx context.Context, in *pb.StopEndpointServeRequest) (*pb.StopEndpointServeResponse, error)
+	// StartContainerAppServe(in *pb.StartContainerAppServeRequest, stream pb.EndpointService_StartEndpointServeServer) error
+	// StopContainerAppServe(ctx context.Context, in *pb.StopEndpointServeRequest) (*pb.StopEndpointServeResponse, error)
 }
 
 type TCPContainerAppService struct {

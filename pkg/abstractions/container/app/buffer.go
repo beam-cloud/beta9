@@ -18,7 +18,7 @@ import (
 type tcpConnection struct {
 	src  net.Conn
 	dst  net.Conn
-	done chan struct{}
+	done chan bool
 }
 
 type container struct {
@@ -75,7 +75,7 @@ func NewConnectionBuffer(
 }
 
 func (cb *ConnectionBuffer) ForwardConnection(src, dst net.Conn) error {
-	done := make(chan struct{})
+	done := make(chan bool)
 	cb.buffer.Push(tcpConnection{
 		src:  src,
 		dst:  dst,
@@ -143,7 +143,7 @@ func (cb *ConnectionBuffer) handleTCPConnection(tcpConn tcpConnection) {
 }
 
 func (cb *ConnectionBuffer) copyData(src io.Reader, dst io.Writer) {
-	_, err := io.CopyBuffer(dst, src, make([]byte, 32*1024)) // Use a 32KB buffer for better performance
+	_, err := io.CopyBuffer(dst, src, make([]byte, 32*1024))
 	if err != nil {
 	}
 }
