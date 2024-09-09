@@ -212,7 +212,7 @@ class RunnerAbstraction(BaseAbstraction):
         function_name = func.__name__
         setattr(self, attr, f"{module_name}:{function_name}")
 
-    def remove_tmp_files(self) -> None:
+    def _remove_tmp_files(self) -> None:
         for tmp_file in self.tmp_files:
             tmp_file.close()
 
@@ -306,7 +306,7 @@ class RunnerAbstraction(BaseAbstraction):
 
         if not self.files_synced:
             sync_result = self.syncer.sync()
-            self.remove_tmp_files()
+            self._remove_tmp_files()
 
             if sync_result.success:
                 self.files_synced = True
