@@ -1,6 +1,7 @@
+import inspect
 import os
 import threading
-from typing import Callable, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 from .... import terminal
 from ....abstractions.base.runner import (
@@ -20,29 +21,78 @@ from ....clients.bot import (
     StopBotServeRequest,
 )
 from ....sync import FileSyncer
-from ....type import GpuType, GpuTypeAlias, TaskPolicy
+from ....type import GpuType, GpuTypeAlias
 from ...mixins import DeployableMixin
 
 
 class BotTransition:
-    # TODO convert to dataclass
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
-        image: Image = Image(),
+        image_id: str = "",
         timeout: int = 180,
-        keep_warm_seconds: int = 180,
-        max_pending_tasks: int = 100,
-        on_start: Optional[Callable] = None,
+        keep_warm: int = 180,
+        max_pending: int = 100,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
         callback_url: Optional[str] = None,
-        task_policy: TaskPolicy = TaskPolicy(),
+        task_policy: Optional[str] = None,
+        handler: Optional[str] = None,
+        bot_instance: Optional["Bot"] = None,  # Reference to Bot instance
     ):
-        pass
+        self.config = {
+            "cpu": cpu,
+            "memory": memory,
+            "gpu": gpu,
+            "image_id": image_id,
+            "timeout": timeout,
+            "keep_warm": keep_warm,
+            "max_pending": max_pending,
+            "volumes": volumes or [],
+            "secrets": secrets or [],
+            "name": name or "",
+            "callback_url": callback_url or "",
+            "task_policy": task_policy or "",
+            "handler": handler or "",
+        }
+        self.bot_instance: Optional["Bot"] = bot_instance
+        self.handler: str = ""
+
+    def _map_callable_to_attr(self, *, attr: str, func: Callable):
+        """
+        Determine the module and function name of a callable function, and cache on the class.
+        This is used for passing callables to stub config.
+        """
+        if getattr(self, attr):
+            return
+
+        module = inspect.getmodule(func)  # Determine module / function name
+        if module:
+            module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
+            module_name = os.path.splitext(module_file)[0]
+        else:
+            module_name = "__main__"
+
+        function_name = func.__name__
+        setattr(self, attr, f"{module_name}:{function_name}")
+
+    def __call__(self, func: Callable) -> None:
+        self._map_callable_to_attr(attr="handler", func=func)
+        self.config["handler"] = getattr(self, "handler")
+
+        transition_data = self.config.copy()
+        transition_data["name"] = func.__name__
+
+        if not hasattr(self.bot_instance, "extra"):
+            self.bot_instance.extra = {}
+
+        if "transitions" not in self.bot_instance.extra:
+            self.bot_instance.extra["transitions"] = {}
+
+        self.bot_instance.extra["transitions"][func.__name__] = transition_data
 
 
 class Bot(RunnerAbstraction, DeployableMixin):
@@ -93,6 +143,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         self._bot_stub: Optional[BotServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.places: List[str] = places
+        self.extra: Dict[str, Dict[str, dict]] = {}
 
     @property
     def bot_stub(self) -> BotServiceStub:
@@ -105,7 +156,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         self._bot_stub = value
 
     def transition(self, *args, **kwargs) -> BotTransition:
-        pass
+        return BotTransition(*args, **kwargs, bot_instance=self)
 
     @with_grpc_error_handling
     def serve(self, timeout: int = 0):

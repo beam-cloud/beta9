@@ -60,7 +60,6 @@ func (s *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb.B
 			time.Sleep(time.Second * 1)
 		}
 	}
-
 }
 
 func (s *PetriBotService) StopBotServe(ctx context.Context, in *pb.StopBotServeRequest) (*pb.StopBotServeResponse, error) {
