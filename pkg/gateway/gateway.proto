@@ -247,6 +247,7 @@ message GetOrCreateStubRequest {
   repeated SecretVar secrets = 21;
   Autoscaler autoscaler = 22;
   TaskPolicy task_policy = 23;
+  string extra = 24;
 }
 
 message GetOrCreateStubResponse {

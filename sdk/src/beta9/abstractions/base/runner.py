@@ -1,4 +1,5 @@
 import inspect
+import json
 import os
 import sys
 import tempfile
@@ -109,6 +110,7 @@ class RunnerAbstraction(BaseAbstraction):
             timeout=task_policy.timeout or timeout,
             ttl=task_policy.ttl,
         )
+        self.extra: dict = {}
 
         if on_start is not None:
             self._map_callable_to_attr(attr="on_start", func=on_start)
@@ -380,6 +382,7 @@ class RunnerAbstraction(BaseAbstraction):
                         timeout=self.task_policy.timeout,
                         ttl=self.task_policy.ttl,
                     ),
+                    extra=json.dumps(self.extra),
                 )
             )
 

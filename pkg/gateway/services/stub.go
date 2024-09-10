@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 
@@ -86,6 +87,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Secrets:         []types.Secret{},
 		Authorized:      in.Authorized,
 		Autoscaler:      autoscaler,
+		Extra:           json.RawMessage(in.Extra),
 	}
 
 	// Get secrets

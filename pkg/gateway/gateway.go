@@ -352,7 +352,20 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterSignalServiceServer(g.grpcServer, signalService)
 
 	// Register Bot service
-	botService, err := bot.NewPetriBotService(g.RedisClient)
+	botService, err := bot.NewPetriBotService(g.ctx,
+		bot.BotServiceOpts{
+			Config:         g.Config,
+			ContainerRepo:  g.ContainerRepo,
+			BackendRepo:    g.BackendRepo,
+			WorkspaceRepo:  g.WorkspaceRepo,
+			TaskRepo:       g.TaskRepo,
+			RedisClient:    g.RedisClient,
+			Scheduler:      g.Scheduler,
+			RouteGroup:     g.rootRouteGroup,
+			Tailscale:      g.Tailscale,
+			TaskDispatcher: g.TaskDispatcher,
+			EventRepo:      g.EventRepo,
+		})
 	if err != nil {
 		return err
 	}
