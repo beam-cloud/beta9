@@ -436,6 +436,9 @@ func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
 					log.Printf("<%s> - cedana health check failed: %+v\n", request.ContainerId, details.UnhealthyReasons)
 					break
 				}
+				if err != nil {
+					log.Printf("<%s> - cedana health check failed: %+v\n", request.ContainerId, err)
+				}
 			}
 		} else {
 			instance, exists := s.containerInstances.Get(request.ContainerId)
@@ -580,7 +583,6 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		if err != nil {
 			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
 		}
-
 	}()
 }
 
@@ -695,21 +697,27 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	defer containerInstance.Overlay.Cleanup()
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
-	// Setup container network namespace / devices
-	err = s.containerNetworkManager.Setup(containerId, spec)
-	if err != nil {
-		log.Printf("<%s> failed to setup container network: %v", containerId, err)
-		containerErr = err
-		return
-	}
+	// // Setup container network namespace / devices
+	// err = s.containerNetworkManager.Setup(containerId, spec)
+	// if err != nil {
+	// 	log.Printf("<%s> failed to setup container network: %v", containerId, err)
+	// 	containerErr = err
+	// 	return
+	// }
 
-	// Expose the bind port
-	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
-	if err != nil {
-		log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
-		containerErr = err
-		return
-	}
+	// // Expose the bind port
+	// err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
+	// if err != nil {
+	// 	log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
+	// 	containerErr = err
+	// 	return
+	// }
+
+	// // Expose cedana port
+	// err = s.containerNetworkManager.ExposePort(containerId, CedanaPort, CedanaPort)
+	// if err != nil {
+	// 	log.Printf("<%s> failed to expose cedana port, C/R unavailable: %v", containerId, err)
+	// }
 
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
@@ -847,7 +855,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		}
 		originalArgs := "\"" + strings.Join(spec.Process.Args, " ") + "\""
 		// TODO: Detect and pass in --cuda flag
-		cedanaArgs := fmt.Sprintf("%s daemon start --gpu-enabled=%t --config='%s' & criu check & %s exec %s -w %s -i %s --attach",
+		cedanaArgs := fmt.Sprintf("%s daemon start --gpu-enabled=%t --config='%s' & %s exec %s -w %s -i %s --attach",
 			CedanaPath,
 			request.Gpu != "",
 			configJSON,
@@ -859,11 +867,58 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Process.Env = append(spec.Process.Env, "CEDANA_CLI_WAIT_FOR_READY=true")
 		// TODO: kill daemon when container is stopped
 
-		// Add C/R capabilities
-		spec.Process.Capabilities.Bounding = append(spec.Process.Capabilities.Bounding, "CAP_SYS_ADMIN")
-		spec.Process.Capabilities.Effective = append(spec.Process.Capabilities.Effective, "CAP_SYS_ADMIN")
-		spec.Process.Capabilities.Permitted = append(spec.Process.Capabilities.Permitted, "CAP_SYS_ADMIN")
-		spec.Process.Capabilities.Ambient = append(spec.Process.Capabilities.Ambient, "CAP_SYS_ADMIN")
+		// Add privileged capabilities for C/R
+		// XXX: Probably more than we need for now. Anyways won't be needed in future when running
+		// cedana as a daemon in the worker instead.
+		capabilities := []string{
+			"CAP_CHOWN",
+			"CAP_DAC_OVERRIDE",
+			"CAP_DAC_READ_SEARCH",
+			"CAP_FOWNER",
+			"CAP_FSETID",
+			"CAP_KILL",
+			"CAP_SETGID",
+			"CAP_SETUID",
+			"CAP_SETPCAP",
+			"CAP_LINUX_IMMUTABLE",
+			"CAP_NET_BIND_SERVICE",
+			"CAP_NET_BROADCAST",
+			"CAP_NET_ADMIN",
+			"CAP_NET_RAW",
+			"CAP_IPC_LOCK",
+			"CAP_IPC_OWNER",
+			"CAP_SYS_MODULE",
+			"CAP_SYS_RAWIO",
+			"CAP_SYS_CHROOT",
+			"CAP_SYS_PTRACE",
+			"CAP_SYS_PACCT",
+			"CAP_SYS_ADMIN",
+			"CAP_SYS_BOOT",
+			"CAP_SYS_NICE",
+			"CAP_SYS_RESOURCE",
+			"CAP_SYS_TIME",
+			"CAP_SYS_TTY_CONFIG",
+			"CAP_MKNOD",
+			"CAP_LEASE",
+			"CAP_AUDIT_WRITE",
+			"CAP_AUDIT_CONTROL",
+			"CAP_SETFCAP",
+			"CAP_MAC_OVERRIDE",
+			"CAP_MAC_ADMIN",
+			"CAP_SYSLOG",
+			"CAP_WAKE_ALARM",
+			"CAP_BLOCK_SUSPEND",
+			"CAP_AUDIT_READ",
+			"CAP_PERFMON",
+			"CAP_BPF",
+			"CAP_CHECKPOINT_RESTORE",
+		}
+
+		spec.Process.Capabilities.Bounding = append(spec.Process.Capabilities.Bounding, capabilities...)
+		spec.Process.Capabilities.Effective = append(spec.Process.Capabilities.Effective, capabilities...)
+		spec.Process.Capabilities.Inheritable = append(spec.Process.Capabilities.Inheritable, capabilities...)
+		spec.Process.Capabilities.Permitted = append(spec.Process.Capabilities.Permitted, capabilities...)
+		spec.Process.Capabilities.Ambient = append(spec.Process.Capabilities.Ambient, capabilities...)
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
@@ -907,12 +962,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		Type:        "none",
 		Source:      "/workspace/resolv.conf",
 		Destination: "/etc/resolv.conf",
-		Options: []string{"ro",
+		Options: []string{
+			"ro",
 			"rbind",
 			"rprivate",
 			"nosuid",
 			"noexec",
-			"nodev"},
+			"nodev",
+		},
 	}
 
 	if s.config.Worker.UseHostResolvConf {

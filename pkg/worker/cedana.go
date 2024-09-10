@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	api "github.com/cedana/cedana/api/services/task"
@@ -11,7 +12,8 @@ import (
 )
 
 const (
-	Address                    = "0.0.0.0:8080"
+	CedanaPort                 = 8080
+	host                       = "0.0.0.0"
 	defaultStartDeadline       = 10 * time.Second
 	defaultCheckpointDeadline  = 2 * time.Minute
 	defaultRestoreDeadline     = 2 * time.Minute
@@ -27,7 +29,8 @@ type CedanaClient struct {
 func NewCedanaClient(ctx context.Context) (*CedanaClient, error) {
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	taskConn, err := grpc.NewClient(Address, opts...)
+	addr := fmt.Sprintf("%s:%d", host, CedanaPort)
+	taskConn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
 		return nil, err
 	}
