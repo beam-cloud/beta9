@@ -34,7 +34,7 @@ func (s *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb.B
 		case <-stream.Context().Done():
 			return nil
 		default:
-			stream.Send(&pb.StartBotServeResponse{Done: false})
+			stream.Send(&pb.StartBotServeResponse{Done: false, Output: "Bot running\n"})
 			time.Sleep(time.Second * 1)
 		}
 	}
