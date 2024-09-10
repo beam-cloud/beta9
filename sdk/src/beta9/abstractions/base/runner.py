@@ -42,15 +42,18 @@ TASKQUEUE_STUB_TYPE = "taskqueue"
 ENDPOINT_STUB_TYPE = "endpoint"
 ASGI_STUB_TYPE = "asgi"
 SCHEDULE_STUB_TYPE = "schedule"
+BOT_STUB_TYPE = "bot"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
 ASGI_DEPLOYMENT_STUB_TYPE = "asgi/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
 SCHEDULE_DEPLOYMENT_STUB_TYPE = "schedule/deployment"
+BOT_DEPLOYMENT_STUB_TYPE = "bot/deployment"
 TASKQUEUE_SERVE_STUB_TYPE = "taskqueue/serve"
 ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
 ASGI_SERVE_STUB_TYPE = "asgi/serve"
 FUNCTION_SERVE_STUB_TYPE = "function/serve"
+BOT_SERVE_STUB_TYPE = "bot/serve"
 
 
 class RunnerAbstraction(BaseAbstraction):

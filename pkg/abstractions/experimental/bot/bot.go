@@ -1,0 +1,35 @@
+package bot
+
+import (
+	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
+)
+
+type BotConfig struct {
+	Places      []string
+	Transitions []BotTransitionConfig
+}
+
+type BotTransitionConfig struct {
+	Cpu     int64         `json:"cpu"`
+	Gpu     types.GpuType `json:"gpu"`
+	Memory  int64         `json:"memory"`
+	ImageId string        `json:"image_id"`
+}
+
+type BotService interface {
+	pb.BotServiceServer
+}
+
+type PetriBotService struct {
+	pb.UnimplementedBotServiceServer
+
+	rdb *common.RedisClient
+}
+
+func NewPetriBotService(rdb *common.RedisClient) (BotService, error) {
+	return &PetriBotService{
+		rdb: rdb,
+	}, nil
+}
