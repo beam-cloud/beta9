@@ -540,7 +540,7 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 	).From("task t").
 		Join("workspace w ON t.workspace_id = w.id").
 		Join("stub s ON t.stub_id = s.id").
-		Join("deployment d ON s.id = d.stub_id").
+		LeftJoin("deployment d ON s.id = d.stub_id").
 		OrderBy("t.id DESC")
 
 	// Apply filters
