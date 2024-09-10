@@ -6,19 +6,19 @@ from beta9.abstractions.image import Image, ImageCredentialValueNotFound
 
 
 class TestImage(TestCase):
-    def test_image_container_commands(self):
+    def test_image_build_steps(self):
         image = Image()
         image.add_commands(["apt-get install curl -y"])
         image.add_python_packages(["requests"])
         image.add_commands(["apt-get install wget -y"])
         image.add_commands(["numpy", "pytorch"])
 
-        assert len(image.container_commands) == 5
-        assert image.container_commands[0].command == "apt-get install curl -y"
-        assert image.container_commands[1].command == "requests"
-        assert image.container_commands[2].command == "apt-get install wget -y"
-        assert image.container_commands[3].command == "numpy"
-        assert image.container_commands[4].command == "pytorch"
+        assert len(image.build_steps) == 5
+        assert image.build_steps[0].command == "apt-get install curl -y"
+        assert image.build_steps[1].command == "requests"
+        assert image.build_steps[2].command == "apt-get install wget -y"
+        assert image.build_steps[3].command == "numpy"
+        assert image.build_steps[4].command == "pytorch"
 
     def test_image_credentials(self):
         env = {
