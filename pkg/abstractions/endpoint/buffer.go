@@ -325,7 +325,6 @@ func (rb *RequestBuffer) handleRequest(req request) {
 	} else {
 		rb.handleHttpRequest(req, c)
 	}
-
 }
 
 func (rb *RequestBuffer) handleWSRequest(req request, c container) {
