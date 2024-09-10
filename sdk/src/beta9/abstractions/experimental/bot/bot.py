@@ -1,5 +1,8 @@
+import os
+import threading
 from typing import Callable, List, Optional, Union
 
+from .... import terminal
 from ....abstractions.base.runner import (
     BOT_DEPLOYMENT_STUB_TYPE,
     BOT_SERVE_STUB_TYPE,
@@ -10,7 +13,11 @@ from ....abstractions.image import Image
 from ....abstractions.volume import Volume
 from ....channel import with_grpc_error_handling
 from ....clients.bot import (
+    BotServeKeepAliveRequest,
     BotServiceStub,
+    StartBotServeRequest,
+    StartBotServeResponse,
+    StopBotServeRequest,
 )
 from ....sync import FileSyncer
 from ....type import GpuType, GpuTypeAlias, TaskPolicy
@@ -88,13 +95,13 @@ class Bot(RunnerAbstraction, DeployableMixin):
         self.places: List[str] = places
 
     @property
-    def stub(self) -> BotServiceStub:
+    def bot_stub(self) -> BotServiceStub:
         if not self._bot_stub:
             self._bot_stub = BotServiceStub(self.channel)
         return self._bot_stub
 
-    @stub.setter
-    def stub(self, value: BotServiceStub) -> None:
+    @bot_stub.setter
+    def bot_stub(self, value: BotServiceStub) -> None:
         self._bot_stub = value
 
     def transition(self, *args, **kwargs) -> BotTransition:
@@ -107,4 +114,55 @@ class Bot(RunnerAbstraction, DeployableMixin):
         ):
             return False
 
-        print("prepared!")
+        try:
+            with terminal.progress("Serving endpoint..."):
+                base_url = self.settings.api_host
+                if not base_url.startswith(("http://", "https://")):
+                    base_url = f"http://{base_url}"
+
+                invocation_url = f"{base_url}/{self.base_stub_type}/id/{self.stub_id}"
+                self.print_invocation_snippet(invocation_url=invocation_url)
+
+                return self._serve(dir=os.getcwd(), object_id=self.object_id, timeout=timeout)
+
+        except KeyboardInterrupt:
+            self._handle_serve_interrupt()
+
+    def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
+        def notify(*_, **__):
+            self.bot_stub.bot_serve_keep_alive(
+                BotServeKeepAliveRequest(
+                    stub_id=self.stub_id,
+                    timeout=timeout,
+                )
+            )
+
+        threading.Thread(
+            target=self.sync_dir_to_workspace,
+            kwargs={"dir": dir, "object_id": object_id, "on_event": notify},
+            daemon=True,
+        ).start()
+
+        r: Optional[StartBotServeResponse] = None
+        for r in self.bot_stub.start_bot_serve(
+            StartBotServeRequest(
+                stub_id=self.stub_id,
+                timeout=timeout,
+            )
+        ):
+            if r.output != "":
+                terminal.detail(r.output, end="")
+
+            if r.done or r.exit_code != 0:
+                break
+
+        if r is None or not r.done or r.exit_code != 0:
+            terminal.error("Serve container failed ❌")
+
+        terminal.warn("Bot serve timed out. All container have been stopped.")
+
+    def _handle_serve_interrupt(self) -> None:
+        terminal.header("Stopping all bot containers")
+        self.bot_stub.stop_bot_serve(StopBotServeRequest(stub_id=self.stub_id))
+        terminal.print("Goodbye 👋")
+        os._exit(0)

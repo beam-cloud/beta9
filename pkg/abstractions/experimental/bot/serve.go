@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 
@@ -13,9 +14,31 @@ func (s *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb.B
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	log.Println("authInfo: ", authInfo)
+	log.Printf("authInfo: %+v\n", authInfo)
 
-	return nil
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				// outputChan <- common.OutputMsg{Msg: ""}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-stream.Context().Done():
+			return nil
+		default:
+			stream.Send(&pb.StartBotServeResponse{Done: false})
+			time.Sleep(time.Second * 1)
+		}
+	}
+
 }
 
 func (s *PetriBotService) StopBotServe(ctx context.Context, in *pb.StopBotServeRequest) (*pb.StopBotServeResponse, error) {
