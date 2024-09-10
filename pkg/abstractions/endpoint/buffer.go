@@ -138,11 +138,7 @@ func (rb *RequestBuffer) processRequests() {
 				continue
 			}
 
-			if req.ctx.IsWebSocket() {
-				go rb.handleWSRequest(req)
-			} else {
-				go rb.handleHttpRequest(req)
-			}
+			go rb.handleRequest(req)
 		}
 	}
 }
@@ -306,35 +302,20 @@ func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
 	return client, nil
 }
 
-func (rb *RequestBuffer) handleWSRequest(req request) {
-	rb.availableContainersLock.RLock()
-	if len(rb.availableContainers) == 0 {
-		rb.availableContainersLock.RUnlock()
-		rb.buffer.Push(req)
-		return
-	}
-
-	c := rb.availableContainers[0]
-	rb.availableContainersLock.RUnlock()
-
-	err := rb.incrementRequestsInFlight(c.id)
-	if err != nil {
-		return
-	}
-
+func (rb *RequestBuffer) handleWSRequest(req request, c container) {
 	defer rb.afterRequest(req, c.id)
 
 	dstDialer := websocket.Dialer{
 		NetDialContext: network.GetDialer(c.address, rb.tailscale, rb.tsConfig),
 	}
 
-	err = proxyWebsocketConnection(req.ctx.Response().Writer, req.ctx.Request(), dstDialer, fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")))
+	err := proxyWebsocketConnection(req.ctx.Response().Writer, req.ctx.Request(), dstDialer, fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")))
 	if err != nil {
 		return
 	}
 }
 
-func (rb *RequestBuffer) handleHttpRequest(req request) {
+func (rb *RequestBuffer) handleRequest(req request) {
 	rb.availableContainersLock.RLock()
 	if len(rb.availableContainers) == 0 {
 		rb.availableContainersLock.RUnlock()
@@ -352,6 +333,15 @@ func (rb *RequestBuffer) handleHttpRequest(req request) {
 		return
 	}
 
+	if req.ctx.IsWebSocket() {
+		rb.handleWSRequest(req, c)
+	} else {
+		rb.handleHttpRequest(req, c)
+	}
+
+}
+
+func (rb *RequestBuffer) handleHttpRequest(req request, c container) {
 	request := req.ctx.Request()
 	requestBody := request.Body
 	if !rb.isASGI {
