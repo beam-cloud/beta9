@@ -107,7 +107,7 @@ func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 	h.Write([]byte(strings.Join(opts.Commands, "-")))
 	if len(opts.BuildSteps) > 0 {
 		for _, step := range opts.BuildSteps {
-			h.Write([]byte(fmt.Sprintf("%s-%s", step.Type, step.Command)))
+			fmt.Fprintf(h, "%s-%s", step.Type, step.Command)
 		}
 	}
 	commandListHash := hex.EncodeToString(h.Sum(nil))

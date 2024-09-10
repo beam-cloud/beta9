@@ -127,10 +127,10 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 	steps := make([]BuildStep, len(buildSteps))
-	for i, c := range buildSteps {
+	for i, s := range buildSteps {
 		steps[i] = BuildStep{
-			Command: c.Command,
-			Type:    c.Type,
+			Command: s.Command,
+			Type:    s.Type,
 		}
 	}
 	return steps
