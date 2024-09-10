@@ -4,7 +4,13 @@
 # This file has been @generated
 
 from dataclasses import dataclass
-from typing import Dict
+from typing import (
+    TYPE_CHECKING,
+    AsyncIterator,
+    Dict,
+    Iterator,
+    Optional,
+)
 
 import betterproto
 import grpc
@@ -12,5 +18,71 @@ from betterproto.grpcstub.grpcio_client import SyncServiceStub
 from betterproto.grpcstub.grpclib_server import ServiceBase
 
 
+if TYPE_CHECKING:
+    import grpclib.server
+    from betterproto.grpcstub.grpclib_client import MetadataLike
+    from grpclib.metadata import Deadline
+
+
+@dataclass(eq=False, repr=False)
+class StartBotServeRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    timeout: int = betterproto.int32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class StartBotServeResponse(betterproto.Message):
+    output: str = betterproto.string_field(1)
+    done: bool = betterproto.bool_field(2)
+    exit_code: int = betterproto.int32_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class StopBotServeRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class StopBotServeResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class BotServeKeepAliveRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    timeout: int = betterproto.int32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class BotServeKeepAliveResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+
+
 class BotServiceStub(SyncServiceStub):
-    pass
+    def start_bot_serve(
+        self, start_bot_serve_request: "StartBotServeRequest"
+    ) -> Iterator["StartBotServeResponse"]:
+        for response in self._unary_stream(
+            "/bot.BotService/StartBotServe",
+            StartBotServeRequest,
+            StartBotServeResponse,
+        )(start_bot_serve_request):
+            yield response
+
+    def stop_bot_serve(
+        self, stop_bot_serve_request: "StopBotServeRequest"
+    ) -> "StopBotServeResponse":
+        return self._unary_unary(
+            "/bot.BotService/StopBotServe",
+            StopBotServeRequest,
+            StopBotServeResponse,
+        )(stop_bot_serve_request)
+
+    def bot_serve_keep_alive(
+        self, bot_serve_keep_alive_request: "BotServeKeepAliveRequest"
+    ) -> "BotServeKeepAliveResponse":
+        return self._unary_unary(
+            "/bot.BotService/BotServeKeepAlive",
+            BotServeKeepAliveRequest,
+            BotServeKeepAliveResponse,
+        )(bot_serve_keep_alive_request)

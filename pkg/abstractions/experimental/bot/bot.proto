@@ -4,4 +4,30 @@ option go_package = "github.com/beam-cloud/beta9/proto";
 
 package bot;
 
-service BotService {}
+service BotService {
+  rpc StartBotServe(StartBotServeRequest)
+      returns (stream StartBotServeResponse) {}
+  rpc StopBotServe(StopBotServeRequest) returns (StopBotServeResponse) {}
+  rpc BotServeKeepAlive(BotServeKeepAliveRequest)
+      returns (BotServeKeepAliveResponse) {}
+}
+
+message StartBotServeRequest {
+  string stub_id = 1;
+  int32 timeout = 2;
+}
+
+message StartBotServeResponse {
+  string output = 1;
+  bool done = 2;
+  int32 exit_code = 3;
+}
+
+message StopBotServeRequest { string stub_id = 1; }
+message StopBotServeResponse { bool ok = 1; }
+
+message BotServeKeepAliveRequest {
+  string stub_id = 1;
+  int32 timeout = 2;
+}
+message BotServeKeepAliveResponse { bool ok = 1; }

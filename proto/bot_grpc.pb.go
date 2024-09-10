@@ -7,7 +7,10 @@
 package proto
 
 import (
+	context "context"
 	grpc "google.golang.org/grpc"
+	codes "google.golang.org/grpc/codes"
+	status "google.golang.org/grpc/status"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -15,12 +18,19 @@ import (
 // Requires gRPC-Go v1.32.0 or later.
 const _ = grpc.SupportPackageIsVersion7
 
-const ()
+const (
+	BotService_StartBotServe_FullMethodName     = "/bot.BotService/StartBotServe"
+	BotService_StopBotServe_FullMethodName      = "/bot.BotService/StopBotServe"
+	BotService_BotServeKeepAlive_FullMethodName = "/bot.BotService/BotServeKeepAlive"
+)
 
 // BotServiceClient is the client API for BotService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BotServiceClient interface {
+	StartBotServe(ctx context.Context, in *StartBotServeRequest, opts ...grpc.CallOption) (BotService_StartBotServeClient, error)
+	StopBotServe(ctx context.Context, in *StopBotServeRequest, opts ...grpc.CallOption) (*StopBotServeResponse, error)
+	BotServeKeepAlive(ctx context.Context, in *BotServeKeepAliveRequest, opts ...grpc.CallOption) (*BotServeKeepAliveResponse, error)
 }
 
 type botServiceClient struct {
@@ -31,10 +41,63 @@ func NewBotServiceClient(cc grpc.ClientConnInterface) BotServiceClient {
 	return &botServiceClient{cc}
 }
 
+func (c *botServiceClient) StartBotServe(ctx context.Context, in *StartBotServeRequest, opts ...grpc.CallOption) (BotService_StartBotServeClient, error) {
+	stream, err := c.cc.NewStream(ctx, &BotService_ServiceDesc.Streams[0], BotService_StartBotServe_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &botServiceStartBotServeClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type BotService_StartBotServeClient interface {
+	Recv() (*StartBotServeResponse, error)
+	grpc.ClientStream
+}
+
+type botServiceStartBotServeClient struct {
+	grpc.ClientStream
+}
+
+func (x *botServiceStartBotServeClient) Recv() (*StartBotServeResponse, error) {
+	m := new(StartBotServeResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (c *botServiceClient) StopBotServe(ctx context.Context, in *StopBotServeRequest, opts ...grpc.CallOption) (*StopBotServeResponse, error) {
+	out := new(StopBotServeResponse)
+	err := c.cc.Invoke(ctx, BotService_StopBotServe_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *botServiceClient) BotServeKeepAlive(ctx context.Context, in *BotServeKeepAliveRequest, opts ...grpc.CallOption) (*BotServeKeepAliveResponse, error) {
+	out := new(BotServeKeepAliveResponse)
+	err := c.cc.Invoke(ctx, BotService_BotServeKeepAlive_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BotServiceServer is the server API for BotService service.
 // All implementations must embed UnimplementedBotServiceServer
 // for forward compatibility
 type BotServiceServer interface {
+	StartBotServe(*StartBotServeRequest, BotService_StartBotServeServer) error
+	StopBotServe(context.Context, *StopBotServeRequest) (*StopBotServeResponse, error)
+	BotServeKeepAlive(context.Context, *BotServeKeepAliveRequest) (*BotServeKeepAliveResponse, error)
 	mustEmbedUnimplementedBotServiceServer()
 }
 
@@ -42,6 +105,15 @@ type BotServiceServer interface {
 type UnimplementedBotServiceServer struct {
 }
 
+func (UnimplementedBotServiceServer) StartBotServe(*StartBotServeRequest, BotService_StartBotServeServer) error {
+	return status.Errorf(codes.Unimplemented, "method StartBotServe not implemented")
+}
+func (UnimplementedBotServiceServer) StopBotServe(context.Context, *StopBotServeRequest) (*StopBotServeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StopBotServe not implemented")
+}
+func (UnimplementedBotServiceServer) BotServeKeepAlive(context.Context, *BotServeKeepAliveRequest) (*BotServeKeepAliveResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BotServeKeepAlive not implemented")
+}
 func (UnimplementedBotServiceServer) mustEmbedUnimplementedBotServiceServer() {}
 
 // UnsafeBotServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -55,13 +127,85 @@ func RegisterBotServiceServer(s grpc.ServiceRegistrar, srv BotServiceServer) {
 	s.RegisterService(&BotService_ServiceDesc, srv)
 }
 
+func _BotService_StartBotServe_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StartBotServeRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(BotServiceServer).StartBotServe(m, &botServiceStartBotServeServer{stream})
+}
+
+type BotService_StartBotServeServer interface {
+	Send(*StartBotServeResponse) error
+	grpc.ServerStream
+}
+
+type botServiceStartBotServeServer struct {
+	grpc.ServerStream
+}
+
+func (x *botServiceStartBotServeServer) Send(m *StartBotServeResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func _BotService_StopBotServe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopBotServeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BotServiceServer).StopBotServe(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BotService_StopBotServe_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BotServiceServer).StopBotServe(ctx, req.(*StopBotServeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BotService_BotServeKeepAlive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BotServeKeepAliveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BotServiceServer).BotServeKeepAlive(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BotService_BotServeKeepAlive_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BotServiceServer).BotServeKeepAlive(ctx, req.(*BotServeKeepAliveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BotService_ServiceDesc is the grpc.ServiceDesc for BotService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var BotService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "bot.BotService",
 	HandlerType: (*BotServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
-	Streams:     []grpc.StreamDesc{},
-	Metadata:    "bot.proto",
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "StopBotServe",
+			Handler:    _BotService_StopBotServe_Handler,
+		},
+		{
+			MethodName: "BotServeKeepAlive",
+			Handler:    _BotService_BotServeKeepAlive_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "StartBotServe",
+			Handler:       _BotService_StartBotServe_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "bot.proto",
 }

@@ -1,6 +1,8 @@
 package bot
 
 import (
+	"context"
+
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -20,11 +22,12 @@ type BotTransitionConfig struct {
 
 type BotService interface {
 	pb.BotServiceServer
+	StartBotServe(in *pb.StartBotServeRequest, stream pb.BotService_StartBotServeServer) error
+	StopBotServe(ctx context.Context, in *pb.StopBotServeRequest) (*pb.StopBotServeResponse, error)
 }
 
 type PetriBotService struct {
 	pb.UnimplementedBotServiceServer
-
 	rdb *common.RedisClient
 }
 
