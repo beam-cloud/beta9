@@ -39,19 +39,20 @@ type BotLocationConfig struct {
 }
 
 type BotTransitionConfig struct {
-	Cpu         int64         `json:"cpu"`
-	Gpu         types.GpuType `json:"gpu"`
-	Memory      int64         `json:"memory"`
-	ImageId     string        `json:"image_id"`
-	Timeout     int           `json:"timeout"`
-	KeepWarm    int           `json:"keep_warm"`
-	MaxPending  int           `json:"max_pending"`
-	Volumes     []string      `json:"volumes"`
-	Secrets     []string      `json:"secrets"`
-	Handler     string        `json:"handler"`
-	CallbackUrl string        `json:"callback_url"`
-	TaskPolicy  string        `json:"task_policy"`
-	Name        string        `json:"name"`
+	Cpu         int64          `json:"cpu"`
+	Gpu         types.GpuType  `json:"gpu"`
+	Memory      int64          `json:"memory"`
+	ImageId     string         `json:"image_id"`
+	Timeout     int            `json:"timeout"`
+	KeepWarm    int            `json:"keep_warm"`
+	MaxPending  int            `json:"max_pending"`
+	Volumes     []string       `json:"volumes"`
+	Secrets     []string       `json:"secrets"`
+	Handler     string         `json:"handler"`
+	CallbackUrl string         `json:"callback_url"`
+	TaskPolicy  string         `json:"task_policy"`
+	Name        string         `json:"name"`
+	Inputs      map[string]int `json:"inputs"`
 }
 type BotService interface {
 	pb.BotServiceServer

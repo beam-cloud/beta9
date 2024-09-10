@@ -42,6 +42,7 @@ class BotTransition:
         callback_url: Optional[str] = None,
         task_policy: Optional[str] = None,
         handler: Optional[str] = None,
+        inputs: dict = {},
         bot_instance: Optional["Bot"] = None,  # Reference to Bot instance
     ):
         self.config = {
@@ -58,6 +59,7 @@ class BotTransition:
             "callback_url": callback_url or "",
             "task_policy": task_policy or "",
             "handler": handler or "",
+            "inputs": inputs or {},
         }
         self.bot_instance: Optional["Bot"] = bot_instance
         self.handler: str = ""
