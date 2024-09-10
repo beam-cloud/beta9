@@ -15,9 +15,7 @@ import (
 
 func (s *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb.BotService_StartBotServeServer) error {
 	ctx := stream.Context()
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
-	log.Printf("authInfo: %+v\n", authInfo)
+	_, _ = auth.AuthInfoFromContext(ctx)
 
 	stub, err := s.backendRepo.GetStubByExternalId(ctx, in.StubId)
 	if err != nil {

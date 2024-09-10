@@ -23,6 +23,7 @@ from ....clients.bot import (
 from ....sync import FileSyncer
 from ....type import GpuType, GpuTypeAlias
 from ...mixins import DeployableMixin
+from .marker import BotLocation
 
 
 class BotTransition:
@@ -92,6 +93,7 @@ class BotTransition:
         if "transitions" not in self.bot_instance.extra:
             self.bot_instance.extra["transitions"] = {}
 
+        print(self.bot_instance.extra)
         self.bot_instance.extra["transitions"][func.__name__] = transition_data
 
 
@@ -121,7 +123,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
     def __init__(
         self,
-        places: List[str],
+        locations: List[BotLocation],
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
@@ -142,8 +144,14 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
         self._bot_stub: Optional[BotServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
-        self.places: List[str] = places
+        self.locations: List[BotLocation] = locations
         self.extra: Dict[str, Dict[str, dict]] = {}
+
+        self.extra["locations"] = {}
+
+        for location in self.locations:
+            location_config = location.to_dict()
+            self.extra["locations"][location.name] = location_config
 
     @property
     def bot_stub(self) -> BotServiceStub:

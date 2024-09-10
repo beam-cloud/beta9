@@ -7,7 +7,8 @@ import (
 /*
 
 What does the coordinator do?
-
+	- maintains & updates the state of the bot instance
+	-
 */
 
 type BotCoordinator struct {

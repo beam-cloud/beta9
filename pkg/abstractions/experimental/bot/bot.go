@@ -30,8 +30,12 @@ type BotServiceOpts struct {
 }
 
 type BotConfig struct {
-	Places      []string                       `json:"places"`
+	Locations   map[string]BotLocationConfig   `json:"locations"`
 	Transitions map[string]BotTransitionConfig `json:"transitions"`
+}
+
+type BotLocationConfig struct {
+	Name string `json:"name"`
 }
 
 type BotTransitionConfig struct {
