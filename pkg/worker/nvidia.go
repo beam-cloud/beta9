@@ -293,5 +293,20 @@ func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Moun
 		}...)
 	}
 
+	mounts = append(mounts, []specs.Mount{
+		{
+			Type:        "bind",
+			Source:      fmt.Sprintf("/usr/local/cuda-%s", defaultContainerCudaVersion),
+			Destination: "/usr/local/cuda",
+			Options: []string{
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev",
+				"rw",
+			},
+		},
+	}...)
+
 	return mounts
 }
