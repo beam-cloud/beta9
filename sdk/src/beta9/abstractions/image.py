@@ -7,6 +7,7 @@ from ..abstractions.base import BaseAbstraction
 from ..clients.image import (
     BuildImageRequest,
     BuildImageResponse,
+    BuildStep,
     ImageServiceStub,
     VerifyImageBuildRequest,
     VerifyImageBuildResponse,
@@ -62,6 +63,10 @@ class Image(BaseAbstraction):
         An Image object encapsulates the configuration of a custom container image
         that will be used as the runtime environment for executing tasks.
 
+        If the `python_packages` variable is set, it will always run before `commands`.
+        To control the order of execution, use the `add_commands` and `add_python_packages`
+        methods. These will be executed in the order they are added.
+
         Parameters:
             python_version (Union[PythonVersion, str]):
                 The Python version to be used in the image. Default is
@@ -89,8 +94,8 @@ class Image(BaseAbstraction):
 
         Example:
 
-            Using a custom private image from AWS ECR. By defining a sequence of AWS environment variable
-            keys, the Image object will lookup the values automatically.
+            To use a custom private image from AWS ECR, define a sequence of AWS environment variables.
+            The Image object will lookup the values automatically.
 
             ```python
             image = Image(
@@ -110,6 +115,7 @@ class Image(BaseAbstraction):
         self.python_version = python_version
         self.python_packages = self._sanitize_python_packages(python_packages)
         self.commands = commands
+        self.build_steps = []
         self.base_image = base_image or ""
         self.base_image_creds = base_image_creds or {}
         self._stub: Optional[ImageServiceStub] = None
@@ -151,6 +157,7 @@ class Image(BaseAbstraction):
                 python_packages=self.python_packages,
                 python_version=self.python_version,
                 commands=self.commands,
+                build_steps=self.build_steps,
                 force_rebuild=False,
                 existing_image_uri=self.base_image,
             )
@@ -173,6 +180,7 @@ class Image(BaseAbstraction):
                     python_packages=self.python_packages,
                     python_version=self.python_version,
                     commands=self.commands,
+                    build_steps=self.build_steps,
                     existing_image_uri=self.base_image,
                     existing_image_creds=self.get_credentials_from_env(),
                 )
@@ -208,3 +216,37 @@ class Image(BaseAbstraction):
             else:
                 raise ImageCredentialValueNotFound(key)
         return creds
+
+    def add_commands(self, commands: Sequence[str]) -> "Image":
+        """
+        Add shell commands that will be executed when building the image.
+
+        These will be executed at the end of the image build and in the
+        order they are added.
+
+        Parameters:
+            commands: The shell commands to execute.
+
+        Returns:
+            Image: The Image object.
+        """
+        for command in commands:
+            self.build_steps.append(BuildStep(command=command, type="shell"))
+        return self
+
+    def add_python_packages(self, packages: Sequence[str]) -> "Image":
+        """
+        Add python packages that will be installed when building the image.
+
+        These will be executed at the end of the image build and in the
+        order they are added.
+
+        Parameters:
+            packages: The Python packages to add. Valid package names are: numpy, pandas==2.2.2, etc.
+
+        Returns:
+            Image: The Image object.
+        """
+        for package in packages:
+            self.build_steps.append(BuildStep(command=package, type="pip"))
+        return self
