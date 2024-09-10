@@ -30,6 +30,15 @@ func ConnectToHost(ctx context.Context, host string, timeout time.Duration, tail
 	return conn, nil
 }
 
+func GetDialer(tailscale *Tailscale, tsConfig types.TailscaleConfig) func(ctx context.Context, network, address string) (net.Conn, error) {
+	if tsConfig.Enabled {
+		return tailscale.Dial
+	}
+
+	dialer := &net.Dialer{}
+	return dialer.DialContext
+}
+
 func ResolveTailscaleService(serviceName string, timeout time.Duration) (string, error) {
 	client := tailscale.LocalClient{}
 	interval := time.Second * 1

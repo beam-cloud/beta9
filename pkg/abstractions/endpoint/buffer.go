@@ -314,8 +314,6 @@ func (rb *RequestBuffer) handleWSRequest(req request) {
 		return
 	}
 
-	// Select an available container to forward the request to (whichever one has the lowest # of inflight requests)
-	// Basically least-connections load balancing
 	c := rb.availableContainers[0]
 	rb.availableContainersLock.RUnlock()
 
@@ -326,7 +324,7 @@ func (rb *RequestBuffer) handleWSRequest(req request) {
 
 	defer rb.afterRequest(req, c.id)
 
-	err = proxyWebsocketConnection(req.ctx.Response().Writer, req.ctx.Request(), fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")))
+	err = rb.proxyWebsocketConnection(req.ctx.Response().Writer, req.ctx.Request(), fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")))
 	if err != nil {
 		return
 	}
@@ -466,7 +464,7 @@ func (rb *RequestBuffer) afterRequest(req request, containerId string) {
 	)
 }
 
-func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dstAddress string) error {
+func (rb *RequestBuffer) proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dstAddress string) error {
 	upgrader := websocket.Upgrader{}
 
 	wsSrc, err := upgrader.Upgrade(w, req, nil)
@@ -474,7 +472,11 @@ func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dstAddre
 		return err
 	}
 
-	wsDst, resp, err := websocket.DefaultDialer.Dial(dstAddress, nil)
+	dialer := websocket.Dialer{
+		NetDialContext: network.GetDialer(rb.tailscale, rb.tsConfig),
+	}
+
+	wsDst, resp, err := dialer.Dial(dstAddress, nil)
 	if err != nil {
 		return err
 	}
@@ -483,30 +485,14 @@ func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dstAddre
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	wg := sync.WaitGroup{}
-	wg.Add(2)
-
-	go forwardWsMessages(wsSrc, wsDst, &wg)
-	go forwardWsMessages(wsDst, wsSrc, &wg)
-
-	wg.Wait()
+	go forwardWSConn(wsSrc.NetConn(), wsDst.NetConn())
+	forwardWSConn(wsDst.NetConn(), wsSrc.NetConn())
 	return nil
 }
 
-func forwardWsMessages(wsFrom *websocket.Conn, wsTo *websocket.Conn, wg *sync.WaitGroup) {
-	defer wsFrom.Close() // Close the connection if 1 of the 2 connections is closed. That way we will close the other one as well
-	defer wsTo.Close()
-	defer wg.Done()
-
-	for {
-		messageType, br, err := wsFrom.ReadMessage()
-		if err != nil {
-			return
-		}
-
-		err = wsTo.WriteMessage(messageType, br)
-		if err != nil {
-			return
-		}
+func forwardWSConn(src net.Conn, dst net.Conn) {
+	_, err := io.Copy(src, dst)
+	if err != nil {
+		return
 	}
 }
