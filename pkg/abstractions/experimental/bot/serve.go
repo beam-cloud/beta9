@@ -46,5 +46,6 @@ func (s *PetriBotService) StopBotServe(ctx context.Context, in *pb.StopBotServeR
 }
 
 func (s *PetriBotService) BotServeKeepAlive(ctx context.Context, in *pb.BotServeKeepAliveRequest) (*pb.BotServeKeepAliveResponse, error) {
+	log.Println("keepalive")
 	return &pb.BotServeKeepAliveResponse{Ok: true}, nil
 }
