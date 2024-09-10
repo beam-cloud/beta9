@@ -54,6 +54,7 @@ type BotTransitionConfig struct {
 	Name        string         `json:"name"`
 	Inputs      map[string]int `json:"inputs"`
 }
+
 type BotService interface {
 	pb.BotServiceServer
 	StartBotServe(in *pb.StartBotServeRequest, stream pb.BotService_StartBotServeServer) error
