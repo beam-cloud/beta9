@@ -325,7 +325,7 @@ func (rb *RequestBuffer) handleWSRequest(req request) {
 	defer rb.afterRequest(req, c.id)
 
 	dstDialer := websocket.Dialer{
-		NetDialContext: network.GetDialer(rb.tailscale, rb.tsConfig),
+		NetDialContext: network.GetDialer(c.address, rb.tailscale, rb.tsConfig),
 	}
 
 	err = proxyWebsocketConnection(req.ctx.Response().Writer, req.ctx.Request(), dstDialer, fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")))
