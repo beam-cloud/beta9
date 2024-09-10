@@ -40,7 +40,7 @@ type Builder struct {
 	tailscale     *network.Tailscale
 }
 
-type ContainerCommand struct {
+type BuildStep struct {
 	Command string
 	Type    string
 }
@@ -53,7 +53,7 @@ type BuildOpts struct {
 	PythonVersion      string
 	PythonPackages     []string
 	Commands           []string
-	ContainerCommands  []ContainerCommand
+	BuildSteps         []BuildStep
 	ExistingImageUri   string
 	ExistingImageCreds map[string]string
 	ForceRebuild       bool
@@ -69,7 +69,7 @@ func (o *BuildOpts) String() string {
 	fmt.Fprintf(&b, "  \"PythonVersion\": %q,", o.PythonVersion)
 	fmt.Fprintf(&b, "  \"PythonPackages\": %#v,", o.PythonPackages)
 	fmt.Fprintf(&b, "  \"Commands\": %#v,", o.Commands)
-	fmt.Fprintf(&b, "  \"ContainerCommands\": %#v,", o.ContainerCommands)
+	fmt.Fprintf(&b, "  \"BuildSteps\": %#v,", o.BuildSteps)
 	fmt.Fprintf(&b, "  \"ExistingImageUri\": %q,", o.ExistingImageUri)
 	fmt.Fprintf(&b, "  \"ExistingImageCreds\": %#v,", o.ExistingImageCreds)
 	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
@@ -105,9 +105,9 @@ type ImageIdHash struct {
 func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 	h := sha1.New()
 	h.Write([]byte(strings.Join(opts.Commands, "-")))
-	if len(opts.ContainerCommands) > 0 {
-		for _, cmd := range opts.ContainerCommands {
-			h.Write([]byte(fmt.Sprintf("%s-%s", cmd.Type, cmd.Command)))
+	if len(opts.BuildSteps) > 0 {
+		for _, step := range opts.BuildSteps {
+			h.Write([]byte(fmt.Sprintf("%s-%s", step.Type, step.Command)))
 		}
 	}
 	commandListHash := hex.EncodeToString(h.Sum(nil))
@@ -276,12 +276,12 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	// Generate the commands to run in the container
-	for _, cmd := range opts.ContainerCommands {
-		switch cmd.Type {
+	for _, step := range opts.BuildSteps {
+		switch step.Type {
 		case shellCommandType:
-			opts.Commands = append(opts.Commands, cmd.Command)
+			opts.Commands = append(opts.Commands, step.Command)
 		case pipCommandType:
-			opts.Commands = append(opts.Commands, b.generatePipInstallCommand([]string{cmd.Command}, opts.PythonVersion))
+			opts.Commands = append(opts.Commands, b.generatePipInstallCommand([]string{step.Command}, opts.PythonVersion))
 		}
 	}
 

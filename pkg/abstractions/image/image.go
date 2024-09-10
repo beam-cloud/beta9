@@ -62,7 +62,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		PythonVersion:     in.PythonVersion,
 		PythonPackages:    in.PythonPackages,
 		Commands:          in.Commands,
-		ContainerCommands: convertContainerCommands(in.ContainerCommands),
+		BuildSteps:        convertBuildSteps(in.BuildSteps),
 		ExistingImageUri:  in.ExistingImageUri,
 	}
 
@@ -92,7 +92,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		PythonVersion:      in.PythonVersion,
 		PythonPackages:     in.PythonPackages,
 		Commands:           in.Commands,
-		ContainerCommands:  convertContainerCommands(in.ContainerCommands),
+		BuildSteps:         convertBuildSteps(in.BuildSteps),
 		ExistingImageUri:   in.ExistingImageUri,
 		ExistingImageCreds: in.ExistingImageCreds,
 	}
@@ -125,13 +125,13 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	return nil
 }
 
-func convertContainerCommands(containerCommands []*pb.ContainerCommand) []ContainerCommand {
-	commands := make([]ContainerCommand, len(containerCommands))
-	for i, c := range containerCommands {
-		commands[i] = ContainerCommand{
+func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
+	steps := make([]BuildStep, len(buildSteps))
+	for i, c := range buildSteps {
+		steps[i] = BuildStep{
 			Command: c.Command,
 			Type:    c.Type,
 		}
 	}
-	return commands
+	return steps
 }

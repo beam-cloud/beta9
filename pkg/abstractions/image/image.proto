@@ -10,7 +10,7 @@ service ImageService {
   rpc BuildImage(BuildImageRequest) returns (stream BuildImageResponse) {}
 }
 
-message ContainerCommand {
+message BuildStep {
   string type = 1;
   string command = 2;
 }
@@ -21,7 +21,7 @@ message VerifyImageBuildRequest {
   repeated string commands = 3;
   bool force_rebuild = 4;
   string existing_image_uri = 5;
-  repeated ContainerCommand container_commands = 6;
+  repeated BuildStep build_steps = 6;
 }
 
 message VerifyImageBuildResponse {
@@ -42,7 +42,7 @@ message BuildImageRequest {
 
   map<string, string> existing_image_creds = 5;
 
-  repeated ContainerCommand container_commands = 6;
+  repeated BuildStep build_steps = 6;
 }
 
 message BuildImageResponse {

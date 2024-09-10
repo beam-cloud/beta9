@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(eq=False, repr=False)
-class ContainerCommand(betterproto.Message):
+class BuildStep(betterproto.Message):
     type: str = betterproto.string_field(1)
     command: str = betterproto.string_field(2)
 
@@ -38,7 +38,7 @@ class VerifyImageBuildRequest(betterproto.Message):
     commands: List[str] = betterproto.string_field(3)
     force_rebuild: bool = betterproto.bool_field(4)
     existing_image_uri: str = betterproto.string_field(5)
-    container_commands: List["ContainerCommand"] = betterproto.message_field(6)
+    build_steps: List["BuildStep"] = betterproto.message_field(6)
 
 
 @dataclass(eq=False, repr=False)
@@ -61,7 +61,7 @@ class BuildImageRequest(betterproto.Message):
     existing_image_creds: Dict[str, str] = betterproto.map_field(
         5, betterproto.TYPE_STRING, betterproto.TYPE_STRING
     )
-    container_commands: List["ContainerCommand"] = betterproto.message_field(6)
+    build_steps: List["BuildStep"] = betterproto.message_field(6)
 
 
 @dataclass(eq=False, repr=False)

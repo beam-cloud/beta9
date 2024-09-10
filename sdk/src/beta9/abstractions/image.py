@@ -7,7 +7,7 @@ from ..abstractions.base import BaseAbstraction
 from ..clients.image import (
     BuildImageRequest,
     BuildImageResponse,
-    ContainerCommand,
+    BuildStep,
     ImageServiceStub,
     VerifyImageBuildRequest,
     VerifyImageBuildResponse,
@@ -115,7 +115,7 @@ class Image(BaseAbstraction):
         self.python_version = python_version
         self.python_packages = self._sanitize_python_packages(python_packages)
         self.commands = commands
-        self.container_commands = []
+        self.build_steps = []
         self.base_image = base_image or ""
         self.base_image_creds = base_image_creds or {}
         self._stub: Optional[ImageServiceStub] = None
@@ -157,7 +157,7 @@ class Image(BaseAbstraction):
                 python_packages=self.python_packages,
                 python_version=self.python_version,
                 commands=self.commands,
-                container_commands=self.container_commands,
+                build_steps=self.build_steps,
                 force_rebuild=False,
                 existing_image_uri=self.base_image,
             )
@@ -180,7 +180,7 @@ class Image(BaseAbstraction):
                     python_packages=self.python_packages,
                     python_version=self.python_version,
                     commands=self.commands,
-                    container_commands=self.container_commands,
+                    build_steps=self.build_steps,
                     existing_image_uri=self.base_image,
                     existing_image_creds=self.get_credentials_from_env(),
                 )
@@ -231,7 +231,7 @@ class Image(BaseAbstraction):
             Image: The Image object.
         """
         for command in commands:
-            self.container_commands.append(ContainerCommand(command=command, type="shell"))
+            self.build_steps.append(BuildStep(command=command, type="shell"))
         return self
 
     def add_python_packages(self, packages: Sequence[str]) -> "Image":
@@ -248,5 +248,5 @@ class Image(BaseAbstraction):
             Image: The Image object.
         """
         for package in packages:
-            self.container_commands.append(ContainerCommand(command=package, type="pip"))
+            self.build_steps.append(BuildStep(command=package, type="pip"))
         return self
