@@ -27,8 +27,9 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 
 			var token *types.Token
 			var workspace *types.Workspace
+			var err error
 
-			token, workspace, err := workspaceRepo.AuthorizeToken(tokenKey)
+			token, workspace, err = workspaceRepo.AuthorizeToken(tokenKey)
 			if err != nil {
 				token, workspace, err = backendRepo.AuthorizeToken(c.Request().Context(), tokenKey)
 				if err != nil {

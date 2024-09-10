@@ -138,11 +138,7 @@ func (rb *RequestBuffer) processRequests() {
 				continue
 			}
 
-			if req.ctx.IsWebSocket() {
-				go rb.handleWSRequest(req)
-			} else {
-				go rb.handleHttpRequest(req)
-			}
+			go rb.handleRequest(req)
 		}
 	}
 }
@@ -306,7 +302,7 @@ func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
 	return client, nil
 }
 
-func (rb *RequestBuffer) handleWSRequest(req request) {
+func (rb *RequestBuffer) handleRequest(req request) {
 	rb.availableContainersLock.RLock()
 	if len(rb.availableContainers) == 0 {
 		rb.availableContainersLock.RUnlock()
@@ -324,32 +320,27 @@ func (rb *RequestBuffer) handleWSRequest(req request) {
 		return
 	}
 
+	if req.ctx.IsWebSocket() {
+		rb.handleWSRequest(req, c)
+	} else {
+		rb.handleHttpRequest(req, c)
+	}
+}
+
+func (rb *RequestBuffer) handleWSRequest(req request, c container) {
 	defer rb.afterRequest(req, c.id)
 
-	err = proxyWebsocketConnection(req.ctx.Response().Writer, req.ctx.Request(), fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")))
+	dstDialer := websocket.Dialer{
+		NetDialContext: network.GetDialer(c.address, rb.tailscale, rb.tsConfig),
+	}
+
+	err := proxyWebsocketConnection(req.ctx.Response().Writer, req.ctx.Request(), dstDialer, fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")))
 	if err != nil {
 		return
 	}
 }
 
-func (rb *RequestBuffer) handleHttpRequest(req request) {
-	rb.availableContainersLock.RLock()
-	if len(rb.availableContainers) == 0 {
-		rb.availableContainersLock.RUnlock()
-		rb.buffer.Push(req)
-		return
-	}
-
-	// Select an available container to forward the request to (whichever one has the lowest # of inflight requests)
-	// Basically least-connections load balancing
-	c := rb.availableContainers[0]
-	rb.availableContainersLock.RUnlock()
-
-	err := rb.incrementRequestsInFlight(c.id)
-	if err != nil {
-		return
-	}
-
+func (rb *RequestBuffer) handleHttpRequest(req request, c container) {
 	request := req.ctx.Request()
 	requestBody := request.Body
 	if !rb.isASGI {
@@ -466,7 +457,7 @@ func (rb *RequestBuffer) afterRequest(req request, containerId string) {
 	)
 }
 
-func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dstAddress string) error {
+func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dialer websocket.Dialer, dstAddress string) error {
 	upgrader := websocket.Upgrader{}
 
 	wsSrc, err := upgrader.Upgrade(w, req, nil)
@@ -474,7 +465,7 @@ func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dstAddre
 		return err
 	}
 
-	wsDst, resp, err := websocket.DefaultDialer.Dial(dstAddress, nil)
+	wsDst, resp, err := dialer.Dial(dstAddress, nil)
 	if err != nil {
 		return err
 	}
@@ -483,30 +474,14 @@ func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dstAddre
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	wg := sync.WaitGroup{}
-	wg.Add(2)
-
-	go forwardWsMessages(wsSrc, wsDst, &wg)
-	go forwardWsMessages(wsDst, wsSrc, &wg)
-
-	wg.Wait()
+	go forwardWSConn(wsSrc.NetConn(), wsDst.NetConn())
+	forwardWSConn(wsDst.NetConn(), wsSrc.NetConn())
 	return nil
 }
 
-func forwardWsMessages(wsFrom *websocket.Conn, wsTo *websocket.Conn, wg *sync.WaitGroup) {
-	defer wsFrom.Close() // Close the connection if 1 of the 2 connections is closed. That way we will close the other one as well
-	defer wsTo.Close()
-	defer wg.Done()
-
-	for {
-		messageType, br, err := wsFrom.ReadMessage()
-		if err != nil {
-			return
-		}
-
-		err = wsTo.WriteMessage(messageType, br)
-		if err != nil {
-			return
-		}
+func forwardWSConn(src net.Conn, dst net.Conn) {
+	_, err := io.Copy(src, dst)
+	if err != nil {
+		return
 	}
 }

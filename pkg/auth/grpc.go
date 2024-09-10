@@ -55,8 +55,9 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 
 	var token *types.Token
 	var workspace *types.Workspace
+	var err error
 
-	token, workspace, err := ai.workspaceRepo.AuthorizeToken(tokenKey)
+	token, workspace, err = ai.workspaceRepo.AuthorizeToken(tokenKey)
 	if err != nil {
 		token, workspace, err = ai.backendRepo.AuthorizeToken(context.TODO(), tokenKey)
 		if err != nil {
