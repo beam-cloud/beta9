@@ -325,7 +325,7 @@ func (vs *GlobalVolumeService) copyPathStream(ctx context.Context, stream <-chan
 		}
 	}
 
-	return nil
+	return file.Sync()
 }
 
 func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string, workspace *types.Workspace) ([]string, error) {
