@@ -324,7 +324,11 @@ func (rb *RequestBuffer) handleWSRequest(req request) {
 
 	defer rb.afterRequest(req, c.id)
 
-	err = rb.proxyWebsocketConnection(req.ctx.Response().Writer, req.ctx.Request(), fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")))
+	dstDialer := websocket.Dialer{
+		NetDialContext: network.GetDialer(rb.tailscale, rb.tsConfig),
+	}
+
+	err = proxyWebsocketConnection(req.ctx.Response().Writer, req.ctx.Request(), dstDialer, fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")))
 	if err != nil {
 		return
 	}
@@ -464,16 +468,12 @@ func (rb *RequestBuffer) afterRequest(req request, containerId string) {
 	)
 }
 
-func (rb *RequestBuffer) proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dstAddress string) error {
+func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dialer websocket.Dialer, dstAddress string) error {
 	upgrader := websocket.Upgrader{}
 
 	wsSrc, err := upgrader.Upgrade(w, req, nil)
 	if err != nil {
 		return err
-	}
-
-	dialer := websocket.Dialer{
-		NetDialContext: network.GetDialer(rb.tailscale, rb.tsConfig),
 	}
 
 	wsDst, resp, err := dialer.Dial(dstAddress, nil)
