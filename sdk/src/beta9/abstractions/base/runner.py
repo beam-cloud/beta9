@@ -1,5 +1,6 @@
 import inspect
 import os
+import tempfile
 import time
 from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
@@ -111,6 +112,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.settings: SDKSettings = get_settings()
         self.config_context: ConfigContext = get_config_context()
+        self.tmp_files: List[tempfile.NamedTemporaryFile] = []
 
     def print_invocation_snippet(self, invocation_url: str) -> None:
         """Print curl request to call deployed container URL"""
@@ -197,14 +199,22 @@ class RunnerAbstraction(BaseAbstraction):
             return
 
         module = inspect.getmodule(func)  # Determine module / function name
-        if module:
+        if hasattr(module, "__file__"):
             module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
+        elif in_jupyter():
+            tmp_file = create_tmp_jupyter_file(module._ih)
+            module_name = tmp_file.name.split("/")[-1].removesuffix(".py")
+            self.tmp_files.append(tmp_file)
         else:
             module_name = "__main__"
 
         function_name = func.__name__
         setattr(self, attr, f"{module_name}:{function_name}")
+
+    def _remove_tmp_files(self) -> None:
+        for tmp_file in self.tmp_files:
+            tmp_file.close()
 
     def _sync_content(
         self,
@@ -296,6 +306,7 @@ class RunnerAbstraction(BaseAbstraction):
 
         if not self.files_synced:
             sync_result = self.syncer.sync()
+            self._remove_tmp_files()
 
             if sync_result.success:
                 self.files_synced = True
@@ -371,3 +382,25 @@ class RunnerAbstraction(BaseAbstraction):
 
         self.runtime_ready = True
         return True
+
+
+def in_jupyter() -> bool:
+    try:
+        from IPython import get_ipython
+
+        shell = get_ipython().__class__.__name__
+        return shell == "ZMQInteractiveShell"
+    except (NameError, ImportError):
+        return False
+
+
+def create_tmp_jupyter_file(input_history: List[str]) -> tempfile.NamedTemporaryFile:
+    tmp_file = tempfile.NamedTemporaryFile(mode="w+", dir=".", suffix=".py")
+    for code in input_history:
+        if isinstance(code, list):
+            code = "".join(code)
+        tmp_file.write(code + "\n\n")
+
+    tmp_file.flush()
+
+    return tmp_file
