@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -56,6 +57,10 @@ func (bi *BotInterface) SendPrompt(prompt string) error {
 	}
 
 	responseMsg := resp.Choices[0].Message.Content
+	if !strings.HasSuffix(responseMsg, "\n") {
+		responseMsg += "\n"
+	}
+
 	return bi.outputBuffer.Push(responseMsg)
 }
 

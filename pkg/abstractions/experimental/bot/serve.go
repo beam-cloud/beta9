@@ -2,7 +2,6 @@ package bot
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -39,7 +38,7 @@ func (pbs *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb
 		default:
 			resp, err := instance.botInterface.outputBuffer.Pop()
 			if err == nil {
-				stream.Send(&pb.StartBotServeResponse{Done: false, Output: fmt.Sprintf("\r%s\n", resp)})
+				stream.Send(&pb.StartBotServeResponse{Done: false, Output: resp})
 			}
 
 			time.Sleep(time.Millisecond * 100)
