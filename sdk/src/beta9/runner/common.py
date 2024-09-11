@@ -134,8 +134,9 @@ class FunctionHandler:
     Helper class for loading user entry point functions
     """
 
-    def __init__(self) -> None:
+    def __init__(self, handler_path: Optional[str] = None) -> None:
         self.pass_context: bool = False
+        self.handler_path: Optional[str] = handler_path
         self.handler: Optional[Callable] = None
         self.is_async: bool = False
         self._load()
@@ -151,7 +152,13 @@ class FunctionHandler:
             sys.path.insert(0, USER_CODE_DIR)
 
         try:
-            module, func = config.handler.split(":")
+            module = None
+            func = None
+
+            if self.handler_path is not None:
+                module, func = self.handler_path.split(":")
+            else:
+                module, func = config.handler.split(":")
 
             with self.importing_user_code():
                 target_module = importlib.import_module(module)

@@ -152,7 +152,7 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 		return nil, err
 	}
 
-	instance, err = newBotInstance(pbs.ctx, token, stub, stubConfig, botConfig, pbs.botStateManager)
+	instance, err = newBotInstance(pbs.ctx, pbs.scheduler, token, stub, stubConfig, botConfig, pbs.botStateManager)
 	if err != nil {
 		return nil, err
 	}
