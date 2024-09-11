@@ -39,6 +39,16 @@ func (pbs *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb
 			instance.cancelFunc()
 			return nil
 		default:
+			prompt, err := instance.botInterface.inputBuffer.Pop()
+			if err == nil {
+				instance.botInterface.SendPrompt(prompt)
+			}
+
+			resp, err := instance.botInterface.outputBuffer.Pop()
+			if err == nil {
+				stream.Send(&pb.StartBotServeResponse{Done: false, Output: fmt.Sprintf("%s\n", resp)})
+			}
+
 			time.Sleep(time.Second * 1)
 		}
 	}

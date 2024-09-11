@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -59,7 +58,7 @@ func (i *botInstance) Start() error {
 		case <-i.ctx.Done():
 			return nil
 		default:
-			log.Println(i.runTransition("transcribes"))
+			// log.Println(i.runTransition("transcribes"))
 			time.Sleep(time.Second)
 		}
 
