@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	"context"
 
@@ -58,6 +59,7 @@ type BotTransitionConfig struct {
 	Volumes     []string       `json:"volumes"`
 	Secrets     []string       `json:"secrets"`
 	Handler     string         `json:"handler"`
+	OnStart     string         `json:"on_start"`
 	CallbackUrl string         `json:"callback_url"`
 	TaskPolicy  string         `json:"task_policy"`
 	Name        string         `json:"name"`
@@ -68,6 +70,8 @@ type BotService interface {
 	pb.BotServiceServer
 	StartBotServe(in *pb.StartBotServeRequest, stream pb.BotService_StartBotServeServer) error
 	StopBotServe(ctx context.Context, in *pb.StopBotServeRequest) (*pb.StopBotServeResponse, error)
+	BotServeKeepAlive(ctx context.Context, in *pb.BotServeKeepAliveRequest) (*pb.BotServeKeepAliveResponse, error)
+	SendBotMessage(ctx context.Context, in *pb.SendBotMessageRequest) (*pb.SendBotMessageResponse, error)
 }
 
 type PetriBotService struct {
@@ -167,6 +171,11 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 	}(instance)
 
 	return instance, nil
+}
+
+func (s *PetriBotService) SendBotMessage(ctx context.Context, in *pb.SendBotMessageRequest) (*pb.SendBotMessageResponse, error) {
+	log.Printf("msg: %s\n", in.Message)
+	return &pb.SendBotMessageResponse{Ok: true}, nil
 }
 
 var Keys = &keys{}

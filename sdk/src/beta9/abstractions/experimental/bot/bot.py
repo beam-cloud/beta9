@@ -1,6 +1,7 @@
 import inspect
 import os
 import threading
+import time
 from typing import Callable, Dict, List, Optional, Union
 
 from .... import terminal
@@ -16,6 +17,7 @@ from ....channel import with_grpc_error_handling
 from ....clients.bot import (
     BotServeKeepAliveRequest,
     BotServiceStub,
+    SendBotMessageRequest,
     StartBotServeRequest,
     StartBotServeResponse,
     StopBotServeRequest,
@@ -134,6 +136,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         callback_url: Optional[str] = None,
+        on_start: Optional[Callable] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -143,6 +146,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
             volumes=volumes,
             secrets=secrets,
             callback_url=callback_url,
+            on_start=on_start,
         )
 
         self._bot_stub: Optional[BotServiceStub] = None
@@ -178,20 +182,28 @@ class Bot(RunnerAbstraction, DeployableMixin):
             return False
 
         try:
-            with terminal.progress("Serving endpoint..."):
-                base_url = self.settings.api_host
-                if not base_url.startswith(("http://", "https://")):
-                    base_url = f"http://{base_url}"
+            base_url = self.settings.api_host
+            if not base_url.startswith(("http://", "https://")):
+                base_url = f"http://{base_url}"
 
-                invocation_url = f"{base_url}/{self.base_stub_type}/id/{self.stub_id}"
-                self.print_invocation_snippet(invocation_url=invocation_url)
+            invocation_url = f"{base_url}/{self.base_stub_type}/id/{self.stub_id}"
+            self.print_invocation_snippet(invocation_url=invocation_url)
 
-                return self._serve(dir=os.getcwd(), object_id=self.object_id, timeout=timeout)
+            return self._serve(dir=os.getcwd(), object_id=self.object_id, timeout=timeout)
 
         except KeyboardInterrupt:
             self._handle_serve_interrupt()
 
     def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
+        def capture_and_send_message():
+            time.sleep(0.5)
+            while True:
+                user_input = terminal.prompt(text="#")
+                if user_input:
+                    self.bot_stub.send_bot_message(
+                        SendBotMessageRequest(stub_id=self.stub_id, message=user_input)
+                    )
+
         def notify(*_, **__):
             self.bot_stub.bot_serve_keep_alive(
                 BotServeKeepAliveRequest(
@@ -205,6 +217,8 @@ class Bot(RunnerAbstraction, DeployableMixin):
             kwargs={"dir": dir, "object_id": object_id, "on_event": notify},
             daemon=True,
         ).start()
+
+        threading.Thread(target=capture_and_send_message, daemon=True).start()
 
         r: Optional[StartBotServeResponse] = None
         for r in self.bot_stub.start_bot_serve(

@@ -10,6 +10,7 @@ service BotService {
   rpc StopBotServe(StopBotServeRequest) returns (StopBotServeResponse) {}
   rpc BotServeKeepAlive(BotServeKeepAliveRequest)
       returns (BotServeKeepAliveResponse) {}
+  rpc SendBotMessage(SendBotMessageRequest) returns (SendBotMessageResponse) {}
 }
 
 message StartBotServeRequest {
@@ -31,3 +32,11 @@ message BotServeKeepAliveRequest {
   int32 timeout = 2;
 }
 message BotServeKeepAliveResponse { bool ok = 1; }
+
+message SendBotMessageRequest {
+  string stub_id = 1;
+  string message = 2;
+  string session_id = 3;
+}
+
+message SendBotMessageResponse { bool ok = 1; }

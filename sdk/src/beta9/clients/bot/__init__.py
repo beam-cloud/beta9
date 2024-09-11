@@ -58,6 +58,18 @@ class BotServeKeepAliveResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
+@dataclass(eq=False, repr=False)
+class SendBotMessageRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    message: str = betterproto.string_field(2)
+    session_id: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class SendBotMessageResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+
+
 class BotServiceStub(SyncServiceStub):
     def start_bot_serve(
         self, start_bot_serve_request: "StartBotServeRequest"
@@ -86,3 +98,12 @@ class BotServiceStub(SyncServiceStub):
             BotServeKeepAliveRequest,
             BotServeKeepAliveResponse,
         )(bot_serve_keep_alive_request)
+
+    def send_bot_message(
+        self, send_bot_message_request: "SendBotMessageRequest"
+    ) -> "SendBotMessageResponse":
+        return self._unary_unary(
+            "/bot.BotService/SendBotMessage",
+            SendBotMessageRequest,
+            SendBotMessageResponse,
+        )(send_bot_message_request)
