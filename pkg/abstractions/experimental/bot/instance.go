@@ -2,7 +2,6 @@ package bot
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -28,7 +27,7 @@ func newBotInstance(ctx context.Context, token *types.Token, stubConfig *types.S
 }
 
 func (i *botInstance) Start() error {
-	log.Printf("Starting bot with config: %+v\n", i.botConfig)
+	// TODO: Instantiate a prompt builder
 
 	for {
 		select {
@@ -39,4 +38,8 @@ func (i *botInstance) Start() error {
 		}
 
 	}
+}
+
+func (i *botInstance) step() {
+
 }

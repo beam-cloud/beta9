@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -18,20 +19,19 @@ func (pbs *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb
 		return err
 	}
 
-	stream.Send(&pb.StartBotServeResponse{Done: false, Output: instance.token.Key + "\n"})
-
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				// outputChan <- common.OutputMsg{Msg: ""}
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
+
+	stream.Send(&pb.StartBotServeResponse{Done: false, Output: fmt.Sprintf("Starting bot, using model<%s>\n", instance.botConfig.Model)})
 
 	for {
 		select {
@@ -39,7 +39,6 @@ func (pbs *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb
 			instance.cancelFunc()
 			return nil
 		default:
-			stream.Send(&pb.StartBotServeResponse{Done: false, Output: "Bot running\n"})
 			time.Sleep(time.Second * 1)
 		}
 	}
