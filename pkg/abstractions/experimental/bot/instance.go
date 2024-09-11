@@ -54,13 +54,28 @@ func (i *botInstance) Start() error {
 				- We need to be able to...?
 	*/
 
+	// i.botConfig.Transitions["test"].Handler
+
+	env := []string{
+		fmt.Sprintf("BETA9_TOKEN=%s", i.token.Key),
+		fmt.Sprintf("HANDLER=%s", i.stubConfig.Handler),
+		fmt.Sprintf("ON_START=%s", i.stubConfig.OnStart),
+		fmt.Sprintf("STUB_ID=%s", i.stub.ExternalId),
+		fmt.Sprintf("STUB_TYPE=%s", i.stub.Type),
+		fmt.Sprintf("WORKERS=%d", i.stubConfig.Workers),
+		fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.stubConfig.KeepWarmSeconds),
+		fmt.Sprintf("PYTHON_VERSION=%s", i.stubConfig.PythonVersion),
+		fmt.Sprintf("CALLBACK_URL=%s", i.stubConfig.CallbackUrl),
+		fmt.Sprintf("TIMEOUT=%d", i.stubConfig.TaskPolicy.Timeout),
+	}
+
 	err := i.scheduler.Run(&types.ContainerRequest{
 		ContainerId: i.genContainerId(botContainerTypeModel),
-		Env:         []string{},
+		Env:         env,
 		Cpu:         i.stubConfig.Runtime.Cpu,
 		Memory:      i.stubConfig.Runtime.Memory,
 		Gpu:         string(i.stubConfig.Runtime.Gpu),
-		GpuCount:    0, //uint32(i.stubConfig.Runtime.Gp),
+		GpuCount:    0,
 		ImageId:     i.stubConfig.Runtime.ImageId,
 		StubId:      i.stub.ExternalId,
 		WorkspaceId: i.stub.Workspace.ExternalId,

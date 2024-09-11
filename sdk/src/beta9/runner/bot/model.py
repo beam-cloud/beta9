@@ -1,12 +1,13 @@
+from ..common import FunctionHandler, config
+
+
 class BotTransition:
     def __init__(self) -> None:
-        pass
+        self.handler = FunctionHandler(handler_path=config.handler)
+        print(self.handler)
 
     def start(self):
-        i = 0
-        while i < 10:
-            print("hi")
-            i += 1
+        pass
 
 
 if __name__ == "__main__":

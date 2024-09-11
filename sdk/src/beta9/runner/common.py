@@ -168,6 +168,7 @@ class FunctionHandler:
             self.pass_context = "context" in sig.parameters
             self.is_async = asyncio.iscoroutinefunction(self.handler.func)
         except BaseException:
+            print(traceback.format_exc())
             raise RunnerException()
 
     def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
