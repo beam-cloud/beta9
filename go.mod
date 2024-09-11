@@ -48,6 +48,7 @@ require (
 	github.com/prometheus/procfs v0.13.0
 	github.com/redis/go-redis/v9 v9.5.1
 	github.com/rs/zerolog v1.32.0
+	github.com/sashabaranov/go-openai v1.29.1
 	github.com/shirou/gopsutil/v4 v4.24.6
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.9.0

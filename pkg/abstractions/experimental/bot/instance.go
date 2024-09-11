@@ -18,6 +18,7 @@ const (
 
 type botInstance struct {
 	ctx             context.Context
+	appConfig       types.AppConfig
 	scheduler       *scheduler.Scheduler
 	token           *types.Token
 	stub            *types.StubWithRelated
@@ -25,12 +26,21 @@ type botInstance struct {
 	botConfig       BotConfig
 	cancelFunc      context.CancelFunc
 	botStateManager *botStateManager
+	botInterface    *BotInterface
 }
 
-func newBotInstance(ctx context.Context, scheduler *scheduler.Scheduler, token *types.Token, stub *types.StubWithRelated, stubConfig *types.StubConfigV1, botConfig BotConfig, botStateManager *botStateManager) (*botInstance, error) {
+func newBotInstance(ctx context.Context, appConfig types.AppConfig, scheduler *scheduler.Scheduler, token *types.Token, stub *types.StubWithRelated, stubConfig *types.StubConfigV1, botConfig BotConfig, botStateManager *botStateManager) (*botInstance, error) {
 	ctx, cancelFunc := context.WithCancel(ctx)
+
+	botInterface, err := NewBotInterface(appConfig.Abstractions.Bot.OpenAIKey)
+	if err != nil {
+		cancelFunc()
+		return nil, err
+	}
+
 	return &botInstance{
 		ctx:             ctx,
+		appConfig:       appConfig,
 		token:           token,
 		scheduler:       scheduler,
 		stub:            stub,
@@ -38,6 +48,7 @@ func newBotInstance(ctx context.Context, scheduler *scheduler.Scheduler, token *
 		botConfig:       botConfig,
 		cancelFunc:      cancelFunc,
 		botStateManager: botStateManager,
+		botInterface:    botInterface,
 	}, nil
 }
 
@@ -100,7 +111,8 @@ func (i *botInstance) Start() error {
 }
 
 func (i *botInstance) step() {
-	i.botStateManager.addMarkerToLocation()
+	i.botInterface.Chat()
+	// i.botStateManager.addMarkerToLocation()
 }
 
 func (i *botInstance) genContainerId(containerType string) string {

@@ -195,15 +195,6 @@ class Bot(RunnerAbstraction, DeployableMixin):
             self._handle_serve_interrupt()
 
     def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
-        def capture_and_send_message():
-            time.sleep(0.5)
-            while True:
-                user_input = terminal.prompt(text="#")
-                if user_input:
-                    self.bot_stub.send_bot_message(
-                        SendBotMessageRequest(stub_id=self.stub_id, message=user_input)
-                    )
-
         def notify(*_, **__):
             self.bot_stub.bot_serve_keep_alive(
                 BotServeKeepAliveRequest(
@@ -211,6 +202,15 @@ class Bot(RunnerAbstraction, DeployableMixin):
                     timeout=timeout,
                 )
             )
+
+        def capture_and_send_message():
+            time.sleep(0.1)
+            while True:
+                user_input = terminal.prompt(text="#")
+                if user_input:
+                    self.bot_stub.send_bot_message(
+                        SendBotMessageRequest(stub_id=self.stub_id, message=user_input)
+                    )
 
         threading.Thread(
             target=self.sync_dir_to_workspace,

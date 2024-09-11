@@ -20,6 +20,7 @@ type AppConfig struct {
 	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
 	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
+	Abstractions   AbstractionConfig         `key:"abstractions" json:"abstractions"`
 }
 
 type DatabaseConfig struct {
@@ -374,4 +375,12 @@ type FluentBitEventConfig struct {
 	DialTimeout     time.Duration           `key:"dialTimeout" json:"dial_timeout"`
 	KeepAlive       time.Duration           `key:"keepAlive" json:"keep_alive"`
 	Mapping         []FluentBitEventMapping `key:"mapping" json:"mapping"`
+}
+
+type AbstractionConfig struct {
+	Bot BotConfig `key:"bot" json:"bot"`
+}
+
+type BotConfig struct {
+	OpenAIKey string `key:"openAIKey" json:"openai_key"`
 }
