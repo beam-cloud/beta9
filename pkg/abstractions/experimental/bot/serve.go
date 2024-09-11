@@ -2,39 +2,24 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/types"
 
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-func (s *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb.BotService_StartBotServeServer) error {
+func (pbs *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb.BotService_StartBotServeServer) error {
 	ctx := stream.Context()
 	_, _ = auth.AuthInfoFromContext(ctx)
 
-	stub, err := s.backendRepo.GetStubByExternalId(ctx, in.StubId)
-	if err != nil {
-		return errors.New("invalid stub id")
-	}
-
-	var stubConfig *types.StubConfigV1 = &types.StubConfigV1{}
-	err = json.Unmarshal([]byte(stub.Config), stubConfig)
+	instance, err := pbs.getOrCreateBotInstance(in.StubId)
 	if err != nil {
 		return err
 	}
 
-	var botConfig BotConfig
-	err = json.Unmarshal(stubConfig.Extra, &botConfig)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("botConfig: %+v\n", botConfig)
+	stream.Send(&pb.StartBotServeResponse{Done: false, Output: instance.token.Key + "\n"})
 
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)

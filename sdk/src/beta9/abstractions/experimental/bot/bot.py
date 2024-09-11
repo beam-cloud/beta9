@@ -125,6 +125,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
     def __init__(
         self,
+        model: str,
         locations: List[BotLocation],
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
@@ -147,8 +148,9 @@ class Bot(RunnerAbstraction, DeployableMixin):
         self._bot_stub: Optional[BotServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.locations: List[BotLocation] = locations
-        self.extra: Dict[str, Dict[str, dict]] = {}
 
+        self.extra: Dict[str, Dict[str, dict]] = {}
+        self.extra["model"] = model
         self.extra["locations"] = {}
 
         for location in self.locations:

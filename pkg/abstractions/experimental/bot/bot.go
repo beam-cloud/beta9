@@ -1,6 +1,10 @@
 package bot
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+
 	"context"
 
 	"github.com/labstack/echo/v4"
@@ -30,6 +34,7 @@ type BotServiceOpts struct {
 }
 
 type BotConfig struct {
+	Model       string                         `json:"model"`
 	Locations   map[string]BotLocationConfig   `json:"locations"`
 	Transitions map[string]BotTransitionConfig `json:"transitions"`
 }
@@ -75,6 +80,7 @@ type PetriBotService struct {
 	taskRepo        repository.TaskRepository
 	tailscale       *network.Tailscale
 	taskDispatcher  *task.Dispatcher
+	botInstances    *common.SafeMap[*botInstance]
 }
 
 func NewPetriBotService(ctx context.Context, opts BotServiceOpts) (BotService, error) {
@@ -96,5 +102,63 @@ func NewPetriBotService(ctx context.Context, opts BotServiceOpts) (BotService, e
 		tailscale:       opts.Tailscale,
 		taskDispatcher:  opts.TaskDispatcher,
 		eventRepo:       opts.EventRepo,
+		botInstances:    common.NewSafeMap[*botInstance](),
 	}, nil
+}
+
+func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance, error) {
+	instance, exists := pbs.botInstances.Get(stubId)
+	if exists {
+		return instance, nil
+	}
+
+	stub, err := pbs.backendRepo.GetStubByExternalId(pbs.ctx, stubId)
+	if err != nil {
+		return nil, errors.New("invalid stub id")
+	}
+
+	var stubConfig *types.StubConfigV1 = &types.StubConfigV1{}
+	err = json.Unmarshal([]byte(stub.Config), stubConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	var botConfig BotConfig
+	err = json.Unmarshal(stubConfig.Extra, &botConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := pbs.backendRepo.RetrieveActiveToken(pbs.ctx, stub.Workspace.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	instance, err = newBotInstance(pbs.ctx, token, stubConfig, botConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	pbs.botInstances.Set(stubId, instance)
+
+	// Monitor and then clean up the instance once it's done
+	go instance.Start()
+	go func(i *botInstance) {
+		<-i.ctx.Done()
+		pbs.botInstances.Delete(stubId)
+	}(instance)
+
+	return instance, nil
+}
+
+var Keys = &keys{}
+
+type keys struct{}
+
+var (
+	botKeepWarmLock string = "bot:%s:%s:keep_warm_lock:%s"
+)
+
+func (k *keys) botKeepWarmLock(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(botKeepWarmLock, workspaceName, stubId, containerId)
 }
