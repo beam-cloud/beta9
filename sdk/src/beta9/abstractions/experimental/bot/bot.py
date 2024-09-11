@@ -68,11 +68,13 @@ class BotTransition:
             "inputs": inputs or {},
         }
 
-        if not self._build_image_for_transition():
-            return
+        self.bot_instance: Optional["Bot"] = bot_instance
+
+        if self.bot_instance.image != self.image:
+            if not self._build_image_for_transition():
+                return
 
         self.config["image_id"] = self.image_id
-        self.bot_instance: Optional["Bot"] = bot_instance
 
     def _build_image_for_transition(
         self,
@@ -121,7 +123,6 @@ class BotTransition:
         if "transitions" not in self.bot_instance.extra:
             self.bot_instance.extra["transitions"] = {}
 
-        print(self.bot_instance.extra)
         self.bot_instance.extra["transitions"][func.__name__] = transition_data
 
 

@@ -126,6 +126,14 @@ class Image(BaseAbstraction):
             self._stub = ImageServiceStub(self.channel)
         return self._stub
 
+    def __eq__(self: "Image", other: "Image"):
+        return (
+            self.python_version == other.python_version
+            and self.python_packages == other.python_packages
+            and self.base_image == self.base_image
+            and self.base_image_creds == self.base_image_creds
+        )
+
     def _sanitize_python_packages(self, packages: List[str]) -> List[str]:
         # https://pip.pypa.io/en/stable/reference/requirements-file-format/
         prefix_exceptions = ["--", "-"]

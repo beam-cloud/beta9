@@ -59,7 +59,7 @@ func (i *botInstance) Start() error {
 		case <-i.ctx.Done():
 			return nil
 		default:
-			log.Println(i.runTransition("transcribe"))
+			log.Println(i.runTransition("transcribes"))
 			time.Sleep(time.Second)
 		}
 
