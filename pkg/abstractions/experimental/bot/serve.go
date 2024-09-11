@@ -31,25 +31,18 @@ func (pbs *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb
 		}
 	}()
 
-	stream.Send(&pb.StartBotServeResponse{Done: false, Output: fmt.Sprintf("Starting bot, using model<%s>\n", instance.botConfig.Model)})
-
 	for {
 		select {
 		case <-stream.Context().Done():
 			instance.cancelFunc()
 			return nil
 		default:
-			prompt, err := instance.botInterface.inputBuffer.Pop()
-			if err == nil {
-				instance.botInterface.SendPrompt(prompt)
-			}
-
 			resp, err := instance.botInterface.outputBuffer.Pop()
 			if err == nil {
 				stream.Send(&pb.StartBotServeResponse{Done: false, Output: fmt.Sprintf("\r%s\n", resp)})
 			}
 
-			time.Sleep(time.Second * 1)
+			time.Sleep(time.Millisecond * 100)
 		}
 	}
 }

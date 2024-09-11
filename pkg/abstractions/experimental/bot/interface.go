@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -17,13 +18,16 @@ type BotInterface struct {
 }
 
 func NewBotInterface(key, model string) (*BotInterface, error) {
-	return &BotInterface{
+	bi := &BotInterface{
 		client:       openai.NewClient(key),
 		model:        model,
 		inputBuffer:  &Buffer{Messages: []string{}, MaxLength: 100},
 		outputBuffer: &Buffer{Messages: []string{}, MaxLength: 100},
 		history:      []openai.ChatCompletionMessage{},
-	}, nil
+	}
+
+	bi.outputBuffer.Push(fmt.Sprintf("Starting bot, using model<%s>\n", bi.model))
+	return bi, nil
 }
 
 func (bi *BotInterface) pushInput(msg string) error {

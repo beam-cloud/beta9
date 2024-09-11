@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -58,10 +59,18 @@ func (i *botInstance) Start() error {
 		case <-i.ctx.Done():
 			return nil
 		default:
-			// log.Println(i.runTransition("transcribes"))
+			prompt, err := i.botInterface.inputBuffer.Pop()
+			if err == nil {
+
+				err = i.botInterface.SendPrompt(prompt)
+				if err != nil {
+					log.Printf("failed to send prompt: %v\n", err)
+					continue
+				}
+			}
+
 			time.Sleep(time.Second)
 		}
-
 	}
 }
 
