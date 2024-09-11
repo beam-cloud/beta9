@@ -11,7 +11,7 @@ from ....abstractions.base.runner import (
     BOT_STUB_TYPE,
     RunnerAbstraction,
 )
-from ....abstractions.image import Image
+from ....abstractions.image import Image, ImageBuildResult
 from ....abstractions.volume import Volume
 from ....channel import with_grpc_error_handling
 from ....clients.bot import (
@@ -34,7 +34,7 @@ class BotTransition:
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
-        image_id: str = "",
+        image: Image = Image(),
         timeout: int = 180,
         keep_warm: int = 180,
         max_pending: int = 100,
@@ -45,13 +45,17 @@ class BotTransition:
         task_policy: Optional[str] = None,
         handler: Optional[str] = None,
         inputs: dict = {},
-        bot_instance: Optional["Bot"] = None,  # Reference to Bot instance
+        bot_instance: Optional["Bot"] = None,  # Reference to parent Bot instance
     ):
+        self.handler: str = handler
+        self.image: Image = image
+        self.image_available: bool = False
+        self.image_id: str = ""
+
         self.config = {
             "cpu": cpu,
             "memory": memory,
             "gpu": gpu,
-            "image_id": image_id,
             "timeout": timeout,
             "keep_warm": keep_warm,
             "max_pending": max_pending,
@@ -63,8 +67,28 @@ class BotTransition:
             "handler": handler or "",
             "inputs": inputs or {},
         }
+
+        if not self._build_image_for_transition():
+            return
+
+        self.config["image_id"] = self.image_id
         self.bot_instance: Optional["Bot"] = bot_instance
-        self.handler: str = ""
+
+    def _build_image_for_transition(
+        self,
+    ) -> bool:
+        if not self.image_available:
+            terminal.detail(f"Building image for transition: {self.config}")
+
+            image_build_result: ImageBuildResult = self.image.build()
+
+            if image_build_result and image_build_result.success:
+                self.image_available = True
+                self.image_id = image_build_result.image_id
+                return True
+            else:
+                terminal.error("Image build failed", exit=False)
+                return False
 
     def _map_callable_to_attr(self, *, attr: str, func: Callable):
         """

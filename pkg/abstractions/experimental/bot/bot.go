@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 
 	"context"
 
@@ -174,8 +173,12 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 }
 
 func (s *PetriBotService) SendBotMessage(ctx context.Context, in *pb.SendBotMessageRequest) (*pb.SendBotMessageResponse, error) {
-	log.Printf("msg: %s\n", in.Message)
-	return &pb.SendBotMessageResponse{Ok: true}, nil
+	instance, err := s.getOrCreateBotInstance(in.StubId)
+	if err != nil {
+		return &pb.SendBotMessageResponse{Ok: false}, nil
+	}
+
+	return &pb.SendBotMessageResponse{Ok: instance.botInterface.pushInput(in.Message) == nil}, nil
 }
 
 var Keys = &keys{}
