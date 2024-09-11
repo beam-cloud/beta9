@@ -8,7 +8,7 @@ import (
 
 type BotTask struct {
 	msg *types.TaskMessage
-	// tq  *RedisTaskQueue
+	pbs *PetriBotService
 }
 
 func (t *BotTask) Execute(ctx context.Context, options ...interface{}) error {

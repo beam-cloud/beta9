@@ -90,7 +90,7 @@ func NewPetriBotService(ctx context.Context, opts BotServiceOpts) (BotService, e
 		return nil, err
 	}
 
-	return &PetriBotService{
+	pbs := &PetriBotService{
 		ctx:             ctx,
 		config:          opts.Config,
 		rdb:             opts.RedisClient,
@@ -105,6 +105,18 @@ func NewPetriBotService(ctx context.Context, opts BotServiceOpts) (BotService, e
 		eventRepo:       opts.EventRepo,
 		botInstances:    common.NewSafeMap[*botInstance](),
 		botStateManager: newBotStateManager(opts.RedisClient),
+	}
+
+	// Register task dispatcher
+	pbs.taskDispatcher.Register(string(types.ExecutorBot), pbs.botTaskFactory)
+
+	return pbs, nil
+}
+
+func (pbs *PetriBotService) botTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
+	return &BotTask{
+		pbs: pbs,
+		msg: &msg,
 	}, nil
 }
 
