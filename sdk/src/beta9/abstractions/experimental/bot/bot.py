@@ -260,7 +260,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         if r is None or not r.done or r.exit_code != 0:
             terminal.error("Serve container failed ❌")
 
-        terminal.warn("Bot serve timed out. All container have been stopped.")
+        terminal.warn("Bot serve timed out. All containers have been stopped.")
 
     def _handle_serve_interrupt(self) -> None:
         terminal.header("Stopping all bot containers")
