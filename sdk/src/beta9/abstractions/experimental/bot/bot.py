@@ -83,7 +83,6 @@ class BotTransition:
             terminal.detail(f"Building image for transition: {self.config}")
 
             image_build_result: ImageBuildResult = self.image.build()
-
             if image_build_result and image_build_result.success:
                 self.image_available = True
                 self.image_id = image_build_result.image_id

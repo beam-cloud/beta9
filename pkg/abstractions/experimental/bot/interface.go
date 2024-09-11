@@ -13,6 +13,7 @@ type BotInterface struct {
 	model        string
 	inputBuffer  *Buffer
 	outputBuffer *Buffer
+	history      []openai.ChatCompletionMessage
 }
 
 func NewBotInterface(key, model string) (*BotInterface, error) {
@@ -21,6 +22,7 @@ func NewBotInterface(key, model string) (*BotInterface, error) {
 		model:        model,
 		inputBuffer:  &Buffer{Messages: []string{}, MaxLength: 100},
 		outputBuffer: &Buffer{Messages: []string{}, MaxLength: 100},
+		history:      []openai.ChatCompletionMessage{},
 	}, nil
 }
 
@@ -29,18 +31,21 @@ func (bi *BotInterface) pushInput(msg string) error {
 }
 
 func (bi *BotInterface) SendPrompt(prompt string) error {
+	messages := []openai.ChatCompletionMessage{
+		{
+			Role:    openai.ChatMessageRoleUser,
+			Content: prompt,
+		},
+	}
+
 	resp, err := bi.client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
-			Model: bi.model,
-			Messages: []openai.ChatCompletionMessage{
-				{
-					Role:    openai.ChatMessageRoleUser,
-					Content: prompt,
-				},
-			},
+			Model:    bi.model,
+			Messages: messages,
 		},
 	)
+
 	if err != nil {
 		log.Println(err)
 		return err
