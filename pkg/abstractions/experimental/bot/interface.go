@@ -17,7 +17,7 @@ func NewBotInterface(key string) (*BotInterface, error) {
 	}, nil
 }
 
-func (bi *BotInterface) Chat() error {
+func (bi *BotInterface) SendPrompt(prompt string) error {
 	resp, err := bi.client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
@@ -25,14 +25,16 @@ func (bi *BotInterface) Chat() error {
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleUser,
-					Content: "Hello!",
+					Content: prompt,
 				},
 			},
 		},
 	)
+	if err != nil {
+		return err
+	}
 
-	log.Printf("resp: %+v\n", resp)
-	log.Printf("err: %+v\n", err)
+	log.Println("resp: ", resp)
 
 	return nil
 }

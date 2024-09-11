@@ -53,20 +53,6 @@ func newBotInstance(ctx context.Context, appConfig types.AppConfig, scheduler *s
 }
 
 func (i *botInstance) Start() error {
-	/*
-		TODO:
-			- Get a handle to a model (this could be a VLLM container)
-			- Setup some sort of system prompt to establish the rules of the game
-				- this should include information about the types of markers...?
-			- Send system prompt / intro
-			- Create some sort of interface that can accept input from the user
-			- Determine how transition containers are managed
-				- We can use a similar thing to a taskqueue
-				- We need to be able to...?
-	*/
-
-	// i.botConfig.Transitions["test"].Handler
-
 	env := []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", i.token.Key),
 		fmt.Sprintf("HANDLER=%s", i.stubConfig.Handler),
@@ -111,8 +97,6 @@ func (i *botInstance) Start() error {
 }
 
 func (i *botInstance) step() {
-	i.botInterface.Chat()
-	// i.botStateManager.addMarkerToLocation()
 }
 
 func (i *botInstance) genContainerId(containerType string) string {
