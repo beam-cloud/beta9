@@ -19,6 +19,10 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+var (
+	botContainerPrefix string = "bot"
+)
+
 type BotServiceOpts struct {
 	Config         types.AppConfig
 	RedisClient    *common.RedisClient
@@ -148,7 +152,7 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 		return nil, err
 	}
 
-	instance, err = newBotInstance(pbs.ctx, token, stubConfig, botConfig, pbs.botStateManager)
+	instance, err = newBotInstance(pbs.ctx, token, stub, stubConfig, botConfig, pbs.botStateManager)
 	if err != nil {
 		return nil, err
 	}
