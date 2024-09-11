@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"log"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -41,6 +42,7 @@ func (bi *BotInterface) SendPrompt(prompt string) error {
 		},
 	)
 	if err != nil {
+		log.Println(err)
 		return err
 	}
 

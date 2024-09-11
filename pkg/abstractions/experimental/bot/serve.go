@@ -46,7 +46,7 @@ func (pbs *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb
 
 			resp, err := instance.botInterface.outputBuffer.Pop()
 			if err == nil {
-				stream.Send(&pb.StartBotServeResponse{Done: false, Output: fmt.Sprintf("%s\n", resp)})
+				stream.Send(&pb.StartBotServeResponse{Done: false, Output: fmt.Sprintf("\r%s\n", resp)})
 			}
 
 			time.Sleep(time.Second * 1)
