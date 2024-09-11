@@ -13,19 +13,23 @@ type botInstance struct {
 	token      *types.Token
 	stubConfig *types.StubConfigV1
 	botConfig  BotConfig
+	cancelFunc context.CancelFunc
 }
 
 func newBotInstance(ctx context.Context, token *types.Token, stubConfig *types.StubConfigV1, botConfig BotConfig) (*botInstance, error) {
+	ctx, cancelFunc := context.WithCancel(ctx)
 	return &botInstance{
 		ctx:        ctx,
 		token:      token,
 		stubConfig: stubConfig,
 		botConfig:  botConfig,
+		cancelFunc: cancelFunc,
 	}, nil
 }
 
 func (i *botInstance) Start() error {
-	log.Printf("starting bot with config: %+v\n", i.botConfig)
+	log.Printf("Starting bot with config: %+v\n", i.botConfig)
+
 	for {
 		select {
 		case <-i.ctx.Done():

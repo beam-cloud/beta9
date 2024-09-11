@@ -2,7 +2,6 @@ package bot
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -37,6 +36,7 @@ func (pbs *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb
 	for {
 		select {
 		case <-stream.Context().Done():
+			instance.cancelFunc()
 			return nil
 		default:
 			stream.Send(&pb.StartBotServeResponse{Done: false, Output: "Bot running\n"})
@@ -50,6 +50,5 @@ func (s *PetriBotService) StopBotServe(ctx context.Context, in *pb.StopBotServeR
 }
 
 func (s *PetriBotService) BotServeKeepAlive(ctx context.Context, in *pb.BotServeKeepAliveRequest) (*pb.BotServeKeepAliveResponse, error) {
-	log.Println("keepalive")
 	return &pb.BotServeKeepAliveResponse{Ok: true}, nil
 }
