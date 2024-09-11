@@ -11,24 +11,18 @@ import (
 
 func (pbs *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb.BotService_StartBotServeServer) error {
 	ctx := stream.Context()
-	_, _ = auth.AuthInfoFromContext(ctx)
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	instance, err := pbs.getOrCreateBotInstance(in.StubId)
 	if err != nil {
 		return err
 	}
 
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	if authInfo.Workspace.ExternalId != instance.stub.Workspace.ExternalId {
+		stream.Send(&pb.StartBotServeResponse{Done: true, Output: "Invalid stub", ExitCode: 1})
+		instance.cancelFunc()
+		return nil
+	}
 
 	for {
 		select {
@@ -39,9 +33,9 @@ func (pbs *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb
 			resp, err := instance.botInterface.outputBuffer.Pop()
 			if err == nil {
 				stream.Send(&pb.StartBotServeResponse{Done: false, Output: resp})
+			} else {
+				time.Sleep(time.Millisecond * 100)
 			}
-
-			time.Sleep(time.Millisecond * 100)
 		}
 	}
 }

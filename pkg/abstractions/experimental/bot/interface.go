@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -31,10 +30,6 @@ func NewBotInterface(key, model string) (*BotInterface, error) {
 	return bi, nil
 }
 
-func (bi *BotInterface) pushInput(msg string) error {
-	return bi.inputBuffer.Push(msg)
-}
-
 func (bi *BotInterface) SendPrompt(prompt string) error {
 	messages := []openai.ChatCompletionMessage{
 		{
@@ -52,7 +47,6 @@ func (bi *BotInterface) SendPrompt(prompt string) error {
 	)
 
 	if err != nil {
-		log.Println(err)
 		return err
 	}
 
@@ -62,6 +56,10 @@ func (bi *BotInterface) SendPrompt(prompt string) error {
 	}
 
 	return bi.outputBuffer.Push(responseMsg)
+}
+
+func (bi *BotInterface) pushInput(msg string) error {
+	return bi.inputBuffer.Push(msg)
 }
 
 type Prompt struct {
