@@ -1,6 +1,8 @@
 package bot
 
 import (
+	"log"
+
 	"github.com/beam-cloud/beta9/pkg/common"
 )
 
@@ -15,5 +17,6 @@ func newBotStateManager(rdb *common.RedisClient) *botStateManager {
 }
 
 func (m *botStateManager) addMarkerToLocation() error {
+	log.Println("addMarkerToLocation")
 	return nil
 }

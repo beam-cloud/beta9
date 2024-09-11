@@ -81,6 +81,7 @@ type PetriBotService struct {
 	tailscale       *network.Tailscale
 	taskDispatcher  *task.Dispatcher
 	botInstances    *common.SafeMap[*botInstance]
+	botStateManager *botStateManager
 }
 
 func NewPetriBotService(ctx context.Context, opts BotServiceOpts) (BotService, error) {
@@ -103,6 +104,7 @@ func NewPetriBotService(ctx context.Context, opts BotServiceOpts) (BotService, e
 		taskDispatcher:  opts.TaskDispatcher,
 		eventRepo:       opts.EventRepo,
 		botInstances:    common.NewSafeMap[*botInstance](),
+		botStateManager: newBotStateManager(opts.RedisClient),
 	}, nil
 }
 
@@ -134,7 +136,7 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 		return nil, err
 	}
 
-	instance, err = newBotInstance(pbs.ctx, token, stubConfig, botConfig)
+	instance, err = newBotInstance(pbs.ctx, token, stubConfig, botConfig, pbs.botStateManager)
 	if err != nil {
 		return nil, err
 	}

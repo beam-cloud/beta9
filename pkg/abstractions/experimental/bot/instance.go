@@ -8,21 +8,23 @@ import (
 )
 
 type botInstance struct {
-	ctx        context.Context
-	token      *types.Token
-	stubConfig *types.StubConfigV1
-	botConfig  BotConfig
-	cancelFunc context.CancelFunc
+	ctx             context.Context
+	token           *types.Token
+	stubConfig      *types.StubConfigV1
+	botConfig       BotConfig
+	cancelFunc      context.CancelFunc
+	botStateManager *botStateManager
 }
 
-func newBotInstance(ctx context.Context, token *types.Token, stubConfig *types.StubConfigV1, botConfig BotConfig) (*botInstance, error) {
+func newBotInstance(ctx context.Context, token *types.Token, stubConfig *types.StubConfigV1, botConfig BotConfig, botStateManager *botStateManager) (*botInstance, error) {
 	ctx, cancelFunc := context.WithCancel(ctx)
 	return &botInstance{
-		ctx:        ctx,
-		token:      token,
-		stubConfig: stubConfig,
-		botConfig:  botConfig,
-		cancelFunc: cancelFunc,
+		ctx:             ctx,
+		token:           token,
+		stubConfig:      stubConfig,
+		botConfig:       botConfig,
+		cancelFunc:      cancelFunc,
+		botStateManager: botStateManager,
 	}, nil
 }
 
@@ -34,6 +36,7 @@ func (i *botInstance) Start() error {
 		case <-i.ctx.Done():
 			return nil
 		default:
+			i.step()
 			time.Sleep(time.Second)
 		}
 
@@ -41,5 +44,5 @@ func (i *botInstance) Start() error {
 }
 
 func (i *botInstance) step() {
-
+	i.botStateManager.addMarkerToLocation()
 }
