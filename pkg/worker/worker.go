@@ -465,7 +465,8 @@ func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
 		return
 	}
 
-	err := s.cedanaClient.Checkpoint(context.TODO(), request.ContainerId)
+	gpuEnabled := request.Gpu != ""
+	err := s.cedanaClient.Checkpoint(context.TODO(), request.ContainerId, gpuEnabled)
 	if err != nil {
 		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
 		return
@@ -853,17 +854,19 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse cedana config: %v", err)
 		}
+		gpuEnabled := request.Gpu != ""
 		originalArgs := "\"" + strings.Join(spec.Process.Args, " ") + "\""
 		cudaVersion := "12.4" // XXX: Should detect and modify if using custom image
-		cedanaArgs := fmt.Sprintf("%s daemon start --gpu-enabled=%t --cuda %s --config='%s' & %s exec %s -w %s -i %s --attach",
+		cedanaArgs := fmt.Sprintf("%s daemon start --gpu-enabled=%t --cuda %s --config='%s' & %s exec %s -w %s -i %s --attach --gpu-enabled=%t",
 			CedanaPath,
-			request.Gpu != "",
+			gpuEnabled,
 			cudaVersion,
 			configJSON,
 			CedanaPath,
 			originalArgs,
 			defaultContainerDirectory,
-			request.ContainerId)
+			request.ContainerId,
+			gpuEnabled)
 		spec.Process.Args = []string{"/bin/bash", "-c", cedanaArgs}
 		spec.Process.Env = append(spec.Process.Env, "CEDANA_CLI_WAIT_FOR_READY=true")
 		// TODO: kill daemon when container is stopped

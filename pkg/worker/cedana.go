@@ -61,14 +61,15 @@ func (c *CedanaClient) Start(ctx context.Context) error {
 	return nil
 }
 
-func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) error {
+func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string, gpuEnabled bool) error {
 	ctx, cancel := context.WithTimeout(ctx, defaultCheckpointDeadline)
 	defer cancel()
 
 	args := api.DumpArgs{
 		Type:     api.CRType_LOCAL,
 		JID:      containerId,
-		CriuOpts: &api.CriuOpts{TcpEstablished: true},
+		CriuOpts: &api.CriuOpts{TcpEstablished: true, LeaveRunning: true},
+		GPU:      gpuEnabled,
 		// Dump dir taken from config
 	}
 	_, err := c.service.Dump(ctx, &args)

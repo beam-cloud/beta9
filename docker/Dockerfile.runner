@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-FROM ubuntu:20.04 as base
+FROM ubuntu:22.04 as base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -15,7 +15,7 @@ EOT
 RUN <<EOT
 set -eux
 apt-get install -y python3-protobuf libnet1 libnftables1 libnl-3-200 libprotobuf-c1 iptables
-curl -L -o criu_3.19-4_amd64.deb https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04/amd64/criu_3.19-4_amd64.deb
+curl -L -o criu_3.19-4_amd64.deb https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_22.04/amd64/criu_3.19-4_amd64.deb
 dpkg -i criu_3.19-4_amd64.deb
 rm criu_3.19-4_amd64.deb
 EOT
