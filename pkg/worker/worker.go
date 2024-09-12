@@ -854,10 +854,11 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			return nil, fmt.Errorf("failed to parse cedana config: %v", err)
 		}
 		originalArgs := "\"" + strings.Join(spec.Process.Args, " ") + "\""
-		// TODO: Detect and pass in --cuda flag
-		cedanaArgs := fmt.Sprintf("%s daemon start --gpu-enabled=%t --config='%s' & %s exec %s -w %s -i %s --attach",
+		cudaVersion := "12.4" // XXX: Should detect and modify if using custom image
+		cedanaArgs := fmt.Sprintf("%s daemon start --gpu-enabled=%t --cuda %s --config='%s' & %s exec %s -w %s -i %s --attach",
 			CedanaPath,
 			request.Gpu != "",
+			cudaVersion,
 			configJSON,
 			CedanaPath,
 			originalArgs,

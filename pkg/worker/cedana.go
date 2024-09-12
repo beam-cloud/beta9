@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	api "github.com/cedana/cedana/api/services/task"
+	api "github.com/cedana/cedana/pkg/api/services/task"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -66,9 +66,9 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) error
 	defer cancel()
 
 	args := api.DumpArgs{
-		Type:           api.CRType_LOCAL,
-		JID:            containerId,
-		TcpEstablished: true,
+		Type:     api.CRType_LOCAL,
+		JID:      containerId,
+		CriuOpts: &api.CriuOpts{TcpEstablished: true},
 		// Dump dir taken from config
 	}
 	_, err := c.service.Dump(ctx, &args)
@@ -84,9 +84,9 @@ func (c *CedanaClient) Restore(ctx context.Context, containerId string) error {
 	defer cancel()
 
 	args := &api.RestoreArgs{
-		Type:           api.CRType_LOCAL,
-		JID:            containerId,
-		TcpEstablished: true,
+		Type:     api.CRType_LOCAL,
+		JID:      containerId,
+		CriuOpts: &api.CriuOpts{TcpEstablished: true},
 	}
 	_, err := c.service.Restore(ctx, args)
 	// TODO gather metrics from response
