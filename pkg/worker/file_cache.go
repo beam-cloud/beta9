@@ -28,17 +28,6 @@ func (cm *FileCacheManager) GetClient() *blobcache.BlobCacheClient {
 	return cm.client
 }
 
-func (cm *FileCacheManager) CacheFiles() {
-	if cm.client == nil {
-		return
-	}
-
-	if !fileCacheAvailable() {
-		return
-	}
-
-}
-
 func fileCacheAvailable() bool {
 	if _, err := os.Stat(baseFileCachePath); os.IsNotExist(err) {
 		return false
