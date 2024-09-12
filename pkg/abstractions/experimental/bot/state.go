@@ -1,8 +1,6 @@
 package bot
 
 import (
-	"log"
-
 	"github.com/beam-cloud/beta9/pkg/common"
 )
 
@@ -16,7 +14,18 @@ func newBotStateManager(rdb *common.RedisClient) *botStateManager {
 	}
 }
 
+func (m *botStateManager) updateSessionMemory(sessionId string) error {
+	return nil
+}
+
+func (m *botStateManager) getSessionMemory(sessionId string) error {
+	return nil
+}
+
+func (m *botStateManager) deleteSessionMemory(sessionId string) error {
+	return nil
+}
+
 func (m *botStateManager) addMarkerToLocation() error {
-	log.Println("addMarkerToLocation")
 	return nil
 }

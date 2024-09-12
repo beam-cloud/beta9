@@ -12,8 +12,8 @@ import (
 type BotInterface struct {
 	client       *openai.Client
 	model        string
-	inputBuffer  *Buffer
-	outputBuffer *Buffer
+	inputBuffer  *messageBuffer
+	outputBuffer *messageBuffer
 	history      []openai.ChatCompletionMessage
 }
 
@@ -21,8 +21,8 @@ func NewBotInterface(key, model string) (*BotInterface, error) {
 	bi := &BotInterface{
 		client:       openai.NewClient(key),
 		model:        model,
-		inputBuffer:  &Buffer{Messages: []string{}, MaxLength: 100},
-		outputBuffer: &Buffer{Messages: []string{}, MaxLength: 100},
+		inputBuffer:  &messageBuffer{Messages: []string{}, MaxLength: 100},
+		outputBuffer: &messageBuffer{Messages: []string{}, MaxLength: 100},
 		history:      []openai.ChatCompletionMessage{},
 	}
 
@@ -62,15 +62,12 @@ func (bi *BotInterface) pushInput(msg string) error {
 	return bi.inputBuffer.Push(msg)
 }
 
-type Prompt struct {
-}
-
-type Buffer struct {
+type messageBuffer struct {
 	Messages  []string
 	MaxLength uint
 }
 
-func (b *Buffer) Push(msg string) error {
+func (b *messageBuffer) Push(msg string) error {
 	if len(b.Messages) >= int(b.MaxLength) {
 		return errors.New("buffer full")
 	}
@@ -79,7 +76,7 @@ func (b *Buffer) Push(msg string) error {
 	return nil
 }
 
-func (b *Buffer) Pop() (string, error) {
+func (b *messageBuffer) Pop() (string, error) {
 	if len(b.Messages) == 0 {
 		return "", errors.New("buffer empty")
 	}
