@@ -1,13 +1,11 @@
-import asyncio
 import inspect
 import os
 from abc import ABC
-from asyncio import AbstractEventLoop
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Coroutine, Optional
+from typing import Optional
 
-from ... import config, terminal
+from ... import config
 from ...channel import Channel
 from ...channel import get_channel as _get_channel
 from ...config import ConfigContext, get_config_context, set_settings
@@ -58,18 +56,9 @@ def get_channel() -> Channel:
 
 
 class BaseAbstraction(ABC):
-    def __init__(self) -> None:
-        self.loop: AbstractEventLoop = asyncio.get_event_loop()
-
     @property
     def channel(self) -> Channel:
         return get_channel()
-
-    def run_sync(self, coroutine: Coroutine) -> Any:
-        try:
-            return self.loop.run_until_complete(coroutine)
-        except Exception:
-            terminal.error("Lost connection to gateway 🔌")
 
     def __init_subclass__(cls, /, **kwargs):
         """

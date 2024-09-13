@@ -102,7 +102,7 @@ class GunicornApplication(BaseApplication):
 
 
 class OnStartMethodHandler:
-    def __init__(self, worker):
+    def __init__(self, worker: UvicornWorker) -> None:
         self._is_running = True
         self._worker = worker
 
@@ -114,7 +114,7 @@ class OnStartMethodHandler:
         await task
         return result
 
-    async def _keep_worker_alive(self):
+    async def _keep_worker_alive(self) -> None:
         while self._is_running:
             self._worker.notify()
             await asyncio.sleep(1)
@@ -136,6 +136,8 @@ class TaskLifecycleMiddleware(BaseHTTPMiddleware):
         if not task_id:
             raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Task ID missing")
 
+        os.environ["TASK_ID"] = task_id
+
         with StdoutJsonInterceptor(task_id=task_id):
             print(f"Received task <{task_id}>")
             start_response = request.app.state.gateway_stub.start_task(
@@ -156,6 +158,8 @@ class TaskLifecycleMiddleware(BaseHTTPMiddleware):
                 print(f"Task <{task_id}> finished")
                 return response
             finally:
+                del os.environ["TASK_ID"]
+
                 end_task_and_send_callback(
                     gateway_stub=request.app.state.gateway_stub,
                     payload=task_lifecycle_data.result,
