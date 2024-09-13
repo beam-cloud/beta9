@@ -399,7 +399,13 @@ def create_tmp_jupyter_file(input_history: List[str]) -> tempfile.NamedTemporary
     for code in input_history:
         if isinstance(code, list):
             code = "".join(code)
-        tmp_file.write(code + "\n\n")
+
+        # Skip command lines
+        for line in code.split("\n"):
+            if line.startswith("get_ipython"):
+                continue
+
+            tmp_file.write(line + "\n")
 
     tmp_file.flush()
 
