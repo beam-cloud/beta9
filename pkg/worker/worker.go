@@ -768,12 +768,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	// Add bind mounts to runc spec
 	for _, m := range request.Mounts {
-		log.Printf("m: %+v\n", m)
-
-		if s.fileCacheManager.CacheAvailable() && m.MountPath == types.WorkerUserCodeVolume {
-			s.fileCacheManager.CacheFilesInPath(m.LocalPath)
-		}
-
 		// Skip mountpoint storage if the local path does not exist (mounting failed)
 		if m.MountType == storage.StorageModeMountPoint {
 			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
@@ -809,6 +803,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	if s.fileCacheManager.CacheAvailable() {
+		// if s.fileCacheManager.CacheAvailable() && m.MountPath == types.WorkerUserCodeVolume {
+		// 	s.fileCacheManager.CacheFilesInPath(m.LocalPath)
+		// }
+
 		cacheMount := specs.Mount{
 			Type:        "none",
 			Source:      baseFileCachePath,
