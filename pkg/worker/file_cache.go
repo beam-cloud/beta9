@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -42,6 +43,29 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 
 		return nil
 	})
+}
+
+func (cm *FileCacheManager) InitWorkspace(workspaceName string) (string, error) {
+	workspaceVolumePath := fmt.Sprintf("/data/volumes/%s", workspaceName)
+	fileName := fmt.Sprintf("%s/.cache", workspaceVolumePath)
+
+	_, err := os.Stat(fileName)
+	if os.IsNotExist(err) {
+		file, err := os.Create(fileName)
+		if err != nil {
+			return "", err
+		}
+		defer file.Close()
+	} else {
+		return workspaceVolumePath, nil
+	}
+
+	_, err = cm.client.StoreContentFromSource(fileName, 0)
+	if err != nil {
+		return "", err
+	}
+
+	return workspaceVolumePath, nil
 }
 
 // GetClient returns the blobcache client instance.

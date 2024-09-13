@@ -767,6 +767,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
 
 	// Add bind mounts to runc spec
+	var volumeCacheMap map[string]string = make(map[string]string)
 	for _, m := range request.Mounts {
 		// Skip mountpoint storage if the local path does not exist (mounting failed)
 		if m.MountType == storage.StorageModeMountPoint {
@@ -774,6 +775,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				continue
 			}
 		} else {
+			volumeCacheMap[filepath.Base(m.MountPath)] = m.LocalPath
+
 			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
 				err := os.MkdirAll(m.LocalPath, 0755)
 				if err != nil {
@@ -803,13 +806,20 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	if s.fileCacheManager.CacheAvailable() {
-		// if s.fileCacheManager.CacheAvailable() && m.MountPath == types.WorkerUserCodeVolume {
-		// 	s.fileCacheManager.CacheFilesInPath(m.LocalPath)
-		// }
+		volumeCacheMapStr := "{}"
+		volumeCacheMapBytes, err := json.Marshal(volumeCacheMap)
+		if err == nil {
+			volumeCacheMapStr = string(volumeCacheMapBytes)
+		}
+
+		workspaceVolumePath, err := s.fileCacheManager.InitWorkspace(request.WorkspaceName)
+		if err != nil {
+			log.Printf("failed to set up workspace")
+		}
 
 		cacheMount := specs.Mount{
 			Type:        "none",
-			Source:      baseFileCachePath,
+			Source:      filepath.Join(baseFileCachePath, workspaceVolumePath),
 			Destination: "/cache",
 			Options: []string{"ro",
 				"rbind",
@@ -820,6 +830,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		}
 
 		spec.Mounts = append(spec.Mounts, cacheMount)
+		spec.Process.Env = append(spec.Process.Env, []string{fmt.Sprintf("VOLUME_CACHE_MAP=%s", volumeCacheMapStr)}...)
 	}
 
 	// Configure resolv.conf

@@ -146,17 +146,18 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 	env = append(secrets, env...)
 
 	err = t.fs.scheduler.Run(&types.ContainerRequest{
-		ContainerId: t.containerId,
-		Env:         env,
-		Cpu:         stubConfig.Runtime.Cpu,
-		Memory:      stubConfig.Runtime.Memory,
-		Gpu:         string(stubConfig.Runtime.Gpu),
-		GpuCount:    uint32(gpuCount),
-		ImageId:     stubConfig.Runtime.ImageId,
-		StubId:      stub.ExternalId,
-		WorkspaceId: stub.Workspace.ExternalId,
-		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
-		Mounts:      mounts,
+		ContainerId:   t.containerId,
+		Env:           env,
+		Cpu:           stubConfig.Runtime.Cpu,
+		Memory:        stubConfig.Runtime.Memory,
+		Gpu:           string(stubConfig.Runtime.Gpu),
+		GpuCount:      uint32(gpuCount),
+		ImageId:       stubConfig.Runtime.ImageId,
+		StubId:        stub.ExternalId,
+		WorkspaceId:   stub.Workspace.ExternalId,
+		WorkspaceName: stub.Workspace.Name,
+		EntryPoint:    []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
+		Mounts:        mounts,
 	})
 	if err != nil {
 		return err

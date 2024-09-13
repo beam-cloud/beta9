@@ -92,10 +92,8 @@ github.com/aws/aws-sdk-go-v2/service/sts v1.26.7/go.mod h1:6h2YuIoxaMSCFf5fi1EgZ
 github.com/aws/smithy-go v1.20.0 h1:6+kZsCXZwKxZS9RfISnPc4EXlHoyAkm2hPuM8X2BrrQ=
 github.com/aws/smithy-go v1.20.0/go.mod h1:uo5RKksAl4PzhqaAbjd4rLgFoq5koTsQKYuGe7dklGc=
 github.com/aybabtme/rgbterm v0.0.0-20170906152045-cc83f3b3ce59/go.mod h1:q/89r3U2H7sSsE2t6Kca0lfwTK8JdoNGS/yzM/4iH5I=
-github.com/beam-cloud/blobcache-v2 v0.0.0-20240913004740-f8233f33ce0a h1:aiwwu+JYC8ZOdwHhCkhKZYNQTO00xy66xO7RSn55cxs=
-github.com/beam-cloud/blobcache-v2 v0.0.0-20240913004740-f8233f33ce0a/go.mod h1:XtbxegnbBWGVzZBiN5bahVg7mUGJdhh+xHxRHRlDV8g=
-github.com/beam-cloud/blobcache-v2 v0.0.0-20240913023210-3463b99de05d h1:MS4mEvfpmCIbXiIe3AfjPS55HO1LZjyUW5nXjQMbrmw=
-github.com/beam-cloud/blobcache-v2 v0.0.0-20240913023210-3463b99de05d/go.mod h1:XtbxegnbBWGVzZBiN5bahVg7mUGJdhh+xHxRHRlDV8g=
+github.com/beam-cloud/blobcache-v2 v0.0.0-20240913202803-981564f27c83 h1:CPlpmwYT/Mh4HXCyG3vYvzsSHHaaJY0SfEgyzsind4w=
+github.com/beam-cloud/blobcache-v2 v0.0.0-20240913202803-981564f27c83/go.mod h1:EUKE5YN1F3lOag00x75QAwGN4CurkqshsH2My4UzgX4=
 github.com/beam-cloud/clip v0.0.0-20240826223025-899feb184e88 h1:SAzRxbcUKx0fFfqBRfrm39fyh0ixtuPM8/1HNJpnh9U=
 github.com/beam-cloud/clip v0.0.0-20240826223025-899feb184e88/go.mod h1:FO7taXHUAqgx33PjeB6LbSLpKob3Ceyo9Po64nq5TR0=
 github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170 h1:KYVz18kobBGU8URM9Srn++2tcL9e0PcwYyH0Z4GYicM=
@@ -165,6 +163,8 @@ github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f h1:lO4WD4F/r
 github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f/go.mod h1:cuUVRXasLTGF7a8hSLbxyZXjz+1KgoB3wDUb6vlszIc=
 github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e h1:vUmf0yezR0y7jJ5pceLHthLaYf4bA5T14B6q39S4q2Q=
 github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e/go.mod h1:YTIHhz/QFSYnu/EhlF2SpU2Uk+32abacUYA5ZPljz1A=
+github.com/djherbis/atime v1.1.0 h1:rgwVbP/5by8BvvjBNrbh64Qz33idKT3pSnMSJsxhi0g=
+github.com/djherbis/atime v1.1.0/go.mod h1:28OF6Y8s3NQWwacXc5eZTsEsiMzp7LF8MbXE+XJPdBE=
 github.com/djherbis/times v1.6.0 h1:w2ctJ92J8fBvWPxugmXIv7Nz7Q3iDMKNx9v5ocVH20c=
 github.com/djherbis/times v1.6.0/go.mod h1:gOHeRAz2h+VJNZ5Gmc/o7iD9k4wW7NMVqieYCY99oc0=
 github.com/docker/cli v25.0.0+incompatible h1:zaimaQdnX7fYWFqzN88exE9LDEvRslexpFowZBX6GoQ=
