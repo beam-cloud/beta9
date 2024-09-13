@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
@@ -319,3 +320,8 @@ def is_asgi3(app: Any) -> bool:
         return False
     else:
         return inspect.iscoroutinefunction(call) and has_asgi3_signature(call)
+
+
+class ThreadPoolExecutorOverride(ThreadPoolExecutor):
+    def __exit__(self, *_, **__):
+        self.shutdown(cancel_futures=True)

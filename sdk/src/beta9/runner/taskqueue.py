@@ -6,7 +6,7 @@ import threading
 import time
 import traceback
 from concurrent import futures
-from concurrent.futures import CancelledError, ThreadPoolExecutor
+from concurrent.futures import CancelledError
 from multiprocessing import Event, Process, set_start_method
 from multiprocessing.synchronize import Event as TEvent
 from typing import Any, List, NamedTuple, Union
@@ -29,6 +29,7 @@ from ..logging import StdoutJsonInterceptor
 from ..runner.common import (
     FunctionContext,
     FunctionHandler,
+    ThreadPoolExecutorOverride,
     config,
     execute_lifecycle_method,
     send_callback,
@@ -269,82 +270,82 @@ class TaskQueueWorker:
         # Load handler and execute on_start method
         handler = FunctionHandler()
         on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
-        thread_pool = ThreadPoolExecutor()
 
         print(f"Worker[{self.worker_index}] ready")
-        while True:
-            task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)
-            if not task:
-                time.sleep(TASK_POLLING_INTERVAL)
-                continue
+        with ThreadPoolExecutorOverride() as thread_pool:
+            while True:
+                task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)
+                if not task:
+                    time.sleep(TASK_POLLING_INTERVAL)
+                    continue
 
-            with StdoutJsonInterceptor(task_id=task.id):
-                print(f"Running task <{task.id}>")
+                with StdoutJsonInterceptor(task_id=task.id):
+                    print(f"Running task <{task.id}>")
 
-                context = FunctionContext.new(
-                    config=config,
-                    task_id=task.id,
-                    on_start_value=on_start_value,
-                )
+                    context = FunctionContext.new(
+                        config=config,
+                        task_id=task.id,
+                        on_start_value=on_start_value,
+                    )
 
-                monitor_task = thread_pool.submit(
-                    self._monitor_task,
-                    context=context,
-                    stub_id=config.stub_id,
-                    container_id=config.container_id,
-                    task=task,
-                    taskqueue_stub=taskqueue_stub,
-                    gateway_stub=gateway_stub,
-                )
-                futures.thread._threads_queues.clear()
+                    monitor_task = thread_pool.submit(
+                        self._monitor_task,
+                        context=context,
+                        stub_id=config.stub_id,
+                        container_id=config.container_id,
+                        task=task,
+                        taskqueue_stub=taskqueue_stub,
+                        gateway_stub=gateway_stub,
+                    )
+                    futures.thread._threads_queues.clear()
 
-                start_time = time.time()
-                task_status = TaskStatus.Complete
-                result = None
-                duration = None
-
-                try:
-                    args = task.args or []
-                    kwargs = task.kwargs or {}
-
-                    result = handler(context, *args, **kwargs)
-                except BaseException:
-                    print(traceback.format_exc())
-                    task_status = TaskStatus.Error
-                finally:
-                    duration = time.time() - start_time
+                    start_time = time.time()
+                    task_status = TaskStatus.Complete
+                    result = None
+                    duration = None
 
                     try:
-                        # TODO: add retries / the ability to recreate the channel dynamically if connection to gateway fails
-                        complete_task_response: TaskQueueCompleteResponse = (
-                            taskqueue_stub.task_queue_complete(
-                                TaskQueueCompleteRequest(
-                                    task_id=task.id,
-                                    stub_id=config.stub_id,
-                                    task_duration=duration,
-                                    task_status=task_status,
-                                    container_id=config.container_id,
-                                    container_hostname=config.container_hostname,
-                                    keep_warm_seconds=config.keep_warm_seconds,
-                                )
-                            )
-                        )
-                        if not complete_task_response.ok:
-                            raise RunnerException("Unable to end task")
+                        args = task.args or []
+                        kwargs = task.kwargs or {}
 
-                        print(f"Task completed <{task.id}>, took {duration}s")
-
-                        send_callback(
-                            gateway_stub=gateway_stub,
-                            context=context,
-                            payload=result or {},
-                            task_status=task_status,
-                            override_callback_url=kwargs.get("callback_url"),
-                        )  # Send callback to callback_url, if defined
+                        result = handler(context, *args, **kwargs)
                     except BaseException:
                         print(traceback.format_exc())
+                        task_status = TaskStatus.Error
                     finally:
-                        monitor_task.cancel()
+                        duration = time.time() - start_time
+
+                        try:
+                            # TODO: add retries / the ability to recreate the channel dynamically if connection to gateway fails
+                            complete_task_response: TaskQueueCompleteResponse = (
+                                taskqueue_stub.task_queue_complete(
+                                    TaskQueueCompleteRequest(
+                                        task_id=task.id,
+                                        stub_id=config.stub_id,
+                                        task_duration=duration,
+                                        task_status=task_status,
+                                        container_id=config.container_id,
+                                        container_hostname=config.container_hostname,
+                                        keep_warm_seconds=config.keep_warm_seconds,
+                                    )
+                                )
+                            )
+                            if not complete_task_response.ok:
+                                raise RunnerException("Unable to end task")
+
+                            print(f"Task completed <{task.id}>, took {duration}s")
+
+                            send_callback(
+                                gateway_stub=gateway_stub,
+                                context=context,
+                                payload=result or {},
+                                task_status=task_status,
+                                override_callback_url=kwargs.get("callback_url"),
+                            )  # Send callback to callback_url, if defined
+                        except BaseException:
+                            print(traceback.format_exc())
+                        finally:
+                            monitor_task.cancel()
 
 
 if __name__ == "__main__":

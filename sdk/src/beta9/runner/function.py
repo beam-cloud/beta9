@@ -3,7 +3,7 @@ import os
 import time
 import traceback
 from concurrent import futures
-from concurrent.futures import CancelledError, ThreadPoolExecutor
+from concurrent.futures import CancelledError
 from typing import Optional
 
 import cloudpickle
@@ -30,6 +30,7 @@ from ..logging import StdoutJsonInterceptor
 from ..runner.common import (
     FunctionContext,
     FunctionHandler,
+    ThreadPoolExecutorOverride,
     config,
     end_task_and_send_callback,
     send_callback,
@@ -130,8 +131,7 @@ def main(channel: Channel):
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
     task_id = config.task_id
 
-    thread_pool = ThreadPoolExecutor()
-    with StdoutJsonInterceptor(task_id=task_id):
+    with StdoutJsonInterceptor(task_id=task_id), ThreadPoolExecutorOverride() as thread_pool:
         container_id = config.container_id
         container_hostname = config.container_hostname
         if not task_id:
