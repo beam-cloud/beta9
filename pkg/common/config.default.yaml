@@ -64,7 +64,6 @@ imageService:
       secretKey: test
       endpoint:
   runner:
-    baseImageTag: latest
     baseImageName: beta9-runner
     baseImageRegistry: registry.localhost:5000
     tags:

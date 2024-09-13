@@ -132,7 +132,6 @@ type S3ImageRegistryConfig struct {
 type RunnerConfig struct {
 	BaseImageName     string            `key:"baseImageName" json:"base_image_name"`
 	BaseImageRegistry string            `key:"baseImageRegistry" json:"base_image_registry"`
-	BaseImageTag      string            `key:"baseImageTag" json:"base_image_tag"`
 	Tags              map[string]string `key:"tags" json:"tags"`
 }
 
