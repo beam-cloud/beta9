@@ -26,7 +26,8 @@ from ..clients.gateway import (
 )
 from ..exceptions import RunnerException
 
-USER_CODE_VOLUME = "/mnt/code"
+USER_CODE_DIR = "/mnt/code"
+USER_VOLUMES_DIR = "/volumes"
 
 
 @dataclass
@@ -145,8 +146,8 @@ class FunctionHandler:
         del os.environ["BETA9_IMPORTING_USER_CODE"]
 
     def _load(self):
-        if sys.path[0] != USER_CODE_VOLUME:
-            sys.path.insert(0, USER_CODE_VOLUME)
+        if sys.path[0] != USER_CODE_DIR:
+            sys.path.insert(0, USER_CODE_DIR)
 
         try:
             module, func = config.handler.split(":")
@@ -174,7 +175,7 @@ class FunctionHandler:
 
 
 @contextlib.contextmanager
-def patch_open_for_reads():
+def _patch_open_for_reads():
     original_open = builtins.open
 
     def _custom_open(file, mode="r", *args, **kwargs):
@@ -185,7 +186,7 @@ def patch_open_for_reads():
     def _modify_path_if_needed(file_path):
         file_path: str = os.path.realpath(file_path)
 
-        if file_path.startswith("/volumes"):
+        if file_path.startswith(USER_VOLUMES_DIR):
             cache_path = Path(f"/cache/data{file_path}")
 
             if not cache_path.exists():
@@ -206,8 +207,8 @@ def patch_open_for_reads():
 def execute_lifecycle_method(name: str) -> Union[Any, None]:
     """Executes a container lifecycle method defined by the user and return it's value"""
 
-    if sys.path[0] != USER_CODE_VOLUME:
-        sys.path.insert(0, USER_CODE_VOLUME)
+    if sys.path[0] != USER_CODE_DIR:
+        sys.path.insert(0, USER_CODE_DIR)
 
     func: str = getattr(config, name)
     if func == "" or func is None:
@@ -216,7 +217,7 @@ def execute_lifecycle_method(name: str) -> Union[Any, None]:
     start_time = time.time()
     print(f"Running {name} func: {func}")
     try:
-        with patch_open_for_reads():
+        with _patch_open_for_reads():
             module, func = func.split(":")
             target_module = importlib.import_module(module)
             method = getattr(target_module, func)
