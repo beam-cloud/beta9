@@ -31,7 +31,7 @@ apt-get install -y python3.12 python3.12-dev python3.12-distutils
 
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
-python3.12 -m pip install --upgrade distlib setuptools pip
+python3.12 -m pip install --upgrade distlib setuptools pip urllib3
 python3.12 -m pip install -r /workspace/requirements.txt
 
 # Set default python
