@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Dict, Optional, Union
 
 import requests
 from starlette.responses import Response
@@ -28,7 +28,7 @@ from ..exceptions import RunnerException
 
 USER_CODE_DIR = "/mnt/code"
 USER_VOLUMES_DIR = "/volumes"
-USER_CACHE_DIR = "/cache/data"
+USER_CACHE_DIR = "/cache"
 
 
 @dataclass
@@ -46,6 +46,7 @@ class Config:
     callback_url: Optional[str]
     task_id: Optional[str]
     bind_port: int
+    volume_cache_map: Dict
 
     @classmethod
     def load_from_env(cls) -> "Config":
@@ -62,6 +63,7 @@ class Config:
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
+        volume_cache_map = json.loads(os.getenv("VOLUME_CACHE_MAP", "{}"))
 
         if workers <= 0:
             workers = 1
@@ -83,6 +85,7 @@ class Config:
             task_id=task_id,
             bind_port=bind_port,
             timeout=timeout,
+            volume_cache_map=volume_cache_map,
         )
 
 
@@ -151,15 +154,16 @@ class FunctionHandler:
             sys.path.insert(0, USER_CODE_DIR)
 
         try:
-            module, func = config.handler.split(":")
+            with _patch_open_for_reads():
+                module, func = config.handler.split(":")
 
-            with self.importing_user_code():
-                target_module = importlib.import_module(module)
+                with self.importing_user_code():
+                    target_module = importlib.import_module(module)
 
-            self.handler = getattr(target_module, func)
-            sig = inspect.signature(self.handler.func)
-            self.pass_context = "context" in sig.parameters
-            self.is_async = asyncio.iscoroutinefunction(self.handler.func)
+                self.handler = getattr(target_module, func)
+                sig = inspect.signature(self.handler.func)
+                self.pass_context = "context" in sig.parameters
+                self.is_async = asyncio.iscoroutinefunction(self.handler.func)
         except BaseException:
             raise RunnerException()
 
@@ -187,14 +191,35 @@ def _patch_open_for_reads():
     def _modify_path_if_needed(file_path):
         file_path: str = os.path.realpath(file_path)
 
-        if file_path.startswith(USER_VOLUMES_DIR):
-            try:
-                # This stat forces a cache of the contents if its a valid file
-                os.stat(f"{USER_CACHE_DIR}/{file_path.replace('/','%')}")
-            except FileNotFoundError:
-                return file_path
+        if not os.path.exists(file_path):
+            raise FileNotFoundError
 
-            cache_path = Path(f"{USER_CACHE_DIR}/{file_path}")
+        if file_path.startswith(USER_VOLUMES_DIR) and config.volume_cache_map:
+            content_path = Path(file_path.removeprefix(USER_VOLUMES_DIR))
+
+            volume_name = content_path.parents[0].name
+            volume_id = Path(config.volume_cache_map[volume_name]).name
+            cache_content_path = str(volume_id / content_path.relative_to(content_path.parents[0]))
+            cache_path = Path(f"{USER_CACHE_DIR}/{cache_content_path}")
+
+            file_outdated = False
+            if cache_path.exists():
+                original_mtime = int(os.path.getmtime(file_path))
+                cache_mtime = int(os.path.getmtime(cache_path))
+                print("orig:", original_mtime)
+                print("cache: ", cache_mtime)
+
+                # Original file is newer; need to force update the cache
+                if original_mtime > cache_mtime:
+                    file_outdated = True
+
+            if not cache_path.exists() or file_outdated:
+                try:
+                    # This stat forces a cache of the contents if its a valid file
+                    os.stat(f"{USER_CACHE_DIR}/{cache_content_path.replace('/', '%')}")
+                except FileNotFoundError:
+                    return file_path
+
             if not cache_path.exists():
                 return file_path
 
