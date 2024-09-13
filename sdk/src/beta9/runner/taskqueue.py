@@ -6,7 +6,7 @@ import threading
 import time
 import traceback
 from concurrent import futures
-from concurrent.futures import CancelledError, ThreadPoolExecutor
+from concurrent.futures import CancelledError
 from multiprocessing import Event, Process, set_start_method
 from multiprocessing.synchronize import Event as TEvent
 from typing import Any, List, NamedTuple, Union
@@ -29,6 +29,7 @@ from ..logging import StdoutJsonInterceptor
 from ..runner.common import (
     FunctionContext,
     FunctionHandler,
+    ThreadPoolExecutorOverride,
     config,
     execute_lifecycle_method,
     send_callback,
@@ -269,10 +270,9 @@ class TaskQueueWorker:
         # Load handler and execute on_start method
         handler = FunctionHandler()
         on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
-        thread_pool = ThreadPoolExecutor()
 
         print(f"Worker[{self.worker_index}] ready")
-        try:
+        with ThreadPoolExecutorOverride() as thread_pool:
             while True:
                 task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)
                 if not task:
@@ -346,8 +346,6 @@ class TaskQueueWorker:
                             print(traceback.format_exc())
                         finally:
                             monitor_task.cancel()
-        finally:
-            thread_pool.shutdown()
 
 
 if __name__ == "__main__":

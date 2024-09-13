@@ -3,7 +3,7 @@ import os
 import time
 import traceback
 from concurrent import futures
-from concurrent.futures import CancelledError, ThreadPoolExecutor
+from concurrent.futures import CancelledError
 from typing import Optional
 
 import cloudpickle
@@ -30,6 +30,7 @@ from ..logging import StdoutJsonInterceptor
 from ..runner.common import (
     FunctionContext,
     FunctionHandler,
+    ThreadPoolExecutorOverride,
     config,
     end_task_and_send_callback,
     send_callback,
@@ -130,91 +131,87 @@ def main(channel: Channel):
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
     task_id = config.task_id
 
-    thread_pool = ThreadPoolExecutor()
-    try:
-        with StdoutJsonInterceptor(task_id=task_id):
-            container_id = config.container_id
-            container_hostname = config.container_hostname
-            if not task_id:
-                raise RunnerException("Invalid runner environment")
+    with StdoutJsonInterceptor(task_id=task_id), ThreadPoolExecutorOverride() as thread_pool:
+        container_id = config.container_id
+        container_hostname = config.container_hostname
+        if not task_id:
+            raise RunnerException("Invalid runner environment")
 
-            # Start the task
-            start_time = time.time()
-            start_task_response: StartTaskResponse = gateway_stub.start_task(
-                StartTaskRequest(task_id=task_id, container_id=container_id)
+        # Start the task
+        start_time = time.time()
+        start_task_response: StartTaskResponse = gateway_stub.start_task(
+            StartTaskRequest(task_id=task_id, container_id=container_id)
+        )
+
+        if not start_task_response.ok:
+            raise RunnerException("Unable to start task")
+
+        # Kick off monitoring task
+        context = FunctionContext.new(config=config, task_id=task_id)
+        monitor_task = thread_pool.submit(
+            _monitor_task,
+            context=context,
+            stub_id=config.stub_id,
+            task_id=task_id,
+            container_id=config.container_id,
+            function_stub=function_stub,
+            gateway_stub=gateway_stub,
+        )
+        futures.thread._threads_queues.clear()
+
+        task_status = TaskStatus.Complete
+        error: Optional[BaseException] = None
+
+        # Invoke function
+        try:
+            get_args_resp: FunctionGetArgsResponse = function_stub.function_get_args(
+                FunctionGetArgsRequest(task_id=task_id)
             )
 
-            if not start_task_response.ok:
-                raise RunnerException("Unable to start task")
+            if not get_args_resp.ok:
+                raise InvalidFunctionArgumentsException
 
-            # Kick off monitoring task
-            context = FunctionContext.new(config=config, task_id=task_id)
-            monitor_task = thread_pool.submit(
-                _monitor_task,
-                context=context,
-                stub_id=config.stub_id,
+            payload: dict = _load_args(get_args_resp.args)
+            args = payload.get("args") or []
+            kwargs = payload.get("kwargs") or {}
+
+            handler = FunctionHandler()
+            result = handler(context, *args, **kwargs)
+        except BaseException as exc:
+            print(traceback.format_exc())
+            result = error = exc
+            task_status = TaskStatus.Error
+        finally:
+            pickled_result = cloudpickle.dumps(result)
+            set_result_resp: FunctionSetResultResponse = function_stub.function_set_result(
+                FunctionSetResultRequest(task_id=task_id, result=pickled_result)
+            )
+            if not set_result_resp.ok:
+                raise RunnerException("Unable to set function result")
+
+        task_duration = time.time() - start_time
+
+        end_task_response = end_task_and_send_callback(
+            gateway_stub=gateway_stub,
+            payload=result,
+            end_task_request=EndTaskRequest(
                 task_id=task_id,
-                container_id=config.container_id,
-                function_stub=function_stub,
-                gateway_stub=gateway_stub,
-            )
-            futures.thread._threads_queues.clear()
+                task_duration=task_duration,
+                task_status=task_status,
+                container_id=container_id,
+                container_hostname=container_hostname,
+                keep_warm_seconds=0,
+            ),
+            override_callback_url=kwargs.get("callback_url"),
+        )
 
-            task_status = TaskStatus.Complete
-            error: Optional[BaseException] = None
+        if not end_task_response.ok:
+            raise RunnerException("Unable to end task")
 
-            # Invoke function
-            try:
-                get_args_resp: FunctionGetArgsResponse = function_stub.function_get_args(
-                    FunctionGetArgsRequest(task_id=task_id)
-                )
+        monitor_task.cancel()
 
-                if not get_args_resp.ok:
-                    raise InvalidFunctionArgumentsException
-
-                payload: dict = _load_args(get_args_resp.args)
-                args = payload.get("args") or []
-                kwargs = payload.get("kwargs") or {}
-
-                handler = FunctionHandler()
-                result = handler(context, *args, **kwargs)
-            except BaseException as exc:
-                print(traceback.format_exc())
-                result = error = exc
-                task_status = TaskStatus.Error
-            finally:
-                pickled_result = cloudpickle.dumps(result)
-                set_result_resp: FunctionSetResultResponse = function_stub.function_set_result(
-                    FunctionSetResultRequest(task_id=task_id, result=pickled_result)
-                )
-                if not set_result_resp.ok:
-                    raise RunnerException("Unable to set function result")
-
-            task_duration = time.time() - start_time
-
-            end_task_response = end_task_and_send_callback(
-                gateway_stub=gateway_stub,
-                payload=result,
-                end_task_request=EndTaskRequest(
-                    task_id=task_id,
-                    task_duration=task_duration,
-                    task_status=task_status,
-                    container_id=container_id,
-                    container_hostname=container_hostname,
-                    keep_warm_seconds=0,
-                ),
-                override_callback_url=kwargs.get("callback_url"),
-            )
-
-            if not end_task_response.ok:
-                raise RunnerException("Unable to end task")
-
-            monitor_task.cancel()
-
-            if error is not None and task_status == TaskStatus.Error:
-                raise error.with_traceback(error.__traceback__)
-    finally:
-        thread_pool.shutdown()
+        if error is not None and task_status == TaskStatus.Error:
+            raise error.with_traceback(error.__traceback__)
 
 
 if __name__ == "__main__":
