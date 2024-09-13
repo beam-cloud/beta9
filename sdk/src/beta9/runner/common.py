@@ -28,6 +28,7 @@ from ..exceptions import RunnerException
 
 USER_CODE_DIR = "/mnt/code"
 USER_VOLUMES_DIR = "/volumes"
+USER_CACHE_DIR = "/cache/data"
 
 
 @dataclass
@@ -187,8 +188,13 @@ def _patch_open_for_reads():
         file_path: str = os.path.realpath(file_path)
 
         if file_path.startswith(USER_VOLUMES_DIR):
-            cache_path = Path(f"/cache/data{file_path}")
+            try:
+                # This stat forces a cache of the contents if its a valid file
+                os.stat(f"{USER_CACHE_DIR}/{file_path.replace('/','%')}")
+            except FileNotFoundError:
+                return file_path
 
+            cache_path = Path(f"{USER_CACHE_DIR}/{file_path}")
             if not cache_path.exists():
                 return file_path
 
