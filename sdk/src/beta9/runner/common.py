@@ -1,4 +1,6 @@
 import asyncio
+import builtins
+import contextlib
 import importlib
 import inspect
 import json
@@ -10,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
+from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import requests
@@ -170,6 +173,36 @@ class FunctionHandler:
         return self.handler(*args, **kwargs)
 
 
+@contextlib.contextmanager
+def patch_open_for_reads():
+    original_open = builtins.open
+
+    def _custom_open(file, mode="r", *args, **kwargs):
+        if "r" in mode:
+            file = _modify_path_if_needed(file)
+        return original_open(file, mode, *args, **kwargs)
+
+    def _modify_path_if_needed(file_path):
+        file_path: str = os.path.realpath(file_path)
+
+        if file_path.startswith("/volumes"):
+            cache_path = Path(f"/cache/data{file_path}")
+
+            if not cache_path.exists():
+                return file_path
+
+            return str(cache_path)
+
+        return file_path
+
+    builtins.open = _custom_open
+
+    try:
+        yield
+    finally:
+        builtins.open = original_open
+
+
 def execute_lifecycle_method(name: str) -> Union[Any, None]:
     """Executes a container lifecycle method defined by the user and return it's value"""
 
@@ -183,11 +216,12 @@ def execute_lifecycle_method(name: str) -> Union[Any, None]:
     start_time = time.time()
     print(f"Running {name} func: {func}")
     try:
-        module, func = func.split(":")
-        target_module = importlib.import_module(module)
-        method = getattr(target_module, func)
-        result = method()
-        duration = time.time() - start_time
+        with patch_open_for_reads():
+            module, func = func.split(":")
+            target_module = importlib.import_module(module)
+            method = getattr(target_module, func)
+            result = method()
+            duration = time.time() - start_time
 
         print(f"{name} func complete, took: {duration}s")
         return result

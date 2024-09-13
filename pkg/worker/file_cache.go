@@ -1,7 +1,9 @@
 package worker
 
 import (
+	"log"
 	"os"
+	"path/filepath"
 	"syscall"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -24,11 +26,39 @@ func NewFileCacheManager(config types.AppConfig, client *blobcache.BlobCacheClie
 	}
 }
 
+// CacheFilesInPath caches files from a specified source path
+func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
+	filepath.Walk(sourcePath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() {
+			_, err := cm.client.StoreContentFromSource(path, 0)
+			if err == nil {
+				log.Printf("File cached successfully: %q\n", path)
+			}
+		}
+
+		return nil
+	})
+}
+
+// GetClient returns the blobcache client instance.
 func (cm *FileCacheManager) GetClient() *blobcache.BlobCacheClient {
+	if !cm.CacheAvailable() {
+		return nil
+	}
+
 	return cm.client
 }
 
-func fileCacheAvailable() bool {
+// CacheAvailable checks if the file cache is available
+func (cm *FileCacheManager) CacheAvailable() bool {
+	if !cm.config.Worker.BlobCacheEnabled {
+		return false
+	}
+
 	if _, err := os.Stat(baseFileCachePath); os.IsNotExist(err) {
 		return false
 	}

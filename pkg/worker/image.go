@@ -125,7 +125,8 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	// in memory (in a nearby region). If a remote cache is available, this supercedes
 	// the local cache - which is basically just downloading the image to disk
 	startTime := time.Now()
-	if (c.cacheClient != nil && fileCacheAvailable()) && !isBuildContainer {
+
+	if c.cacheClient != nil && !isBuildContainer {
 		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
 		sourceOffset := int64(0)
 

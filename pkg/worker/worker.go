@@ -768,6 +768,11 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	// Add bind mounts to runc spec
 	for _, m := range request.Mounts {
+		log.Printf("m: %+v\n", m)
+
+		if s.fileCacheManager.CacheAvailable() && m.MountPath == types.WorkerUserCodeVolume {
+			s.fileCacheManager.CacheFilesInPath(m.LocalPath)
+		}
 
 		// Skip mountpoint storage if the local path does not exist (mounting failed)
 		if m.MountType == storage.StorageModeMountPoint {
@@ -801,6 +806,22 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			Destination: m.MountPath,
 			Options:     []string{"rbind", mode},
 		})
+	}
+
+	if s.fileCacheManager.CacheAvailable() {
+		cacheMount := specs.Mount{
+			Type:        "none",
+			Source:      baseFileCachePath,
+			Destination: "/cache",
+			Options: []string{"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"},
+		}
+
+		spec.Mounts = append(spec.Mounts, cacheMount)
 	}
 
 	// Configure resolv.conf
