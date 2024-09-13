@@ -248,6 +248,7 @@ type Stub struct {
 	ExternalId    string    `db:"external_id" json:"external_id"`
 	Name          string    `db:"name" json:"name"`
 	Type          StubType  `db:"type" json:"type"`
+	Group         string    `db:"group" json:"group"`
 	Config        string    `db:"config" json:"config"`
 	ConfigVersion uint      `db:"config_version" json:"config_version"`
 	ObjectId      uint      `db:"object_id" json:"object_id"`       // Foreign key to Object
