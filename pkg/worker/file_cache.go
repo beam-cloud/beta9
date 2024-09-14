@@ -48,6 +48,10 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 }
 
 func (cm *FileCacheManager) EnableVolumeCaching(workspaceName string, volumeCacheMap map[string]string, spec *specs.Spec) error {
+	if !cm.client.HostsAvailable() {
+		return blobcache.ErrHostNotFound
+	}
+
 	volumeCacheMapStr := "{}"
 	volumeCacheMapBytes, err := json.Marshal(volumeCacheMap)
 	if err != nil {

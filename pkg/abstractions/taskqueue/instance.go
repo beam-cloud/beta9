@@ -67,18 +67,18 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 
 	for c := 0; c < containersToRun; c++ {
 		runRequest := &types.ContainerRequest{
-			ContainerId:   i.genContainerId(),
-			Env:           env,
-			Cpu:           i.StubConfig.Runtime.Cpu,
-			Memory:        i.StubConfig.Runtime.Memory,
-			Gpu:           string(i.StubConfig.Runtime.Gpu),
-			GpuCount:      uint32(gpuCount),
-			ImageId:       i.StubConfig.Runtime.ImageId,
-			StubId:        i.Stub.ExternalId,
-			WorkspaceId:   i.Workspace.ExternalId,
-			WorkspaceName: i.Workspace.Name,
-			EntryPoint:    i.EntryPoint,
-			Mounts:        mounts,
+			ContainerId: i.genContainerId(),
+			Env:         env,
+			Cpu:         i.StubConfig.Runtime.Cpu,
+			Memory:      i.StubConfig.Runtime.Memory,
+			Gpu:         string(i.StubConfig.Runtime.Gpu),
+			GpuCount:    uint32(gpuCount),
+			ImageId:     i.StubConfig.Runtime.ImageId,
+			StubId:      i.Stub.ExternalId,
+			WorkspaceId: i.Workspace.ExternalId,
+			Workspace:   *i.Workspace,
+			EntryPoint:  i.EntryPoint,
+			Mounts:      mounts,
 		}
 
 		err := i.Scheduler.Run(runRequest)

@@ -159,18 +159,18 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 	}
 
 	err = cs.scheduler.Run(&types.ContainerRequest{
-		ContainerId:   containerId,
-		Env:           env,
-		Cpu:           stubConfig.Runtime.Cpu,
-		Memory:        stubConfig.Runtime.Memory,
-		Gpu:           string(stubConfig.Runtime.Gpu),
-		GpuCount:      uint32(gpuCount),
-		ImageId:       stubConfig.Runtime.ImageId,
-		StubId:        stub.ExternalId,
-		WorkspaceId:   authInfo.Workspace.ExternalId,
-		WorkspaceName: authInfo.Workspace.Name,
-		EntryPoint:    []string{stubConfig.PythonVersion, "-m", "beta9.runner.container", base64.StdEncoding.EncodeToString(in.Command)},
-		Mounts:        mounts,
+		ContainerId: containerId,
+		Env:         env,
+		Cpu:         stubConfig.Runtime.Cpu,
+		Memory:      stubConfig.Runtime.Memory,
+		Gpu:         string(stubConfig.Runtime.Gpu),
+		GpuCount:    uint32(gpuCount),
+		ImageId:     stubConfig.Runtime.ImageId,
+		StubId:      stub.ExternalId,
+		WorkspaceId: authInfo.Workspace.ExternalId,
+		Workspace:   *authInfo.Workspace,
+		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.container", base64.StdEncoding.EncodeToString(in.Command)},
+		Mounts:      mounts,
 	})
 	if err != nil {
 		return err
