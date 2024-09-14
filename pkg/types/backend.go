@@ -18,6 +18,7 @@ type Workspace struct {
 	CreatedAt          time.Time         `db:"created_at" json:"created_at,omitempty"`
 	UpdatedAt          time.Time         `db:"updated_at" json:"updated_at,omitempty"`
 	SigningKey         *string           `db:"signing_key" json:"signing_key"`
+	VolumeCacheEnabled bool              `db:"volume_cache_enabled" json:"volume_cache_enabled"`
 	ConcurrencyLimitId *uint             `db:"concurrency_limit_id" json:"concurrency_limit_id,omitempty"`
 	ConcurrencyLimit   *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit"`
 }
