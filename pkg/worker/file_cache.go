@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 const (
@@ -45,7 +47,37 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 	})
 }
 
-func (cm *FileCacheManager) InitWorkspace(workspaceName string) (string, error) {
+func (cm *FileCacheManager) EnableVolumeCaching(workspaceName string, volumeCacheMap map[string]string, spec *specs.Spec) error {
+	volumeCacheMapStr := "{}"
+	volumeCacheMapBytes, err := json.Marshal(volumeCacheMap)
+	if err != nil {
+		return err
+	}
+	volumeCacheMapStr = string(volumeCacheMapBytes)
+
+	workspaceVolumePath, err := cm.initWorkspace(workspaceName)
+	if err != nil {
+		return err
+	}
+
+	cacheMount := specs.Mount{
+		Type:        "none",
+		Source:      filepath.Join(baseFileCachePath, workspaceVolumePath),
+		Destination: "/cache",
+		Options: []string{"ro",
+			"rbind",
+			"rprivate",
+			"nosuid",
+			"noexec",
+			"nodev"},
+	}
+
+	spec.Mounts = append(spec.Mounts, cacheMount)
+	spec.Process.Env = append(spec.Process.Env, []string{fmt.Sprintf("VOLUME_CACHE_MAP=%s", volumeCacheMapStr)}...)
+	return nil
+}
+
+func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) {
 	workspaceVolumePath := fmt.Sprintf("/data/volumes/%s", workspaceName)
 	fileName := fmt.Sprintf("%s/.cache", workspaceVolumePath)
 

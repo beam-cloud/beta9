@@ -763,11 +763,12 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Env = append(spec.Process.Env, env...)
 	spec.Root.Readonly = false
 
+	var volumeCacheMap map[string]string = make(map[string]string)
+
 	// Create local workspace path so we can symlink volumes before the container starts
 	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
 
 	// Add bind mounts to runc spec
-	var volumeCacheMap map[string]string = make(map[string]string)
 	for _, m := range request.Mounts {
 		// Skip mountpoint storage if the local path does not exist (mounting failed)
 		if m.MountType == storage.StorageModeMountPoint {
@@ -793,7 +794,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		if m.LinkPath != "" {
 			err = forceSymlink(m.MountPath, m.LinkPath)
 			if err != nil {
-				log.Printf("unable to symlink volume: %v", err)
+				log.Printf("<%s> - unable to symlink volume: %v", request.ContainerId, err)
 			}
 		}
 
@@ -805,32 +806,12 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		})
 	}
 
+	// If volume caching is enabled, set it up and add proper mounts to spec
 	if s.fileCacheManager.CacheAvailable() {
-		volumeCacheMapStr := "{}"
-		volumeCacheMapBytes, err := json.Marshal(volumeCacheMap)
-		if err == nil {
-			volumeCacheMapStr = string(volumeCacheMapBytes)
-		}
-
-		workspaceVolumePath, err := s.fileCacheManager.InitWorkspace(request.WorkspaceName)
+		err = s.fileCacheManager.EnableVolumeCaching(request.WorkspaceName, volumeCacheMap, spec)
 		if err != nil {
-			log.Printf("failed to set up workspace")
+			log.Printf("<%s> - failed to setup volume caching: %v", request.ContainerId, err)
 		}
-
-		cacheMount := specs.Mount{
-			Type:        "none",
-			Source:      filepath.Join(baseFileCachePath, workspaceVolumePath),
-			Destination: "/cache",
-			Options: []string{"ro",
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"noexec",
-				"nodev"},
-		}
-
-		spec.Mounts = append(spec.Mounts, cacheMount)
-		spec.Process.Env = append(spec.Process.Env, []string{fmt.Sprintf("VOLUME_CACHE_MAP=%s", volumeCacheMapStr)}...)
 	}
 
 	// Configure resolv.conf

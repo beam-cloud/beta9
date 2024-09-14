@@ -191,23 +191,34 @@ def _patch_open_for_reads():
     def _modify_path_if_needed(file_path):
         file_path: str = os.path.realpath(file_path)
 
-        if not os.path.exists(file_path):
-            raise FileNotFoundError
-
         if file_path.startswith(USER_VOLUMES_DIR) and config.volume_cache_map:
-            content_path = Path(file_path.removeprefix(USER_VOLUMES_DIR))
+            if not os.path.exists(file_path):
+                return file_path
 
-            volume_name = content_path.parents[0].name
-            volume_id = Path(config.volume_cache_map[volume_name]).name
-            cache_content_path = str(volume_id / content_path.relative_to(content_path.parents[0]))
-            cache_path = Path(f"{USER_CACHE_DIR}/{cache_content_path}")
+            content_path = Path(file_path.removeprefix(USER_VOLUMES_DIR))
+            volume_name: str = content_path.parts[1]  # FIXME
+
+            try:
+                volume_id = Path(config.volume_cache_map[volume_name]).name
+            except KeyError:
+                return file_path
+
+            cache_source_path = str(
+                volume_id / content_path.relative_to(content_path.parents[1])
+            )  # FIXME
+            cache_path = Path(f"{USER_CACHE_DIR}/{cache_source_path}")
+
+            print("cache source path: ", cache_source_path)
+            print("content path: ", content_path)
+            print("volume_name: ", volume_name)
 
             file_outdated = False
             if cache_path.exists():
-                original_mtime = int(os.path.getmtime(file_path))
-                cache_mtime = int(os.path.getmtime(cache_path))
-                print("orig:", original_mtime)
-                print("cache: ", cache_mtime)
+                original_mtime = int(os.stat(file_path).st_mtime)
+                cache_mtime = int(os.stat(cache_path).st_mtime)
+
+                print("original file timestamp:", original_mtime)
+                print("cached file timestamp: ", cache_mtime)
 
                 # Original file is newer; need to force update the cache
                 if original_mtime > cache_mtime:
@@ -216,10 +227,11 @@ def _patch_open_for_reads():
             if not cache_path.exists() or file_outdated:
                 try:
                     # This stat forces a cache of the contents if its a valid file
-                    os.stat(f"{USER_CACHE_DIR}/{cache_content_path.replace('/', '%')}")
+                    os.stat(f"{USER_CACHE_DIR}/{cache_source_path.replace('/', '%')}")
                 except FileNotFoundError:
                     return file_path
 
+            # If caching failed, this won't exist, so return the regular file path
             if not cache_path.exists():
                 return file_path
 
