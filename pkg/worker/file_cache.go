@@ -38,8 +38,8 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 
 		if !info.IsDir() {
 			_, err := cm.client.StoreContentFromSource(path, 0)
-			if err == nil {
-				log.Printf("File cached successfully: %q\n", path)
+			if err != nil {
+				log.Printf("Failed to cache file<%s>: %v\n", path, err)
 			}
 		}
 
