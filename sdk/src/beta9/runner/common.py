@@ -207,21 +207,15 @@ def _patch_open_for_reads():
                 return file_path
 
             content_path = Path(file_path.removeprefix(USER_VOLUMES_DIR))
-            volume_name: str = content_path.parts[1]  # FIXME
+            volume_name: str = content_path.parts[1] if content_path.parts else ""
 
             try:
                 volume_id = Path(config.volume_cache_map[volume_name]).name
             except KeyError:
                 return file_path
 
-            cache_source_path = str(
-                volume_id / content_path.relative_to(content_path.parents[1])
-            )  # FIXME
+            cache_source_path = str(volume_id / content_path.relative_to(f"/{volume_name}"))
             cache_path = Path(f"{USER_CACHE_DIR}/{cache_source_path}")
-
-            print("cache source path: ", cache_source_path)
-            print("content path: ", content_path)
-            print("volume_name: ", volume_name)
 
             file_outdated = False
             if cache_path.exists():
