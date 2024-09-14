@@ -181,12 +181,23 @@ class FunctionHandler:
 
 @contextlib.contextmanager
 def _patch_open_for_reads():
-    original_open = builtins.open
+    _open = builtins.open
 
     def _custom_open(file, mode="r", *args, **kwargs):
+        original_file = file
+        patched_read = False
+
         if "r" in mode:
+            patched_read = True
             file = _modify_path_if_needed(file)
-        return original_open(file, mode, *args, **kwargs)
+
+        try:
+            return _open(file, mode, *args, **kwargs)
+        except OSError:
+            if patched_read:
+                return _open(original_file, mode, *args, **kwargs)
+            else:
+                raise
 
     def _modify_path_if_needed(file_path):
         file_path: str = os.path.realpath(file_path)
@@ -217,21 +228,18 @@ def _patch_open_for_reads():
                 original_mtime = int(os.stat(file_path).st_mtime)
                 cache_mtime = int(os.stat(cache_path).st_mtime)
 
-                print("original file timestamp:", original_mtime)
-                print("cached file timestamp: ", cache_mtime)
-
                 # Original file is newer; need to force update the cache
                 if original_mtime > cache_mtime:
                     file_outdated = True
 
             if not cache_path.exists() or file_outdated:
                 try:
-                    # This stat forces a cache of the contents if its a valid file
+                    # This stat forces the contents to be cached nearby
                     os.stat(f"{USER_CACHE_DIR}/{cache_source_path.replace('/', '%')}")
                 except FileNotFoundError:
                     return file_path
 
-            # If caching failed, this won't exist, so return the regular file path
+            # If caching failed, this file won't exist - so just return the regular file path
             if not cache_path.exists():
                 return file_path
 
@@ -244,7 +252,7 @@ def _patch_open_for_reads():
     try:
         yield
     finally:
-        builtins.open = original_open
+        builtins.open = _open
 
 
 def execute_lifecycle_method(name: str) -> Union[Any, None]:
