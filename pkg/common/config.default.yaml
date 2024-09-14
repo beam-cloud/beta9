@@ -48,7 +48,6 @@ gateway:
   stubLimits:
     memory: 32768
 imageService:
-  cacheURL:
   localCacheEnabled: true
   registryStore: local
   registryCredentialProvider: docker
@@ -129,6 +128,7 @@ worker:
   defaultWorkerMemoryRequest: 1024
   terminationGracePeriod: 30
   addWorkerTimeout: 10m
+  blobCacheEnabled: false
 providers:
   ec2:
     accessKey:

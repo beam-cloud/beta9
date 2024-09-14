@@ -98,12 +98,11 @@ type GatewayServiceConfig struct {
 }
 
 type ImageServiceConfig struct {
-	CacheURL                       string                `key:"cacheURL" json:"cache_url"`
-	BlobCacheEnabled               bool                  `key:"blobCacheEnabled" json:"blob_cache_enabled"`
+	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
+	BlobCacheEnabled               bool                  `key:"blobCacheEnabled" json:"blob_cache_enabled"` // TODO: remove this once all workers cycle with the new config
 	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
 	RegistryCredentialProviderName string                `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
 	Registries                     ImageRegistriesConfig `key:"registries" json:"registries"`
-	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
 	EnableTLS                      bool                  `key:"enableTLS" json:"enable_tls"`
 	BuildContainerCpu              int64                 `key:"buildContainerCpu" json:"build_container_cpu"`
 	BuildContainerMemory           int64                 `key:"buildContainerMemory" json:"build_container_memory"`
@@ -190,6 +189,7 @@ type WorkerConfig struct {
 	ImagePVCName               string                      `key:"imagePVCName" json:"image_pvc_name"`
 	AddWorkerTimeout           time.Duration               `key:"addWorkerTimeout" json:"add_worker_timeout"`
 	TerminationGracePeriod     int64                       `key:"terminationGracePeriod"`
+	BlobCacheEnabled           bool                        `key:"blobCacheEnabled" json:"blob_cache_enabled"`
 }
 
 type PoolMode string

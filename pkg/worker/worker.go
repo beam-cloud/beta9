@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 
@@ -39,6 +40,7 @@ type Worker struct {
 	imageMountPath          string
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
+	fileCacheManager        *FileCacheManager
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
 	containerMountManager   *ContainerMountManager
@@ -142,7 +144,16 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	imageClient, err := NewImageClient(config, workerId, workerRepo)
+	var cacheClient *blobcache.BlobCacheClient = nil
+	if config.Worker.BlobCacheEnabled {
+		cacheClient, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
+		if err != nil {
+			log.Printf("[WARNING] Cache unavailable, performance may be degraded: %+v\n", err)
+		}
+	}
+
+	fileCacheManager := NewFileCacheManager(config, cacheClient)
+	imageClient, err := NewImageClient(config, workerId, workerRepo, fileCacheManager)
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +192,7 @@ func NewWorker() (*Worker, error) {
 		gpuCount:                uint32(gpuCount),
 		runcHandle:              runc.Runc{},
 		runcServer:              runcServer,
+		fileCacheManager:        fileCacheManager,
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		redisClient:             redisClient,
@@ -273,7 +285,6 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerId := request.ContainerId
-
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Pull image
@@ -752,18 +763,21 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Env = append(spec.Process.Env, env...)
 	spec.Root.Readonly = false
 
+	var volumeCacheMap map[string]string = make(map[string]string)
+
 	// Create local workspace path so we can symlink volumes before the container starts
 	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
 
 	// Add bind mounts to runc spec
 	for _, m := range request.Mounts {
-
 		// Skip mountpoint storage if the local path does not exist (mounting failed)
 		if m.MountType == storage.StorageModeMountPoint {
 			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
 				continue
 			}
 		} else {
+			volumeCacheMap[filepath.Base(m.MountPath)] = m.LocalPath
+
 			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
 				err := os.MkdirAll(m.LocalPath, 0755)
 				if err != nil {
@@ -780,7 +794,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		if m.LinkPath != "" {
 			err = forceSymlink(m.MountPath, m.LinkPath)
 			if err != nil {
-				log.Printf("unable to symlink volume: %v", err)
+				log.Printf("<%s> - unable to symlink volume: %v", request.ContainerId, err)
 			}
 		}
 
@@ -790,6 +804,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			Destination: m.MountPath,
 			Options:     []string{"rbind", mode},
 		})
+	}
+
+	// If volume caching is enabled, set it up and add proper mounts to spec
+	if s.fileCacheManager.CacheAvailable() && request.Workspace.VolumeCacheEnabled {
+		err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
+		if err != nil {
+			log.Printf("<%s> - failed to setup volume caching: %v", request.ContainerId, err)
+		}
 	}
 
 	// Configure resolv.conf
@@ -867,7 +889,7 @@ func (s *Worker) startup() error {
 
 	err = os.MkdirAll(containerLogsPath, os.ModePerm)
 	if err != nil {
-		return fmt.Errorf("failed to create logs directory: %w", err)
+		return fmt.Errorf("failed to create logs directory: %v", err)
 	}
 
 	go s.eventRepo.PushWorkerStartedEvent(s.workerId)
@@ -880,7 +902,6 @@ func (s *Worker) shutdown() error {
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
 	var errs error
-
 	if worker, err := s.workerRepo.GetWorkerById(s.workerId); err != nil {
 		errs = errors.Join(errs, err)
 	} else if worker != nil {

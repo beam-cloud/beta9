@@ -168,6 +168,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,
 		WorkspaceId: authInfo.Workspace.ExternalId,
+		Workspace:   *authInfo.Workspace,
 		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.container", base64.StdEncoding.EncodeToString(in.Command)},
 		Mounts:      mounts,
 	})

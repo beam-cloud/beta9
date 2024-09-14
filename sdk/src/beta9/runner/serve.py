@@ -16,7 +16,7 @@ from ..abstractions.base.runner import (
     TASKQUEUE_SERVE_STUB_TYPE,
 )
 from ..exceptions import RunnerException
-from ..runner.common import USER_CODE_VOLUME
+from ..runner.common import USER_CODE_DIR
 from ..runner.common import config as cfg
 
 
@@ -38,7 +38,7 @@ class ServeGateway:
     def __init__(self) -> None:
         self.process: Union[subprocess.Popen, None] = None
         self.exit_code: int = 0
-        self.watch_dir: str = USER_CODE_VOLUME
+        self.watch_dir: str = USER_CODE_DIR
         self.restart_event = Event()
         self.exit_event = Event()
 

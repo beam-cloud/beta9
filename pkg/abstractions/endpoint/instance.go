@@ -81,6 +81,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			ImageId:     i.StubConfig.Runtime.ImageId,
 			StubId:      i.Stub.ExternalId,
 			WorkspaceId: i.Workspace.ExternalId,
+			Workspace:   *i.Workspace,
 			EntryPoint:  i.EntryPoint,
 			Mounts:      mounts,
 		}

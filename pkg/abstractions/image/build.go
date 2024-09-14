@@ -190,6 +190,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		SourceImage:      &sourceImage,
 		SourceImageCreds: opts.BaseImageCreds,
 		WorkspaceId:      authInfo.Workspace.ExternalId,
+		Workspace:        *authInfo.Workspace,
 		EntryPoint:       []string{"tail", "-f", "/dev/null"},
 		PoolSelector:     b.config.ImageService.BuildContainerPoolSelector,
 	})
