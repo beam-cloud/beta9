@@ -82,7 +82,7 @@ func (cm *FileCacheManager) EnableVolumeCaching(workspaceName string, volumeCach
 }
 
 func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) {
-	workspaceVolumePath := fmt.Sprintf("/data/volumes/%s", workspaceName)
+	workspaceVolumePath := filepath.Join(types.DefaultVolumesPath, workspaceName)
 	fileName := fmt.Sprintf("%s/.cache", workspaceVolumePath)
 
 	_, err := os.Stat(fileName)
