@@ -2,7 +2,7 @@ name: Auto Changelog PR
 
 on:
   release:
-    types: [published]
+    types: [published, created]
   workflow_dispatch: # Add this line to allow manual triggering
 
 jobs:
