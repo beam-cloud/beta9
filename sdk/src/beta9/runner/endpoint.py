@@ -158,7 +158,8 @@ class TaskLifecycleMiddleware(BaseHTTPMiddleware):
                 print(f"Task <{task_id}> finished")
                 return response
             finally:
-                del os.environ["TASK_ID"]
+                if "TASK_ID" in os.environ:
+                    del os.environ["TASK_ID"]
 
                 end_task_and_send_callback(
                     gateway_stub=request.app.state.gateway_stub,
