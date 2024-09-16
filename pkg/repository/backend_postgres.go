@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -758,16 +760,35 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 	}
 
 	// Stub not found, create a new one
+	groupName := generateGroupName(name, stubType, fmt.Sprint(workspaceId))
 	queryCreate := `
-    INSERT INTO stub (name, type, config, object_id, workspace_id)
-    VALUES ($1, $2, $3, $4, $5)
-    RETURNING id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at;
+    INSERT INTO stub (name, type, config, object_id, workspace_id, "group")
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, "group";
     `
-	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), objectId, workspaceId); err != nil {
+	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), objectId, workspaceId, groupName); err != nil {
 		return types.Stub{}, err
 	}
 
 	return stub, nil
+}
+
+func generateGroupName(name, typ, workspaceID string) string {
+	nameParts := strings.Split(name, ":")
+	if len(nameParts) != 2 {
+		return ""
+	}
+
+	namePart := strings.ReplaceAll(nameParts[1], "_", "-")
+	if namePart == "" {
+		return ""
+	}
+
+	hash := md5.Sum([]byte(name + typ + workspaceID))
+	hashString := hex.EncodeToString(hash[:])
+	hashPart := hashString[len(hashString)-7:]
+
+	return namePart + "-" + hashPart
 }
 
 func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
@@ -902,7 +923,7 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	query := `
         SELECT d.*,
                w.external_id AS "workspace.external_id", w.name AS "workspace.name",
-               s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
+               s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", s."group" AS "stub.group"
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
         JOIN stub s ON d.stub_id = s.id
@@ -918,11 +939,48 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	return &deploymentWithRelated, nil
 }
 
+// GetDeploymentByStubGroup retrieves the deployment by name, version, and stub group
+// If version is 0, it will return the latest version
+func (c *PostgresBackendRepository) GetDeploymentByStubGroup(ctx context.Context, name string, version uint, stubGroup string) (*types.DeploymentWithRelated, error) {
+	var deploymentWithRelated types.DeploymentWithRelated
+
+	query := `
+		WITH deployment_data AS (
+			SELECT
+				d.*,
+				w.external_id AS "workspace.external_id", w.name AS "workspace.name",
+				s.external_id AS "stub.external_id", s.name AS "stub.name", s.type AS "stub.type", s.config AS "stub.config"
+			FROM deployment d
+			JOIN workspace w ON d.workspace_id = w.id
+			JOIN stub s ON d.stub_id = s.id
+			WHERE d.name = $1
+				AND s.group = $3
+				AND d.deleted_at IS NULL
+		)
+		SELECT
+			d.id, d.external_id, d.version,
+			d."workspace.external_id", d."workspace.name",
+			d."stub.external_id", d."stub.name", d."stub.type", d."stub.config"
+		FROM deployment_data d
+		WHERE version = CASE
+				WHEN $2 = 0 THEN (SELECT MAX(version) FROM deployment_data)
+				ELSE $2
+			END
+		LIMIT 1;
+	`
+	err := c.client.GetContext(ctx, &deploymentWithRelated, query, name, version, stubGroup)
+	if err != nil {
+		return nil, err
+	}
+
+	return &deploymentWithRelated, nil
+}
+
 func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
 	query := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).
 		Select(
 			"d.*",
-			"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
+			"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"", "s.\"group\" AS \"stub.group\"",
 		).
 		From("deployment d").
 		Join(`(
@@ -966,7 +1024,7 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
 	query := `
         SELECT d.*,
                w.external_id AS "workspace.external_id", w.name AS "workspace.name",
-               s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
+               s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", s."group" AS "stub.group"
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
         JOIN stub s ON d.stub_id = s.id
@@ -994,7 +1052,7 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"d.id, d.external_id, d.name, d.active, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at",
 		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
-		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
+		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"", "s.\"group\" AS \"stub.group\"",
 	).From("deployment d").
 		Join("workspace w ON d.workspace_id = w.id").
 		Join("stub s ON d.stub_id = s.id").
