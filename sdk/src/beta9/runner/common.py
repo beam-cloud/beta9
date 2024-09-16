@@ -184,17 +184,22 @@ def _patch_open_for_reads():
     _open = builtins.open
 
     def _custom_open(file, mode="r", *args, **kwargs):
+        print(f"custom open, file {file}")
         original_file = file
         patched_read = False
 
         if "r" in mode:
             patched_read = True
+            print(f"patching read for file: {file}")
             file = _modify_path_if_needed(file)
 
         try:
             return _open(file, mode, *args, **kwargs)
         except OSError:
             if patched_read:
+                print(
+                    f"tried to read file with patched read, failed with os error: {traceback.format_exc()}"
+                )
                 return _open(original_file, mode, *args, **kwargs)
             else:
                 raise
@@ -203,7 +208,10 @@ def _patch_open_for_reads():
         file_path: str = os.path.realpath(file_path)
 
         if file_path.startswith(USER_VOLUMES_DIR) and config.volume_cache_map:
+            print(f"attempting to used cache for file: {file_path}")
+
             if not os.path.exists(file_path):
+                print(f"file not found: {file_path}")
                 return file_path
 
             content_path = Path(file_path.removeprefix(USER_VOLUMES_DIR))
@@ -212,6 +220,7 @@ def _patch_open_for_reads():
             try:
                 volume_id = Path(config.volume_cache_map[volume_name]).name
             except KeyError:
+                print(f"volume not found: {volume_name}")
                 return file_path
 
             cache_source_path = str(volume_id / content_path.relative_to(f"/{volume_name}"))
@@ -219,6 +228,7 @@ def _patch_open_for_reads():
 
             file_outdated = False
             if cache_path.exists():
+                print(f"cache path exists: {cache_path}")
                 original_mtime = int(os.stat(file_path).st_mtime)
                 cache_mtime = int(os.stat(cache_path).st_mtime)
 
@@ -227,6 +237,7 @@ def _patch_open_for_reads():
                     file_outdated = True
 
             if not cache_path.exists() or file_outdated:
+                print(f"cache path not found, attempting to cache: {cache_path}")
                 try:
                     # This stat forces the contents to be cached nearby
                     os.stat(f"{USER_CACHE_DIR}/{cache_source_path.replace('/', '%')}")
@@ -235,6 +246,9 @@ def _patch_open_for_reads():
 
             # If caching failed, this file won't exist - so just return the regular file path
             if not cache_path.exists():
+                print(
+                    f"caching failed somehow for cache_path<{cache_path}>, returning {file_path} instead"
+                )
                 return file_path
 
             return str(cache_path)
