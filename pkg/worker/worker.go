@@ -690,6 +690,10 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		"PYTHONUNBUFFERED=1",
 	}
 
+	if request.Workspace.VolumeCacheEnabled {
+		env = append(env, "LD_PRELOAD=/workspace/intercept.so")
+	}
+
 	env = append(env, request.Env...)
 	return env
 }

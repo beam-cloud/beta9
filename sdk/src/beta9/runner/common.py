@@ -1,9 +1,6 @@
 import asyncio
-import builtins
-import contextlib
 import importlib
 import inspect
-import io
 import json
 import os
 import sys
@@ -154,16 +151,15 @@ class FunctionHandler:
             sys.path.insert(0, USER_CODE_DIR)
 
         try:
-            with _patch_open_for_reads():
-                module, func = config.handler.split(":")
+            module, func = config.handler.split(":")
 
-                with self.importing_user_code():
-                    target_module = importlib.import_module(module)
+            with self.importing_user_code():
+                target_module = importlib.import_module(module)
 
-                self.handler = getattr(target_module, func)
-                sig = inspect.signature(self.handler.func)
-                self.pass_context = "context" in sig.parameters
-                self.is_async = asyncio.iscoroutinefunction(self.handler.func)
+            self.handler = getattr(target_module, func)
+            sig = inspect.signature(self.handler.func)
+            self.pass_context = "context" in sig.parameters
+            self.is_async = asyncio.iscoroutinefunction(self.handler.func)
         except BaseException:
             raise RunnerException()
 
@@ -179,61 +175,6 @@ class FunctionHandler:
         return self.handler(*args, **kwargs)
 
 
-@contextlib.contextmanager
-def _patch_open_for_reads():
-    _original_builtins_open = builtins.open
-    _original_io_open = io.open
-    _original_os_open = os.open
-
-    def _custom_open(*args, **kwargs):
-        """
-        Consolidated custom open function for builtins.open, io.open, and os.open.
-        """
-        if not args:
-            raise TypeError("open() missing required positional argument: 'file' or 'path'")
-
-        # Extract the first argument and determine if it's a file/path
-        file_or_path = args[0]
-        second_arg = args[1] if len(args) > 1 else None
-
-        # Determine if this is os.open or builtins.open/io.open based on the type of the second argument
-        if isinstance(second_arg, int) or ("flags" in kwargs):
-            path = file_or_path
-            flags = second_arg if isinstance(second_arg, int) else kwargs.get("flags", os.O_RDONLY)
-            mode = kwargs.get("mode", 0o777)
-
-            if flags & os.O_RDONLY or flags & os.O_RDWR:
-                print(f"Intercepted os.open read for path: {path}")
-                path = _modify_path_if_needed(path)
-
-            return _original_os_open(path, flags, mode, *args[2:], **kwargs)
-        else:
-            # Handle builtins.open and io.open
-            file = file_or_path
-            mode = second_arg if isinstance(second_arg, str) else "r"
-            if "r" in mode:
-                print(f"Intercepted open read for file: {file}")
-                file = _modify_path_if_needed(file)
-
-            return _original_builtins_open(file, mode, *args[2:], **kwargs)
-
-    def _modify_path_if_needed(file_path):
-        print(f"Modifying path if needed for: {file_path}")
-        return file_path  # Return the modified or original file path as needed
-
-    # Assign the custom open function to all open functions
-    builtins.open = _custom_open
-    io.open = _custom_open
-    os.open = _custom_open
-
-    try:
-        yield
-    finally:
-        builtins.open = _original_builtins_open
-        io.open = _original_io_open
-        os.open = _original_os_open
-
-
 def execute_lifecycle_method(name: str) -> Union[Any, None]:
     """Executes a container lifecycle method defined by the user and return it's value"""
 
@@ -247,12 +188,11 @@ def execute_lifecycle_method(name: str) -> Union[Any, None]:
     start_time = time.time()
     print(f"Running {name} func: {func}")
     try:
-        with _patch_open_for_reads():
-            module, func = func.split(":")
-            target_module = importlib.import_module(module)
-            method = getattr(target_module, func)
-            result = method()
-            duration = time.time() - start_time
+        module, func = func.split(":")
+        target_module = importlib.import_module(module)
+        method = getattr(target_module, func)
+        result = method()
+        duration = time.time() - start_time
 
         print(f"{name} func complete, took: {duration}s")
         return result
