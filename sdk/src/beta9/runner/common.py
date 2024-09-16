@@ -3,6 +3,7 @@ import builtins
 import contextlib
 import importlib
 import inspect
+import io
 import json
 import os
 import sys
@@ -12,7 +13,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
-from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
 
 import requests
@@ -181,88 +181,57 @@ class FunctionHandler:
 
 @contextlib.contextmanager
 def _patch_open_for_reads():
-    _open = builtins.open
+    _original_builtins_open = builtins.open
+    _original_io_open = io.open
+    _original_os_open = os.open
 
-    def _custom_open(file, mode="r", *args, **kwargs):
-        print(f"custom open, file {file}")
-        original_file = file
-        patched_read = False
+    def _custom_open(*args, **kwargs):
+        """
+        Consolidated custom open function for builtins.open, io.open, and os.open.
+        """
+        if not args:
+            raise TypeError("open() missing required positional argument: 'file' or 'path'")
 
-        if "r" in mode:
-            patched_read = True
-            print(f"patching read for file: {file}")
-            file = _modify_path_if_needed(file)
+        # Extract the first argument and determine if it's a file/path
+        file_or_path = args[0]
+        second_arg = args[1] if len(args) > 1 else None
 
-        try:
-            return _open(file, mode, *args, **kwargs)
-        except OSError:
-            if patched_read:
-                print(
-                    f"tried to read file with patched read, failed with os error: {traceback.format_exc()}"
-                )
-                return _open(original_file, mode, *args, **kwargs)
-            else:
-                raise
+        # Determine if this is os.open or builtins.open/io.open based on the type of the second argument
+        if isinstance(second_arg, int) or ("flags" in kwargs):
+            path = file_or_path
+            flags = second_arg if isinstance(second_arg, int) else kwargs.get("flags", os.O_RDONLY)
+            mode = kwargs.get("mode", 0o777)
+
+            if flags & os.O_RDONLY or flags & os.O_RDWR:
+                print(f"Intercepted os.open read for path: {path}")
+                path = _modify_path_if_needed(path)
+
+            return _original_os_open(path, flags, mode, *args[2:], **kwargs)
+        else:
+            # Handle builtins.open and io.open
+            file = file_or_path
+            mode = second_arg if isinstance(second_arg, str) else "r"
+            if "r" in mode:
+                print(f"Intercepted open read for file: {file}")
+                file = _modify_path_if_needed(file)
+
+            return _original_builtins_open(file, mode, *args[2:], **kwargs)
 
     def _modify_path_if_needed(file_path):
-        file_path: str = os.path.realpath(file_path)
+        print(f"Modifying path if needed for: {file_path}")
+        return file_path  # Return the modified or original file path as needed
 
-        if file_path.startswith(USER_VOLUMES_DIR) and config.volume_cache_map:
-            print(f"attempting to used cache for file: {file_path}")
-
-            if not os.path.exists(file_path):
-                print(f"file not found: {file_path}")
-                return file_path
-
-            content_path = Path(file_path.removeprefix(USER_VOLUMES_DIR))
-            volume_name: str = content_path.parts[1] if content_path.parts else ""
-
-            try:
-                volume_id = Path(config.volume_cache_map[volume_name]).name
-            except KeyError:
-                print(f"volume not found: {volume_name}")
-                return file_path
-
-            cache_source_path = str(volume_id / content_path.relative_to(f"/{volume_name}"))
-            cache_path = Path(f"{USER_CACHE_DIR}/{cache_source_path}")
-
-            file_outdated = False
-            if cache_path.exists():
-                print(f"cache path exists: {cache_path}")
-                original_mtime = int(os.stat(file_path).st_mtime)
-                cache_mtime = int(os.stat(cache_path).st_mtime)
-
-                # Original file is newer; need to force update the cache
-                if original_mtime > cache_mtime:
-                    file_outdated = True
-
-            if not cache_path.exists() or file_outdated:
-                print(f"cache path not found, attempting to cache: {cache_path}")
-                try:
-                    # This stat forces the contents to be cached nearby
-                    os.stat(f"{USER_CACHE_DIR}/{cache_source_path.replace('/', '%')}")
-                except FileNotFoundError:
-                    return file_path
-
-            # If caching failed, this file won't exist - so just return the regular file path
-            if not cache_path.exists():
-                print(
-                    f"caching failed somehow for cache_path<{cache_path}>, returning {file_path} instead"
-                )
-                return file_path
-
-            return str(cache_path)
-
-        return file_path
-
+    # Assign the custom open function to all open functions
     builtins.open = _custom_open
+    io.open = _custom_open
     os.open = _custom_open
 
     try:
         yield
     finally:
-        builtins.open = _open
-        os.open = _open
+        builtins.open = _original_builtins_open
+        io.open = _original_io_open
+        os.open = _original_os_open
 
 
 def execute_lifecycle_method(name: str) -> Union[Any, None]:
