@@ -256,11 +256,13 @@ def _patch_open_for_reads():
         return file_path
 
     builtins.open = _custom_open
+    os.open = _custom_open
 
     try:
         yield
     finally:
         builtins.open = _open
+        os.open = _open
 
 
 def execute_lifecycle_method(name: str) -> Union[Any, None]:
