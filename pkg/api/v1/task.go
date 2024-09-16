@@ -88,7 +88,7 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to list tasks")
 	} else {
 		for i := range tasks.Data {
-			tasks.Data[i].SanitizeStubConfig()
+			tasks.Data[i].Stub.SanitizeConfig()
 			g.addOutputsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
 			g.addStatsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
 		}
@@ -112,8 +112,7 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 		if task == nil {
 			return HTTPNotFound()
 		}
-
-		task.SanitizeStubConfig()
+		task.Stub.SanitizeConfig()
 		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
 		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
 

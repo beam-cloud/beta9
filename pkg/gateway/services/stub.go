@@ -102,8 +102,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 
 		stubConfig.Secrets = append(stubConfig.Secrets, types.Secret{
-			Name:  secret.Name,
-			Value: secret.Value,
+			Name:      secret.Name,
+			Value:     secret.Value,
+			CreatedAt: secret.CreatedAt,
+			UpdatedAt: secret.UpdatedAt,
 		})
 	}
 

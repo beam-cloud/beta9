@@ -144,23 +144,6 @@ type TaskWithRelated struct {
 	Stub      Stub         `db:"stub" json:"stub"`
 }
 
-func (t *TaskWithRelated) SanitizeStubConfig() error {
-	var stubConfig StubConfigV1
-	err := json.Unmarshal([]byte(t.Stub.Config), &stubConfig)
-	if err != nil {
-		return err
-	}
-
-	stubConfig.Secrets = []Secret{}
-
-	stubConfigBytes, err := json.Marshal(stubConfig)
-	if err != nil {
-		return err
-	}
-	t.Stub.Config = string(stubConfigBytes)
-	return nil
-}
-
 type TaskCountPerDeployment struct {
 	DeploymentName string `db:"deployment_name" json:"deployment_name"`
 	TaskCount      uint   `db:"task_count" json:"task_count"`
@@ -265,6 +248,27 @@ func (s *Stub) UnmarshalConfig() (*StubConfigV1, error) {
 	return config, nil
 }
 
+func (s *Stub) SanitizeConfig() error {
+	var config StubConfigV1
+	err := json.Unmarshal([]byte(s.Config), &config)
+	if err != nil {
+		return err
+	}
+
+	// Remove secret values from config
+	for i := range config.Secrets {
+		config.Secrets[i].Value = ""
+	}
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Config = string(data)
+	return nil
+}
+
 type StubWithRelated struct {
 	Stub
 	Workspace Workspace `db:"workspace" json:"workspace"`
@@ -335,8 +339,8 @@ type Secret struct {
 	UpdatedAt     time.Time `db:"updated_at" json:"updated_at,omitempty"`
 	Name          string    `db:"name" json:"name"`
 	Value         string    `db:"value" json:"value,omitempty"`
-	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id"`
-	LastUpdatedBy *uint     `db:"last_updated_by" json:"last_updated_by"`
+	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id,omitempty"`
+	LastUpdatedBy *uint     `db:"last_updated_by" json:"last_updated_by,omitempty"`
 }
 
 type ScheduledJob struct {
