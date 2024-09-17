@@ -1,6 +1,4 @@
 import asyncio
-import builtins
-import contextlib
 import importlib
 import inspect
 import json
@@ -12,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
-from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
 
 import requests
@@ -154,16 +151,15 @@ class FunctionHandler:
             sys.path.insert(0, USER_CODE_DIR)
 
         try:
-            with _patch_open_for_reads():
-                module, func = config.handler.split(":")
+            module, func = config.handler.split(":")
 
-                with self.importing_user_code():
-                    target_module = importlib.import_module(module)
+            with self.importing_user_code():
+                target_module = importlib.import_module(module)
 
-                self.handler = getattr(target_module, func)
-                sig = inspect.signature(self.handler.func)
-                self.pass_context = "context" in sig.parameters
-                self.is_async = asyncio.iscoroutinefunction(self.handler.func)
+            self.handler = getattr(target_module, func)
+            sig = inspect.signature(self.handler.func)
+            self.pass_context = "context" in sig.parameters
+            self.is_async = asyncio.iscoroutinefunction(self.handler.func)
         except BaseException:
             raise RunnerException()
 
@@ -179,76 +175,6 @@ class FunctionHandler:
         return self.handler(*args, **kwargs)
 
 
-@contextlib.contextmanager
-def _patch_open_for_reads():
-    _open = builtins.open
-
-    def _custom_open(file, mode="r", *args, **kwargs):
-        original_file = file
-        patched_read = False
-
-        if "r" in mode:
-            patched_read = True
-            file = _modify_path_if_needed(file)
-
-        try:
-            return _open(file, mode, *args, **kwargs)
-        except OSError:
-            if patched_read:
-                return _open(original_file, mode, *args, **kwargs)
-            else:
-                raise
-
-    def _modify_path_if_needed(file_path):
-        file_path: str = os.path.realpath(file_path)
-
-        if file_path.startswith(USER_VOLUMES_DIR) and config.volume_cache_map:
-            if not os.path.exists(file_path):
-                return file_path
-
-            content_path = Path(file_path.removeprefix(USER_VOLUMES_DIR))
-            volume_name: str = content_path.parts[1] if content_path.parts else ""
-
-            try:
-                volume_id = Path(config.volume_cache_map[volume_name]).name
-            except KeyError:
-                return file_path
-
-            cache_source_path = str(volume_id / content_path.relative_to(f"/{volume_name}"))
-            cache_path = Path(f"{USER_CACHE_DIR}/{cache_source_path}")
-
-            file_outdated = False
-            if cache_path.exists():
-                original_mtime = int(os.stat(file_path).st_mtime)
-                cache_mtime = int(os.stat(cache_path).st_mtime)
-
-                # Original file is newer; need to force update the cache
-                if original_mtime > cache_mtime:
-                    file_outdated = True
-
-            if not cache_path.exists() or file_outdated:
-                try:
-                    # This stat forces the contents to be cached nearby
-                    os.stat(f"{USER_CACHE_DIR}/{cache_source_path.replace('/', '%')}")
-                except FileNotFoundError:
-                    return file_path
-
-            # If caching failed, this file won't exist - so just return the regular file path
-            if not cache_path.exists():
-                return file_path
-
-            return str(cache_path)
-
-        return file_path
-
-    builtins.open = _custom_open
-
-    try:
-        yield
-    finally:
-        builtins.open = _open
-
-
 def execute_lifecycle_method(name: str) -> Union[Any, None]:
     """Executes a container lifecycle method defined by the user and return it's value"""
 
@@ -262,12 +188,11 @@ def execute_lifecycle_method(name: str) -> Union[Any, None]:
     start_time = time.time()
     print(f"Running {name} func: {func}")
     try:
-        with _patch_open_for_reads():
-            module, func = func.split(":")
-            target_module = importlib.import_module(module)
-            method = getattr(target_module, func)
-            result = method()
-            duration = time.time() - start_time
+        module, func = func.split(":")
+        target_module = importlib.import_module(module)
+        method = getattr(target_module, func)
+        result = method()
+        duration = time.time() - start_time
 
         print(f"{name} func complete, took: {duration}s")
         return result

@@ -5,6 +5,7 @@
 !go.mod
 !go.sum
 !sdk
+!bin/volume_cache.so
 **/__pycache__
 *.pyc
 .venv
