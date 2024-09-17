@@ -4,7 +4,7 @@ import (
 	"time"
 
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
-	cedana "github.com/cedana/cedana/types"
+	cedana "github.com/cedana/cedana/pkg/types"
 	corev1 "k8s.io/api/core/v1"
 )
 
