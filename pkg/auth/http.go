@@ -23,8 +23,8 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 			tokenKey = strings.TrimPrefix(authHeader, "Bearer ")
 
 			if authHeader == "" || tokenKey == "" {
-				// Check for the token in the Sec-WebSocket-Protocol header
-				tokenKey = parseAuthFromWebsocketProtocolHeader(req.Header.Get("Sec-WebSocket-Protocol"))
+				// Check query param for token
+				tokenKey = req.URL.Query().Get("token")
 				if tokenKey == "" {
 					return next(c)
 				}
@@ -127,30 +127,4 @@ func WithClusterAdminAuth(next func(ctx echo.Context) error) func(ctx echo.Conte
 
 		return next(ctx)
 	}
-}
-
-func parseAuthFromWebsocketProtocolHeader(header string) string {
-	// We want to tell users to format their Sec-WebSocket-Protocol header like this:
-	// Sec-WebSocket-Protocol: Authorization, <token>
-
-	parts := strings.Split(header, ",")
-	if len(parts) < 2 {
-		return ""
-	}
-
-	// Find the "Authorization" value index
-	for i, part := range parts {
-		trimmedPart := strings.TrimSpace(part)
-
-		if strings.ToLower(trimmedPart) == "authorization" {
-			// Check if there is a value that comes after the "Authorization" key
-			if i+1 < len(parts) {
-				// These two equal signs were removed in the client side for this header value because
-				// Sec-WebSocket-Protocol does not allow for '=' characters
-				return strings.TrimSpace(parts[i+1])
-			}
-		}
-	}
-
-	return ""
 }
