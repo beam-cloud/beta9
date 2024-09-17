@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	defaultContainerCudaVersion string   = "11.8"
+	defaultContainerCudaVersion string   = "12.4"
 	defaultContainerPath        []string = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
 	defaultContainerLibrary     []string = []string{"/usr/lib/x86_64-linux-gnu", "/usr/lib/worker/x86_64-linux-gnu", "/usr/local/nvidia/lib64"}
 )
@@ -270,7 +270,9 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string, options *ContainerO
 }
 
 func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
-	cudaPaths := []string{fmt.Sprintf("/usr/local/cuda-%s", defaultContainerCudaVersion), "/usr/local/nvidia/lib64"}
+	// /usr/local/cuda already points to the installed CUDA lib in the worker
+	// XXX: Could remove hardcoded defaultContainerCudaVersion from this file
+	cudaPaths := []string{"/usr/local/cuda", "/usr/local/nvidia/lib64"}
 
 	for _, path := range cudaPaths {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
