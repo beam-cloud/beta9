@@ -28,6 +28,7 @@ class DeployableMixin:
         name: Optional[str] = None,
         context: Optional[ConfigContext] = None,
         invocation_details_func: Optional[Callable[..., None]] = None,
+        url_type: str = "subdomain",
     ) -> bool:
         self._validate()
 
@@ -50,13 +51,12 @@ class DeployableMixin:
             DeployStubRequest(stub_id=self.parent.stub_id, name=self.parent.name)
         )
 
+        self.parent.deployment_id = deploy_response.deployment_id
         if deploy_response.ok:
             terminal.header("Deployed 🎉")
             if invocation_details_func:
-                invocation_details_func()
+                invocation_details_func(url_type=url_type)
             else:
-                self.parent.print_invocation_snippet(deploy_response.invoke_url)
-
-        self.deployment_id = deploy_response.deployment_id
+                self.parent.print_invocation_snippet(url_type=url_type)
 
         return deploy_response.ok

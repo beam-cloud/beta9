@@ -33,6 +33,7 @@ const (
 	GatewayService_ListTasks_FullMethodName            = "/gateway.GatewayService/ListTasks"
 	GatewayService_GetOrCreateStub_FullMethodName      = "/gateway.GatewayService/GetOrCreateStub"
 	GatewayService_DeployStub_FullMethodName           = "/gateway.GatewayService/DeployStub"
+	GatewayService_GetURL_FullMethodName               = "/gateway.GatewayService/GetURL"
 	GatewayService_ListDeployments_FullMethodName      = "/gateway.GatewayService/ListDeployments"
 	GatewayService_StopDeployment_FullMethodName       = "/gateway.GatewayService/StopDeployment"
 	GatewayService_DeleteDeployment_FullMethodName     = "/gateway.GatewayService/DeleteDeployment"
@@ -69,6 +70,7 @@ type GatewayServiceClient interface {
 	// Stubs
 	GetOrCreateStub(ctx context.Context, in *GetOrCreateStubRequest, opts ...grpc.CallOption) (*GetOrCreateStubResponse, error)
 	DeployStub(ctx context.Context, in *DeployStubRequest, opts ...grpc.CallOption) (*DeployStubResponse, error)
+	GetURL(ctx context.Context, in *GetURLRequest, opts ...grpc.CallOption) (*GetURLResponse, error)
 	// Deployments
 	ListDeployments(ctx context.Context, in *ListDeploymentsRequest, opts ...grpc.CallOption) (*ListDeploymentsResponse, error)
 	StopDeployment(ctx context.Context, in *StopDeploymentRequest, opts ...grpc.CallOption) (*StopDeploymentResponse, error)
@@ -245,6 +247,15 @@ func (c *gatewayServiceClient) DeployStub(ctx context.Context, in *DeployStubReq
 	return out, nil
 }
 
+func (c *gatewayServiceClient) GetURL(ctx context.Context, in *GetURLRequest, opts ...grpc.CallOption) (*GetURLResponse, error) {
+	out := new(GetURLResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetURL_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) ListDeployments(ctx context.Context, in *ListDeploymentsRequest, opts ...grpc.CallOption) (*ListDeploymentsResponse, error) {
 	out := new(ListDeploymentsResponse)
 	err := c.cc.Invoke(ctx, GatewayService_ListDeployments_FullMethodName, in, out, opts...)
@@ -367,6 +378,7 @@ type GatewayServiceServer interface {
 	// Stubs
 	GetOrCreateStub(context.Context, *GetOrCreateStubRequest) (*GetOrCreateStubResponse, error)
 	DeployStub(context.Context, *DeployStubRequest) (*DeployStubResponse, error)
+	GetURL(context.Context, *GetURLRequest) (*GetURLResponse, error)
 	// Deployments
 	ListDeployments(context.Context, *ListDeploymentsRequest) (*ListDeploymentsResponse, error)
 	StopDeployment(context.Context, *StopDeploymentRequest) (*StopDeploymentResponse, error)
@@ -430,6 +442,9 @@ func (UnimplementedGatewayServiceServer) GetOrCreateStub(context.Context, *GetOr
 }
 func (UnimplementedGatewayServiceServer) DeployStub(context.Context, *DeployStubRequest) (*DeployStubResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeployStub not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetURL(context.Context, *GetURLRequest) (*GetURLResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetURL not implemented")
 }
 func (UnimplementedGatewayServiceServer) ListDeployments(context.Context, *ListDeploymentsRequest) (*ListDeploymentsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListDeployments not implemented")
@@ -737,6 +752,24 @@ func _GatewayService_DeployStub_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_GetURL_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetURLRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetURL(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetURL_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetURL(ctx, req.(*GetURLRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GatewayService_ListDeployments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListDeploymentsRequest)
 	if err := dec(in); err != nil {
@@ -993,6 +1026,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeployStub",
 			Handler:    _GatewayService_DeployStub_Handler,
+		},
+		{
+			MethodName: "GetURL",
+			Handler:    _GatewayService_GetURL_Handler,
 		},
 		{
 			MethodName: "ListDeployments",

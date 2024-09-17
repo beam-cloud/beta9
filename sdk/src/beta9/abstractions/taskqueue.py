@@ -168,7 +168,7 @@ class _CallableWrapper(DeployableMixin):
         return self.func(*args, **kwargs)
 
     @with_grpc_error_handling
-    def serve(self, timeout: int = 0) -> bool:
+    def serve(self, timeout: int = 0, url_type: str = "subdomain"):
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=TASKQUEUE_SERVE_STUB_TYPE, force_create_stub=True
         ):
@@ -176,13 +176,7 @@ class _CallableWrapper(DeployableMixin):
 
         try:
             with terminal.progress("Serving taskqueue..."):
-                base_url = self.parent.settings.api_host
-                if not base_url.startswith(("http://", "https://")):
-                    base_url = f"http://{base_url}"
-
-                self.parent.print_invocation_snippet(
-                    invocation_url=f"{base_url}/taskqueue/id/{self.parent.stub_id}"
-                )
+                self.parent.print_invocation_snippet(url_type=url_type)
 
                 return self._serve(
                     dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout

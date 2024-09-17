@@ -44,10 +44,20 @@ def common(**_):
     default=0,
     help="The inactivity timeout for the serve instance in seconds. Set to -1 for no timeout. Set to 0 to use default timeout (10 minutes)",
 )
+@click.option(
+    "--url-type",
+    help="The type of URL to get back.",
+    default="subdomain",
+    type=click.Choice(["subdomain", "path"]),
+)
 @extraclick.pass_service_client
 @click.pass_context
 def serve(
-    ctx: click.Context, service: ServiceClient, entrypoint: str, timeout: Optional[int] = None
+    ctx: click.Context,
+    service: ServiceClient,
+    entrypoint: str,
+    timeout: Optional[int] = None,
+    url_type: str = "path",
 ):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
@@ -72,4 +82,4 @@ def serve(
             f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{func_name}'"
         )
 
-    user_func.serve(timeout=int(timeout))  # type:ignore
+    user_func.serve(timeout=int(timeout), url_type=url_type)  # type:ignore

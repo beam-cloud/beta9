@@ -773,8 +773,8 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 	return stub, nil
 }
 
-func generateGroupName(name, typ, workspaceID string) string {
-	nameParts := strings.Split(name, ":")
+func generateGroupName(stubName, stubType, workspaceId string) string {
+	nameParts := strings.Split(stubName, ":")
 	if len(nameParts) != 2 {
 		return ""
 	}
@@ -784,7 +784,7 @@ func generateGroupName(name, typ, workspaceID string) string {
 		return ""
 	}
 
-	hash := md5.Sum([]byte(name + typ + workspaceID))
+	hash := md5.Sum([]byte(stubName + stubType + workspaceId))
 	hashString := hex.EncodeToString(hash[:])
 	hashPart := hashString[len(hashString)-7:]
 
@@ -794,7 +794,7 @@ func generateGroupName(name, typ, workspaceID string) string {
 func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
 	var stub types.StubWithRelated
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at,
+		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at, s."group",
 	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled",
 	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"`,
 	).
