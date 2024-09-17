@@ -57,11 +57,11 @@ func (c *ContainerGroup) GetContainer(ctx echo.Context) error {
 
 	containerState, err := c.containerRepo.GetContainerState(containerId)
 	if err != nil {
-		return HTTPBadRequest("invalid container id")
+		return HTTPBadRequest("Invalid container id")
 	}
 
 	if containerState.WorkspaceId != workspaceId {
-		return HTTPBadRequest("invalid workspace id")
+		return HTTPBadRequest("Invalid workspace id")
 	}
 
 	return ctx.JSON(http.StatusOK, containerState)
@@ -92,19 +92,17 @@ func (c *ContainerGroup) StopContainer(ctx echo.Context) error {
 
 	state, err := c.containerRepo.GetContainerState(containerId)
 	if err != nil {
-		return HTTPBadRequest("invalid container id")
+		return HTTPBadRequest("Invalid container id")
 	}
 
 	if state.WorkspaceId != workspaceId {
-		return HTTPBadRequest("invalid workspace id")
+		return HTTPBadRequest("Invalid workspace id")
 	}
 
 	err = c.scheduler.Stop(containerId)
 	if err != nil {
-		return HTTPInternalServerError("failed to stop container")
+		return HTTPInternalServerError("Failed to stop container")
 	}
 
-	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"message": "container stopped",
-	})
+	return ctx.NoContent(http.StatusOK)
 }
