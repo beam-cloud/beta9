@@ -464,7 +464,6 @@ func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dialer w
 			return true
 		},
 	}
-	req.Header.Del("Sec-Websocket-Protocol")
 
 	wsSrc, err := upgrader.Upgrade(w, req, nil)
 	if err != nil {
