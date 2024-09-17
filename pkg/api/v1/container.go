@@ -35,6 +35,7 @@ func NewContainerGroup(
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListContainersByWorkspaceId))
 	g.GET("/:workspaceId/:containerId", auth.WithWorkspaceAuth(group.GetContainer))
+	g.POST("/:workspaceId/:containerId/stop", auth.WithWorkspaceAuth(group.StopContainer))
 	g.POST("/:workspaceId/stop-all", auth.WithWorkspaceAuth(group.StopAllWorkspaceContainers))
 
 	return group
@@ -82,5 +83,28 @@ func (c *ContainerGroup) StopAllWorkspaceContainers(ctx echo.Context) error {
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"message": "all containers stopped",
+	})
+}
+
+func (c *ContainerGroup) StopContainer(ctx echo.Context) error {
+	workspaceId := ctx.Param("workspaceId")
+	containerId := ctx.Param("containerId")
+
+	state, err := c.containerRepo.GetContainerState(containerId)
+	if err != nil {
+		return HTTPBadRequest("invalid container id")
+	}
+
+	if state.WorkspaceId != workspaceId {
+		return HTTPBadRequest("invalid workspace id")
+	}
+
+	err = c.scheduler.Stop(containerId)
+	if err != nil {
+		return HTTPInternalServerError("failed to stop container")
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]interface{}{
+		"message": "container stopped",
 	})
 }
