@@ -90,7 +90,7 @@ class FileSyncer:
         return patterns
 
     def _should_ignore(self, path: str) -> bool:
-        spec = pathspec.PathSpec.from_lines("gitignore", self.ignore_patterns)
+        spec = pathspec.PathSpec.from_lines("gitwildmatch", self.ignore_patterns)
         relative_path = os.path.relpath(path, self.root_dir)
         return spec.match_file(relative_path)
 
