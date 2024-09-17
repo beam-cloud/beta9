@@ -125,7 +125,7 @@ COPY --from=skopeo /workspace/default-policy.json /etc/containers/policy.json
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
 COPY ./sdk/src/beta9 /workspace/sdk
-COPY ./volume_cache.so /usr/local/lib/volume_cache.so
+COPY ./bin/volume_cache.so /usr/local/lib/volume_cache.so
 
 VOLUME "/usr/lib/x86_64-linux-gnu"
 VOLUME "/usr/lib/aarch64-linux-gnu"
