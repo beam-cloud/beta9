@@ -78,8 +78,8 @@ func (cm *FileCacheManager) EnableVolumeCaching(workspaceName string, volumeCach
 
 	interceptMount := specs.Mount{
 		Type:        "none",
-		Source:      "/usr/local/lib/intercept.so",
-		Destination: "/usr/local/lib/intercept.so",
+		Source:      "/usr/local/lib/volume_cache.so",
+		Destination: "/usr/local/lib/volume_cache.so",
 		Options: []string{"ro",
 			"rbind",
 			"rprivate",
@@ -90,7 +90,7 @@ func (cm *FileCacheManager) EnableVolumeCaching(workspaceName string, volumeCach
 	spec.Mounts = append(spec.Mounts, cacheMount)
 	spec.Mounts = append(spec.Mounts, interceptMount)
 
-	spec.Process.Env = append(spec.Process.Env, []string{fmt.Sprintf("VOLUME_CACHE_MAP=%s", volumeCacheMapStr), "LD_PRELOAD=/usr/local/lib/intercept.so"}...)
+	spec.Process.Env = append(spec.Process.Env, []string{fmt.Sprintf("VOLUME_CACHE_MAP=%s", volumeCacheMapStr), "LD_PRELOAD=/usr/local/lib/volume_cache.so"}...)
 	return nil
 }
 
