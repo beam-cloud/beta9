@@ -183,7 +183,7 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId
 	if _, err := rand.Read(randomBytes); err != nil {
 		return types.Token{}, err
 	}
-	key := base64.URLEncoding.EncodeToString(randomBytes)
+	key := hex.EncodeToString(randomBytes)
 
 	query := `
 	INSERT INTO token (external_id, key, active, token_type, reusable, workspace_id)
