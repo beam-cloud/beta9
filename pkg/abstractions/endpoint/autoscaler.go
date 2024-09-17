@@ -65,16 +65,14 @@ func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSampl
 	desiredContainers := 1
 
 	timeoutKey := Keys.endpointServeLock(i.Workspace.Name, i.Stub.ExternalId)
-
-	ttl, err := i.Rdb.TTL(i.Ctx, timeoutKey).Result()
+	exists, err := i.Rdb.Exists(i.Ctx, timeoutKey).Result()
 	if err != nil {
 		return &abstractions.AutoscalerResult{
 			ResultValid: false,
 		}
 	}
 
-	// When ttl is -2 the key does not exist. If the ttl has not been reset recently, don't scale it back up.
-	if (ttl == -2 && sample.TotalRequests == 0) || (endpointServeContainerTimeout.Seconds()-ttl.Seconds() > 20 && sample.CurrentContainers == 0) {
+	if sample.TotalRequests == 0 && exists == 0 {
 		desiredContainers = 0
 	}
 

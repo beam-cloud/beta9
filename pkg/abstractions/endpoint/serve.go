@@ -43,6 +43,7 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 		1,
 		timeoutDuration,
 	)
+	defer instance.Rdb.Del(context.Background(), Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId))
 
 	container, err := instance.WaitForContainer(ctx, endpointServeContainerTimeout)
 	if err != nil {
