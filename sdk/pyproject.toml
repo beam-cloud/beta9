@@ -69,6 +69,6 @@ src = ["src", "test", "bin"]
 "src/beta9/__init__.py" = ["F403"]
 
 [tool.vendoring]
-destination = "beta9/vendor"
+destination = "src/beta9/vendor"
 requirements = "vendors.txt"
 namespace = "beta9.vendor"
