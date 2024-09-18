@@ -8,7 +8,7 @@ from typing import Generator, NamedTuple, Optional
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 
-from sdk.vendor.pathspec import PathSpec
+from beta9.vendor.pathspec import PathSpec
 
 from . import terminal
 from .clients.gateway import (
