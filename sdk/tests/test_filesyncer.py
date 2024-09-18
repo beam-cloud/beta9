@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 from beta9.sync import IGNORE_FILE_CONTENTS, FileSyncer
 
 
-class TestTaskQueue(TestCase):
+class TestFileSyncer(TestCase):
     def test_init_ignore_file(self):
         syncer = FileSyncer(gateway_stub=MagicMock())
         syncer._init_ignore_file()
