@@ -62,7 +62,7 @@ exclude_also = [
 
 [tool.ruff]
 line-length = 100
-exclude = ["src/beta9/clients"]
+exclude = ["src/beta9/clients", "vendor"]
 src = ["src", "test", "bin"]
 
 [tool.ruff.lint.per-file-ignores]
