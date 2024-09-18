@@ -1,11 +1,11 @@
-import fnmatch
 import hashlib
 import os
+import re
 import tempfile
 import zipfile
 from pathlib import Path
 from queue import Queue
-from typing import Generator, NamedTuple, Optional
+from typing import Generator, NamedTuple, Optional, Tuple, Union
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 
@@ -79,7 +79,12 @@ class FileSyncer:
 
         if self.ignore_file_path.is_file():
             with self.ignore_file_path.open() as file:
-                patterns = [line.strip() for line in file.readlines() if line.strip()]
+                for line in file.readlines():
+                    pattern = line.strip()
+                    if pattern:
+                        regex, include = self._pattern_to_regex(pattern)
+                        if include:
+                            patterns.append(regex)
 
         return patterns
 
@@ -87,9 +92,7 @@ class FileSyncer:
         relative_path = os.path.relpath(path, self.root_dir)
 
         for pattern in self.ignore_patterns:
-            if fnmatch.fnmatch(relative_path, pattern) or fnmatch.fnmatch(
-                os.path.basename(path), pattern
-            ):
+            if self._match_file(pattern, relative_path):
                 return True
 
         return False
@@ -113,6 +116,160 @@ class FileSyncer:
             while chunk := file.read(chunk_size):
                 hasher.update(chunk)
         return hasher.hexdigest()
+
+    # The methods _match_file, _pattern_to_regex, and _translate_segment_glob are copied
+    # from pathspec.patterns.gitwildmatch (https://github.com/cpburnz/python-pathspec)
+    @staticmethod
+    def _match_file(regex: str | bytes, path: str) -> bool:
+        match = re.search(regex, path)
+        return bool(match)
+
+    def _pattern_to_regex(
+        self,
+        pattern: Union[str, bytes],
+    ) -> Tuple[Optional[Union[str, bytes]], Optional[bool]]:
+        _BYTES_ENCODING = "latin1"
+        _DIR_MARK = "ps_d"
+
+        if isinstance(pattern, str):
+            return_type = str
+        elif isinstance(pattern, bytes):
+            return_type = bytes
+            pattern = pattern.decode(_BYTES_ENCODING)
+        else:
+            return None, None
+
+        original_pattern = pattern
+
+        if pattern.endswith("\\ "):
+            pattern = pattern.lstrip()
+        else:
+            pattern = pattern.strip()
+
+        if pattern.startswith("#"):
+            return None, None
+
+        elif pattern == "/":
+            return None, None
+
+        elif pattern:
+            if pattern.startswith("!"):
+                include = False
+                pattern = pattern[1:]
+            else:
+                include = True
+
+            override_regex = None
+            pattern_segs = pattern.split("/")
+            is_dir_pattern = not pattern_segs[-1]
+
+            for i in range(len(pattern_segs) - 1, 0, -1):
+                prev, seg = pattern_segs[i - 1], pattern_segs[i]
+                if prev == "**" and seg == "**":
+                    del pattern_segs[i]
+
+            if len(pattern_segs) == 2 and pattern_segs[0] == "**" and not pattern_segs[1]:
+                override_regex = f"^.+(?P<{_DIR_MARK}>/).*$"
+
+            if not pattern_segs[0]:
+                del pattern_segs[0]
+            elif len(pattern_segs) == 1 or (len(pattern_segs) == 2 and not pattern_segs[1]):
+                if pattern_segs[0] != "**":
+                    pattern_segs.insert(0, "**")
+
+            if not pattern_segs:
+                terminal.detail(f"Invalid ignore pattern will be ignored: {original_pattern!r}")
+
+            if not pattern_segs[-1] and len(pattern_segs) > 1:
+                pattern_segs[-1] = "**"
+
+            if override_regex is None:
+                output = ["^"]
+                need_slash = False
+                end = len(pattern_segs) - 1
+                for i, seg in enumerate(pattern_segs):
+                    if seg == "**":
+                        if i == 0 and i == end:
+                            output.append("[^/]+(?:/.*)?")
+                        elif i == 0:
+                            output.append("(?:.+/)?")
+                            need_slash = False
+                        elif i == end:
+                            output.append(f"(?P<{_DIR_MARK}>/).*" if is_dir_pattern else "/.*")
+                        else:
+                            output.append("(?:/.+)?")
+                            need_slash = True
+                    elif seg == "*":
+                        if need_slash:
+                            output.append("/")
+                        output.append("[^/]+")
+                        if i == end:
+                            output.append(f"(?:(?P<{_DIR_MARK}>/).*)?")
+                        need_slash = True
+                    else:
+                        if need_slash:
+                            output.append("/")
+                        output.append(self._translate_segment_glob(seg))
+                        if i == end:
+                            output.append(f"(?:(?P<{_DIR_MARK}>/).*)?")
+                        need_slash = True
+                output.append("$")
+                regex = "".join(output)
+            else:
+                regex = override_regex
+
+        else:
+            return None, None
+
+        if regex is not None and return_type is bytes:
+            regex = regex.encode(_BYTES_ENCODING)
+
+        return regex, include
+
+    @staticmethod
+    def _translate_segment_glob(pattern: str) -> str:
+        escape = False
+        regex = ""
+        i, end = 0, len(pattern)
+        while i < end:
+            char = pattern[i]
+            i += 1
+            if escape:
+                escape = False
+                regex += re.escape(char)
+            elif char == "\\":
+                escape = True
+            elif char == "*":
+                regex += "[^/]*"
+            elif char == "?":
+                regex += "[^/]"
+            elif char == "[":
+                j = i
+                if j < end and pattern[j] in "!^":
+                    j += 1
+                if j < end and pattern[j] == "]":
+                    j += 1
+                while j < end and pattern[j] != "]":
+                    j += 1
+                if j < end:
+                    j += 1
+                    expr = "["
+                    if pattern[i] in "!^":
+                        expr += "^"
+                        i += 1
+                    expr += pattern[i:j].replace("\\", "\\\\")
+                    regex += expr
+                    i = j
+                else:
+                    regex += "\\["
+            else:
+                regex += re.escape(char)
+        if escape:
+            terminal.detail(
+                f"Pattern will be ignore because of escape character with no next character: {pattern!r}"
+            )
+            return ""
+        return regex
 
     def sync(self) -> FileSyncResult:
         terminal.header("Syncing files")
