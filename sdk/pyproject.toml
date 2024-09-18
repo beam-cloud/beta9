@@ -67,3 +67,8 @@ src = ["src", "test", "bin"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/beta9/__init__.py" = ["F403"]
+
+[tool.vendoring]
+destination = "vendor"
+requirements = "vendors.txt"
+namespace = "beta9.vendor"
