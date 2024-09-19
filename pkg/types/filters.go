@@ -62,6 +62,13 @@ type StubFilter struct {
 	Pagination  bool        `query:"pagination"`
 }
 
+type StubGetURLFilter struct {
+	StubId       string `param:"stubId"`
+	WorkspaceId  string `param:"workspaceId"`
+	DeploymentId string `param:"deploymentId"`
+	URLType      string `query:"urlType"`
+}
+
 func ParseConditionFromQueryFilters(out interface{}, queryFilters ...QueryFilter) {
 	val := reflect.ValueOf(out).Elem()
 	typ := val.Type()

@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -21,9 +22,11 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 		config:      config,
 	}
 
-	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId)) // Allows workspace admins to list stubs specific to their workspace
-	g.GET("/:workspaceId/:stubId", auth.WithWorkspaceAuth(group.RetrieveStub))   // Allows workspace admins to retrieve a specific stub
-	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                        // Allows cluster admins to list all stubs
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId))           // Allows workspace admins to list stubs specific to their workspace
+	g.GET("/:workspaceId/:stubId", auth.WithWorkspaceAuth(group.RetrieveStub))             // Allows workspace admins to retrieve a specific stub
+	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                                  // Allows cluster admins to list all stubs
+	g.GET("/:workspaceId/:stubId/url", auth.WithWorkspaceAuth(group.GetURL))               // Allows workspace admins to get the URL of a stub
+	g.GET("/:workspaceId/:stubId/url/:deploymentId", auth.WithWorkspaceAuth(group.GetURL)) // Allows workspace admins to get the URL of a stub by deployment Id
 
 	return group
 }
@@ -90,4 +93,43 @@ func (g *StubGroup) RetrieveStub(ctx echo.Context) error {
 
 	return ctx.JSON(http.StatusOK, stub)
 
+}
+
+func (g *StubGroup) GetURL(ctx echo.Context) error {
+	filter := &types.StubGetURLFilter{}
+	if err := ctx.Bind(filter); err != nil {
+		return HTTPBadRequest("Failed to decode query parameters")
+	}
+
+	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), filter.StubId)
+	if err != nil {
+		return HTTPInternalServerError("Failed to lookup stub")
+	}
+	if stub == nil {
+		return HTTPBadRequest("Invalid stub ID")
+	}
+
+	// Get URL for Serves
+	if stub.Type.IsServe() {
+		invokeUrl := common.BuildServeURL(g.config.GatewayService.ExternalURL, filter.URLType, stub)
+		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
+	}
+
+	// Get URL for Deployments
+	if filter.DeploymentId == "" {
+		return HTTPBadRequest("Deployment ID is required")
+	}
+
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), filter.WorkspaceId)
+	if err != nil {
+		return HTTPInternalServerError("Failed to lookup workspace")
+	}
+
+	deployment, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), workspace.Id, filter.DeploymentId)
+	if err != nil {
+		return HTTPInternalServerError("Failed to lookup deployment")
+	}
+
+	invokeUrl := common.BuildDeploymentURL(g.config.GatewayService.ExternalURL, filter.URLType, stub, &deployment.Deployment)
+	return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 }
