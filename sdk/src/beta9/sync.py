@@ -1,4 +1,3 @@
-import fnmatch
 import hashlib
 import os
 import tempfile
@@ -8,6 +7,8 @@ from queue import Queue
 from typing import Generator, NamedTuple, Optional
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
+
+from beta9.vendor.pathspec import PathSpec
 
 from . import terminal
 from .clients.gateway import (
@@ -85,14 +86,8 @@ class FileSyncer:
 
     def _should_ignore(self, path: str) -> bool:
         relative_path = os.path.relpath(path, self.root_dir)
-
-        for pattern in self.ignore_patterns:
-            if fnmatch.fnmatch(relative_path, pattern) or fnmatch.fnmatch(
-                os.path.basename(path), pattern
-            ):
-                return True
-
-        return False
+        spec = PathSpec.from_lines("gitwildmatch", self.ignore_patterns)
+        return spec.match_file(relative_path)
 
     def _collect_files(self) -> Generator[str, None, None]:
         terminal.detail(f"Collecting files from {self.root_dir}")
