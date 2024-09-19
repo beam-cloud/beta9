@@ -26,7 +26,7 @@ var (
 
 type SubdomainBackendRepo interface {
 	GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error)
-	GetDeploymentByStubGroup(ctx context.Context, name string, version uint, stubGroup string) (*types.DeploymentWithRelated, error)
+	GetDeploymentByStubGroup(ctx context.Context, version uint, stubGroup string) (*types.DeploymentWithRelated, error)
 }
 
 // subdomainMiddleware is a middleware that parses the subdomain from the request and routes it to the correct handler.
@@ -126,10 +126,12 @@ func getStubForSubdomain(ctx context.Context, repo SubdomainBackendRepo, fields 
 	}
 
 	version := parseVersion(fields.Version)
-	deployment, err := repo.GetDeploymentByStubGroup(ctx, fields.Name, version, fields.StubGroup)
+	deployment, err := repo.GetDeploymentByStubGroup(ctx, version, fields.StubGroup)
 	if err != nil {
 		return nil, err
 	}
+
+	fields.Name = deployment.Name
 
 	return &deployment.Stub, nil
 }
