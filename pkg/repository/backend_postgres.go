@@ -941,7 +941,7 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 
 // GetDeploymentByStubGroup retrieves the deployment by name, version, and stub group
 // If version is 0, it will return the latest version
-func (c *PostgresBackendRepository) GetDeploymentByStubGroup(ctx context.Context, name string, version uint, stubGroup string) (*types.DeploymentWithRelated, error) {
+func (c *PostgresBackendRepository) GetDeploymentByStubGroup(ctx context.Context, version uint, stubGroup string) (*types.DeploymentWithRelated, error) {
 	var deploymentWithRelated types.DeploymentWithRelated
 
 	query := `
@@ -953,22 +953,22 @@ func (c *PostgresBackendRepository) GetDeploymentByStubGroup(ctx context.Context
 			FROM deployment d
 			JOIN workspace w ON d.workspace_id = w.id
 			JOIN stub s ON d.stub_id = s.id
-			WHERE d.name = $1
-				AND s.group = $3
+			WHERE
+				s.group = $2
 				AND d.deleted_at IS NULL
 		)
 		SELECT
-			d.id, d.external_id, d.version,
+			d.id, d.name, d.external_id, d.version,
 			d."workspace.external_id", d."workspace.name",
 			d."stub.external_id", d."stub.name", d."stub.type", d."stub.config"
 		FROM deployment_data d
 		WHERE version = CASE
-				WHEN $2 = 0 THEN (SELECT MAX(version) FROM deployment_data)
-				ELSE $2
+				WHEN $1 = 0 THEN (SELECT MAX(version) FROM deployment_data)
+				ELSE $1
 			END
 		LIMIT 1;
 	`
-	err := c.client.GetContext(ctx, &deploymentWithRelated, query, name, version, stubGroup)
+	err := c.client.GetContext(ctx, &deploymentWithRelated, query, version, stubGroup)
 	if err != nil {
 		return nil, err
 	}

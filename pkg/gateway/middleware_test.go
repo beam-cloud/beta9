@@ -13,7 +13,8 @@ import (
 )
 
 type middlewareRepoForTest struct {
-	stub *types.Stub
+	deployName string
+	stub       *types.Stub
 }
 
 func (r *middlewareRepoForTest) GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
@@ -21,81 +22,103 @@ func (r *middlewareRepoForTest) GetStubByExternalId(ctx context.Context, externa
 		Stub: *r.stub,
 	}, nil
 }
-func (r *middlewareRepoForTest) GetDeploymentByStubGroup(ctx context.Context, name string, version uint, stubGroup string) (*types.DeploymentWithRelated, error) {
+
+func (r *middlewareRepoForTest) GetDeploymentByStubGroup(ctx context.Context, version uint, stubGroup string) (*types.DeploymentWithRelated, error) {
 	return &types.DeploymentWithRelated{
+		Deployment: types.Deployment{
+			Name: r.deployName,
+		},
 		Stub: *r.stub,
 	}, nil
 }
 
 func TestSubdomainMiddleware(t *testing.T) {
 	tests := []struct {
-		name     string
-		host     string
-		stubType types.StubType
-		expected map[string]string
+		name       string
+		host       string
+		deployName string
+		stubType   types.StubType
+		expected   map[string]string
 	}{
 		{
-			name:     "subdomain-with-name-hash",
-			host:     "task2-7a7db8c.app.example.com",
-			stubType: "taskqueue/deployment",
+			name:       "subdomain-with-name-hash",
+			host:       "task2-7a7db8c.app.example.com",
+			deployName: "task2",
+			stubType:   "taskqueue/deployment",
 			expected: map[string]string{
 				"path": "/taskqueue/task2",
 			},
 		},
 		{
-			name:     "subdomain-with-name-hash-and-latest",
-			host:     "task2-7a7db8c-latest.app.example.com",
-			stubType: "taskqueue/deployment",
+			name:       "subdomain-with-name-hash-and-latest",
+			host:       "task2-7a7db8c-latest.app.example.com",
+			deployName: "task2",
+			stubType:   "taskqueue/deployment",
 			expected: map[string]string{
 				"path": "/taskqueue/task2/latest",
 			},
 		},
 		{
-			name:     "subdomain-with-name-hash-and-version",
-			host:     "task2-7a7db8c-v1.app.example.com",
-			stubType: "taskqueue/deployment",
+			name:       "subdomain-with-name-hash-and-version",
+			host:       "task2-7a7db8c-v1.app.example.com",
+			deployName: "task2",
+			stubType:   "taskqueue/deployment",
 			expected: map[string]string{
 				"path": "/taskqueue/task2/v1",
 			},
 		},
 		{
-			name:     "subdomain-with-name-hash-and-stubid",
-			host:     "task2-7a7db8c-8f32e485-2b2e-4238-9878-490eb9b0a9d3.app.example.com",
-			stubType: "taskqueue/deployment",
+			name:       "subdomain-with-name-hash-and-stubid",
+			host:       "task2-7a7db8c-8f32e485-2b2e-4238-9878-490eb9b0a9d3.app.example.com",
+			deployName: "task2",
+			stubType:   "taskqueue/deployment",
 			expected: map[string]string{
 				"path": "/taskqueue/id/8f32e485-2b2e-4238-9878-490eb9b0a9d3",
 			},
 		},
 		{
-			name:     "subdomain-with-hyphen-name-and-hash",
-			host:     "hello-world-7a7db8c.app.example.com",
-			stubType: "taskqueue/deployment",
+			name:       "subdomain-with-hyphen-name-and-hash",
+			host:       "hello-world-7a7db8c.app.example.com",
+			deployName: "hello-world",
+			stubType:   "taskqueue/deployment",
 			expected: map[string]string{
 				"path": "/taskqueue/hello-world",
 			},
 		},
 		{
-			name:     "subdomain-with-hyphen-name-and-hash-and-version",
-			host:     "hello-world-123-7a7db8c-v3.app.example.com",
-			stubType: "taskqueue/deployment",
+			name:       "subdomain-with-hyphen-name-and-hash-and-version",
+			host:       "hello-world-123-7a7db8c-v3.app.example.com",
+			deployName: "hello-world-123",
+			stubType:   "taskqueue/deployment",
 			expected: map[string]string{
 				"path": "/taskqueue/hello-world-123/v3",
 			},
 		},
 		{
-			name:     "subdomain-with-hyphen-name-and-hash-and-latest",
-			host:     "hello-world-123-7a7db8c-latest.app.example.com",
-			stubType: "taskqueue/deployment",
+			name:       "subdomain-with-hyphen-name-and-hash-and-latest",
+			host:       "hello-world-123-7a7db8c-latest.app.example.com",
+			deployName: "hello-world-123",
+			stubType:   "taskqueue/deployment",
 			expected: map[string]string{
 				"path": "/taskqueue/hello-world-123/latest",
 			},
 		},
 		{
-			name:     "subdomain-with-hyphen-name-and-hash-and-stubid",
-			host:     "hello-world-again-and-again-7a7db8c-8f32e485-2b2e-4238-9878-490eb9b0a9d3.app.example.com",
-			stubType: "taskqueue/deployment",
+			name:       "subdomain-with-hyphen-name-and-hash-and-stubid",
+			host:       "hello-world-again-and-again-7a7db8c-8f32e485-2b2e-4238-9878-490eb9b0a9d3.app.example.com",
+			deployName: "hello-world-again-and-again",
+			stubType:   "taskqueue/deployment",
 			expected: map[string]string{
 				"path": "/taskqueue/id/8f32e485-2b2e-4238-9878-490eb9b0a9d3",
+			},
+		},
+		{
+			name:       "subdomain-with-hyphen-name-and-hash-and-version-and-deploy-name",
+			host:       "hello-world-again-and-again-7a7db8c-v10.app.example.com",
+			deployName: "my-name",
+			stubType:   "taskqueue/deployment",
+			expected: map[string]string{
+				"path": "/taskqueue/my-name/v10",
 			},
 		},
 	}
@@ -104,6 +127,7 @@ func TestSubdomainMiddleware(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			e := echo.New()
 			repo := &middlewareRepoForTest{
+				deployName: test.deployName,
 				stub: &types.Stub{
 					Type: test.stubType,
 				},
