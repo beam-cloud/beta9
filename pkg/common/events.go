@@ -171,7 +171,7 @@ retry:
 			return
 
 		case err := <-errs:
-			log.Printf("error with eventbus subscription: %v\n", err)
+			log.Printf("Error with eventbus subscription: %v\n", err)
 			break retry
 		}
 	}
