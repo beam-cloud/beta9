@@ -18,6 +18,7 @@ import (
 )
 
 var (
+	ErrNilMessage       = errors.New("redis: nil message")
 	ErrChannelClosed    = errors.New("redis: channel closed")
 	ErrConnectionIssue  = errors.New("redis: connection issue")
 	ErrUnknownRedisMode = errors.New("redis: unknown mode")
@@ -235,6 +236,11 @@ func (r *RedisClient) handleChannelSubs(
 		case message, ok := <-ch:
 			if !ok {
 				errCh <- ErrChannelClosed
+				return
+			}
+
+			if message == nil {
+				errCh <- ErrNilMessage
 				return
 			}
 
