@@ -83,7 +83,7 @@ func TestBuildInvokeURL(t *testing.T) {
 				Version: uint(23),
 			},
 			invokeType: "domain",
-			want:       "https://app2-fffffff-20a3f632-a5f8-4013-a2ac-4ab5c80912c7.app.example.com",
+			want:       "https://20a3f632-a5f8-4013-a2ac-4ab5c80912c7.app.example.com",
 		},
 		{
 			name:        "should return domain based private url",
@@ -136,7 +136,7 @@ func TestBuildInvokeURL(t *testing.T) {
 				Version: uint(25),
 			},
 			invokeType: "domain",
-			want:       "https://app2-eeeeeee-aff86f02-c968-47a9-9132-0bde826b0aca.app.example.com",
+			want:       "https://aff86f02-c968-47a9-9132-0bde826b0aca.app.example.com",
 		},
 	}
 

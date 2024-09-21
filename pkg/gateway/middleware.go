@@ -10,18 +10,20 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 )
 
 var (
 	subdomainRegex *regexp.Regexp = regexp.MustCompile(
 		`^` +
-			`(?P<name>[a-zA-Z0-9-]+)-` +
-			`(?P<hash>[a-zA-Z0-9]{7})` +
-			`(?:-(?P<version>v[0-9]+|latest|[a-f0-9-]{36}))?` + // Version is optional. Will default to latest version.
-			`$`,
+			`(?:` +
+			`(?P<StubGroup>[a-zA-Z0-9-]+-[a-zA-Z0-9]{7})(?:-(?P<Version>v[0-9]+|latest))?` + // Matches StubGroup-Version. Version is optional.
+			`|` +
+			`(?P<StubID>[a-f0-9-]{36})` + // Matches Stub ID
+			`)$`,
 	)
+
+	ErrSubdomainDoesNotMatchRegex = errors.New("subdomain does not match regex")
 )
 
 type SubdomainBackendRepo interface {
@@ -32,18 +34,18 @@ type SubdomainBackendRepo interface {
 // subdomainMiddleware is a middleware that parses the subdomain from the request and routes it to the correct handler.
 //
 // The expected subdomain format is one of the following:
-// - "<name>-<hash>-<version>.<baseDomain>"
-// - "<name>-<hash>.<baseDomain>"
+// - <stubGroup>-<version>.<baseDomain>
+// - <stubId>.<baseDomain>
 //
-// The middleware extracts the subdomain parts and locates the appropriate stub based on the parsed subdomain,
-// then routes the request to the corresponding handler. If the subdomain does not match the expected format,
-// or if the stub cannot be found, the middleware will pass the request.
+// The middleware extracts the stub group and optionally the version, or the stub id from the subdomain. It then fetches
+// the corresponding stub or deployment, builds a path, and then routes the request to the corresponding handler. If the
+// subdomain does not match the expected format, or if the stub cannot be found, the middleware will pass the request.
 //
 // Example subdomains that can be parsed:
 // - myapp-7a7db8c.app.example.com         // No version, defaults to "latest"
 // - myapp-7a7db8c-latest.app.example.com  // "latest" version
 // - myapp-7a7db8c-v1.app.example.com      // "v1" as the version
-// - myapp-7a7db8c-8f32e485-2b2e-4238-9878-490eb9b0a9d3.app.example.com // Stub ID as the version
+// - 8f32e485-2b2e-4238-9878-490eb9b0a9d3.app.example.com // Stub ID as the version
 func subdomainMiddleware(externalURL string, backendRepo SubdomainBackendRepo) echo.MiddlewareFunc {
 	baseDomain := parseHostFromURL(externalURL)
 
@@ -54,7 +56,7 @@ func subdomainMiddleware(externalURL string, backendRepo SubdomainBackendRepo) e
 				return next(ctx)
 			}
 
-			fields, err := parseSubdomainFields(subdomainRegex, subdomain)
+			fields, err := parseSubdomainFields(subdomain)
 			if err != nil {
 				return next(ctx)
 			}
@@ -80,6 +82,7 @@ func subdomainMiddleware(externalURL string, backendRepo SubdomainBackendRepo) e
 type SubdomainFields struct {
 	Name      string
 	Version   string
+	StubId    string
 	StubGroup string
 }
 
@@ -91,35 +94,34 @@ func parseSubdomain(host, baseDomain string) string {
 	return ""
 }
 
-func parseSubdomainFields(re *regexp.Regexp, subdomain string) (*SubdomainFields, error) {
-	match := re.FindStringSubmatch(subdomain)
+func parseSubdomainFields(subdomain string) (*SubdomainFields, error) {
+	match := subdomainRegex.FindStringSubmatch(subdomain)
 	if len(match) == 0 {
-		return nil, errors.New("subdomain does not match regex")
+		return nil, ErrSubdomainDoesNotMatchRegex
 	}
 
 	fields := make(map[string]string)
-	for i, name := range re.SubexpNames() {
+	for i, name := range subdomainRegex.SubexpNames() {
 		if i != 0 && name != "" {
 			fields[name] = match[i]
 		}
 	}
 
-	if fields["name"] == "" || fields["hash"] == "" {
-		return nil, errors.New("subdomain does not contain required fields")
-	}
-
 	return &SubdomainFields{
-		Name:      fields["name"],
-		StubGroup: fields["name"] + "-" + fields["hash"],
-		Version:   fields["version"],
+		StubId:    fields["StubID"],
+		StubGroup: fields["StubGroup"],
+		Version:   fields["Version"],
 	}, nil
 }
 
 func getStubForSubdomain(ctx context.Context, repo SubdomainBackendRepo, fields *SubdomainFields) (*types.Stub, error) {
-	if isValidExternalID(fields.Version) {
-		stubRelated, err := repo.GetStubByExternalId(ctx, fields.Version)
+	if fields.StubId != "" {
+		stubRelated, err := repo.GetStubByExternalId(ctx, fields.StubId)
 		if err != nil {
 			return nil, err
+		}
+		if stubRelated == nil {
+			return nil, errors.New("stub not found")
 		}
 
 		return &stubRelated.Stub, nil
@@ -155,8 +157,8 @@ func buildHandlerPath(stub *types.Stub, fields *SubdomainFields, extraPaths ...s
 
 	if stubConfig, err := stub.UnmarshalConfig(); err == nil && !stubConfig.Authorized {
 		pathSegments = append(pathSegments, "public", stub.ExternalId)
-	} else if isValidExternalID(fields.Version) {
-		pathSegments = append(pathSegments, "id", fields.Version)
+	} else if fields.StubId != "" {
+		pathSegments = append(pathSegments, "id", fields.StubId)
 	} else {
 		pathSegments = append(pathSegments, fields.Name, fields.Version)
 	}
@@ -177,9 +179,4 @@ func parseHostFromURL(s string) string {
 	}
 
 	return parsedURL.Hostname()
-}
-
-func isValidExternalID(s string) bool {
-	_, err := uuid.Parse(s)
-	return err == nil
 }

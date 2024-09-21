@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -37,86 +36,77 @@ func TestSubdomainMiddleware(t *testing.T) {
 		name       string
 		host       string
 		deployName string
-		stubType   types.StubType
+		stubType   string
 		expected   map[string]string
 	}{
 		{
-			name:       "subdomain-with-name-hash",
+			name:       "name-and-hash",
 			host:       "task2-7a7db8c.app.example.com",
 			deployName: "task2",
-			stubType:   "taskqueue/deployment",
+			stubType:   types.StubTypeTaskQueueDeployment,
 			expected: map[string]string{
 				"path": "/taskqueue/task2",
 			},
 		},
 		{
-			name:       "subdomain-with-name-hash-and-latest",
+			name:       "name-hash-and-latest-version",
 			host:       "task2-7a7db8c-latest.app.example.com",
 			deployName: "task2",
-			stubType:   "taskqueue/deployment",
+			stubType:   types.StubTypeTaskQueueDeployment,
 			expected: map[string]string{
 				"path": "/taskqueue/task2/latest",
 			},
 		},
 		{
-			name:       "subdomain-with-name-hash-and-version",
+			name:       "name-hash-and-specific-version",
 			host:       "task2-7a7db8c-v1.app.example.com",
 			deployName: "task2",
-			stubType:   "taskqueue/deployment",
+			stubType:   types.StubTypeTaskQueueDeployment,
 			expected: map[string]string{
 				"path": "/taskqueue/task2/v1",
 			},
 		},
 		{
-			name:       "subdomain-with-name-hash-and-stubid",
-			host:       "task2-7a7db8c-8f32e485-2b2e-4238-9878-490eb9b0a9d3.app.example.com",
+			name:       "stub-id",
+			host:       "8f32e485-2b2e-4238-9878-490eb9b0a9d3.app.example.com",
 			deployName: "task2",
-			stubType:   "taskqueue/deployment",
+			stubType:   types.StubTypeTaskQueueDeployment,
 			expected: map[string]string{
 				"path": "/taskqueue/id/8f32e485-2b2e-4238-9878-490eb9b0a9d3",
 			},
 		},
 		{
-			name:       "subdomain-with-hyphen-name-and-hash",
+			name:       "hyphened-name-and-hash",
 			host:       "hello-world-7a7db8c.app.example.com",
 			deployName: "hello-world",
-			stubType:   "taskqueue/deployment",
+			stubType:   types.StubTypeTaskQueueDeployment,
 			expected: map[string]string{
 				"path": "/taskqueue/hello-world",
 			},
 		},
 		{
-			name:       "subdomain-with-hyphen-name-and-hash-and-version",
+			name:       "hyphened-name-hash-and-specific-version",
 			host:       "hello-world-123-7a7db8c-v3.app.example.com",
 			deployName: "hello-world-123",
-			stubType:   "taskqueue/deployment",
+			stubType:   types.StubTypeTaskQueueDeployment,
 			expected: map[string]string{
 				"path": "/taskqueue/hello-world-123/v3",
 			},
 		},
 		{
-			name:       "subdomain-with-hyphen-name-and-hash-and-latest",
+			name:       "hyphened-name-hash-and-latest-version",
 			host:       "hello-world-123-7a7db8c-latest.app.example.com",
 			deployName: "hello-world-123",
-			stubType:   "taskqueue/deployment",
+			stubType:   types.StubTypeTaskQueueDeployment,
 			expected: map[string]string{
 				"path": "/taskqueue/hello-world-123/latest",
 			},
 		},
 		{
-			name:       "subdomain-with-hyphen-name-and-hash-and-stubid",
-			host:       "hello-world-again-and-again-7a7db8c-8f32e485-2b2e-4238-9878-490eb9b0a9d3.app.example.com",
-			deployName: "hello-world-again-and-again",
-			stubType:   "taskqueue/deployment",
-			expected: map[string]string{
-				"path": "/taskqueue/id/8f32e485-2b2e-4238-9878-490eb9b0a9d3",
-			},
-		},
-		{
-			name:       "subdomain-with-hyphen-name-and-hash-and-version-and-deploy-name",
+			name:       "hyphened-name-hash-and-specific-version-with-deployment-name",
 			host:       "hello-world-again-and-again-7a7db8c-v10.app.example.com",
 			deployName: "my-name",
-			stubType:   "taskqueue/deployment",
+			stubType:   types.StubTypeTaskQueueDeployment,
 			expected: map[string]string{
 				"path": "/taskqueue/my-name/v10",
 			},
@@ -129,7 +119,7 @@ func TestSubdomainMiddleware(t *testing.T) {
 			repo := &middlewareRepoForTest{
 				deployName: test.deployName,
 				stub: &types.Stub{
-					Type: test.stubType,
+					Type: types.StubType(test.stubType),
 				},
 			}
 
@@ -211,51 +201,52 @@ func TestParseSubdomainFields(t *testing.T) {
 		expectedErr error
 	}{
 		{
-			subdomain: "task1-9a7dbcc",
+			subdomain: "app1-9a7dbcc",
 			expected: &SubdomainFields{
-				Name:      "task1",
-				StubGroup: "task1-9a7dbcc",
-				Version:   "",
+				StubGroup: "app1-9a7dbcc",
 			},
 		},
 		{
-
-			subdomain: "task2-7a7db8c-latest",
+			subdomain: "app2-7a7db8c-latest",
 			expected: &SubdomainFields{
-				Name:      "task2",
-				StubGroup: "task2-7a7db8c",
+				StubGroup: "app2-7a7db8c",
 				Version:   "latest",
 			},
 		},
 		{
-			subdomain: "task3-7a7db8c-v1",
+			subdomain: "my-app-7a7db8c-v1",
 			expected: &SubdomainFields{
-				Name:      "task3",
-				StubGroup: "task3-7a7db8c",
+				StubGroup: "my-app-7a7db8c",
 				Version:   "v1",
 			},
 		},
 		{
-			subdomain: "task4-4b7df8c-8f32e485-2b2e-4238-9878-490eb9b0a9d3",
+			subdomain: "8f32e485-2b2e-4238-9878-490eb9b0a9d3",
 			expected: &SubdomainFields{
-				Name:      "task4",
-				StubGroup: "task4-4b7df8c",
-				Version:   "8f32e485-2b2e-4238-9878-490eb9b0a9d3",
+				StubId: "8f32e485-2b2e-4238-9878-490eb9b0a9d3",
 			},
 		},
 		{
-			subdomain:   "task5",
-			expectedErr: errors.New("subdomain does not match regex"),
+			subdomain:   "invalid-subdomain",
+			expectedErr: ErrSubdomainDoesNotMatchRegex,
 		},
 		{
-			subdomain:   "task6-8f32e485-2b2e-4238-9878-490eb9b0a9d3",
-			expectedErr: errors.New("subdomain does not match regex"),
+			subdomain:   "invalid-123f",
+			expectedErr: ErrSubdomainDoesNotMatchRegex,
+		},
+		{
+			subdomain:   "invalid-2b2e-4238-9878-111122222333",
+			expectedErr: ErrSubdomainDoesNotMatchRegex,
+		},
+		{
+			subdomain:   "invalid-8f32e485-2b2e-4238-9878-490eb9b0a9d3",
+			expectedErr: ErrSubdomainDoesNotMatchRegex,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.subdomain, func(t *testing.T) {
-			fields, err := parseSubdomainFields(subdomainRegex, test.subdomain)
+			fields, err := parseSubdomainFields(test.subdomain)
 
 			if test.expectedErr != nil {
 				assert.Error(t, err)
@@ -269,40 +260,6 @@ func TestParseSubdomainFields(t *testing.T) {
 	}
 }
 
-func TestIsValidExternalId(t *testing.T) {
-	tests := []struct {
-		externalId string
-		expected   bool
-	}{
-		{
-			externalId: "task1-9a7dbcc",
-			expected:   false,
-		},
-		{
-			externalId: "1",
-			expected:   false,
-		},
-		{
-			externalId: "v1",
-			expected:   false,
-		},
-		{
-			externalId: "8f32e485-2b2e-4238-9878-490eb9b0a9d3",
-			expected:   true,
-		},
-		{
-			externalId: "565fe2e4-c0ae-4153-813a-97a8eb818422",
-			expected:   true,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.externalId, func(t *testing.T) {
-			assert.Equal(t, test.expected, isValidExternalID(test.externalId))
-		})
-	}
-}
-
 func TestBuildHandlerPath(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -312,40 +269,46 @@ func TestBuildHandlerPath(t *testing.T) {
 		expected   string
 	}{
 		{
-			name: "endpoint-noauth-with-extra-paths",
+			name: "public-path",
 			stub: &types.Stub{
-				Type:       "endpoint/deployment",
+				Type:       types.StubType(types.StubTypeEndpointDeployment),
 				Config:     `{"authorized": false}`,
 				ExternalId: "49a41870-bb61-4c45-aad1-68aaa7073c2e",
 			},
+			expected: "/endpoint/public/49a41870-bb61-4c45-aad1-68aaa7073c2e",
+		},
+		{
+			name: "stub-id-path",
+			stub: &types.Stub{
+				Type: types.StubType(types.StubTypeEndpointDeployment),
+			},
+			fields: &SubdomainFields{
+				StubId: "4ec446ce-3fd1-41a8-9f70-4d25b9224821",
+			},
+			expected: "/endpoint/id/4ec446ce-3fd1-41a8-9f70-4d25b9224821",
+		},
+		{
+			name: "name-and-version-path",
+			stub: &types.Stub{
+				Type: types.StubType(types.StubTypeTaskQueueDeployment),
+			},
+			fields: &SubdomainFields{
+				Name:    "tq",
+				Version: "v55",
+			},
+			expected: "/taskqueue/tq/v55",
+		},
+		{
+			name: "name-and-version-path-with-extra-paths",
+			stub: &types.Stub{
+				Type: types.StubType(types.StubTypeASGIDeployment),
+			},
+			fields: &SubdomainFields{
+				Name:    "tq",
+				Version: "v55",
+			},
 			extraPaths: []string{"api", "users"},
-			expected:   "/endpoint/public/49a41870-bb61-4c45-aad1-68aaa7073c2e/api/users",
-		},
-		{
-			name: "endpoint-with-stubid-for-version",
-			stub: &types.Stub{
-				Type: "endpoint/deployment",
-			},
-			fields: &SubdomainFields{
-				Name:      "handler",
-				StubGroup: "handler-332db1c",
-				Version:   "4ec446ce-3fd1-41a8-9f70-4d25b9224821",
-			},
-			extraPaths: []string{},
-			expected:   "/endpoint/id/4ec446ce-3fd1-41a8-9f70-4d25b9224821",
-		},
-		{
-			name: "taskqueue-with-normal-version",
-			stub: &types.Stub{
-				Type: "taskqueue/deployment",
-			},
-			fields: &SubdomainFields{
-				Name:      "tq",
-				StubGroup: "tq-9a7dbcc",
-				Version:   "v55",
-			},
-			extraPaths: []string{},
-			expected:   "/taskqueue/tq/v55",
+			expected:   "/asgi/tq/v55/api/users",
 		},
 	}
 
