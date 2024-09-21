@@ -3,14 +3,21 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
+)
+
+const (
+	handlerKeyTtl time.Duration = 5 * time.Minute
 )
 
 var (
@@ -46,7 +53,7 @@ type SubdomainBackendRepo interface {
 // - myapp-7a7db8c-latest.app.example.com  // "latest" version
 // - myapp-7a7db8c-v1.app.example.com      // "v1" as the version
 // - 8f32e485-2b2e-4238-9878-490eb9b0a9d3.app.example.com // Stub ID as the version
-func subdomainMiddleware(externalURL string, backendRepo SubdomainBackendRepo) echo.MiddlewareFunc {
+func subdomainMiddleware(externalURL string, backendRepo SubdomainBackendRepo, redisClient *common.RedisClient) echo.MiddlewareFunc {
 	baseDomain := parseHostFromURL(externalURL)
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -56,21 +63,30 @@ func subdomainMiddleware(externalURL string, backendRepo SubdomainBackendRepo) e
 				return next(ctx)
 			}
 
-			fields, err := parseSubdomainFields(subdomain)
-			if err != nil {
-				return next(ctx)
+			handlerKey := fmt.Sprintf("middleware:subdomain:%s:handler", subdomain)
+			handlerPath := redisClient.Get(ctx.Request().Context(), handlerKey).Val()
+
+			if handlerPath == "" {
+				fmt.Println("Looking up handler path in database")
+				fields, err := parseSubdomainFields(subdomain)
+				if err != nil {
+					return next(ctx)
+				}
+
+				stub, err := getStubForSubdomain(ctx.Request().Context(), backendRepo, fields)
+				if err != nil {
+					return next(ctx)
+				}
+
+				handlerPath = buildHandlerPath(stub, fields)
+				redisClient.Set(ctx.Request().Context(), handlerKey, handlerPath, handlerKeyTtl)
 			}
 
-			stub, err := getStubForSubdomain(ctx.Request().Context(), backendRepo, fields)
-			if err != nil {
-				return next(ctx)
-			}
-
-			handlerPath := buildHandlerPath(stub, fields, ctx.Request().URL.Path)
-			ctx.Echo().Router().Find(ctx.Request().Method, handlerPath, ctx)
+			handlerPathFull := path.Join("/", handlerPath, ctx.Request().URL.Path)
+			ctx.Echo().Router().Find(ctx.Request().Method, handlerPathFull, ctx)
 
 			if handler := ctx.Handler(); handler != nil {
-				ctx.Request().URL.Path = handlerPath
+				ctx.Request().URL.Path = handlerPathFull
 				return handler(ctx)
 			}
 

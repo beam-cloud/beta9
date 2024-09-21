@@ -17,7 +17,7 @@ func TestBuildInvokeURL(t *testing.T) {
 		want        string
 	}{
 		{
-			name:        "should return non-public url when stubConfig is invalid",
+			name:        "should return path url for private deployments",
 			externalUrl: "http://app.example.com",
 			stub: &types.StubWithRelated{
 				Stub: types.Stub{
@@ -30,11 +30,11 @@ func TestBuildInvokeURL(t *testing.T) {
 				Name:    "app1",
 				Version: uint(11),
 			},
-			invokeType: "path",
+			invokeType: InvokeUrlTypePath,
 			want:       "http://app.example.com/schedule/app1/v11",
 		},
 		{
-			name:        "should return path based public url",
+			name:        "should return path url for public deployments",
 			externalUrl: "https://app.example.com",
 			stub: &types.StubWithRelated{
 				Stub: types.Stub{
@@ -47,28 +47,28 @@ func TestBuildInvokeURL(t *testing.T) {
 				Name:    "app2",
 				Version: uint(22),
 			},
-			invokeType: "path",
-			want:       "https://app.example.com/public/64741d05-2273-422a-8424-2e0760e539d3",
+			invokeType: InvokeUrlTypePath,
+			want:       "https://app.example.com/endpoint/public/64741d05-2273-422a-8424-2e0760e539d3",
 		},
 		{
-			name:        "should return path based private url",
+			name:        "should return path url for serves",
 			externalUrl: "https://app.example.com",
 			stub: &types.StubWithRelated{
 				Stub: types.Stub{
-					ExternalId: "20a3f632-a5f8-4013-a2ac-4ab5c80912c7",
-					Config:     `{"authorized": true}`,
-					Type:       types.StubType(types.StubTypeEndpointDeployment),
+					ExternalId: "aff86f02-c968-47a9-9132-0bde826b0aca",
+					Config:     `{}`,
+					Type:       types.StubType(types.StubTypeASGIServe),
 				},
 			},
 			deployment: &types.Deployment{
 				Name:    "app2",
-				Version: uint(23),
+				Version: uint(28),
 			},
-			invokeType: "path",
-			want:       "https://app.example.com/endpoint/app2/v23",
+			invokeType: InvokeUrlTypePath,
+			want:       "https://app.example.com/asgi/id/aff86f02-c968-47a9-9132-0bde826b0aca",
 		},
 		{
-			name:        "should return domain based public url",
+			name:        "should return domain url for deployments",
 			externalUrl: "https://app.example.com",
 			stub: &types.StubWithRelated{
 				Stub: types.Stub{
@@ -82,46 +82,11 @@ func TestBuildInvokeURL(t *testing.T) {
 				Name:    "app2",
 				Version: uint(23),
 			},
-			invokeType: "domain",
-			want:       "https://20a3f632-a5f8-4013-a2ac-4ab5c80912c7.app.example.com",
+			invokeType: InvokeUrlTypeSubdomain,
+			want:       "https://app2-fffffff-v23.app.example.com",
 		},
 		{
-			name:        "should return domain based private url",
-			externalUrl: "https://app.example.com",
-			stub: &types.StubWithRelated{
-				Stub: types.Stub{
-					ExternalId: "44ad2b42-69be-49f8-806d-e0ee644f9341",
-					Config:     `{"authorized": true}`,
-					Type:       types.StubType(types.StubTypeASGIDeployment),
-					Group:      "app2-fffffff",
-				},
-			},
-			deployment: &types.Deployment{
-				Name:    "app2",
-				Version: uint(24),
-			},
-			invokeType: "domain",
-			want:       "https://app2-fffffff-v24.app.example.com",
-		},
-		{
-			name:        "should return path based serve url",
-			externalUrl: "https://app.example.com",
-			stub: &types.StubWithRelated{
-				Stub: types.Stub{
-					ExternalId: "aff86f02-c968-47a9-9132-0bde826b0aca",
-					Config:     `{}`,
-					Type:       types.StubType(types.StubTypeASGIServe),
-				},
-			},
-			deployment: &types.Deployment{
-				Name:    "app2",
-				Version: uint(28),
-			},
-			invokeType: "path",
-			want:       "https://app.example.com/asgi/id/aff86f02-c968-47a9-9132-0bde826b0aca",
-		},
-		{
-			name:        "should return domain based serve url",
+			name:        "should return domain url for serves",
 			externalUrl: "https://app.example.com",
 			stub: &types.StubWithRelated{
 				Stub: types.Stub{
@@ -135,7 +100,7 @@ func TestBuildInvokeURL(t *testing.T) {
 				Name:    "app2",
 				Version: uint(25),
 			},
-			invokeType: "domain",
+			invokeType: InvokeUrlTypeSubdomain,
 			want:       "https://aff86f02-c968-47a9-9132-0bde826b0aca.app.example.com",
 		},
 	}
