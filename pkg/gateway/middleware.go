@@ -67,7 +67,6 @@ func subdomainMiddleware(externalURL string, backendRepo SubdomainBackendRepo, r
 			handlerPath := redisClient.Get(ctx.Request().Context(), handlerKey).Val()
 
 			if handlerPath == "" {
-				fmt.Println("Looking up handler path in database")
 				fields, err := parseSubdomainFields(subdomain)
 				if err != nil {
 					return next(ctx)
