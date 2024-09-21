@@ -6,10 +6,26 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 )
+
+func NewRedisClientForTest() (*common.RedisClient, error) {
+	s, err := miniredis.Run()
+	if err != nil {
+		return nil, err
+	}
+
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
+	if err != nil {
+		return nil, err
+	}
+
+	return rdb, nil
+}
 
 type middlewareRepoForTest struct {
 	deployName string
@@ -115,8 +131,11 @@ func TestSubdomainMiddleware(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			redisClient, err := NewRedisClientForTest()
+			assert.NoError(t, err)
+
 			e := echo.New()
-			repo := &middlewareRepoForTest{
+			backendRepo := &middlewareRepoForTest{
 				deployName: test.deployName,
 				stub: &types.Stub{
 					Type: types.StubType(test.stubType),
@@ -134,7 +153,7 @@ func TestSubdomainMiddleware(t *testing.T) {
 			g.GET("/:deploymentName/v:version", handler)
 			g.GET("/id/:stubId", handler)
 
-			mw := subdomainMiddleware("https://app.example.com", repo)
+			mw := subdomainMiddleware("https://app.example.com", backendRepo, redisClient)
 
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.Host = test.host
@@ -142,7 +161,7 @@ func TestSubdomainMiddleware(t *testing.T) {
 
 			c := e.NewContext(req, rec)
 			h := mw(handler)
-			err := h(c)
+			err = h(c)
 			assert.NoError(t, err)
 			e.Shutdown(context.Background())
 		})

@@ -155,7 +155,7 @@ func (g *Gateway) initHttp() error {
 		AllowHeaders: g.Config.GatewayService.HTTP.CORS.AllowedHeaders,
 		AllowMethods: g.Config.GatewayService.HTTP.CORS.AllowedMethods,
 	}))
-	e.Use(subdomainMiddleware(g.Config.GatewayService.ExternalURL, g.BackendRepo))
+	e.Use(subdomainMiddleware(g.Config.GatewayService.ExternalURL, g.BackendRepo, g.RedisClient))
 	e.Use(middleware.Recover())
 
 	// Accept both HTTP/2 and HTTP/1
