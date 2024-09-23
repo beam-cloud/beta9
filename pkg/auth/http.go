@@ -24,7 +24,7 @@ func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repo
 
 			if authHeader == "" || tokenKey == "" {
 				// Check query param for token
-				tokenKey = req.URL.Query().Get("token")
+				tokenKey = req.URL.Query().Get("auth_token")
 				if tokenKey == "" {
 					return next(c)
 				}
