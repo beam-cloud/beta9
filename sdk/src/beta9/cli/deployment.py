@@ -60,7 +60,7 @@ def common(**_):
 @click.option(
     "--url-type",
     help="The type of URL to get back.",
-    default="subdomain",
+    default="path",
     type=click.Choice(["subdomain", "path"]),
 )
 @click.pass_context
@@ -102,7 +102,7 @@ def management():
 @click.option(
     "--url-type",
     help="The type of URL to get back.",
-    default="subdomain",
+    default="path",
     type=click.Choice(["subdomain", "path"]),
 )
 @extraclick.pass_service_client
