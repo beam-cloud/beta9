@@ -81,8 +81,6 @@ class FileSyncer:
 
         patterns = []
 
-        terminal.header("ignore_file_path", self.ignore_file_path)
-        terminal.header("ignore_file_path.is_file()", self.ignore_file_path.is_file())
         if self.ignore_file_path.is_file():
             with self.ignore_file_path.open() as file:
                 patterns = [line.strip() for line in file.readlines() if line.strip()]
@@ -119,7 +117,6 @@ class FileSyncer:
 
         self._init_ignore_file()
         self.ignore_patterns = self._read_ignore_file()
-        terminal.header("ignore_patterns", self.ignore_patterns)
         temp_zip_name = tempfile.NamedTemporaryFile(delete=False).name
 
         with zipfile.ZipFile(temp_zip_name, "w") as zipf:
