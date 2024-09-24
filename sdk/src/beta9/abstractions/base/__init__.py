@@ -1,5 +1,6 @@
 import inspect
 import os
+import sys
 from abc import ABC
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,9 +70,10 @@ class BaseAbstraction(ABC):
         frames = inspect.stack()
         frame = frames[-1]
 
-        if frame.code_context and any(
-            substr in frame.code_context[0] for substr in ("import beam", "from beam")
-        ):
+        if (
+            frame.code_context
+            and any(substr in frame.code_context[0] for substr in ("import beam", "from beam"))
+        ) or "beam" in sys.modules:
 
             @dataclass
             class SDKSettings(config.SDKSettings):

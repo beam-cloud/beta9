@@ -1,5 +1,6 @@
 import inspect
 import os
+import sys
 import tempfile
 import time
 from queue import Empty, Queue
@@ -213,7 +214,7 @@ class RunnerAbstraction(BaseAbstraction):
         if hasattr(module, "__file__"):
             module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
-        elif in_jupyter():
+        elif in_ipython_env():
             tmp_file = create_tmp_jupyter_file(module._ih)
             module_name = tmp_file.name.split("/")[-1].removesuffix(".py")
             self.tmp_files.append(tmp_file)
@@ -395,7 +396,10 @@ class RunnerAbstraction(BaseAbstraction):
         return True
 
 
-def in_jupyter() -> bool:
+def in_ipython_env() -> bool:
+    if "google.colab" in sys.modules:
+        return True
+
     try:
         from IPython import get_ipython
 

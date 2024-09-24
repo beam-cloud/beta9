@@ -38,6 +38,8 @@ venv
 *.pyc
 __pycache__
 .DS_Store
+.config
+drive/MyDrive
 """
 
 
@@ -68,6 +70,7 @@ class FileSyncer:
 
         terminal.detail(f"Writing {IGNORE_FILE_NAME} file")
         with self.ignore_file_path.open(mode="w") as f:
+            terminal.detail(IGNORE_FILE_CONTENTS)
             f.writelines(IGNORE_FILE_CONTENTS)
 
     def _read_ignore_file(self) -> list:
@@ -78,6 +81,8 @@ class FileSyncer:
 
         patterns = []
 
+        terminal.header("ignore_file_path", self.ignore_file_path)
+        terminal.header("ignore_file_path.is_file()", self.ignore_file_path.is_file())
         if self.ignore_file_path.is_file():
             with self.ignore_file_path.open() as file:
                 patterns = [line.strip() for line in file.readlines() if line.strip()]
@@ -114,12 +119,16 @@ class FileSyncer:
 
         self._init_ignore_file()
         self.ignore_patterns = self._read_ignore_file()
+        terminal.header("ignore_patterns", self.ignore_patterns)
         temp_zip_name = tempfile.NamedTemporaryFile(delete=False).name
 
         with zipfile.ZipFile(temp_zip_name, "w") as zipf:
             for file in self._collect_files():
-                zipf.write(file, os.path.relpath(file, self.root_dir))
-                terminal.detail(f"Added {file}")
+                try:
+                    zipf.write(file, os.path.relpath(file, self.root_dir))
+                    terminal.detail(f"Added {file}")
+                except OSError as e:
+                    terminal.warn(f"Failed to add {file}: {e}")
 
         size = os.path.getsize(temp_zip_name)
         hash = self._calculate_sha256(temp_zip_name)
