@@ -220,8 +220,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	log.Printf("building image with container <%v>\n", containerId)
-
 	go func() {
 		<-ctx.Done() // If user cancels the build, kill the container
 		client.Kill(containerId)
