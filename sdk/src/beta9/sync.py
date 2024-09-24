@@ -40,6 +40,10 @@ __pycache__
 .DS_Store
 .config
 drive/MyDrive
+.coverage
+.pytest_cache
+.ruff_cache
+.dockerignore
 """
 
 
