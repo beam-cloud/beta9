@@ -70,7 +70,6 @@ class FileSyncer:
 
         terminal.detail(f"Writing {IGNORE_FILE_NAME} file")
         with self.ignore_file_path.open(mode="w") as f:
-            terminal.detail(IGNORE_FILE_CONTENTS)
             f.writelines(IGNORE_FILE_CONTENTS)
 
     def _read_ignore_file(self) -> list:
