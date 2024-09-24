@@ -235,7 +235,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
 			return err
 		}
-		log.Printf("container <%v> status: %v\n", containerId, r)
 
 		if r.Running {
 			buildContainerRunning = true
