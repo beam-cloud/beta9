@@ -44,6 +44,7 @@ drive/MyDrive
 .pytest_cache
 .ruff_cache
 .dockerignore
+.ipynb_checkpoints
 """
 
 
