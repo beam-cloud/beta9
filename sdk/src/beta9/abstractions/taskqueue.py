@@ -168,7 +168,7 @@ class _CallableWrapper(DeployableMixin):
         return self.func(*args, **kwargs)
 
     @with_grpc_error_handling
-    def serve(self, timeout: int = 0, url_type: str = "subdomain"):
+    def serve(self, timeout: int = 0, url_type: str = ""):
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=TASKQUEUE_SERVE_STUB_TYPE, force_create_stub=True
         ):

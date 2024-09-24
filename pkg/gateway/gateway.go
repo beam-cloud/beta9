@@ -31,6 +31,7 @@ import (
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	gatewayMiddleware "github.com/beam-cloud/beta9/pkg/gateway/middleware"
 	gatewayservices "github.com/beam-cloud/beta9/pkg/gateway/services"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -155,7 +156,7 @@ func (g *Gateway) initHttp() error {
 		AllowHeaders: g.Config.GatewayService.HTTP.CORS.AllowedHeaders,
 		AllowMethods: g.Config.GatewayService.HTTP.CORS.AllowedMethods,
 	}))
-	e.Use(subdomainMiddleware(g.Config.GatewayService.ExternalURL, g.BackendRepo, g.RedisClient))
+	e.Use(gatewayMiddleware.Subdomain(g.Config.GatewayService.ExternalURL, g.BackendRepo, g.RedisClient))
 	e.Use(middleware.Recover())
 
 	// Accept both HTTP/2 and HTTP/1

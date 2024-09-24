@@ -101,6 +101,10 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 		return HTTPBadRequest("Failed to decode query parameters")
 	}
 
+	if filter.URLType == "" {
+		filter.URLType = g.config.GatewayService.InvokeURLType
+	}
+
 	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), filter.StubId)
 	if err != nil {
 		return HTTPInternalServerError("Failed to lookup stub")

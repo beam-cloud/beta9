@@ -116,7 +116,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.config_context: ConfigContext = get_config_context()
         self.tmp_files: List[tempfile.NamedTemporaryFile] = []
 
-    def print_invocation_snippet(self, url_type: str = "subdomain") -> None:
+    def print_invocation_snippet(self, url_type: str = "") -> None:
         """Print curl request to call deployed container URL"""
 
         res = self.gateway_stub.get_url(

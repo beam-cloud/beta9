@@ -65,6 +65,7 @@ type Deployment struct {
 	ExternalId  string       `db:"external_id" json:"external_id"`
 	Name        string       `db:"name" json:"name"`
 	Active      bool         `db:"active" json:"active"`
+	Subdomain   string       `db:"subdomain" json:"subdomain"`
 	WorkspaceId uint         `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
 	StubId      uint         `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
 	StubType    string       `db:"stub_type" json:"stub_type"`
@@ -231,7 +232,6 @@ type Stub struct {
 	ExternalId    string    `db:"external_id" json:"external_id"`
 	Name          string    `db:"name" json:"name"`
 	Type          StubType  `db:"type" json:"type"`
-	Group         string    `db:"group" json:"group"`
 	Config        string    `db:"config" json:"config"`
 	ConfigVersion uint      `db:"config_version" json:"config_version"`
 	ObjectId      uint      `db:"object_id" json:"object_id"`       // Foreign key to Object

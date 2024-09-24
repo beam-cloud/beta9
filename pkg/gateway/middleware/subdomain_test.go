@@ -38,7 +38,7 @@ func (r *middlewareRepoForTest) GetStubByExternalId(ctx context.Context, externa
 	}, nil
 }
 
-func (r *middlewareRepoForTest) GetDeploymentByStubGroup(ctx context.Context, version uint, stubGroup string) (*types.DeploymentWithRelated, error) {
+func (r *middlewareRepoForTest) GetDeploymentBySubdomain(ctx context.Context, subdomain string, version uint) (*types.DeploymentWithRelated, error) {
 	return &types.DeploymentWithRelated{
 		Deployment: types.Deployment{
 			Name: r.deployName,
@@ -61,7 +61,7 @@ func TestSubdomainMiddleware(t *testing.T) {
 			deployName: "task2",
 			stubType:   types.StubTypeTaskQueueDeployment,
 			expected: map[string]string{
-				"path": "/taskqueue/task2",
+				"path": "/taskqueue/task2/latest",
 			},
 		},
 		{
@@ -97,7 +97,7 @@ func TestSubdomainMiddleware(t *testing.T) {
 			deployName: "hello-world",
 			stubType:   types.StubTypeTaskQueueDeployment,
 			expected: map[string]string{
-				"path": "/taskqueue/hello-world",
+				"path": "/taskqueue/hello-world/latest",
 			},
 		},
 		{
@@ -153,7 +153,7 @@ func TestSubdomainMiddleware(t *testing.T) {
 			g.GET("/:deploymentName/v:version", handler)
 			g.GET("/id/:stubId", handler)
 
-			mw := subdomainMiddleware("https://app.example.com", backendRepo, redisClient)
+			mw := Subdomain("https://app.example.com", backendRepo, redisClient)
 
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.Host = test.host
@@ -222,21 +222,22 @@ func TestParseSubdomainFields(t *testing.T) {
 		{
 			subdomain: "app1-9a7dbcc",
 			expected: &SubdomainFields{
-				StubGroup: "app1-9a7dbcc",
+				Subdomain: "app1-9a7dbcc",
+				Version:   0,
 			},
 		},
 		{
 			subdomain: "app2-7a7db8c-latest",
 			expected: &SubdomainFields{
-				StubGroup: "app2-7a7db8c",
-				Version:   "latest",
+				Subdomain: "app2-7a7db8c",
+				Version:   0,
 			},
 		},
 		{
 			subdomain: "my-app-7a7db8c-v1",
 			expected: &SubdomainFields{
-				StubGroup: "my-app-7a7db8c",
-				Version:   "v1",
+				Subdomain: "my-app-7a7db8c",
+				Version:   1,
 			},
 		},
 		{
@@ -313,7 +314,7 @@ func TestBuildHandlerPath(t *testing.T) {
 			},
 			fields: &SubdomainFields{
 				Name:    "tq",
-				Version: "v55",
+				Version: 55,
 			},
 			expected: "/taskqueue/tq/v55",
 		},
@@ -324,7 +325,7 @@ func TestBuildHandlerPath(t *testing.T) {
 			},
 			fields: &SubdomainFields{
 				Name:    "tq",
-				Version: "v55",
+				Version: 55,
 			},
 			extraPaths: []string{"api", "users"},
 			expected:   "/asgi/tq/v55/api/users",
