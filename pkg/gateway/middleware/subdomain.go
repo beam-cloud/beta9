@@ -75,7 +75,9 @@ func Subdomain(externalURL string, backendRepo SubdomainBackendRepo, redisClient
 				}
 
 				handlerPath = buildHandlerPath(stub, fields)
-				redisClient.Set(ctx.Request().Context(), handlerKey, handlerPath, handlerKeyTtl)
+				if fields.Version > 0 || fields.StubId != "" {
+					redisClient.Set(ctx.Request().Context(), handlerKey, handlerPath, handlerKeyTtl)
+				}
 			}
 
 			handlerPathFull := path.Join("/", handlerPath, ctx.Request().URL.Path)
