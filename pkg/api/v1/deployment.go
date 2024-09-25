@@ -205,6 +205,13 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 
 func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRelated, ctx echo.Context) error {
 	for _, deployment := range deployments {
+		// Stop scheduled job
+		if deployment.StubType == types.StubTypeScheduledJobDeployment {
+			if scheduledJob, err := g.backendRepo.GetScheduledJob(ctx.Request().Context(), deployment.Id); err == nil {
+				g.backendRepo.DeleteScheduledJob(ctx.Request().Context(), scheduledJob)
+			}
+		}
+
 		// Stop active containers
 		containers, err := g.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
 		if err == nil {
