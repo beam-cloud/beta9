@@ -59,9 +59,8 @@ def common(**_):
 )
 @click.option(
     "--url-type",
-    help="The type of URL to get back.",
-    default="path",
-    type=click.Choice(["subdomain", "path"]),
+    help="The type of URL to get back. [default is determined by the server] ",
+    type=click.Choice(["host", "path"]),
 )
 @click.pass_context
 def deploy(ctx: click.Context, name: str, entrypoint: str, url_type: str):
@@ -101,9 +100,8 @@ def management():
 )
 @click.option(
     "--url-type",
-    help="The type of URL to get back.",
-    default="path",
-    type=click.Choice(["subdomain", "path"]),
+    help="The type of URL to get back. [default is determined by the server] ",
+    type=click.Choice(["host", "path"]),
 )
 @extraclick.pass_service_client
 def create_deployment(service: ServiceClient, name: str, entrypoint: str, url_type: str):

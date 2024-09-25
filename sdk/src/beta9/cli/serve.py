@@ -46,9 +46,8 @@ def common(**_):
 )
 @click.option(
     "--url-type",
-    help="The type of URL to get back.",
-    default="subdomain",
-    type=click.Choice(["subdomain", "path"]),
+    help="The type of URL to get back. [default is determined by the server] ",
+    type=click.Choice(["host", "path"]),
 )
 @extraclick.pass_service_client
 @click.pass_context

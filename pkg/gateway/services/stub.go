@@ -212,6 +212,10 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 		}, nil
 	}
 
+	if in.UrlType == "" {
+		in.UrlType = gws.appConfig.GatewayService.InvokeURLType
+	}
+
 	// Get URL for Serves
 	if stub.Type.IsServe() {
 		invokeUrl := common.BuildServeURL(gws.appConfig.GatewayService.ExternalURL, in.UrlType, stub)

@@ -91,6 +91,7 @@ type GatewayServiceConfig struct {
 	Host            string        `key:"host" json:"host"`
 	ExternalHost    string        `key:"externalHost" json:"external_host"`
 	ExternalURL     string        `key:"externalURL" json:"external_url"`
+	InvokeURLType   string        `key:"invokeURLType" json:"invoke_url_type"`
 	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
 	HTTP            HTTPConfig    `key:"http" json:"http"`
 	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`

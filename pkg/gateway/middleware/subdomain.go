@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"path"
 	"regexp"
@@ -24,7 +25,7 @@ var (
 	subdomainRegex *regexp.Regexp = regexp.MustCompile(
 		`^` +
 			`(?:` +
-			`(?P<StubGroup>[a-zA-Z0-9-]+-[a-zA-Z0-9]{7})(?:-(?P<Version>v[0-9]+|latest))?` + // Matches StubGroup-Version. Version is optional.
+			`(?P<Subdomain>[a-zA-Z0-9-]+-[a-zA-Z0-9]{7})(?:-(?P<Version>v[0-9]+|latest))?` + // Matches Subdomain-Version. Version is optional.
 			`|` +
 			`(?P<StubID>[a-f0-9-]{36})` + // Matches Stub ID
 			`)$`,
@@ -35,25 +36,21 @@ var (
 
 type SubdomainBackendRepo interface {
 	GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error)
-	GetDeploymentByStubGroup(ctx context.Context, version uint, stubGroup string) (*types.DeploymentWithRelated, error)
+	GetDeploymentBySubdomain(ctx context.Context, subdomain string, version uint) (*types.DeploymentWithRelated, error)
 }
 
-// subdomainMiddleware is a middleware that parses the subdomain from the request and routes it to the correct handler.
+// Subdomain is middleware that routes requests based on the subdomain format.
 //
-// The expected subdomain format is one of the following:
-// - <stubGroup>-<version>.<baseDomain>
-// - <stubId>.<baseDomain>
+// It extracts either a deployment's subdomain or a stub ID from the request's host.
+// Based on the extracted value, it fetches the corresponding deployment or stub,
+// builds the appropriate handler path, and invokes the corresponding handler.
 //
-// The middleware extracts the stub group and optionally the version, or the stub id from the subdomain. It then fetches
-// the corresponding stub or deployment, builds a path, and then routes the request to the corresponding handler. If the
-// subdomain does not match the expected format, or if the stub cannot be found, the middleware will pass the request.
-//
-// Example subdomains that can be parsed:
-// - myapp-7a7db8c.app.example.com         // No version, defaults to "latest"
-// - myapp-7a7db8c-latest.app.example.com  // "latest" version
-// - myapp-7a7db8c-v1.app.example.com      // "v1" as the version
-// - 8f32e485-2b2e-4238-9878-490eb9b0a9d3.app.example.com // Stub ID as the version
-func subdomainMiddleware(externalURL string, backendRepo SubdomainBackendRepo, redisClient *common.RedisClient) echo.MiddlewareFunc {
+// Supported Subdomain Formats:
+// - {subdomain}.app.example.com                  // Routes to the "latest" version of a deployment
+// - {subdomain}-latest.app.example.com           // Routes to the "latest" version of a deployment
+// - {subdomain}-v{version}.app.example.com       // Routes to a specific version of a deployment
+// - {stubId}.app.example.com                     // Routes to a specified stub, typically used for serves
+func Subdomain(externalURL string, backendRepo SubdomainBackendRepo, redisClient *common.RedisClient) echo.MiddlewareFunc {
 	baseDomain := parseHostFromURL(externalURL)
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -96,16 +93,32 @@ func subdomainMiddleware(externalURL string, backendRepo SubdomainBackendRepo, r
 
 type SubdomainFields struct {
 	Name      string
-	Version   string
+	Version   uint
 	StubId    string
-	StubGroup string
+	Subdomain string
 }
 
 func parseSubdomain(host, baseDomain string) string {
-	domain := "." + baseDomain
-	if strings.HasSuffix(host, domain) {
-		return strings.TrimSuffix(host, domain)
+	// Remove port if present
+	h, _, err := net.SplitHostPort(host)
+	if err != nil {
+		h = host // If error, assume no port
 	}
+
+	// Normalize to lower case
+	normalizedHost := strings.ToLower(h)
+	normalizedBaseDomain := strings.ToLower(baseDomain)
+
+	// If host equals baseDomain, return empty string
+	if normalizedHost == normalizedBaseDomain {
+		return ""
+	}
+
+	// Check if host ends with "." + baseDomain
+	if strings.HasSuffix(normalizedHost, "."+normalizedBaseDomain) {
+		return strings.TrimSuffix(normalizedHost, "."+normalizedBaseDomain)
+	}
+
 	return ""
 }
 
@@ -124,8 +137,8 @@ func parseSubdomainFields(subdomain string) (*SubdomainFields, error) {
 
 	return &SubdomainFields{
 		StubId:    fields["StubID"],
-		StubGroup: fields["StubGroup"],
-		Version:   fields["Version"],
+		Subdomain: fields["Subdomain"],
+		Version:   parseVersion(fields["Version"]),
 	}, nil
 }
 
@@ -142,8 +155,7 @@ func getStubForSubdomain(ctx context.Context, repo SubdomainBackendRepo, fields 
 		return &stubRelated.Stub, nil
 	}
 
-	version := parseVersion(fields.Version)
-	deployment, err := repo.GetDeploymentByStubGroup(ctx, version, fields.StubGroup)
+	deployment, err := repo.GetDeploymentBySubdomain(ctx, fields.Subdomain, fields.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +187,13 @@ func buildHandlerPath(stub *types.Stub, fields *SubdomainFields, extraPaths ...s
 	} else if fields.StubId != "" {
 		pathSegments = append(pathSegments, "id", fields.StubId)
 	} else {
-		pathSegments = append(pathSegments, fields.Name, fields.Version)
+		pathSegments = append(pathSegments, fields.Name)
+
+		if fields.Version > 0 {
+			pathSegments = append(pathSegments, fmt.Sprintf("v%d", fields.Version))
+		} else {
+			pathSegments = append(pathSegments, "latest")
+		}
 	}
 
 	pathSegments = append(pathSegments, extraPaths...)
