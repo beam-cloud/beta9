@@ -38,6 +38,13 @@ venv
 *.pyc
 __pycache__
 .DS_Store
+.config
+drive/MyDrive
+.coverage
+.pytest_cache
+.ruff_cache
+.dockerignore
+.ipynb_checkpoints
 """
 
 
@@ -118,8 +125,11 @@ class FileSyncer:
 
         with zipfile.ZipFile(temp_zip_name, "w") as zipf:
             for file in self._collect_files():
-                zipf.write(file, os.path.relpath(file, self.root_dir))
-                terminal.detail(f"Added {file}")
+                try:
+                    zipf.write(file, os.path.relpath(file, self.root_dir))
+                    terminal.detail(f"Added {file}")
+                except OSError as e:
+                    terminal.warn(f"Failed to add {file}: {e}")
 
         size = os.path.getsize(temp_zip_name)
         hash = self._calculate_sha256(temp_zip_name)
