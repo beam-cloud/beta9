@@ -52,7 +52,6 @@ jobs:
           echo "" >> $FILENAME
           echo "## Changelog" >> $FILENAME
           echo "${{ steps.release.outputs.body }}" >> $FILENAME
-          gh --help
 
       - name: Commit and push changes
         run: |
@@ -65,12 +64,6 @@ jobs:
           git push -u origin autochangelog/${{ steps.release.outputs.name }}
 
       - name: Create pull request
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.BEAM_DOCS_PAT }}
-          path: beam-docs
-          commit-message: "Add changelog for ${{ steps.release.outputs.name }}"
-          branch: autochangelog/${{ steps.release.outputs.name }}
-          title: "Changelog for ${{ steps.release.outputs.name }}"
-          body: "This PR adds the changelog for ${{ steps.release.outputs.name }}."
-          base: main
+        run: |
+          cd beam-docs
+          gh pr create --title "Changelog for ${{ steps.release.outputs.name }}" --body "This PR adds the changelog for ${{ steps.release.outputs.name }}." --base main --head autochangelog/${{ steps.release.outputs.name }}
