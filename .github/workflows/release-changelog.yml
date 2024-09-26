@@ -78,10 +78,14 @@ jobs:
                 }
               }
             }
+            
+            // format feats into a single bulleted string
+            const featsString = feats.map(feat => `- ${feat}`).join('\n');
+            const fixesString = fixes.map(fix => `- ${fix}`).join('\n');
 
             core.setOutput('name', release.name.replace(/\s+/g, '-'));
-            core.setOutput('feats', feats);
-            core.setOutput('fixes', fixes);
+            core.setOutput('feats', featsString);
+            core.setOutput('fixes', fixesString);
             core.setOutput('created_at', formatDate(release.created_at));
             core.setOutput('pretty_date', prettyDate(release.created_at));
 
@@ -96,19 +100,20 @@ jobs:
         run: |
           cd beam-docs/v2/releases
           FILENAME="${{ steps.release.outputs.created_at }}.mdx"
-          echo "---\ntitle: \"${{ steps.release.outputs.pretty_date }}\"\n---" > $FILENAME
+          echo "---" >> $FILENAME
           echo "" >> $FILENAME
-          echo "Release date: ${{ steps.release.outputs.created_at }}" >> $FILENAME
+          echo "title: \"${{ steps.release.outputs.pretty_date }}\"" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "---" >> $FILENAME
           echo "" >> $FILENAME
           echo "## Features" >> $FILENAME
-          for feat in ${{ steps.release.outputs.feats }}; do
-            echo "- $feat" >> $FILENAME
-          done
+          echo "" >> $FILENAME
+          echo ${{ steps.release.outputs.feats }} >> $FILENAME
           echo "" >> $FILENAME
           echo "## Fixes" >> $FILENAME
-          for fix in ${{ steps.release.outputs.fixes }}; do
-            echo "- $fix" >> $FILENAME
-          done
+          echo "" >> $FILENAME
+          echo ${{ steps.release.outputs.fixes }} >> $FILENAME
+          echo "" >> $FILENAME
 
       - name: Commit and push changes
         run: |
