@@ -52,15 +52,13 @@ func GenerateDSN(config types.PostgresConfig) string {
 	)
 }
 
-type MigrationLockFunc func(string) (func(), error)
-
 type PostgresBackendRepository struct {
 	client    *sqlx.DB
 	config    types.PostgresConfig
 	eventRepo EventRepository
 }
 
-func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository, obtainMigrationLock MigrationLockFunc) (*PostgresBackendRepository, error) {
+func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository) (*PostgresBackendRepository, error) {
 	dsn := GenerateDSN(config)
 
 	db, err := sqlx.Connect("postgres", dsn)
@@ -68,23 +66,14 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 		return nil, err
 	}
 
-	repo := &PostgresBackendRepository{
+	return &PostgresBackendRepository{
 		client:    db,
 		config:    config,
 		eventRepo: eventRepo,
-	}
-
-	if release, err := obtainMigrationLock("postgres"); err == nil {
-		defer release()
-		if err := repo.migrate(); err != nil {
-			log.Fatalf("Failed to run backend migrations: %v", err)
-		}
-	}
-
-	return repo, nil
+	}, nil
 }
 
-func (r *PostgresBackendRepository) migrate() error {
+func (r *PostgresBackendRepository) Migrate() error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}

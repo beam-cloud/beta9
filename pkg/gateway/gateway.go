@@ -98,9 +98,16 @@ func NewGateway() (*Gateway, error) {
 		Storage:     storage,
 	}
 
-	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo, gateway.initLock)
+	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo)
 	if err != nil {
 		return nil, err
+	}
+
+	if release, err := gateway.initLock("postgres"); err == nil {
+		defer release()
+		if err = backendRepo.Migrate(); err != nil {
+			return nil, err
+		}
 	}
 
 	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
