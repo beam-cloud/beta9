@@ -52,7 +52,7 @@ type RequestBuffer struct {
 	buffer                  *abstractions.RingBuffer[request]
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
-	maxTaskPerContainer     int
+	maxWorkersPerContainer  int
 
 	length atomic.Int32
 
@@ -72,14 +72,14 @@ func NewRequestBuffer(
 	isASGI bool,
 ) *RequestBuffer {
 	b := &RequestBuffer{
-		ctx:                 ctx,
-		rdb:                 rdb,
-		workspace:           workspace,
-		stubId:              stubId,
-		stubConfig:          stubConfig,
-		buffer:              abstractions.NewRingBuffer[request](size),
-		availableContainers: []container{},
-
+		ctx:                     ctx,
+		rdb:                     rdb,
+		workspace:               workspace,
+		stubId:                  stubId,
+		stubConfig:              stubConfig,
+		buffer:                  abstractions.NewRingBuffer[request](size),
+		availableContainers:     []container{},
+		maxWorkersPerContainer:  int(stubConfig.Workers),
 		availableContainersLock: sync.RWMutex{},
 		containerRepo:           containerRepo,
 		httpClient:              &http.Client{},
@@ -89,12 +89,6 @@ func NewRequestBuffer(
 		tsConfig:  tsConfig,
 
 		isASGI: isASGI,
-	}
-
-	if stubConfig.Autoscaler == nil || stubConfig.Autoscaler.TasksPerContainer == 0 {
-		b.maxTaskPerContainer = 1
-	} else {
-		b.maxTaskPerContainer = int(stubConfig.Autoscaler.TasksPerContainer)
 	}
 
 	go b.discoverContainers()
@@ -322,7 +316,7 @@ func (rb *RequestBuffer) handleRequest(req request) {
 	c := rb.availableContainers[0]
 	rb.availableContainersLock.RUnlock()
 
-	lockId, err := rb.rdb.AcquireSemaphore(req.ctx.Request().Context(), c.id, uint(rb.maxTaskPerContainer), time.Duration(1*time.Minute))
+	lockId, err := rb.rdb.AcquireSemaphore(req.ctx.Request().Context(), c.id, uint(rb.maxWorkersPerContainer), time.Duration(1*time.Minute))
 	if err != nil {
 		rb.buffer.Push(req)
 		return
