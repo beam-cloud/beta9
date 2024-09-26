@@ -55,6 +55,7 @@ jobs:
 
       - name: Commit and push changes
         run: |
+          cd beam-docs
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
           git checkout -b autochangelog/${{ steps.release.outputs.name }}
@@ -66,6 +67,7 @@ jobs:
         uses: peter-evans/create-pull-request@v5
         with:
           token: ${{ secrets.BEAM_DOCS_PAT }}
+          path: beam-docs
           commit-message: "Add changelog for ${{ steps.release.outputs.name }}"
           branch: autochangelog/${{ steps.release.outputs.name }}
           title: "Changelog for ${{ steps.release.outputs.name }}"
