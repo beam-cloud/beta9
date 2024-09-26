@@ -42,7 +42,10 @@ jobs:
 
             const isRelease = context.eventName === 'release';
 
-            let release;
+            let release = {};
+
+            console.log(isRelease);
+
             if (isRelease) {
               release = context.payload.release;
             } else {
@@ -52,6 +55,7 @@ jobs:
                 created_at: '2024-09-25'
               }
             }
+            console.log(release);
 
             const lines = release.body.split('\n');
 
