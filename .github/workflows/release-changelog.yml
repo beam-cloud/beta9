@@ -20,12 +20,22 @@ jobs:
         uses: actions/github-script@v6
         with:
           script: |
-            const release = context.payload.release;
-            return {
-              name: release.name,
-              body: release.body,
-              created_at: release.created_at
-            };
+            const isRelease = context.eventName === 'release';
+            
+            if (isRelease) {
+              const release = context.payload.release;
+              return {
+                name: release.name,
+                body: release.body,
+                created_at: release.created_at
+              };
+            } else {
+              return {
+                name: "mock release",
+                body: "This is a mock release body for testing purposes.",
+                created_at: new Date().toISOString()
+              };
+            }
 
       - name: Checkout beam-docs repo
         uses: actions/checkout@v3
@@ -50,16 +60,17 @@ jobs:
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
+          git checkout -b autochangelog/${{ steps.release.outputs.name }}
           git add .
           git commit -m "Add changelog for ${{ steps.release.outputs.name }}"
-          git push origin main
+          git push -u origin autochangelog/${{ steps.release.outputs.name }}
 
       - name: Create pull request
         uses: peter-evans/create-pull-request@v5
         with:
           token: ${{ secrets.BEAM_DOCS_PAT }}
           commit-message: "Add changelog for ${{ steps.release.outputs.name }}"
-          branch: auto-changelog
+          branch: autochangelog/${{ steps.release.outputs.name }}
           title: "Changelog for ${{ steps.release.outputs.name }}"
           body: "This PR adds the changelog for ${{ steps.release.outputs.name }}."
           base: main
