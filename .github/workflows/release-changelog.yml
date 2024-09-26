@@ -72,4 +72,3 @@ jobs:
           branch: autochangelog/${{ steps.release.outputs.name }}
           title: "Changelog for ${{ steps.release.outputs.name }}"
           body: "This PR adds the changelog for ${{ steps.release.outputs.name }}."
-          base: main
