@@ -52,7 +52,7 @@ func GenerateDSN(config types.PostgresConfig) string {
 	)
 }
 
-type LockMigrationFunc func(string) (func(), error)
+type MigrationLockFunc func(string) (func(), error)
 
 type PostgresBackendRepository struct {
 	client    *sqlx.DB
@@ -60,7 +60,7 @@ type PostgresBackendRepository struct {
 	eventRepo EventRepository
 }
 
-func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository, obtainMigrationLock LockMigrationFunc) (*PostgresBackendRepository, error) {
+func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository, obtainMigrationLock MigrationLockFunc) (*PostgresBackendRepository, error) {
 	dsn := GenerateDSN(config)
 
 	db, err := sqlx.Connect("postgres", dsn)
