@@ -4,6 +4,9 @@ on:
   release:
     types: [published, created]
   workflow_dispatch: # Add this line to allow manual triggering
+  push:
+    branches:
+      - eli/automated-changelog
 
 jobs:
   changelog:
