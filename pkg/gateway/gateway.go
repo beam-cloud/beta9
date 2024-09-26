@@ -141,8 +141,8 @@ func NewGateway() (*Gateway, error) {
 	return gateway, nil
 }
 
-func (g *Gateway) initLock() (func(), error) {
-	lockKey := "gateway:init:lock"
+func (g *Gateway) initLock(name string) (func(), error) {
+	lockKey := fmt.Sprintf("gateway:init:%v:lock", name)
 	lock := common.NewRedisLock(g.RedisClient)
 
 	if err := lock.Acquire(g.ctx, lockKey, common.RedisLockOptions{TtlS: 10, Retries: 1}); err != nil {
