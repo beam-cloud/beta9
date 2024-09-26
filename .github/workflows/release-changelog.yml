@@ -24,17 +24,13 @@ jobs:
             
             if (isRelease) {
               const release = context.payload.release;
-              return {
-                name: release.name,
-                body: release.body,
-                created_at: release.created_at
-              };
+              core.setOutput('name', release.name);
+              core.setOutput('body', release.body);
+              core.setOutput('created_at', release.created_at);
             } else {
-              return {
-                name: "mock release",
-                body: "This is a mock release body for testing purposes.",
-                created_at: new Date().toISOString()
-              };
+              core.setOutput('name', 'test v1.0.0');
+              core.setOutput('body', 'This is a mock release body for testing purposes.');
+              core.setOutput('created_at', new Date().toISOString());
             }
 
       - name: Checkout beam-docs repo
