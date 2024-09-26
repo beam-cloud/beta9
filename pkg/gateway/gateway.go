@@ -151,7 +151,7 @@ func (g *Gateway) initLock() (func(), error) {
 
 	return func() {
 		if err := lock.Release(lockKey); err != nil {
-			log.Printf("Failed to release migration lock: %v", err)
+			log.Println("Failed to release init lock:", err)
 		}
 	}, nil
 }
