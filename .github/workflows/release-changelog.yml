@@ -24,11 +24,12 @@ jobs:
             
             if (isRelease) {
               const release = context.payload.release;
-              core.setOutput('name', release.name);
+              core.setOutput('name', release.name.replace(/\s+/g, '-'));
               core.setOutput('body', release.body);
               core.setOutput('created_at', release.created_at);
             } else {
-              core.setOutput('name', 'test v1.0.0');
+              const name = 'test v1.0.0';
+              core.setOutput('name', name.replace(/\s+/g, '-'));
               core.setOutput('body', 'This is a mock release body for testing purposes.');
               core.setOutput('created_at', new Date().toISOString());
             }
