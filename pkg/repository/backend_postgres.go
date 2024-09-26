@@ -66,20 +66,14 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 		return nil, err
 	}
 
-	repo := &PostgresBackendRepository{
+	return &PostgresBackendRepository{
 		client:    db,
 		config:    config,
 		eventRepo: eventRepo,
-	}
-
-	if err := repo.migrate(); err != nil {
-		log.Fatalf("failed to run backend migrations: %v", err)
-	}
-
-	return repo, nil
+	}, nil
 }
 
-func (r *PostgresBackendRepository) migrate() error {
+func (r *PostgresBackendRepository) Migrate() error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}

@@ -84,10 +84,6 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	eventRepo := repository.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
-	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo)
-	if err != nil {
-		return nil, err
-	}
 
 	storage, err := storage.NewStorage(config.Storage)
 	if err != nil {
@@ -100,6 +96,18 @@ func NewGateway() (*Gateway, error) {
 		ctx:         ctx,
 		cancelFunc:  cancel,
 		Storage:     storage,
+	}
+
+	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo)
+	if err != nil {
+		return nil, err
+	}
+
+	if release, err := gateway.initLock("postgres"); err == nil {
+		defer release()
+		if err = backendRepo.Migrate(); err != nil {
+			return nil, err
+		}
 	}
 
 	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
@@ -138,6 +146,21 @@ func NewGateway() (*Gateway, error) {
 	gateway.EventRepo = eventRepo
 
 	return gateway, nil
+}
+
+func (g *Gateway) initLock(name string) (func(), error) {
+	lockKey := fmt.Sprintf("gateway:init:%v:lock", name)
+	lock := common.NewRedisLock(g.RedisClient)
+
+	if err := lock.Acquire(g.ctx, lockKey, common.RedisLockOptions{TtlS: 10, Retries: 1}); err != nil {
+		return nil, err
+	}
+
+	return func() {
+		if err := lock.Release(lockKey); err != nil {
+			log.Println("Failed to release init lock:", err)
+		}
+	}, nil
 }
 
 func (g *Gateway) initHttp() error {
