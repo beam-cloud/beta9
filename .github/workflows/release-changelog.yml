@@ -28,6 +28,18 @@ jobs:
               return `${month}-${day}-${year}`;
             }
 
+            function prettyDate(dateString) {
+              const [year, month, day] = dateString.split('-').map(Number);
+              const date = new Date(Date.UTC(year, month - 1, day));
+              
+              return new Intl.DateTimeFormat('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                timeZone: 'UTC'
+              }).format(date);
+            }
+
             const isRelease = context.eventName === 'release';
             
             if (isRelease) {
@@ -62,6 +74,7 @@ jobs:
             core.setOutput('feats', feats);
             core.setOutput('fixes', fixes);
             core.setOutput('created_at', formatDate(release.created_at));
+            core.setOutput('pretty_date', prettyDate(release.created_at));
 
       - name: Checkout beam-docs repo
         uses: actions/checkout@v3
@@ -73,14 +86,20 @@ jobs:
       - name: Create new release file in beam-docs
         run: |
           cd beam-docs/v2/releases
-          RELEASE_DATE=$(date -I)
-          FILENAME="${RELEASE_DATE}.md"
-          echo "# Release: ${{ steps.release.outputs.name }}" > $FILENAME
+          FILENAME="${{ steps.release.outputs.created_at }}.mdx"
+          echo "---\ntitle: \"${{ steps.release.outputs.pretty_date }}\"\n---" > $FILENAME
           echo "" >> $FILENAME
           echo "Release date: ${{ steps.release.outputs.created_at }}" >> $FILENAME
           echo "" >> $FILENAME
-          echo "## Changelog" >> $FILENAME
-          echo "${{ steps.release.outputs.body }}" >> $FILENAME
+          echo "## Features" >> $FILENAME
+          for feat in ${{ steps.release.outputs.feats }}; do
+            echo "- $feat" >> $FILENAME
+          done
+          echo "" >> $FILENAME
+          echo "## Fixes" >> $FILENAME
+          for fix in ${{ steps.release.outputs.fixes }}; do
+            echo "- $fix" >> $FILENAME
+          done
 
       - name: Commit and push changes
         run: |
