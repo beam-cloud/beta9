@@ -101,9 +101,7 @@ jobs:
           cd beam-docs/v2/releases
           FILENAME="${{ steps.release.outputs.created_at }}.mdx"
           echo "---" >> $FILENAME
-          echo "" >> $FILENAME
           echo "title: \"${{ steps.release.outputs.pretty_date }}\"" >> $FILENAME
-          echo "" >> $FILENAME
           echo "---" >> $FILENAME
           echo "" >> $FILENAME
           echo "## Features" >> $FILENAME
