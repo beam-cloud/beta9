@@ -108,11 +108,11 @@ jobs:
           echo "" >> $FILENAME
           echo "## Features" >> $FILENAME
           echo "" >> $FILENAME
-          echo ${{ steps.release.outputs.feats }} >> $FILENAME
+          echo "${{ steps.release.outputs.feats }}" >> $FILENAME
           echo "" >> $FILENAME
           echo "## Fixes" >> $FILENAME
           echo "" >> $FILENAME
-          echo ${{ steps.release.outputs.fixes }} >> $FILENAME
+          echo "${{ steps.release.outputs.fixes }}" >> $FILENAME
           echo "" >> $FILENAME
 
       - name: Commit and push changes
