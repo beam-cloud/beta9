@@ -6,7 +6,7 @@ on:
   workflow_dispatch: # Add this line to allow manual triggering
   push:
     branches:
-      - eli/automated-changelog
+      - eli/automated-changelog # For testing
 
 jobs:
   changelog:
@@ -20,19 +20,48 @@ jobs:
         uses: actions/github-script@v6
         with:
           script: |
+            function formatDate(dateString) {
+              const date = new Date(dateString);
+              const month = String(date.getMonth() + 1).padStart(2, '0');
+              const day = String(date.getDate()).padStart(2, '0');
+              const year = String(date.getFullYear()).slice(-2);
+              return `${month}-${day}-${year}`;
+            }
+
             const isRelease = context.eventName === 'release';
             
             if (isRelease) {
               const release = context.payload.release;
-              core.setOutput('name', release.name.replace(/\s+/g, '-'));
-              core.setOutput('body', release.body);
-              core.setOutput('created_at', release.created_at);
             } else {
-              const name = 'test v1.0.0';
-              core.setOutput('name', name.replace(/\s+/g, '-'));
-              core.setOutput('body', 'This is a mock release body for testing purposes.');
-              core.setOutput('created_at', new Date().toISOString());
+              const release = {
+                name: 'test v1.0.0',
+                body: '## What\'s Changed\n* Feat: Add index for task by @jsun-m in https://github.com/beam-cloud/beta9/pull/540\n* Fix: stop container endpoint by @dleviminzi in https://github.com/beam-cloud/beta9/pull/546\n* Fix: Don\'t scale up stopped serves by @dleviminzi in https://github.com/beam-cloud/beta9/pull/539\n* Feat: Ignore patterns like git by @dleviminzi in https://github.com/beam-cloud/beta9/pull/538\n* Fix: Hanging build container by @luke-lombardi in https://github.com/beam-cloud/beta9/pull/549\n* Fix: Remove serve lock when connection is lost for task queue serve by @dleviminzi in https://github.com/beam-cloud/beta9/pull/550\n* Revert "ignore patterns like git (#538)" by @dleviminzi in https://github.com/beam-cloud/beta9/pull/551\n\n**Full Changelog**: https://github.com/beam-cloud/beta9/compare/gateway-0.1.200...gateway-0.1.201',
+                created_at: '2024-09-25'
+              }
             }
+            const lines = release.body.split('\n');
+
+            const feats = [];
+            const fixes = [];
+            for (const line of lines) {
+              if (line.startsWith('*')) {
+                const [_, type, description] = line.match(/^\*\s*(feat|fix):\s*(.*)$/);
+                if (type === 'feat') {
+                  const byIndex = description.indexOf('by');
+                  const cleanedDesc = description.slice(0, byIndex).replace('* feat:', '').trim();
+                  feats.push(cleanedDesc);
+                } else if (type === 'fix') {
+                  const byIndex = description.indexOf('by');
+                  const cleanedDesc = description.slice(0, byIndex).replace('* fix:', '').trim();
+                  fixes.push(cleanedDesc);
+                }
+              }
+            }
+
+            core.setOutput('name', release.name.replace(/\s+/g, '-'));
+            core.setOutput('feats', feats);
+            core.setOutput('fixes', fixes);
+            core.setOutput('created_at', formatDate(release.created_at));
 
       - name: Checkout beam-docs repo
         uses: actions/checkout@v3
