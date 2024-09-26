@@ -3,10 +3,6 @@ name: Auto Changelog PR
 on:
   release:
     types: [published, created]
-  workflow_dispatch: # Add this line to allow manual triggering
-  push:
-    branches:
-      - eli/automated-changelog # For testing
 
 jobs:
   changelog:
@@ -47,7 +43,8 @@ jobs:
 
             if (isRelease) {
               release = context.payload.release;
-            } else {
+            } else { 
+              // For testing this action
               release = {
                 name: 'test v1.0.0',
                 body: '## What\'s Changed\n* Feat: Add index for task by @jsun-m in https://github.com/beam-cloud/beta9/pull/540\n* Fix: stop container endpoint by @dleviminzi in https://github.com/beam-cloud/beta9/pull/546\n* Fix: Don\'t scale up stopped serves by @dleviminzi in https://github.com/beam-cloud/beta9/pull/539\n* Feat: Ignore patterns like git by @dleviminzi in https://github.com/beam-cloud/beta9/pull/538\n* Fix: Hanging build container by @luke-lombardi in https://github.com/beam-cloud/beta9/pull/549\n* Fix: Remove serve lock when connection is lost for task queue serve by @dleviminzi in https://github.com/beam-cloud/beta9/pull/550\n* Revert "ignore patterns like git (#538)" by @dleviminzi in https://github.com/beam-cloud/beta9/pull/551\n\n**Full Changelog**: https://github.com/beam-cloud/beta9/compare/gateway-0.1.200...gateway-0.1.201',
