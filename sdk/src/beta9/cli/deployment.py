@@ -57,10 +57,14 @@ def common(**_):
     nargs=1,
     required=True,
 )
-@extraclick.pass_service_client
+@click.option(
+    "--url-type",
+    help="The type of URL to get back. [default is determined by the server] ",
+    type=click.Choice(["host", "path"]),
+)
 @click.pass_context
-def deploy(ctx: click.Context, service: ServiceClient, name: str, entrypoint: str):
-    ctx.invoke(create_deployment, name=name, entrypoint=entrypoint)
+def deploy(ctx: click.Context, name: str, entrypoint: str, url_type: str):
+    ctx.invoke(create_deployment, name=name, entrypoint=entrypoint, url_type=url_type)
 
 
 @click.group(
@@ -94,8 +98,13 @@ def management():
     help='The name the entrypoint e.g. "file:function".',
     required=True,
 )
+@click.option(
+    "--url-type",
+    help="The type of URL to get back. [default is determined by the server] ",
+    type=click.Choice(["host", "path"]),
+)
 @extraclick.pass_service_client
-def create_deployment(service: ServiceClient, name: str, entrypoint: str):
+def create_deployment(service: ServiceClient, name: str, entrypoint: str, url_type: str):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
@@ -119,7 +128,7 @@ def create_deployment(service: ServiceClient, name: str, entrypoint: str):
             f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{func_name}'"
         )
 
-    if not user_func.deploy(name=name, context=service._config):  # type: ignore
+    if not user_func.deploy(name=name, context=service._config, url_type=url_type):  # type: ignore
         terminal.error("Deployment failed ☠️")
 
 

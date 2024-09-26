@@ -65,6 +65,7 @@ type Deployment struct {
 	ExternalId  string       `db:"external_id" json:"external_id"`
 	Name        string       `db:"name" json:"name"`
 	Active      bool         `db:"active" json:"active"`
+	Subdomain   string       `db:"subdomain" json:"subdomain"`
 	WorkspaceId uint         `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
 	StubId      uint         `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
 	StubType    string       `db:"stub_type" json:"stub_type"`
@@ -142,23 +143,6 @@ type TaskWithRelated struct {
 	Stats     TaskStats    `json:"stats"`
 	Workspace Workspace    `db:"workspace" json:"workspace"`
 	Stub      Stub         `db:"stub" json:"stub"`
-}
-
-func (t *TaskWithRelated) SanitizeStubConfig() error {
-	var stubConfig StubConfigV1
-	err := json.Unmarshal([]byte(t.Stub.Config), &stubConfig)
-	if err != nil {
-		return err
-	}
-
-	stubConfig.Secrets = []Secret{}
-
-	stubConfigBytes, err := json.Marshal(stubConfig)
-	if err != nil {
-		return err
-	}
-	t.Stub.Config = string(stubConfigBytes)
-	return nil
 }
 
 type TaskCountPerDeployment struct {
@@ -265,6 +249,27 @@ func (s *Stub) UnmarshalConfig() (*StubConfigV1, error) {
 	return config, nil
 }
 
+func (s *Stub) SanitizeConfig() error {
+	var config StubConfigV1
+	err := json.Unmarshal([]byte(s.Config), &config)
+	if err != nil {
+		return err
+	}
+
+	// Remove secret values from config
+	for i := range config.Secrets {
+		config.Secrets[i].Value = ""
+	}
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Config = string(data)
+	return nil
+}
+
 type StubWithRelated struct {
 	Stub
 	Workspace Workspace `db:"workspace" json:"workspace"`
@@ -335,8 +340,8 @@ type Secret struct {
 	UpdatedAt     time.Time `db:"updated_at" json:"updated_at,omitempty"`
 	Name          string    `db:"name" json:"name"`
 	Value         string    `db:"value" json:"value,omitempty"`
-	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id"`
-	LastUpdatedBy *uint     `db:"last_updated_by" json:"last_updated_by"`
+	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id,omitempty"`
+	LastUpdatedBy *uint     `db:"last_updated_by" json:"last_updated_by,omitempty"`
 }
 
 type ScheduledJob struct {

@@ -30,6 +30,7 @@ service GatewayService {
   // Stubs
   rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse);
   rpc DeployStub(DeployStubRequest) returns (DeployStubResponse);
+  rpc GetURL(GetURLRequest) returns (GetURLResponse);
 
   // Deployments
   rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
@@ -431,4 +432,16 @@ message DeleteTokenRequest { string token_id = 1; }
 message DeleteTokenResponse {
   bool ok = 1;
   string err_msg = 2;
+}
+
+message GetURLRequest {
+  string stub_id = 1;
+  string deployment_id = 2;
+  string url_type = 3;
+}
+
+message GetURLResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string url = 3;
 }

@@ -17,12 +17,17 @@ type HttpAuthContext struct {
 func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			var tokenKey string
 			req := c.Request()
 			authHeader := req.Header.Get("Authorization")
-			tokenKey := strings.TrimPrefix(authHeader, "Bearer ")
+			tokenKey = strings.TrimPrefix(authHeader, "Bearer ")
 
 			if authHeader == "" || tokenKey == "" {
-				return next(c)
+				// Check query param for token
+				tokenKey = req.URL.Query().Get("auth_token")
+				if tokenKey == "" {
+					return next(c)
+				}
 			}
 
 			var token *types.Token

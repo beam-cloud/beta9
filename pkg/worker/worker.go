@@ -723,6 +723,21 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 	return &newSpec, nil
 }
 
+const (
+	standardCPUShare  uint64 = 1024
+	standardCPUPeriod int64  = 100_000
+)
+
+func calculateCPUShares(millicores int64) uint64 {
+	shares := uint64(millicores) * standardCPUShare / 1000
+	return shares
+}
+
+func calculateCPUQuota(millicores int64) int64 {
+	quota := millicores * standardCPUPeriod / 1000
+	return quota
+}
+
 // Generate a runc spec from a given request
 func (s *Worker) specFromRequest(request *types.ContainerRequest, options *ContainerOptions) (*specs.Spec, error) {
 	os.MkdirAll(filepath.Join(baseConfigPath, request.ContainerId), os.ModePerm)
@@ -735,6 +750,17 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
+
+	// TODO: Re-enable resource limits after more communication to community
+	// spec.Linux.Resources.Memory = &specs.LinuxMemory{
+	// 	Limit: ptr.To(request.Memory * 1024 * 1024),
+	// }
+
+	// spec.Linux.Resources.CPU = &specs.LinuxCPU{
+	// 	Shares: ptr.To(calculateCPUShares(request.Cpu)),
+	// 	Quota:  ptr.To(calculateCPUQuota(request.Cpu)),
+	// 	Period: ptr.To(uint64(standardCPUPeriod)),
+	// }
 
 	env := s.getContainerEnvironment(request, options)
 	if request.Gpu != "" {

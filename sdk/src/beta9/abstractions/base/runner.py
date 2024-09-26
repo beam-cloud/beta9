@@ -1,5 +1,6 @@
 import inspect
 import os
+import sys
 import tempfile
 import time
 from queue import Empty, Queue
@@ -16,6 +17,7 @@ from ...clients.gateway import (
     GatewayServiceStub,
     GetOrCreateStubRequest,
     GetOrCreateStubResponse,
+    GetUrlRequest,
     ReplaceObjectContentOperation,
     ReplaceObjectContentRequest,
     ReplaceObjectContentResponse,
@@ -114,12 +116,22 @@ class RunnerAbstraction(BaseAbstraction):
         self.config_context: ConfigContext = get_config_context()
         self.tmp_files: List[tempfile.NamedTemporaryFile] = []
 
-    def print_invocation_snippet(self, invocation_url: str) -> None:
+    def print_invocation_snippet(self, url_type: str = "") -> None:
         """Print curl request to call deployed container URL"""
+
+        res = self.gateway_stub.get_url(
+            GetUrlRequest(
+                stub_id=self.stub_id,
+                deployment_id=getattr(self, "deployment_id", ""),
+                url_type=url_type,
+            )
+        )
+        if not res.ok:
+            return terminal.error("Failed to get invocation URL", exit=False)
 
         terminal.header("Invocation details")
         commands = [
-            f"curl -X POST '{invocation_url}' \\",
+            f"curl -X POST '{res.url}' \\",
             "-H 'Connection: keep-alive' \\",
             "-H 'Content-Type: application/json' \\",
             *(
@@ -202,7 +214,7 @@ class RunnerAbstraction(BaseAbstraction):
         if hasattr(module, "__file__"):
             module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
-        elif in_jupyter():
+        elif in_ipython_env():
             tmp_file = create_tmp_jupyter_file(module._ih)
             module_name = tmp_file.name.split("/")[-1].removesuffix(".py")
             self.tmp_files.append(tmp_file)
@@ -384,7 +396,10 @@ class RunnerAbstraction(BaseAbstraction):
         return True
 
 
-def in_jupyter() -> bool:
+def in_ipython_env() -> bool:
+    if "google.colab" in sys.modules:
+        return True
+
     try:
         from IPython import get_ipython
 

@@ -458,7 +458,12 @@ func (rb *RequestBuffer) afterRequest(req request, containerId string) {
 }
 
 func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dialer websocket.Dialer, dstAddress string) error {
-	upgrader := websocket.Upgrader{}
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			// Allow all origins
+			return true
+		},
+	}
 
 	wsSrc, err := upgrader.Upgrade(w, req, nil)
 	if err != nil {

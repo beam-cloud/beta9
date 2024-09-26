@@ -515,6 +515,20 @@ class DeleteTokenResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
 
 
+@dataclass(eq=False, repr=False)
+class GetUrlRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    deployment_id: str = betterproto.string_field(2)
+    url_type: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class GetUrlResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    url: str = betterproto.string_field(3)
+
+
 class GatewayServiceStub(SyncServiceStub):
     def authorize(self, authorize_request: "AuthorizeRequest") -> "AuthorizeResponse":
         return self._unary_unary(
@@ -633,6 +647,13 @@ class GatewayServiceStub(SyncServiceStub):
             DeployStubRequest,
             DeployStubResponse,
         )(deploy_stub_request)
+
+    def get_url(self, get_url_request: "GetUrlRequest") -> "GetUrlResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetURL",
+            GetUrlRequest,
+            GetUrlResponse,
+        )(get_url_request)
 
     def list_deployments(
         self, list_deployments_request: "ListDeploymentsRequest"
