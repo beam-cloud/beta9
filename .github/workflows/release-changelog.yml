@@ -64,6 +64,8 @@ jobs:
           git push -u origin autochangelog/${{ steps.release.outputs.name }}
 
       - name: Create pull request
+        env:
+          GH_TOKEN: ${{ secrets.BEAM_DOCS_PAT }}
         run: |
           cd beam-docs
           gh pr create --title "Changelog for ${{ steps.release.outputs.name }}" --body "This PR adds the changelog for ${{ steps.release.outputs.name }}." --base main --head autochangelog/${{ steps.release.outputs.name }}
