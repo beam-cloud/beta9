@@ -63,15 +63,18 @@ jobs:
             const fixes = [];
             for (const line of lines) {
               if (line.startsWith('*')) {
-                const [_, type, description] = line.match(/^\*\s*(feat|fix):\s*(.*)$/);
-                if (type === 'feat') {
+                const m = line.match(/^\*\s*(Feat|Fix):\s*(.*)$/);
+                if (m) {
+                  const [_, type, description] = m;
                   const byIndex = description.indexOf('by');
-                  const cleanedDesc = description.slice(0, byIndex).replace('* feat:', '').trim();
-                  feats.push(cleanedDesc);
-                } else if (type === 'fix') {
-                  const byIndex = description.indexOf('by');
-                  const cleanedDesc = description.slice(0, byIndex).replace('* fix:', '').trim();
-                  fixes.push(cleanedDesc);
+                  
+                  if (type === 'Feat') {
+                    const cleanedDesc = description.slice(0, byIndex).trim();
+                    feats.push(cleanedDesc);
+                  } else if (type === 'Fix') {
+                    const cleanedDesc = description.slice(0, byIndex).trim();
+                    fixes.push(cleanedDesc);
+                  }
                 }
               }
             }
