@@ -52,6 +52,7 @@ jobs:
           echo "" >> $FILENAME
           echo "## Changelog" >> $FILENAME
           echo "${{ steps.release.outputs.body }}" >> $FILENAME
+          gh --help
 
       - name: Commit and push changes
         run: |
@@ -72,3 +73,4 @@ jobs:
           branch: autochangelog/${{ steps.release.outputs.name }}
           title: "Changelog for ${{ steps.release.outputs.name }}"
           body: "This PR adds the changelog for ${{ steps.release.outputs.name }}."
+          base: main
