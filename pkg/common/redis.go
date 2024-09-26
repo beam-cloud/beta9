@@ -14,6 +14,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/bsm/redislock"
+	"github.com/gofrs/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -442,4 +443,90 @@ func ToSlice(v interface{}) []interface{} {
 	}
 
 	return fieldValues
+}
+
+func (r *RedisClient) AcquireSemaphore(ctx context.Context, semname string, limit uint, timeout time.Duration) (string, error) {
+	l, err := redislock.Obtain(ctx, r, "lock:"+semname, 3*time.Second, &redislock.Options{
+		RetryStrategy: redislock.NoRetry(),
+	})
+	if err != nil {
+		return "", err
+	}
+
+	defer func() {
+		l.Release(ctx)
+	}()
+
+	id, err := uuid.NewV4()
+	if err != nil {
+		return "", err
+	}
+
+	now := time.Now()
+
+	pipeline := r.TxPipeline()
+
+	pipeline.ZRemRangeByScore(
+		ctx,
+		semname,
+		"-inf",
+		fmt.Sprintf("%d", now.Add(-timeout).UnixNano()),
+	)
+
+	pipeline.ZAdd(
+		ctx,
+		semname,
+		redis.Z{
+			Score:  float64(now.Add(timeout).UnixNano()),
+			Member: id.String(),
+		},
+	)
+
+	pipeline.ZRank(ctx, semname, id.String())
+
+	cmds, err := pipeline.Exec(ctx)
+	if err != nil {
+		r.ZRem(ctx, semname, id.String())
+		return "", err
+	}
+
+	rankCmd := cmds[len(cmds)-1]
+	if rankCmd.Err() != nil {
+		r.ZRem(ctx, semname, id.String())
+		return "", rankCmd.Err()
+	}
+
+	rank := rankCmd.(*redis.IntCmd).Val()
+	if rank >= int64(limit) {
+		r.ZRem(ctx, semname, id.String())
+		return "", redislock.ErrNotObtained
+	}
+
+	return id.String(), nil
+}
+
+func (r *RedisClient) ReleaseSemaphore(ctx context.Context, semname, id string) error {
+	cmd := r.ZRem(ctx, semname, id)
+	if cmd.Err() != nil {
+		return cmd.Err()
+	}
+
+	return nil
+}
+
+func (r *RedisClient) RefreshSemaphore(ctx context.Context, semname, id string, timeout time.Duration) error {
+	now := time.Now()
+	cmd := r.ZAdd(
+		ctx,
+		semname,
+		redis.Z{
+			Score:  float64(now.Add(timeout).UnixNano()),
+			Member: id,
+		},
+	)
+	if cmd.Err() != nil {
+		return cmd.Err()
+	}
+
+	return nil
 }

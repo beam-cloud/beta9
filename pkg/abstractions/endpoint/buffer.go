@@ -52,6 +52,7 @@ type RequestBuffer struct {
 	buffer                  *abstractions.RingBuffer[request]
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
+	maxTaskPerContainer     int
 
 	length atomic.Int32
 
@@ -88,6 +89,12 @@ func NewRequestBuffer(
 		tsConfig:  tsConfig,
 
 		isASGI: isASGI,
+	}
+
+	if stubConfig.Autoscaler == nil || stubConfig.Autoscaler.TasksPerContainer == 0 {
+		b.maxTaskPerContainer = 1
+	} else {
+		b.maxTaskPerContainer = int(stubConfig.Autoscaler.TasksPerContainer)
 	}
 
 	go b.discoverContainers()
@@ -315,7 +322,26 @@ func (rb *RequestBuffer) handleRequest(req request) {
 	c := rb.availableContainers[0]
 	rb.availableContainersLock.RUnlock()
 
-	err := rb.incrementRequestsInFlight(c.id)
+	lockId, err := rb.rdb.AcquireSemaphore(req.ctx.Request().Context(), c.id, uint(rb.maxTaskPerContainer), time.Duration(1*time.Minute))
+	if err != nil {
+		rb.buffer.Push(req)
+		return
+	}
+
+	go func() {
+		for {
+			select {
+			case <-req.ctx.Request().Context().Done():
+				return
+			case <-time.After(30 * time.Second):
+				rb.rdb.RefreshSemaphore(req.ctx.Request().Context(), c.id, lockId, time.Duration(1*time.Minute))
+			}
+		}
+	}()
+
+	defer rb.rdb.ReleaseSemaphore(context.Background(), c.id, lockId)
+
+	err = rb.incrementRequestsInFlight(c.id)
 	if err != nil {
 		return
 	}
