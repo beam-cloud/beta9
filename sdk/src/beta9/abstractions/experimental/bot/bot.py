@@ -199,20 +199,14 @@ class Bot(RunnerAbstraction, DeployableMixin):
         return BotTransition(*args, **kwargs, bot_instance=self)
 
     @with_grpc_error_handling
-    def serve(self, timeout: int = 0):
+    def serve(self, timeout: int = 0, url_type: str = ""):
         if not self.prepare_runtime(
             func=None, stub_type=BOT_SERVE_STUB_TYPE, force_create_stub=True
         ):
             return False
 
         try:
-            base_url = self.settings.api_host
-            if not base_url.startswith(("http://", "https://")):
-                base_url = f"http://{base_url}"
-
-            invocation_url = f"{base_url}/{self.base_stub_type}/id/{self.stub_id}"
-            self.print_invocation_snippet(invocation_url=invocation_url)
-
+            self.print_invocation_snippet(url_type=url_type)
             return self._serve(dir=os.getcwd(), object_id=self.object_id, timeout=timeout)
 
         except KeyboardInterrupt:
