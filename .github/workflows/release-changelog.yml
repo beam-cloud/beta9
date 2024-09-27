@@ -52,8 +52,8 @@ jobs:
 
             // Stop the workflow if the release notes do not end with "publish changelog"
             const lastLine = lines[lines.length - 1].trim().toLowerCase();
-            console.log(lastLine);
             if (lastLine !== 'publish changelog') {
+              console.log('Release notes do not end with "publish changelog". Stopping workflow.');
               core.setOutput('should_continue', 'false');
               core.setOutput('error_message', 'Release notes do not end with "publish changelog". Stopping workflow.');
               return;
