@@ -27,14 +27,17 @@ func upSubdomain(ctx context.Context, tx *sql.Tx) error {
 	updateTable := `
 		UPDATE deployment d
 		SET subdomain = NULLIF(
-			LOWER(
-				CONCAT(
-					REGEXP_REPLACE(d.name, '[^a-zA-Z0-9-]', '-', 'g'),
-					'-',
-					LEFT(md5(d.name || s.type || s.workspace_id), 7)
-				)
+			REGEXP_REPLACE(
+				TRIM(BOTH '-' FROM LOWER(
+					CONCAT(
+						REGEXP_REPLACE(d.name, '[^a-zA-Z0-9]+', '-', 'g'),
+						'-',
+						LEFT(md5(d.name || s.type || s.workspace_id), 7)
+					)
+				)),
+				'-+', '-', 'g'
 			),
-		'-'
+			''
 		)
 		FROM stub s
 		WHERE d.stub_id = s.id;
