@@ -366,6 +366,13 @@ func (rb *RequestBuffer) handleHttpRequest(req request, c container) {
 		return
 	}
 
+	// Copy headers to new request
+	for key, values := range request.Header {
+		for _, val := range values {
+			httpReq.Header.Add(key, val)
+		}
+	}
+
 	httpReq.Header.Add("X-TASK-ID", req.taskMessage.TaskId) // Add task ID to header
 	go rb.heartBeat(req, c.id)                              // Send heartbeat via redis for duration of request
 
