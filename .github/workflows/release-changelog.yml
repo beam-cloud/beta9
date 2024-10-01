@@ -1,0 +1,141 @@
+name: Auto Changelog PR
+
+on:
+  release:
+    types: [published, created]
+  workflow_dispatch: # Add this line to allow manual triggering
+  push:
+    branches:
+      - eli/automated-changelog
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the Beta9 repo
+        uses: actions/checkout@v3
+
+      - name: Fetch the latest release data
+        id: release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            function formatDate(dateString) {
+              const date = new Date(dateString);
+              const month = String(date.getMonth() + 1).padStart(2, '0');
+              const day = String(date.getDate()).padStart(2, '0');
+              const year = String(date.getFullYear()).slice(-2);
+              return `${month}-${day}-${year}`;
+            }
+
+            function prettyDate(dateString) {
+              const [year, month, day] = dateString.split('-').map(Number);
+              const date = new Date(Date.UTC(year, month - 1, day));
+              
+              return new Intl.DateTimeFormat('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                timeZone: 'UTC'
+              }).format(date);
+            }
+
+            // const release = context.payload.release;
+            const release = {
+              name: 'test v1.0.0',
+              body: '## What\'s Changed\n* Feat: Add index for task by @jsun-m in https://github.com/beam-cloud/beta9/pull/540\n* Fix: stop container endpoint by @dleviminzi in https://github.com/beam-cloud/beta9/pull/546\n* Fix: Don\'t scale up stopped serves by @dleviminzi in https://github.com/beam-cloud/beta9/pull/539\n* Feat: Ignore patterns like git by @dleviminzi in https://github.com/beam-cloud/beta9/pull/538\n* Fix: Hanging build container by @luke-lombardi in https://github.com/beam-cloud/beta9/pull/549\n* Fix: Remove serve lock when connection is lost for task queue serve by @dleviminzi in https://github.com/beam-cloud/beta9/pull/550\n* Revert "ignore patterns like git (#538)" by @dleviminzi in https://github.com/beam-cloud/beta9/pull/551\n\n**Full Changelog**: https://github.com/beam-cloud/beta9/compare/gateway-0.1.200...gateway-0.1.201\n\npublish changelog',
+              created_at: '2024-09-25'
+            };
+          
+
+            const lines = release.body.split('\n');
+
+            // Stop the workflow if the release notes do not end with "publish changelog"
+            const lastLine = lines[lines.length - 1].trim().toLowerCase();
+            if (lastLine !== 'publish changelog') {
+              core.setOutput('should_continue', 'false');
+              core.setOutput('error_message', 'Release notes do not end with "publish changelog". Stopping workflow.');
+              return;
+            }
+
+            const feats = [];
+            const fixes = [];
+            for (const line of lines) {
+              if (line.startsWith('*')) {
+                const m = line.match(/^\*\s*(Feat|Fix):\s*(.*)$/);
+                if (m) {
+                  const [_, type, description] = m;
+                  const byIndex = description.indexOf('by');
+                  
+                  if (type === 'Feat') {
+                    const cleanedDesc = description.slice(0, byIndex).trim();
+                    feats.push(cleanedDesc);
+                  } else if (type === 'Fix') {
+                    const cleanedDesc = description.slice(0, byIndex).trim();
+                    fixes.push(cleanedDesc);
+                  }
+                }
+              }
+            }
+            
+            // Stop the workflow if no features or fixes are found
+            if (feats.length === 0 && fixes.length === 0) {
+              core.setOutput('should_continue', 'false');
+              core.setOutput('error_message', 'No features or fixes found in the release notes. Stopping workflow.');
+              return;
+            }
+
+            const featsString = feats.map(feat => `- ${feat}`).join('\n');
+            const fixesString = fixes.map(fix => `- ${fix}`).join('\n');
+
+            core.setOutput('name', release.name.replace(/\s+/g, '-'));
+            core.setOutput('feats', featsString);
+            core.setOutput('fixes', fixesString);
+            core.setOutput('created_at', formatDate(release.created_at));
+            core.setOutput('pretty_date', prettyDate(release.created_at));
+            core.setOutput('should_continue', 'true');
+
+      - name: Checkout beam-docs repo
+        if: steps.release.outputs.should_continue == 'true'
+        uses: actions/checkout@v3
+        with:
+          repository: slai-labs/beam-docs
+          path: beam-docs
+          token: ${{ secrets.BEAM_DOCS_PAT }}
+
+      - name: Create new release file in beam-docs
+        if: steps.release.outputs.should_continue == 'true'
+        run: |
+          cd beam-docs/v2/releases
+          FILENAME="${{ steps.release.outputs.created_at }}.mdx"
+          echo "---" >> $FILENAME
+          echo "title: \"${{ steps.release.outputs.pretty_date }}\"" >> $FILENAME
+          echo "---" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "## Features" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "${{ steps.release.outputs.feats }}" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "## Fixes" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "${{ steps.release.outputs.fixes }}" >> $FILENAME
+          echo "" >> $FILENAME
+
+      - name: Commit and push changes
+        if: steps.release.outputs.should_continue == 'true'
+        run: |
+          cd beam-docs
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git checkout -b autochangelog/${{ steps.release.outputs.name }}
+          git add .
+          git commit -m "Add changelog for ${{ steps.release.outputs.name }}"
+          git push -u origin autochangelog/${{ steps.release.outputs.name }}
+
+      - name: Create pull request
+        if: steps.release.outputs.should_continue == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.BEAM_DOCS_PAT }}
+        run: |
+          cd beam-docs
+          gh pr create --title "Changelog for ${{ steps.release.outputs.name }}" --body "This PR adds the changelog for ${{ steps.release.outputs.name }}." --base main --head autochangelog/${{ steps.release.outputs.name }}
