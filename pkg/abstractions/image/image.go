@@ -55,8 +55,13 @@ func NewRuncImageService(
 func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
 	var valid bool = true
 
+	baseImageTag, ok := is.config.ImageService.Runner.Tags[in.PythonVersion]
+	if !ok {
+		return nil, errors.Errorf("Python version not supportted: %s", in.PythonVersion)
+	}
+
 	opts := &BuildOpts{
-		BaseImageTag:      is.config.ImageService.Runner.Tags[in.PythonVersion],
+		BaseImageTag:      baseImageTag,
 		BaseImageName:     is.config.ImageService.Runner.BaseImageName,
 		BaseImageRegistry: is.config.ImageService.Runner.BaseImageRegistry,
 		PythonVersion:     in.PythonVersion,
