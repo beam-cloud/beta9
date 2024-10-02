@@ -3,6 +3,8 @@ import os
 import time
 import traceback
 from concurrent.futures import CancelledError, ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import Optional
 
 import cloudpickle
 import grpc
@@ -30,6 +32,12 @@ from ..runner.common import (
     send_callback,
 )
 from ..type import TaskExitCode, TaskStatus
+
+
+@dataclass
+class FunctionResult:
+    result: bytes
+    callback_url_override: Optional[str] = None
 
 
 def _load_args(args: bytes) -> dict:
@@ -182,8 +190,9 @@ def invoke_function(function_stub, context, task_id):
         raise InvalidFunctionArgumentsException("Invalid function arguments")
 
     payload = _load_args(get_args_resp.args)
-    args = payload.get("args", [])
-    kwargs = payload.get("kwargs", {})
+    args = payload.get("args") or []
+    kwargs = payload.get("kwargs") or {}
+    callback_url = kwargs.pop("callback_url", None)
 
     handler = FunctionHandler()
     result = handler(context, *args, **kwargs)
@@ -195,17 +204,27 @@ def invoke_function(function_stub, context, task_id):
     if not set_result_resp.ok:
         raise RunnerException("Unable to set function result")
 
-    return result
+    return FunctionResult(
+        result=result,
+        callback_url_override=callback_url,
+    )
 
 
-def complete_task(gateway_stub, result, task_id, container_id, container_hostname, start_time):
+def complete_task(
+    gateway_stub: GatewayServiceStub,
+    result: FunctionResult,
+    task_id: str,
+    container_id: str,
+    container_hostname: str,
+    start_time: float,
+):
     task_status = TaskStatus.Complete
     task_duration = time.time() - start_time
     keep_warm_seconds = 0
 
     end_task_response = end_task_and_send_callback(
         gateway_stub=gateway_stub,
-        payload=result,
+        payload=result.result,
         end_task_request=EndTaskRequest(
             task_id=task_id,
             task_duration=task_duration,
@@ -214,7 +233,7 @@ def complete_task(gateway_stub, result, task_id, container_id, container_hostnam
             container_hostname=container_hostname,
             keep_warm_seconds=keep_warm_seconds,
         ),
-        override_callback_url=None,
+        override_callback_url=result.callback_url_override,
     )
 
     if not end_task_response.ok:
