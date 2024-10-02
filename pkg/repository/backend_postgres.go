@@ -904,7 +904,7 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
         LIMIT 1;
     `
 
-	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, name, version, stubType)
+	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, name, version, types.StubType(stubType).Kind())
 	if err != nil {
 		return nil, err
 	}

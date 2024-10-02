@@ -1,6 +1,7 @@
 package function
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -57,6 +58,7 @@ func (g *functionGroup) FunctionInvoke(ctx echo.Context) error {
 
 			deployment, err = g.fs.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), stubType)
 			if err != nil {
+				log.Println(err)
 				return apiv1.HTTPBadRequest("Invalid deployment")
 			}
 		}
