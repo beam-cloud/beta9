@@ -53,8 +53,9 @@ class ServeGateway:
 
     def shutdown(self, signum=None, frame=None) -> None:
         self.kill_subprocess()
-        self.observer.stop()
-        self.observer.join(timeout=0.1)
+        if self.observer.is_alive():
+            self.observer.stop()
+            self.observer.join(timeout=0.1)
         self.exit_event.set()
         self.restart_event.set()
 
