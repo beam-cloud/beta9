@@ -124,6 +124,7 @@ type BackendRepository interface {
 	DeletePreviousScheduledJob(ctx context.Context, deployment *types.Deployment) error
 	GetScheduledJob(ctx context.Context, deploymentId uint) (*types.ScheduledJob, error)
 	ListenToChannel(ctx context.Context, channel string) (<-chan string, error)
+	Ping() error
 }
 
 type TaskRepository interface {

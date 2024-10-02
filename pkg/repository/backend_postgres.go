@@ -85,6 +85,10 @@ func (r *PostgresBackendRepository) Migrate() error {
 	return nil
 }
 
+func (r *PostgresBackendRepository) Ping() error {
+	return r.client.Ping()
+}
+
 func (r *PostgresBackendRepository) generateExternalId() (string, error) {
 	id, err := uuid.NewRandom()
 	if err != nil {
