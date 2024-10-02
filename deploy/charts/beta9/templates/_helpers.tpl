@@ -53,10 +53,11 @@ controllers:
             enabled: true
             custom: true
             spec:
+              successThreshold: 1
               failureThreshold: 3
               initialDelaySeconds: 5
               periodSeconds: 5
-              timeoutSeconds: 2
+              timeoutSeconds: 1
               httpGet:
                 path: /api/v1/health
                 port: 1994
