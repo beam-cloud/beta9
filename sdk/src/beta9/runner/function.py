@@ -128,13 +128,12 @@ def main(channel: Channel):
     if not task_id:
         raise RunnerException("Invalid runner environment")
 
-    start_time = time.time()
-
     with StdoutJsonInterceptor(task_id=task_id):
         container_id = config.container_id
         container_hostname = config.container_hostname
 
         # Start the task
+        start_time = time.time()
         start_task_response = start_task(gateway_stub, task_id, container_id)
         if not start_task_response.ok:
             raise RunnerException("Unable to start task")
@@ -202,6 +201,7 @@ def invoke_function(function_stub, context, task_id):
 def complete_task(gateway_stub, result, task_id, container_id, container_hostname, start_time):
     task_status = TaskStatus.Complete
     task_duration = time.time() - start_time
+    keep_warm_seconds = 0
 
     end_task_response = end_task_and_send_callback(
         gateway_stub=gateway_stub,
@@ -212,7 +212,7 @@ def complete_task(gateway_stub, result, task_id, container_id, container_hostnam
             task_status=task_status,
             container_id=container_id,
             container_hostname=container_hostname,
-            keep_warm_seconds=0,
+            keep_warm_seconds=keep_warm_seconds,
         ),
         override_callback_url=None,
     )
