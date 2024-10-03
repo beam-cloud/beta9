@@ -23,7 +23,13 @@ from ..clients.gateway import (
     StartTaskRequest,
     StartTaskResponse,
 )
-from ..exceptions import InvalidFunctionArgumentsException, RunnerException
+from ..exceptions import (
+    FunctionSetResultError,
+    InvalidFunctionArgumentsError,
+    InvalidRunnerEnvironmentError,
+    TaskEndError,
+    TaskStartError,
+)
 from ..logging import StdoutJsonInterceptor
 from ..runner.common import (
     FunctionContext,
@@ -50,7 +56,7 @@ def _load_args(args: bytes) -> dict:
         try:
             return json.loads(args.decode("utf-8"))
         except json.JSONDecodeError:
-            raise InvalidFunctionArgumentsException
+            raise InvalidFunctionArgumentsError
 
 
 def _monitor_task(
@@ -136,7 +142,7 @@ def main(channel: Channel):
     task_id = config.task_id
 
     if not task_id:
-        raise RunnerException("Invalid runner environment")
+        raise InvalidRunnerEnvironmentError
 
     with StdoutJsonInterceptor(task_id=task_id):
         container_id = config.container_id
@@ -146,7 +152,7 @@ def main(channel: Channel):
         start_time = time.time()
         start_task_response = start_task(gateway_stub, task_id, container_id)
         if not start_task_response.ok:
-            raise RunnerException("Unable to start task")
+            raise TaskStartError
 
         context = FunctionContext.new(config=config, task_id=task_id)
 
@@ -200,7 +206,7 @@ def invoke_function(
     try:
         get_args_resp = function_stub.function_get_args(FunctionGetArgsRequest(task_id=task_id))
         if not get_args_resp.ok:
-            raise InvalidFunctionArgumentsException("Invalid function arguments")
+            raise InvalidFunctionArgumentsError
 
         payload = _load_args(get_args_resp.args)
         args = payload.get("args") or []
@@ -215,7 +221,7 @@ def invoke_function(
             FunctionSetResultRequest(task_id=task_id, result=pickled_result)
         )
         if not set_result_resp.ok:
-            raise RunnerException("Unable to set function result")
+            raise FunctionSetResultError
 
         return InvokeResult(
             result=result,
@@ -256,7 +262,7 @@ def complete_task(
     )
 
     if not end_task_response.ok:
-        raise RunnerException("Unable to end task")
+        raise TaskEndError
 
 
 def handle_task_failure(
