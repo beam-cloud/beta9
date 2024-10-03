@@ -330,4 +330,5 @@ def is_asgi3(app: Any) -> bool:
 
 class ThreadPoolExecutorOverride(ThreadPoolExecutor):
     def __exit__(self, *_, **__):
+        # cancel_futures added in 3.9
         self.shutdown(cancel_futures=True)
