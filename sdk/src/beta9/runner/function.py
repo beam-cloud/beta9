@@ -4,7 +4,7 @@ import time
 import traceback
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import cloudpickle
 import grpc
@@ -21,8 +21,15 @@ from ..clients.gateway import (
     EndTaskRequest,
     GatewayServiceStub,
     StartTaskRequest,
+    StartTaskResponse,
 )
-from ..exceptions import InvalidFunctionArgumentsException, RunnerException
+from ..exceptions import (
+    FunctionSetResultError,
+    InvalidFunctionArgumentsError,
+    InvalidRunnerEnvironmentError,
+    TaskEndError,
+    TaskStartError,
+)
 from ..logging import StdoutJsonInterceptor
 from ..runner.common import (
     FunctionContext,
@@ -35,9 +42,10 @@ from ..type import TaskExitCode, TaskStatus
 
 
 @dataclass
-class FunctionResult:
-    result: bytes
-    callback_url_override: Optional[str] = None
+class InvokeResult:
+    result: Optional[str] = None
+    callback_url: Optional[str] = None
+    exception: Optional[BaseException] = None
 
 
 def _load_args(args: bytes) -> dict:
@@ -48,7 +56,7 @@ def _load_args(args: bytes) -> dict:
         try:
             return json.loads(args.decode("utf-8"))
         except json.JSONDecodeError:
-            raise InvalidFunctionArgumentsException
+            raise InvalidFunctionArgumentsError
 
 
 def _monitor_task(
@@ -134,7 +142,7 @@ def main(channel: Channel):
     task_id = config.task_id
 
     if not task_id:
-        raise RunnerException("Invalid runner environment")
+        raise InvalidRunnerEnvironmentError
 
     with StdoutJsonInterceptor(task_id=task_id):
         container_id = config.container_id
@@ -144,75 +152,94 @@ def main(channel: Channel):
         start_time = time.time()
         start_task_response = start_task(gateway_stub, task_id, container_id)
         if not start_task_response.ok:
-            raise RunnerException("Unable to start task")
+            raise TaskStartError
 
         context = FunctionContext.new(config=config, task_id=task_id)
 
         # Start monitoring the task
-        with ThreadPoolExecutor() as thread_pool:
-            monitor_future = thread_pool.submit(
-                _monitor_task,
-                context=context,
-                stub_id=config.stub_id,
-                task_id=task_id,
-                container_id=container_id,
-                function_stub=function_stub,
-                gateway_stub=gateway_stub,
-            )
+        thread_pool = ThreadPoolExecutor()
+        monitor_future = thread_pool.submit(
+            _monitor_task,
+            context=context,
+            stub_id=config.stub_id,
+            task_id=task_id,
+            container_id=container_id,
+            function_stub=function_stub,
+            gateway_stub=gateway_stub,
+        )
 
-            # Invoke the function and handle its result
-            try:
-                result = invoke_function(function_stub, context, task_id)
-            except BaseException as e:
-                handle_task_failure(e, gateway_stub, task_id, container_id, container_hostname)
-                raise
-            finally:
-                monitor_future.cancel()
+        # Invoke the function and handle its result
+        result = InvokeResult()
+        try:
+            result = invoke_function(function_stub, context, task_id)
+            if result.exception:
+                raise result.exception
+        except BaseException:
+            handle_task_failure(result, gateway_stub, task_id, container_id, container_hostname)
+            raise
+        finally:
+            monitor_future.cancel()
 
-            # End the task and send callback
-            complete_task(
-                gateway_stub,
-                result,
-                task_id,
-                container_id,
-                container_hostname,
-                start_time,
-            )
+        # End the task and send callback
+        complete_task(
+            gateway_stub,
+            result,
+            task_id,
+            container_id,
+            container_hostname,
+            start_time,
+        )
+
+        thread_pool.shutdown(wait=False)
 
 
-def start_task(gateway_stub, task_id, container_id):
+def start_task(
+    gateway_stub: GatewayServiceStub, task_id: str, container_id: str
+) -> StartTaskResponse:
     return gateway_stub.start_task(StartTaskRequest(task_id=task_id, container_id=container_id))
 
 
-def invoke_function(function_stub, context, task_id):
-    get_args_resp = function_stub.function_get_args(FunctionGetArgsRequest(task_id=task_id))
-    if not get_args_resp.ok:
-        raise InvalidFunctionArgumentsException("Invalid function arguments")
+def invoke_function(
+    function_stub: FunctionServiceStub, context: FunctionContext, task_id: str
+) -> InvokeResult:
+    result: Any = None
+    callback_url = None
 
-    payload = _load_args(get_args_resp.args)
-    args = payload.get("args") or []
-    kwargs = payload.get("kwargs") or {}
-    callback_url = kwargs.pop("callback_url", None)
+    try:
+        get_args_resp = function_stub.function_get_args(FunctionGetArgsRequest(task_id=task_id))
+        if not get_args_resp.ok:
+            raise InvalidFunctionArgumentsError
 
-    handler = FunctionHandler()
-    result = handler(context, *args, **kwargs)
+        payload = _load_args(get_args_resp.args)
+        args = payload.get("args") or []
+        kwargs = payload.get("kwargs") or {}
+        callback_url = kwargs.pop("callback_url", None)
 
-    pickled_result = cloudpickle.dumps(result)
-    set_result_resp = function_stub.function_set_result(
-        FunctionSetResultRequest(task_id=task_id, result=pickled_result)
-    )
-    if not set_result_resp.ok:
-        raise RunnerException("Unable to set function result")
+        handler = FunctionHandler()
+        result = handler(context, *args, **kwargs)
 
-    return FunctionResult(
-        result=result,
-        callback_url_override=callback_url,
-    )
+        pickled_result = cloudpickle.dumps(result)
+        set_result_resp = function_stub.function_set_result(
+            FunctionSetResultRequest(task_id=task_id, result=pickled_result)
+        )
+        if not set_result_resp.ok:
+            raise FunctionSetResultError
+
+        return InvokeResult(
+            result=result,
+            callback_url=callback_url,
+        )
+    except BaseException as e:
+        return InvokeResult(
+            result=result,
+            exception=e,
+            callback_url=callback_url,
+        )
 
 
 def complete_task(
     gateway_stub: GatewayServiceStub,
-    result: FunctionResult,
+    result: InvokeResult,
     task_id: str,
     container_id: str,
     container_hostname: str,
@@ -233,22 +260,28 @@ def complete_task(
             container_hostname=container_hostname,
             keep_warm_seconds=keep_warm_seconds,
         ),
-        override_callback_url=result.callback_url_override,
+        override_callback_url=result.callback_url,
     )
 
     if not end_task_response.ok:
-        raise RunnerException("Unable to end task")
+        raise TaskEndError
 
 
-def handle_task_failure(exception, gateway_stub, task_id, container_id, container_hostname):
-    result = str(exception)
+def handle_task_failure(
+    result: InvokeResult,
+    gateway_stub: GatewayServiceStub,
+    task_id: str,
+    container_id: str,
+    container_hostname: str,
+):
+    payload = {"error": str(result.exception)}
     task_status = TaskStatus.Error
     task_duration = 0
     keep_warm_seconds = 0
 
     end_task_and_send_callback(
         gateway_stub=gateway_stub,
-        payload=result,
+        payload=payload,
         end_task_request=EndTaskRequest(
             task_id=task_id,
             task_duration=task_duration,
@@ -257,6 +290,7 @@ def handle_task_failure(exception, gateway_stub, task_id, container_id, containe
             container_hostname=container_hostname,
             keep_warm_seconds=keep_warm_seconds,
         ),
+        override_callback_url=result.callback_url,
     )
 
 
