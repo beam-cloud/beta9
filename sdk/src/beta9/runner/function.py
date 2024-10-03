@@ -172,6 +172,7 @@ def main(channel: Channel):
         result = invoke_function(function_stub, context, task_id)
         if result.exception:
             handle_task_failure(result, gateway_stub, task_id, container_id, container_hostname)
+            thread_pool.shutdown(wait=False)
             raise result.exception
 
         # End the task and send callback
