@@ -135,8 +135,8 @@ def _monitor_task(
             os._exit(0)
 
 
-@pass_channel
 @handle_error(print_traceback=False)
+@pass_channel
 def main(channel: Channel):
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
