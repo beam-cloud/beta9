@@ -44,7 +44,7 @@ from ..type import TaskExitCode, TaskStatus
 @dataclass
 class InvokeResult:
     result: Optional[str] = None
-    callback_url_override: Optional[str] = None
+    callback_url: Optional[str] = None
     exception: Optional[BaseException] = None
 
 
@@ -225,13 +225,13 @@ def invoke_function(
 
         return InvokeResult(
             result=result,
-            callback_url_override=callback_url,
+            callback_url=callback_url,
         )
     except BaseException as e:
         return InvokeResult(
             result=result,
             exception=e,
-            callback_url_override=callback_url,
+            callback_url=callback_url,
         )
 
 
@@ -258,7 +258,7 @@ def complete_task(
             container_hostname=container_hostname,
             keep_warm_seconds=keep_warm_seconds,
         ),
-        override_callback_url=result.callback_url_override,
+        override_callback_url=result.callback_url,
     )
 
     if not end_task_response.ok:
@@ -288,7 +288,7 @@ def handle_task_failure(
             container_hostname=container_hostname,
             keep_warm_seconds=keep_warm_seconds,
         ),
-        override_callback_url=result.callback_url_override,
+        override_callback_url=result.callback_url,
     )
 
 
