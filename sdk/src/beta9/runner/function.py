@@ -9,7 +9,7 @@ from typing import Any, Optional
 import cloudpickle
 import grpc
 
-from ..channel import Channel, with_runner_context
+from ..channel import Channel, handle_error, pass_channel
 from ..clients.function import (
     FunctionGetArgsRequest,
     FunctionMonitorRequest,
@@ -135,7 +135,8 @@ def _monitor_task(
             os._exit(0)
 
 
-@with_runner_context
+@pass_channel
+@handle_error(print_traceback=False)
 def main(channel: Channel):
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
@@ -171,8 +172,9 @@ def main(channel: Channel):
         # Invoke the function and handle its result
         result = invoke_function(function_stub, context, task_id)
         if result.exception:
-            handle_task_failure(result, gateway_stub, task_id, container_id, container_hostname)
             thread_pool.shutdown(wait=False)
+            handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
+            print(result.exception)
             raise result.exception
 
         # End the task and send callback
@@ -263,8 +265,8 @@ def complete_task(
 
 
 def handle_task_failure(
-    result: InvokeResult,
     gateway_stub: GatewayServiceStub,
+    result: InvokeResult,
     task_id: str,
     container_id: str,
     container_hostname: str,
