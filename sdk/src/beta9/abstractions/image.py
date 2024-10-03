@@ -12,7 +12,7 @@ from ..clients.image import (
     VerifyImageBuildRequest,
     VerifyImageBuildResponse,
 )
-from ..type import PythonVersion
+from ..type import PythonVersion, PythonVersionAlias
 
 try:
     from typing import TypeAlias
@@ -51,7 +51,7 @@ class Image(BaseAbstraction):
 
     def __init__(
         self,
-        python_version: Union[PythonVersion, str] = PythonVersion.Python310,
+        python_version: PythonVersionAlias = PythonVersion.Python310,
         python_packages: Union[List[str], str] = [],
         commands: List[str] = [],
         base_image: Optional[str] = None,
