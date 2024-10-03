@@ -17,6 +17,7 @@ from starlette.responses import Response
 
 from ..clients.gateway import (
     EndTaskRequest,
+    EndTaskResponse,
     GatewayServiceStub,
     SignPayloadRequest,
     SignPayloadResponse,
@@ -30,18 +31,18 @@ USER_CACHE_DIR = "/cache"
 
 @dataclass
 class Config:
-    container_id: Optional[str]
-    container_hostname: Optional[str]
-    stub_id: Optional[str]
-    stub_type: Optional[str]
-    workers: Optional[int]
-    keep_warm_seconds: Optional[int]
-    timeout: Optional[int]
+    container_id: str
+    container_hostname: str
+    stub_id: str
+    stub_type: str
+    workers: int
+    keep_warm_seconds: int
+    timeout: int
     python_version: str
     handler: str
-    on_start: Optional[str]
-    callback_url: Optional[str]
-    task_id: Optional[str]
+    on_start: str
+    callback_url: str
+    task_id: str
     bind_port: int
     volume_cache_map: Dict
 
@@ -232,7 +233,7 @@ def end_task_and_send_callback(
     payload: Any,
     end_task_request: EndTaskRequest,
     override_callback_url: Optional[str] = None,
-):
+) -> EndTaskResponse:
     resp = gateway_stub.end_task(end_task_request)
 
     send_callback(
