@@ -158,7 +158,7 @@ def main(channel: Channel):
 
         # Start monitoring the task
         thread_pool = ThreadPoolExecutor()
-        monitor_future = thread_pool.submit(
+        thread_pool.submit(
             _monitor_task,
             context=context,
             stub_id=config.stub_id,
@@ -169,16 +169,10 @@ def main(channel: Channel):
         )
 
         # Invoke the function and handle its result
-        result = InvokeResult()
-        try:
-            result = invoke_function(function_stub, context, task_id)
-            if result.exception:
-                raise result.exception
-        except BaseException:
+        result = invoke_function(function_stub, context, task_id)
+        if result.exception:
             handle_task_failure(result, gateway_stub, task_id, container_id, container_hostname)
-            raise
-        finally:
-            monitor_future.cancel()
+            raise result.exception
 
         # End the task and send callback
         complete_task(
