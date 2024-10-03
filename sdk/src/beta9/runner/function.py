@@ -157,38 +157,40 @@ def main(channel: Channel):
         context = FunctionContext.new(config=config, task_id=task_id)
 
         # Start monitoring the task
-        with ThreadPoolExecutor() as thread_pool:
-            monitor_future = thread_pool.submit(
-                _monitor_task,
-                context=context,
-                stub_id=config.stub_id,
-                task_id=task_id,
-                container_id=container_id,
-                function_stub=function_stub,
-                gateway_stub=gateway_stub,
-            )
+        thread_pool = ThreadPoolExecutor()
+        monitor_future = thread_pool.submit(
+            _monitor_task,
+            context=context,
+            stub_id=config.stub_id,
+            task_id=task_id,
+            container_id=container_id,
+            function_stub=function_stub,
+            gateway_stub=gateway_stub,
+        )
 
-            # Invoke the function and handle its result
-            result = InvokeResult()
-            try:
-                result = invoke_function(function_stub, context, task_id)
-                if result.exception:
-                    raise result.exception
-            except BaseException:
-                handle_task_failure(result, gateway_stub, task_id, container_id, container_hostname)
-                raise
-            finally:
-                monitor_future.cancel()
+        # Invoke the function and handle its result
+        result = InvokeResult()
+        try:
+            result = invoke_function(function_stub, context, task_id)
+            if result.exception:
+                raise result.exception
+        except BaseException:
+            handle_task_failure(result, gateway_stub, task_id, container_id, container_hostname)
+            raise
+        finally:
+            monitor_future.cancel()
 
-            # End the task and send callback
-            complete_task(
-                gateway_stub,
-                result,
-                task_id,
-                container_id,
-                container_hostname,
-                start_time,
-            )
+        # End the task and send callback
+        complete_task(
+            gateway_stub,
+            result,
+            task_id,
+            container_id,
+            container_hostname,
+            start_time,
+        )
+
+        thread_pool.shutdown(wait=False)
 
 
 def start_task(
