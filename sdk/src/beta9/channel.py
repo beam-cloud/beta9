@@ -181,6 +181,7 @@ def runner_context():
         config = get_config_context()
         channel: Channel = get_channel(config)
         yield channel
+        channel.close()
     except RunnerException as exc:
         exit_code = exc.code
     except SystemExit as exc:
@@ -192,8 +193,6 @@ def runner_context():
         if exit_code != 0:
             print(traceback.format_exc())
             sys.exit(exit_code)
-
-        channel.close()
 
 
 def with_runner_context(func: Callable) -> Callable:
