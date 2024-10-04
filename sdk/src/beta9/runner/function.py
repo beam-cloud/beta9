@@ -30,7 +30,7 @@ from ..exceptions import (
     TaskEndError,
     TaskStartError,
 )
-from ..logging import StdoutJsonInterceptor
+from ..logging import json_output_interceptor
 from ..runner.common import (
     FunctionContext,
     FunctionHandler,
@@ -135,6 +135,7 @@ def _monitor_task(
             os._exit(0)
 
 
+@json_output_interceptor(task_id=config.task_id)
 @handle_error(print_traceback=False)
 @pass_channel
 def main(channel: Channel):
@@ -145,49 +146,48 @@ def main(channel: Channel):
     if not task_id:
         raise InvalidRunnerEnvironmentError
 
-    with StdoutJsonInterceptor(task_id=task_id):
-        container_id = config.container_id
-        container_hostname = config.container_hostname
+    container_id = config.container_id
+    container_hostname = config.container_hostname
 
-        # Start the task
-        start_time = time.time()
-        start_task_response = start_task(gateway_stub, task_id, container_id)
-        if not start_task_response.ok:
-            raise TaskStartError
+    # Start the task
+    start_time = time.time()
+    start_task_response = start_task(gateway_stub, task_id, container_id)
+    if not start_task_response.ok:
+        raise TaskStartError
 
-        context = FunctionContext.new(config=config, task_id=task_id)
+    context = FunctionContext.new(config=config, task_id=task_id)
 
-        # Start monitoring the task
-        thread_pool = ThreadPoolExecutor()
-        thread_pool.submit(
-            _monitor_task,
-            context=context,
-            stub_id=config.stub_id,
-            task_id=task_id,
-            container_id=container_id,
-            function_stub=function_stub,
-            gateway_stub=gateway_stub,
-        )
+    # Start monitoring the task
+    thread_pool = ThreadPoolExecutor()
+    thread_pool.submit(
+        _monitor_task,
+        context=context,
+        stub_id=config.stub_id,
+        task_id=task_id,
+        container_id=container_id,
+        function_stub=function_stub,
+        gateway_stub=gateway_stub,
+    )
 
-        # Invoke the function and handle its result
-        result = invoke_function(function_stub, context, task_id)
-        if result.exception:
-            thread_pool.shutdown(wait=False)
-            handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
-            print(result.exception)
-            raise result.exception
-
-        # End the task and send callback
-        complete_task(
-            gateway_stub,
-            result,
-            task_id,
-            container_id,
-            container_hostname,
-            start_time,
-        )
-
+    # Invoke the function and handle its result
+    result = invoke_function(function_stub, context, task_id)
+    if result.exception:
         thread_pool.shutdown(wait=False)
+        handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
+        print(result.exception)
+        raise result.exception
+
+    # End the task and send callback
+    complete_task(
+        gateway_stub,
+        result,
+        task_id,
+        container_id,
+        container_hostname,
+        start_time,
+    )
+
+    thread_pool.shutdown(wait=False)
 
 
 def start_task(
