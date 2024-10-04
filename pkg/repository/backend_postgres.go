@@ -645,8 +645,15 @@ func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Contex
 }
 
 func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error) {
+	interval := strings.ToLower(filters.Interval)
+	if interval == "" {
+		interval = "hour"
+	}
+
+	date_truc := fmt.Sprintf("DATE_TRUNC('%s', t.created_at)", interval)
+
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		`DATE_TRUNC('hour', t.created_at) as time, COUNT(t.id) as count,
+		date_truc + ` as time, COUNT(t.id) as count,
 			json_build_object(
 				'COMPLETE', SUM(CASE WHEN t.status = 'COMPLETE' THEN 1 ELSE 0 END),
 				'ERROR', SUM(CASE WHEN t.status = 'ERROR' THEN 1 ELSE 0 END),
