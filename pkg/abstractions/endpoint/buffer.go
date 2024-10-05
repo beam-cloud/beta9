@@ -268,8 +268,8 @@ func (rb *RequestBuffer) acquireRequestToken(containerId string) error {
 		return err
 	}
 
-	// If the token count is negative, we exceeded our threshold of available request tokens
-	// -- just reverse the operation
+	// If the token count is negative, we exceeded our threshold of
+	// available request tokens, just reverse the operation
 	if tokenCount < 0 {
 		rb.rdb.Incr(rb.ctx, tokenKey)
 		return errors.New("too many in-flight requests")
