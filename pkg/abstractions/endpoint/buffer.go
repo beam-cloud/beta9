@@ -33,6 +33,7 @@ type request struct {
 	ctx         echo.Context
 	payload     *types.TaskPayload
 	taskMessage *types.TaskMessage
+	task        *EndpointTask
 	done        chan bool
 }
 
@@ -92,13 +93,17 @@ func NewRequestBuffer(
 	return b
 }
 
-func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPayload, taskMessage *types.TaskMessage) error {
+func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
 	done := make(chan bool)
 	rb.buffer.Push(request{
-		ctx:         ctx,
-		done:        done,
-		payload:     payload,
-		taskMessage: taskMessage,
+		ctx:  ctx,
+		done: done,
+		payload: &types.TaskPayload{
+			Args:   task.msg.Args,
+			Kwargs: task.msg.Kwargs,
+		},
+		task:        task,
+		taskMessage: task.msg,
 	}, false)
 
 	for {
@@ -130,7 +135,8 @@ func (rb *RequestBuffer) processRequests() {
 			}
 
 			if req.ctx.Request().Context().Err() != nil {
-				// Context has been cancelled
+				// Request context has been cancelled, mark task as cancelled
+				req.task.Cancel(context.Background(), types.TaskCancellationReason(types.TaskRequestCancelled))
 				continue
 			}
 

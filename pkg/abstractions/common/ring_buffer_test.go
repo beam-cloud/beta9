@@ -107,7 +107,7 @@ func TestRingBuffer_PriorityPushOnFullBuffer(t *testing.T) {
 	rb.Push(3, false)
 	rb.Push(0, true) // priority push to head
 
-	// First we insert 1,2, and 3:
+	// First we insert 1, 2, and 3:
 	// -> [1,2,3]
 
 	// Then we insert 0 with priority, which should end up like:
