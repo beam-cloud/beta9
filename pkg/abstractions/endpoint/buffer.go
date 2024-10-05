@@ -30,11 +30,10 @@ const (
 )
 
 type request struct {
-	ctx         echo.Context
-	payload     *types.TaskPayload
-	taskMessage *types.TaskMessage
-	task        *EndpointTask
-	done        chan bool
+	ctx     echo.Context
+	payload *types.TaskPayload
+	task    *EndpointTask
+	done    chan bool
 }
 
 type container struct {
@@ -102,8 +101,7 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 			Args:   task.msg.Args,
 			Kwargs: task.msg.Kwargs,
 		},
-		task:        task,
-		taskMessage: task.msg,
+		task: task,
 	}, false)
 
 	for {
@@ -401,8 +399,8 @@ func (rb *RequestBuffer) handleHttpRequest(req request, c container) {
 		}
 	}
 
-	httpReq.Header.Add("X-TASK-ID", req.taskMessage.TaskId) // Add task ID to header
-	go rb.heartBeat(req, c.id)                              // Send heartbeat via redis for duration of request
+	httpReq.Header.Add("X-TASK-ID", req.task.msg.TaskId) // Add task ID to header
+	go rb.heartBeat(req, c.id)                           // Send heartbeat via redis for duration of request
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -462,13 +460,13 @@ func (rb *RequestBuffer) heartBeat(req request, containerId string) {
 	ticker := time.NewTicker(endpointRequestHeartbeatInterval)
 	defer ticker.Stop()
 
-	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskMessage.TaskId), containerId, endpointRequestHeartbeatInterval)
+	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId), containerId, endpointRequestHeartbeatInterval)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskMessage.TaskId), containerId, endpointRequestHeartbeatInterval)
+			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId), containerId, endpointRequestHeartbeatInterval)
 		}
 	}
 }
