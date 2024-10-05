@@ -70,7 +70,7 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		return err
 	}
 
-	return nil
+	return t.es.taskDispatcher.Complete(ctx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
 }
 
 func (t *EndpointTask) HeartBeat(ctx context.Context) (bool, error) {
