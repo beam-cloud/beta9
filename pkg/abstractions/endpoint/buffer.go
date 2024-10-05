@@ -250,7 +250,6 @@ func (rb *RequestBuffer) requestTokens(containerId string) (int, error) {
 	} else if err == redis.Nil {
 		maxTokens := int(rb.stubConfig.Workers)
 
-		// Try to set the key if it doesn't exist
 		created, err := rb.rdb.SetNX(rb.ctx, tokenKey, maxTokens, 0).Result()
 		if err != nil {
 			return 0, err
@@ -260,12 +259,12 @@ func (rb *RequestBuffer) requestTokens(containerId string) (int, error) {
 			return maxTokens, nil
 		}
 
-		maxTokens, err = rb.rdb.Get(rb.ctx, tokenKey).Int()
+		tokens, err := rb.rdb.Get(rb.ctx, tokenKey).Int()
 		if err != nil {
 			return 0, err
 		}
 
-		return maxTokens, nil
+		return tokens, nil
 	}
 
 	return val, nil
