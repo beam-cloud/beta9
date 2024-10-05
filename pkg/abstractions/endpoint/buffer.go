@@ -323,16 +323,18 @@ func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
 
 func (rb *RequestBuffer) handleRequest(req request) {
 	rb.availableContainersLock.RLock()
-	defer rb.availableContainersLock.RUnlock()
 
 	if len(rb.availableContainers) == 0 {
 		rb.buffer.Push(req)
+		rb.availableContainersLock.RUnlock()
 		return
 	}
 
 	// Select an available container to forward the request to (whichever one has the lowest # of inflight requests)
 	// Basically least-connections load balancing
 	c := rb.availableContainers[0]
+
+	rb.availableContainersLock.RUnlock()
 
 	err := rb.acquireRequestToken(c.id)
 	if err != nil {
