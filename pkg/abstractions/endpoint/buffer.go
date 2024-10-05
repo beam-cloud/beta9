@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	requestProcessingInterval time.Duration = time.Millisecond * 500
+	requestProcessingInterval time.Duration = time.Millisecond * 100
 )
 
 type request struct {
