@@ -314,16 +314,20 @@ func (l *RedisLock) Release(key string) error {
 }
 
 // Attempts to copy field values of the same name from the src to the dst struct.
-func CopyStruct(src, dst interface{}) {
+func CopyStruct(src, dst any) {
 	srcVal := reflect.ValueOf(src).Elem()
 	dstVal := reflect.ValueOf(dst).Elem()
 
 	for i := 0; i < srcVal.NumField(); i++ {
-		srcField := srcVal.Type().Field(i).Name
-		dstField := dstVal.FieldByName(srcField)
+		srcField := srcVal.Field(i)
+		dstField := dstVal.FieldByName(srcVal.Type().Field(i).Name)
 
 		if dstField.IsValid() && dstField.CanSet() {
-			dstField.Set(srcVal.Field(i))
+			if srcField.Type() == dstField.Type() {
+				dstField.Set(srcVal.Field(i))
+			} else if srcField.Kind() == reflect.String && dstField.Kind() == reflect.String {
+				dstField.Set(reflect.ValueOf(srcField.String()))
+			}
 		}
 	}
 }
