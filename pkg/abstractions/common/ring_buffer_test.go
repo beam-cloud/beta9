@@ -39,7 +39,7 @@ func TestRingBuffer_PushAndPop(t *testing.T) {
 }
 
 func TestRingBuffer_PriorityPush(t *testing.T) {
-	rb := NewRingBuffer[int](3)
+	rb := NewRingBuffer[int](4)
 
 	// Test priority push
 	rb.Push(1, false)
@@ -60,6 +60,11 @@ func TestRingBuffer_PriorityPush(t *testing.T) {
 	val, ok = rb.Pop()
 	if !ok || val != 2 {
 		t.Errorf("expected 2, got %v", val)
+	}
+
+	val, ok = rb.Pop()
+	if !ok || val != 3 {
+		t.Errorf("expected 3, got %v", val)
 	}
 }
 
