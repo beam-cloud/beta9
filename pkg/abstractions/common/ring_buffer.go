@@ -25,10 +25,11 @@ func (rb *RingBuffer[T]) Push(request T, priority bool) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
+	// If priority is true, move head backward to insert at the front
 	if priority {
-		// Priority insert: move head backward to insert at the front
 		rb.head = (rb.head - 1 + rb.size) % rb.size
 		rb.buffer[rb.head] = request
+
 		if rb.count < rb.size {
 			rb.count++
 		} else {
@@ -36,11 +37,12 @@ func (rb *RingBuffer[T]) Push(request T, priority bool) {
 			rb.tail = (rb.tail - 1 + rb.size) % rb.size
 		}
 	} else {
-		// Normal FIFO insert: insert at the tail
+		// Normal FIFO insert, just insert at the tail
 		rb.buffer[rb.tail] = request
 		rb.tail = (rb.tail + 1) % rb.size
+
+		// Buffer is full, move head forward to overwrite oldest element
 		if rb.count == rb.size {
-			// Buffer is full, move head forward to overwrite oldest element
 			rb.head = (rb.head + 1) % rb.size
 		} else {
 			rb.count++
