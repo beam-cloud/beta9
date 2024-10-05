@@ -99,7 +99,7 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPay
 		done:        done,
 		payload:     payload,
 		taskMessage: taskMessage,
-	})
+	}, false)
 
 	for {
 		select {
@@ -325,7 +325,7 @@ func (rb *RequestBuffer) handleRequest(req request) {
 	rb.availableContainersLock.RLock()
 
 	if len(rb.availableContainers) == 0 {
-		rb.buffer.Push(req)
+		rb.buffer.Push(req, true)
 		rb.availableContainersLock.RUnlock()
 		return
 	}
@@ -338,7 +338,7 @@ func (rb *RequestBuffer) handleRequest(req request) {
 
 	err := rb.acquireRequestToken(c.id)
 	if err != nil {
-		rb.buffer.Push(req)
+		rb.buffer.Push(req, true)
 		return
 	}
 
