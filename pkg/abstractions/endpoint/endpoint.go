@@ -45,8 +45,8 @@ type HttpEndpointService struct {
 }
 
 var (
-	DefaultEndpointRequestTimeoutS int    = 600  // 10 minutes
-	DefaultEndpointRequestTTL      uint32 = 1200 // 20 minutes
+	DefaultEndpointRequestTimeoutS int    = 600 // 10 minutes
+	DefaultEndpointRequestTTL      uint32 = 600 // 10 minutes
 	ASGIRoutePrefix                string = "/asgi"
 
 	endpointContainerPrefix                 string        = "endpoint"
@@ -237,7 +237,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 		return nil, err
 	}
 
-	requestBufferSize := int(stubConfig.MaxPendingTasks)
+	requestBufferSize := int(stubConfig.MaxPendingTasks) + 1
 	if requestBufferSize < endpointMinRequestBufferSize {
 		requestBufferSize = endpointMinRequestBufferSize
 	}
@@ -311,7 +311,7 @@ type keys struct{}
 var (
 	endpointKeepWarmLock     string = "endpoint:%s:%s:keep_warm_lock:%s"
 	endpointInstanceLock     string = "endpoint:%s:%s:instance_lock"
-	endpointRequestsInFlight string = "endpoint:%s:%s:requests_in_flight:%s"
+	endpointRequestTokens    string = "endpoint:%s:%s:request_tokens:%s"
 	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s"
 	endpointServeLock        string = "endpoint:%s:%s:serve_lock"
 )
@@ -324,8 +324,8 @@ func (k *keys) endpointInstanceLock(workspaceName, stubId string) string {
 	return fmt.Sprintf(endpointInstanceLock, workspaceName, stubId)
 }
 
-func (k *keys) endpointRequestsInFlight(workspaceName, stubId, containerId string) string {
-	return fmt.Sprintf(endpointRequestsInFlight, workspaceName, stubId, containerId)
+func (k *keys) endpointRequestTokens(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(endpointRequestTokens, workspaceName, stubId, containerId)
 }
 
 func (k *keys) endpointRequestHeartbeat(workspaceName, stubId, taskId string) string {

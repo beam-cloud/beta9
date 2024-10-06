@@ -30,10 +30,7 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 		return err
 	}
 
-	return instance.buffer.ForwardRequest(echoCtx, &types.TaskPayload{
-		Args:   t.msg.Args,
-		Kwargs: t.msg.Kwargs,
-	}, t.msg)
+	return instance.buffer.ForwardRequest(echoCtx, t)
 }
 
 func (t *EndpointTask) Retry(ctx context.Context) error {
@@ -62,6 +59,8 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		task.Status = types.TaskStatusExpired
 	case types.TaskExceededRetryLimit:
 		task.Status = types.TaskStatusError
+	case types.TaskRequestCancelled:
+		task.Status = types.TaskStatusCancelled
 	default:
 		task.Status = types.TaskStatusError
 	}
@@ -71,7 +70,7 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		return err
 	}
 
-	return nil
+	return t.es.taskDispatcher.Complete(ctx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
 }
 
 func (t *EndpointTask) HeartBeat(ctx context.Context) (bool, error) {

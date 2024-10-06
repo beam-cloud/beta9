@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,7 +12,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -25,11 +25,15 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+const (
+	requestProcessingInterval time.Duration = time.Millisecond * 50
+)
+
 type request struct {
-	ctx         echo.Context
-	payload     *types.TaskPayload
-	taskMessage *types.TaskMessage
-	done        chan bool
+	ctx     echo.Context
+	payload *types.TaskPayload
+	task    *EndpointTask
+	done    chan bool
 }
 
 type container struct {
@@ -39,11 +43,10 @@ type container struct {
 }
 
 type RequestBuffer struct {
-	ctx        context.Context
-	httpClient *http.Client
-	tailscale  *network.Tailscale
-	tsConfig   types.TailscaleConfig
-	// tsClients               *common.SafeMap[*http.Client]
+	ctx                     context.Context
+	httpClient              *http.Client
+	tailscale               *network.Tailscale
+	tsConfig                types.TailscaleConfig
 	stubId                  string
 	stubConfig              *types.StubConfigV1
 	workspace               *types.Workspace
@@ -52,10 +55,7 @@ type RequestBuffer struct {
 	buffer                  *abstractions.RingBuffer[request]
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
-
-	length atomic.Int32
-
-	isASGI bool
+	isASGI                  bool
 }
 
 func NewRequestBuffer(
@@ -71,23 +71,19 @@ func NewRequestBuffer(
 	isASGI bool,
 ) *RequestBuffer {
 	b := &RequestBuffer{
-		ctx:                 ctx,
-		rdb:                 rdb,
-		workspace:           workspace,
-		stubId:              stubId,
-		stubConfig:          stubConfig,
-		buffer:              abstractions.NewRingBuffer[request](size),
-		availableContainers: []container{},
-
+		ctx:                     ctx,
+		rdb:                     rdb,
+		workspace:               workspace,
+		stubId:                  stubId,
+		stubConfig:              stubConfig,
+		buffer:                  abstractions.NewRingBuffer[request](size),
+		availableContainers:     []container{},
 		availableContainersLock: sync.RWMutex{},
 		containerRepo:           containerRepo,
 		httpClient:              &http.Client{},
-		length:                  atomic.Int32{},
-
-		tailscale: tailscale,
-		tsConfig:  tsConfig,
-
-		isASGI: isASGI,
+		tailscale:               tailscale,
+		tsConfig:                tsConfig,
+		isASGI:                  isASGI,
 	}
 
 	go b.discoverContainers()
@@ -96,19 +92,17 @@ func NewRequestBuffer(
 	return b
 }
 
-func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPayload, taskMessage *types.TaskMessage) error {
+func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
 	done := make(chan bool)
 	rb.buffer.Push(request{
-		ctx:         ctx,
-		done:        done,
-		payload:     payload,
-		taskMessage: taskMessage,
-	})
-
-	rb.length.Add(1)
-	defer func() {
-		rb.length.Add(-1)
-	}()
+		ctx:  ctx,
+		done: done,
+		payload: &types.TaskPayload{
+			Args:   task.msg.Args,
+			Kwargs: task.msg.Kwargs,
+		},
+		task: task,
+	}, false)
 
 	for {
 		select {
@@ -116,7 +110,7 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, payload *types.TaskPay
 			return nil
 		case <-done:
 			return nil
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(requestProcessingInterval):
 		}
 	}
 }
@@ -127,24 +121,26 @@ func (rb *RequestBuffer) processRequests() {
 		case <-rb.ctx.Done():
 			return
 		default:
+			if len(rb.availableContainers) == 0 {
+				time.Sleep(requestProcessingInterval)
+				continue
+			}
+
 			req, ok := rb.buffer.Pop()
 			if !ok {
-				time.Sleep(time.Millisecond * 100)
+				time.Sleep(requestProcessingInterval)
 				continue
 			}
 
 			if req.ctx.Request().Context().Err() != nil {
-				// Context has been cancelled
+				// Request context has been cancelled, mark task as cancelled
+				rb.cancelInFlightTask(req.task)
 				continue
 			}
 
 			go rb.handleRequest(req)
 		}
 	}
-}
-
-func (rb *RequestBuffer) Length() int {
-	return int(rb.length.Load())
 }
 
 func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
@@ -198,10 +194,14 @@ func (rb *RequestBuffer) discoverContainers() {
 						return
 					}
 
-					inFlightRequests, err := rb.requestsInFlight(cs.ContainerId)
+					availableTokens, err := rb.requestTokens(cs.ContainerId)
 					if err != nil {
 						return
 					}
+
+					// Let's say we have 5 workers available, and there are three tokens left in this bucket
+					// that means we currently have 5-3 -> 2 requests in flight
+					inFlightRequests := int(rb.stubConfig.Workers) - availableTokens
 
 					if rb.checkAddressIsReady(containerAddress) {
 						availableContainersChan <- container{
@@ -209,6 +209,7 @@ func (rb *RequestBuffer) discoverContainers() {
 							address:          containerAddress,
 							inFlightRequests: inFlightRequests,
 						}
+
 						return
 					}
 				}(containerState)
@@ -232,29 +233,55 @@ func (rb *RequestBuffer) discoverContainers() {
 			rb.availableContainers = availableContainers
 			rb.availableContainersLock.Unlock()
 
-			time.Sleep(1 * time.Second)
+			time.Sleep(500 * time.Millisecond)
 		}
 	}
 }
 
-func (rb *RequestBuffer) requestsInFlight(containerId string) (int, error) {
-	val, err := rb.rdb.Get(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId)).Int()
+func (rb *RequestBuffer) requestTokens(containerId string) (int, error) {
+	tokenKey := Keys.endpointRequestTokens(rb.workspace.Name, rb.stubId, containerId)
+
+	val, err := rb.rdb.Get(rb.ctx, tokenKey).Int()
 	if err != nil && err != redis.Nil {
 		return 0, err
 	} else if err == redis.Nil {
-		return 0, nil
+		maxTokens := int(rb.stubConfig.Workers)
+
+		created, err := rb.rdb.SetNX(rb.ctx, tokenKey, maxTokens, 0).Result()
+		if err != nil {
+			return 0, err
+		}
+
+		if created {
+			return maxTokens, nil
+		}
+
+		tokens, err := rb.rdb.Get(rb.ctx, tokenKey).Int()
+		if err != nil {
+			return 0, err
+		}
+
+		return tokens, nil
 	}
 
 	return val, nil
 }
 
-func (rb *RequestBuffer) incrementRequestsInFlight(containerId string) error {
-	err := rb.rdb.Incr(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId)).Err()
+func (rb *RequestBuffer) acquireRequestToken(containerId string) error {
+	tokenKey := Keys.endpointRequestTokens(rb.workspace.Name, rb.stubId, containerId)
+	tokenCount, err := rb.rdb.Decr(rb.ctx, tokenKey).Result()
 	if err != nil {
 		return err
 	}
 
-	err = rb.rdb.Expire(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId), time.Duration(rb.stubConfig.TaskPolicy.Timeout)*time.Second).Err()
+	// If the token count is negative, we exceeded our threshold of
+	// available request tokens, just reverse the operation
+	if tokenCount < 0 {
+		rb.rdb.Incr(rb.ctx, tokenKey)
+		return errors.New("too many in-flight requests")
+	}
+
+	err = rb.rdb.Expire(rb.ctx, tokenKey, time.Duration(rb.stubConfig.TaskPolicy.Timeout)*time.Second).Err()
 	if err != nil {
 		return err
 	}
@@ -262,13 +289,20 @@ func (rb *RequestBuffer) incrementRequestsInFlight(containerId string) error {
 	return nil
 }
 
-func (rb *RequestBuffer) decrementRequestsInFlight(containerId string) error {
-	err := rb.rdb.Decr(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId)).Err()
+func (rb *RequestBuffer) releaseRequestToken(containerId string) error {
+	// TODO: if a gateway crashes before releasing the token, it could lead to a drift
+	// in the count of available request tokens for a particular container. To handle this
+	// we could move the release logic to the task implementation (e.g. task.Complete), so that
+	// it handles the release of the token and is not tied to a specific gateway
+
+	tokenKey := Keys.endpointRequestTokens(rb.workspace.Name, rb.stubId, containerId)
+
+	err := rb.rdb.Incr(rb.ctx, tokenKey).Err()
 	if err != nil {
 		return err
 	}
 
-	err = rb.rdb.Expire(rb.ctx, Keys.endpointRequestsInFlight(rb.workspace.Name, rb.stubId, containerId), time.Duration(rb.stubConfig.TaskPolicy.Timeout)*time.Second).Err()
+	err = rb.rdb.Expire(rb.ctx, tokenKey, time.Duration(rb.stubConfig.TaskPolicy.Timeout)*time.Second).Err()
 	if err != nil {
 		return err
 	}
@@ -304,19 +338,22 @@ func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
 
 func (rb *RequestBuffer) handleRequest(req request) {
 	rb.availableContainersLock.RLock()
+
 	if len(rb.availableContainers) == 0 {
+		rb.buffer.Push(req, true)
 		rb.availableContainersLock.RUnlock()
-		rb.buffer.Push(req)
 		return
 	}
 
 	// Select an available container to forward the request to (whichever one has the lowest # of inflight requests)
 	// Basically least-connections load balancing
 	c := rb.availableContainers[0]
+
 	rb.availableContainersLock.RUnlock()
 
-	err := rb.incrementRequestsInFlight(c.id)
+	err := rb.acquireRequestToken(c.id)
 	if err != nil {
+		rb.buffer.Push(req, true)
 		return
 	}
 
@@ -373,8 +410,8 @@ func (rb *RequestBuffer) handleHttpRequest(req request, c container) {
 		}
 	}
 
-	httpReq.Header.Add("X-TASK-ID", req.taskMessage.TaskId) // Add task ID to header
-	go rb.heartBeat(req, c.id)                              // Send heartbeat via redis for duration of request
+	httpReq.Header.Add("X-TASK-ID", req.task.msg.TaskId) // Add task ID to header
+	go rb.heartBeat(req, c.id)                           // Send heartbeat via redis for duration of request
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -429,18 +466,27 @@ func (rb *RequestBuffer) handleHttpRequest(req request, c container) {
 	}
 }
 
+func (rb *RequestBuffer) cancelInFlightTask(task *EndpointTask) {
+	task.Cancel(context.Background(), types.TaskCancellationReason(types.TaskRequestCancelled))
+}
+
 func (rb *RequestBuffer) heartBeat(req request, containerId string) {
 	ctx := req.ctx.Request().Context()
 	ticker := time.NewTicker(endpointRequestHeartbeatInterval)
 	defer ticker.Stop()
 
-	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskMessage.TaskId), containerId, endpointRequestHeartbeatInterval)
+	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId), containerId, endpointRequestHeartbeatInterval)
 	for {
 		select {
 		case <-ctx.Done():
+			if err := req.ctx.Request().Context().Err(); err == context.Canceled {
+				rb.cancelInFlightTask(req.task)
+				return
+			}
+
 			return
 		case <-ticker.C:
-			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.taskMessage.TaskId), containerId, endpointRequestHeartbeatInterval)
+			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId), containerId, endpointRequestHeartbeatInterval)
 		}
 	}
 }
@@ -450,12 +496,13 @@ func (rb *RequestBuffer) afterRequest(req request, containerId string) {
 		req.done <- true
 	}()
 
-	defer rb.decrementRequestsInFlight(containerId)
+	defer rb.releaseRequestToken(containerId)
 
 	// Set keep warm lock
 	if rb.stubConfig.KeepWarmSeconds == 0 {
 		return
 	}
+
 	rb.rdb.SetEx(
 		context.Background(),
 		Keys.endpointKeepWarmLock(rb.workspace.Name, rb.stubId, containerId),
