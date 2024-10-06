@@ -290,6 +290,11 @@ func (rb *RequestBuffer) acquireRequestToken(containerId string) error {
 }
 
 func (rb *RequestBuffer) releaseRequestToken(containerId string) error {
+	// TODO: if a gateway crashes before releasing the token, it could lead to a drift
+	// in the count of available request tokens for a particular container. To handle this
+	// we could move the release logic to the task implementation (e.g. task.Complete), so that
+	// it handles the release of the token and is not tied to a specific gateway
+
 	tokenKey := Keys.endpointRequestTokens(rb.workspace.Name, rb.stubId, containerId)
 
 	err := rb.rdb.Incr(rb.ctx, tokenKey).Err()
