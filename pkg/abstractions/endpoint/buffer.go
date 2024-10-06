@@ -110,7 +110,6 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 			return nil
 		case <-done:
 			return nil
-		case <-time.After(requestProcessingInterval):
 		}
 	}
 }
@@ -478,14 +477,7 @@ func (rb *RequestBuffer) heartBeat(req request, containerId string) {
 	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId), containerId, endpointRequestHeartbeatInterval)
 	for {
 		select {
-		case <-req.done:
-			return
 		case <-ctx.Done():
-			if err := req.ctx.Request().Context().Err(); err == context.Canceled {
-				rb.cancelInFlightTask(req.task)
-				return
-			}
-
 			return
 		case <-ticker.C:
 			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId), containerId, endpointRequestHeartbeatInterval)
