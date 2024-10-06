@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	requestProcessingInterval time.Duration = time.Millisecond * 100
+	requestProcessingInterval time.Duration = time.Millisecond * 50
 )
 
 type request struct {
@@ -196,10 +196,6 @@ func (rb *RequestBuffer) discoverContainers() {
 
 					availableTokens, err := rb.requestTokens(cs.ContainerId)
 					if err != nil {
-						return
-					}
-
-					if availableTokens <= 0 {
 						return
 					}
 
