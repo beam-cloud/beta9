@@ -237,7 +237,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 		return nil, err
 	}
 
-	requestBufferSize := int(stubConfig.MaxPendingTasks)
+	requestBufferSize := int(stubConfig.MaxPendingTasks) + 1
 	if requestBufferSize < endpointMinRequestBufferSize {
 		requestBufferSize = endpointMinRequestBufferSize
 	}

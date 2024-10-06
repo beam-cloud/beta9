@@ -209,6 +209,7 @@ func (rb *RequestBuffer) discoverContainers() {
 							address:          containerAddress,
 							inFlightRequests: inFlightRequests,
 						}
+
 						return
 					}
 				}(containerState)
