@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	requestProcessingInterval time.Duration = time.Millisecond * 50
+	requestProcessingInterval time.Duration = time.Millisecond * 100
 )
 
 type request struct {
@@ -478,6 +478,8 @@ func (rb *RequestBuffer) heartBeat(req request, containerId string) {
 	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId), containerId, endpointRequestHeartbeatInterval)
 	for {
 		select {
+		case <-req.done:
+			return
 		case <-ctx.Done():
 			if err := req.ctx.Request().Context().Err(); err == context.Canceled {
 				rb.cancelInFlightTask(req.task)
