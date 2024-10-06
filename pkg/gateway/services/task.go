@@ -70,6 +70,12 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 		return &pb.EndTaskResponse{Ok: false}, nil
 	}
 
+	if task.Status.IsCompleted() {
+		return &pb.EndTaskResponse{
+			Ok: true,
+		}, nil
+	}
+
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatus(in.TaskStatus)
 

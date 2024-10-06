@@ -134,7 +134,7 @@ func (rb *RequestBuffer) processRequests() {
 
 			if req.ctx.Request().Context().Err() != nil {
 				// Request context has been cancelled, mark task as cancelled
-				req.task.Cancel(context.Background(), types.TaskCancellationReason(types.TaskRequestCancelled))
+				rb.cancelInFlightTask(req.task)
 				continue
 			}
 
@@ -461,6 +461,10 @@ func (rb *RequestBuffer) handleHttpRequest(req request, c container) {
 	}
 }
 
+func (rb *RequestBuffer) cancelInFlightTask(task *EndpointTask) {
+	task.Cancel(context.Background(), types.TaskCancellationReason(types.TaskRequestCancelled))
+}
+
 func (rb *RequestBuffer) heartBeat(req request, containerId string) {
 	ctx := req.ctx.Request().Context()
 	ticker := time.NewTicker(endpointRequestHeartbeatInterval)
@@ -470,6 +474,11 @@ func (rb *RequestBuffer) heartBeat(req request, containerId string) {
 	for {
 		select {
 		case <-ctx.Done():
+			if err := req.ctx.Request().Context().Err(); err == context.Canceled {
+				rb.cancelInFlightTask(req.task)
+				return
+			}
+
 			return
 		case <-ticker.C:
 			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId), containerId, endpointRequestHeartbeatInterval)
