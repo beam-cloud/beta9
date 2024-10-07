@@ -90,8 +90,7 @@ func TestCopyStruct(t *testing.T) {
 	options1 := &types.RedisConfig{ClientName: "hello", PoolSize: 10, ConnMaxLifetime: time.Second}
 	options2 := &types.RedisConfig{}
 
-	err := CopyStruct(options1, options2)
-	assert.NoError(t, err)
+	CopyStruct(options1, options2)
 
 	assert.Equal(t, options1, options2)
 }
