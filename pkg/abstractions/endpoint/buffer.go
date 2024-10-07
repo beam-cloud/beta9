@@ -430,7 +430,7 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	}
 
 	// Write status code header
-	req.ctx.Response().WriteHeader(resp.StatusCode)
+	req.ctx.Response().Writer.WriteHeader(resp.StatusCode)
 
 	// Check if we can stream the response
 	streamingSupported := true
