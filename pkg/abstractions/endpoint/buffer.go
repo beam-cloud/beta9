@@ -375,6 +375,8 @@ func (rb *RequestBuffer) handleWSRequest(req *request, c container) {
 }
 
 func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
+	defer rb.afterRequest(c.id)
+
 	request := req.ctx.Request()
 
 	requestBody := request.Body
@@ -419,7 +421,6 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	}
 
 	defer resp.Body.Close()
-	defer rb.afterRequest(c.id)
 
 	// Write response headers
 	for key, values := range resp.Header {
