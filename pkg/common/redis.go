@@ -14,6 +14,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/bsm/redislock"
+	"github.com/mitchellh/mapstructure"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -44,7 +45,9 @@ func WithClientName(name string) func(*redis.UniversalOptions) {
 
 func NewRedisClient(config types.RedisConfig, options ...func(*redis.UniversalOptions)) (*RedisClient, error) {
 	opts := &redis.UniversalOptions{}
-	CopyStruct(&config, opts)
+	if err := CopyStruct(&config, opts); err != nil {
+		return nil, err
+	}
 
 	for _, opt := range options {
 		opt(opts)
@@ -313,23 +316,17 @@ func (l *RedisLock) Release(key string) error {
 	return redislock.ErrLockNotHeld
 }
 
-// Attempts to copy field values of the same name from the src to the dst struct.
-func CopyStruct(src, dst any) {
-	srcVal := reflect.ValueOf(src).Elem()
-	dstVal := reflect.ValueOf(dst).Elem()
-
-	for i := 0; i < srcVal.NumField(); i++ {
-		srcField := srcVal.Field(i)
-		dstField := dstVal.FieldByName(srcVal.Type().Field(i).Name)
-
-		if dstField.IsValid() && dstField.CanSet() {
-			if srcField.Type() == dstField.Type() {
-				dstField.Set(srcVal.Field(i))
-			} else if srcField.Kind() == reflect.String && dstField.Kind() == reflect.String {
-				dstField.Set(reflect.ValueOf(srcField.String()))
-			}
-		}
+// Copies the values of a struct to another struct.
+func CopyStruct(src, dst any) error {
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           dst,
+	})
+	if err != nil {
+		return err
 	}
+
+	return decoder.Decode(src)
 }
 
 // Copies the result of HGetAll to a provided struct.

@@ -318,10 +318,14 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 	updatedWorker := &types.Worker{}
 	if w != nil {
 		// Populate updated worker with values from database
-		common.CopyStruct(w, updatedWorker)
+		if err := common.CopyStruct(w, updatedWorker); err != nil {
+			return fmt.Errorf("failed to copy worker struct from database: %v", err)
+		}
 	} else {
 		// Populate updated worker with values from function parameter
-		common.CopyStruct(worker, updatedWorker)
+		if err := common.CopyStruct(worker, updatedWorker); err != nil {
+			return fmt.Errorf("failed to copy worker struct from param: %v", err)
+		}
 	}
 
 	if updatedWorker.ResourceVersion != worker.ResourceVersion {
