@@ -68,7 +68,7 @@ jobs:
             const featsString = feats.map(feat => `- ${feat}`).join('\n');
             const fixesString = fixes.map(fix => `- fix ${fix}`).join('\n');
 
-            core.setOutput('name', release.name.replace(/\s+/g, '-'));
+            core.setOutput('name', release.name.replace(/(:\s)/g, '-v'));
             core.setOutput('feats', featsString);
             core.setOutput('fixes', fixesString);
             core.setOutput('created_at', formatDate(release.created_at));
