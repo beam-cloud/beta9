@@ -48,16 +48,18 @@ func (gws *GatewayService) ListWorkers(ctx context.Context, in *pb.ListWorkersRe
 			FreeGpuCount:  w.FreeGpuCount,
 		}
 
-		if containers, err := gws.containerRepo.GetActiveContainersByWorkerId(w.Id); err == nil {
-			pbWorkers[i].ActiveContainers = make([]*pb.Container, len(containers))
+		containers, err := gws.containerRepo.GetActiveContainersByWorkerId(w.Id)
+		if err != nil {
+			continue
+		}
 
-			for j, c := range containers {
-				pbWorkers[i].ActiveContainers[j] = &pb.Container{
-					ContainerId: c.ContainerId,
-					WorkspaceId: string(c.WorkspaceId),
-					Status:      string(c.Status),
-					ScheduledAt: timestamppb.New(time.Unix(c.ScheduledAt, 0)),
-				}
+		pbWorkers[i].ActiveContainers = make([]*pb.Container, len(containers))
+		for j, c := range containers {
+			pbWorkers[i].ActiveContainers[j] = &pb.Container{
+				ContainerId: c.ContainerId,
+				WorkspaceId: string(c.WorkspaceId),
+				Status:      string(c.Status),
+				ScheduledAt: timestamppb.New(time.Unix(c.ScheduledAt, 0)),
 			}
 		}
 	}
