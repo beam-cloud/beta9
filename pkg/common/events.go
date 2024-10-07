@@ -117,9 +117,6 @@ func (eb *EventBus) Claim(eventId string) (*Event, *RedisLock, bool) {
 		lockKey := fmt.Sprintf("%s:%s:%s", eventPrefix, eventId, eventLockSuffix)
 
 		lock = NewRedisLock(eb.rdb)
-		if err != nil {
-			return nil, nil, false
-		}
 
 		err = lock.Acquire(context.TODO(), lockKey, RedisLockOptions{
 			TtlS: eventLockTtlS,
@@ -157,7 +154,14 @@ func (eb *EventBus) receive(ctx context.Context, wg *sync.WaitGroup, eventType s
 retry:
 	for {
 		select {
-		case m := <-messages:
+		case m, ok := <-messages:
+			if !ok {
+				log.Printf("Events subscription closed for type <%s>. Retrying ...\n", eventType)
+				time.Sleep(eventRetryDelay)
+				messages, errs = eb.rdb.Subscribe(ctx, eventChannelKey)
+				continue retry
+			}
+
 			eventId := m.Payload
 
 			event, lock, claimed := eb.Claim(eventId)
