@@ -33,6 +33,7 @@ type request struct {
 	ctx       echo.Context
 	payload   *types.TaskPayload
 	task      *EndpointTask
+	done      chan bool
 	processed bool
 }
 
@@ -93,15 +94,16 @@ func NewRequestBuffer(
 }
 
 func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
+	done := make(chan bool)
 	req := &request{
-		ctx: ctx,
+		ctx:  ctx,
+		done: done,
 		payload: &types.TaskPayload{
 			Args:   task.msg.Args,
 			Kwargs: task.msg.Kwargs,
 		},
 		task: task,
 	}
-
 	rb.buffer.Push(req, false)
 
 	for {
@@ -110,8 +112,10 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 			return nil
 		case <-ctx.Request().Context().Done():
 			if !req.processed {
-				rb.cancelInFlightTask(task)
+				rb.cancelInFlightTask(req.task)
 			}
+			return nil
+		case <-done:
 			return nil
 		}
 	}
@@ -352,10 +356,9 @@ func (rb *RequestBuffer) handleRequest(req *request) {
 		rb.buffer.Push(req, true)
 		return
 	}
+	defer rb.afterRequest(req, c.id)
 
 	req.processed = true
-	defer rb.afterRequest(c.id)
-
 	if req.ctx.IsWebSocket() {
 		rb.handleWSRequest(req, c)
 	} else {
@@ -481,7 +484,11 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 	}
 }
 
-func (rb *RequestBuffer) afterRequest(containerId string) {
+func (rb *RequestBuffer) afterRequest(req *request, containerId string) {
+	defer func() {
+		req.done <- true
+	}()
+
 	defer rb.releaseRequestToken(containerId)
 
 	// Set keep warm lock
