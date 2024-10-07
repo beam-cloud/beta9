@@ -354,6 +354,8 @@ func (rb *RequestBuffer) handleRequest(req *request) {
 	}
 
 	req.processed = true
+	defer rb.afterRequest(c.id)
+
 	if req.ctx.IsWebSocket() {
 		rb.handleWSRequest(req, c)
 	} else {
@@ -362,8 +364,6 @@ func (rb *RequestBuffer) handleRequest(req *request) {
 }
 
 func (rb *RequestBuffer) handleWSRequest(req *request, c container) {
-	defer rb.afterRequest(c.id)
-
 	dstDialer := websocket.Dialer{
 		NetDialContext: network.GetDialer(c.address, rb.tailscale, rb.tsConfig),
 	}
@@ -375,8 +375,6 @@ func (rb *RequestBuffer) handleWSRequest(req *request, c container) {
 }
 
 func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
-	defer rb.afterRequest(c.id)
-
 	request := req.ctx.Request()
 
 	requestBody := request.Body
