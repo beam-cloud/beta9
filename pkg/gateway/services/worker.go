@@ -3,13 +3,14 @@ package gatewayservices
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (gws *GatewayService) ListWorkers(ctx context.Context, in *pb.ListWorkersRequest) (*pb.ListWorkersResponse, error) {
@@ -32,11 +33,32 @@ func (gws *GatewayService) ListWorkers(ctx context.Context, in *pb.ListWorkersRe
 
 	pbWorkers := make([]*pb.Worker, len(workers))
 	for i, w := range workers {
-		pbWorkers[i] = &pb.Worker{}
-		common.CopyStruct(w, pbWorkers[i])
+		pbWorkers[i] = &pb.Worker{
+			Id:            w.Id,
+			Status:        string(w.Status),
+			Gpu:           w.Gpu,
+			PoolName:      w.PoolName,
+			MachineId:     w.MachineId,
+			Priority:      w.Priority,
+			TotalCpu:      w.TotalCpu,
+			TotalMemory:   w.TotalMemory,
+			TotalGpuCount: w.TotalGpuCount,
+			FreeCpu:       w.FreeCpu,
+			FreeMemory:    w.FreeMemory,
+			FreeGpuCount:  w.FreeGpuCount,
+		}
 
 		if containers, err := gws.containerRepo.GetActiveContainersByWorkerId(w.Id); err == nil {
-			pbWorkers[i].ActiveContainers = uint32(len(containers))
+			pbWorkers[i].ActiveContainers = make([]*pb.Container, len(containers))
+
+			for j, c := range containers {
+				pbWorkers[i].ActiveContainers[j] = &pb.Container{
+					ContainerId: c.ContainerId,
+					WorkspaceId: string(c.WorkspaceId),
+					Status:      string(c.Status),
+					ScheduledAt: timestamppb.New(time.Unix(c.ScheduledAt, 0)),
+				}
+			}
 		}
 	}
 

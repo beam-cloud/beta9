@@ -543,7 +543,7 @@ class Worker(betterproto.Message):
     free_cpu: int = betterproto.int64_field(10)
     free_memory: int = betterproto.int64_field(11)
     free_gpu_count: int = betterproto.uint32_field(12)
-    active_containers: int = betterproto.uint32_field(13)
+    active_containers: List["Container"] = betterproto.message_field(13)
 
 
 @dataclass(eq=False, repr=False)

@@ -96,8 +96,9 @@ def list_workers(
             f"{worker.free_cpu:,}m",
             terminal.humanize_memory(worker.free_memory * 1024 * 1024),
             str(worker.free_gpu_count),
-            str(worker.active_containers),
+            str(len(worker.active_containers)),
         )
+
     table.add_section()
     table.add_row(f"[bold]{len(res.workers)} items")
 
