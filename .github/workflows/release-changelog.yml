@@ -2,7 +2,7 @@ name: Auto Changelog PR
 
 on:
   release:
-    types: [published, created]
+    types: [published]
 
 jobs:
   changelog:
