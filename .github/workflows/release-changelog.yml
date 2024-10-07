@@ -25,14 +25,13 @@ jobs:
             }
 
             function prettyDate(dateString) {
-              const [year, month, day] = dateString.split('-').map(Number);
-              const date = new Date(Date.UTC(year, month - 1, day));
-              
+              const date = new Date(dateString);
+
               return new Intl.DateTimeFormat('en-US', {
                 year: 'numeric',
                 month: 'long',
                 day: 'numeric',
-                timeZone: 'UTC'
+                timeZone: 'UTC',
               }).format(date);
             }
 
