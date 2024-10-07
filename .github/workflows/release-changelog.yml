@@ -37,17 +37,13 @@ jobs:
             }
 
             const release = context.payload.release;
-
-            // TODO: remove this when after first real release
-            console.log("release", release);
-
             const lines = release.body.split('\n');
 
             const feats = [];
             const fixes = [];
             for (const line of lines) {
               if (line.startsWith('*')) {
-                const m = line.match(/^\*\s*(Feat|Fix):\s*(.*)$/);
+                const m = line.match(/^\*\s*(Feat|Fix):\s*(.*)\s*$/);
                 if (m) {
                   const [_, type, description] = m;
                   const byIndex = description.indexOf('by');
@@ -71,7 +67,7 @@ jobs:
             }
 
             const featsString = feats.map(feat => `- ${feat}`).join('\n');
-            const fixesString = fixes.map(fix => `- ${fix}`).join('\n');
+            const fixesString = fixes.map(fix => `- fix ${fix}`).join('\n');
 
             core.setOutput('name', release.name.replace(/\s+/g, '-'));
             core.setOutput('feats', featsString);
