@@ -43,15 +43,15 @@ jobs:
             const fixes = [];
             for (const line of lines) {
               if (line.startsWith('*')) {
-                const m = line.match(/^\*\s*(Feat|Fix):\s*(.*)\s*$/);
+                const m = line.match(/^\*\s*([fF]eat|[fF]ix):\s*(.*)\s*/);
                 if (m) {
                   const [_, type, description] = m;
                   const byIndex = description.indexOf('by');
                   
-                  if (type === 'Feat') {
+                  if (type.toLowerCase() === 'feat') {
                     const cleanedDesc = description.slice(0, byIndex).trim();
                     feats.push(cleanedDesc);
-                  } else if (type === 'Fix') {
+                  } else if (type.toLowerCase() === 'fix') {
                     const cleanedDesc = description.slice(0, byIndex).trim();
                     fixes.push(cleanedDesc);
                   }
