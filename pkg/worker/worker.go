@@ -791,9 +791,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	var volumeCacheMap map[string]string = make(map[string]string)
 
-	// Create local workspace path so we can symlink volumes before the container starts
-	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
-
 	// Add bind mounts to runc spec
 	for _, m := range request.Mounts {
 		// Skip mountpoint storage if the local path does not exist (mounting failed)

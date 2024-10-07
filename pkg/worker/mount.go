@@ -1,7 +1,9 @@
 package worker
 
 import (
+	"fmt"
 	"log"
+	"os"
 	"path"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -21,7 +23,21 @@ func NewContainerMountManager() *ContainerMountManager {
 
 // SetupContainerMounts initializes any external storage for a container
 func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerRequest) error {
+	// Create local workspace path so we can symlink volumes before the container starts
+	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
+
 	for i, m := range request.Mounts {
+		if m.MountPath == "/mnt/code" && request.Stub.Type.IsDeployment() {
+			source := m.LocalPath
+			localUserSource := tempUserCodeDir(request.ContainerId)
+			err := copyDirectory(source, localUserSource)
+			if err != nil {
+				log.Printf("<%s> - failed to eager copy juiceFS user code to local /mnt/code: %v\n", request.ContainerId, err)
+			} else {
+				request.Mounts[i].LocalPath = localUserSource
+			}
+		}
+
 		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
 			// Add containerId to local mount path for mountpoint storage
 			m.LocalPath = path.Join(m.LocalPath, request.ContainerId)
@@ -71,4 +87,8 @@ func (c *ContainerMountManager) setupMountPointS3(containerId string, m types.Mo
 	c.mountPointPaths.Set(containerId, mountPointPaths)
 
 	return nil
+}
+
+func tempUserCodeDir(containerId string) string {
+	return fmt.Sprintf("/tmp/%s/code", containerId)
 }
