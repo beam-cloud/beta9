@@ -30,10 +30,10 @@ const (
 )
 
 type request struct {
-	ctx     echo.Context
-	payload *types.TaskPayload
-	task    *EndpointTask
-	done    chan bool
+	ctx       echo.Context
+	payload   *types.TaskPayload
+	task      *EndpointTask
+	processed bool
 }
 
 type container struct {
@@ -52,7 +52,7 @@ type RequestBuffer struct {
 	workspace               *types.Workspace
 	rdb                     *common.RedisClient
 	containerRepo           repository.ContainerRepository
-	buffer                  *abstractions.RingBuffer[request]
+	buffer                  *abstractions.RingBuffer[*request]
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
 	isASGI                  bool
@@ -76,7 +76,7 @@ func NewRequestBuffer(
 		workspace:               workspace,
 		stubId:                  stubId,
 		stubConfig:              stubConfig,
-		buffer:                  abstractions.NewRingBuffer[request](size),
+		buffer:                  abstractions.NewRingBuffer[*request](size),
 		availableContainers:     []container{},
 		availableContainersLock: sync.RWMutex{},
 		containerRepo:           containerRepo,
@@ -93,22 +93,25 @@ func NewRequestBuffer(
 }
 
 func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
-	done := make(chan bool)
-	rb.buffer.Push(request{
-		ctx:  ctx,
-		done: done,
+	req := &request{
+		ctx: ctx,
 		payload: &types.TaskPayload{
 			Args:   task.msg.Args,
 			Kwargs: task.msg.Kwargs,
 		},
 		task: task,
-	}, false)
+	}
+
+	rb.buffer.Push(req, false)
 
 	for {
 		select {
 		case <-rb.ctx.Done():
 			return nil
-		case <-done:
+		case <-ctx.Request().Context().Done():
+			if !req.processed {
+				rb.cancelInFlightTask(task)
+			}
 			return nil
 		}
 	}
@@ -128,12 +131,6 @@ func (rb *RequestBuffer) processRequests() {
 			req, ok := rb.buffer.Pop()
 			if !ok {
 				time.Sleep(requestProcessingInterval)
-				continue
-			}
-
-			if req.ctx.Request().Context().Err() != nil {
-				// Request context has been cancelled, mark task as cancelled
-				rb.cancelInFlightTask(req.task)
 				continue
 			}
 
@@ -335,7 +332,7 @@ func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
 	return client, nil
 }
 
-func (rb *RequestBuffer) handleRequest(req request) {
+func (rb *RequestBuffer) handleRequest(req *request) {
 	rb.availableContainersLock.RLock()
 
 	if len(rb.availableContainers) == 0 {
@@ -356,6 +353,9 @@ func (rb *RequestBuffer) handleRequest(req request) {
 		return
 	}
 
+	req.processed = true
+	defer rb.afterRequest(c.id)
+
 	if req.ctx.IsWebSocket() {
 		rb.handleWSRequest(req, c)
 	} else {
@@ -363,9 +363,7 @@ func (rb *RequestBuffer) handleRequest(req request) {
 	}
 }
 
-func (rb *RequestBuffer) handleWSRequest(req request, c container) {
-	defer rb.afterRequest(req, c.id)
-
+func (rb *RequestBuffer) handleWSRequest(req *request, c container) {
 	dstDialer := websocket.Dialer{
 		NetDialContext: network.GetDialer(c.address, rb.tailscale, rb.tsConfig),
 	}
@@ -376,8 +374,9 @@ func (rb *RequestBuffer) handleWSRequest(req request, c container) {
 	}
 }
 
-func (rb *RequestBuffer) handleHttpRequest(req request, c container) {
+func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	request := req.ctx.Request()
+
 	requestBody := request.Body
 	if !rb.isASGI {
 		b, err := json.Marshal(req.payload)
@@ -398,7 +397,6 @@ func (rb *RequestBuffer) handleHttpRequest(req request, c container) {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
 		})
-		req.done <- true
 		return
 	}
 
@@ -417,12 +415,10 @@ func (rb *RequestBuffer) handleHttpRequest(req request, c container) {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
 		})
-		req.done <- true
 		return
 	}
 
 	defer resp.Body.Close()
-	defer rb.afterRequest(req, c.id)
 
 	// Write response headers
 	for key, values := range resp.Header {
@@ -469,7 +465,7 @@ func (rb *RequestBuffer) cancelInFlightTask(task *EndpointTask) {
 	task.Cancel(context.Background(), types.TaskCancellationReason(types.TaskRequestCancelled))
 }
 
-func (rb *RequestBuffer) heartBeat(req request, containerId string) {
+func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 	ctx := req.ctx.Request().Context()
 	ticker := time.NewTicker(endpointRequestHeartbeatInterval)
 	defer ticker.Stop()
@@ -485,11 +481,7 @@ func (rb *RequestBuffer) heartBeat(req request, containerId string) {
 	}
 }
 
-func (rb *RequestBuffer) afterRequest(req request, containerId string) {
-	defer func() {
-		req.done <- true
-	}()
-
+func (rb *RequestBuffer) afterRequest(containerId string) {
 	defer rb.releaseRequestToken(containerId)
 
 	// Set keep warm lock
