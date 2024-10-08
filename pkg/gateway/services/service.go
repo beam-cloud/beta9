@@ -18,6 +18,7 @@ type GatewayService struct {
 	taskDispatcher *task.Dispatcher
 	redisClient    *common.RedisClient
 	eventRepo      repository.EventRepository
+	workerRepo     repository.WorkerRepository
 	pb.UnimplementedGatewayServiceServer
 }
 
@@ -30,6 +31,7 @@ type GatewayServiceOpts struct {
 	TaskDispatcher *task.Dispatcher
 	RedisClient    *common.RedisClient
 	EventRepo      repository.EventRepository
+	WorkerRepo     repository.WorkerRepository
 }
 
 func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
@@ -42,5 +44,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		taskDispatcher: opts.TaskDispatcher,
 		redisClient:    opts.RedisClient,
 		eventRepo:      opts.EventRepo,
+		workerRepo:     opts.WorkerRepo,
 	}, nil
 }

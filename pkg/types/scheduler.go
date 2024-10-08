@@ -10,6 +10,7 @@ type WorkerStatus string
 const (
 	WorkerStatusAvailable WorkerStatus = "available"
 	WorkerStatusPending   WorkerStatus = "pending"
+	WorkerStatusDisabled  WorkerStatus = "disabled"
 	WorkerStateTtlS       int          = 60
 )
 

@@ -50,6 +50,7 @@ type TaskFilter struct {
 	CreatedAtEnd   string      `query:"created_at_end"`
 	MinDuration    uint        `query:"min_duration"`
 	MaxDuration    uint        `query:"max_duration"`
+	Interval       string      `query:"interval"`
 	Cursor         string      `query:"cursor"`
 }
 

@@ -58,6 +58,7 @@ type Gateway struct {
 	EventRepo      repository.EventRepository
 	Tailscale      *network.Tailscale
 	metricsRepo    repository.MetricsRepository
+	workerRepo     repository.WorkerRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
 	ctx            context.Context
@@ -127,6 +128,7 @@ func NewGateway() (*Gateway, error) {
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
+	workerRepo := repository.NewWorkerRedisRepository(redisClient, config.Worker)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)
 	taskDispatcher, err := task.NewDispatcher(ctx, taskRepo)
 	if err != nil {
@@ -144,6 +146,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.TaskDispatcher = taskDispatcher
 	gateway.metricsRepo = metricsRepo
 	gateway.EventRepo = eventRepo
+	gateway.workerRepo = workerRepo
 
 	return gateway, nil
 }
@@ -367,6 +370,7 @@ func (g *Gateway) registerServices() error {
 		TaskDispatcher: g.TaskDispatcher,
 		RedisClient:    g.RedisClient,
 		EventRepo:      g.EventRepo,
+		WorkerRepo:     g.workerRepo,
 	})
 	if err != nil {
 		return err

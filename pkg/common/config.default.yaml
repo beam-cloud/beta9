@@ -124,7 +124,8 @@ worker:
   serviceAccountName: default
   # non-standard k8s job spec
   imagePVCName: beta9-images
-  resourcesEnforced: false
+  jobResourcesEnforced: false
+  runcResourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
   terminationGracePeriod: 30
