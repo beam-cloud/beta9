@@ -66,7 +66,7 @@ jobs:
               },
               body: "## What's Changed\r\n" +
                 '* Remove condition and add temporary log by @dleviminzi in https://github.com/beam-cloud/beta9/pull/592\r\n' +
-                '* Fix: nil dereference error in eventbus by @nickpetrovic in https://github.com/beam-cloud/beta9/pull/593\r\n' +
+                '* Fix: nil derowiahdohiawhdoieference error in eventbus by @nickpetrovic in https://github.com/beam-cloud/beta9/pull/593\r\n' +
                 '* Fix: ohohouiho in https://github.com/beam-cloud/beta9/pull/593\r\n' +
                 '\r\n' +
                 '\r\n' +
@@ -163,7 +163,7 @@ jobs:
         if: steps.release.outputs.should_continue == 'true'
         run: |
           cd beam-docs
-          NEW_FILE="./v2/releases/${{ steps.release.outputs.created_at }}"
+          NEW_FILE="v2/releases/${{ steps.release.outputs.created_at }}"
           jq --arg new_file "$NEW_FILE" '
             .navigation[] |= 
               if .group == "Releases" then 
