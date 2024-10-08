@@ -184,7 +184,8 @@ type WorkerConfig struct {
 	ImagePullSecrets           []string                    `key:"imagePullSecrets" json:"image_pull_secrets"`
 	Namespace                  string                      `key:"namespace" json:"namespace"`
 	ServiceAccountName         string                      `key:"serviceAccountName" json:"service_account_name"`
-	ResourcesEnforced          bool                        `key:"resourcesEnforced" json:"resources_enforced"`
+	JobResourcesEnforced       bool                        `key:"jobResourcesEnforced" json:"job_resources_enforced"`
+	RunCResourcesEnforced      bool                        `key:"runcResourcesEnforced" json:"runc_resources_enforced"`
 	DefaultWorkerCPURequest    int64                       `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
 	DefaultWorkerMemoryRequest int64                       `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
 	ImagePVCName               string                      `key:"imagePVCName" json:"image_pvc_name"`

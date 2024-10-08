@@ -18,6 +18,7 @@ import (
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"k8s.io/utils/ptr"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -751,16 +752,16 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
 
-	// TODO: Re-enable resource limits after more communication to community
-	// spec.Linux.Resources.Memory = &specs.LinuxMemory{
-	// 	Limit: ptr.To(request.Memory * 1024 * 1024),
-	// }
-
-	// spec.Linux.Resources.CPU = &specs.LinuxCPU{
-	// 	Shares: ptr.To(calculateCPUShares(request.Cpu)),
-	// 	Quota:  ptr.To(calculateCPUQuota(request.Cpu)),
-	// 	Period: ptr.To(uint64(standardCPUPeriod)),
-	// }
+	if s.config.Worker.RunCResourcesEnforced {
+		spec.Linux.Resources.CPU = &specs.LinuxCPU{
+			Shares: ptr.To(calculateCPUShares(request.Cpu)),
+			Quota:  ptr.To(calculateCPUQuota(request.Cpu)),
+			Period: ptr.To(uint64(standardCPUPeriod)),
+		}
+		spec.Linux.Resources.Memory = &specs.LinuxMemory{
+			Limit: ptr.To(request.Memory * 1024 * 1024),
+		}
+	}
 
 	env := s.getContainerEnvironment(request, options)
 	if request.Gpu != "" {
