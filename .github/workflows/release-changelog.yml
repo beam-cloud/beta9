@@ -153,8 +153,16 @@ jobs:
             echo "" >> $FILENAME
           else
             awk -v feats="${{ steps.release.outputs.feats }}" -v fixes="${{ steps.release.outputs.fixes }}" '
-              /^## Features/ { print; print feats; next }
-              /^## Fixes/ { print; print fixes; next }
+              /^## Features/ { 
+                print
+                if (feats != "") print feats
+                next 
+              }
+              /^## Fixes/ { 
+                print
+                if (fixes != "") print fixes
+                next 
+              }
               { print }
             ' "$FILENAME" > "${FILENAME}.tmp" && mv "${FILENAME}.tmp" "$FILENAME"
           fi
