@@ -18,6 +18,7 @@ type WorkerRepository interface {
 	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId string) error
+	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
 	RemoveWorker(w *types.Worker) error
 	SetWorkerKeepAlive(workerId string) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
