@@ -140,16 +140,17 @@ jobs:
         run: |
           cd beam-docs/v2/releases
           FILENAME="./${{ steps.release.outputs.created_at }}.mdx"
-          echo "---" >> $FILENAME
-          echo "title: \"${{ steps.release.outputs.pretty_date }}\"" >> $FILENAME
-          echo "---" >> $FILENAME
-          echo "" >> $FILENAME
-          echo "## Features" >> $FILENAME
-          echo "${{ steps.release.outputs.feats }}" >> $FILENAME
-          echo "" >> $FILENAME
-          echo "## Fixes" >> $FILENAME
-          echo "${{ steps.release.outputs.fixes }}" >> $FILENAME
-          echo "" >> $FILENAME
+          if [ ! -f "$FILENAME" ]; then
+            echo "---" >> $FILENAME
+            echo "title: \"${{ steps.release.outputs.pretty_date }}\"" >> $FILENAME
+            echo "---" >> $FILENAME
+            echo "" >> $FILENAME
+            echo "## Features" >> $FILENAME
+            echo "${{ steps.release.outputs.feats }}" >> $FILENAME
+            echo "" >> $FILENAME
+            echo "## Fixes" >> $FILENAME
+            echo "${{ steps.release.outputs.fixes }}" >> $FILENAME
+            echo "" >> $FILENAME
           else
             awk -v feats="${{ steps.release.outputs.feats }}" -v fixes="${{ steps.release.outputs.fixes }}" '
               /^## Features/ { print; print feats; next }
