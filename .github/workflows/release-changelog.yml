@@ -40,7 +40,7 @@ jobs:
               }).format(date);
             }
 
-            # const release = context.payload.release;
+            // const release = context.payload.release;
             const release = {
               assets: [],
               assets_url: 'https://api.github.com/repos/beam-cloud/beta9/releases/178751163/assets',
