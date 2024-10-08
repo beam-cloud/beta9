@@ -76,7 +76,7 @@ jobs:
               html_url: 'https://github.com/beam-cloud/beta9/releases/tag/gateway-0.1.222',
               id: 178751163,
               mentions_count: 2,
-              name: 'Gateway: 0.1.222',
+              name: 'Gateway: 0.1.12322',
               node_id: 'RE_kwDOKtkjw84Kp4a7',
               prerelease: false,
               published_at: '2024-10-08T18:29:06Z',
