@@ -71,7 +71,7 @@ jobs:
                 '\r\n' +
                 '\r\n' +
                 '**Full Changelog**: https://github.com/beam-cloud/beta9/compare/gateway-0.1.221...gateway-0.1.222',
-              created_at: '2024-10-07T18:28:30Z',
+              created_at: '2024-10-08T18:28:30Z',
               draft: false,
               html_url: 'https://github.com/beam-cloud/beta9/releases/tag/gateway-0.1.222',
               id: 178751163,
@@ -79,7 +79,7 @@ jobs:
               name: 'Gateway: 0.1.222',
               node_id: 'RE_kwDOKtkjw84Kp4a7',
               prerelease: false,
-              published_at: '2024-10-07T18:29:06Z',
+              published_at: '2024-10-08T18:29:06Z',
               tag_name: 'gateway-0.1.222',
               tarball_url: 'https://api.github.com/repos/beam-cloud/beta9/tarball/gateway-0.1.222',
               target_commitish: 'main',
