@@ -3,6 +3,7 @@ name: Auto Changelog PR
 on:
   release:
     types: [published]
+  
 
 jobs:
   changelog:
@@ -87,19 +88,38 @@ jobs:
         if: steps.release.outputs.should_continue == 'true'
         run: |
           cd beam-docs/v2/releases
-          FILENAME="${{ steps.release.outputs.created_at }}.mdx"
+          FILENAME="./${{ steps.release.outputs.created_at }}.mdx"
           echo "---" >> $FILENAME
           echo "title: \"${{ steps.release.outputs.pretty_date }}\"" >> $FILENAME
           echo "---" >> $FILENAME
           echo "" >> $FILENAME
           echo "## Features" >> $FILENAME
-          echo "" >> $FILENAME
           echo "${{ steps.release.outputs.feats }}" >> $FILENAME
           echo "" >> $FILENAME
           echo "## Fixes" >> $FILENAME
-          echo "" >> $FILENAME
           echo "${{ steps.release.outputs.fixes }}" >> $FILENAME
           echo "" >> $FILENAME
+          else
+            awk -v feats="${{ steps.release.outputs.feats }}" -v fixes="${{ steps.release.outputs.fixes }}" '
+              /^## Features/ { print; print feats; next }
+              /^## Fixes/ { print; print fixes; next }
+              { print }
+            ' "$FILENAME" > "${FILENAME}.tmp" && mv "${FILENAME}.tmp" "$FILENAME"
+          fi
+
+      - name: Update mint.json
+        if: steps.release.outputs.should_continue == 'true'
+        run: |
+          cd beam-docs
+          NEW_FILE="./v2/releases/${{ steps.release.outputs.created_at }}"
+          jq --arg new_file "$NEW_FILE" '
+            .navigation[] |= 
+              if .group == "Releases" then 
+                .pages |= if index($new_file) then . else [$new_file] + . end
+              else 
+                .
+              end
+          ' ./mint.json > ./mint.json.tmp && mv ./mint.json.tmp ./mint.json
 
       - name: Commit and push changes
         if: steps.release.outputs.should_continue == 'true'
