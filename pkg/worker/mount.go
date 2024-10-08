@@ -27,12 +27,12 @@ func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerReq
 	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
 
 	for i, m := range request.Mounts {
-		if m.MountPath == "/mnt/code" && request.Stub.Type.IsDeployment() {
+		if m.MountPath == defaultContainerDirectory && request.Stub.Type.IsDeployment() {
 			source := m.LocalPath
 			localUserSource := tempUserCodeDir(request.ContainerId)
 			err := copyDirectory(source, localUserSource)
 			if err != nil {
-				log.Printf("<%s> - failed to eager copy juiceFS user code to local /mnt/code: %v\n", request.ContainerId, err)
+				log.Printf("<%s> - failed to eagerly copy remote user code to local /mnt/code: %v\n", request.ContainerId, err)
 			} else {
 				request.Mounts[i].LocalPath = localUserSource
 			}
