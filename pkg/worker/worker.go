@@ -197,7 +197,7 @@ func NewWorker() (*Worker, error) {
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		redisClient:             redisClient,
-		containerMountManager:   NewContainerMountManager(),
+		containerMountManager:   NewContainerMountManager(config),
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
 		podHostName:             podHostName,
