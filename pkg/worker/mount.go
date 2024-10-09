@@ -12,12 +12,14 @@ import (
 )
 
 type ContainerMountManager struct {
-	mountPointPaths *common.SafeMap[[]string]
+	mountPointPaths    *common.SafeMap[[]string]
+	EagerCacheStubCode bool
 }
 
-func NewContainerMountManager() *ContainerMountManager {
+func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 	return &ContainerMountManager{
-		mountPointPaths: common.NewSafeMap[[]string](),
+		mountPointPaths:    common.NewSafeMap[[]string](),
+		EagerCacheStubCode: config.Worker.EagerCacheStubCode,
 	}
 }
 
@@ -27,7 +29,7 @@ func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerReq
 	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
 
 	for i, m := range request.Mounts {
-		if m.MountPath == defaultContainerDirectory && !request.Stub.Type.IsServe() {
+		if c.EagerCacheStubCode && m.MountPath == defaultContainerDirectory && !request.Stub.Type.IsServe() {
 			source := m.LocalPath
 			localUserSource := tempUserCodeDir(request.ContainerId)
 			err := copyDirectory(source, localUserSource)
