@@ -3,6 +3,10 @@ name: Auto Changelog PR
 on:
   release:
     types: [published]
+  workflow_dispatch: # Add this line to allow manual triggering
+  push:
+    branches:
+      - dlm/dedupe-changelog
 
     
 jobs:
@@ -36,7 +40,52 @@ jobs:
               }).format(date);
             }
 
-            const release = context.payload.release;
+            const release = {
+              assets: [],
+              assets_url: 'https://api.github.com/repos/beam-cloud/beta9/releases/178751163/assets',
+              author: {
+                avatar_url: 'https://avatars.githubusercontent.com/u/4001122?v=4',
+                events_url: 'https://api.github.com/users/nickpetrovic/events{/privacy}',
+                followers_url: 'https://api.github.com/users/nickpetrovic/followers',
+                following_url: 'https://api.github.com/users/nickpetrovic/following{/other_user}',
+                gists_url: 'https://api.github.com/users/nickpetrovic/gists{/gist_id}',
+                gravatar_id: '',
+                html_url: 'https://github.com/nickpetrovic',
+                id: 4001122,
+                login: 'nickpetrovic',
+                node_id: 'MDQ6VXNlcjQwMDExMjI=',
+                organizations_url: 'https://api.github.com/users/nickpetrovic/orgs',
+                received_events_url: 'https://api.github.com/users/nickpetrovic/received_events',
+                repos_url: 'https://api.github.com/users/nickpetrovic/repos',
+                site_admin: false,
+                starred_url: 'https://api.github.com/users/nickpetrovic/starred{/owner}{/repo}',
+                subscriptions_url: 'https://api.github.com/users/nickpetrovic/subscriptions',
+                type: 'User',
+                url: 'https://api.github.com/users/nickpetrovic'
+              },
+              body: "## What's Changed\r\n" +
+                '* Remove condition and add temporary log by @dleviminzi in https://github.com/beam-cloud/beta9/pull/592\r\n' +
+                '* Fix: nil dereference error in eventbus by @nickpetrovic in https://github.com/beam-cloud/beta9/pull/593\r\n' +
+                '\r\n' +
+                '\r\n' +
+                '**Full Changelog**: https://github.com/beam-cloud/beta9/compare/gateway-0.1.221...gateway-0.1.222',
+              created_at: '2024-10-07T18:28:30Z',
+              draft: false,
+              html_url: 'https://github.com/beam-cloud/beta9/releases/tag/gateway-0.1.222',
+              id: 178751163,
+              mentions_count: 2,
+              name: 'Gateway: 0.1.222',
+              node_id: 'RE_kwDOKtkjw84Kp4a7',
+              prerelease: false,
+              published_at: '2024-10-07T18:29:06Z',
+              tag_name: 'gateway-0.1.222',
+              tarball_url: 'https://api.github.com/repos/beam-cloud/beta9/tarball/gateway-0.1.222',
+              target_commitish: 'main',
+              upload_url: 'https://uploads.github.com/repos/beam-cloud/beta9/releases/178751163/assets{?name,label}',
+              url: 'https://api.github.com/repos/beam-cloud/beta9/releases/178751163',
+              zipball_url: 'https://api.github.com/repos/beam-cloud/beta9/zipball/gateway-0.1.222'
+            }
+            // context.payload.release;
             const lines = release.body.split('\n');
 
             const feats = [];
@@ -66,12 +115,9 @@ jobs:
               return;
             }
 
-            const featsString = feats.map(feat => `- ${feat}`).join('\n');
-            const fixesString = fixes.map(fix => `- fix ${fix}`).join('\n');
-
             core.setOutput('name', release.name.replace(/(:\s)/g, '-v'));
-            core.setOutput('feats', featsString);
-            core.setOutput('fixes', fixesString);
+            core.setOutput('new_feats', JSON.stringify(newFeats));
+            core.setOutput('new_fixes', JSON.stringify(newFixes));
             core.setOutput('created_at', formatDate(release.created_at));
             core.setOutput('pretty_date', prettyDate(release.created_at));
             core.setOutput('should_continue', 'true');
@@ -84,37 +130,70 @@ jobs:
           path: beam-docs
           token: ${{ secrets.BEAM_DOCS_PAT }}
 
+      - name: Process changelog
+        if: steps.release.outputs.should_continue == 'true'
+        id: process_changelog
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const filename = `./beam-docs/v2/releases/${process.env.CREATED_AT}.mdx`;
+            let existingFeats = [];
+            let existingFixes = [];
+
+            if (fs.existsSync(filename)) {
+              const content = fs.readFileSync(filename, 'utf8');
+              const featuresMatch = content.match(/## Features\n([\s\S]*?)(?=\n## |$)/);
+              const fixesMatch = content.match(/## Fixes\n([\s\S]*?)(?=\n## |$)/);
+
+              if (featuresMatch) {
+                existingFeats = featuresMatch[1].split('\n').filter(line => line.trim().startsWith('-')).map(line => line.trim().slice(2));
+              }
+              if (fixesMatch) {
+                existingFixes = fixesMatch[1].split('\n').filter(line => line.trim().startsWith('-')).map(line => line.trim().slice(2));
+              }
+            }
+
+            const newFeats = JSON.parse(process.env.NEW_FEATS);
+            const newFixes = JSON.parse(process.env.NEW_FIXES);
+
+            const allFeats = [...new Set([...existingFeats, ...newFeats])];
+            const allFixes = [...new Set([...existingFixes, ...newFixes])];
+
+            const featsString = allFeats.map(feat => `- ${feat}`).join('\n');
+            const fixesString = allFixes.map(fix => `- ${fix}`).join('\n');
+
+            core.setOutput('feats', featsString);
+            core.setOutput('fixes', fixesString);
+
+        env:
+          CREATED_AT: ${{ steps.release.outputs.created_at }}
+          NEW_FEATS: ${{ steps.release.outputs.new_feats }}
+          NEW_FIXES: ${{ steps.release.outputs.new_fixes }}
+
       - name: Create new release file in beam-docs
         if: steps.release.outputs.should_continue == 'true'
         run: |
           cd beam-docs/v2/releases
           FILENAME="./${{ steps.release.outputs.created_at }}.mdx"
-          if [ ! -f "$FILENAME" ]; then
-            echo "---" >> $FILENAME
-            echo "title: \"${{ steps.release.outputs.pretty_date }}\"" >> $FILENAME
-            echo "---" >> $FILENAME
-            echo "" >> $FILENAME
-            echo "## Features" >> $FILENAME
-            echo "${{ steps.release.outputs.feats }}" >> $FILENAME
-            echo "" >> $FILENAME
-            echo "## Fixes" >> $FILENAME
-            echo "${{ steps.release.outputs.fixes }}" >> $FILENAME
-            echo "" >> $FILENAME
-          else
-            awk -v feats="${{ steps.release.outputs.feats }}" -v fixes="${{ steps.release.outputs.fixes }}" '
-              /^## Features/ { 
-                print
-                if (feats != "") print feats
-                next 
-              }
-              /^## Fixes/ { 
-                print
-                if (fixes != "") print fixes
-                next 
-              }
-              { print }
-            ' "$FILENAME" > "${FILENAME}.tmp" && mv "${FILENAME}.tmp" "$FILENAME"
+          if [ -f "$FILENAME" ]; then
+            rm -f $FILENAME
           fi
+
+          echo "---" >> $FILENAME
+          echo "title: \"${{ steps.release.outputs.pretty_date }}\"" >> $FILENAME
+          echo "---" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "## Features" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "${{ steps.process_changelog.outputs.feats }}" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "## Fixes" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "${{ steps.process_changelog.outputs.fixes }}" >> $FILENAME
+          echo "" >> $FILENAME
 
       - name: Update mint.json
         if: steps.release.outputs.should_continue == 'true'
