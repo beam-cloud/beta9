@@ -221,11 +221,14 @@ jobs:
             core.setOutput('created_at', artifact.created_at);
             core.setOutput('should_continue', 'true');
 
+      - name: Write artifact to file
+        run: echo '${{ steps.release.outputs.artifact }}' > new_artifact.json
+
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with: 
           name: ${{ steps.release.outputs.name }}
-          path: ${{ steps.release.outputs.artifact }}
+          path: new_artifact.json
 
       - name: Checkout beam-docs repo
         if: steps.release.outputs.should_continue == 'true'
