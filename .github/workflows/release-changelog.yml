@@ -188,7 +188,7 @@ jobs:
               name: name,
               feats: feats,
               fixes: fixes,
-              created_at: ${{ steps.artifact_name.outputs.created_at }},
+              created_at: "${{ steps.artifact_name.outputs.created_at }}",
               pretty_date: pretty_date,
             }
 
