@@ -13,7 +13,8 @@ from fastapi.responses import JSONResponse, Response
 from gunicorn.app.base import Arbiter, BaseApplication
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.types import ASGIApp
+from starlette.requests import HTTPConnection
+from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.workers import UvicornWorker
 
 from ..abstractions.base.runner import (
@@ -127,51 +128,67 @@ class TaskLifecycleData:
     override_callback_url: Optional[str] = None
 
 
+async def runTask(request, func, func_args):
+    task_id = request.headers.get("X-TASK-ID")
+    if not task_id:
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Task ID missing")
+
+    os.environ["TASK_ID"] = task_id
+    with StdoutJsonInterceptor(task_id=task_id):
+        print(f"Received task <{task_id}>")
+        start_response = request.app.state.gateway_stub.start_task(
+            StartTaskRequest(task_id=task_id, container_id=cfg.container_id)
+        )
+        if not start_response.ok:
+            raise HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to start task"
+            )
+
+        task_lifecycle_data = TaskLifecycleData(
+            status=TaskStatus.Complete, result=None, override_callback_url=None
+        )
+
+        try:
+            request.state.task_lifecycle_data = task_lifecycle_data
+            response = await func(*func_args)
+            print(f"Task <{task_id}> finished")
+            return response
+        finally:
+            if "TASK_ID" in os.environ:
+                del os.environ["TASK_ID"]
+
+            end_task_and_send_callback(
+                gateway_stub=request.app.state.gateway_stub,
+                payload=task_lifecycle_data.result,
+                end_task_request=EndTaskRequest(
+                    task_id=task_id,
+                    container_id=cfg.container_id,
+                    keep_warm_seconds=cfg.keep_warm_seconds,
+                    task_status=task_lifecycle_data.status,
+                ),
+                override_callback_url=task_lifecycle_data.override_callback_url,
+            )
+
+
+class WebsocketTaskLifecycleMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "websocket":
+            await self.app(scope, receive, send)
+            return
+
+        request = HTTPConnection(scope, receive)
+        return await runTask(request, self.app, (scope, receive, send))
+
+
 class TaskLifecycleMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.url.path == "/health":
             return await call_next(request)
 
-        task_id = request.headers.get("X-TASK-ID")
-        if not task_id:
-            raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Task ID missing")
-
-        os.environ["TASK_ID"] = task_id
-
-        with StdoutJsonInterceptor(task_id=task_id):
-            print(f"Received task <{task_id}>")
-            start_response = request.app.state.gateway_stub.start_task(
-                StartTaskRequest(task_id=task_id, container_id=cfg.container_id)
-            )
-            if not start_response.ok:
-                raise HTTPException(
-                    status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to start task"
-                )
-
-            task_lifecycle_data = TaskLifecycleData(
-                status=TaskStatus.Complete, result=None, override_callback_url=None
-            )
-
-            try:
-                request.state.task_lifecycle_data = task_lifecycle_data
-                response = await call_next(request)
-                print(f"Task <{task_id}> finished")
-                return response
-            finally:
-                if "TASK_ID" in os.environ:
-                    del os.environ["TASK_ID"]
-
-                end_task_and_send_callback(
-                    gateway_stub=request.app.state.gateway_stub,
-                    payload=task_lifecycle_data.result,
-                    end_task_request=EndTaskRequest(
-                        task_id=task_id,
-                        container_id=cfg.container_id,
-                        keep_warm_seconds=cfg.keep_warm_seconds,
-                        task_status=task_lifecycle_data.status,
-                    ),
-                    override_callback_url=task_lifecycle_data.override_callback_url,
-                )
+        return await runTask(request, call_next, (request,))
 
 
 def get_task_lifecycle_data(request: Request):
@@ -209,6 +226,7 @@ class EndpointManager:
             self.app = FastAPI(lifespan=self.lifespan)
 
         self.app.add_middleware(TaskLifecycleMiddleware)
+        self.app.add_middleware(WebsocketTaskLifecycleMiddleware)
 
         # Register signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)

@@ -371,7 +371,12 @@ func (rb *RequestBuffer) handleWSRequest(req *request, c container) {
 		NetDialContext: network.GetDialer(c.address, rb.tailscale, rb.tsConfig),
 	}
 
-	err := proxyWebsocketConnection(req.ctx.Response().Writer, req.ctx.Request(), dstDialer, fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")))
+	err := rb.proxyWebsocketConnection(
+		req,
+		c,
+		dstDialer,
+		fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")),
+	)
 	if err != nil {
 		return
 	}
@@ -504,7 +509,7 @@ func (rb *RequestBuffer) afterRequest(req *request, containerId string) {
 	)
 }
 
-func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dialer websocket.Dialer, dstAddress string) error {
+func (rb *RequestBuffer) proxyWebsocketConnection(r *request, c container, dialer websocket.Dialer, dstAddress string) error {
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
 			// Allow all origins
@@ -512,12 +517,18 @@ func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dialer w
 		},
 	}
 
+	w := r.ctx.Response().Writer
+	req := r.ctx.Request()
+
 	wsSrc, err := upgrader.Upgrade(w, req, nil)
 	if err != nil {
 		return err
 	}
 
-	wsDst, resp, err := dialer.Dial(dstAddress, nil)
+	headers := http.Header{}
+	headers.Add("X-TASK-ID", r.task.msg.TaskId) // Add task ID to header
+
+	wsDst, resp, err := dialer.Dial(dstAddress, headers)
 	if err != nil {
 		return err
 	}
@@ -526,6 +537,7 @@ func proxyWebsocketConnection(w http.ResponseWriter, req *http.Request, dialer w
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
+	go rb.heartBeat(r, c.id) // Send heartbeat via redis for duration of request
 	go forwardWSConn(wsSrc.NetConn(), wsDst.NetConn())
 	forwardWSConn(wsDst.NetConn(), wsSrc.NetConn())
 	return nil
