@@ -130,7 +130,7 @@ jobs:
               },
               body: "## What's Changed\r\n" +
                 '* Remove condition and add temporary log by @dleviminzi in https://github.com/beam-cloud/beta9/pull/592\r\n' +
-                '* Fix: nil dereference error in eventbus by @nickpetrovic in https://github.com/beam-cloud/beta9/pull/593\r\n' +
+                '* Fix: new thing eventbus by @nickpetrovic in https://github.com/beam-cloud/beta9/pull/593\r\n' +
                 '\r\n' +
                 '\r\n' +
                 '**Full Changelog**: https://github.com/beam-cloud/beta9/compare/gateway-0.1.221...gateway-0.1.222',
@@ -210,7 +210,7 @@ jobs:
             }
 
             const featString = artifact.feats.map(feat => `- ${feat}`).join('\n');
-            const fixString = artifact.fixes.map(fix => `- ${fix}`).join('\n');
+            const fixString = artifact.fixes.map(fix => `- fix ${fix}`).join('\n');
 
             const artifactJson = JSON.stringify(artifact, null, 2);
             core.setOutput('artifact', artifactJson);
