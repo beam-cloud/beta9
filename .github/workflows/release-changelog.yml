@@ -3,6 +3,10 @@ name: Auto Changelog PR
 on:
   release:
     types: [published]
+  workflow_dispatch:
+  push:
+    branches:
+      - dlm/rework-changelog-logic
 
     
 jobs:
@@ -12,8 +16,8 @@ jobs:
       - name: Checkout the Beta9 repo
         uses: actions/checkout@v3
 
-      - name: Fetch the latest release data
-        id: release
+      - name: Set release artifact name
+        id: artifact_name
         uses: actions/github-script@v7
         with:
           script: |
@@ -25,6 +29,70 @@ jobs:
               return `${month}-${day}-${year}`;
             }
 
+            const release = {
+              assets: [],
+              assets_url: 'https://api.github.com/repos/beam-cloud/beta9/releases/178751163/assets',
+              author: {
+                avatar_url: 'https://avatars.githubusercontent.com/u/4001122?v=4',
+                events_url: 'https://api.github.com/users/nickpetrovic/events{/privacy}',
+                followers_url: 'https://api.github.com/users/nickpetrovic/followers',
+                following_url: 'https://api.github.com/users/nickpetrovic/following{/other_user}',
+                gists_url: 'https://api.github.com/users/nickpetrovic/gists{/gist_id}',
+                gravatar_id: '',
+                html_url: 'https://github.com/nickpetrovic',
+                id: 4001122,
+                login: 'nickpetrovic',
+                node_id: 'MDQ6VXNlcjQwMDExMjI=',
+                organizations_url: 'https://api.github.com/users/nickpetrovic/orgs',
+                received_events_url: 'https://api.github.com/users/nickpetrovic/received_events',
+                repos_url: 'https://api.github.com/users/nickpetrovic/repos',
+                site_admin: false,
+                starred_url: 'https://api.github.com/users/nickpetrovic/starred{/owner}{/repo}',
+                subscriptions_url: 'https://api.github.com/users/nickpetrovic/subscriptions',
+                type: 'User',
+                url: 'https://api.github.com/users/nickpetrovic'
+              },
+              body: "## What's Changed\r\n" +
+                '* Remove condition and add temporary log by @dleviminzi in https://github.com/beam-cloud/beta9/pull/592\r\n' +
+                '* Fix: nil dereference error in eventbus by @nickpetrovic in https://github.com/beam-cloud/beta9/pull/593\r\n' +
+                '\r\n' +
+                '\r\n' +
+                '**Full Changelog**: https://github.com/beam-cloud/beta9/compare/gateway-0.1.221...gateway-0.1.222',
+              created_at: '2024-10-07T18:28:30Z',
+              draft: false,
+              html_url: 'https://github.com/beam-cloud/beta9/releases/tag/gateway-0.1.222',
+              id: 178751163,
+              mentions_count: 2,
+              name: 'Gateway: 0.1.222',
+              node_id: 'RE_kwDOKtkjw84Kp4a7',
+              prerelease: false,
+              published_at: '2024-10-07T18:29:06Z',
+              tag_name: 'gateway-0.1.222',
+              tarball_url: 'https://api.github.com/repos/beam-cloud/beta9/tarball/gateway-0.1.222',
+              target_commitish: 'main',
+              upload_url: 'https://uploads.github.com/repos/beam-cloud/beta9/releases/178751163/assets{?name,label}',
+              url: 'https://api.github.com/repos/beam-cloud/beta9/releases/178751163',
+              zipball_url: 'https://api.github.com/repos/beam-cloud/beta9/zipball/gateway-0.1.222'
+            }
+
+            // const release = context.payload.release;
+            const created_at = formatDate(release.created_at)
+            core.setOutput('artifact_name', 'cl_' + created_at + '.json');
+            core.setOutput('created_at', created_at);
+
+      - name: Download old release artifact if it exists
+        id: old_artifact
+        uses: actions/download-artifact@v3
+        continue-on-error: true
+        with:
+          name: ${{ steps.artifact_name.outputs.artifact_name }}
+          path: old_artifact.json
+
+      - name: Create new release artifact
+        id: release
+        uses: actions/github-script@v7
+        with:
+          script: |
             function prettyDate(dateString) {
               const date = new Date(dateString);
 
@@ -36,7 +104,52 @@ jobs:
               }).format(date);
             }
 
-            const release = context.payload.release;
+            const release = {
+              assets: [],
+              assets_url: 'https://api.github.com/repos/beam-cloud/beta9/releases/178751163/assets',
+              author: {
+                avatar_url: 'https://avatars.githubusercontent.com/u/4001122?v=4',
+                events_url: 'https://api.github.com/users/nickpetrovic/events{/privacy}',
+                followers_url: 'https://api.github.com/users/nickpetrovic/followers',
+                following_url: 'https://api.github.com/users/nickpetrovic/following{/other_user}',
+                gists_url: 'https://api.github.com/users/nickpetrovic/gists{/gist_id}',
+                gravatar_id: '',
+                html_url: 'https://github.com/nickpetrovic',
+                id: 4001122,
+                login: 'nickpetrovic',
+                node_id: 'MDQ6VXNlcjQwMDExMjI=',
+                organizations_url: 'https://api.github.com/users/nickpetrovic/orgs',
+                received_events_url: 'https://api.github.com/users/nickpetrovic/received_events',
+                repos_url: 'https://api.github.com/users/nickpetrovic/repos',
+                site_admin: false,
+                starred_url: 'https://api.github.com/users/nickpetrovic/starred{/owner}{/repo}',
+                subscriptions_url: 'https://api.github.com/users/nickpetrovic/subscriptions',
+                type: 'User',
+                url: 'https://api.github.com/users/nickpetrovic'
+              },
+              body: "## What's Changed\r\n" +
+                '* Remove condition and add temporary log by @dleviminzi in https://github.com/beam-cloud/beta9/pull/592\r\n' +
+                '* Fix: nil dereference error in eventbus by @nickpetrovic in https://github.com/beam-cloud/beta9/pull/593\r\n' +
+                '\r\n' +
+                '\r\n' +
+                '**Full Changelog**: https://github.com/beam-cloud/beta9/compare/gateway-0.1.221...gateway-0.1.222',
+              created_at: '2024-10-07T18:28:30Z',
+              draft: false,
+              html_url: 'https://github.com/beam-cloud/beta9/releases/tag/gateway-0.1.222',
+              id: 178751163,
+              mentions_count: 2,
+              name: 'Gateway: 0.1.222',
+              node_id: 'RE_kwDOKtkjw84Kp4a7',
+              prerelease: false,
+              published_at: '2024-10-07T18:29:06Z',
+              tag_name: 'gateway-0.1.222',
+              tarball_url: 'https://api.github.com/repos/beam-cloud/beta9/tarball/gateway-0.1.222',
+              target_commitish: 'main',
+              upload_url: 'https://uploads.github.com/repos/beam-cloud/beta9/releases/178751163/assets{?name,label}',
+              url: 'https://api.github.com/repos/beam-cloud/beta9/releases/178751163',
+              zipball_url: 'https://api.github.com/repos/beam-cloud/beta9/zipball/gateway-0.1.222'
+            }
+              
             const lines = release.body.split('\n');
 
             const feats = [];
@@ -66,15 +179,52 @@ jobs:
               return;
             }
 
-            const featsString = feats.map(feat => `- ${feat}`).join('\n');
-            const fixesString = fixes.map(fix => `- fix ${fix}`).join('\n');
+            const name = release.name.replace(/(:\s)/g, '-v')
+            const pretty_date = prettyDate(release.created_at)
 
-            core.setOutput('name', release.name.replace(/(:\s)/g, '-v'));
-            core.setOutput('feats', featsString);
-            core.setOutput('fixes', fixesString);
-            core.setOutput('created_at', formatDate(release.created_at));
-            core.setOutput('pretty_date', prettyDate(release.created_at));
+            // create artifact
+            const artifact = {
+              name: name,
+              feats: feats,
+              fixes: fixes,
+              created_at: ${{ steps.artifact_name.outputs.created_at }},
+              pretty_date: pretty_date,
+            }
+
+            const fs = require('fs')
+            let oldArtifact = {}
+            try {
+              oldArtifact = JSON.parse(fs.readFileSync('old_artifact.json', 'utf8'))
+            } catch (error) {
+              console.log('No old artifact found')
+            }
+            
+            if (oldArtifact.feats) {
+              const uniqueFeats = new Set([...oldArtifact.feats, ...feats]);
+              artifact.feats = Array.from(uniqueFeats);
+            }
+            if (oldArtifact.fixes) {
+              const uniqueFixes = new Set([...oldArtifact.fixes, ...fixes]);
+              artifact.fixes = Array.from(uniqueFixes);
+            }
+
+            const featString = artifact.feats.map(feat => `- ${feat}`).join('\n');
+            const fixString = artifact.fixes.map(fix => `- ${fix}`).join('\n');
+
+            const artifactJson = JSON.stringify(artifact, null, 2);
+            core.setOutput('artifact', artifactJson);
+            core.setOutput('name', artifact.name);
+            core.setOutput('pretty_date', artifact.pretty_date);
+            core.setOutput('feats', featString);
+            core.setOutput('fixes', fixString);
+            core.setOutput('created_at', artifact.created_at);
             core.setOutput('should_continue', 'true');
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with: 
+          name: ${{ steps.release.outputs.name }}
+          path: ${{ steps.release.outputs.artifact }}
 
       - name: Checkout beam-docs repo
         if: steps.release.outputs.should_continue == 'true'
@@ -90,31 +240,20 @@ jobs:
           cd beam-docs/v2/releases
           FILENAME="./${{ steps.release.outputs.created_at }}.mdx"
           if [ ! -f "$FILENAME" ]; then
-            echo "---" >> $FILENAME
-            echo "title: \"${{ steps.release.outputs.pretty_date }}\"" >> $FILENAME
-            echo "---" >> $FILENAME
-            echo "" >> $FILENAME
-            echo "## Features" >> $FILENAME
-            echo "${{ steps.release.outputs.feats }}" >> $FILENAME
-            echo "" >> $FILENAME
-            echo "## Fixes" >> $FILENAME
-            echo "${{ steps.release.outputs.fixes }}" >> $FILENAME
-            echo "" >> $FILENAME
-          else
-            awk -v feats="${{ steps.release.outputs.feats }}" -v fixes="${{ steps.release.outputs.fixes }}" '
-              /^## Features/ { 
-                print
-                if (feats != "") print feats
-                next 
-              }
-              /^## Fixes/ { 
-                print
-                if (fixes != "") print fixes
-                next 
-              }
-              { print }
-            ' "$FILENAME" > "${FILENAME}.tmp" && mv "${FILENAME}.tmp" "$FILENAME"
+            # delete old release file
           fi
+
+          # build release file from artifact
+          echo "---" >> $FILENAME
+          echo "title: \"${{ steps.release.outputs.pretty_date }}\"" >> $FILENAME
+          echo "---" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "## Features" >> $FILENAME
+          echo "${{ steps.release.outputs.feats }}" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "## Fixes" >> $FILENAME
+          echo "${{ steps.release.outputs.fixes }}" >> $FILENAME
+          echo "" >> $FILENAME
 
       - name: Update mint.json
         if: steps.release.outputs.should_continue == 'true'
