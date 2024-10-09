@@ -133,6 +133,9 @@ jobs:
               body: "## What's Changed\r\n" +
                 '* Remove condition and add temporary log by @dleviminzi in https://github.com/beam-cloud/beta9/pull/592\r\n' +
                 '* Fix: new thing eventbus by @nickpetrovic in https://github.com/beam-cloud/beta9/pull/593\r\n' +
+                '* Fix: new thing number 2 eventbus by @nickpetrovic in https://github.com/beam-cloud/beta9/pull/593\r\n' +
+                '* Fix: new thing number 3 eventbus by @nickpetrovic in https://github.com/beam-cloud/beta9/pull/593\r\n' +
+                '* Feat: new thing number 4 eventbus by @nickpetrovic in https://github.com/beam-cloud/beta9/pull/593\r\n' +
                 '\r\n' +
                 '\r\n' +
                 '**Full Changelog**: https://github.com/beam-cloud/beta9/compare/gateway-0.1.221...gateway-0.1.222',
