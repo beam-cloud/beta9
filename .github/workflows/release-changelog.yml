@@ -240,9 +240,8 @@ jobs:
         run: |
           cd beam-docs/v2/releases
           FILENAME="./${{ steps.release.outputs.created_at }}.mdx"
-          if [ ! -f "$FILENAME" ]; then
-            # delete old release file
-            echo "HERE"
+          # check if old release file exists and delete it
+          if [ -f "$FILENAME" ]; then
             rm -f $FILENAME
           fi
 
