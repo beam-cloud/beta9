@@ -116,8 +116,8 @@ jobs:
             }
 
             core.setOutput('name', release.name.replace(/(:\s)/g, '-v'));
-            core.setOutput('new_feats', JSON.stringify(newFeats));
-            core.setOutput('new_fixes', JSON.stringify(newFixes));
+            core.setOutput('new_feats', JSON.stringify(feats));
+            core.setOutput('new_fixes', JSON.stringify(fixes));
             core.setOutput('created_at', formatDate(release.created_at));
             core.setOutput('pretty_date', prettyDate(release.created_at));
             core.setOutput('should_continue', 'true');
