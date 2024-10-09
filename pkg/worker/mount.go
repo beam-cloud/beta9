@@ -27,7 +27,7 @@ func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerReq
 	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
 
 	for i, m := range request.Mounts {
-		if m.MountPath == defaultContainerDirectory && request.Stub.Type.IsDeployment() {
+		if m.MountPath == defaultContainerDirectory && !request.Stub.Type.IsServe() {
 			source := m.LocalPath
 			localUserSource := tempUserCodeDir(request.ContainerId)
 			err := copyDirectory(source, localUserSource)
