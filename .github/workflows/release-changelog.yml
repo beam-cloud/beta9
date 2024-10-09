@@ -229,7 +229,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with: 
-          name: ${{ steps.release.outputs.artifact_name }}
+          name: ${{ steps.artifact_name.outputs.artifact_name }}
           path: new_artifact.json
 
       - name: Checkout beam-docs repo
