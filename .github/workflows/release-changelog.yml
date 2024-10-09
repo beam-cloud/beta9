@@ -242,6 +242,7 @@ jobs:
           FILENAME="./${{ steps.release.outputs.created_at }}.mdx"
           if [ ! -f "$FILENAME" ]; then
             # delete old release file
+            echo "HERE"
             rm -f $FILENAME
           fi
 
