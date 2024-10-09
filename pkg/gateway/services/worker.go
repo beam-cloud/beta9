@@ -195,5 +195,8 @@ func (gws *GatewayService) DrainWorker(ctx context.Context, in *pb.DrainWorkerRe
 
 func isClusterAdmin(ctx context.Context) (bool, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	return authInfo.Token.TokenType == types.TokenTypeClusterAdmin, errors.New("This action is not permitted")
+	if authInfo.Token.TokenType == types.TokenTypeClusterAdmin {
+		return true, nil
+	}
+	return false, errors.New("This action is not permitted")
 }
