@@ -251,11 +251,25 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 	return filteredWorkers
 }
 
+const InitialBackupGPUTypePriority = -1000 // Make sure that the backup gpu priorities are lower than the preset gpu-pool priorities which are set around 0
+
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	backupGpuMapPriority := map[string]int{}
+	for i, gpu := range request.BackupGpus {
+		backupGpuMapPriority[gpu] = InitialBackupGPUTypePriority - i
+	}
+
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
-		if worker.FreeCpu >= int64(request.Cpu) && worker.FreeMemory >= int64(request.Memory) &&
-			worker.Gpu == request.Gpu && worker.FreeGpuCount >= request.GpuCount && worker.Status != types.WorkerStatusDisabled {
+		validGpu := worker.Gpu == request.Gpu
+		if gpuPriority, ok := backupGpuMapPriority[worker.Gpu]; ok {
+			validGpu = true
+			worker.Priority = int32(gpuPriority)
+		}
+
+		validGpu = validGpu && worker.FreeGpuCount >= request.GpuCount
+
+		if worker.FreeCpu >= int64(request.Cpu) && worker.FreeMemory >= int64(request.Memory) && validGpu && worker.Status != types.WorkerStatusDisabled {
 			filteredWorkers = append(filteredWorkers, worker)
 		}
 	}

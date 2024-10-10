@@ -470,6 +470,118 @@ func TestSelectCPUWorker(t *testing.T) {
 	assert.Equal(t, types.WorkerStatusPending, updatedWorker.Status)
 }
 
+func TestSelectWorkersWithBackupGPU(t *testing.T) {
+	tests := []struct {
+		name               string
+		requests           []*types.ContainerRequest
+		expectedGpuResults []string
+		gpus               []string
+	}{
+		{
+			name: "simple",
+			requests: []*types.ContainerRequest{
+				{
+					Cpu:    1000,
+					Memory: 1000,
+					Gpu:    "A10G",
+				},
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					Gpu:        "A10G",
+					BackupGpus: []string{"T4"},
+				},
+			},
+			expectedGpuResults: []string{"A10G", "T4"},
+			gpus:               []string{"A10G", "T4"},
+		},
+		{
+			name: "complex",
+			requests: []*types.ContainerRequest{
+				{
+					Cpu:    1000,
+					Memory: 1000,
+					Gpu:    "A10G",
+				},
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					Gpu:        "A10G",
+					BackupGpus: []string{"T4", "A6000"},
+				},
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					Gpu:        "A10G",
+					BackupGpus: []string{"T4", "A6000"},
+				},
+			},
+			expectedGpuResults: []string{"A10G", "T4", "A6000"},
+			gpus:               []string{"A10G", "T4", "A6000"},
+		},
+		{
+			name: "not enough backup GPUs",
+			requests: []*types.ContainerRequest{
+				{
+					Cpu:    1000,
+					Memory: 1000,
+					Gpu:    "A10G",
+				},
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					Gpu:        "A10G",
+					BackupGpus: []string{"T4"},
+				},
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					Gpu:        "A10G",
+					BackupGpus: []string{"T4"},
+				},
+			},
+			expectedGpuResults: []string{"A10G", "T4", ""},
+			gpus:               []string{"A10G", "T4", "A6000"},
+		},
+	}
+
+	for _, tt := range tests {
+		wb, err := NewSchedulerForTest()
+		assert.Nil(t, err)
+		assert.NotNil(t, wb)
+
+		t.Run(tt.name, func(t *testing.T) {
+			for _, gpu := range tt.gpus {
+				newWorker := &types.Worker{
+					Id:         uuid.New().String(),
+					Status:     types.WorkerStatusPending,
+					FreeCpu:    1000,
+					FreeMemory: 1000,
+					Gpu:        gpu,
+				}
+
+				// Create a new worker
+				err = wb.workerRepo.AddWorker(newWorker)
+				assert.Nil(t, err)
+			}
+
+			for i, req := range tt.requests {
+				worker, err := wb.selectWorker(req)
+				if err != nil {
+					assert.EqualError(t, err, (&types.ErrNoSuitableWorkerFound{}).Error())
+					assert.Equal(t, tt.expectedGpuResults[i], "")
+					continue
+				}
+
+				assert.Equal(t, tt.expectedGpuResults[i], worker.Gpu)
+
+				err = wb.scheduleRequest(worker, req)
+				assert.Nil(t, err)
+			}
+		})
+	}
+}
+
 func TestRequiresPoolSelectorWorker(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
