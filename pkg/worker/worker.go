@@ -197,7 +197,7 @@ func NewWorker() (*Worker, error) {
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		redisClient:             redisClient,
-		containerMountManager:   NewContainerMountManager(),
+		containerMountManager:   NewContainerMountManager(config),
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
 		podHostName:             podHostName,
@@ -791,9 +791,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Root.Readonly = false
 
 	var volumeCacheMap map[string]string = make(map[string]string)
-
-	// Create local workspace path so we can symlink volumes before the container starts
-	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
 
 	// Add bind mounts to runc spec
 	for _, m := range request.Mounts {
