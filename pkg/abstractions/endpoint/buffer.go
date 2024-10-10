@@ -400,6 +400,15 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	}
 
 	containerUrl := fmt.Sprintf("http://%s/%s", c.address, req.ctx.Param("subPath"))
+
+	// Forward query params to the container if ASGI
+	if rb.isASGI {
+		queryParams := req.ctx.QueryString()
+		if queryParams != "" {
+			containerUrl += "?" + queryParams
+		}
+	}
+
 	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, requestBody)
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
