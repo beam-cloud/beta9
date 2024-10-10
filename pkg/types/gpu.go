@@ -16,8 +16,8 @@ const (
 	GPU_A6000   GPUType = "A6000"
 	GPU_RTX4090 GPUType = "RTX4090"
 
-	NO_GPU GPUType = "NO_GPU"
-	ANY    GPUType = "ANY"
+	NO_GPU  GPUType = "NO_GPU"
+	ANY_GPU GPUType = "any"
 )
 
 func AllGPUTypes() []GPUType {
