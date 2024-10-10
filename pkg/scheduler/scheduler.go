@@ -256,7 +256,7 @@ const InitialBackupGPUTypePriority = -1000 // Make sure that the backup gpu prio
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	backupGpuMapPriority := map[string]int{}
 	for i, gpu := range request.BackupGpus {
-		backupGpuMapPriority[gpu] = InitialBackupGPUTypePriority - i
+		backupGpuMapPriority[gpu] = InitialBackupGPUTypePriority - i // Make sure priorities are greater in priority earlier in the list
 	}
 
 	filteredWorkers := []*types.Worker{}
