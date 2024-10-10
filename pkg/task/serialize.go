@@ -69,29 +69,20 @@ func parseRequestArgs(queryParams url.Values, taskPayload *types.TaskPayload) {
 		if len(values) == 1 {
 			taskPayload.Kwargs[key] = convertToNumericIfPossible(values[0])
 		} else {
-			allInt := true
 			allFloat := true
 			floats := make([]float64, len(values))
-			ints := make([]int64, len(values))
 
 			for i, value := range values {
 				convertedValue := convertToNumericIfPossible(value)
 				switch v := convertedValue.(type) {
-				case int64:
-					ints[i] = v
-					allFloat = false
 				case float64:
 					floats[i] = v
-					allInt = false
 				default:
-					allInt = false
 					allFloat = false
 					continue
 				}
 			}
-			if allInt {
-				taskPayload.Kwargs[key] = ints
-			} else if allFloat {
+			if allFloat {
 				taskPayload.Kwargs[key] = floats
 			} else {
 				taskPayload.Kwargs[key] = values
@@ -101,9 +92,6 @@ func parseRequestArgs(queryParams url.Values, taskPayload *types.TaskPayload) {
 }
 
 func convertToNumericIfPossible(s string) interface{} {
-	if intVal, err := strconv.ParseInt(s, 10, 64); err == nil {
-		return intVal
-	}
 	if floatVal, err := strconv.ParseFloat(s, 64); err == nil {
 		return floatVal
 	}

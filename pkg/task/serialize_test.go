@@ -121,7 +121,7 @@ func TestSerializeHttpPayload(t *testing.T) {
 			queryParams: url.Values{"sleep": []string{"100"}},
 			wantPayload: &types.TaskPayload{
 				Args:   nil,
-				Kwargs: map[string]interface{}{"sleep": int64(100)},
+				Kwargs: map[string]interface{}{"sleep": float64(100)},
 			},
 			wantErr: false,
 		},
@@ -130,7 +130,7 @@ func TestSerializeHttpPayload(t *testing.T) {
 			queryParams: url.Values{"sleep": []string{"100"}},
 			wantPayload: &types.TaskPayload{
 				Args:   nil,
-				Kwargs: map[string]interface{}{"sleep": int64(100)},
+				Kwargs: map[string]interface{}{"sleep": float64(100)},
 			},
 			wantErr: false,
 		},
@@ -139,7 +139,7 @@ func TestSerializeHttpPayload(t *testing.T) {
 			queryParams: url.Values{"sleep": []string{"100", "200", "300"}},
 			wantPayload: &types.TaskPayload{
 				Args:   nil,
-				Kwargs: map[string]interface{}{"sleep": []int64{100, 200, 300}},
+				Kwargs: map[string]interface{}{"sleep": []float64{100, 200, 300}},
 			},
 			wantErr: false,
 		},
@@ -157,7 +157,16 @@ func TestSerializeHttpPayload(t *testing.T) {
 			queryParams: url.Values{"sleep": []string{"100", "200.2", "300"}},
 			wantPayload: &types.TaskPayload{
 				Args:   nil,
-				Kwargs: map[string]interface{}{"sleep": []string{"100", "200.2", "300"}},
+				Kwargs: map[string]interface{}{"sleep": []float64{100.0, 200.2, 300.0}},
+			},
+			wantErr: false,
+		},
+		{
+			name:        "mix of strings and numbers",
+			queryParams: url.Values{"sleep": []string{"Today", "200.2", "300"}},
+			wantPayload: &types.TaskPayload{
+				Args:   nil,
+				Kwargs: map[string]interface{}{"sleep": []string{"Today", "200.2", "300"}},
 			},
 			wantErr: false,
 		},
