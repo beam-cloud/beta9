@@ -158,6 +158,7 @@ class ASGI(Endpoint):
         image: Image = Image(),
         timeout: int = 180,
         workers: int = 1,
+        concurrent_requests: int = 0,
         keep_warm_seconds: int = 180,
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
@@ -175,6 +176,7 @@ class ASGI(Endpoint):
             image,
             timeout,
             workers,
+            concurrent_requests,
             keep_warm_seconds,
             max_pending_tasks,
             on_start,
@@ -187,6 +189,7 @@ class ASGI(Endpoint):
         )
 
         self.is_asgi = True
+        self.concurrent_requests = concurrent_requests
 
 
 class _CallableWrapper(DeployableMixin):

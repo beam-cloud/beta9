@@ -253,6 +253,7 @@ message GetOrCreateStubRequest {
   repeated SecretVar secrets = 21;
   Autoscaler autoscaler = 22;
   TaskPolicy task_policy = 23;
+  uint32 concurrent_requests = 24;
 }
 
 message GetOrCreateStubResponse {
