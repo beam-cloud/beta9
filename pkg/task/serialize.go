@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
+	"strconv"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -27,16 +29,25 @@ func SerializeHttpPayload(ctx echo.Context) (*types.TaskPayload, error) {
 		return nil, errors.New("invalid request payload")
 	}
 
-	// Handle empty JSON object
-	if len(payload) == 0 {
-		return &types.TaskPayload{
-			Args:   nil,
-			Kwargs: make(map[string]interface{}),
-		}, nil
+	taskPayload := &types.TaskPayload{
+		Args:   nil,
+		Kwargs: make(map[string]interface{}),
 	}
 
-	taskPayload := &types.TaskPayload{}
+	if len(payload) > 0 {
+		parseRequestPayload(payload, taskPayload)
+	}
 
+	// Parse query params into kwargs entries
+	queryParams := ctx.Request().URL.Query()
+	if len(queryParams) > 0 {
+		parseRequestArgs(queryParams, taskPayload)
+	}
+
+	return taskPayload, nil
+}
+
+func parseRequestPayload(payload map[string]interface{}, taskPayload *types.TaskPayload) {
 	// Check if payload is a list (args)
 	if args, ok := payload["args"].([]interface{}); ok {
 		taskPayload.Args = args
@@ -51,6 +62,24 @@ func SerializeHttpPayload(ctx echo.Context) (*types.TaskPayload, error) {
 		// Remaining payload is treated as kwargs if not empty
 		taskPayload.Kwargs = payload
 	}
+}
 
-	return taskPayload, nil
+func parseRequestArgs(queryParams url.Values, taskPayload *types.TaskPayload) {
+	for key, values := range queryParams {
+		if len(values) == 1 {
+			taskPayload.Kwargs[key] = convertToNumericIfPossible(values[0])
+		} else {
+			taskPayload.Kwargs[key] = values
+		}
+	}
+}
+
+func convertToNumericIfPossible(s string) interface{} {
+	if intVal, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return intVal
+	}
+	if floatVal, err := strconv.ParseFloat(s, 64); err == nil {
+		return floatVal
+	}
+	return s
 }
