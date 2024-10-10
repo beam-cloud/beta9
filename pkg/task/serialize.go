@@ -20,13 +20,9 @@ func SerializeHttpPayload(ctx echo.Context) (*types.TaskPayload, error) {
 	// Decode the JSON directly from the reader
 	payload := map[string]interface{}{}
 	if err := decoder.Decode(&payload); err != nil {
-		if err == io.EOF {
-			return &types.TaskPayload{
-				Args:   nil,
-				Kwargs: make(map[string]interface{}),
-			}, nil
+		if err != io.EOF {
+			return nil, errors.New("invalid request payload")
 		}
-		return nil, errors.New("invalid request payload")
 	}
 
 	taskPayload := &types.TaskPayload{
@@ -65,11 +61,41 @@ func parseRequestPayload(payload map[string]interface{}, taskPayload *types.Task
 }
 
 func parseRequestArgs(queryParams url.Values, taskPayload *types.TaskPayload) {
+	if taskPayload.Kwargs == nil {
+		taskPayload.Kwargs = make(map[string]interface{})
+	}
+
 	for key, values := range queryParams {
 		if len(values) == 1 {
 			taskPayload.Kwargs[key] = convertToNumericIfPossible(values[0])
 		} else {
-			taskPayload.Kwargs[key] = values
+			allInt := true
+			allFloat := true
+			floats := make([]float64, len(values))
+			ints := make([]int64, len(values))
+
+			for i, value := range values {
+				convertedValue := convertToNumericIfPossible(value)
+				switch v := convertedValue.(type) {
+				case int64:
+					ints[i] = v
+					allFloat = false
+				case float64:
+					floats[i] = v
+					allInt = false
+				default:
+					allInt = false
+					allFloat = false
+					continue
+				}
+			}
+			if allInt {
+				taskPayload.Kwargs[key] = ints
+			} else if allFloat {
+				taskPayload.Kwargs[key] = floats
+			} else {
+				taskPayload.Kwargs[key] = values
+			}
 		}
 	}
 }
