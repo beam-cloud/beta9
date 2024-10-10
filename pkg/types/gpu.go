@@ -17,6 +17,7 @@ const (
 	GPU_RTX4090 GPUType = "RTX4090"
 
 	NO_GPU GPUType = "NO_GPU"
+	ANY    GPUType = "ANY"
 )
 
 func AllGPUTypes() []GPUType {
