@@ -199,6 +199,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
+	// Get the hostname of the build container
+	go b.checkForInitialImagePullError(containerId, outputChan)
+
 	hostname, err := b.containerRepo.GetWorkerAddress(containerId)
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
@@ -319,6 +322,32 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 func (b *Builder) genContainerId() string {
 	return fmt.Sprintf("%s%s", types.BuildContainerPrefix, uuid.New().String()[:8])
+}
+
+func (b *Builder) checkForInitialImagePullError(containerId string, outputChan chan common.OutputMsg) {
+	// If the initial image pull of custom base image fails, the container will never receive
+	// a container address for the runc client to connect to.
+	// If it fails without a container address, we can still look up the exit code
+	// to terminate the build and notify the user.
+	for {
+		_, err := b.containerRepo.GetContainerAddress(containerId)
+		if err == nil {
+			return
+		}
+
+		_, err = b.containerRepo.GetContainerExitCode(containerId)
+		if err == nil {
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Base image failed to load.\n"}
+			return
+		}
+
+		_, err = b.containerRepo.GetContainerState(containerId)
+		if err != nil {
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unexpected error occurred: container no longer exists.\n"}
+			return
+		}
+		time.Sleep(1 * time.Second)
+	}
 }
 
 func (b *Builder) extractPackageName(pkg string) string {
