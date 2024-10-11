@@ -73,15 +73,14 @@ func NewGateway() (*Gateway, error) {
 	}
 	config := configManager.GetConfig()
 
-	if err := common.InitializeLogger(config); err != nil {
-		return nil, err
-	}
-
 	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Gateway"))
 	if err != nil {
 		return nil, err
 	}
 
+	if err := common.InitializeLogger(redisClient, config); err != nil {
+		return nil, err
+	}
 	metricsRepo, err := metrics.NewMetrics(config.Monitoring, string(metrics.MetricsSourceGateway))
 	if err != nil {
 		return nil, err

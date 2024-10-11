@@ -9,9 +9,10 @@ import (
 )
 
 type TraceLogger struct {
-	logger *zap.Logger
-	sugar  *zap.SugaredLogger
-	config types.AppConfig
+	logger    *zap.Logger
+	sugar     *zap.SugaredLogger
+	config    types.AppConfig
+	debugRepo DebugRepository
 }
 
 var (
@@ -19,12 +20,17 @@ var (
 	once   sync.Once
 )
 
-func InitializeLogger(config types.AppConfig) error {
+func InitializeLogger(rdb *RedisClient, config types.AppConfig) error {
 	var err error
+
+	logLevel := zap.InfoLevel
+	if config.DebugMode {
+		logLevel = zap.DebugLevel
+	}
 
 	cfg := zap.Config{
 		Encoding:         "console",
-		Level:            zap.NewAtomicLevelAt(zap.InfoLevel),
+		Level:            zap.NewAtomicLevelAt(logLevel),
 		OutputPaths:      []string{"stdout"},
 		ErrorOutputPaths: []string{"stderr"},
 		EncoderConfig: zapcore.EncoderConfig{
@@ -49,10 +55,17 @@ func InitializeLogger(config types.AppConfig) error {
 			err = e
 			return
 		}
+
+		var debugRepo DebugRepository
+		if config.DebugMode {
+			debugRepo = NewDebugRedisRepository(rdb)
+		}
+
 		Logger = &TraceLogger{
-			logger: logger,
-			sugar:  logger.Sugar(),
-			config: config,
+			logger:    logger,
+			sugar:     logger.Sugar(),
+			config:    config,
+			debugRepo: debugRepo,
 		}
 	})
 
@@ -77,4 +90,17 @@ func (tl *TraceLogger) Errorf(template string, args ...interface{}) {
 
 func (tl *TraceLogger) Fatalf(template string, args ...interface{}) {
 	tl.sugar.Fatalf(template, args...)
+}
+
+type DebugRedisRepository struct {
+	rdb  *RedisClient
+	lock *RedisLock
+}
+
+type DebugRepository interface {
+}
+
+func NewDebugRedisRepository(r *RedisClient) DebugRepository {
+	lock := NewRedisLock(r)
+	return &DebugRedisRepository{rdb: r, lock: lock}
 }

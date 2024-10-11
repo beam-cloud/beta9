@@ -131,12 +131,12 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	if err := common.InitializeLogger(config); err != nil {
+	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
+	if err != nil {
 		return nil, err
 	}
 
-	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
-	if err != nil {
+	if err := common.InitializeLogger(redisClient, config); err != nil {
 		return nil, err
 	}
 
