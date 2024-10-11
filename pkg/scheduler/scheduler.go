@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log"
 	"math"
 	"sort"
 	"time"
@@ -54,17 +53,17 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		case types.PoolModeExternal:
 			controller, err = NewExternalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, providerRepo, tailscale, pool.Provider)
 		default:
-			log.Printf("no valid controller found for pool <%s> with mode: %s\n", name, pool.Mode)
+			common.Logger.Infof("no valid controller found for pool <%s> with mode: %s", name, pool.Mode)
 			continue
 		}
 
 		if err != nil {
-			log.Printf("unable to load controller <%s>: %+v\n", name, err)
+			common.Logger.Infof("unable to load controller <%s>: %+v\n", name, err)
 			continue
 		}
 
 		workerPoolManager.SetPool(name, pool, controller)
-		log.Printf("loaded controller for pool <%s> with mode: %s and GPU type: %s\n", name, pool.Mode, pool.GPUType)
+		common.Logger.Infof("loaded controller for pool <%s> with mode: %s and GPU type: %s", name, pool.Mode, pool.GPUType)
 	}
 
 	return &Scheduler{
@@ -82,7 +81,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 }
 
 func (s *Scheduler) Run(request *types.ContainerRequest) error {
-	log.Printf("Received RUN request: %+v\n", request)
+	common.Logger.Infof("Received RUN request: %+v\n", request)
 
 	request.Timestamp = time.Now()
 
@@ -139,7 +138,7 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 }
 
 func (s *Scheduler) Stop(containerId string) error {
-	log.Printf("Received STOP request: %s\n", containerId)
+	common.Logger.Infof("Received STOP request: %s\n", containerId)
 
 	err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	if err != nil {
@@ -154,7 +153,7 @@ func (s *Scheduler) Stop(containerId string) error {
 		LockAndDelete: false,
 	})
 	if err != nil {
-		log.Printf("Could not stop container: %+v\n", err)
+		common.Logger.Infof("Could not stop container: %+v\n", err)
 		return err
 	}
 
@@ -200,22 +199,22 @@ func (s *Scheduler) StartProcessingRequests() {
 			// so we can add a new worker.
 			controller, err := s.getController(request)
 			if err != nil {
-				log.Printf("No controller found for request: %+v, error: %v\n", request, err)
+				common.Logger.Infof("No controller found for request: %+v, error: %v\n", request, err)
 				continue
 			}
 
 			go func() {
 				newWorker, err := controller.AddWorker(request.Cpu, request.Memory, request.Gpu, request.GpuCount)
 				if err != nil {
-					log.Printf("Unable to add worker job for container <%s>: %+v\n", request.ContainerId, err)
+					common.Logger.Infof("Unable to add worker job for container <%s>: %+v\n", request.ContainerId, err)
 					s.addRequestToBacklog(request)
 					return
 				}
 
-				log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
+				common.Logger.Infof("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
 				err = s.scheduleRequest(newWorker, request)
 				if err != nil {
-					log.Printf("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
+					common.Logger.Infof("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
 					s.addRequestToBacklog(request)
 				}
 			}()
@@ -329,7 +328,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 			return
 		}
 
-		log.Printf("Giving up on request <%s> after %d attempts or due to max retry duration exceeded\n", request.ContainerId, request.RetryCount)
+		common.Logger.Infof("Giving up on request <%s> after %d attempts or due to max retry duration exceeded\n", request.ContainerId, request.RetryCount)
 		s.containerRepo.DeleteContainerState(&types.ContainerRequest{ContainerId: request.ContainerId})
 	}()
 

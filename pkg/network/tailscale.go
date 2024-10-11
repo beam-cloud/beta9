@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"tailscale.com/tsnet"
@@ -56,7 +57,7 @@ type Tailscale struct {
 
 func (t *Tailscale) logF(format string, v ...interface{}) {
 	if t.debug {
-		log.Printf(format, v...)
+		common.Logger.Infof(format, v...)
 	}
 }
 
@@ -100,7 +101,7 @@ func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (n
 		return nil, err
 	}
 
-	log.Printf("Connected to tailnet - listening on %s\n", addr)
+	common.Logger.Infof("Connected to tailnet - listening on %s", addr)
 	return listener, nil
 }
 

@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"log"
 	"testing"
 	"time"
 
@@ -94,7 +93,7 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, 
 	// Add the worker state
 	err := wpc.workerRepo.AddWorker(worker)
 	if err != nil {
-		log.Printf("Unable to create worker: %+v\n", err)
+		common.Logger.Infof("Unable to create worker: %+v\n", err)
 		return nil, err
 	}
 
@@ -140,7 +139,7 @@ func (wpc *ExternalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int6
 	// Add the worker state
 	err := wpc.workerRepo.AddWorker(worker)
 	if err != nil {
-		log.Printf("Unable to create worker: %+v\n", err)
+		common.Logger.Infof("Unable to create worker: %+v\n", err)
 		return nil, err
 	}
 
@@ -208,7 +207,7 @@ func (wpc *ExternalWorkerPoolControllerForTest) AddWorkerToMachine(cpu int64, me
 
 	// Add the worker state
 	if err := wpc.workerRepo.AddWorker(worker); err != nil {
-		log.Printf("Unable to create worker: %+v\n", err)
+		common.Logger.Infof("Unable to create worker: %+v\n", err)
 		return nil, err
 	}
 

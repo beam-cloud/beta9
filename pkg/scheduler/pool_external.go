@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -89,7 +89,7 @@ func NewExternalWorkerPoolController(
 	// Start monitoring worker pool size
 	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
 	if err != nil {
-		log.Printf("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
+		common.Logger.Infof("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
 	}
 
 	// Reconcile nodes with state
@@ -139,13 +139,13 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	}
 	defer wpc.providerRepo.RemoveMachineLock(string(*wpc.providerName), wpc.name, machineId)
 
-	log.Printf("Waiting for machine registration <machineId: %s>\n", machineId)
+	common.Logger.Infof("Waiting for machine registration <machineId: %s>\n", machineId)
 	machineState, err := wpc.providerRepo.WaitForMachineRegistration(string(*wpc.providerName), wpc.name, machineId)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Printf("Machine registered <machineId: %s>, hostname: %s\n", machineId, machineState.HostName)
+	common.Logger.Infof("Machine registered <machineId: %s>, hostname: %s\n", machineId, machineState.HostName)
 	worker, err := wpc.createWorkerOnMachine(workerId, machineId, machineState, cpu, memory, gpuType, gpuCount)
 	if err != nil {
 		return nil, err
@@ -197,7 +197,7 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 	}
 
 	if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && machine.State.Gpu == gpuType && remainingMachineGpuCount >= gpuCount {
-		log.Printf("Using existing machine <machineId: %s>, hostname: %s\n", machine.State.MachineId, machine.State.HostName)
+		common.Logger.Infof("Using existing machine <machineId: %s>, hostname: %s\n", machine.State.MachineId, machine.State.HostName)
 
 		// If there is only one GPU available on the machine, give the worker access to everything
 		// This prevents situations where a user requests a small amount of compute, and the subsequent
@@ -243,7 +243,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 
 	// Add the worker state
 	if err := wpc.workerRepo.AddWorker(worker); err != nil {
-		log.Printf("Unable to create worker: %+v\n", err)
+		common.Logger.Infof("Unable to create worker: %+v\n", err)
 		return nil, err
 	}
 

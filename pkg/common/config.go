@@ -67,7 +67,7 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 			sort.Strings(matches)
 			for _, path := range matches {
 				if err := cm.LoadConfig(ext, file.Provider(path)); err != nil {
-					log.Printf("Failed to load config %s: %v\n", path, err)
+					Logger.Errorf("Failed to load config %s: %v\n", path, err)
 				}
 			}
 		}
@@ -77,7 +77,7 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 	configJson := os.Getenv("CONFIG_JSON")
 	if configJson != "" {
 		if err := cm.LoadConfig(JSONConfigFormat, rawbytes.Provider([]byte(configJson))); err != nil {
-			log.Printf("Error loading configuration from CONFIG_JSON: %v\n", err)
+			Logger.Errorf("Error loading configuration from CONFIG_JSON: %v\n", err)
 		} else {
 			cm.tag = "json"
 		}

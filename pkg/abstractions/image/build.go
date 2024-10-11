@@ -6,7 +6,6 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -265,7 +264,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
 	}
 
-	log.Printf("container <%v> building with options: %s\n", containerId, opts)
+	common.Logger.Infof("container <%v> building with options: %s\n", containerId, opts)
 	startTime := time.Now()
 
 	// Detect if python3.x is installed in the container, if not install it
@@ -292,7 +291,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 
 		if r, err := client.Exec(containerId, cmd); err != nil || !r.Ok {
-			log.Printf("failed to execute command for container <%v>: \"%v\" - %v\n", containerId, cmd, err)
+			common.Logger.Infof("failed to execute command for container <%v>: \"%v\" - %v\n", containerId, cmd, err)
 
 			errMsg := ""
 			if err != nil {
@@ -304,7 +303,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			return err
 		}
 	}
-	log.Printf("container <%v> build took %v\n", containerId, time.Since(startTime))
+	common.Logger.Infof("container <%v> build took %v\n", containerId, time.Since(startTime))
 
 	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "\nSaving image, this may take a few minutes...\n"}
 	err = client.Archive(ctx, containerId, imageId, outputChan)

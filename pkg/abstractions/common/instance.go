@@ -3,7 +3,6 @@ package abstractions
 import (
 	"context"
 	"errors"
-	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -195,7 +194,7 @@ func (i *AutoscaledInstance) Monitor() error {
 			}
 
 			if initialContainerCount != len(i.Containers) {
-				log.Printf("<%s> scaled from %d->%d", i.Name, initialContainerCount, len(i.Containers))
+				common.Logger.Infof("<%s> scaled from %d->%d", i.Name, initialContainerCount, len(i.Containers))
 			}
 
 		case desiredContainers := <-i.ScaleEventChan:
@@ -207,7 +206,7 @@ func (i *AutoscaledInstance) Monitor() error {
 			if err := i.HandleScalingEvent(desiredContainers); err != nil {
 				if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 					if time.Now().After(ignoreScalingEventWindow) {
-						log.Printf("<%s> throttled by concurrency limit", i.Name)
+						common.Logger.Infof("<%s> throttled by concurrency limit", i.Name)
 						ignoreScalingEventWindow = time.Now().Add(IgnoreScalingEventInterval)
 					}
 				}
@@ -230,7 +229,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	}
 
 	if state.FailedContainers >= i.FailedContainerThreshold {
-		log.Printf("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
+		common.Logger.Infof("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
 		desiredContainers = 0
 	}
 

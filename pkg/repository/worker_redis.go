@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -382,7 +381,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 		return fmt.Errorf("failed to push request: %w", err)
 	}
 
-	log.Printf("Request for container %s added to worker: %s\n", request.ContainerId, worker.Id)
+	common.Logger.Infof("Request for container %s added to worker: %s\n", request.ContainerId, worker.Id)
 
 	return nil
 }
@@ -395,7 +394,7 @@ func (r *WorkerRedisRepository) AddContainerToWorker(workerId string, containerI
 		return fmt.Errorf("failed to add container to worker container index: %w", err)
 	}
 
-	log.Printf("Container %s added to worker: %s\n", containerId, workerId)
+	common.Logger.Infof("Container %s added to worker: %s\n", containerId, workerId)
 	return nil
 }
 
@@ -407,7 +406,7 @@ func (r *WorkerRedisRepository) RemoveContainerFromWorker(workerId string, conta
 		return fmt.Errorf("failed to remove container from worker container index: %w", err)
 	}
 
-	log.Printf("Removed container %s from worker %s\n", containerId, workerId)
+	common.Logger.Infof("Removed container %s from worker %s\n", containerId, workerId)
 	return nil
 }
 

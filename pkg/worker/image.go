@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -200,7 +199,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 
 func (c *ImageClient) Cleanup() error {
 	c.mountedFuseServers.Range(func(imageId string, server *fuse.Server) bool {
-		log.Printf("Un-mounting image: %s\n", imageId)
+		common.Logger.Infof("Un-mounting image: %s\n", imageId)
 		server.Unmount()
 		return true // Continue iteration
 	})
@@ -361,19 +360,19 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}
 
 	if err != nil {
-		log.Printf("Unable to create archive: %v\n", err)
+		common.Logger.Infof("Unable to create archive: %v\n", err)
 		return err
 	}
-	log.Printf("Container <%v> archive took %v\n", imageId, time.Since(startTime))
+	common.Logger.Infof("Container <%v> archive took %v\n", imageId, time.Since(startTime))
 
 	// Push the archive to a registry
 	startTime = time.Now()
 	err = c.registry.Push(ctx, archivePath, imageId)
 	if err != nil {
-		log.Printf("Failed to push image <%v>: %v\n", imageId, err)
+		common.Logger.Infof("Failed to push image <%v>: %v\n", imageId, err)
 		return err
 	}
 
-	log.Printf("Image <%v> push took %v\n", imageId, time.Since(startTime))
+	common.Logger.Infof("Image <%v> push took %v\n", imageId, time.Since(startTime))
 	return nil
 }

@@ -2,7 +2,6 @@ package worker
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"syscall"
@@ -232,7 +231,7 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string, options *ContainerO
 
 			formattedVersion := major + "." + minor
 
-			log.Printf("found existing cuda version in container image: %s (formatted: %s)\n", existingCudaVersion, formattedVersion)
+			common.Logger.Infof("found existing cuda version in container image: %s (formatted: %s)\n", existingCudaVersion, formattedVersion)
 
 			cudaVersion = formattedVersion
 			existingCudaFound = true

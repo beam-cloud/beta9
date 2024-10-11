@@ -109,7 +109,7 @@ func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 		Body:   f,
 	})
 	if err != nil {
-		log.Printf("error uploading image to registry: %v", err)
+		Logger.Errorf("Error uploading image to registry: %v", err)
 		return err
 	}
 

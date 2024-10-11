@@ -3,12 +3,12 @@ package storage
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"text/template"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/cenkalti/backoff"
 )
@@ -27,7 +27,7 @@ func NewCunoFsStorage(config types.CunoFSConfig) (Storage, error) {
 }
 
 func (s *CunoFsStorage) Mount(localPath string) error {
-	log.Printf("CunoFS filesystem mounting to: '%s'\n", localPath)
+	common.Logger.Infof("CunoFS filesystem mounting to: '%s'\n", localPath)
 	s.mountCmd = exec.Command(
 		"cuno",
 		"mount",
@@ -41,7 +41,7 @@ func (s *CunoFsStorage) Mount(localPath string) error {
 	go func() {
 		output, err := s.mountCmd.CombinedOutput()
 		if err != nil {
-			log.Fatalf("error executing cunofs mount: %v, output: %s", err, string(output))
+			common.Logger.Fatalf("error executing cunofs mount: %v, output: %s", err, string(output))
 		}
 	}()
 
@@ -69,7 +69,7 @@ func (s *CunoFsStorage) Mount(localPath string) error {
 		return fmt.Errorf("failed to mount CunoFS filesystem to: '%s'", localPath)
 	}
 
-	log.Printf("CunoFS filesystem mounted to: '%s'", localPath)
+	common.Logger.Infof("CunoFS filesystem mounted to: '%s'", localPath)
 	return nil
 }
 
@@ -123,11 +123,11 @@ func (s *CunoFsStorage) Unmount(localPath string) error {
 
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			log.Printf("error executing cuno umount: %v, output: %s", err, string(output))
+			common.Logger.Infof("error executing cuno umount: %v, output: %s", err, string(output))
 			return err
 		}
 
-		log.Printf("CunoFS filesystem unmounted from: '%s'\n", localPath)
+		common.Logger.Infof("CunoFS filesystem unmounted from: '%s'\n", localPath)
 		return nil
 	}
 

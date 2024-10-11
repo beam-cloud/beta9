@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -121,10 +121,10 @@ func (p *LambdaLabsProvider) TerminateMachine(ctx context.Context, poolName, ins
 
 	err = p.ProviderRepo.RemoveMachine(p.Name, poolName, machineId)
 	if err != nil {
-		log.Printf("<provider %s>: Unable to remove machine state <machineId: %s>: %+v\n", p.Name, machineId, err)
+		common.Logger.Infof("<provider %s>: Unable to remove machine state <machineId: %s>: %+v\n", p.Name, machineId, err)
 		return err
 	}
 
-	log.Printf("<provider %s>: Terminated machine <machineId: %s> due to inactivity\n", p.Name, machineId)
+	common.Logger.Infof("<provider %s>: Terminated machine <machineId: %s> due to inactivity\n", p.Name, machineId)
 	return nil
 }

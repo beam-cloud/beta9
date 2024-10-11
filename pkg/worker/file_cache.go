@@ -3,11 +3,11 @@ package worker
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"syscall"
 
+	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -39,7 +39,7 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 		if !info.IsDir() {
 			_, err := cm.client.StoreContentFromSource(path, 0)
 			if err != nil {
-				log.Printf("Failed to cache file<%s>: %v\n", path, err)
+				common.Logger.Infof("Failed to cache file<%s>: %v\n", path, err)
 			}
 		}
 

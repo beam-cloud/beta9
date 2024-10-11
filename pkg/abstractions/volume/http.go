@@ -3,11 +3,11 @@ package volume
 import (
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/labstack/echo/v4"
 )
 
@@ -98,7 +98,7 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 				break
 			}
 			if err != nil {
-				log.Printf("Failed to upload file: %v\n", err)
+				common.Logger.Infof("Failed to upload file: %v\n", err)
 				break
 			}
 

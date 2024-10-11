@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	batchv1 "k8s.io/api/batch/v1"
@@ -56,7 +56,7 @@ func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.Ap
 	// Start monitoring worker pool size
 	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
 	if err != nil {
-		log.Printf("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
+		common.Logger.Infof("<pool %s> unable to monitor pool size: %+v\n", wpc.name, err)
 	}
 
 	go wpc.deleteStalePendingWorkerJobs()
@@ -95,7 +95,7 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 
 	// Add the worker state
 	if err := wpc.workerRepo.AddWorker(worker); err != nil {
-		log.Printf("Unable to create worker: %+v\n", err)
+		common.Logger.Infof("Unable to create worker: %+v\n", err)
 		return nil, err
 	}
 
@@ -434,7 +434,7 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 
 		jobs, err := wpc.kubeClient.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{LabelSelector: jobSelector})
 		if err != nil {
-			log.Printf("Failed to list jobs for controller <%s>: %v\n", wpc.name, err)
+			common.Logger.Infof("Failed to list jobs for controller <%s>: %v\n", wpc.name, err)
 			continue
 		}
 
@@ -443,7 +443,7 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 
 			pods, err := wpc.kubeClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: podSelector})
 			if err != nil {
-				log.Printf("Failed to list pods for job <%v>: %v\n", job.Name, err)
+				common.Logger.Infof("Failed to list pods for job <%v>: %v\n", job.Name, err)
 				continue
 			}
 
@@ -458,7 +458,7 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 					// Remove worker from repository
 					if workerId, ok := pod.Labels[Beta9WorkerLabelIDKey]; ok {
 						if err := wpc.workerRepo.RemoveWorker(&types.Worker{Id: workerId}); err != nil {
-							log.Printf("Failed to delete pending worker <%s> from repo: %v \n", workerId, err)
+							common.Logger.Infof("Failed to delete pending worker <%s> from repo: %v \n", workerId, err)
 						}
 					}
 
@@ -466,10 +466,10 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 					if err := wpc.kubeClient.BatchV1().Jobs(namespace).Delete(ctx, job.Name, metav1.DeleteOptions{
 						PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 					}); err != nil {
-						log.Printf("Failed to delete pending worker job <%s>: %v\n", job.Name, err)
+						common.Logger.Infof("Failed to delete pending worker job <%s>: %v\n", job.Name, err)
 					}
 
-					log.Printf("Deleted worker <%s> due to exceeding age limit of <%v>\n", job.Name, maxAge)
+					common.Logger.Infof("Deleted worker <%s> due to exceeding age limit of <%v>\n", job.Name, maxAge)
 				}
 			}
 		}

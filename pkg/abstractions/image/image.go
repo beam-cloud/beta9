@@ -88,7 +88,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 }
 
 func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
-	log.Printf("incoming image build request: %+v", in)
+	common.Logger.Infof("incoming image build request: %+v", in)
 
 	buildOptions := &BuildOpts{
 		BaseImageTag:       is.config.ImageService.Runner.Tags[in.PythonVersion],
