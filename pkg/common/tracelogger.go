@@ -74,6 +74,9 @@ func InitializeLogger(rdb *RedisClient, config types.AppConfig) error {
 }
 
 func (tl *TraceLogger) Debugf(ctx context.Context, template string, args ...interface{}) {
+	if tl.config.DebugMode {
+	}
+
 	tl.sugar.Debugf(template, args...)
 }
 
