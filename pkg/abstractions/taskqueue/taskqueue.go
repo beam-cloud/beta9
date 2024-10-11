@@ -142,6 +142,19 @@ func NewRedisTaskQueueService(
 	return tq, nil
 }
 
+func (tq *RedisTaskQueue) isPublic(stubId string) (*types.Workspace, error) {
+	instance, err := tq.getOrCreateQueueInstance(stubId)
+	if err != nil {
+		return nil, err
+	}
+
+	if instance.StubConfig.Authorized {
+		return nil, errors.New("unauthorized")
+	}
+
+	return instance.Workspace, nil
+}
+
 func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
 	return &TaskQueueTask{
 		tq:  tq,
