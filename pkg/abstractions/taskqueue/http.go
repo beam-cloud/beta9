@@ -24,6 +24,7 @@ func registerTaskQueueRoutes(g *echo.Group, tq *RedisTaskQueue) *taskQueueGroup 
 	g.POST("/:deploymentName", auth.WithAuth(group.TaskQueuePut))
 	g.POST("/:deploymentName/latest", auth.WithAuth(group.TaskQueuePut))
 	g.POST("/:deploymentName/v:version", auth.WithAuth(group.TaskQueuePut))
+	g.POST("/public/:stubId", auth.WithAssumedStubAuth(group.TaskQueuePut, group.tq.isPublic))
 
 	return group
 }
