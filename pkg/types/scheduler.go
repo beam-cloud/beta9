@@ -66,17 +66,19 @@ type ContainerState struct {
 	Memory      int64           `redis:"memory" json:"memory"`
 }
 
+type GpuRequest struct {
+	MainGpus   []string `json:"main_gpus"`
+	BackupGpus []string `json:"backup_gpus"`
+}
+
 type ContainerRequest struct {
-	ContainerId string   `json:"container_id"`
-	EntryPoint  []string `json:"entry_point"`
-	Env         []string `json:"env"`
-	Cpu         int64    `json:"cpu"`
-	Memory      int64    `json:"memory"`
-	Gpu         string   `json:"gpu"`
-	BackupGpus  []string `json:"backup_gpus"`
-	// TODO: Ideally Gpu and BackupGpus should be merged into a single field
-	// However we need to do it in a backward compatible way
-	ActualGpu        string          `json:"actual_gpu"` // The actual GPU that was chosen for the container
+	ContainerId      string          `json:"container_id"`
+	EntryPoint       []string        `json:"entry_point"`
+	Env              []string        `json:"env"`
+	Cpu              int64           `json:"cpu"`
+	Memory           int64           `json:"memory"`
+	Gpu              string          `json:"gpu"`
+	GpuRequest       GpuRequest      `json:"gpu_request"`
 	GpuCount         uint32          `json:"gpu_count"`
 	SourceImage      *string         `json:"source_image"`
 	SourceImageCreds string          `json:"source_image_creds"`

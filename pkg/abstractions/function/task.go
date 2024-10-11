@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -146,21 +145,18 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 
 	env = append(secrets, env...)
 
-	gpuTypes := strings.Split(string(stubConfig.Runtime.Gpu), ",")
-	mainGpuType := gpuTypes[0]
-
-	backupGpuTypes := []string{}
-	if len(gpuTypes) > 1 {
-		backupGpuTypes = gpuTypes[1:]
-	}
+	mainGpuTypes := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
+	backupGpuTypes := types.GpuTypesToStrings(stubConfig.Runtime.BackupGpus)
 
 	err = t.fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: t.containerId,
 		Env:         env,
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
-		Gpu:         mainGpuType,
-		BackupGpus:  backupGpuTypes,
+		GpuRequest: types.GpuRequest{
+			MainGpus:   mainGpuTypes,
+			BackupGpus: backupGpuTypes,
+		},
 		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,

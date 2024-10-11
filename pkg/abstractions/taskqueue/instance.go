@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
-	"strings"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -66,13 +65,8 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		gpuCount = 1
 	}
 
-	gpuTypes := strings.Split(string(i.StubConfig.Runtime.Gpu), ",")
-	mainGpuType := gpuTypes[0]
-
-	backupGpuTypes := []string{}
-	if len(gpuTypes) > 1 {
-		backupGpuTypes = gpuTypes[1:]
-	}
+	mainGpuTypes := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)
+	backupGpuTypes := types.GpuTypesToStrings(i.StubConfig.Runtime.BackupGpus)
 
 	for c := 0; c < containersToRun; c++ {
 		runRequest := &types.ContainerRequest{
@@ -80,8 +74,10 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			Env:         env,
 			Cpu:         i.StubConfig.Runtime.Cpu,
 			Memory:      i.StubConfig.Runtime.Memory,
-			Gpu:         mainGpuType,
-			BackupGpus:  backupGpuTypes,
+			GpuRequest: types.GpuRequest{
+				MainGpus:   mainGpuTypes,
+				BackupGpus: backupGpuTypes,
+			},
 			GpuCount:    uint32(gpuCount),
 			ImageId:     i.StubConfig.Runtime.ImageId,
 			StubId:      i.Stub.ExternalId,

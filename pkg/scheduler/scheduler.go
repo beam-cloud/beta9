@@ -177,7 +177,7 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 		}
 		controllers = append(controllers, wp.Controller)
 	} else {
-		combinedRequestedGpu := append([]string{request.Gpu}, request.BackupGpus...)
+		combinedRequestedGpu := append(request.GpuRequest.MainGpus, request.GpuRequest.BackupGpus...)
 
 		for _, gpu := range combinedRequestedGpu {
 			wp, ok := s.workerPoolManager.GetPoolByGPU(gpu)
@@ -258,8 +258,7 @@ func (s *Scheduler) StartProcessingRequests() {
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
 	go s.schedulerMetrics.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
-
-	request.ActualGpu = worker.Gpu
+	request.Gpu = worker.Gpu
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 
@@ -274,27 +273,56 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 	return filteredWorkers
 }
 
-const InitialBackupGPUTypePriority = -1000 // Make sure that the backup gpu priorities are lower than the preset gpu-pool priorities which are set around 0
+const backupGPUTypeScore = -1000 // Make sure that the backup gpu priorities are lower than the preset gpu-pool priorities which are set around 0
+
+type GpuRequestPriority struct {
+	Priority int
+	IsBackup bool
+}
 
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
-	backupGpuMapPriority := map[string]int{}
-	for i, gpu := range request.BackupGpus {
-		backupGpuMapPriority[gpu] = InitialBackupGPUTypePriority - i // Make sure priorities are greater in priority earlier in the list
+	gpuRequestMap := map[string]GpuRequestPriority{
+		request.Gpu: {Priority: 0, IsBackup: false}, // This is is for backwards compatibility
+	}
+
+	for i, gpu := range request.GpuRequest.BackupGpus {
+		gpuRequestMap[gpu] = GpuRequestPriority{
+			Priority: backupGPUTypeScore - i, // Make sure priorities are greater in priority earlier in the list
+			IsBackup: true,
+		}
+	}
+
+	for _, gpu := range request.GpuRequest.MainGpus {
+		gpuRequestMap[gpu] = GpuRequestPriority{
+			Priority: 0,
+			IsBackup: false,
+		}
 	}
 
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
-		validGpu := worker.Gpu == request.Gpu
-		if gpuPriority, ok := backupGpuMapPriority[worker.Gpu]; ok {
-			validGpu = true
-			worker.Priority = int32(gpuPriority)
+		// Check if the worker has enough free cpu and memory to run the container
+		if worker.FreeCpu < int64(request.Cpu) || worker.FreeMemory < int64(request.Memory) {
+			continue
 		}
 
-		validGpu = validGpu && worker.FreeGpuCount >= request.GpuCount
-
-		if worker.FreeCpu >= int64(request.Cpu) && worker.FreeMemory >= int64(request.Memory) && validGpu && worker.Status != types.WorkerStatusDisabled {
-			filteredWorkers = append(filteredWorkers, worker)
+		// Validate GPU resource availability
+		priority, validGpu := gpuRequestMap[worker.Gpu]
+		if !validGpu || worker.FreeGpuCount < request.GpuCount {
+			continue
 		}
+
+		// Override the worker priority if the request is a backup gpu (this should be lower than default gpu priorities)
+		if priority.IsBackup {
+			worker.Priority = int32(priority.Priority)
+		}
+
+		// Check if the worker has been cordoned
+		if worker.Status == types.WorkerStatusDisabled {
+			continue
+		}
+
+		filteredWorkers = append(filteredWorkers, worker)
 	}
 	return filteredWorkers
 }
@@ -337,6 +365,8 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 
 	// Select the worker with the highest score
 	sort.Slice(scoredWorkers, func(i, j int) bool {
+		// TODO: Figure out a short way to randomize order of workers with the same score
+
 		return scoredWorkers[i].score > scoredWorkers[j].score
 	})
 

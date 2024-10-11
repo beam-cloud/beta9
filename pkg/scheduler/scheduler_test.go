@@ -483,13 +483,17 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 				{
 					Cpu:    1000,
 					Memory: 1000,
-					Gpu:    "A10G",
+					GpuRequest: types.GpuRequest{
+						MainGpus: []string{"A10G"},
+					},
 				},
 				{
-					Cpu:        1000,
-					Memory:     1000,
-					Gpu:        "A10G",
-					BackupGpus: []string{"T4"},
+					Cpu:    1000,
+					Memory: 1000,
+					GpuRequest: types.GpuRequest{
+						MainGpus:   []string{"A10G"},
+						BackupGpus: []string{"T4"},
+					},
 				},
 			},
 			expectedGpuResults: []string{"A10G", "T4"},
@@ -501,19 +505,25 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 				{
 					Cpu:    1000,
 					Memory: 1000,
-					Gpu:    "A10G",
+					GpuRequest: types.GpuRequest{
+						MainGpus: []string{"A10G"},
+					},
 				},
 				{
-					Cpu:        1000,
-					Memory:     1000,
-					Gpu:        "A10G",
-					BackupGpus: []string{"T4", "A6000"},
+					Cpu:    1000,
+					Memory: 1000,
+					GpuRequest: types.GpuRequest{
+						MainGpus:   []string{"A10G"},
+						BackupGpus: []string{"T4", "A6000"},
+					},
 				},
 				{
-					Cpu:        1000,
-					Memory:     1000,
-					Gpu:        "A10G",
-					BackupGpus: []string{"T4", "A6000"},
+					Cpu:    1000,
+					Memory: 1000,
+					GpuRequest: types.GpuRequest{
+						MainGpus:   []string{"A10G"},
+						BackupGpus: []string{"T4", "A6000"},
+					},
 				},
 			},
 			expectedGpuResults: []string{"A10G", "T4", "A6000"},
@@ -525,23 +535,45 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 				{
 					Cpu:    1000,
 					Memory: 1000,
-					Gpu:    "A10G",
+					GpuRequest: types.GpuRequest{
+						MainGpus:   []string{"A10G"},
+						BackupGpus: []string{"T4"},
+					},
 				},
 				{
-					Cpu:        1000,
-					Memory:     1000,
-					Gpu:        "A10G",
-					BackupGpus: []string{"T4"},
+					Cpu:    1000,
+					Memory: 1000,
+					GpuRequest: types.GpuRequest{
+						MainGpus:   []string{"A10G"},
+						BackupGpus: []string{"T4"},
+					},
 				},
 				{
-					Cpu:        1000,
-					Memory:     1000,
-					Gpu:        "A10G",
-					BackupGpus: []string{"T4"},
+					Cpu:    1000,
+					Memory: 1000,
+					GpuRequest: types.GpuRequest{
+						MainGpus:   []string{"A10G"},
+						BackupGpus: []string{"T4"},
+					},
 				},
 			},
 			expectedGpuResults: []string{"A10G", "T4", ""},
 			gpus:               []string{"A10G", "T4", "A6000"},
+		},
+		{
+			name: "backward compatibility",
+			requests: []*types.ContainerRequest{
+				{
+					Cpu:    1000,
+					Memory: 1000,
+					Gpu:    "A10G",
+					GpuRequest: types.GpuRequest{
+						BackupGpus: []string{"T4"},
+					},
+				},
+			},
+			expectedGpuResults: []string{"A10G"},
+			gpus:               []string{"A10G", "T4"},
 		},
 	}
 

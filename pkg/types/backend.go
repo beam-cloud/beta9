@@ -285,10 +285,12 @@ type Image struct {
 }
 
 type Runtime struct {
-	Cpu     int64   `json:"cpu"`
-	Gpu     GpuType `json:"gpu"`
-	Memory  int64   `json:"memory"`
-	ImageId string  `json:"image_id"`
+	Cpu        int64     `json:"cpu"`
+	Gpu        GpuType   `json:"gpu"`
+	Memory     int64     `json:"memory"`
+	ImageId    string    `json:"image_id"`
+	Gpus       []GpuType `json:"gpus"`
+	BackupGpus []GpuType `json:"backup_gpus"`
 }
 
 type GpuType string
@@ -314,6 +316,18 @@ func (g *GpuType) UnmarshalJSON(data []byte) error {
 	}
 
 	return nil
+}
+
+func (g *GpuType) String() string {
+	return string(*g)
+}
+
+func GpuTypesToStrings(gpus []GpuType) []string {
+	var gpuStrings []string
+	for _, gpu := range gpus {
+		gpuStrings = append(gpuStrings, string(gpu))
+	}
+	return gpuStrings
 }
 
 // FilterFieldMapping represents a mapping between a client-provided field and
