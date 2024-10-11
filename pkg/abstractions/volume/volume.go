@@ -486,7 +486,7 @@ func (vs *GlobalVolumeService) movePath(ctx context.Context, originalPath string
 	originalDir := path.Dir(originalFullPath)
 	if _, err := os.Stat(originalDir); !os.IsNotExist(err) {
 		if err := os.Remove(originalDir); err != nil {
-			fmt.Printf("Non-critical: failed to remove original directory %s, might not be empty: %v\n", originalDir, err)
+			common.Logger.Warnf("Failed to remove original directory %s, might not be empty: %v", originalDir, err)
 		}
 	}
 

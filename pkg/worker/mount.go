@@ -33,7 +33,7 @@ func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerReq
 			localUserSource := tempUserCodeDir(request.ContainerId)
 			err := copyDirectory(source, localUserSource)
 			if err != nil {
-				common.Logger.Infof("<%s> - failed to eagerly copy remote user code to local /mnt/code: %v\n", request.ContainerId, err)
+				common.Logger.Errorf("<%s> - failed to eagerly copy remote user code to local /mnt/code: %v", request.ContainerId, err)
 			} else {
 				request.Mounts[i].LocalPath = localUserSource
 			}
@@ -64,7 +64,7 @@ func (c *ContainerMountManager) RemoveContainerMounts(containerId string) {
 	mountPointS3, _ := storage.NewMountPointStorage(types.MountPointConfig{})
 	for _, m := range mountPointPaths {
 		if err := mountPointS3.Unmount(m); err != nil {
-			common.Logger.Infof("<%s> - failed to unmount external s3 bucket: %v\n", containerId, err)
+			common.Logger.Warnf("<%s> - failed to unmount external s3 bucket: %v", containerId, err)
 		}
 	}
 

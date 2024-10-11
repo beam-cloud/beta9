@@ -66,7 +66,7 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 				if _, ok := err.(*types.ProviderNotImplemented); ok {
 					return
 				} else {
-					common.Logger.Infof("<provider %s>: unable to list machines - %v\n", p.Name, err)
+					common.Logger.Infof("<provider %s>: unable to list machines - %v", p.Name, err)
 					continue
 				}
 			}
@@ -81,14 +81,14 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 
 					machine, err := p.ProviderRepo.GetMachine(p.Name, poolName, machineId)
 					if err != nil {
-						common.Logger.Infof("<provider %s>: unable to retrieve machine <machineId: %s> - %v\n", p.Name, machineId, err)
+						common.Logger.Infof("<provider %s>: unable to retrieve machine <machineId: %s> - %v", p.Name, machineId, err)
 						p.TerminateMachineFunc(ctx, poolName, instanceId, machineId)
 						return
 					}
 
 					workers, err := p.WorkerRepo.GetAllWorkersOnMachine(machineId)
 					if err != nil {
-						common.Logger.Infof("<provider %s>: unable to retrieve workers for machine <machineId: %s> - %v\n", p.Name, machineId, err)
+						common.Logger.Infof("<provider %s>: unable to retrieve workers for machine <machineId: %s> - %v", p.Name, machineId, err)
 						return
 					}
 

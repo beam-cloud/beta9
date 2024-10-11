@@ -39,7 +39,7 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 		if !info.IsDir() {
 			_, err := cm.client.StoreContentFromSource(path, 0)
 			if err != nil {
-				common.Logger.Infof("Failed to cache file<%s>: %v\n", path, err)
+				common.Logger.Errorf("Failed to cache file<%s>: %v", path, err)
 			}
 		}
 

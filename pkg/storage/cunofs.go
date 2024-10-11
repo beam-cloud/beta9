@@ -27,7 +27,7 @@ func NewCunoFsStorage(config types.CunoFSConfig) (Storage, error) {
 }
 
 func (s *CunoFsStorage) Mount(localPath string) error {
-	common.Logger.Infof("CunoFS filesystem mounting to: '%s'\n", localPath)
+	common.Logger.Infof("CunoFS filesystem mounting to: '%s'", localPath)
 	s.mountCmd = exec.Command(
 		"cuno",
 		"mount",
@@ -127,7 +127,7 @@ func (s *CunoFsStorage) Unmount(localPath string) error {
 			return err
 		}
 
-		common.Logger.Infof("CunoFS filesystem unmounted from: '%s'\n", localPath)
+		common.Logger.Infof("CunoFS filesystem unmounted from: '%s'", localPath)
 		return nil
 	}
 

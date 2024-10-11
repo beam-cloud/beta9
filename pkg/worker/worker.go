@@ -153,7 +153,7 @@ func NewWorker() (*Worker, error) {
 	if config.Worker.BlobCacheEnabled {
 		cacheClient, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
 		if err != nil {
-			common.Logger.Infof("[WARNING] Cache unavailable, performance may be degraded: %+v\n", err)
+			common.Logger.Warnf("[WARNING] Cache unavailable, performance may be degraded: %+v", err)
 		}
 	}
 
@@ -247,17 +247,17 @@ func (s *Worker) Run() error {
 
 			_, exists := s.containerInstances.Get(containerId)
 			if !exists {
-				common.Logger.Infof("<%s> - running container.\n", containerId)
+				common.Logger.Infof("<%s> - running container.", containerId)
 
 				err := s.RunContainer(request)
 				if err != nil {
-					common.Logger.Infof("Unable to run container <%s>: %v\n", containerId, err)
+					common.Logger.Infof("Unable to run container <%s>: %v", containerId, err)
 
 					// Set a non-zero exit code for the container (both in memory, and in repo)
 					exitCode := 1
 					err := s.containerRepo.SetContainerExitCode(containerId, exitCode)
 					if err != nil {
-						common.Logger.Infof("<%s> - failed to set exit code: %v\n", containerId, err)
+						common.Logger.Errorf("<%s> - failed to set exit code: %v", containerId, err)
 					}
 
 					s.containerLock.Unlock()
@@ -293,10 +293,10 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Pull image
-	common.Logger.Infof("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
+	common.Logger.Infof("<%s> - lazy-pulling image: %s", containerId, request.ImageId)
 	err := s.imageClient.PullLazy(request)
 	if err != nil && request.SourceImage != nil {
-		common.Logger.Infof("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
+		common.Logger.Infof("<%s> - lazy-pull failed, pulling source image: %s", containerId, *request.SourceImage)
 		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
 		if err == nil {
 			err = s.imageClient.PullLazy(request)
@@ -310,7 +310,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	common.Logger.Infof("<%s> - acquired port: %d\n", containerId, bindPort)
+	common.Logger.Infof("<%s> - acquired port: %d", containerId, bindPort)
 
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
@@ -331,7 +331,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	common.Logger.Infof("<%s> - successfully created spec from request.\n", containerId)
+	common.Logger.Infof("<%s> - successfully created spec from request.", containerId)
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
@@ -340,7 +340,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	common.Logger.Infof("<%s> - set container address.\n", containerId)
+	common.Logger.Infof("<%s> - set container address.", containerId)
 
 	outputChan := make(chan common.OutputMsg)
 	go s.containerWg.Add(1)
@@ -348,7 +348,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	// Start the container
 	go s.spawn(request, spec, outputChan, opts)
 
-	common.Logger.Infof("<%s> - spawned successfully.\n", containerId)
+	common.Logger.Infof("<%s> - spawned successfully.", containerId)
 	return nil
 }
 
@@ -364,13 +364,13 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			return nil
 		}
 
-		common.Logger.Infof("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
+		common.Logger.Infof("<%s> - container still running: %s", request.ContainerId, request.ImageId)
 
 		// Stop container if it is "orphaned" - meaning it's running but has no associated state
 		state, err := s.containerRepo.GetContainerState(request.ContainerId)
 		if err != nil {
 			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-				common.Logger.Infof("<%s> - container state not found, stopping container\n", request.ContainerId)
+				common.Logger.Infof("<%s> - container state not found, stopping container", request.ContainerId)
 				s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
 				return nil
 			}
@@ -380,7 +380,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 
 		err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
 		if err != nil {
-			common.Logger.Infof("<%s> - unable to update container state: %v\n", request.ContainerId, err)
+			common.Logger.Infof("<%s> - unable to update container state: %v", request.ContainerId, err)
 		}
 
 		// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
@@ -394,7 +394,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 					return
 				}
 
-				common.Logger.Infof("<%s> - container still running after stop event %ds ago - force killing\n", request.ContainerId, s.config.Worker.TerminationGracePeriod)
+				common.Logger.Infof("<%s> - container still running after stop event %ds ago - force killing", request.ContainerId, s.config.Worker.TerminationGracePeriod)
 				s.stopContainerChan <- stopContainerEvent{
 					ContainerId: request.ContainerId,
 					Kill:        true,
@@ -413,7 +413,7 @@ func (s *Worker) stopContainer(event *common.Event) bool {
 
 	var err error = nil
 	if _, exists := s.containerInstances.Get(containerId); exists {
-		common.Logger.Infof("<%s> - received stop container event.\n", containerId)
+		common.Logger.Infof("<%s> - received stop container event.", containerId)
 		s.stopContainerChan <- stopContainerEvent{ContainerId: containerId, Kill: false}
 	}
 
@@ -422,7 +422,7 @@ func (s *Worker) stopContainer(event *common.Event) bool {
 
 func (s *Worker) processStopContainerEvents() {
 	for event := range s.stopContainerChan {
-		common.Logger.Infof("<%s> - stopping container.\n", event.ContainerId)
+		common.Logger.Infof("<%s> - stopping container.", event.ContainerId)
 
 		instance, exists := s.containerInstances.Get(event.ContainerId)
 		if !exists {
@@ -443,7 +443,7 @@ func (s *Worker) processStopContainerEvents() {
 			All: true,
 		})
 		if err != nil {
-			common.Logger.Infof("<%s> - unable to stop container: %v\n", event.ContainerId, err)
+			common.Logger.Infof("<%s> - unable to stop container: %v", event.ContainerId, err)
 
 			if strings.Contains(err.Error(), "container does not exist") {
 				// In case container network is still around for some reason, get rid of it
@@ -456,7 +456,7 @@ func (s *Worker) processStopContainerEvents() {
 			continue
 		}
 
-		common.Logger.Infof("<%s> - container stopped.\n", event.ContainerId)
+		common.Logger.Infof("<%s> - container stopped.", event.ContainerId)
 	}
 }
 
@@ -473,7 +473,7 @@ func (s *Worker) terminateContainer(containerId string, request *types.Container
 
 	err := s.containerRepo.SetContainerExitCode(containerId, *exitCode)
 	if err != nil {
-		common.Logger.Infof("<%s> - failed to set exit code: %v\n", containerId, err)
+		common.Logger.Infof("<%s> - failed to set exit code: %v", containerId, err)
 	}
 
 	s.clearContainer(containerId, request, time.Duration(s.config.Worker.TerminationGracePeriod)*time.Second, *exitCode)
@@ -490,7 +490,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	// Tear down container network components
 	err := s.containerNetworkManager.TearDown(request.ContainerId)
 	if err != nil {
-		common.Logger.Infof("<%s> - failed to clean up container network: %v\n", request.ContainerId, err)
+		common.Logger.Infof("<%s> - failed to clean up container network: %v", request.ContainerId, err)
 	}
 
 	s.completedRequests <- request
@@ -511,7 +511,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		s.containerInstances.Delete(containerId)
 		err := s.containerRepo.DeleteContainerState(request)
 		if err != nil {
-			common.Logger.Infof("<%s> - failed to remove container state: %v\n", containerId, err)
+			common.Logger.Infof("<%s> - failed to remove container state: %v", containerId, err)
 		}
 
 	}()
@@ -603,7 +603,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 		if _, err := s.containerRepo.GetContainerState(containerId); err != nil {
 			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-				common.Logger.Infof("<%s> - container state not found, returning\n", containerId)
+				common.Logger.Infof("<%s> - container state not found, returning", containerId)
 				return
 			}
 		}
@@ -809,7 +809,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
 				err := os.MkdirAll(m.LocalPath, 0755)
 				if err != nil {
-					common.Logger.Infof("<%s> - failed to create mount directory: %v\n", request.ContainerId, err)
+					common.Logger.Infof("<%s> - failed to create mount directory: %v", request.ContainerId, err)
 				}
 			}
 		}
@@ -868,7 +868,7 @@ func (s *Worker) manageWorkerCapacity() {
 	for request := range s.completedRequests {
 		err := s.processCompletedRequest(request)
 		if err != nil {
-			common.Logger.Infof("Unable to process completed request: %v\n", err)
+			common.Logger.Infof("Unable to process completed request: %v", err)
 			s.completedRequests <- request
 			continue
 		}

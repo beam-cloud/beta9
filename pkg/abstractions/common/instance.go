@@ -229,7 +229,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	}
 
 	if state.FailedContainers >= i.FailedContainerThreshold {
-		common.Logger.Infof("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
+		common.Logger.Infof("<%s> reached failed container threshold, scaling to zero.", i.Name)
 		desiredContainers = 0
 	}
 

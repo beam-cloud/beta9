@@ -131,7 +131,7 @@ func (s *JuiceFsStorage) Unmount(localPath string) error {
 			return err
 		}
 
-		common.Logger.Infof("JuiceFS filesystem unmounted from: '%s'\n", localPath)
+		common.Logger.Infof("JuiceFS filesystem unmounted from: '%s'", localPath)
 		return nil
 	}
 

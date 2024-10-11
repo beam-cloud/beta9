@@ -44,7 +44,7 @@ func InitializeLogger(config types.AppConfig) error {
 
 	once.Do(func() {
 		var e error
-		logger, e := cfg.Build(zap.AddCaller(), zap.AddCallerSkip(1)) // Adjusted caller skip to 1
+		logger, e := cfg.Build(zap.AddCaller(), zap.AddCallerSkip(1))
 		if e != nil {
 			err = e
 			return

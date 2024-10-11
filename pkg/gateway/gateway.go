@@ -409,7 +409,7 @@ func (g *Gateway) Start() error {
 		}
 
 		if g.grpcServer.Serve(lis); err != nil {
-			common.Logger.Fatalf("Failed to start grpc server: %v\n", err)
+			common.Logger.Fatalf("Failed to start grpc server: %v", err)
 		}
 	}()
 

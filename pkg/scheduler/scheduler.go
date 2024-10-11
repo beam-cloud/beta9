@@ -81,7 +81,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 }
 
 func (s *Scheduler) Run(request *types.ContainerRequest) error {
-	common.Logger.Infof("Received RUN request: %+v\n", request)
+	common.Logger.Infof("Received RUN request: %+v", request)
 
 	request.Timestamp = time.Now()
 
@@ -138,7 +138,7 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 }
 
 func (s *Scheduler) Stop(containerId string) error {
-	common.Logger.Infof("Received STOP request: %s\n", containerId)
+	common.Logger.Infof("Received STOP request: %s", containerId)
 
 	err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	if err != nil {
@@ -153,7 +153,7 @@ func (s *Scheduler) Stop(containerId string) error {
 		LockAndDelete: false,
 	})
 	if err != nil {
-		common.Logger.Infof("Could not stop container: %+v\n", err)
+		common.Logger.Infof("Could not stop container: %+v", err)
 		return err
 	}
 

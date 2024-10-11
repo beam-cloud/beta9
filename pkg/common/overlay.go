@@ -131,10 +131,10 @@ func (co *ContainerOverlay) Cleanup() error {
 		i := len(co.layers) - 1
 		layer := co.layers[i]
 
-		Logger.Infof("Unmounting layer: %s\n", layer.merged)
+		Logger.Infof("Unmounting layer: %s", layer.merged)
 		err := exec.Command("umount", "-f", layer.merged).Run()
 		if err != nil {
-			Logger.Infof("Unable to unmount layer: %v\n", err)
+			Logger.Infof("Unable to unmount layer: %v", err)
 			return err
 		}
 
@@ -172,6 +172,6 @@ func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 		return err
 	}
 
-	Logger.Infof("<%s> - mounted layer-%d in %s.\n", co.containerId, layer.index, time.Since(startTime))
+	Logger.Infof("<%s> - mounted layer-%d in %s.", co.containerId, layer.index, time.Since(startTime))
 	return nil
 }

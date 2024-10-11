@@ -44,7 +44,7 @@ func (s *WorkerPoolSizer) Start() {
 		func() {
 			freeCapacity, err := s.controller.FreeCapacity()
 			if err != nil {
-				common.Logger.Infof("<pool %s> Error getting free capacity: %v\n", s.controller.Name(), err)
+				common.Logger.Infof("<pool %s> Error getting free capacity: %v", s.controller.Name(), err)
 				return
 			}
 

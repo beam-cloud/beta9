@@ -83,13 +83,13 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	ipt6Supported := true
 	ipt6, err = iptables.New(iptables.Path(ipv6Path), iptables.IPFamily(iptables.ProtocolIPv6))
 	if err != nil {
-		common.Logger.Infof("network manager: IPv6 iptables initialization failed, falling back to IPv4 only: %v\n", err)
+		common.Logger.Errorf("network manager: IPv6 iptables initialization failed, falling back to IPv4 only: %v", err)
 		ipt6Supported = false
 	} else {
 		// Check if the ip6tables NAT table can be accessed
 		_, err := ipt6.List("nat", "POSTROUTING")
 		if err != nil {
-			common.Logger.Infof("network manager: IPv6 iptables NAT table not available, falling back to IPv4 only: %v\n", err)
+			common.Logger.Errorf("network manager: IPv6 iptables NAT table not available, falling back to IPv4 only: %v", err)
 			ipt6Supported = false
 		}
 	}
@@ -446,7 +446,7 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 		case <-ticker.C:
 			containerIds, err := m.listContainerIdsFromIptables()
 			if err != nil {
-				common.Logger.Infof("network manager: error listing container ids - %v\n", err)
+				common.Logger.Errorf("network manager: error listing container ids - %v", err)
 				continue
 			}
 
@@ -465,10 +465,10 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 					var notFoundErr *types.ErrContainerStateNotFound
 					if _, err := m.containerRepo.GetContainerState(containerId); err != nil && errors.As(err, &notFoundErr) {
 						// Container state not found, so tear down the namespace and associated resources
-						common.Logger.Infof("network manager: orphaned namespace detected<%s>, cleaning up...\n", containerId)
+						common.Logger.Infof("network manager: orphaned namespace detected<%s>, cleaning up...", containerId)
 
 						if err := m.TearDown(containerId); err != nil {
-							common.Logger.Infof("network manager: error tearing down namespace<%s> - %v\n", containerId, err)
+							common.Logger.Infof("network manager: error tearing down namespace<%s> - %v", containerId, err)
 						}
 					}
 

@@ -135,7 +135,7 @@ func (p *Proxy) startServiceProxy(service types.InternalService, listener net.Li
 
 				err := p.tailscaleRepo.SetHostname(service.Name, serviceId, hostName)
 				if err != nil {
-					common.Logger.Infof("Unable to set tailscale hostname: %+v\n", err)
+					common.Logger.Infof("Unable to set tailscale hostname: %+v", err)
 				}
 
 				time.Sleep(time.Second * 15)

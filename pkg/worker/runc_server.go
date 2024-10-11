@@ -59,7 +59,7 @@ func (s *RunCServer) Start() error {
 	}
 
 	s.port = listener.Addr().(*net.TCPAddr).Port
-	common.Logger.Infof("RunCServer started on port %d\n", s.port)
+	common.Logger.Infof("RunCServer started on port %d", s.port)
 
 	grpcServer := grpc.NewServer()
 	pb.RegisterRunCServiceServer(grpcServer, s)
@@ -221,7 +221,7 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 				if progress > lastProgress && progress != lastProgress {
 					lastProgress = progress
 
-					common.Logger.Infof("Image upload progress: %d/100\n", progress)
+					common.Logger.Infof("Image upload progress: %d/100", progress)
 					err := stream.Send(&pb.RunCArchiveResponse{Done: false, Success: false, Progress: int32(progress), ErrorMsg: ""})
 					if err != nil {
 						return
