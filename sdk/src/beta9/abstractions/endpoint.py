@@ -117,8 +117,6 @@ class Endpoint(RunnerAbstraction):
         callback_url: Optional[str] = None,
         task_policy: TaskPolicy = TaskPolicy(),
     ):
-        # Default to 1 concurrent requests for endpoints
-        self.concurrent_requests = 1
         super().__init__(
             cpu=cpu,
             memory=memory,

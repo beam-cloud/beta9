@@ -61,7 +61,7 @@ class RunnerAbstraction(BaseAbstraction):
         gpu: GpuTypeAlias = GpuType.NoGPU,
         image: Image = Image(),
         workers: int = 1,
-        concurrent_requests: int = 0,
+        concurrent_requests: int = 1,
         keep_warm_seconds: float = 10.0,
         max_pending_tasks: int = 100,
         retries: int = 3,
