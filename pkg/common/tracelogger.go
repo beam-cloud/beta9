@@ -79,7 +79,10 @@ func InitializeLogger(rdb *RedisClient, config types.AppConfig) error {
 type traceIdKey string
 
 func (tl *TraceLogger) tracedContext(ctx context.Context) context.Context {
-	return context.WithValue(ctx, traceIdKey("traceId"), uuid.New().String())
+	if ctx.Value(traceIdKey("traceId")) == nil {
+		return context.WithValue(ctx, traceIdKey("traceId"), uuid.New().String())
+	}
+	return ctx
 }
 
 func (tl *TraceLogger) Debugf(ctx context.Context, template string, args ...interface{}) context.Context {
