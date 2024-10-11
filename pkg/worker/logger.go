@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path"
 	"strings"
@@ -43,7 +42,7 @@ func (r *ContainerLogger) Log(containerId, stubId string, format string, args ..
 		TimestampFormat: time.RFC3339Nano,
 	})
 
-	log.Print(fmt.Sprintf("<%s> - ", containerId) + fmt.Sprintf(format, args...))
+	common.Logger.Infof(fmt.Sprintf("<%s> - ", containerId) + fmt.Sprintf(format, args...))
 	f.WithFields(logrus.Fields{
 		"container_id": containerId,
 		"stub_id":      stubId,
