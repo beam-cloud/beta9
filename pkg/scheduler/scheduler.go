@@ -161,23 +161,37 @@ func (s *Scheduler) Stop(containerId string) error {
 	return nil
 }
 
-func (s *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolController, error) {
-	var ok bool
-	var workerPool *WorkerPool
+func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoolController, error) {
+	controllers := []WorkerPoolController{}
 
 	if request.PoolSelector != "" {
-		workerPool, ok = s.workerPoolManager.GetPool(request.PoolSelector)
+		wp, ok := s.workerPoolManager.GetPool(request.PoolSelector)
+		if !ok {
+			return nil, errors.New("no controller found for request")
+		}
+		controllers = append(controllers, wp.Controller)
 	} else if request.Gpu == "" {
-		workerPool, ok = s.workerPoolManager.GetPool("default")
+		wp, ok := s.workerPoolManager.GetPool("default")
+		if !ok {
+			return nil, errors.New("no controller found for request")
+		}
+		controllers = append(controllers, wp.Controller)
 	} else {
-		workerPool, ok = s.workerPoolManager.GetPoolByGPU(request.Gpu)
+		combinedRequestedGpu := append([]string{request.Gpu}, request.BackupGpus...)
+
+		for _, gpu := range combinedRequestedGpu {
+			wp, ok := s.workerPoolManager.GetPoolByGPU(gpu)
+			if ok {
+				controllers = append(controllers, wp.Controller)
+			}
+		}
+
+		if len(controllers) == 0 {
+			return nil, errors.New("no controller found for request")
+		}
 	}
 
-	if !ok {
-		return nil, errors.New("no controller found for request")
-	}
-
-	return workerPool.Controller, nil
+	return controllers, nil
 }
 
 func (s *Scheduler) StartProcessingRequests() {
@@ -198,26 +212,34 @@ func (s *Scheduler) StartProcessingRequests() {
 		if err != nil || worker == nil {
 			// We didn't find a Worker that fit the ContainerRequest's requirements. Let's find a controller
 			// so we can add a new worker.
-			controller, err := s.getController(request)
+
+			controller, err := s.getControllers(request)
 			if err != nil {
 				log.Printf("No controller found for request: %+v, error: %v\n", request, err)
 				continue
 			}
 
 			go func() {
-				newWorker, err := controller.AddWorker(request.Cpu, request.Memory, request.Gpu, request.GpuCount)
-				if err != nil {
-					log.Printf("Unable to add worker job for container <%s>: %+v\n", request.ContainerId, err)
-					s.addRequestToBacklog(request)
-					return
+				for _, c := range controller {
+					// Iterates through controllers in the order of prioritized gpus to attempt to add a worker
+					if c == nil {
+						continue
+					}
+					newWorker, err := c.AddWorker(request.Cpu, request.Memory, request.Gpu, request.GpuCount)
+					if err == nil {
+						log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
+
+						err = s.scheduleRequest(newWorker, request)
+						if err != nil {
+							log.Printf("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
+							s.addRequestToBacklog(request)
+						}
+						return
+					}
 				}
 
-				log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
-				err = s.scheduleRequest(newWorker, request)
-				if err != nil {
-					log.Printf("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
-					s.addRequestToBacklog(request)
-				}
+				log.Printf("Unable to add worker for container<%s>: %v\n", request.ContainerId, err)
+				s.addRequestToBacklog(request)
 			}()
 
 			continue
@@ -237,6 +259,7 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 	go s.schedulerMetrics.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
 
+	request.ActualGpu = worker.Gpu
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 

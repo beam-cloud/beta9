@@ -58,7 +58,7 @@ class RunnerAbstraction(BaseAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: GpuTypeAlias = GpuType.NoGPU,
+        gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         image: Image = Image(),
         workers: int = 1,
         keep_warm_seconds: float = 10.0,
@@ -333,7 +333,10 @@ class RunnerAbstraction(BaseAbstraction):
                 return False
 
         try:
-            self.gpu = GpuType(self.gpu).value
+            if isinstance(self.gpu, list):
+                self.gpu = ",".join([GpuType(g).value for g in self.gpu])
+            else:
+                self.gpu = GpuType(self.gpu).value
         except ValueError:
             terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
             return False

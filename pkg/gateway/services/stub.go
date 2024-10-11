@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
@@ -27,6 +28,8 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	if in.Gpu != "" {
+		gpus := strings.Split(in.Gpu, ",")
+
 		concurrencyLimit, err := gws.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, authInfo.Workspace.ExternalId)
 		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
 			return &pb.GetOrCreateStubResponse{
@@ -44,8 +47,16 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 
 		// T4s are currently in a different pool than other GPUs and won't show up in gpu counts
-		if gpuCounts[in.Gpu] <= 1 && in.Gpu != types.GPU_T4.String() {
-			warning = fmt.Sprintf("GPU capacity for %s is currently low.", in.Gpu)
+		lowGpus := []string{}
+
+		for _, gpu := range gpus {
+			if gpuCounts[gpu] <= 1 && gpu != types.GPU_T4.String() {
+				lowGpus = append(lowGpus, gpu)
+			}
+		}
+
+		if len(lowGpus) > 0 {
+			warning = fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowGpus, ", "))
 		}
 	}
 

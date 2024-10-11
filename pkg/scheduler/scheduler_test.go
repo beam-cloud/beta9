@@ -338,33 +338,33 @@ func TestGetController(t *testing.T) {
 
 	t.Run("returns correct controller", func(t *testing.T) {
 		cpuRequest := &types.ContainerRequest{Gpu: ""}
-		defaultController, err := wb.getController(cpuRequest)
-		if err != nil || defaultController.Name() != "default" {
+		defaultController, err := wb.getControllers(cpuRequest)
+		if err != nil || defaultController[0].Name() != "default" {
 			t.Errorf("Expected default controller, got %v, error: %v", defaultController, err)
 		}
 
 		a10gRequest := &types.ContainerRequest{Gpu: "A10G"}
-		a10gController, err := wb.getController(a10gRequest)
-		if err != nil || a10gController.Name() != "beta9-a10g" {
+		a10gController, err := wb.getControllers(a10gRequest)
+		if err != nil || a10gController[0].Name() != "beta9-a10g" {
 			t.Errorf("Expected beta9-a10g controller, got %v, error: %v", a10gController, err)
 		}
 
 		t4Request := &types.ContainerRequest{Gpu: "T4"}
-		t4Controller, err := wb.getController(t4Request)
-		if err != nil || t4Controller.Name() != "beta9-t4" {
+		t4Controller, err := wb.getControllers(t4Request)
+		if err != nil || t4Controller[0].Name() != "beta9-t4" {
 			t.Errorf("Expected beta9-t4 controller, got %v, error: %v", t4Controller, err)
 		}
 
 		buildRequest := &types.ContainerRequest{PoolSelector: "beta9-build"}
-		buildController, err := wb.getController(buildRequest)
-		if err != nil || buildController.Name() != "beta9-build" {
+		buildController, err := wb.getControllers(buildRequest)
+		if err != nil || buildController[0].Name() != "beta9-build" {
 			t.Errorf("Expected beta9-build controller, got %v, error: %v", buildController, err)
 		}
 	})
 
 	t.Run("returns error if no suitable controller found", func(t *testing.T) {
 		unknownRequest := &types.ContainerRequest{Gpu: "UNKNOWN_GPU"}
-		_, err := wb.getController(unknownRequest)
+		_, err := wb.getControllers(unknownRequest)
 		if err == nil {
 			t.Errorf("Expected error for unknown GPU type, got nil")
 		}
