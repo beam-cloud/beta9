@@ -108,6 +108,7 @@ class Endpoint(RunnerAbstraction):
         workers: int = 1,
         keep_warm_seconds: int = 180,
         max_pending_tasks: int = 100,
+        concurrent_requests: int = 0,
         on_start: Optional[Callable] = None,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
@@ -127,6 +128,7 @@ class Endpoint(RunnerAbstraction):
             retries=0,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
+            concurrent_requests=concurrent_requests,
             on_start=on_start,
             volumes=volumes,
             secrets=secrets,
@@ -167,29 +169,30 @@ class ASGI(Endpoint):
         name: Optional[str] = None,
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
+        task_policy: TaskPolicy = TaskPolicy(),
         callback_url: Optional[str] = None,
     ):
         super().__init__(
-            cpu,
-            memory,
-            gpu,
-            image,
-            timeout,
-            workers,
-            concurrent_requests,
-            keep_warm_seconds,
-            max_pending_tasks,
-            on_start,
-            volumes,
-            secrets,
-            name,
-            authorized,
-            autoscaler,
-            callback_url,
+            cpu=cpu,
+            memory=memory,
+            gpu=gpu,
+            image=image,
+            timeout=timeout,
+            workers=workers,
+            keep_warm_seconds=keep_warm_seconds,
+            max_pending_tasks=max_pending_tasks,
+            concurrent_requests=concurrent_requests,
+            on_start=on_start,
+            volumes=volumes,
+            secrets=secrets,
+            name=name,
+            authorized=authorized,
+            autoscaler=autoscaler,
+            callback_url=callback_url,
+            task_policy=task_policy,
         )
 
         self.is_asgi = True
-        self.concurrent_requests = concurrent_requests
 
 
 class _CallableWrapper(DeployableMixin):
