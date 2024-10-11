@@ -221,7 +221,9 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 		return instance, nil
 	}
 
-	stub, err := es.backendRepo.GetStubByExternalId(es.ctx, stubId)
+	ctx := common.Logger.Debugf(es.ctx, "Creating endpoint instance for stub: %s", stubId)
+
+	stub, err := es.backendRepo.GetStubByExternalId(ctx, stubId)
 	if err != nil {
 		return nil, errors.New("invalid stub id")
 	}
@@ -232,10 +234,12 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 		return nil, err
 	}
 
-	token, err := es.backendRepo.RetrieveActiveToken(es.ctx, stub.Workspace.Id)
+	token, err := es.backendRepo.RetrieveActiveToken(ctx, stub.Workspace.Id)
 	if err != nil {
 		return nil, err
 	}
+
+	common.Logger.Debugf(ctx, "Retrieved token for stub: %s", stubId)
 
 	requestBufferSize := int(stubConfig.MaxPendingTasks) + 1
 	if requestBufferSize < endpointMinRequestBufferSize {
@@ -246,7 +250,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 	instance = &endpointInstance{}
 
 	// Create base autoscaled instance
-	autoscaledInstance, err := abstractions.NewAutoscaledInstance(es.ctx, &abstractions.AutoscaledInstanceConfig{
+	autoscaledInstance, err := abstractions.NewAutoscaledInstance(ctx, &abstractions.AutoscaledInstanceConfig{
 		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
 		Rdb:                 es.rdb,
 		Stub:                stub,
@@ -265,6 +269,8 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 	if err != nil {
 		return nil, err
 	}
+
+	common.Logger.Debugf(ctx, "Created autoscaled instance for stub: %s", stubId)
 
 	if stub.Type.Kind() == types.StubTypeASGI {
 		instance.isASGI = true
