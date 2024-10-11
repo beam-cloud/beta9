@@ -163,6 +163,8 @@ func (s *Scheduler) Stop(containerId string) error {
 
 func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoolController, error) {
 	controllers := []WorkerPoolController{}
+	combinedRequestedGpu := append(request.GpuRequest.MainGpus, request.GpuRequest.BackupGpus...)
+	combinedRequestedGpu = append(combinedRequestedGpu, request.Gpu) // This is for backwards compatibility
 
 	if request.PoolSelector != "" {
 		wp, ok := s.workerPoolManager.GetPool(request.PoolSelector)
@@ -170,15 +172,13 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 			return nil, errors.New("no controller found for request")
 		}
 		controllers = append(controllers, wp.Controller)
-	} else if request.Gpu == "" {
+	} else if request.Gpu == "" || len(combinedRequestedGpu) == 0 {
 		wp, ok := s.workerPoolManager.GetPool("default")
 		if !ok {
 			return nil, errors.New("no controller found for request")
 		}
 		controllers = append(controllers, wp.Controller)
 	} else {
-		combinedRequestedGpu := append(request.GpuRequest.MainGpus, request.GpuRequest.BackupGpus...)
-
 		for _, gpu := range combinedRequestedGpu {
 			wp, ok := s.workerPoolManager.GetPoolByGPU(gpu)
 			if ok {
