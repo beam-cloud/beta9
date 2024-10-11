@@ -89,9 +89,8 @@ func NewRequestBuffer(
 		isASGI:                  isASGI,
 	}
 
-	if stubConfig.ConcurrentRequests > 0 && isASGI {
+	if stubConfig.ConcurrentRequests > 1 && isASGI {
 		// Floor is set to the number of workers
-		// FIXME: Do workers even do anything for asgi?
 		b.maxTokens = max(int(stubConfig.ConcurrentRequests), b.maxTokens)
 	}
 

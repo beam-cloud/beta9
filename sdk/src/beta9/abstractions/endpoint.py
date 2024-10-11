@@ -108,7 +108,6 @@ class Endpoint(RunnerAbstraction):
         workers: int = 1,
         keep_warm_seconds: int = 180,
         max_pending_tasks: int = 100,
-        concurrent_requests: int = 0,
         on_start: Optional[Callable] = None,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
@@ -118,6 +117,8 @@ class Endpoint(RunnerAbstraction):
         callback_url: Optional[str] = None,
         task_policy: TaskPolicy = TaskPolicy(),
     ):
+        # Default to 1 concurrent requests for endpoints
+        self.concurrent_requests = 1
         super().__init__(
             cpu=cpu,
             memory=memory,
@@ -128,7 +129,6 @@ class Endpoint(RunnerAbstraction):
             retries=0,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
-            concurrent_requests=concurrent_requests,
             on_start=on_start,
             volumes=volumes,
             secrets=secrets,
@@ -137,6 +137,7 @@ class Endpoint(RunnerAbstraction):
             autoscaler=autoscaler,
             callback_url=callback_url,
             task_policy=task_policy,
+            concurrent_requests=self.concurrent_requests,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
@@ -152,6 +153,88 @@ class Endpoint(RunnerAbstraction):
 
 
 class ASGI(Endpoint):
+    """
+    Decorator which allows you to create an ASGI application.
+
+    Parameters:
+        cpu (Union[int, float, str]):
+            The number of CPU cores allocated to the container. Default is 1.0.
+        memory (Union[int, str]):
+            The amount of memory allocated to the container. It should be specified in
+            MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
+        gpu (Union[GpuType, str]):
+            The type or name of the GPU device to be used for GPU-accelerated tasks. If not
+            applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
+        image (Union[Image, dict]):
+            The container image used for the task execution. Default is [Image](#image).
+        volumes (Optional[List[Volume]]):
+            A list of volumes to be mounted to the ASGI application. Default is None.
+        timeout (Optional[int]):
+            The maximum number of seconds a task can run before it times out.
+            Default is 3600. Set it to -1 to disable the timeout.
+        retries (Optional[int]):
+            The maximum number of times a task will be retried if the container crashes. Default is 3.
+        workers (Optional[int]):
+            The number of processes handling tasks per container.
+            Modifying this parameter can improve throughput for certain workloads.
+            Workers will share the CPU, Memory, and GPU defined.
+            You may need to increase these values to increase concurrency.
+            Default is 1.
+        concurrent_requests (int):
+            The maximum number of concurrent requests the ASGI application can handle.
+            Unlike regular endpoints that process requests synchronously, ASGI applications
+            can handle multiple requests concurrently. This parameter allows you to specify
+            the level of concurrency. For applications with blocking operations, this can
+            improve throughput by allowing the application to process other requests while
+            waiting for blocking operations to complete. Default is 1.
+        keep_warm_seconds (int):
+            The duration in seconds to keep the task queue warm even if there are no pending
+            tasks. Keeping the queue warm helps to reduce the latency when new tasks arrive.
+            Default is 10s.
+        max_pending_tasks (int):
+            The maximum number of tasks that can be pending in the queue. If the number of
+            pending tasks exceeds this value, the task queue will stop accepting new tasks.
+            Default is 100.
+        secrets (Optional[List[str]):
+            A list of secrets that are injected into the container as environment variables. Default is [].
+        name (Optional[str]):
+            An optional name for this ASGI application, used during deployment. If not specified, you must
+            specify the name at deploy time with the --name argument
+        authorized (Optional[str]):
+            If false, allows the ASGI application to be invoked without an auth token.
+            Default is True.
+        autoscaler (Optional[Autoscaler]):
+            Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
+            various autoscaling strategies (Defaults to QueueDepthAutoscaler())
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        task_policy (TaskPolicy):
+            The task policy for the function. This helps manage the lifecycle of an individual task.
+            Setting values here will override timeout and retries.
+    Example:
+        ```python
+        from beta9 import asgi, Image
+
+        @asgi(
+            cpu=1.0,
+            memory=128,
+            gpu="T4"
+        )
+        def web_server(context):
+            from fastapi import FastAPI
+
+            app = FastAPI()
+
+            @app.post("/hello")
+            async def something():
+                return {"hello": True}
+
+            @app.post("/warmup")
+            async def warmup():
+                return {"status": "warm"}
+        ```
+    """
+
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
@@ -172,6 +255,7 @@ class ASGI(Endpoint):
         task_policy: TaskPolicy = TaskPolicy(),
         callback_url: Optional[str] = None,
     ):
+        self.concurrent_requests = concurrent_requests
         super().__init__(
             cpu=cpu,
             memory=memory,
@@ -181,7 +265,6 @@ class ASGI(Endpoint):
             workers=workers,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
-            concurrent_requests=concurrent_requests,
             on_start=on_start,
             volumes=volumes,
             secrets=secrets,
