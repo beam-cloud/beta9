@@ -392,7 +392,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 	} else if leftoverTimeoutSeconds <= 0 {
 		err := timeoutCallback()
 		if err != nil {
-			common.Logger.Infof("error timing out task: %v", err)
+			common.Logger.Infof(ctx, "error timing out task: %v", err)
 			return err
 		}
 
@@ -412,7 +412,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				case <-timeoutChan:
 					err := timeoutCallback()
 					if err != nil {
-						common.Logger.Infof("task timeout err: %v", err)
+						common.Logger.Infof(ctx, "task timeout err: %v", err)
 					}
 					timeoutFlag <- true
 					return
@@ -428,7 +428,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 
 				case err := <-errs:
 					if err != nil {
-						common.Logger.Infof("monitor task subscription err: %v", err)
+						common.Logger.Infof(ctx, "monitor task subscription err: %v", err)
 						break retry
 					}
 				}

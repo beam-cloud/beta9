@@ -163,7 +163,7 @@ func (g *Gateway) initLock(name string) (func(), error) {
 
 	return func() {
 		if err := lock.Release(lockKey); err != nil {
-			common.Logger.Infof("Failed to release init lock: %v", err)
+			common.Logger.Infof(g.ctx, "Failed to release init lock: %v", err)
 		}
 	}, nil
 }
@@ -388,43 +388,43 @@ func (g *Gateway) Start() error {
 
 	err = g.initGrpc()
 	if err != nil {
-		common.Logger.Fatalf("Failed to initialize grpc server: %v", err)
+		common.Logger.Fatalf(g.ctx, "Failed to initialize grpc server: %v", err)
 	}
 
 	err = g.initHttp()
 	if err != nil {
-		common.Logger.Fatalf("Failed to initialize http server: %v", err)
+		common.Logger.Fatalf(g.ctx, "Failed to initialize http server: %v", err)
 	}
 
 	err = g.registerServices()
 	if err != nil {
-		common.Logger.Fatalf("Failed to register services: %v", err)
+		common.Logger.Fatalf(g.ctx, "Failed to register services: %v", err)
 	}
 
 	go func() {
 		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", g.Config.GatewayService.GRPC.Port))
 		if err != nil {
-			common.Logger.Fatalf("Failed to listen: %v", err)
+			common.Logger.Fatalf(g.ctx, "Failed to listen: %v", err)
 		}
 
 		if g.grpcServer.Serve(lis); err != nil {
-			common.Logger.Fatalf("Failed to start grpc server: %v", err)
+			common.Logger.Fatalf(g.ctx, "Failed to start grpc server: %v", err)
 		}
 	}()
 
 	go func() {
 		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", g.Config.GatewayService.HTTP.Port))
 		if err != nil {
-			common.Logger.Fatalf("Failed to listen: %v", err)
+			common.Logger.Fatalf(g.ctx, "Failed to listen: %v", err)
 		}
 
 		if err := g.httpServer.Serve(lis); err != nil && err != http.ErrServerClosed {
-			common.Logger.Fatalf("Failed to start http server: %v", err)
+			common.Logger.Fatalf(g.ctx, "Failed to start http server: %v", err)
 		}
 	}()
 
-	common.Logger.Infof("Gateway http server running @ %d", g.Config.GatewayService.HTTP.Port)
-	common.Logger.Infof("Gateway grpc server running @ %d", g.Config.GatewayService.GRPC.Port)
+	common.Logger.Infof(g.ctx, "Gateway http server running @ %d", g.Config.GatewayService.HTTP.Port)
+	common.Logger.Infof(g.ctx, "Gateway grpc server running @ %d", g.Config.GatewayService.GRPC.Port)
 
 	terminationSignal := make(chan os.Signal, 1)
 	defer close(terminationSignal)
@@ -432,7 +432,7 @@ func (g *Gateway) Start() error {
 	signal.Notify(terminationSignal, os.Interrupt, syscall.SIGTERM)
 
 	<-terminationSignal
-	common.Logger.Infof("Termination signal received. Shutting down...")
+	common.Logger.Infof(g.ctx, "Termination signal received. Shutting down...")
 
 	ctx, cancel := context.WithTimeout(g.ctx, g.Config.GatewayService.ShutdownTimeout)
 	defer cancel()

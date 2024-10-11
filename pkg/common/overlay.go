@@ -1,6 +1,7 @@
 package common
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -124,17 +125,17 @@ func (co *ContainerOverlay) AddLayer(upperDir string) error {
 	return nil
 }
 
-func (co *ContainerOverlay) Cleanup() error {
+func (co *ContainerOverlay) Cleanup(ctx context.Context) error {
 	var err error = nil
 	for len(co.layers) > 0 {
 		// Get the last layer index
 		i := len(co.layers) - 1
 		layer := co.layers[i]
 
-		Logger.Infof("Unmounting layer: %s", layer.merged)
+		Logger.Infof(ctx, "Unmounting layer: %s", layer.merged)
 		err := exec.Command("umount", "-f", layer.merged).Run()
 		if err != nil {
-			Logger.Infof("Unable to unmount layer: %v", err)
+			Logger.Errorf(ctx, "Unable to unmount layer: %v", err)
 			return err
 		}
 
@@ -172,6 +173,6 @@ func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 		return err
 	}
 
-	Logger.Infof("<%s> - mounted layer-%d in %s.", co.containerId, layer.index, time.Since(startTime))
+	Logger.Infof(context.TODO(), "<%s> - mounted layer-%d in %s.", co.containerId, layer.index, time.Since(startTime))
 	return nil
 }

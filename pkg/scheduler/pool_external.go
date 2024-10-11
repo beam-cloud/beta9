@@ -89,7 +89,7 @@ func NewExternalWorkerPoolController(
 	// Start monitoring worker pool size
 	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
 	if err != nil {
-		common.Logger.Infof("<pool %s> unable to monitor pool size: %+v", wpc.name, err)
+		common.Logger.Infof(ctx, "<pool %s> unable to monitor pool size: %+v", wpc.name, err)
 	}
 
 	// Reconcile nodes with state
@@ -139,13 +139,13 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	}
 	defer wpc.providerRepo.RemoveMachineLock(string(*wpc.providerName), wpc.name, machineId)
 
-	common.Logger.Infof("Waiting for machine registration <machineId: %s>", machineId)
+	common.Logger.Infof(wpc.ctx, "Waiting for machine registration <machineId: %s>", machineId)
 	machineState, err := wpc.providerRepo.WaitForMachineRegistration(string(*wpc.providerName), wpc.name, machineId)
 	if err != nil {
 		return nil, err
 	}
 
-	common.Logger.Infof("Machine registered <machineId: %s>, hostname: %s", machineId, machineState.HostName)
+	common.Logger.Infof(wpc.ctx, "Machine registered <machineId: %s>, hostname: %s", machineId, machineState.HostName)
 	worker, err := wpc.createWorkerOnMachine(workerId, machineId, machineState, cpu, memory, gpuType, gpuCount)
 	if err != nil {
 		return nil, err
@@ -197,7 +197,7 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 	}
 
 	if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && machine.State.Gpu == gpuType && remainingMachineGpuCount >= gpuCount {
-		common.Logger.Infof("Using existing machine <machineId: %s>, hostname: %s", machine.State.MachineId, machine.State.HostName)
+		common.Logger.Infof(wpc.ctx, "Using existing machine <machineId: %s>, hostname: %s", machine.State.MachineId, machine.State.HostName)
 
 		// If there is only one GPU available on the machine, give the worker access to everything
 		// This prevents situations where a user requests a small amount of compute, and the subsequent
@@ -243,7 +243,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 
 	// Add the worker state
 	if err := wpc.workerRepo.AddWorker(worker); err != nil {
-		common.Logger.Infof("Unable to create worker: %+v", err)
+		common.Logger.Infof(wpc.ctx, "Unable to create worker: %+v", err)
 		return nil, err
 	}
 

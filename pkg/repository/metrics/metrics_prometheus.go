@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sort"
@@ -61,7 +62,7 @@ func (r *PrometheusMetricsRepository) Init(source string) error {
 
 	go func() {
 		if err := r.listenAndServe(); err != nil {
-			common.Logger.Fatalf("Failed to start metrics server: %v", err)
+			common.Logger.Fatalf(context.TODO(), "Failed to start metrics server: %v", err)
 		}
 	}()
 

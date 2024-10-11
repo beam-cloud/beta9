@@ -53,17 +53,17 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		case types.PoolModeExternal:
 			controller, err = NewExternalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, providerRepo, tailscale, pool.Provider)
 		default:
-			common.Logger.Infof("no valid controller found for pool <%s> with mode: %s", name, pool.Mode)
+			common.Logger.Infof(ctx, "no valid controller found for pool <%s> with mode: %s", name, pool.Mode)
 			continue
 		}
 
 		if err != nil {
-			common.Logger.Infof("unable to load controller <%s>: %+v", name, err)
+			common.Logger.Infof(ctx, "unable to load controller <%s>: %+v", name, err)
 			continue
 		}
 
 		workerPoolManager.SetPool(name, pool, controller)
-		common.Logger.Infof("loaded controller for pool <%s> with mode: %s and GPU type: %s", name, pool.Mode, pool.GPUType)
+		common.Logger.Infof(ctx, "loaded controller for pool <%s> with mode: %s and GPU type: %s", name, pool.Mode, pool.GPUType)
 	}
 
 	return &Scheduler{
@@ -81,7 +81,8 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 }
 
 func (s *Scheduler) Run(request *types.ContainerRequest) error {
-	common.Logger.Infof("Received RUN request: %+v", request)
+	ctx := context.Background()
+	common.Logger.Infof(ctx, "Received RUN request: %+v", request)
 
 	request.Timestamp = time.Now()
 
@@ -138,7 +139,8 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 }
 
 func (s *Scheduler) Stop(containerId string) error {
-	common.Logger.Infof("Received STOP request: %s", containerId)
+	ctx := context.Background()
+	common.Logger.Infof(ctx, "Received STOP request: %s", containerId)
 
 	err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	if err != nil {
@@ -153,7 +155,7 @@ func (s *Scheduler) Stop(containerId string) error {
 		LockAndDelete: false,
 	})
 	if err != nil {
-		common.Logger.Infof("Could not stop container: %+v", err)
+		common.Logger.Infof(ctx, "Could not stop container: %+v", err)
 		return err
 	}
 
@@ -181,6 +183,8 @@ func (s *Scheduler) getController(request *types.ContainerRequest) (WorkerPoolCo
 
 func (s *Scheduler) StartProcessingRequests() {
 	for {
+		ctx := context.Background()
+
 		if s.requestBacklog.Len() == 0 {
 			time.Sleep(requestProcessingInterval)
 			continue
@@ -199,22 +203,22 @@ func (s *Scheduler) StartProcessingRequests() {
 			// so we can add a new worker.
 			controller, err := s.getController(request)
 			if err != nil {
-				common.Logger.Infof("No controller found for request: %+v, error: %v", request, err)
+				common.Logger.Infof(ctx, "No controller found for request: %+v, error: %v", request, err)
 				continue
 			}
 
 			go func() {
 				newWorker, err := controller.AddWorker(request.Cpu, request.Memory, request.Gpu, request.GpuCount)
 				if err != nil {
-					common.Logger.Infof("Unable to add worker job for container <%s>: %+v", request.ContainerId, err)
+					common.Logger.Infof(ctx, "Unable to add worker job for container <%s>: %+v", request.ContainerId, err)
 					s.addRequestToBacklog(request)
 					return
 				}
 
-				common.Logger.Infof("Added new worker <%s> for container %s", newWorker.Id, request.ContainerId)
+				common.Logger.Infof(ctx, "Added new worker <%s> for container %s", newWorker.Id, request.ContainerId)
 				err = s.scheduleRequest(newWorker, request)
 				if err != nil {
-					common.Logger.Infof("Unable to schedule request for container<%s>: %v", request.ContainerId, err)
+					common.Logger.Infof(ctx, "Unable to schedule request for container<%s>: %v", request.ContainerId, err)
 					s.addRequestToBacklog(request)
 				}
 			}()
@@ -328,7 +332,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 			return
 		}
 
-		common.Logger.Infof("Giving up on request <%s> after %d attempts or due to max retry duration exceeded", request.ContainerId, request.RetryCount)
+		common.Logger.Infof(context.TODO(), "Giving up on request <%s> after %d attempts or due to max retry duration exceeded", request.ContainerId, request.RetryCount)
 		s.containerRepo.DeleteContainerState(&types.ContainerRequest{ContainerId: request.ContainerId})
 	}()
 

@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,7 +43,7 @@ func (r *ContainerLogger) Log(containerId, stubId string, format string, args ..
 		TimestampFormat: time.RFC3339Nano,
 	})
 
-	common.Logger.Infof(fmt.Sprintf("<%s> - ", containerId) + fmt.Sprintf(format, args...))
+	common.Logger.Infof(context.TODO(), fmt.Sprintf("<%s> - ", containerId)+fmt.Sprintf(format, args...))
 	f.WithFields(logrus.Fields{
 		"container_id": containerId,
 		"stub_id":      stubId,
@@ -103,9 +104,9 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 			}
 
 			if msg.TaskID != nil && msg.Message != "" {
-				common.Logger.Infof("<%s>:<%s> - %s", containerId, *msg.TaskID, msg.Message)
+				common.Logger.Infof(context.TODO(), "<%s>:<%s> - %s", containerId, *msg.TaskID, msg.Message)
 			} else if msg.Message != "" {
-				common.Logger.Infof("<%s> - %s", containerId, msg.Message)
+				common.Logger.Infof(context.TODO(), "<%s> - %s", containerId, msg.Message)
 			}
 		}
 
@@ -116,7 +117,7 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 				"stub_id":      instance.StubId,
 			}).Info(o.Msg)
 
-			common.Logger.Infof("<%s> - %s", containerId, o.Msg)
+			common.Logger.Infof(context.TODO(), "<%s> - %s", containerId, o.Msg)
 
 			// Write logs to in-memory log buffer as well
 			instance.LogBuffer.Write([]byte(o.Msg))

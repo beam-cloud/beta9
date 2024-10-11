@@ -55,11 +55,11 @@ func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], image
 func (s *RunCServer) Start() error {
 	listener, err := net.Listen("tcp", ":0") // // Random free port
 	if err != nil {
-		common.Logger.Fatalf("Runc server: failed to listen: %v", err)
+		common.Logger.Fatalf(context.TODO(), "Runc server: failed to listen: %v", err)
 	}
 
 	s.port = listener.Addr().(*net.TCPAddr).Port
-	common.Logger.Infof("RunCServer started on port %d", s.port)
+	common.Logger.Infof(context.TODO(), "RunCServer started on port %d", s.port)
 
 	grpcServer := grpc.NewServer()
 	pb.RegisterRunCServiceServer(grpcServer, s)
@@ -67,7 +67,7 @@ func (s *RunCServer) Start() error {
 	go func() {
 		err := grpcServer.Serve(listener)
 		if err != nil {
-			common.Logger.Errorf("Runc server: failed to start grpc server: %v", err)
+			common.Logger.Errorf(context.TODO(), "Runc server: failed to start grpc server: %v", err)
 		}
 	}()
 
@@ -221,7 +221,7 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 				if progress > lastProgress && progress != lastProgress {
 					lastProgress = progress
 
-					common.Logger.Infof("Image upload progress: %d/100", progress)
+					common.Logger.Infof(ctx, "Image upload progress: %d/100", progress)
 					err := stream.Send(&pb.RunCArchiveResponse{Done: false, Success: false, Progress: int32(progress), ErrorMsg: ""})
 					if err != nil {
 						return

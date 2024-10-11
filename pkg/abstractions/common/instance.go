@@ -194,7 +194,7 @@ func (i *AutoscaledInstance) Monitor() error {
 			}
 
 			if initialContainerCount != len(i.Containers) {
-				common.Logger.Infof("<%s> scaled from %d->%d", i.Name, initialContainerCount, len(i.Containers))
+				common.Logger.Infof(i.Ctx, "<%s> scaled from %d->%d", i.Name, initialContainerCount, len(i.Containers))
 			}
 
 		case desiredContainers := <-i.ScaleEventChan:
@@ -206,7 +206,7 @@ func (i *AutoscaledInstance) Monitor() error {
 			if err := i.HandleScalingEvent(desiredContainers); err != nil {
 				if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 					if time.Now().After(ignoreScalingEventWindow) {
-						common.Logger.Infof("<%s> throttled by concurrency limit", i.Name)
+						common.Logger.Infof(i.Ctx, "<%s> throttled by concurrency limit", i.Name)
 						ignoreScalingEventWindow = time.Now().Add(IgnoreScalingEventInterval)
 					}
 				}
@@ -229,7 +229,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	}
 
 	if state.FailedContainers >= i.FailedContainerThreshold {
-		common.Logger.Infof("<%s> reached failed container threshold, scaling to zero.", i.Name)
+		common.Logger.Infof(i.Ctx, "<%s> reached failed container threshold, scaling to zero.", i.Name)
 		desiredContainers = 0
 	}
 

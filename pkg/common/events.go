@@ -145,7 +145,7 @@ func (eb *EventBus) ReceiveEvents(ctx context.Context) {
 func (eb *EventBus) receive(ctx context.Context, wg *sync.WaitGroup, eventType string) {
 	defer wg.Done()
 
-	Logger.Infof("Receiving events for type: <%s>", eventType)
+	Logger.Infof(ctx, "Receiving events for type: <%s>", eventType)
 
 	eventChannelKey := fmt.Sprintf("%s/%s", eventChannelPrefix, eventType)
 	messages, errs := eb.rdb.Subscribe(ctx, eventChannelKey)
@@ -155,7 +155,7 @@ retry:
 		select {
 		case m, ok := <-messages:
 			if !ok {
-				Logger.Warnf("Events subscription closed for type <%s>. Retrying ...", eventType)
+				Logger.Warnf(ctx, "Events subscription closed for type <%s>. Retrying ...", eventType)
 				time.Sleep(eventRetryDelay)
 				messages, errs = eb.rdb.Subscribe(ctx, eventChannelKey)
 				continue retry
@@ -174,7 +174,7 @@ retry:
 			return
 
 		case err := <-errs:
-			Logger.Errorf("Error with eventbus subscription: %v", err)
+			Logger.Errorf(ctx, "Error with eventbus subscription: %v", err)
 			break retry
 		}
 	}
@@ -195,7 +195,7 @@ func (eb *EventBus) handleEvent(eventId string, event *Event, lock *RedisLock) {
 		// This is not the same as a "retry" because the callback was never invoked.
 		err := eb.rdb.Publish(context.TODO(), eventChannelKey, eventId).Err()
 		if err != nil {
-			Logger.Errorf("Failed to republish event <%v>: %v", eventId, err)
+			Logger.Errorf(context.TODO(), "Failed to republish event <%v>: %v", eventId, err)
 		}
 		return
 	}
@@ -229,7 +229,7 @@ func (eb *EventBus) resendEvent(eventChannelKey string, eventId string, event *E
 	}
 
 	if retries >= int(event.Retries) {
-		Logger.Infof("Hit retry limit, not resending event: <%+v>", event)
+		Logger.Infof(context.TODO(), "Hit retry limit, not resending event: <%+v>", event)
 		return errors.New("hit event retry limit")
 	}
 

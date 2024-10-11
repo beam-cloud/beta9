@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -39,7 +40,7 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 		if !info.IsDir() {
 			_, err := cm.client.StoreContentFromSource(path, 0)
 			if err != nil {
-				common.Logger.Errorf("Failed to cache file<%s>: %v", path, err)
+				common.Logger.Errorf(context.TODO(), "Failed to cache file<%s>: %v", path, err)
 			}
 		}
 

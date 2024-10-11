@@ -57,7 +57,7 @@ type Tailscale struct {
 
 func (t *Tailscale) logF(format string, v ...interface{}) {
 	if t.debug {
-		common.Logger.Infof(format, v...)
+		common.Logger.Infof(context.TODO(), format, v...)
 	}
 }
 
@@ -101,7 +101,7 @@ func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (n
 		return nil, err
 	}
 
-	common.Logger.Infof("Connected to tailnet - listening on %s", addr)
+	common.Logger.Infof(ctx, "Connected to tailnet - listening on %s", addr)
 	return listener, nil
 }
 

@@ -121,7 +121,7 @@ func (p *Proxy) Start() error {
 }
 
 func (p *Proxy) startServiceProxy(service types.InternalService, listener net.Listener, serviceId string) {
-	common.Logger.Infof("Svc<%s> listening on port: %d", service.Name, service.LocalPort)
+	common.Logger.Infof(context.TODO(), "Svc<%s> listening on port: %d", service.Name, service.LocalPort)
 
 	if p.config.Tailscale.Enabled {
 		go func() {
@@ -135,7 +135,7 @@ func (p *Proxy) startServiceProxy(service types.InternalService, listener net.Li
 
 				err := p.tailscaleRepo.SetHostname(service.Name, serviceId, hostName)
 				if err != nil {
-					common.Logger.Infof("Unable to set tailscale hostname: %+v", err)
+					common.Logger.Infof(context.TODO(), "Unable to set tailscale hostname: %+v", err)
 				}
 
 				time.Sleep(time.Second * 15)
@@ -147,7 +147,7 @@ func (p *Proxy) startServiceProxy(service types.InternalService, listener net.Li
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
-				common.Logger.Infof("Failed to accept connection for svc<%s>: %v", service.Name, err)
+				common.Logger.Infof(context.TODO(), "Failed to accept connection for svc<%s>: %v", service.Name, err)
 				continue
 			}
 
@@ -159,7 +159,7 @@ func (p *Proxy) startServiceProxy(service types.InternalService, listener net.Li
 func (p *Proxy) handleConnection(src net.Conn, destination string) {
 	dst, err := net.Dial("tcp", destination)
 	if err != nil {
-		common.Logger.Infof("Failed to dial destination %s: %v", destination, err)
+		common.Logger.Infof(context.TODO(), "Failed to dial destination %s: %v", destination, err)
 		src.Close()
 		return
 	}

@@ -1,6 +1,7 @@
 package common
 
 import (
+	"context"
 	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -72,23 +73,23 @@ func InitializeLogger(rdb *RedisClient, config types.AppConfig) error {
 	return err
 }
 
-func (tl *TraceLogger) Debugf(template string, args ...interface{}) {
+func (tl *TraceLogger) Debugf(ctx context.Context, template string, args ...interface{}) {
 	tl.sugar.Debugf(template, args...)
 }
 
-func (tl *TraceLogger) Infof(template string, args ...interface{}) {
+func (tl *TraceLogger) Infof(ctx context.Context, template string, args ...interface{}) {
 	tl.sugar.Infof(template, args...)
 }
 
-func (tl *TraceLogger) Warnf(template string, args ...interface{}) {
+func (tl *TraceLogger) Warnf(ctx context.Context, template string, args ...interface{}) {
 	tl.sugar.Warnf(template, args...)
 }
 
-func (tl *TraceLogger) Errorf(template string, args ...interface{}) {
+func (tl *TraceLogger) Errorf(ctx context.Context, template string, args ...interface{}) {
 	tl.sugar.Errorf(template, args...)
 }
 
-func (tl *TraceLogger) Fatalf(template string, args ...interface{}) {
+func (tl *TraceLogger) Fatalf(ctx context.Context, template string, args ...interface{}) {
 	tl.sugar.Fatalf(template, args...)
 }
 

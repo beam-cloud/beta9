@@ -271,7 +271,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 	} else if leftoverTimeoutSeconds <= 0 {
 		err := timeoutCallback()
 		if err != nil {
-			common.Logger.Infof("error timing out task: %v", err)
+			common.Logger.Infof(fs.ctx, "error timing out task: %v", err)
 			return err
 		}
 
@@ -291,7 +291,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 				case <-timeoutChan:
 					err := timeoutCallback()
 					if err != nil {
-						common.Logger.Infof("task timeout err: %v", err)
+						common.Logger.Infof(fs.ctx, "task timeout err: %v", err)
 					}
 					timeoutFlag <- true
 					return
@@ -307,7 +307,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 
 				case err := <-errs:
 					if err != nil {
-						common.Logger.Infof("monitor task subscription err: %v", err)
+						common.Logger.Infof(fs.ctx, "monitor task subscription err: %v", err)
 						break retry
 					}
 				}
@@ -406,7 +406,7 @@ func (fs *RunCFunctionService) FunctionSchedule(ctx context.Context, req *pb.Fun
 }
 
 func (fs *RunCFunctionService) listenForScheduledJobs() {
-	common.Logger.Infof("Listening for scheduled jobs on channel: <%v>", repository.ScheduledJobsChannel)
+	common.Logger.Infof(fs.ctx, "Listening for scheduled jobs on channel: <%v>", repository.ScheduledJobsChannel)
 	for {
 		select {
 		case <-fs.ctx.Done():
@@ -414,7 +414,7 @@ func (fs *RunCFunctionService) listenForScheduledJobs() {
 		default:
 			messages, err := fs.backendRepo.ListenToChannel(fs.ctx, repository.ScheduledJobsChannel)
 			if err != nil {
-				common.Logger.Errorf("Failed to listen to scheduled job channel:", err)
+				common.Logger.Errorf(fs.ctx, "Failed to listen to scheduled job channel: %v", err)
 				time.Sleep(1 * time.Second)
 				continue
 			}
@@ -423,7 +423,7 @@ func (fs *RunCFunctionService) listenForScheduledJobs() {
 			for message := range messages {
 				var payload types.ScheduledJobPayload
 				if err := json.Unmarshal([]byte(message), &payload); err != nil {
-					common.Logger.Errorf("Failed to unmarshal scheduled job payload:", err)
+					common.Logger.Errorf(fs.ctx, "Failed to unmarshal scheduled job payload: %v", err)
 					continue
 				}
 
@@ -433,7 +433,7 @@ func (fs *RunCFunctionService) listenForScheduledJobs() {
 
 				authInfo := &auth.AuthInfo{Workspace: &types.Workspace{Name: payload.WorkspaceName}}
 				if _, err = fs.invoke(fs.ctx, authInfo, payload.StubId, &payload.TaskPayload); err != nil {
-					common.Logger.Errorf("Failed to invoke scheduled job:", err)
+					common.Logger.Errorf(fs.ctx, "Failed to invoke scheduled job: %v", err)
 				}
 
 				lock.Release(Keys.FunctionScheduledJobLock(payload.StubId))

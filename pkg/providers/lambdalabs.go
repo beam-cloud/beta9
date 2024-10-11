@@ -121,10 +121,10 @@ func (p *LambdaLabsProvider) TerminateMachine(ctx context.Context, poolName, ins
 
 	err = p.ProviderRepo.RemoveMachine(p.Name, poolName, machineId)
 	if err != nil {
-		common.Logger.Infof("<provider %s>: Unable to remove machine state <machineId: %s>: %+v", p.Name, machineId, err)
+		common.Logger.Infof(p.Ctx, "<provider %s>: Unable to remove machine state <machineId: %s>: %+v", p.Name, machineId, err)
 		return err
 	}
 
-	common.Logger.Infof("<provider %s>: Terminated machine <machineId: %s> due to inactivity", p.Name, machineId)
+	common.Logger.Infof(p.Ctx, "<provider %s>: Terminated machine <machineId: %s> due to inactivity", p.Name, machineId)
 	return nil
 }

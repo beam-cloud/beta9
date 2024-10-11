@@ -98,7 +98,7 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 				break
 			}
 			if err != nil {
-				common.Logger.Infof("Failed to upload file: %v", err)
+				common.Logger.Infof(ctx.Request().Context(), "Failed to upload file: %v", err)
 				break
 			}
 

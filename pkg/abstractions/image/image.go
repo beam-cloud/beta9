@@ -88,7 +88,6 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 }
 
 func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
-	common.Logger.Infof("incoming image build request: %+v", in)
 
 	buildOptions := &BuildOpts{
 		BaseImageTag:       is.config.ImageService.Runner.Tags[in.PythonVersion],
@@ -103,6 +102,8 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	}
 
 	ctx := stream.Context()
+	common.Logger.Infof(ctx, "incoming image build request: %+v", in)
+
 	outputChan := make(chan common.OutputMsg)
 
 	go is.builder.Build(ctx, buildOptions, outputChan)

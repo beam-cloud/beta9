@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -25,7 +26,7 @@ func NewJuiceFsStorage(config types.JuiceFSConfig) (Storage, error) {
 }
 
 func (s *JuiceFsStorage) Mount(localPath string) error {
-	common.Logger.Infof("JuiceFS filesystem mounting to: '%s'", localPath)
+	common.Logger.Infof(context.TODO(), "JuiceFS filesystem mounting to: '%s'", localPath)
 
 	cacheSize := strconv.FormatInt(s.config.CacheSize, 10)
 
@@ -56,7 +57,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 	go func() {
 		output, err := s.mountCmd.CombinedOutput()
 		if err != nil {
-			common.Logger.Fatalf("error executing juicefs mount: %v, output: %s", err, string(output))
+			common.Logger.Fatalf(context.TODO(), "error executing juicefs mount: %v, output: %s", err, string(output))
 		}
 	}()
 
@@ -84,7 +85,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		return fmt.Errorf("failed to mount JuiceFS filesystem to: '%s'", localPath)
 	}
 
-	common.Logger.Infof("JuiceFS filesystem mounted to: '%s'", localPath)
+	common.Logger.Infof(context.TODO(), "JuiceFS filesystem mounted to: '%s'", localPath)
 	return nil
 }
 
@@ -127,11 +128,11 @@ func (s *JuiceFsStorage) Unmount(localPath string) error {
 
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			common.Logger.Infof("error executing juicefs umount: %v, output: %s", err, string(output))
+			common.Logger.Infof(context.TODO(), "error executing juicefs umount: %v, output: %s", err, string(output))
 			return err
 		}
 
-		common.Logger.Infof("JuiceFS filesystem unmounted from: '%s'", localPath)
+		common.Logger.Infof(context.TODO(), "JuiceFS filesystem unmounted from: '%s'", localPath)
 		return nil
 	}
 

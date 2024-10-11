@@ -82,7 +82,7 @@ func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix 
 				return
 
 			case err := <-errs:
-				Logger.Errorf("error with key manager subscription: %v", err)
+				Logger.Errorf(ctx, "error with key manager subscription: %v", err)
 				break retry
 			}
 		}
