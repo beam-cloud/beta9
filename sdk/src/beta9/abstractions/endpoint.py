@@ -98,6 +98,8 @@ class Endpoint(RunnerAbstraction):
         ```
     """
 
+    concurrent_requests = 1
+
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
