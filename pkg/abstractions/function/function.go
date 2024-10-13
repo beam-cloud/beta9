@@ -271,7 +271,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 	} else if leftoverTimeoutSeconds <= 0 {
 		err := timeoutCallback()
 		if err != nil {
-			common.Logger.Infof(fs.ctx, "error timing out task: %v", err)
+			common.Logger.Errorf(fs.ctx, "error timing out task: %v", err)
 			return err
 		}
 
