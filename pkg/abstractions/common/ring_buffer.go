@@ -20,19 +20,34 @@ func NewRingBuffer[T any](size int) *RingBuffer[T] {
 	}
 }
 
-// Push adds a new request to the buffer
-func (rb *RingBuffer[T]) Push(request T) {
+// Push adds a new request to the buffer. If priority is true, it gets inserted at the front of the buffer
+func (rb *RingBuffer[T]) Push(request T, priority bool) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
-	if rb.count == rb.size {
-		rb.head = (rb.head + 1) % rb.size
+	if priority {
+		if rb.count == rb.size {
+			// Buffer is full, overwrite the oldest element at head without moving pointers
+			// No adjustment to head or tail, since the count remains the same
+			rb.buffer[rb.head] = request
+		} else {
+			// Move head backward to insert at front
+			rb.head = (rb.head - 1 + rb.size) % rb.size
+			rb.buffer[rb.head] = request
+			rb.count++
+		}
 	} else {
-		rb.count++
-	}
+		// Normal FIFO insert at tail
+		rb.buffer[rb.tail] = request
+		rb.tail = (rb.tail + 1) % rb.size
 
-	rb.buffer[rb.tail] = request
-	rb.tail = (rb.tail + 1) % rb.size
+		// Buffer is full, move head forward to overwrite oldest element
+		if rb.count == rb.size {
+			rb.head = (rb.head + 1) % rb.size
+		} else {
+			rb.count++
+		}
+	}
 }
 
 // Pop retrieves and removes the oldest request from the buffer

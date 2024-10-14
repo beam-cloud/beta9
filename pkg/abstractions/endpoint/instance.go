@@ -81,8 +81,10 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			ImageId:     i.StubConfig.Runtime.ImageId,
 			StubId:      i.Stub.ExternalId,
 			WorkspaceId: i.Workspace.ExternalId,
+			Workspace:   *i.Workspace,
 			EntryPoint:  i.EntryPoint,
 			Mounts:      mounts,
+			Stub:        *i.Stub,
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers

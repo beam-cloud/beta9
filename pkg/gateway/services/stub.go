@@ -17,6 +17,7 @@ import (
 
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	var warning string
 
 	if in.Memory > int64(gws.appConfig.GatewayService.StubLimits.Memory) {
 		return &pb.GetOrCreateStubResponse{
@@ -32,6 +33,19 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 				Ok:     false,
 				ErrMsg: "GPU concurrency limit is 0.",
 			}, nil
+		}
+
+		gpuCounts, err := gws.providerRepo.GetGPUCounts(gws.appConfig.Worker.Pools)
+		if err != nil {
+			return &pb.GetOrCreateStubResponse{
+				Ok:     false,
+				ErrMsg: "Failed to get GPU counts.",
+			}, nil
+		}
+
+		// T4s are currently in a different pool than other GPUs and won't show up in gpu counts
+		if gpuCounts[in.Gpu] <= 1 && in.Gpu != types.GPU_T4.String() {
+			warning = fmt.Sprintf("GPU capacity for %s is currently low.", in.Gpu)
 		}
 	}
 
@@ -88,8 +102,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 
 		stubConfig.Secrets = append(stubConfig.Secrets, types.Secret{
-			Name:  secret.Name,
-			Value: secret.Value,
+			Name:      secret.Name,
+			Value:     secret.Value,
+			CreatedAt: secret.CreatedAt,
+			UpdatedAt: secret.UpdatedAt,
 		})
 	}
 
@@ -123,8 +139,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	return &pb.GetOrCreateStubResponse{
-		Ok:     err == nil,
-		StubId: stub.ExternalId,
+		Ok:      err == nil,
+		StubId:  stub.ExternalId,
+		WarnMsg: warning,
 	}, nil
 }
 
@@ -147,6 +164,14 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 
 	version := uint(1)
 	if lastestDeployment != nil {
+		if stub.Type == types.StubType(types.StubTypeScheduledJobDeployment) {
+			if err := gws.stopDeployments([]types.DeploymentWithRelated{*lastestDeployment}, ctx); err != nil {
+				return &pb.DeployStubResponse{
+					Ok: false,
+				}, nil
+			}
+		}
+
 		version = lastestDeployment.Version + 1
 	}
 
@@ -157,10 +182,8 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
-	invokeURL := fmt.Sprintf("%s/%s/%s/v%d", gws.appConfig.GatewayService.ExternalURL, stub.Type.Kind(), in.Name, deployment.Version)
-	if stubConfig, err := stub.UnmarshalConfig(); err == nil && !stubConfig.Authorized {
-		invokeURL = fmt.Sprintf("%s/%s/%s/%s", gws.appConfig.GatewayService.ExternalURL, stub.Type.Kind(), "public", stub.ExternalId)
-	}
+	// TODO: Remove this field once `pkg/api/v1/stub.go:GetURL()` is used by frontend and SDK version can be force upgraded
+	invokeUrl := common.BuildDeploymentURL(gws.appConfig.GatewayService.ExternalURL, common.InvokeUrlTypePath, stub, deployment)
 
 	go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
 
@@ -168,7 +191,60 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		Ok:           true,
 		DeploymentId: deployment.ExternalId,
 		Version:      uint32(deployment.Version),
-		InvokeUrl:    invokeURL,
+		InvokeUrl:    invokeUrl,
+	}, nil
+}
+
+func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*pb.GetURLResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	stub, err := gws.backendRepo.GetStubByExternalId(ctx, in.StubId)
+	if err != nil {
+		return &pb.GetURLResponse{
+			Ok:     false,
+			ErrMsg: "Unable to get stub",
+		}, nil
+	}
+	if stub == nil || stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		return &pb.GetURLResponse{
+			Ok:     false,
+			ErrMsg: "Invalid stub ID",
+		}, nil
+	}
+
+	if in.UrlType == "" {
+		in.UrlType = gws.appConfig.GatewayService.InvokeURLType
+	}
+
+	// Get URL for Serves
+	if stub.Type.IsServe() {
+		invokeUrl := common.BuildServeURL(gws.appConfig.GatewayService.ExternalURL, in.UrlType, stub)
+		return &pb.GetURLResponse{
+			Ok:  true,
+			Url: invokeUrl,
+		}, nil
+	}
+
+	// Get URL for Deployments
+	if in.DeploymentId == "" {
+		return &pb.GetURLResponse{
+			Ok:     false,
+			ErrMsg: "Deployment ID is required",
+		}, nil
+	}
+
+	deployment, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, in.DeploymentId)
+	if err != nil {
+		return &pb.GetURLResponse{
+			Ok:     false,
+			ErrMsg: "Unable to get deployment",
+		}, nil
+	}
+
+	invokeUrl := common.BuildDeploymentURL(gws.appConfig.GatewayService.ExternalURL, in.UrlType, stub, &deployment.Deployment)
+	return &pb.GetURLResponse{
+		Ok:  true,
+		Url: invokeUrl,
 	}, nil
 }
 

@@ -66,20 +66,14 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 		return nil, err
 	}
 
-	repo := &PostgresBackendRepository{
+	return &PostgresBackendRepository{
 		client:    db,
 		config:    config,
 		eventRepo: eventRepo,
-	}
-
-	if err := repo.migrate(); err != nil {
-		log.Fatalf("failed to run backend migrations: %v", err)
-	}
-
-	return repo, nil
+	}, nil
 }
 
-func (r *PostgresBackendRepository) migrate() error {
+func (r *PostgresBackendRepository) Migrate() error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
@@ -89,6 +83,10 @@ func (r *PostgresBackendRepository) migrate() error {
 	}
 
 	return nil
+}
+
+func (r *PostgresBackendRepository) Ping() error {
+	return r.client.Ping()
 }
 
 func (r *PostgresBackendRepository) generateExternalId() (string, error) {
@@ -145,7 +143,7 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error) {
 	var workspace types.Workspace
 
-	query := `SELECT id, name, created_at, concurrency_limit_id FROM workspace WHERE external_id = $1;`
+	query := `SELECT id, name, created_at, concurrency_limit_id, volume_cache_enabled FROM workspace WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &workspace, query, externalId)
 	if err != nil {
 		return types.Workspace{}, err
@@ -157,7 +155,7 @@ func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context
 func (r *PostgresBackendRepository) GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalId string) (types.Workspace, error) {
 	var workspace types.Workspace
 
-	query := `SELECT id, name, created_at, concurrency_limit_id, signing_key FROM workspace WHERE external_id = $1;`
+	query := `SELECT id, name, created_at, concurrency_limit_id, signing_key, volume_cache_enabled FROM workspace WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &workspace, query, externalId)
 	if err != nil {
 		return types.Workspace{}, err
@@ -200,7 +198,8 @@ func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId
 func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error) {
 	query := `
 	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.disabled_by_cluster_admin , t.token_type, t.reusable, t.workspace_id,
-	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.signing_key "workspace.signing_key", w.created_at "workspace.created_at", w.updated_at "workspace.updated_at"
+	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.signing_key "workspace.signing_key", w.created_at "workspace.created_at",
+		   w.updated_at "workspace.updated_at", w.volume_cache_enabled "workspace.volume_cache_enabled"
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
 	WHERE t.key = $1 AND t.active = TRUE;
@@ -536,10 +535,12 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 
 func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters types.TaskFilter) squirrel.SelectBuilder {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\", s.type AS \"stub.type\"",
+		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\", s.type AS \"stub.type\", d.external_id AS \"deployment.external_id\", d.name AS \"deployment.name\", d.version AS \"deployment.version\"",
 	).From("task t").
 		Join("workspace w ON t.workspace_id = w.id").
-		Join("stub s ON t.stub_id = s.id").OrderBy("t.id DESC")
+		Join("stub s ON t.stub_id = s.id").
+		LeftJoin("deployment d ON s.id = d.stub_id").
+		OrderBy("t.id DESC")
 
 	// Apply filters
 	if filters.WorkspaceID > 0 {
@@ -644,8 +645,15 @@ func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Contex
 }
 
 func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error) {
+	interval := strings.ToLower(filters.Interval)
+	if interval == "" {
+		interval = "hour"
+	}
+
+	date_truc := fmt.Sprintf("DATE_TRUNC('%s', t.created_at)", interval)
+
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		`DATE_TRUNC('hour', t.created_at) as time, COUNT(t.id) as count,
+		date_truc + ` as time, COUNT(t.id) as count,
 			json_build_object(
 				'COMPLETE', SUM(CASE WHEN t.status = 'COMPLETE' THEN 1 ELSE 0 END),
 				'ERROR', SUM(CASE WHEN t.status = 'ERROR' THEN 1 ELSE 0 END),
@@ -771,7 +779,7 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	var stub types.StubWithRelated
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at,
-	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key",
+	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled",
 	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"`,
 	).
 		From("stub s").
@@ -915,6 +923,43 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 	return &deploymentWithRelated, nil
 }
 
+// GetDeploymentBySubdomain retrieves the deployment by name, version, and stub group
+// If version is 0, it will return the latest version
+func (c *PostgresBackendRepository) GetDeploymentBySubdomain(ctx context.Context, subdomain string, version uint) (*types.DeploymentWithRelated, error) {
+	var deploymentWithRelated types.DeploymentWithRelated
+
+	query := `
+		WITH deployment_data AS (
+			SELECT
+				d.*,
+				w.external_id AS "workspace.external_id", w.name AS "workspace.name",
+				s.external_id AS "stub.external_id", s.name AS "stub.name", s.type AS "stub.type", s.config AS "stub.config"
+			FROM deployment d
+			JOIN workspace w ON d.workspace_id = w.id
+			JOIN stub s ON d.stub_id = s.id
+			WHERE
+				d.subdomain = $1
+				AND d.deleted_at IS NULL
+		)
+		SELECT
+			d.id, d.name, d.external_id, d.version,
+			d."workspace.external_id", d."workspace.name",
+			d."stub.external_id", d."stub.name", d."stub.type", d."stub.config"
+		FROM deployment_data d
+		WHERE version = CASE
+				WHEN $2 = 0 THEN (SELECT MAX(version) FROM deployment_data)
+				ELSE $2
+			END
+		LIMIT 1;
+	`
+	err := c.client.GetContext(ctx, &deploymentWithRelated, query, subdomain, version)
+	if err != nil {
+		return nil, err
+	}
+
+	return &deploymentWithRelated, nil
+}
+
 func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
 	query := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).
 		Select(
@@ -989,7 +1034,7 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
 
 func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.DeploymentFilter) squirrel.SelectBuilder {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		"d.id, d.external_id, d.name, d.active, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at",
+		"d.id, d.external_id, d.name, d.active, d.subdomain, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at",
 		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
 		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
 	).From("deployment d").
@@ -1089,13 +1134,13 @@ func (c *PostgresBackendRepository) ListDeploymentsPaginated(ctx context.Context
 func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error) {
 	var deployment types.Deployment
 
-	query := `
-        INSERT INTO deployment (name, active, workspace_id, stub_id, version, stub_type)
-        VALUES ($1, true, $2, $3, $4, $5)
-        RETURNING id, external_id, name, active, workspace_id, stub_id, version, created_at, updated_at;
-    `
-
-	err := c.client.GetContext(ctx, &deployment, query, name, workspaceId, stubId, version, stubType)
+	subdomain := generateSubdomain(name, stubType, workspaceId)
+	queryCreate := `
+		INSERT INTO deployment (name, active, subdomain, workspace_id, stub_id, version, stub_type)
+		VALUES ($1, true, $2, $3, $4, $5, $6)
+		RETURNING id, external_id, name, active, subdomain, workspace_id, stub_id, stub_type, version, created_at, updated_at;
+	`
+	err := c.client.GetContext(ctx, &deployment, queryCreate, name, subdomain, workspaceId, stubId, version, stubType)
 	if err != nil {
 		return nil, err
 	}

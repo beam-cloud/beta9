@@ -8,14 +8,12 @@ import (
 	"net/url"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/labstack/echo/v4"
 )
 
 type volumeGroup struct {
-	routeGroup    *echo.Group
-	gvs           *GlobalVolumeService
-	workspaceRepo repository.WorkspaceRepository
+	routeGroup *echo.Group
+	gvs        *GlobalVolumeService
 }
 
 var uploadBufferSize = 1024 * 1000 * 8 // 8 Mb

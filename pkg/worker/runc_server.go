@@ -215,6 +215,8 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case progress, ok := <-progressChan:
 				if !ok {
 					return

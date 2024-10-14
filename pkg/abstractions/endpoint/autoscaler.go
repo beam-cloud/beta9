@@ -72,7 +72,7 @@ func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSampl
 		}
 	}
 
-	if sample.TotalRequests == 0 && exists == 0 {
+	if exists == 0 {
 		desiredContainers = 0
 	}
 

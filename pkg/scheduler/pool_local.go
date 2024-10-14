@@ -148,7 +148,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 	)
 
 	resources := corev1.ResourceRequirements{}
-	if wpc.config.Worker.ResourcesEnforced {
+	if wpc.config.Worker.JobResourcesEnforced {
 		resources.Requests = resourceRequests
 		resources.Limits = resourceRequests
 	}

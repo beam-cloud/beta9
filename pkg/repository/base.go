@@ -18,6 +18,7 @@ type WorkerRepository interface {
 	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId string) error
+	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
 	RemoveWorker(w *types.Worker) error
 	SetWorkerKeepAlive(workerId string) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
@@ -57,6 +58,8 @@ type ContainerRepository interface {
 type WorkspaceRepository interface {
 	GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error)
 	SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error
+	AuthorizeToken(string) (*types.Token, *types.Workspace, error)
+	SetAuthorizationToken(*types.Token, *types.Workspace) error
 }
 
 type BackendRepository interface {
@@ -90,6 +93,7 @@ type BackendRepository interface {
 	GetTaskCountPerDeployment(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountPerDeployment, error)
 	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool) (types.Stub, error)
 	GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error)
+	GetDeploymentBySubdomain(ctx context.Context, subdomain string, version uint) (*types.DeploymentWithRelated, error)
 	GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
 	GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
 	DeleteVolume(ctx context.Context, workspaceId uint, name string) error
@@ -121,6 +125,7 @@ type BackendRepository interface {
 	DeletePreviousScheduledJob(ctx context.Context, deployment *types.Deployment) error
 	GetScheduledJob(ctx context.Context, deploymentId uint) (*types.ScheduledJob, error)
 	ListenToChannel(ctx context.Context, channel string) (<-chan string, error)
+	Ping() error
 }
 
 type TaskRepository interface {

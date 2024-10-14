@@ -255,7 +255,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
 		if worker.FreeCpu >= int64(request.Cpu) && worker.FreeMemory >= int64(request.Memory) &&
-			worker.Gpu == request.Gpu && worker.FreeGpuCount >= request.GpuCount {
+			worker.Gpu == request.Gpu && worker.FreeGpuCount >= request.GpuCount && worker.Status != types.WorkerStatusDisabled {
 			filteredWorkers = append(filteredWorkers, worker)
 		}
 	}

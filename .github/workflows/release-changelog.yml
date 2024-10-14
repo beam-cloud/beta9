@@ -1,0 +1,184 @@
+name: Auto Changelog PR
+
+on:
+  release:
+    types: [published]
+
+    
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the Beta9 repo
+        uses: actions/checkout@v3
+
+      - name: Fetch the latest release data
+        id: release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            function formatDate(dateString) {
+              const date = new Date(dateString);
+              const month = String(date.getMonth() + 1).padStart(2, '0');
+              const day = String(date.getDate()).padStart(2, '0');
+              const year = String(date.getFullYear()).slice(-2);
+              return `${month}-${day}-${year}`;
+            }
+
+            function prettyDate(dateString) {
+              const date = new Date(dateString);
+
+              return new Intl.DateTimeFormat('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                timeZone: 'UTC',
+              }).format(date);
+            }
+
+            const release = context.payload.release;
+
+            // log the release object to help debug failed actions
+            console.log(release);
+
+            const lines = release.body.split('\n');
+
+            const feats = [];
+            const fixes = [];
+            for (const line of lines) {
+              if (line.startsWith('*')) {
+                const m = line.match(/^\*\s*([fF]eat|[fF]ix):\s*(.*)\s*/);
+                if (m) {
+                  const [_, type, description] = m;
+                  const byIndex = description.indexOf('by');
+                  
+                  if (type.toLowerCase() === 'feat') {
+                    const cleanedDesc = description.slice(0, byIndex).trim();
+                    feats.push(cleanedDesc);
+                  } else if (type.toLowerCase() === 'fix') {
+                    const cleanedDesc = description.slice(0, byIndex).trim();
+                    fixes.push(cleanedDesc);
+                  }
+                }
+              }
+            }
+            
+            // Stop the workflow if no features or fixes are found
+            if (feats.length === 0 && fixes.length === 0) {
+              core.setOutput('should_continue', 'false');
+              core.setOutput('error_message', 'No features or fixes found in the release notes. Stopping workflow.');
+              return;
+            }
+
+            core.setOutput('name', release.tag_name);
+            core.setOutput('new_feats', JSON.stringify(feats));
+            core.setOutput('new_fixes', JSON.stringify(fixes));
+            core.setOutput('created_at', formatDate(release.created_at));
+            core.setOutput('pretty_date', prettyDate(release.created_at));
+            core.setOutput('should_continue', 'true');
+
+      - name: Checkout beam-docs repo
+        if: steps.release.outputs.should_continue == 'true'
+        uses: actions/checkout@v3
+        with:
+          repository: slai-labs/beam-docs
+          path: beam-docs
+          token: ${{ secrets.BEAM_DOCS_PAT }}
+
+      - name: Process changelog
+        if: steps.release.outputs.should_continue == 'true'
+        id: process_changelog
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const filename = `./beam-docs/v2/releases/${process.env.CREATED_AT}.mdx`;
+            let existingFeats = [];
+            let existingFixes = [];
+
+            if (fs.existsSync(filename)) {
+              const content = fs.readFileSync(filename, 'utf8');
+              const featuresMatch = content.match(/## Features\n([\s\S]*?)(?=\n## |$)/);
+              const fixesMatch = content.match(/## Fixes\n([\s\S]*?)(?=\n## |$)/);
+
+              if (featuresMatch) {
+                existingFeats = featuresMatch[1].split('\n').filter(line => line.trim().startsWith('-')).map(line => line.trim().slice(2));
+              }
+              if (fixesMatch) {
+                existingFixes = fixesMatch[1].split('\n').filter(line => line.trim().startsWith('-')).map(line => line.trim().slice(2));
+              }
+            }
+
+            const newFeats = JSON.parse(process.env.NEW_FEATS);
+            const newFixes = JSON.parse(process.env.NEW_FIXES);
+
+            const allFeats = [...new Set([...existingFeats, ...newFeats])];
+            const allFixes = [...new Set([...existingFixes, ...newFixes])];
+
+            const featsString = allFeats.map(feat => `- ${feat}`).join('\n');
+            const fixesString = allFixes.map(fix => `- ${fix}`).join('\n');
+
+            core.setOutput('feats', featsString);
+            core.setOutput('fixes', fixesString);
+
+        env:
+          CREATED_AT: ${{ steps.release.outputs.created_at }}
+          NEW_FEATS: ${{ steps.release.outputs.new_feats }}
+          NEW_FIXES: ${{ steps.release.outputs.new_fixes }}
+
+      - name: Create new release file in beam-docs
+        if: steps.release.outputs.should_continue == 'true'
+        run: |
+          cd beam-docs/v2/releases
+          FILENAME="./${{ steps.release.outputs.created_at }}.mdx"
+          if [ -f "$FILENAME" ]; then
+            rm -f $FILENAME
+          fi
+
+          echo "---" >> $FILENAME
+          echo "title: \"${{ steps.release.outputs.pretty_date }}\"" >> $FILENAME
+          echo "---" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "## Features" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "${{ steps.process_changelog.outputs.feats }}" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "## Fixes" >> $FILENAME
+          echo "" >> $FILENAME
+          echo "${{ steps.process_changelog.outputs.fixes }}" >> $FILENAME
+          echo "" >> $FILENAME
+
+      - name: Update mint.json
+        if: steps.release.outputs.should_continue == 'true'
+        run: |
+          cd beam-docs
+          NEW_FILE="v2/releases/${{ steps.release.outputs.created_at }}"
+          jq --arg new_file "$NEW_FILE" '
+            .navigation[] |= 
+              if .group == "Releases" then 
+                .pages |= if index($new_file) then . else [$new_file] + . end
+              else 
+                .
+              end
+          ' ./mint.json > ./mint.json.tmp && mv ./mint.json.tmp ./mint.json
+
+      - name: Commit and push changes
+        if: steps.release.outputs.should_continue == 'true'
+        run: |
+          cd beam-docs
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git checkout -b autochangelog/${{ steps.release.outputs.name }}
+          git add .
+          git commit -m "Add changelog for ${{ steps.release.outputs.name }}"
+          git push -u origin autochangelog/${{ steps.release.outputs.name }}
+
+      - name: Create pull request
+        if: steps.release.outputs.should_continue == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.BEAM_DOCS_PAT }}
+        run: |
+          cd beam-docs
+          gh pr create --title "Changelog for ${{ steps.release.outputs.name }}" --body "This PR adds the changelog for ${{ steps.release.outputs.name }}." --base main --head autochangelog/${{ steps.release.outputs.name }}

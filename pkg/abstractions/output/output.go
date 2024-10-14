@@ -123,7 +123,7 @@ func (o *OutputRedisService) writeToFile(ctx context.Context, contentCh <-chan O
 		}
 	}
 
-	return outputId, nil
+	return outputId, file.Sync()
 }
 
 func (o *OutputRedisService) OutputStat(ctx context.Context, in *pb.OutputStatRequest) (*pb.OutputStatResponse, error) {

@@ -155,8 +155,10 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,
 		WorkspaceId: stub.Workspace.ExternalId,
+		Workspace:   stub.Workspace,
 		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
 		Mounts:      mounts,
+		Stub:        *stub,
 	})
 	if err != nil {
 		return err

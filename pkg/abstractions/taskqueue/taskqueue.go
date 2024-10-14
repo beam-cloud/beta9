@@ -36,6 +36,7 @@ type TaskQueueServiceOpts struct {
 	Config         types.AppConfig
 	RedisClient    *common.RedisClient
 	BackendRepo    repository.BackendRepository
+	WorkspaceRepo  repository.WorkspaceRepository
 	TaskRepo       repository.TaskRepository
 	ContainerRepo  repository.ContainerRepository
 	Scheduler      *scheduler.Scheduler
@@ -62,6 +63,7 @@ type RedisTaskQueue struct {
 	taskDispatcher  *task.Dispatcher
 	taskRepo        repository.TaskRepository
 	containerRepo   repository.ContainerRepository
+	workspaceRepo   repository.WorkspaceRepository
 	backendRepo     repository.BackendRepository
 	scheduler       *scheduler.Scheduler
 	pb.UnimplementedTaskQueueServiceServer
@@ -88,6 +90,7 @@ func NewRedisTaskQueueService(
 		scheduler:       opts.Scheduler,
 		stubConfigCache: common.NewSafeMap[*types.StubConfigV1](),
 		keyEventManager: keyEventManager,
+		workspaceRepo:   opts.WorkspaceRepo,
 		taskDispatcher:  opts.TaskDispatcher,
 		taskRepo:        opts.TaskRepo,
 		containerRepo:   opts.ContainerRepo,
@@ -133,10 +136,23 @@ func NewRedisTaskQueueService(
 	tq.taskDispatcher.Register(string(types.ExecutorTaskQueue), tq.taskQueueTaskFactory)
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(opts.BackendRepo)
+	authMiddleware := auth.AuthMiddleware(opts.BackendRepo, opts.WorkspaceRepo)
 	registerTaskQueueRoutes(opts.RouteGroup.Group(taskQueueRoutePrefix, authMiddleware), tq)
 
 	return tq, nil
+}
+
+func (tq *RedisTaskQueue) isPublic(stubId string) (*types.Workspace, error) {
+	instance, err := tq.getOrCreateQueueInstance(stubId)
+	if err != nil {
+		return nil, err
+	}
+
+	if instance.StubConfig.Authorized {
+		return nil, errors.New("unauthorized")
+	}
+
+	return instance.Workspace, nil
 }
 
 func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {

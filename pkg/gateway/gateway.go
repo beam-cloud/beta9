@@ -33,6 +33,7 @@ import (
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	gatewayMiddleware "github.com/beam-cloud/beta9/pkg/gateway/middleware"
 	gatewayservices "github.com/beam-cloud/beta9/pkg/gateway/services"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -59,6 +60,7 @@ type Gateway struct {
 	EventRepo      repository.EventRepository
 	Tailscale      *network.Tailscale
 	metricsRepo    repository.MetricsRepository
+	workerRepo     repository.WorkerRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
 	ctx            context.Context
@@ -85,10 +87,6 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	eventRepo := repository.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
-	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo)
-	if err != nil {
-		return nil, err
-	}
 
 	storage, err := storage.NewStorage(config.Storage)
 	if err != nil {
@@ -101,6 +99,18 @@ func NewGateway() (*Gateway, error) {
 		ctx:         ctx,
 		cancelFunc:  cancel,
 		Storage:     storage,
+	}
+
+	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo)
+	if err != nil {
+		return nil, err
+	}
+
+	if release, err := gateway.initLock("postgres"); err == nil {
+		defer release()
+		if err = backendRepo.Migrate(); err != nil {
+			return nil, err
+		}
 	}
 
 	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
@@ -120,6 +130,7 @@ func NewGateway() (*Gateway, error) {
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
+	workerRepo := repository.NewWorkerRedisRepository(redisClient, config.Worker)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)
 	taskDispatcher, err := task.NewDispatcher(ctx, taskRepo)
 	if err != nil {
@@ -137,8 +148,24 @@ func NewGateway() (*Gateway, error) {
 	gateway.TaskDispatcher = taskDispatcher
 	gateway.metricsRepo = metricsRepo
 	gateway.EventRepo = eventRepo
+	gateway.workerRepo = workerRepo
 
 	return gateway, nil
+}
+
+func (g *Gateway) initLock(name string) (func(), error) {
+	lockKey := fmt.Sprintf("gateway:init:%v:lock", name)
+	lock := common.NewRedisLock(g.RedisClient)
+
+	if err := lock.Acquire(g.ctx, lockKey, common.RedisLockOptions{TtlS: 10, Retries: 1}); err != nil {
+		return nil, err
+	}
+
+	return func() {
+		if err := lock.Release(lockKey); err != nil {
+			log.Println("Failed to release init lock:", err)
+		}
+	}, nil
 }
 
 func (g *Gateway) initHttp() error {
@@ -157,6 +184,7 @@ func (g *Gateway) initHttp() error {
 		AllowHeaders: g.Config.GatewayService.HTTP.CORS.AllowedHeaders,
 		AllowMethods: g.Config.GatewayService.HTTP.CORS.AllowedMethods,
 	}))
+	e.Use(gatewayMiddleware.Subdomain(g.Config.GatewayService.ExternalURL, g.BackendRepo, g.RedisClient))
 	e.Use(middleware.Recover())
 
 	// Accept both HTTP/2 and HTTP/1
@@ -165,11 +193,11 @@ func (g *Gateway) initHttp() error {
 		Handler: h2c.NewHandler(e, &http2.Server{}),
 	}
 
-	authMiddleware := auth.AuthMiddleware(g.BackendRepo)
+	authMiddleware := auth.AuthMiddleware(g.BackendRepo, g.WorkspaceRepo)
 	g.baseRouteGroup = e.Group(apiv1.HttpServerBaseRoute)
 	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
 
-	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.RedisClient)
+	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.RedisClient, g.BackendRepo)
 	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.Config)
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.Config)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.Config)
@@ -183,7 +211,7 @@ func (g *Gateway) initHttp() error {
 }
 
 func (g *Gateway) initGrpc() error {
-	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo)
+	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo, g.WorkspaceRepo)
 
 	serverOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(authInterceptor.Unary()),
@@ -231,6 +259,7 @@ func (g *Gateway) registerServices() error {
 		Config:         g.Config,
 		RedisClient:    g.RedisClient,
 		BackendRepo:    g.BackendRepo,
+		WorkspaceRepo:  g.WorkspaceRepo,
 		TaskRepo:       g.TaskRepo,
 		ContainerRepo:  g.ContainerRepo,
 		Scheduler:      g.Scheduler,
@@ -249,6 +278,7 @@ func (g *Gateway) registerServices() error {
 		Config:         g.Config,
 		RedisClient:    g.RedisClient,
 		BackendRepo:    g.BackendRepo,
+		WorkspaceRepo:  g.WorkspaceRepo,
 		TaskRepo:       g.TaskRepo,
 		ContainerRepo:  g.ContainerRepo,
 		Scheduler:      g.Scheduler,
@@ -267,6 +297,7 @@ func (g *Gateway) registerServices() error {
 		Config:         g.Config,
 		ContainerRepo:  g.ContainerRepo,
 		BackendRepo:    g.BackendRepo,
+		WorkspaceRepo:  g.WorkspaceRepo,
 		TaskRepo:       g.TaskRepo,
 		RedisClient:    g.RedisClient,
 		Scheduler:      g.Scheduler,
@@ -281,7 +312,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterEndpointServiceServer(g.grpcServer, ws)
 
 	// Register volume service
-	vs, err := volume.NewGlobalVolumeService(g.BackendRepo, g.RedisClient, g.rootRouteGroup)
+	vs, err := volume.NewGlobalVolumeService(g.BackendRepo, g.WorkspaceRepo, g.RedisClient, g.rootRouteGroup)
 	if err != nil {
 		return err
 	}
@@ -313,7 +344,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterOutputServiceServer(g.grpcServer, o)
 
 	// Register Secret service
-	secretService := secret.NewSecretService(g.BackendRepo, g.rootRouteGroup)
+	secretService := secret.NewSecretService(g.BackendRepo, g.WorkspaceRepo, g.rootRouteGroup)
 	pb.RegisterSecretServiceServer(g.grpcServer, secretService)
 
 	// Register Signal service
@@ -341,6 +372,7 @@ func (g *Gateway) registerServices() error {
 		TaskDispatcher: g.TaskDispatcher,
 		RedisClient:    g.RedisClient,
 		EventRepo:      g.EventRepo,
+		WorkerRepo:     g.workerRepo,
 	})
 	if err != nil {
 		return err

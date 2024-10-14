@@ -33,6 +33,7 @@ storage:
 gateway:
   host: beta9-gateway
   externalURL: http://localhost:1994
+  invokeURLType: path
   grpc:
     port: 1993
     maxRecvMsgSize: 1024
@@ -48,7 +49,6 @@ gateway:
   stubLimits:
     memory: 32768
 imageService:
-  cacheURL:
   localCacheEnabled: true
   registryStore: local
   registryCredentialProvider: docker
@@ -64,7 +64,6 @@ imageService:
       secretKey: test
       endpoint:
   runner:
-    baseImageTag: latest
     baseImageName: beta9-runner
     baseImageRegistry: registry.localhost:5000
     tags:
@@ -125,11 +124,13 @@ worker:
   serviceAccountName: default
   # non-standard k8s job spec
   imagePVCName: beta9-images
-  resourcesEnforced: false
+  jobResourcesEnforced: false
+  runcResourcesEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
   terminationGracePeriod: 30
   addWorkerTimeout: 10m
+  blobCacheEnabled: false
 providers:
   ec2:
     accessKey:

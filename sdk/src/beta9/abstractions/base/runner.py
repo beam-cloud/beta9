@@ -1,5 +1,7 @@
 import inspect
 import os
+import sys
+import tempfile
 import time
 from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
@@ -15,6 +17,7 @@ from ...clients.gateway import (
     GatewayServiceStub,
     GetOrCreateStubRequest,
     GetOrCreateStubResponse,
+    GetUrlRequest,
     ReplaceObjectContentOperation,
     ReplaceObjectContentRequest,
     ReplaceObjectContentResponse,
@@ -114,13 +117,24 @@ class RunnerAbstraction(BaseAbstraction):
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.settings: SDKSettings = get_settings()
         self.config_context: ConfigContext = get_config_context()
+        self.tmp_files: List[tempfile.NamedTemporaryFile] = []
 
-    def print_invocation_snippet(self, invocation_url: str) -> None:
+    def print_invocation_snippet(self, url_type: str = "") -> None:
         """Print curl request to call deployed container URL"""
+
+        res = self.gateway_stub.get_url(
+            GetUrlRequest(
+                stub_id=self.stub_id,
+                deployment_id=getattr(self, "deployment_id", ""),
+                url_type=url_type,
+            )
+        )
+        if not res.ok:
+            return terminal.error("Failed to get invocation URL", exit=False)
 
         terminal.header("Invocation details")
         commands = [
-            f"curl -X POST '{invocation_url}' \\",
+            f"curl -X POST '{res.url}' \\",
             "-H 'Connection: keep-alive' \\",
             "-H 'Content-Type: application/json' \\",
             *(
@@ -200,14 +214,22 @@ class RunnerAbstraction(BaseAbstraction):
             return
 
         module = inspect.getmodule(func)  # Determine module / function name
-        if module:
+        if hasattr(module, "__file__"):
             module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
+        elif in_ipython_env():
+            tmp_file = create_tmp_jupyter_file(module._ih)
+            module_name = tmp_file.name.split("/")[-1].removesuffix(".py")
+            self.tmp_files.append(tmp_file)
         else:
             module_name = "__main__"
 
         function_name = func.__name__
         setattr(self, attr, f"{module_name}:{function_name}")
+
+    def _remove_tmp_files(self) -> None:
+        for tmp_file in self.tmp_files:
+            tmp_file.close()
 
     def _sync_content(
         self,
@@ -299,6 +321,7 @@ class RunnerAbstraction(BaseAbstraction):
 
         if not self.files_synced:
             sync_result = self.syncer.sync()
+            self._remove_tmp_files()
 
             if sync_result.success:
                 self.files_synced = True
@@ -363,6 +386,8 @@ class RunnerAbstraction(BaseAbstraction):
             if stub_response.ok:
                 self.stub_created = True
                 self.stub_id = stub_response.stub_id
+                if stub_response.warn_msg:
+                    terminal.warn(stub_response.warn_msg)
             else:
                 if err := stub_response.err_msg:
                     terminal.error(err, exit=False)
@@ -372,3 +397,34 @@ class RunnerAbstraction(BaseAbstraction):
 
         self.runtime_ready = True
         return True
+
+
+def in_ipython_env() -> bool:
+    if "google.colab" in sys.modules:
+        return True
+
+    try:
+        from IPython import get_ipython
+
+        shell = get_ipython().__class__.__name__
+        return shell == "ZMQInteractiveShell"
+    except (NameError, ImportError):
+        return False
+
+
+def create_tmp_jupyter_file(input_history: List[str]) -> tempfile.NamedTemporaryFile:
+    tmp_file = tempfile.NamedTemporaryFile(mode="w+", dir=".", suffix=".py")
+    for code in input_history:
+        if isinstance(code, list):
+            code = "".join(code)
+
+        # Skip command lines
+        for line in code.split("\n"):
+            if line.startswith("get_ipython"):
+                continue
+
+            tmp_file.write(line + "\n")
+
+    tmp_file.flush()
+
+    return tmp_file

@@ -184,7 +184,11 @@ func (d *Dispatcher) retryTask(ctx context.Context, task types.TaskInterface, ta
 
 	// Hit retry limit, cancel task and resolve
 	if taskMessage.Retries >= taskMessage.Policy.MaxRetries {
-		log.Printf("<dispatcher> hit retry limit, not reinserting task <%s> into queue: %s\n", taskMessage.TaskId, taskMessage.StubId)
+
+		// Don't bother logging it if the retry limit is set to 0, it's just noise
+		if taskMessage.Policy.MaxRetries != 0 {
+			log.Printf("<dispatcher> hit retry limit, not reinserting task <%s> into queue: %s\n", taskMessage.TaskId, taskMessage.StubId)
+		}
 
 		err = task.Cancel(ctx, types.TaskExceededRetryLimit)
 		if err != nil {

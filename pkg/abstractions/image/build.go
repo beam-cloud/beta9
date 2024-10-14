@@ -27,6 +27,9 @@ const (
 	defaultBuildContainerCpu      int64         = 1000
 	defaultBuildContainerMemory   int64         = 1024
 	defaultContainerSpinupTimeout time.Duration = 180 * time.Second
+
+	pipCommandType   string = "pip"
+	shellCommandType string = "shell"
 )
 
 type Builder struct {
@@ -37,6 +40,11 @@ type Builder struct {
 	tailscale     *network.Tailscale
 }
 
+type BuildStep struct {
+	Command string
+	Type    string
+}
+
 type BuildOpts struct {
 	BaseImageRegistry  string
 	BaseImageName      string
@@ -45,6 +53,7 @@ type BuildOpts struct {
 	PythonVersion      string
 	PythonPackages     []string
 	Commands           []string
+	BuildSteps         []BuildStep
 	ExistingImageUri   string
 	ExistingImageCreds map[string]string
 	ForceRebuild       bool
@@ -60,6 +69,7 @@ func (o *BuildOpts) String() string {
 	fmt.Fprintf(&b, "  \"PythonVersion\": %q,", o.PythonVersion)
 	fmt.Fprintf(&b, "  \"PythonPackages\": %#v,", o.PythonPackages)
 	fmt.Fprintf(&b, "  \"Commands\": %#v,", o.Commands)
+	fmt.Fprintf(&b, "  \"BuildSteps\": %#v,", o.BuildSteps)
 	fmt.Fprintf(&b, "  \"ExistingImageUri\": %q,", o.ExistingImageUri)
 	fmt.Fprintf(&b, "  \"ExistingImageCreds\": %#v,", o.ExistingImageCreds)
 	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
@@ -95,6 +105,11 @@ type ImageIdHash struct {
 func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 	h := sha1.New()
 	h.Write([]byte(strings.Join(opts.Commands, "-")))
+	if len(opts.BuildSteps) > 0 {
+		for _, step := range opts.BuildSteps {
+			fmt.Fprintf(h, "%s-%s", step.Type, step.Command)
+		}
+	}
 	commandListHash := hex.EncodeToString(h.Sum(nil))
 
 	bodyToHash := &ImageIdHash{
@@ -175,6 +190,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		SourceImage:      &sourceImage,
 		SourceImageCreds: opts.BaseImageCreds,
 		WorkspaceId:      authInfo.Workspace.ExternalId,
+		Workspace:        *authInfo.Workspace,
 		EntryPoint:       []string{"tail", "-f", "/dev/null"},
 		PoolSelector:     b.config.ImageService.BuildContainerPoolSelector,
 	})
@@ -245,7 +261,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	// Generate the pip install command and prepend it to the commands list
 	if len(opts.PythonPackages) > 0 {
-		pipInstallCmd := b.generatePipInstallCommand(opts)
+		pipInstallCmd := b.generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
 	}
 
@@ -258,6 +274,16 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
 		installCmd := b.getPythonInstallCommand(opts.PythonVersion)
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
+	}
+
+	// Generate the commands to run in the container
+	for _, step := range opts.BuildSteps {
+		switch step.Type {
+		case shellCommandType:
+			opts.Commands = append(opts.Commands, step.Command)
+		case pipCommandType:
+			opts.Commands = append(opts.Commands, b.generatePipInstallCommand([]string{step.Command}, opts.PythonVersion))
+		}
 	}
 
 	for _, cmd := range opts.Commands {
@@ -273,6 +299,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 				errMsg = err.Error() + "\n"
 			}
 
+			time.Sleep(1 * time.Second) // Wait for logs to be passed through
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: errMsg}
 			return err
 		}
@@ -385,12 +412,12 @@ func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
 }
 
-func (b *Builder) generatePipInstallCommand(opts *BuildOpts) string {
+func (b *Builder) generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
 	var flagLines []string
 	var packages []string
 	var flags = []string{"--", "-"}
 
-	for _, pkg := range opts.PythonPackages {
+	for _, pkg := range pythonPackages {
 		if hasAnyPrefix(pkg, flags) {
 			flagLines = append(flagLines, pkg)
 		} else {
@@ -398,7 +425,7 @@ func (b *Builder) generatePipInstallCommand(opts *BuildOpts) string {
 		}
 	}
 
-	command := fmt.Sprintf("%s -m pip install --root-user-action=ignore", opts.PythonVersion)
+	command := fmt.Sprintf("%s -m pip install --root-user-action=ignore", pythonVersion)
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")
 	}

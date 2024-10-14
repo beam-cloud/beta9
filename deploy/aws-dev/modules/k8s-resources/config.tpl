@@ -28,7 +28,6 @@ gateway:
   host: gateway.beta9
   port: 1993
 imageService:
-  cacheURL:
   registryStore: s3
   registryCredentialProvider: aws
   registries:
