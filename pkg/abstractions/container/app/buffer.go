@@ -3,6 +3,7 @@ package container_app
 import (
 	"context"
 	"io"
+	"log"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -80,7 +81,7 @@ func (cb *ConnectionBuffer) ForwardConnection(src, dst net.Conn) error {
 		src:  src,
 		dst:  dst,
 		done: done,
-	})
+	}, false)
 
 	cb.length.Add(1)
 	defer cb.length.Add(-1)
@@ -145,6 +146,7 @@ func (cb *ConnectionBuffer) handleTCPConnection(tcpConn tcpConnection) {
 func (cb *ConnectionBuffer) copyData(src io.Reader, dst io.Writer) {
 	_, err := io.CopyBuffer(dst, src, make([]byte, 32*1024))
 	if err != nil {
+		log.Println("error copying data:", err)
 	}
 }
 
