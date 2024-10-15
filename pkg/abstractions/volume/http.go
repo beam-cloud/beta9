@@ -9,6 +9,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/labstack/echo/v4"
+	"golang.org/x/sync/errgroup"
 )
 
 type volumeGroup struct {
@@ -88,32 +89,38 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
 	}
 
-	go func() {
-		defer close(ch)
+	var eg errgroup.Group
 
+	eg.Go(func() error {
+		defer close(ch)
 		for {
 			buf := make([]byte, uploadBufferSize) // 8 Mb
 			n, err := stream.Read(buf)
-			if err == io.EOF {
-				break
+			if n > 0 {
+				ch <- CopyPathContent{
+					Path:    decodedVolumePath,
+					Content: buf[:n],
+				}
 			}
 			if err != nil {
+				if err == io.EOF {
+					return nil
+				}
 				log.Printf("Failed to upload file: %v\n", err)
-				break
-			}
-
-			ch <- CopyPathContent{
-				Path:    decodedVolumePath,
-				Content: buf[:n],
+				return err
 			}
 		}
-	}()
+	})
 
-	if err := g.gvs.copyPathStream(
-		ctx.Request().Context(),
-		ch,
-		&workspace,
-	); err != nil {
+	eg.Go(func() error {
+		return g.gvs.copyPathStream(
+			ctx.Request().Context(),
+			ch,
+			&workspace,
+		)
+	})
+
+	if err := eg.Wait(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to upload file: %v", err))
 	} else {
 		return ctx.JSON(http.StatusOK, nil)

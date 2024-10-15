@@ -253,7 +253,8 @@ message GetOrCreateStubRequest {
   repeated SecretVar secrets = 21;
   Autoscaler autoscaler = 22;
   TaskPolicy task_policy = 23;
-  string backup_gpu = 24;
+  uint32 concurrent_requests = 24;
+  string backup_gpu = 25;
 }
 
 message GetOrCreateStubResponse {

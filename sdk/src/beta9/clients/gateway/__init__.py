@@ -278,7 +278,8 @@ class GetOrCreateStubRequest(betterproto.Message):
     secrets: List["SecretVar"] = betterproto.message_field(21)
     autoscaler: "Autoscaler" = betterproto.message_field(22)
     task_policy: "TaskPolicy" = betterproto.message_field(23)
-    backup_gpu: str = betterproto.string_field(24)
+    concurrent_requests: int = betterproto.uint32_field(24)
+    backup_gpu: str = betterproto.string_field(25)
 
 
 @dataclass(eq=False, repr=False)
