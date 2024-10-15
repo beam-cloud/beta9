@@ -33,7 +33,7 @@ type botInstance struct {
 func newBotInstance(ctx context.Context, appConfig types.AppConfig, scheduler *scheduler.Scheduler, token *types.Token, stub *types.StubWithRelated, stubConfig *types.StubConfigV1, botConfig BotConfig, botStateManager *botStateManager) (*botInstance, error) {
 	ctx, cancelFunc := context.WithCancel(ctx)
 
-	botInterface, err := NewBotInterface(appConfig.Abstractions.Bot.OpenAIKey, botConfig.Model)
+	botInterface, err := NewBotInterface(appConfig, botConfig)
 	if err != nil {
 		cancelFunc()
 		return nil, err

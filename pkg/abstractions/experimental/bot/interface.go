@@ -6,24 +6,29 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	openai "github.com/sashabaranov/go-openai"
 )
 
 type BotInterface struct {
 	client       *openai.Client
+	botConfig    BotConfig
 	model        string
 	inputBuffer  *messageBuffer
 	outputBuffer *messageBuffer
 	history      map[string][]openai.ChatCompletionMessage
+	systemPrompt string
 }
 
-func NewBotInterface(key, model string) (*BotInterface, error) {
+func NewBotInterface(appConfig types.AppConfig, botConfig BotConfig) (*BotInterface, error) {
 	bi := &BotInterface{
-		client:       openai.NewClient(key),
-		model:        model,
+		client:       openai.NewClient(appConfig.Abstractions.Bot.OpenAIKey),
+		botConfig:    botConfig,
+		model:        botConfig.Model,
 		inputBuffer:  &messageBuffer{Messages: []string{}, MaxLength: 100},
 		outputBuffer: &messageBuffer{Messages: []string{}, MaxLength: 100},
 		history:      make(map[string][]openai.ChatCompletionMessage),
+		systemPrompt: appConfig.Abstractions.Bot.SystemPrompt,
 	}
 
 	bi.outputBuffer.Push(fmt.Sprintf("Starting bot, using model<%s>\n", bi.model))
@@ -41,12 +46,24 @@ func (bi *BotInterface) initSession(sessionId string) error {
 		bi.history[sessionId] = []openai.ChatCompletionMessage{}
 	}
 
-	userMessage := openai.ChatCompletionMessage{
+	setupPrompt := openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleSystem,
-		Content: "You can only speak italian.",
+		Content: bi.systemPrompt,
 	}
 
-	bi.addMessageToHistory(sessionId, userMessage)
+	networkStructurePrompt := openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleSystem,
+		Content: fmt.Sprintf("Here are the locations and marker types you can convert user data to: %v", bi.botConfig.Locations),
+	}
+
+	networkLayoutPrompt := openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleSystem,
+		Content: fmt.Sprintf("Here are the transitions you can perform: %v", bi.botConfig.Transitions),
+	}
+
+	bi.addMessageToHistory(sessionId, setupPrompt)
+	bi.addMessageToHistory(sessionId, networkStructurePrompt)
+	bi.addMessageToHistory(sessionId, networkLayoutPrompt)
 
 	resp, err := bi.client.CreateChatCompletion(
 		context.Background(),

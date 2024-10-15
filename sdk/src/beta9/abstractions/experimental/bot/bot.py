@@ -185,6 +185,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
         for location in self.locations:
             location_config = location.to_dict()
+            print(location_config)
             self.extra["locations"][location.name] = location_config
 
     @property

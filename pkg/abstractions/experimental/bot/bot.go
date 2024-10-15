@@ -37,16 +37,20 @@ type BotServiceOpts struct {
 	EventRepo      repository.EventRepository
 }
 
+// BotConfig holds the overall configuration for the bot
 type BotConfig struct {
 	Model       string                         `json:"model"`
 	Locations   map[string]BotLocationConfig   `json:"locations"`
 	Transitions map[string]BotTransitionConfig `json:"transitions"`
 }
 
+// BotLocationConfig holds the configuration for a specific location
 type BotLocationConfig struct {
-	Name string `json:"name"`
+	Name   string            `json:"name"`
+	Marker map[string]string `json:"marker"`
 }
 
+// BotTransitionConfig holds the configuration for a transition
 type BotTransitionConfig struct {
 	Cpu         int64          `json:"cpu"`
 	Gpu         types.GpuType  `json:"gpu"`
