@@ -63,6 +63,7 @@ type BotTransitionConfig struct {
 	TaskPolicy  string         `json:"task_policy"`
 	Name        string         `json:"name"`
 	Inputs      map[string]int `json:"inputs"`
+	Outputs     map[string]int `json:"outputs"`
 }
 
 type BotService interface {

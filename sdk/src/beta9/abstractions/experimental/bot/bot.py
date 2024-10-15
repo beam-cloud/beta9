@@ -45,6 +45,7 @@ class BotTransition:
         task_policy: Optional[str] = None,
         handler: Optional[str] = None,
         inputs: dict = {},
+        outputs: dict = {},
         bot_instance: Optional["Bot"] = None,  # Reference to parent Bot instance
     ):
         self.handler: str = handler
@@ -66,6 +67,7 @@ class BotTransition:
             "task_policy": task_policy or "",
             "handler": handler or "",
             "inputs": inputs or {},
+            "outputs": outputs or {},
         }
 
         self.bot_instance: Optional["Bot"] = bot_instance

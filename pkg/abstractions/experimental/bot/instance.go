@@ -61,12 +61,14 @@ func (i *botInstance) Start() error {
 		default:
 			prompt, err := i.botInterface.inputBuffer.Pop()
 			if err == nil {
-				err = i.botInterface.SendPrompt(prompt)
+				err = i.botInterface.SendPrompt("testsession", prompt)
 				if err != nil {
 					log.Printf("failed to send prompt: %v\n", err)
 					continue
 				}
 			}
+
+			log.Printf("bot config: %v\n", i.botConfig)
 
 			time.Sleep(time.Second)
 		}
