@@ -252,7 +252,6 @@ class ASGI(Endpoint):
         name: Optional[str] = None,
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
-        task_policy: TaskPolicy = TaskPolicy(),
         callback_url: Optional[str] = None,
     ):
         self.concurrent_requests = concurrent_requests
@@ -272,7 +271,6 @@ class ASGI(Endpoint):
             authorized=authorized,
             autoscaler=autoscaler,
             callback_url=callback_url,
-            task_policy=task_policy,
         )
 
         self.is_asgi = True
