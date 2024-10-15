@@ -103,10 +103,12 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 				instance.LogBuffer.Write([]byte(msg.Message))
 			}
 
-			if msg.TaskID != nil && msg.Message != "" {
-				log.Printf("<%s>:<%s> - %s\n", containerId, *msg.TaskID, msg.Message)
-			} else if msg.Message != "" {
-				log.Printf("<%s> - %s\n", containerId, msg.Message)
+			for _, line := range strings.Split(msg.Message, "\n") {
+				if msg.TaskID != nil && msg.Message != "" {
+					log.Printf("<%s>:<%s> - %s\n", containerId, *msg.TaskID, line)
+				} else if msg.Message != "" {
+					log.Printf("<%s> - %s\n", containerId, line)
+				}
 			}
 		}
 
@@ -117,7 +119,9 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 				"stub_id":      instance.StubId,
 			}).Info(o.Msg)
 
-			log.Printf("<%s> - %s\n", containerId, o.Msg)
+			for _, line := range strings.Split(o.Msg, "\n") {
+				log.Printf("<%s> - %s\n", containerId, line)
+			}
 
 			// Write logs to in-memory log buffer as well
 			instance.LogBuffer.Write([]byte(o.Msg))

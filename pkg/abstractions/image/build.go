@@ -299,7 +299,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 				errMsg = err.Error() + "\n"
 			}
 
-			time.Sleep(1 * time.Second) // Wait for logs to be passed through
+			time.Sleep(5 * time.Second) // Wait for logs to be passed through
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: errMsg}
 			return err
 		}

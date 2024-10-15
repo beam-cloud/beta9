@@ -47,10 +47,10 @@ runner:
 	done
 
 start:
-	cd hack && okteto up --file okteto.yml
+	cd hack && okteto up --file okteto.yaml
 
 stop:
-	cd hack && okteto down --file okteto.yml
+	cd hack && okteto down --file okteto.yaml
 
 protocol:
 	poetry install --directory ./sdk
