@@ -175,7 +175,7 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 			return nil, errors.New("no controller found for request")
 		}
 		controllers = append(controllers, wp.Controller)
-	} else if request.Gpu == "" && len(combinedRequestedGpu) == 0 {
+	} else if len(combinedRequestedGpu) == 0 {
 		wp, ok := s.workerPoolManager.GetPool("default")
 		if !ok {
 			return nil, errors.New("no controller found for request")
