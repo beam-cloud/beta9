@@ -323,17 +323,21 @@ type MonitoringConfig struct {
 	Prometheus               PrometheusConfig `key:"prometheus" json:"prometheus"`
 	OpenMeter                OpenMeterConfig  `key:"openmeter" json:"openmeter"`
 	FluentBit                FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
+	TelemetryConfig          TelemetryConfig  `key:"telemetry" json:"telemetry"`
 	ContainerMetricsInterval time.Duration    `key:"containerMetricsInterval" json:"container_metrics_interval"`
-	TelemetryMetricsInterval time.Duration    `key:"telemetryMetricsInterval" json:"telemetry_metrics_interval"`
-	TelemetryTraceInterval   time.Duration    `key:"telemetryTraceInterval" json:"telemetry_trace_interval"`
 }
-
 type PrometheusConfig struct {
 	AgentUrl      string `key:"agentUrl" json:"agent_url"`
 	AgentUsername string `key:"agentUsername" json:"agent_username"`
 	AgentPassword string `key:"agentPassword" json:"agent_password"`
 	ScrapeWorkers bool   `key:"scrapeWorkers" json:"scrape_workers"`
 	Port          int    `key:"port" json:"port"`
+}
+
+type TelemetryConfig struct {
+	Enabled       bool          `key:"enabled" json:"enabled"`
+	MeterInterval time.Duration `key:"meterInterval" json:"meter_interval"`
+	TraceInterval time.Duration `key:"traceInterval" json:"trace_interval"`
 }
 
 type OpenMeterConfig struct {

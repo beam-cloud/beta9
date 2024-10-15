@@ -163,12 +163,13 @@ proxy:
     destination: beta9-gateway:1993
 monitoring:
   containerMetricsInterval: 3s
-  telemetryTraceInterval: 3s
-  telemetryMetricsInterval: 3s
   metricsCollector: prometheus
   prometheus:
     scrapeWorkers: true
     port: 9090
+  telemetry:
+    traceInterval: 3s
+    meterInterval: 3s
   fluentbit:
     events:
       endpoint: http://fluent-bit.monitoring:9880

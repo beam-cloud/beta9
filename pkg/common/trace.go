@@ -135,7 +135,7 @@ func newTraceProvider(res *resource.Resource, appConfig types.AppConfig) (*trace
 
 	traceProvider := trace.NewTracerProvider(
 		trace.WithBatcher(traceExporter,
-			trace.WithBatchTimeout(appConfig.Monitoring.TelemetryTraceInterval)),
+			trace.WithBatchTimeout(appConfig.Monitoring.TelemetryConfig.TraceInterval)),
 		trace.WithResource(res),
 	)
 	return traceProvider, nil
@@ -154,7 +154,7 @@ func newMeterProvider(res *resource.Resource, appConfig types.AppConfig) (*metri
 
 	meterProvider := metric.NewMeterProvider(
 		metric.WithReader(metric.NewPeriodicReader(metricExporter,
-			metric.WithInterval(appConfig.Monitoring.TelemetryMetricsInterval))),
+			metric.WithInterval(appConfig.Monitoring.TelemetryConfig.MeterInterval))),
 		metric.WithResource(res),
 	)
 	return meterProvider, nil
