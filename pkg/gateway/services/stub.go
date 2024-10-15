@@ -28,24 +28,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	var mainGpus []types.GpuType
-	var backupGpus []types.GpuType
+	mainGpus := types.GPUTypesFromString(in.Gpu)
+	backupGpus := types.GPUTypesFromString(in.BackupGpu)
 
-	gpuString := strings.Trim(in.Gpu, " ")
-	if len(gpuString) > 0 {
-		for _, gpu := range strings.Split(gpuString, ",") {
-			mainGpus = append(mainGpus, types.GpuType(gpu))
-		}
-	}
-
-	backupGpuString := strings.Trim(in.BackupGpu, " ")
-	if len(backupGpuString) > 0 {
-		for _, gpu := range strings.Split(backupGpuString, ",") {
-			backupGpus = append(backupGpus, types.GpuType(gpu))
-		}
-	}
-
-	if in.Gpu != "" {
+	if len(mainGpus) > 0 || len(backupGpus) > 0 {
 		concurrencyLimit, err := gws.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, authInfo.Workspace.ExternalId)
 		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
 			return &pb.GetOrCreateStubResponse{

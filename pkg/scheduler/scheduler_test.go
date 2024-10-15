@@ -479,9 +479,6 @@ func TestSelectCPUWorker(t *testing.T) {
 	thirdRequest := &types.ContainerRequest{
 		Cpu:    1000,
 		Memory: 1000,
-		GpuRequest: types.GpuRequest{
-			MainGpus: []string{""},
-		},
 	}
 
 	// Create a new worker

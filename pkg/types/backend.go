@@ -323,6 +323,18 @@ func (g *GpuType) String() string {
 	return string(*g)
 }
 
+func GPUTypesFromString(gpu string) []GpuType {
+	gpus := []GpuType{}
+	gpuString := strings.Trim(gpu, " ")
+	if len(gpuString) > 0 {
+		for _, g := range strings.Split(gpuString, ",") {
+			gpus = append(gpus, GpuType(g))
+		}
+	}
+
+	return gpus
+}
+
 func GpuTypesToStrings(gpus []GpuType) []string {
 	var gpuStrings []string
 	for _, gpu := range gpus {
