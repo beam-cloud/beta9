@@ -234,7 +234,7 @@ class Image(BaseAbstraction):
             self.build_steps.append(BuildStep(command=command, type="shell"))
         return self
 
-    def add_python_packages(self, packages: Sequence[str]) -> "Image":
+    def add_python_packages(self, packages: Union[Sequence[str], str]) -> "Image":
         """
         Add python packages that will be installed when building the image.
 
@@ -247,6 +247,9 @@ class Image(BaseAbstraction):
         Returns:
             Image: The Image object.
         """
+        if isinstance(packages, str):
+            packages = self._sanitize_python_packages(self._load_requirements_file(packages))
+
         for package in packages:
             self.build_steps.append(BuildStep(command=package, type="pip"))
         return self
