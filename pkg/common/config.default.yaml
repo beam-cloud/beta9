@@ -163,6 +163,8 @@ proxy:
     destination: beta9-gateway:1993
 monitoring:
   containerMetricsInterval: 3s
+  telemetryTraceInterval: 3s
+  telemetryMetricsInterval: 3s
   metricsCollector: prometheus
   prometheus:
     scrapeWorkers: true

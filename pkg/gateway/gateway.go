@@ -13,7 +13,6 @@ import (
 	"github.com/labstack/echo-contrib/pprof"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
@@ -174,7 +173,6 @@ func (g *Gateway) initHttp() error {
 
 	if g.Config.DebugMode {
 		pprof.Register(e)
-		e.Use(otelecho.Middleware(types.DefaultGatewayServiceName))
 	}
 
 	e.Pre(middleware.RemoveTrailingSlash())
@@ -388,7 +386,10 @@ func (g *Gateway) Start() error {
 
 	// Enable tracing if in debug mode
 	if g.Config.DebugMode {
-		setupOTelSDK(g.ctx)
+		_, err = common.SetupTelemetry(g.ctx, types.DefaultGatewayServiceName, g.Config)
+		if err != nil {
+			log.Fatalf("Failed to setup telemetry: %v", err)
+		}
 	}
 
 	err = g.initGrpc()

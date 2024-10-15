@@ -17,7 +17,7 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	instance, err := es.getOrCreateEndpointInstance(in.StubId,
+	instance, err := es.getOrCreateEndpointInstance(ctx, in.StubId,
 		withEntryPoint(func(instance *endpointInstance) []string {
 			return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 		}),
@@ -111,7 +111,7 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 }
 
 func (es *HttpEndpointService) StopEndpointServe(ctx context.Context, in *pb.StopEndpointServeRequest) (*pb.StopEndpointServeResponse, error) {
-	instance, err := es.getOrCreateEndpointInstance(in.StubId,
+	instance, err := es.getOrCreateEndpointInstance(ctx, in.StubId,
 		withEntryPoint(func(instance *endpointInstance) []string {
 			return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 		}),
