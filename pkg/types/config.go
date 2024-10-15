@@ -335,7 +335,6 @@ type PrometheusConfig struct {
 }
 
 type TelemetryConfig struct {
-	Enabled       bool          `key:"enabled" json:"enabled"`
 	MeterInterval time.Duration `key:"meterInterval" json:"meter_interval"`
 	TraceInterval time.Duration `key:"traceInterval" json:"trace_interval"`
 }
