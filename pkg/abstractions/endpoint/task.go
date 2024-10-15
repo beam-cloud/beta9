@@ -16,13 +16,11 @@ type EndpointTask struct {
 }
 
 func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) error {
-	ctx, span := common.TraceFunc(ctx, "pkg/abstractions/endpoint", "EndpointTask.Execute", t.es.config.DebugMode,
+	trace := common.TraceFunc(ctx, "pkg/abstractions/endpoint", "EndpointTask.Execute", t.es.config.DebugMode,
 		attribute.String("task.id", t.msg.TaskId),
 		attribute.String("stub.id", t.msg.StubId),
 		attribute.String("workspace.name", t.msg.WorkspaceName))
-	if span != nil {
-		defer span.End()
-	}
+	defer trace.End()
 
 	var err error = nil
 	echoCtx := options[0].(echo.Context)

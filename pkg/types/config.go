@@ -335,9 +335,10 @@ type PrometheusConfig struct {
 }
 
 type TelemetryConfig struct {
-	Endpoint      string        `key:"endpoint" json:"endpoint"`
-	MeterInterval time.Duration `key:"meterInterval" json:"meter_interval"`
-	TraceInterval time.Duration `key:"traceInterval" json:"trace_interval"`
+	Endpoint         string        `key:"endpoint" json:"endpoint"`
+	MeterInterval    time.Duration `key:"meterInterval" json:"meter_interval"`
+	TraceInterval    time.Duration `key:"traceInterval" json:"trace_interval"`
+	TraceSampleRatio float64       `key:"traceSampleRatio" json:"trace_sample_ratio"`
 }
 
 type OpenMeterConfig struct {

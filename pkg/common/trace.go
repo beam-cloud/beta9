@@ -24,15 +24,32 @@ import (
 	_trace "go.opentelemetry.io/otel/trace"
 )
 
-func TraceFunc(ctx context.Context, tracerName, spanName string, debugMode bool, attributes ...attribute.KeyValue) (context.Context, _trace.Span) {
+type Tracer struct {
+	Ctx        context.Context
+	tracerName string
+	spanName   string
+	debugMode  bool
+	attributes []attribute.KeyValue
+	Span       _trace.Span
+}
+
+func (t *Tracer) End() {
+	if t.debugMode {
+		t.Span.End()
+	}
+}
+
+func TraceFunc(ctx context.Context, tracerName, spanName string, debugMode bool, attributes ...attribute.KeyValue) *Tracer {
 	if debugMode {
 		tracer := otel.Tracer(tracerName)
 		ctx, span := tracer.Start(ctx, spanName)
 		span.SetAttributes(attributes...)
-		return ctx, span
+		return &Tracer{Ctx: ctx, Span: span, tracerName: tracerName, spanName: spanName, debugMode: debugMode, attributes: attributes}
 	}
 
-	return ctx, nil
+	return &Tracer{
+		Ctx: ctx,
+	}
 }
 
 // SetupTelemetry bootstraps the OpenTelemetry pipeline
@@ -134,6 +151,7 @@ func newTraceProvider(res *resource.Resource, appConfig types.AppConfig) (*trace
 	traceProvider := trace.NewTracerProvider(
 		trace.WithBatcher(traceExporter,
 			trace.WithBatchTimeout(appConfig.Monitoring.TelemetryConfig.TraceInterval)),
+		trace.WithSampler(trace.TraceIDRatioBased(appConfig.Monitoring.TelemetryConfig.TraceSampleRatio)),
 		trace.WithResource(res),
 	)
 	return traceProvider, nil

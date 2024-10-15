@@ -222,11 +222,9 @@ func (i *AutoscaledInstance) Monitor() error {
 }
 
 func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
-	_, span := common.TraceFunc(i.Ctx, "pkg/abstractions/common", "AutoscaledInstance.HandleScalingEvent", i.AppConfig.DebugMode,
+	trace := common.TraceFunc(i.Ctx, "pkg/abstractions/common", "AutoscaledInstance.HandleScalingEvent", i.AppConfig.DebugMode,
 		attribute.String("stub.id", i.Stub.ExternalId))
-	if span != nil {
-		defer span.End()
-	}
+	defer trace.End()
 
 	err := i.Lock.Acquire(i.Ctx, i.InstanceLockKey, common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
