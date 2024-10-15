@@ -384,8 +384,7 @@ func (g *Gateway) registerServices() error {
 func (g *Gateway) Start() error {
 	var err error
 
-	// Enable tracing if in debug mode
-	if g.Config.DebugMode {
+	if g.Config.Monitoring.Telemetry.Enabled {
 		_, err = common.SetupTelemetry(g.ctx, types.DefaultGatewayServiceName, g.Config)
 		if err != nil {
 			log.Fatalf("Failed to setup telemetry: %v", err)

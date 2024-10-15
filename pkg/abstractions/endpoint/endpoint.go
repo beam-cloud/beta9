@@ -217,7 +217,7 @@ func (es *HttpEndpointService) InstanceFactory(stubId string, options ...func(ab
 }
 
 func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {
-	trace := common.TraceFunc(ctx, "pkg/abstractions/endpoint", "HttpEndpointService.getOrCreateEndpointInstance", es.config.DebugMode,
+	trace := common.TraceFunc(ctx, "pkg/abstractions/endpoint", "HttpEndpointService.getOrCreateEndpointInstance", es.config.Monitoring.Telemetry.Enabled,
 		attribute.String("stub.id", stubId))
 	defer trace.End()
 

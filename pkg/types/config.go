@@ -323,7 +323,7 @@ type MonitoringConfig struct {
 	Prometheus               PrometheusConfig `key:"prometheus" json:"prometheus"`
 	OpenMeter                OpenMeterConfig  `key:"openmeter" json:"openmeter"`
 	FluentBit                FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
-	TelemetryConfig          TelemetryConfig  `key:"telemetry" json:"telemetry"`
+	Telemetry                TelemetryConfig  `key:"telemetry" json:"telemetry"`
 	ContainerMetricsInterval time.Duration    `key:"containerMetricsInterval" json:"container_metrics_interval"`
 }
 type PrometheusConfig struct {
@@ -335,6 +335,7 @@ type PrometheusConfig struct {
 }
 
 type TelemetryConfig struct {
+	Enabled          bool          `key:"enabled" json:"enabled"`
 	Endpoint         string        `key:"endpoint" json:"endpoint"`
 	MeterInterval    time.Duration `key:"meterInterval" json:"meter_interval"`
 	TraceInterval    time.Duration `key:"traceInterval" json:"trace_interval"`

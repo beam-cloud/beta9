@@ -28,23 +28,23 @@ type Tracer struct {
 	Ctx        context.Context
 	tracerName string
 	spanName   string
-	debugMode  bool
+	enabled    bool
 	attributes []attribute.KeyValue
 	Span       _trace.Span
 }
 
 func (t *Tracer) End() {
-	if t.debugMode {
+	if t.enabled {
 		t.Span.End()
 	}
 }
 
-func TraceFunc(ctx context.Context, tracerName, spanName string, debugMode bool, attributes ...attribute.KeyValue) *Tracer {
-	if debugMode {
+func TraceFunc(ctx context.Context, tracerName, spanName string, enabled bool, attributes ...attribute.KeyValue) *Tracer {
+	if enabled {
 		tracer := otel.Tracer(tracerName)
 		ctx, span := tracer.Start(ctx, spanName)
 		span.SetAttributes(attributes...)
-		return &Tracer{Ctx: ctx, Span: span, tracerName: tracerName, spanName: spanName, debugMode: debugMode, attributes: attributes}
+		return &Tracer{Ctx: ctx, Span: span, tracerName: tracerName, spanName: spanName, enabled: enabled, attributes: attributes}
 	}
 
 	return &Tracer{
@@ -122,7 +122,7 @@ func newTraceProvider(res *resource.Resource, appConfig types.AppConfig) (*trace
 	var err error
 	var traceExporter *otlptrace.Exporter
 
-	parsedURL, err := url.Parse(appConfig.Monitoring.TelemetryConfig.Endpoint)
+	parsedURL, err := url.Parse(appConfig.Monitoring.Telemetry.Endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -150,8 +150,8 @@ func newTraceProvider(res *resource.Resource, appConfig types.AppConfig) (*trace
 
 	traceProvider := trace.NewTracerProvider(
 		trace.WithBatcher(traceExporter,
-			trace.WithBatchTimeout(appConfig.Monitoring.TelemetryConfig.TraceInterval)),
-		trace.WithSampler(trace.TraceIDRatioBased(appConfig.Monitoring.TelemetryConfig.TraceSampleRatio)),
+			trace.WithBatchTimeout(appConfig.Monitoring.Telemetry.TraceInterval)),
+		trace.WithSampler(trace.TraceIDRatioBased(appConfig.Monitoring.Telemetry.TraceSampleRatio)),
 		trace.WithResource(res),
 	)
 	return traceProvider, nil
@@ -165,7 +165,7 @@ func newMeterProvider(res *resource.Resource, appConfig types.AppConfig) (*metri
 
 	meterProvider := metric.NewMeterProvider(
 		metric.WithReader(metric.NewPeriodicReader(metricExporter,
-			metric.WithInterval(appConfig.Monitoring.TelemetryConfig.MeterInterval))),
+			metric.WithInterval(appConfig.Monitoring.Telemetry.MeterInterval))),
 		metric.WithResource(res),
 	)
 	return meterProvider, nil
