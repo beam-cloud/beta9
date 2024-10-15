@@ -23,6 +23,8 @@ const (
 	BotService_StopBotServe_FullMethodName      = "/bot.BotService/StopBotServe"
 	BotService_BotServeKeepAlive_FullMethodName = "/bot.BotService/BotServeKeepAlive"
 	BotService_SendBotMessage_FullMethodName    = "/bot.BotService/SendBotMessage"
+	BotService_PopBotMarker_FullMethodName      = "/bot.BotService/PopBotMarker"
+	BotService_PushBotMarker_FullMethodName     = "/bot.BotService/PushBotMarker"
 )
 
 // BotServiceClient is the client API for BotService service.
@@ -33,6 +35,8 @@ type BotServiceClient interface {
 	StopBotServe(ctx context.Context, in *StopBotServeRequest, opts ...grpc.CallOption) (*StopBotServeResponse, error)
 	BotServeKeepAlive(ctx context.Context, in *BotServeKeepAliveRequest, opts ...grpc.CallOption) (*BotServeKeepAliveResponse, error)
 	SendBotMessage(ctx context.Context, in *SendBotMessageRequest, opts ...grpc.CallOption) (*SendBotMessageResponse, error)
+	PopBotMarker(ctx context.Context, in *PopBotMarkerRequest, opts ...grpc.CallOption) (*PopBotMarkerResponse, error)
+	PushBotMarker(ctx context.Context, in *PushBotMarkerRequest, opts ...grpc.CallOption) (*PushBotMarkerResponse, error)
 }
 
 type botServiceClient struct {
@@ -102,6 +106,24 @@ func (c *botServiceClient) SendBotMessage(ctx context.Context, in *SendBotMessag
 	return out, nil
 }
 
+func (c *botServiceClient) PopBotMarker(ctx context.Context, in *PopBotMarkerRequest, opts ...grpc.CallOption) (*PopBotMarkerResponse, error) {
+	out := new(PopBotMarkerResponse)
+	err := c.cc.Invoke(ctx, BotService_PopBotMarker_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *botServiceClient) PushBotMarker(ctx context.Context, in *PushBotMarkerRequest, opts ...grpc.CallOption) (*PushBotMarkerResponse, error) {
+	out := new(PushBotMarkerResponse)
+	err := c.cc.Invoke(ctx, BotService_PushBotMarker_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BotServiceServer is the server API for BotService service.
 // All implementations must embed UnimplementedBotServiceServer
 // for forward compatibility
@@ -110,6 +132,8 @@ type BotServiceServer interface {
 	StopBotServe(context.Context, *StopBotServeRequest) (*StopBotServeResponse, error)
 	BotServeKeepAlive(context.Context, *BotServeKeepAliveRequest) (*BotServeKeepAliveResponse, error)
 	SendBotMessage(context.Context, *SendBotMessageRequest) (*SendBotMessageResponse, error)
+	PopBotMarker(context.Context, *PopBotMarkerRequest) (*PopBotMarkerResponse, error)
+	PushBotMarker(context.Context, *PushBotMarkerRequest) (*PushBotMarkerResponse, error)
 	mustEmbedUnimplementedBotServiceServer()
 }
 
@@ -128,6 +152,12 @@ func (UnimplementedBotServiceServer) BotServeKeepAlive(context.Context, *BotServ
 }
 func (UnimplementedBotServiceServer) SendBotMessage(context.Context, *SendBotMessageRequest) (*SendBotMessageResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendBotMessage not implemented")
+}
+func (UnimplementedBotServiceServer) PopBotMarker(context.Context, *PopBotMarkerRequest) (*PopBotMarkerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PopBotMarker not implemented")
+}
+func (UnimplementedBotServiceServer) PushBotMarker(context.Context, *PushBotMarkerRequest) (*PushBotMarkerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PushBotMarker not implemented")
 }
 func (UnimplementedBotServiceServer) mustEmbedUnimplementedBotServiceServer() {}
 
@@ -217,6 +247,42 @@ func _BotService_SendBotMessage_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BotService_PopBotMarker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PopBotMarkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BotServiceServer).PopBotMarker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BotService_PopBotMarker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BotServiceServer).PopBotMarker(ctx, req.(*PopBotMarkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BotService_PushBotMarker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PushBotMarkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BotServiceServer).PushBotMarker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BotService_PushBotMarker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BotServiceServer).PushBotMarker(ctx, req.(*PushBotMarkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BotService_ServiceDesc is the grpc.ServiceDesc for BotService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -235,6 +301,14 @@ var BotService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendBotMessage",
 			Handler:    _BotService_SendBotMessage_Handler,
+		},
+		{
+			MethodName: "PopBotMarker",
+			Handler:    _BotService_PopBotMarker_Handler,
+		},
+		{
+			MethodName: "PushBotMarker",
+			Handler:    _BotService_PushBotMarker_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

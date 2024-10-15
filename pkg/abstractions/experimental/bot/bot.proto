@@ -11,6 +11,8 @@ service BotService {
   rpc BotServeKeepAlive(BotServeKeepAliveRequest)
       returns (BotServeKeepAliveResponse) {}
   rpc SendBotMessage(SendBotMessageRequest) returns (SendBotMessageResponse) {}
+  rpc PopBotMarker(PopBotMarkerRequest) returns (PopBotMarkerResponse) {}
+  rpc PushBotMarker(PushBotMarkerRequest) returns (PushBotMarkerResponse) {}
 }
 
 message StartBotServeRequest {
@@ -40,3 +42,12 @@ message SendBotMessageRequest {
 }
 
 message SendBotMessageResponse { bool ok = 1; }
+
+message PopBotMarkerRequest { string stub_id = 1; }
+message PopBotMarkerResponse { string marker = 1; }
+
+message PushBotMarkerRequest {
+  string stub_id = 1;
+  string marker = 2;
+}
+message PushBotMarkerResponse { bool ok = 1; }

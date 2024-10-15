@@ -70,6 +70,27 @@ class SendBotMessageResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
+@dataclass(eq=False, repr=False)
+class PopBotMarkerRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class PopBotMarkerResponse(betterproto.Message):
+    marker: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class PushBotMarkerRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    marker: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PushBotMarkerResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+
+
 class BotServiceStub(SyncServiceStub):
     def start_bot_serve(
         self, start_bot_serve_request: "StartBotServeRequest"
@@ -107,3 +128,21 @@ class BotServiceStub(SyncServiceStub):
             SendBotMessageRequest,
             SendBotMessageResponse,
         )(send_bot_message_request)
+
+    def pop_bot_marker(
+        self, pop_bot_marker_request: "PopBotMarkerRequest"
+    ) -> "PopBotMarkerResponse":
+        return self._unary_unary(
+            "/bot.BotService/PopBotMarker",
+            PopBotMarkerRequest,
+            PopBotMarkerResponse,
+        )(pop_bot_marker_request)
+
+    def push_bot_marker(
+        self, push_bot_marker_request: "PushBotMarkerRequest"
+    ) -> "PushBotMarkerResponse":
+        return self._unary_unary(
+            "/bot.BotService/PushBotMarker",
+            PushBotMarkerRequest,
+            PushBotMarkerResponse,
+        )(push_bot_marker_request)

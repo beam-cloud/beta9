@@ -382,6 +382,7 @@ type AbstractionConfig struct {
 }
 
 type BotConfig struct {
-	OpenAIKey    string `key:"openAIKey" json:"openai_key"`
-	SystemPrompt string `key:"systemPrompt" json:"system_prompt"`
+	OpenAIKey     string `key:"openAIKey" json:"openai_key"`
+	SystemPrompt  string `key:"systemPrompt" json:"system_prompt"`
+	StepIntervalS uint   `key:"stepIntervalS" json:"step_interval_s"`
 }
