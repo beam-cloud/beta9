@@ -272,6 +272,14 @@ class RunnerAbstraction(BaseAbstraction):
         except Exception as e:
             terminal.warn(str(e))
 
+    def _parse_gpu(self, gpu: Union[GpuTypeAlias, List[GpuTypeAlias]]) -> str:
+        if isinstance(gpu, list) and len(gpu) > 1:
+            return ",".join([GpuType(g).value for g in gpu])
+        elif isinstance(gpu, list) and len(gpu) == 1:
+            return GpuType(gpu[0]).value
+        else:
+            return GpuType(gpu).value
+
     def sync_dir_to_workspace(
         self, *, dir: str, object_id: str, on_event: Optional[Callable] = None
     ) -> ReplaceObjectContentResponse:
@@ -335,19 +343,13 @@ class RunnerAbstraction(BaseAbstraction):
                 return False
 
         try:
-            if isinstance(self.gpu, list):
-                self.gpu = ",".join([GpuType(g).value for g in self.gpu])
-            else:
-                self.gpu = GpuType(self.gpu).value
+            self.gpu = self._parse_gpu(self.gpu)
         except ValueError:
             terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
             return False
 
         try:
-            if isinstance(self.backup_gpu, list):
-                self.backup_gpu = ",".join([GpuType(g).value for g in self.backup_gpu])
-            else:
-                self.backup_gpu = GpuType(self.backup_gpu).value
+            self.backup_gpu = self._parse_gpu(self.backup_gpu)
         except ValueError:
             terminal.error(f"Invalid backup GPU type: {self.backup_gpu}", exit=False)
             return False

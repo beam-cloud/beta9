@@ -172,7 +172,7 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 			return nil, errors.New("no controller found for request")
 		}
 		controllers = append(controllers, wp.Controller)
-	} else if request.Gpu == "" || len(combinedRequestedGpu) == 0 {
+	} else if request.Gpu == "" && len(combinedRequestedGpu) == 0 {
 		wp, ok := s.workerPoolManager.GetPool("default")
 		if !ok {
 			return nil, errors.New("no controller found for request")
@@ -258,7 +258,13 @@ func (s *Scheduler) StartProcessingRequests() {
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
 	go s.schedulerMetrics.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
-	request.Gpu = worker.Gpu
+
+	log.Println("UPDATING CONTAINER STATE GPU", worker.Gpu)
+
+	if err := s.containerRepo.UpdateContainerGPU(request.ContainerId, worker.Gpu); err != nil {
+		return err
+	}
+
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 
@@ -281,8 +287,30 @@ type GpuRequestPriority struct {
 }
 
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
-	gpuRequestMap := map[string]GpuRequestPriority{
-		request.Gpu: {Priority: 0, IsBackup: false}, // This is is for backwards compatibility
+	gpuRequestMap := map[string]GpuRequestPriority{}
+
+	for _, gpu := range request.GpuRequest.MainGpus {
+		gpuRequestMap[gpu] = GpuRequestPriority{
+			Priority: 0,
+			IsBackup: false,
+		}
+	}
+
+	// Backwards compatibility
+	if request.Gpu == "" {
+		if len(gpuRequestMap) == 0 {
+			// No GPU specified, use CPU
+			gpuRequestMap[request.Gpu] = GpuRequestPriority{
+				Priority: 0,
+				IsBackup: false,
+			}
+		}
+	} else {
+		// Else add the request.Gpu to the map
+		gpuRequestMap[request.Gpu] = GpuRequestPriority{
+			Priority: 0,
+			IsBackup: false,
+		}
 	}
 
 	for i, gpu := range request.GpuRequest.BackupGpus {
@@ -292,11 +320,8 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		}
 	}
 
-	for _, gpu := range request.GpuRequest.MainGpus {
-		gpuRequestMap[gpu] = GpuRequestPriority{
-			Priority: 0,
-			IsBackup: false,
-		}
+	for name, gpu := range gpuRequestMap {
+		log.Printf("GPU: %s, Priority: %d, IsBackup: %v\n", name, gpu.Priority, gpu.IsBackup)
 	}
 
 	filteredWorkers := []*types.Worker{}
@@ -345,6 +370,10 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 
 	filteredWorkers := filterWorkersByPoolSelector(workers, request)     // Filter workers by pool selector
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request) // Filter workers resource requirements
+
+	for _, worker := range filteredWorkers {
+		log.Printf("Filtered worker: %s\n", worker.Gpu)
+	}
 
 	if len(filteredWorkers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}

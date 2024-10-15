@@ -468,6 +468,29 @@ func TestSelectCPUWorker(t *testing.T) {
 	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
 	assert.Equal(t, "", updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusPending, updatedWorker.Status)
+
+	newWorker2 := &types.Worker{
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Gpu:        "",
+	}
+
+	thirdRequest := &types.ContainerRequest{
+		Cpu:    1000,
+		Memory: 1000,
+		GpuRequest: types.GpuRequest{
+			MainGpus: []string{""},
+		},
+	}
+
+	// Create a new worker
+	err = wb.workerRepo.AddWorker(newWorker2)
+	assert.Nil(t, err)
+
+	worker, err = wb.selectWorker(thirdRequest)
+	assert.Nil(t, err)
+	assert.Equal(t, "", worker.Gpu)
 }
 
 func TestSelectWorkersWithBackupGPU(t *testing.T) {

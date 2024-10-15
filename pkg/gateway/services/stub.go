@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 
@@ -30,12 +31,18 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	var mainGpus []types.GpuType
 	var backupGpus []types.GpuType
 
-	for _, gpu := range strings.Split(in.Gpu, ",") {
-		mainGpus = append(mainGpus, types.GpuType(gpu))
+	gpuString := strings.Trim(in.Gpu, " ")
+	if len(gpuString) > 0 {
+		for _, gpu := range strings.Split(gpuString, ",") {
+			mainGpus = append(mainGpus, types.GpuType(gpu))
+		}
 	}
 
-	for _, gpu := range strings.Split(in.BackupGpu, ",") {
-		backupGpus = append(backupGpus, types.GpuType(gpu))
+	backupGpuString := strings.Trim(in.BackupGpu, " ")
+	if len(backupGpuString) > 0 {
+		for _, gpu := range strings.Split(backupGpuString, ",") {
+			backupGpus = append(backupGpus, types.GpuType(gpu))
+		}
 	}
 
 	if in.Gpu != "" {
@@ -57,6 +64,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 		// T4s are currently in a different pool than other GPUs and won't show up in gpu counts
 		lowGpus := []string{}
+		log.Println(append(mainGpus, backupGpus...))
 
 		for _, gpu := range append(mainGpus, backupGpus...) {
 			if gpuCounts[gpu.String()] <= 1 && gpu.String() != types.GPU_T4.String() {
