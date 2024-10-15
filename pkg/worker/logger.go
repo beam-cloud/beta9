@@ -104,9 +104,13 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 			}
 
 			for _, line := range strings.Split(msg.Message, "\n") {
-				if msg.TaskID != nil && msg.Message != "" {
+				if line == "" {
+					continue
+				}
+
+				if msg.TaskID != nil {
 					log.Printf("<%s>:<%s> - %s\n", containerId, *msg.TaskID, line)
-				} else if msg.Message != "" {
+				} else {
 					log.Printf("<%s> - %s\n", containerId, line)
 				}
 			}
@@ -120,6 +124,10 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 			}).Info(o.Msg)
 
 			for _, line := range strings.Split(o.Msg, "\n") {
+				if line == "" {
+					continue
+				}
+
 				log.Printf("<%s> - %s\n", containerId, line)
 			}
 
