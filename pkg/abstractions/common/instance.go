@@ -51,7 +51,6 @@ type AutoscaledInstance struct {
 	CancelFunc               context.CancelFunc
 	Name                     string
 	Rdb                      *common.RedisClient
-	Config                   types.AppConfig
 	Lock                     *common.RedisLock
 	IsActive                 bool
 	FailedContainerThreshold int
