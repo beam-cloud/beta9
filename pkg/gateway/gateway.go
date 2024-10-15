@@ -174,7 +174,7 @@ func (g *Gateway) initHttp() error {
 
 	if g.Config.DebugMode {
 		pprof.Register(e)
-		e.Use(otelecho.Middleware("gateway-http"))
+		e.Use(otelecho.Middleware(types.DefaultGatewayServiceName))
 	}
 
 	e.Pre(middleware.RemoveTrailingSlash())

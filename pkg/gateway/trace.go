@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutlog"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
@@ -13,12 +14,23 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 )
 
 // setupOTelSDK bootstraps the OpenTelemetry pipeline
 func setupOTelSDK(ctx context.Context) (shutdown func(context.Context) error, err error) {
 	var shutdownFuncs []func(context.Context) error
+
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceNameKey.String(types.DefaultGatewayServiceName),
+		),
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	// shutdown calls cleanup functions registered via shutdownFuncs.
 	// The errors from the calls are joined.
@@ -39,7 +51,7 @@ func setupOTelSDK(ctx context.Context) (shutdown func(context.Context) error, er
 	prop := newPropagator()
 	otel.SetTextMapPropagator(prop)
 
-	tracerProvider, err := newTraceProvider()
+	tracerProvider, err := newTraceProvider(res)
 	if err != nil {
 		handleErr(err)
 		return
@@ -47,7 +59,7 @@ func setupOTelSDK(ctx context.Context) (shutdown func(context.Context) error, er
 	shutdownFuncs = append(shutdownFuncs, tracerProvider.Shutdown)
 	otel.SetTracerProvider(tracerProvider)
 
-	meterProvider, err := newMeterProvider()
+	meterProvider, err := newMeterProvider(res)
 	if err != nil {
 		handleErr(err)
 		return
@@ -55,7 +67,7 @@ func setupOTelSDK(ctx context.Context) (shutdown func(context.Context) error, er
 	shutdownFuncs = append(shutdownFuncs, meterProvider.Shutdown)
 	otel.SetMeterProvider(meterProvider)
 
-	loggerProvider, err := newLoggerProvider()
+	loggerProvider, err := newLoggerProvider(res)
 	if err != nil {
 		handleErr(err)
 		return
@@ -73,7 +85,7 @@ func newPropagator() propagation.TextMapPropagator {
 	)
 }
 
-func newTraceProvider() (*trace.TracerProvider, error) {
+func newTraceProvider(res *resource.Resource) (*trace.TracerProvider, error) {
 	traceExporter, err := stdouttrace.New(
 		stdouttrace.WithPrettyPrint())
 	if err != nil {
@@ -84,11 +96,12 @@ func newTraceProvider() (*trace.TracerProvider, error) {
 		trace.WithBatcher(traceExporter,
 			// Default is 5s. Set to 1s for demonstrative purposes.
 			trace.WithBatchTimeout(time.Second)),
+		trace.WithResource(res),
 	)
 	return traceProvider, nil
 }
 
-func newMeterProvider() (*metric.MeterProvider, error) {
+func newMeterProvider(res *resource.Resource) (*metric.MeterProvider, error) {
 	metricExporter, err := stdoutmetric.New()
 	if err != nil {
 		return nil, err
@@ -98,11 +111,12 @@ func newMeterProvider() (*metric.MeterProvider, error) {
 		metric.WithReader(metric.NewPeriodicReader(metricExporter,
 			// Default is 1m. Set to 3s for demonstrative purposes.
 			metric.WithInterval(3*time.Second))),
+		metric.WithResource(res),
 	)
 	return meterProvider, nil
 }
 
-func newLoggerProvider() (*log.LoggerProvider, error) {
+func newLoggerProvider(res *resource.Resource) (*log.LoggerProvider, error) {
 	logExporter, err := stdoutlog.New()
 	if err != nil {
 		return nil, err
@@ -110,6 +124,7 @@ func newLoggerProvider() (*log.LoggerProvider, error) {
 
 	loggerProvider := log.NewLoggerProvider(
 		log.WithProcessor(log.NewBatchProcessor(logExporter)),
+		log.WithResource(res),
 	)
 	return loggerProvider, nil
 }
