@@ -3,9 +3,8 @@ package common
 import (
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"errors"
-	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -103,32 +102,31 @@ func newPropagator() propagation.TextMapPropagator {
 }
 
 func newTraceProvider(res *resource.Resource, appConfig types.AppConfig) (*trace.TracerProvider, error) {
-	endpoint := fmt.Sprintf("%s:%d", appConfig.Monitoring.Prometheus.AgentUrl, appConfig.Monitoring.Prometheus.Port)
-
-	headers := map[string]string{
-		"Authorization": "Basic " + basicAuth(appConfig.Monitoring.Prometheus.AgentUsername, appConfig.Monitoring.Prometheus.AgentPassword),
-	}
-
-	var traceExporter *otlptrace.Exporter
 	var err error
+	var traceExporter *otlptrace.Exporter
 
-	if strings.HasPrefix(appConfig.Monitoring.Prometheus.AgentUrl, "https") {
+	parsedURL, err := url.Parse(appConfig.Monitoring.TelemetryConfig.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+	host := parsedURL.Hostname()
+	port := parsedURL.Port()
+	endpoint := host + ":" + port
+
+	if strings.HasPrefix(endpoint, "https") {
 		tlsConfig := &tls.Config{
 			InsecureSkipVerify: true,
 		}
 		traceExporter, err = otlptracehttp.New(context.Background(),
 			otlptracehttp.WithEndpoint(endpoint),
-			otlptracehttp.WithHeaders(headers),
 			otlptracehttp.WithTLSClientConfig(tlsConfig),
 		)
 	} else {
 		traceExporter, err = otlptracehttp.New(context.Background(),
 			otlptracehttp.WithEndpoint(endpoint),
-			otlptracehttp.WithHeaders(headers),
 			otlptracehttp.WithInsecure(),
 		)
 	}
-
 	if err != nil {
 		return nil, err
 	}
@@ -139,11 +137,6 @@ func newTraceProvider(res *resource.Resource, appConfig types.AppConfig) (*trace
 		trace.WithResource(res),
 	)
 	return traceProvider, nil
-}
-
-func basicAuth(username, password string) string {
-	auth := username + ":" + password
-	return base64.StdEncoding.EncodeToString([]byte(auth))
 }
 
 func newMeterProvider(res *resource.Resource, appConfig types.AppConfig) (*metric.MeterProvider, error) {

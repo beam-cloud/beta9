@@ -168,6 +168,7 @@ monitoring:
     scrapeWorkers: true
     port: 9090
   telemetry:
+    endpoint: http://tempo.monitoring:4318
     traceInterval: 3s
     meterInterval: 3s
   fluentbit:
