@@ -251,7 +251,7 @@ class ASGI(Endpoint):
         image: Image = Image(),
         timeout: int = 180,
         workers: int = 1,
-        concurrent_requests: int = 0,
+        concurrent_requests: int = 1,
         keep_warm_seconds: int = 180,
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
