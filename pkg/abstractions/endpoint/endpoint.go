@@ -254,7 +254,6 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 
 	// Create endpoint instance to hold endpoint specific methods/fields
 	instance = &endpointInstance{}
-	trace.Span.AddEvent("Endpoint instance struct created")
 
 	// Create base autoscaled instance
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(es.ctx, &abstractions.AutoscaledInstanceConfig{
