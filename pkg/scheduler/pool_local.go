@@ -74,10 +74,7 @@ func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapac
 
 func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
-	if gpuType != wpc.workerPool.GPUType {
-		return nil, errors.New("incorrect GPU type")
-	}
-	return wpc.addWorkerWithId(workerId, cpu, memory, gpuType, gpuCount)
+	return wpc.addWorkerWithId(workerId, cpu, memory, wpc.workerPool.GPUType, gpuCount)
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {

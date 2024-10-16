@@ -100,9 +100,6 @@ func NewExternalWorkerPoolController(
 
 func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
-	if gpuType != wpc.workerPool.GPUType {
-		return nil, errors.New("incorrect GPU type")
-	}
 
 	machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name, true)
 	if err != nil {
@@ -111,7 +108,7 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 
 	// Attempt to schedule the worker on an existing machine first
 	for _, machine := range machines {
-		worker, err := wpc.attemptToAssignWorkerToMachine(workerId, cpu, memory, gpuType, gpuCount, machine)
+		worker, err := wpc.attemptToAssignWorkerToMachine(workerId, cpu, memory, wpc.workerPool.GPUType, gpuCount, machine)
 		if err != nil {
 			continue
 		}
@@ -129,7 +126,7 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	machineId, err := wpc.provider.ProvisionMachine(wpc.ctx, wpc.name, token.Key, types.ProviderComputeRequest{
 		Cpu:      cpu,
 		Memory:   memory,
-		Gpu:      gpuType,
+		Gpu:      wpc.workerPool.GPUType,
 		GpuCount: gpuCount,
 	})
 	if err != nil {
@@ -149,7 +146,7 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	}
 
 	log.Printf("Machine registered <machineId: %s>, hostname: %s\n", machineId, machineState.HostName)
-	worker, err := wpc.createWorkerOnMachine(workerId, machineId, machineState, cpu, memory, gpuType, gpuCount)
+	worker, err := wpc.createWorkerOnMachine(workerId, machineId, machineState, cpu, memory, wpc.workerPool.GPUType, gpuCount)
 	if err != nil {
 		return nil, err
 	}

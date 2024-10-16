@@ -229,18 +229,15 @@ func (s *Scheduler) StartProcessingRequests() {
 						continue
 					}
 
-					for i := range request.GpuRequest {
-						gpu := request.GpuRequest[i]
-						newWorker, err := c.AddWorker(request.Cpu, request.Memory, gpu, request.GpuCount)
-						if err == nil {
-							log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
-							err = s.scheduleRequest(newWorker, request)
-							if err != nil {
-								log.Printf("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
-								s.addRequestToBacklog(request)
-							}
-							return
+					newWorker, err := c.AddWorker(request.Cpu, request.Memory, request.Gpu, request.GpuCount)
+					if err == nil {
+						log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
+						err = s.scheduleRequest(newWorker, request)
+						if err != nil {
+							log.Printf("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
+							s.addRequestToBacklog(request)
 						}
+						return
 					}
 				}
 
@@ -339,10 +336,6 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 
 	filteredWorkers := filterWorkersByPoolSelector(workers, request)     // Filter workers by pool selector
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request) // Filter workers resource requirements
-
-	for _, worker := range filteredWorkers {
-		log.Printf("Filtered worker: %s\n", worker.Gpu)
-	}
 
 	if len(filteredWorkers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}
