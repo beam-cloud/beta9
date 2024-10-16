@@ -223,24 +223,30 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 
 	instance, exists := es.endpointInstances.Get(stubId)
 	if exists {
+		trace.Span.AddEvent("Endpoint instance found in cache")
 		return instance, nil
 	}
+	trace.Span.AddEvent("Created endpoint instance object")
 
 	stub, err := es.backendRepo.GetStubByExternalId(es.ctx, stubId)
 	if err != nil {
 		return nil, errors.New("invalid stub id")
 	}
+	trace.Span.AddEvent("Stub retrieved")
 
 	var stubConfig *types.StubConfigV1 = &types.StubConfigV1{}
 	err = json.Unmarshal([]byte(stub.Config), stubConfig)
 	if err != nil {
+		trace.Span.AddEvent("Failed to unmarshal stub config")
 		return nil, err
 	}
+	trace.Span.AddEvent("Stub config unmarshalled")
 
 	token, err := es.backendRepo.RetrieveActiveToken(es.ctx, stub.Workspace.Id)
 	if err != nil {
 		return nil, err
 	}
+	trace.Span.AddEvent("Active token retrieved")
 
 	requestBufferSize := int(stubConfig.MaxPendingTasks) + 1
 	if requestBufferSize < endpointMinRequestBufferSize {
@@ -249,6 +255,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 
 	// Create endpoint instance to hold endpoint specific methods/fields
 	instance = &endpointInstance{}
+	trace.Span.AddEvent("Endpoint instance struct created")
 
 	// Create base autoscaled instance
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(es.ctx, &abstractions.AutoscaledInstanceConfig{
@@ -272,11 +279,15 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 		return nil, err
 	}
 
+	trace.Span.AddEvent("Created autoscaled instance")
+
 	if stub.Type.Kind() == types.StubTypeASGI {
 		instance.isASGI = true
+		trace.Span.AddEvent("Instance marked as ASGI")
 	}
 
 	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig, es.tailscale, es.config.Tailscale, instance.isASGI)
+	trace.Span.AddEvent("Request buffer initialized")
 
 	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance
