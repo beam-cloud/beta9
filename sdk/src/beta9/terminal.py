@@ -28,6 +28,7 @@ if env.is_local():
     rich.traceback.install()
 
 _console = Console()
+_current_status = None
 
 
 def header(text: str, subtext: str = "") -> None:
@@ -77,8 +78,16 @@ def url(text: str) -> None:
 
 @contextmanager
 def progress(task_name: str) -> Generator[rich.status.Status, None, None]:
-    with _console.status(task_name, spinner="dots", spinner_style="white") as s:
-        yield s
+    global _current_status
+    if _current_status is not None:
+        yield _current_status
+    else:
+        with _console.status(task_name, spinner="dots", spinner_style="white") as s:
+            _current_status = s
+            try:
+                yield s
+            finally:
+                _current_status = None
 
 
 def progress_open(file, mode, **kwargs):
