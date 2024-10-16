@@ -229,16 +229,18 @@ func (s *Scheduler) StartProcessingRequests() {
 						continue
 					}
 
-					newWorker, err := c.AddWorker(request.Cpu, request.Memory, request.Gpu, request.GpuCount)
-					if err == nil {
-						log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
-
-						err = s.scheduleRequest(newWorker, request)
-						if err != nil {
-							log.Printf("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
-							s.addRequestToBacklog(request)
+					for i := range request.GpuRequest {
+						gpu := request.GpuRequest[i]
+						newWorker, err := c.AddWorker(request.Cpu, request.Memory, gpu, request.GpuCount)
+						if err == nil {
+							log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
+							err = s.scheduleRequest(newWorker, request)
+							if err != nil {
+								log.Printf("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
+								s.addRequestToBacklog(request)
+							}
+							return
 						}
-						return
 					}
 				}
 
@@ -267,6 +269,7 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 		return err
 	}
 
+	request.Gpu = worker.Gpu
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 

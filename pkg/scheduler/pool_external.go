@@ -100,6 +100,9 @@ func NewExternalWorkerPoolController(
 
 func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
+	if gpuType != wpc.workerPool.GPUType {
+		return nil, errors.New("incorrect GPU type")
+	}
 
 	machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name, true)
 	if err != nil {
