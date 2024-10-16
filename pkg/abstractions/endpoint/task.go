@@ -28,6 +28,7 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 	if err != nil {
 		return err
 	}
+	trace.Span.AddEvent("Created endpoint instance")
 
 	_, err = t.es.backendRepo.CreateTask(context.Background(), &types.TaskParams{
 		TaskId:      t.msg.TaskId,
@@ -37,6 +38,7 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 	if err != nil {
 		return err
 	}
+	trace.Span.AddEvent("Created task")
 
 	return instance.buffer.ForwardRequest(echoCtx, t)
 }
