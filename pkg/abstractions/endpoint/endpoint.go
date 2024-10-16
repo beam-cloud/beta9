@@ -281,7 +281,6 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 
 	if stub.Type.Kind() == types.StubTypeASGI {
 		instance.isASGI = true
-		trace.Span.AddEvent("Instance marked as ASGI")
 	}
 
 	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig, es.tailscale, es.config.Tailscale, instance.isASGI)
