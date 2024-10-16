@@ -24,6 +24,8 @@ import (
 	_trace "go.opentelemetry.io/otel/trace"
 )
 
+var tracingEnabled bool
+
 type Tracer struct {
 	Ctx        context.Context
 	tracerName string
@@ -39,12 +41,12 @@ func (t *Tracer) End() {
 	}
 }
 
-func TraceFunc(ctx context.Context, tracerName, spanName string, enabled bool, attributes ...attribute.KeyValue) *Tracer {
-	if enabled {
+func TraceFunc(ctx context.Context, tracerName, spanName string, attributes ...attribute.KeyValue) *Tracer {
+	if tracingEnabled {
 		tracer := otel.Tracer(tracerName)
 		ctx, span := tracer.Start(ctx, spanName)
 		span.SetAttributes(attributes...)
-		return &Tracer{Ctx: ctx, Span: span, tracerName: tracerName, spanName: spanName, enabled: enabled, attributes: attributes}
+		return &Tracer{Ctx: ctx, Span: span, tracerName: tracerName, spanName: spanName, enabled: true, attributes: attributes}
 	}
 
 	return &Tracer{
@@ -64,6 +66,8 @@ func SetupTelemetry(ctx context.Context, serviceName string, appConfig types.App
 	if err != nil {
 		return nil, err
 	}
+
+	tracingEnabled = true
 
 	// shutdown calls cleanup functions registered via shutdownFuncs.
 	// The errors from the calls are joined.

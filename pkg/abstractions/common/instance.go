@@ -222,7 +222,7 @@ func (i *AutoscaledInstance) Monitor() error {
 }
 
 func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
-	trace := common.TraceFunc(i.Ctx, "pkg/abstractions/common", "AutoscaledInstance.HandleScalingEvent", i.AppConfig.Monitoring.Telemetry.Enabled,
+	trace := common.TraceFunc(i.Ctx, "pkg/abstractions/common", "AutoscaledInstance.HandleScalingEvent",
 		attribute.String("stub.id", i.Stub.ExternalId))
 	defer trace.End()
 

@@ -16,7 +16,7 @@ type EndpointTask struct {
 }
 
 func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) error {
-	trace := common.TraceFunc(ctx, "pkg/abstractions/endpoint", "EndpointTask.Execute", t.es.config.Monitoring.Telemetry.Enabled,
+	trace := common.TraceFunc(ctx, "pkg/abstractions/endpoint", "EndpointTask.Execute",
 		attribute.String("task.id", t.msg.TaskId),
 		attribute.String("stub.id", t.msg.StubId),
 		attribute.String("workspace.name", t.msg.WorkspaceName))
