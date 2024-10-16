@@ -379,5 +379,6 @@ type FluentBitEventConfig struct {
 }
 
 type CheckpointingConfig struct {
-	Cedana cedana.Config `key:"cedana" json:"cedana"`
+	Enabled bool          `key:"enabled" json:"enabled"`
+	Cedana  cedana.Config `key:"cedana" json:"cedana"`
 }
