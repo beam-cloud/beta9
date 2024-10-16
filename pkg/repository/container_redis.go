@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -184,6 +185,8 @@ func (cr *ContainerRedisRepository) UpdateContainerGPU(containerId string, gpuTy
 
 	// Update GPU
 	state.Gpu = gpuType
+	log.Printf("Gpu type: %v", state.Gpu)
+	log.Printf("Updating container GPU: %v", state)
 
 	// Save state to database
 	err = cr.rdb.HSet(context.TODO(), stateKey, common.ToSlice(state)).Err()

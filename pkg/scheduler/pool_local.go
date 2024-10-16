@@ -115,7 +115,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 
 	workerCpu := cpu
 	workerMemory := memory
-	workerGpuType := gpuType
+	workerGpuType := wpc.workerPool.GPUType
 	workerGpuCount := gpuCount
 
 	resourceRequests := corev1.ResourceList{}

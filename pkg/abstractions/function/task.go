@@ -131,7 +131,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 	}
 
 	gpuCount := 0
-	if stubConfig.Runtime.Gpu != "" {
+	if len(stubConfig.Runtime.Gpus) > 0 {
 		gpuCount = 1
 	}
 

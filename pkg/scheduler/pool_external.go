@@ -260,7 +260,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 
 	workerCpu := cpu
 	workerMemory := memory
-	workerGpuType := gpuType
+	workerGpuType := wpc.workerPool.GPUType
 	workerGpuCount := gpuCount
 
 	workerImage := fmt.Sprintf("%s/%s:%s",
