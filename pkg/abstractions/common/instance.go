@@ -178,6 +178,7 @@ func (i *AutoscaledInstance) ConsumeContainerEvent(event types.ContainerEvent) {
 }
 
 func (i *AutoscaledInstance) Monitor() error {
+
 	go i.Autoscaler.Start(i.Ctx) // Start the autoscaler
 	ignoreScalingEventWindow := time.Now().Add(-IgnoreScalingEventInterval)
 
@@ -263,6 +264,10 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 }
 
 func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
+	trace := common.TraceFunc(i.Ctx, "pkg/abstractions/common", "AutoscaledInstance.State",
+		attribute.String("stub.id", i.Stub.ExternalId))
+	defer trace.End()
+
 	containers, err := i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
 	if err != nil {
 		return nil, err
