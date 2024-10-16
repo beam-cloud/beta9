@@ -10,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const IgnoreScalingEventInterval = 10 * time.Second
@@ -28,6 +29,7 @@ type AutoscaledInstanceState struct {
 
 type AutoscaledInstanceConfig struct {
 	Name                string
+	AppConfig           types.AppConfig
 	Workspace           *types.Workspace
 	Stub                *types.StubWithRelated
 	StubConfig          *types.StubConfigV1
@@ -45,6 +47,7 @@ type AutoscaledInstanceConfig struct {
 
 type AutoscaledInstance struct {
 	Ctx                      context.Context
+	AppConfig                types.AppConfig
 	CancelFunc               context.CancelFunc
 	Name                     string
 	Rdb                      *common.RedisClient
@@ -94,6 +97,7 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		Ctx:                      ctx,
 		CancelFunc:               cancelFunc,
 		IsActive:                 true,
+		AppConfig:                cfg.AppConfig,
 		Name:                     cfg.Name,
 		Workspace:                cfg.Workspace,
 		Stub:                     cfg.Stub,
@@ -218,6 +222,10 @@ func (i *AutoscaledInstance) Monitor() error {
 }
 
 func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
+	trace := common.TraceFunc(i.Ctx, "pkg/abstractions/common", "AutoscaledInstance.HandleScalingEvent",
+		attribute.String("stub.id", i.Stub.ExternalId))
+	defer trace.End()
+
 	err := i.Lock.Acquire(i.Ctx, i.InstanceLockKey, common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
