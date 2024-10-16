@@ -490,6 +490,15 @@ func TestSelectCPUWorker(t *testing.T) {
 	assert.Equal(t, "", worker.Gpu)
 }
 
+func stringInSlice(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSelectWorkersWithBackupGPU(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -501,19 +510,14 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 			name: "simple",
 			requests: []*types.ContainerRequest{
 				{
-					Cpu:    1000,
-					Memory: 1000,
-					GpuRequest: types.GpuRequest{
-						MainGpus: []string{"A10G"},
-					},
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G"},
 				},
 				{
-					Cpu:    1000,
-					Memory: 1000,
-					GpuRequest: types.GpuRequest{
-						MainGpus:   []string{"A10G"},
-						BackupGpus: []string{"T4"},
-					},
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G", "T4"},
 				},
 			},
 			expectedGpuResults: []string{"A10G", "T4"},
@@ -523,27 +527,19 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 			name: "complex",
 			requests: []*types.ContainerRequest{
 				{
-					Cpu:    1000,
-					Memory: 1000,
-					GpuRequest: types.GpuRequest{
-						MainGpus: []string{"A10G"},
-					},
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G"},
 				},
 				{
-					Cpu:    1000,
-					Memory: 1000,
-					GpuRequest: types.GpuRequest{
-						MainGpus:   []string{"A10G"},
-						BackupGpus: []string{"T4", "A6000"},
-					},
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"T4", "A6000"},
 				},
 				{
-					Cpu:    1000,
-					Memory: 1000,
-					GpuRequest: types.GpuRequest{
-						MainGpus:   []string{"A10G"},
-						BackupGpus: []string{"T4", "A6000"},
-					},
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G", "T4", "A6000"},
 				},
 			},
 			expectedGpuResults: []string{"A10G", "T4", "A6000"},
@@ -553,28 +549,19 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 			name: "not enough backup GPUs",
 			requests: []*types.ContainerRequest{
 				{
-					Cpu:    1000,
-					Memory: 1000,
-					GpuRequest: types.GpuRequest{
-						MainGpus:   []string{"A10G"},
-						BackupGpus: []string{"T4"},
-					},
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G", "T4"},
 				},
 				{
-					Cpu:    1000,
-					Memory: 1000,
-					GpuRequest: types.GpuRequest{
-						MainGpus:   []string{"A10G"},
-						BackupGpus: []string{"T4"},
-					},
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G", "T4"},
 				},
 				{
-					Cpu:    1000,
-					Memory: 1000,
-					GpuRequest: types.GpuRequest{
-						MainGpus:   []string{"A10G"},
-						BackupGpus: []string{"T4"},
-					},
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G", "T4"},
 				},
 			},
 			expectedGpuResults: []string{"A10G", "T4", ""},
@@ -584,12 +571,10 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 			name: "backward compatibility",
 			requests: []*types.ContainerRequest{
 				{
-					Cpu:    1000,
-					Memory: 1000,
-					Gpu:    "A10G",
-					GpuRequest: types.GpuRequest{
-						BackupGpus: []string{"T4"},
-					},
+					Cpu:        1000,
+					Memory:     1000,
+					Gpu:        "A10G",
+					GpuRequest: []string{"T4"},
 				},
 			},
 			expectedGpuResults: []string{"A10G"},
@@ -625,7 +610,7 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 					continue
 				}
 
-				assert.Equal(t, tt.expectedGpuResults[i], worker.Gpu)
+				assert.True(t, stringInSlice(worker.Gpu, req.GpuRequest))
 
 				err = wb.scheduleRequest(worker, req)
 				assert.Nil(t, err)

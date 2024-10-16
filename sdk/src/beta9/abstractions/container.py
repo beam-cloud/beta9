@@ -32,10 +32,6 @@ class Container(RunnerAbstraction):
             applicable or no GPU required, leave it empty.
             You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify multiple
             GPUs, the container will load balance across them with equal priority.
-        backup_gpu (Union[GpuTypeAlias, List[GpuTypeAlias]]):
-            The GPUs to failover to if the primary GPUs are not available.
-            The container will select from the pool of backup GPUs in the order they are provided.
-            If not applicable or no GPU
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Volume]]):
@@ -65,7 +61,6 @@ class Container(RunnerAbstraction):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
-        backup_gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
@@ -79,7 +74,6 @@ class Container(RunnerAbstraction):
             volumes=volumes,
             secrets=secrets,
             callback_url=callback_url,
-            backup_gpu=backup_gpu,
         )
 
         self.task_id = ""

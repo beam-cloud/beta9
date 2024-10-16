@@ -145,18 +145,12 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 
 	env = append(secrets, env...)
 
-	mainGpuTypes := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
-	backupGpuTypes := types.GpuTypesToStrings(stubConfig.Runtime.BackupGpus)
-
 	err = t.fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: t.containerId,
 		Env:         env,
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
-		GpuRequest: types.GpuRequest{
-			MainGpus:   mainGpuTypes,
-			BackupGpus: backupGpuTypes,
-		},
+		GpuRequest:  types.GpuTypesToStrings(stubConfig.Runtime.Gpus),
 		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,

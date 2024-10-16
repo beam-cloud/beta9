@@ -66,10 +66,7 @@ type ContainerState struct {
 	Memory      int64           `redis:"memory" json:"memory"`
 }
 
-type GpuRequest struct {
-	MainGpus   []string `json:"main_gpus"`
-	BackupGpus []string `json:"backup_gpus"`
-}
+type GpuRequest []string
 
 type ContainerRequest struct {
 	ContainerId      string          `json:"container_id"`

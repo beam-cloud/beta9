@@ -163,7 +163,7 @@ func (s *Scheduler) Stop(containerId string) error {
 
 func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoolController, error) {
 	controllers := []WorkerPoolController{}
-	combinedRequestedGpu := append(request.GpuRequest.MainGpus, request.GpuRequest.BackupGpus...)
+	combinedRequestedGpu := request.GpuRequest
 	if request.Gpu != "" {
 		// This is for backwards compatibility
 		combinedRequestedGpu = append(combinedRequestedGpu, request.Gpu)
@@ -280,37 +280,16 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 	return filteredWorkers
 }
 
-const backupGPUTypeScore = -1000 // Make sure that the backup gpu priorities are lower than the preset gpu-pool priorities which are set around 0
-
-type GpuRequestPriority struct {
-	Priority int
-	IsBackup bool
-}
-
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
-	gpuRequestMap := map[string]GpuRequestPriority{}
+	gpuRequestsMap := map[string]string{}
 
-	for _, gpu := range request.GpuRequest.MainGpus {
-		gpuRequestMap[gpu] = GpuRequestPriority{
-			Priority: 0,
-			IsBackup: false,
-		}
-	}
-
-	for i, gpu := range request.GpuRequest.BackupGpus {
-		gpuRequestMap[gpu] = GpuRequestPriority{
-			Priority: backupGPUTypeScore - i, // Make sure priorities are greater in priority earlier in the list
-			IsBackup: true,
-		}
+	for _, gpu := range request.GpuRequest {
+		gpuRequestsMap[gpu] = ""
 	}
 
 	// Backwards compatibility
 	if request.Gpu != "" {
-		// Else add the request.Gpu to the map
-		gpuRequestMap[request.Gpu] = GpuRequestPriority{
-			Priority: 0,
-			IsBackup: false,
-		}
+		gpuRequestsMap[request.Gpu] = ""
 	}
 
 	filteredWorkers := []*types.Worker{}
@@ -325,16 +304,11 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 			continue
 		}
 
-		if len(gpuRequestMap) > 0 {
+		if len(gpuRequestsMap) > 0 {
 			// Validate GPU resource availability
-			priority, validGpu := gpuRequestMap[worker.Gpu]
+			_, validGpu := gpuRequestsMap[worker.Gpu]
 			if !validGpu || worker.FreeGpuCount < request.GpuCount {
 				continue
-			}
-
-			// Override the worker priority if the request is a backup gpu (this should be lower than default gpu priorities)
-			if priority.IsBackup {
-				worker.Priority = int32(priority.Priority)
 			}
 		}
 

@@ -158,18 +158,12 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		gpuCount = 1
 	}
 
-	mainGpuTypes := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
-	backupGpuTypes := types.GpuTypesToStrings(stubConfig.Runtime.BackupGpus)
-
 	err = cs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env:         env,
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
-		GpuRequest: types.GpuRequest{
-			MainGpus:   mainGpuTypes,
-			BackupGpus: backupGpuTypes,
-		},
+		GpuRequest:  types.GpuTypesToStrings(stubConfig.Runtime.Gpus),
 		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,

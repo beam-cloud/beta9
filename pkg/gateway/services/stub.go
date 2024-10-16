@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"math"
 	"strings"
 
@@ -28,10 +27,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	mainGpus := types.GPUTypesFromString(in.Gpu)
-	backupGpus := types.GPUTypesFromString(in.BackupGpu)
+	gpus := types.GPUTypesFromString(in.Gpu)
 
-	if len(mainGpus) > 0 || len(backupGpus) > 0 {
+	if len(gpus) > 0 {
 		concurrencyLimit, err := gws.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, authInfo.Workspace.ExternalId)
 		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
 			return &pb.GetOrCreateStubResponse{
@@ -50,9 +48,8 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 		// T4s are currently in a different pool than other GPUs and won't show up in gpu counts
 		lowGpus := []string{}
-		log.Println(append(mainGpus, backupGpus...))
 
-		for _, gpu := range append(mainGpus, backupGpus...) {
+		for _, gpu := range gpus {
 			if gpuCounts[gpu.String()] <= 1 && gpu.String() != types.GPU_T4.String() {
 				lowGpus = append(lowGpus, gpu.String())
 			}
@@ -83,11 +80,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
-			Cpu:        in.Cpu,
-			Gpus:       mainGpus,
-			BackupGpus: backupGpus,
-			Memory:     in.Memory,
-			ImageId:    in.ImageId,
+			Cpu:     in.Cpu,
+			Gpus:    gpus,
+			Memory:  in.Memory,
+			ImageId: in.ImageId,
 		},
 		Handler:            in.Handler,
 		OnStart:            in.OnStart,
