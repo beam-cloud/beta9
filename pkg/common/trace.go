@@ -20,6 +20,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace/noop"
+
 	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 	_trace "go.opentelemetry.io/otel/trace"
 )
@@ -36,22 +38,20 @@ type Tracer struct {
 }
 
 func (t *Tracer) End() {
-	if t.enabled {
-		t.Span.End()
-	}
+	t.Span.End()
 }
 
 func TraceFunc(ctx context.Context, tracerName, spanName string, attributes ...attribute.KeyValue) *Tracer {
+	var tracer _trace.Tracer
 	if tracingEnabled {
-		tracer := otel.Tracer(tracerName)
-		ctx, span := tracer.Start(ctx, spanName)
-		span.SetAttributes(attributes...)
-		return &Tracer{Ctx: ctx, Span: span, tracerName: tracerName, spanName: spanName, enabled: true, attributes: attributes}
+		tracer = otel.Tracer(tracerName)
+	} else {
+		tracer = noop.NewTracerProvider().Tracer(tracerName)
 	}
 
-	return &Tracer{
-		Ctx: ctx,
-	}
+	ctx, span := tracer.Start(ctx, spanName)
+	span.SetAttributes(attributes...)
+	return &Tracer{Ctx: ctx, Span: span, tracerName: tracerName, spanName: spanName, enabled: tracingEnabled, attributes: attributes}
 }
 
 // SetupTelemetry bootstraps the OpenTelemetry pipeline
