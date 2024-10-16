@@ -254,7 +254,6 @@ func (s *Scheduler) StartProcessingRequests() {
 		if err != nil {
 			s.addRequestToBacklog(request)
 		}
-
 	}
 }
 
