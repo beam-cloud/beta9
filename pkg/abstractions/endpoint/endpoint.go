@@ -237,7 +237,6 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 	var stubConfig *types.StubConfigV1 = &types.StubConfigV1{}
 	err = json.Unmarshal([]byte(stub.Config), stubConfig)
 	if err != nil {
-		trace.Span.AddEvent("Failed to unmarshal stub config")
 		return nil, err
 	}
 	trace.Span.AddEvent("Stub config unmarshalled")
