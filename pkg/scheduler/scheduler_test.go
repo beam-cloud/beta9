@@ -610,7 +610,11 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 					continue
 				}
 
-				assert.True(t, stringInSlice(worker.Gpu, req.GpuRequest))
+				reqGpus := req.GpuRequest
+				if req.Gpu != "" {
+					reqGpus = append(reqGpus, req.Gpu)
+				}
+				assert.True(t, stringInSlice(worker.Gpu))
 
 				err = wb.scheduleRequest(worker, req)
 				assert.Nil(t, err)
