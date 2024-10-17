@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 const (
 	WorkerLifecycleStatsKey        string        = "beta9.worker.usage.spawner.lifecycle"
@@ -31,4 +34,22 @@ type Mount struct {
 	ReadOnly         bool              `json:"read_only"`
 	MountType        string            `json:"mount_type"`
 	MountPointConfig *MountPointConfig `json:"mountpoint_config"`
+}
+
+type ExitCodeError struct {
+	ExitCode int
+}
+
+func (e *ExitCodeError) Error() string {
+	return fmt.Sprintf("exit code error: %s", WorkerContainerExitCodes[e.ExitCode])
+}
+
+var (
+	WorkerContainerExitCodeInvalidCustomImage = 3
+)
+
+var WorkerContainerExitCodes = map[int]string{
+	0: "Success",
+	1: "UnknownError",
+	WorkerContainerExitCodeInvalidCustomImage: "InvalidCustomImage",
 }

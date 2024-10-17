@@ -20,6 +20,7 @@ var (
 	schedulerWorkerAddress           string = "scheduler:container:worker_addr:%s"
 	schedulerContainerLock           string = "scheduler:container:lock:%s"
 	schedulerContainerExitCode       string = "scheduler:container:exit_code:%s"
+	schedulerContainerPreloadError   string = "scheduler:container:preload_error:%s"
 )
 
 var (
@@ -143,6 +144,10 @@ func (rk *redisKeys) SchedulerWorkerAddress(containerId string) string {
 
 func (rk *redisKeys) SchedulerContainerExitCode(containerId string) string {
 	return fmt.Sprintf(schedulerContainerExitCode, containerId)
+}
+
+func (rk *redisKeys) SchedulerContainerPreloadError(containerId string) string {
+	return fmt.Sprintf(schedulerContainerPreloadError, containerId)
 }
 
 // Gateway keys

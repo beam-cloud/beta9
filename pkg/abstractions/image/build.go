@@ -200,11 +200,35 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	hostname, err := b.containerRepo.GetWorkerAddress(containerId)
+	go func() {
+		// Checks if container exited before the communication server was established
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(1 * time.Second):
+				if exitCode, err := b.containerRepo.GetContainerExitCode(containerId); err == nil {
+					if exitCode != 0 {
+						msg, ok := types.WorkerContainerExitCodes[exitCode]
+						if !ok {
+							msg = types.WorkerContainerExitCodes[1]
+						}
+
+						outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
+					}
+					return
+				}
+			}
+		}
+	}()
+
+	hostname, err := b.containerRepo.GetWorkerAddress(ctx, containerId)
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
 	}
+
+	log.Printf("connecting to build container <%v> at %s\n", containerId, hostname)
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
