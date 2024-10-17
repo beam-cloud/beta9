@@ -66,32 +66,34 @@ func parseRequestArgs(queryParams url.Values, taskPayload *types.TaskPayload) {
 	}
 
 	for key, values := range queryParams {
+		// Check if query param is singular or a list
 		if len(values) == 1 {
-			taskPayload.Kwargs[key] = convertToNumericIfPossible(values[0])
-		} else {
-			allFloat := true
-			floats := make([]float64, len(values))
+			taskPayload.Kwargs[key] = tryParseNumeric(values[0])
+			continue
+		}
 
-			for i, value := range values {
-				convertedValue := convertToNumericIfPossible(value)
-				switch v := convertedValue.(type) {
-				case float64:
-					floats[i] = v
-				default:
-					allFloat = false
-					continue
-				}
+		allFloat := true
+		floats := make([]float64, len(values))
+
+		for i, value := range values {
+			convertedValue := tryParseNumeric(value)
+			switch v := convertedValue.(type) {
+			case float64:
+				floats[i] = v
+			default:
+				allFloat = false
+				continue
 			}
-			if allFloat {
-				taskPayload.Kwargs[key] = floats
-			} else {
-				taskPayload.Kwargs[key] = values
-			}
+		}
+		if allFloat {
+			taskPayload.Kwargs[key] = floats
+		} else {
+			taskPayload.Kwargs[key] = values
 		}
 	}
 }
 
-func convertToNumericIfPossible(s string) interface{} {
+func tryParseNumeric(s string) interface{} {
 	if floatVal, err := strconv.ParseFloat(s, 64); err == nil {
 		return floatVal
 	}
