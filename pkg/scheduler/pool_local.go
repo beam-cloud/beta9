@@ -230,6 +230,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
 		Priority:      wpc.workerPool.Priority,
+		BuildVersion:  wpc.config.Worker.ImageTag,
 	}
 }
 
