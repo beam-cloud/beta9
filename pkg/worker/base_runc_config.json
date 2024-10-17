@@ -180,8 +180,7 @@
 				"rprivate",
 				"nosuid",
 				"nodev",
-				"rw",
-				"tmpcopyup"
+				"rw"
 			]
 		},
 		{
