@@ -281,22 +281,17 @@ func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptio
 	if opts.Retries > 0 {
 		retryStrategy = redislock.LimitRetry(redislock.LinearBackoff(100*time.Millisecond), opts.Retries)
 	}
-
 	lock, err := redislock.Obtain(ctx, l.client, key, time.Duration(opts.TtlS)*time.Second, &redislock.Options{
 		RetryStrategy: retryStrategy,
 	})
-	if err != nil && err != redislock.ErrNotObtained {
-		return err // unexpected error, return it
+	if err != nil {
+		return err
 	}
 
-	if err == nil {
-		l.mu.Lock()
-		l.locks[key] = lock
-		l.mu.Unlock()
-		return nil
-	}
-
-	return redislock.ErrNotObtained
+	l.mu.Lock()
+	l.locks[key] = lock
+	l.mu.Unlock()
+	return nil
 }
 
 func (l *RedisLock) Release(key string) error {

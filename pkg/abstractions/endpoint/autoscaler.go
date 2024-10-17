@@ -1,12 +1,9 @@
 package endpoint
 
 import (
-	"fmt"
 	"math"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
-	"github.com/beam-cloud/beta9/pkg/common"
-	"go.opentelemetry.io/otel/attribute"
 )
 
 type endpointAutoscalerSample struct {
@@ -15,22 +12,16 @@ type endpointAutoscalerSample struct {
 }
 
 func endpointSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) {
-	trace := common.TraceFunc(i.Ctx, "pkg/abstractions/endpoint", "endpointSampleFunc",
-		attribute.String("stub.id", i.Stub.ExternalId))
-	defer trace.End()
-
 	totalRequests, err := i.TaskRepo.TasksInFlight(i.Ctx, i.Workspace.Name, i.Stub.ExternalId)
 	if err != nil {
 		totalRequests = -1
 	}
-	trace.Span.AddEvent(fmt.Sprintf("Total requests: %d", totalRequests))
 
 	currentContainers := 0
 	state, err := i.State()
 	if err != nil {
 		currentContainers = -1
 	}
-	trace.Span.AddEvent(fmt.Sprintf("Current containers: %d", currentContainers))
 
 	currentContainers = state.PendingContainers + state.RunningContainers
 
@@ -43,10 +34,6 @@ func endpointSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) 
 }
 
 func endpointDeploymentScaleFunc(i *endpointInstance, s *endpointAutoscalerSample) *abstractions.AutoscalerResult {
-	trace := common.TraceFunc(i.Ctx, "pkg/abstractions/endpoint", "endpointDeploymentScaleFunc",
-		attribute.String("stub.id", i.Stub.ExternalId))
-	defer trace.End()
-
 	desiredContainers := 0
 
 	if s.TotalRequests == 0 {
@@ -58,9 +45,6 @@ func endpointDeploymentScaleFunc(i *endpointInstance, s *endpointAutoscalerSampl
 			}
 		}
 
-		trace.Span.AddEvent(fmt.Sprintf("Total requests: %d", s.TotalRequests))
-		trace.Span.AddEvent(fmt.Sprintf("Tasks per container: %d", i.StubConfig.Autoscaler.TasksPerContainer))
-
 		desiredContainers = int(s.TotalRequests / int64(i.StubConfig.Autoscaler.TasksPerContainer))
 		if s.TotalRequests%int64(i.StubConfig.Autoscaler.TasksPerContainer) > 0 {
 			desiredContainers += 1
@@ -70,8 +54,6 @@ func endpointDeploymentScaleFunc(i *endpointInstance, s *endpointAutoscalerSampl
 		maxReplicas := math.Min(float64(i.StubConfig.Autoscaler.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
-
-	trace.Span.AddEvent(fmt.Sprintf("Desired containers: %d", desiredContainers))
 
 	return &abstractions.AutoscalerResult{
 		DesiredContainers: desiredContainers,
