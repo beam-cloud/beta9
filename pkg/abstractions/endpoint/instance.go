@@ -64,7 +64,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 	env = append(secrets, env...)
 
 	gpuCount := 0
-	if i.StubConfig.Runtime.Gpu != "" {
+	if len(i.StubConfig.Runtime.Gpus) > 0 {
 		gpuCount = 1
 	}
 
@@ -76,7 +76,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			Env:         env,
 			Cpu:         i.StubConfig.Runtime.Cpu,
 			Memory:      i.StubConfig.Runtime.Memory,
-			Gpu:         string(i.StubConfig.Runtime.Gpu),
+			GpuRequest:  types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus),
 			GpuCount:    uint32(gpuCount),
 			ImageId:     i.StubConfig.Runtime.ImageId,
 			StubId:      i.Stub.ExternalId,
