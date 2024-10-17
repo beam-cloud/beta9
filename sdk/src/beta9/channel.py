@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Generator, List, NewType, Optional, Tuple, cast
 
 import grpc
-from grpc import ChannelCredentials
+from grpc import ChannelCredentials, RpcError
 from grpc._interceptor import _Channel as InterceptorChannel
 
 from . import terminal
@@ -111,6 +111,8 @@ def handle_grpc_error(error: grpc.RpcError):
         terminal.error("Unable to connect to gateway.")
     elif code == grpc.StatusCode.CANCELLED:
         return
+    elif code == grpc.StatusCode.RESOURCE_EXHAUSTED:
+        terminal.error("Please ensure your payload or function arguments are less than 4 MiB.")
     elif code == grpc.StatusCode.UNKNOWN:
         terminal.error(f"Error {details}")
     else:
@@ -188,6 +190,8 @@ def handle_error(print_traceback: bool = False):
     exit_code = 0
     try:
         yield
+    except RpcError as exc:
+        handle_grpc_error(exc)
     except RunnerException as exc:
         exit_code = exc.code
     except SystemExit as exc:
