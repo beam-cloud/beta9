@@ -3,7 +3,9 @@ package abstractions
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -178,7 +180,6 @@ func (i *AutoscaledInstance) ConsumeContainerEvent(event types.ContainerEvent) {
 }
 
 func (i *AutoscaledInstance) Monitor() error {
-
 	go i.Autoscaler.Start(i.Ctx) // Start the autoscaler
 	ignoreScalingEventWindow := time.Now().Add(-IgnoreScalingEventInterval)
 
@@ -224,12 +225,14 @@ func (i *AutoscaledInstance) Monitor() error {
 
 func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	trace := common.TraceFunc(i.Ctx, "pkg/abstractions/common", "AutoscaledInstance.HandleScalingEvent",
-		attribute.String("stub.id", i.Stub.ExternalId))
+		attribute.String("stub.id", i.Stub.ExternalId),
+		attribute.String("gateway.host", os.Getenv("HOSTNAME")),
+	)
 	defer trace.End()
 
 	err := i.Lock.Acquire(i.Ctx, i.InstanceLockKey, common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
-		trace.Span.AddEvent("Failed to acquire lock")
+		trace.Span.AddEvent(fmt.Sprintf("Failed to acquire lock: %v", err))
 		return err
 	}
 	defer i.Lock.Release(i.InstanceLockKey)
