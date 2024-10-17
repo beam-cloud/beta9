@@ -37,7 +37,7 @@ func (m *RedisMapService) MapSet(ctx context.Context, in *pb.MapSetRequest) (*pb
 	}
 
 	if time.Duration(in.Ttl)*time.Second > maxMapValueTtls {
-		return &pb.MapSetResponse{Ok: false, ErrMsg: "TTL cannot be larger than 1 week"}, nil
+		return &pb.MapSetResponse{Ok: false, ErrMsg: "TTL cannot be longer than 1 week"}, nil
 	}
 
 	err := m.rdb.Set(ctx, Keys.MapEntry(authInfo.Workspace.Name, in.Name, in.Key), in.Value, time.Duration(in.Ttl)*time.Second).Err()
