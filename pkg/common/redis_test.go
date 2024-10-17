@@ -86,6 +86,36 @@ func TestRedisLockWithTTLAndRetry(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestRedisLockWithTTLAndNoRetry(t *testing.T) {
+	rdb, err := NewRedisClient(types.RedisConfig{Addrs: []string{"127.0.0.1:6379"}, Mode: types.RedisModeSingle})
+	assert.NotNil(t, rdb)
+	assert.NoError(t, err)
+
+	firstLock := NewRedisLock(rdb)
+	secondLock := NewRedisLock(rdb)
+
+	key := "test_key"
+	err = firstLock.Acquire(context.Background(), key, RedisLockOptions{TtlS: 10, Retries: 0})
+	assert.NoError(t, err)
+
+	// Create a channel to pass the result
+	resultCh := make(chan error)
+
+	go func() {
+		time.Sleep(time.Second * 12)
+		err := secondLock.Acquire(context.Background(), key, RedisLockOptions{TtlS: 10, Retries: 0})
+		resultCh <- err
+	}()
+
+	// // Release lock so the secondLock can acquire it
+	// err = firstLock.Release(key)
+	// assert.NoError(t, err)
+
+	// Get the result from the channel and check it
+	err = <-resultCh
+	assert.NoError(t, err)
+}
+
 func TestCopyStruct(t *testing.T) {
 	options1 := &types.RedisConfig{ClientName: "hello", PoolSize: 10, ConnMaxLifetime: time.Second}
 	options2 := &types.RedisConfig{}
