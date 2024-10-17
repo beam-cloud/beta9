@@ -75,7 +75,7 @@ class Map(BaseAbstraction):
 
         Args:
             key: The key to set.
-            value: The value to set.
+            value: The value to set. The max value size is 1 MiB.
             ttl: The time to live for the key in seconds. Cannot be more than 7 days. Defaults to 7 days.
 
         Raises:
