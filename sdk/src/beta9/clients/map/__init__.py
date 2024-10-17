@@ -28,11 +28,13 @@ class MapSetRequest(betterproto.Message):
     name: str = betterproto.string_field(1)
     key: str = betterproto.string_field(2)
     value: bytes = betterproto.bytes_field(3)
+    ttl: int = betterproto.int64_field(4)
 
 
 @dataclass(eq=False, repr=False)
 class MapSetResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
