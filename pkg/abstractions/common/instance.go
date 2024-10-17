@@ -229,6 +229,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 
 	err := i.Lock.Acquire(i.Ctx, i.InstanceLockKey, common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
+		trace.Span.AddEvent("Failed to acquire lock")
 		return err
 	}
 	defer i.Lock.Release(i.InstanceLockKey)

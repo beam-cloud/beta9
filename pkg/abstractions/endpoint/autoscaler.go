@@ -43,6 +43,10 @@ func endpointSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) 
 }
 
 func endpointDeploymentScaleFunc(i *endpointInstance, s *endpointAutoscalerSample) *abstractions.AutoscalerResult {
+	trace := common.TraceFunc(i.Ctx, "pkg/abstractions/endpoint", "endpointDeploymentScaleFunc",
+		attribute.String("stub.id", i.Stub.ExternalId))
+	defer trace.End()
+
 	desiredContainers := 0
 
 	if s.TotalRequests == 0 {
@@ -54,6 +58,9 @@ func endpointDeploymentScaleFunc(i *endpointInstance, s *endpointAutoscalerSampl
 			}
 		}
 
+		trace.Span.AddEvent(fmt.Sprintf("Total requests: %d", s.TotalRequests))
+		trace.Span.AddEvent(fmt.Sprintf("Tasks per container: %d", i.StubConfig.Autoscaler.TasksPerContainer))
+
 		desiredContainers = int(s.TotalRequests / int64(i.StubConfig.Autoscaler.TasksPerContainer))
 		if s.TotalRequests%int64(i.StubConfig.Autoscaler.TasksPerContainer) > 0 {
 			desiredContainers += 1
@@ -63,6 +70,8 @@ func endpointDeploymentScaleFunc(i *endpointInstance, s *endpointAutoscalerSampl
 		maxReplicas := math.Min(float64(i.StubConfig.Autoscaler.MaxContainers), float64(abstractions.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
+
+	trace.Span.AddEvent(fmt.Sprintf("Desired containers: %d", desiredContainers))
 
 	return &abstractions.AutoscalerResult{
 		DesiredContainers: desiredContainers,
