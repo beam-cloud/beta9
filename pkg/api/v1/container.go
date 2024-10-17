@@ -3,6 +3,7 @@ package apiv1
 import (
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -101,6 +102,9 @@ func (c *ContainerGroup) StopContainer(ctx echo.Context) error {
 
 	err = c.scheduler.Stop(containerId)
 	if err != nil {
+		if strings.Contains(err.Error(), "event already exists") {
+			return HTTPConflict("Container is already stopping")
+		}
 		return HTTPInternalServerError("Failed to stop container")
 	}
 

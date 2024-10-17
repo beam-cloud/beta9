@@ -75,6 +75,9 @@ class TaskQueue(RunnerAbstraction):
         name (Optional[str]):
             An optional name for this task_queue, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
+        authorized (Optional[str]):
+            If false, allows the endpoint to be invoked without an auth token.
+            Default is True.
         autoscaler (Autoscaler):
             Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
             various autoscaling strategies. Default is QueueDepthAutoscaler().
@@ -111,6 +114,7 @@ class TaskQueue(RunnerAbstraction):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
+        authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
     ) -> None:
@@ -129,6 +133,7 @@ class TaskQueue(RunnerAbstraction):
             volumes=volumes,
             secrets=secrets,
             name=name,
+            authorized=authorized,
             autoscaler=autoscaler,
             task_policy=task_policy,
         )

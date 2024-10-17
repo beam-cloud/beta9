@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	defaultBuildContainerCpu      int64         = 1000
-	defaultBuildContainerMemory   int64         = 1024
-	defaultContainerSpinupTimeout time.Duration = 180 * time.Second
+	defaultImageBuildGracefulShutdownS               = 5 * time.Second
+	defaultBuildContainerCpu           int64         = 1000
+	defaultBuildContainerMemory        int64         = 1024
+	defaultContainerSpinupTimeout      time.Duration = 180 * time.Second
 
 	pipCommandType   string = "pip"
 	shellCommandType string = "shell"
@@ -299,7 +300,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 				errMsg = err.Error() + "\n"
 			}
 
-			time.Sleep(1 * time.Second) // Wait for logs to be passed through
+			time.Sleep(defaultImageBuildGracefulShutdownS) // Wait for logs to be passed through
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: errMsg}
 			return err
 		}

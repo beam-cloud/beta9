@@ -384,6 +384,13 @@ func (g *Gateway) registerServices() error {
 func (g *Gateway) Start() error {
 	var err error
 
+	if g.Config.Monitoring.Telemetry.Enabled {
+		_, err = common.SetupTelemetry(g.ctx, types.DefaultGatewayServiceName, g.Config)
+		if err != nil {
+			log.Fatalf("Failed to setup telemetry: %v", err)
+		}
+	}
+
 	err = g.initGrpc()
 	if err != nil {
 		log.Fatalf("Failed to initialize grpc server: %v", err)

@@ -167,6 +167,12 @@ monitoring:
   prometheus:
     scrapeWorkers: true
     port: 9090
+  telemetry:
+    enabled: false
+    endpoint: http://tempo.monitoring:4318
+    meterInterval: 3s
+    traceInterval: 3s
+    traceSampleRatio: 1.0
   fluentbit:
     events:
       endpoint: http://fluent-bit.monitoring:9880
