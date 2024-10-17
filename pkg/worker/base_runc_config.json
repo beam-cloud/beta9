@@ -173,7 +173,7 @@
 		},
 		{
 			"destination": "/usr/lib/worker/x86_64-linux-gnu",
-			"type": "bind",
+			"type": "tmpfs",
 			"source": "/usr/lib/x86_64-linux-gnu",
 			"options": [
 				"rbind",
