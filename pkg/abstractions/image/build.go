@@ -203,7 +203,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	var hostname string
 
 	mctx, mcancel := context.WithCancel(ctx)
-	go b.monitorContainerPreloadErrors(mctx, containerId, outputChan)
+	go b.monitorContainerForPreloadErrors(mctx, containerId, outputChan)
 
 	hostname, err = b.containerRepo.GetWorkerAddress(ctx, containerId)
 	mcancel()
@@ -324,7 +324,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	return nil
 }
 
-func (b *Builder) monitorContainerPreloadErrors(ctx context.Context, containerId string, outputChan chan common.OutputMsg) {
+func (b *Builder) monitorContainerForPreloadErrors(ctx context.Context, containerId string, outputChan chan common.OutputMsg) {
 	for {
 		select {
 		case <-ctx.Done():
