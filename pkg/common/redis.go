@@ -277,9 +277,6 @@ func NewRedisLock(client *RedisClient, opts ...RedisLockOption) *RedisLock {
 }
 
 func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptions) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	var retryStrategy redislock.RetryStrategy = nil
 	if opts.Retries > 0 {
 		retryStrategy = redislock.LimitRetry(redislock.LinearBackoff(100*time.Millisecond), opts.Retries)
@@ -293,7 +290,9 @@ func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptio
 	}
 
 	if err == nil {
+		l.mu.Lock()
 		l.locks[key] = lock
+		l.mu.Unlock()
 		return nil
 	}
 
@@ -305,7 +304,11 @@ func (l *RedisLock) Release(key string) error {
 	defer l.mu.Unlock()
 
 	if lock, ok := l.locks[key]; ok {
-		lock.Release(context.TODO())
+		err := lock.Release(context.Background())
+		if err != nil {
+			return err
+		}
+
 		delete(l.locks, key)
 		return nil
 	}
