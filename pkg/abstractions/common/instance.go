@@ -211,6 +211,8 @@ func (i *AutoscaledInstance) Monitor() error {
 			}
 
 			if err := i.HandleScalingEvent(desiredContainers); err != nil {
+				i.logScalingError(err)
+
 				if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 					if time.Now().After(ignoreScalingEventWindow) {
 						log.Printf("<%s> throttled by concurrency limit", i.Name)
@@ -219,8 +221,19 @@ func (i *AutoscaledInstance) Monitor() error {
 				}
 				continue
 			}
+
 		}
 	}
+}
+
+func (i *AutoscaledInstance) logScalingError(err error) {
+	trace := common.TraceFunc(i.Ctx, "pkg/abstractions/common", "AutoscaledInstance.logScalingError",
+		attribute.String("stub.id", i.Stub.ExternalId),
+		attribute.String("gateway.host", os.Getenv("HOSTNAME")),
+	)
+	defer trace.End()
+
+	trace.Span.AddEvent(fmt.Sprintf("Failed to handle scaling event: %v", err))
 }
 
 func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
@@ -230,7 +243,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	)
 	defer trace.End()
 
-	err := i.Lock.Acquire(i.Ctx, i.InstanceLockKey, common.RedisLockOptions{TtlS: 10, Retries: 0})
+	err := i.Lock.Acquire(context.Background(), i.InstanceLockKey, common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		trace.Span.AddEvent(fmt.Sprintf("Failed to acquire lock: %v", err))
 		return err
