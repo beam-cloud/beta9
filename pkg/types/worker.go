@@ -46,6 +46,7 @@ func (e *ExitCodeError) Error() string {
 
 var (
 	WorkerContainerExitCodeInvalidCustomImage = 3
+	WorkerContainerExitCodeUnknownError       = 1
 )
 
 var WorkerContainerExitCodes = map[int]string{

@@ -200,29 +200,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	go func() {
-		// Checks if container exited before the communication server was established
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(1 * time.Second):
-				if exitCode, err := b.containerRepo.GetContainerExitCode(containerId); err == nil {
-					if exitCode != 0 {
-						msg, ok := types.WorkerContainerExitCodes[exitCode]
-						if !ok {
-							msg = types.WorkerContainerExitCodes[1]
-						}
+	var hostname string
 
-						outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
-					}
-					return
-				}
-			}
-		}
-	}()
+	mctx, mcancel := context.WithCancel(ctx)
+	go b.monitorContainerPreloadErrors(mctx, containerId, outputChan)
 
-	hostname, err := b.containerRepo.GetWorkerAddress(ctx, containerId)
+	hostname, err = b.containerRepo.GetWorkerAddress(ctx, containerId)
+	mcancel()
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
@@ -338,6 +322,27 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	outputChan <- common.OutputMsg{Done: true, Success: true, ImageId: imageId}
 	return nil
+}
+
+func (b *Builder) monitorContainerPreloadErrors(ctx context.Context, containerId string, outputChan chan common.OutputMsg) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(1 * time.Second):
+			if exitCode, err := b.containerRepo.GetContainerExitCode(containerId); err == nil {
+				if exitCode != 0 {
+					msg, ok := types.WorkerContainerExitCodes[exitCode]
+					if !ok {
+						msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+					}
+
+					outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
+				}
+				return
+			}
+		}
+	}
 }
 
 func (b *Builder) genContainerId() string {
