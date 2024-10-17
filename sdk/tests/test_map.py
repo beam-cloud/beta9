@@ -27,12 +27,12 @@ class TestMap(TestCase):
 
         self.assertTrue(map.set("test", "test"))
 
-        mock_stub.map_set = MagicMock(return_value=(MapSetResponse(ok=False)))
+        mock_stub.map_set = MagicMock(return_value=(MapSetResponse(ok=False, err_msg="test")))
 
         map = Map(name="test")
         map.stub = mock_stub
 
-        self.assertFalse(map.set("test", "test"))
+        self.assertRaises(ValueError, map.set, "test", "test")
 
     def test_get(self):
         mock_stub = MagicMock()
