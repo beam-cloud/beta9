@@ -310,18 +310,19 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 	key := common.RedisKeys.SchedulerWorkerState(worker.Id)
 
 	// Retrieve current worker capacity
-	w, err := r.getWorkerFromKey(key)
+	currentWorker, err := r.getWorkerFromKey(key)
 	if err != nil {
 		return fmt.Errorf("failed to get worker state <%v>: %v", key, err)
 	}
 
+	sourceWorker := currentWorker // worker from the Redis store
+	if sourceWorker == nil {
+		sourceWorker = worker // worker from the argument
+	}
+
 	updatedWorker := &types.Worker{}
-	if w != nil {
-		// Populate updated worker with values from database
-		common.CopyStruct(w, updatedWorker)
-	} else {
-		// Populate updated worker with values from function parameter
-		common.CopyStruct(worker, updatedWorker)
+	if err := common.CopyStruct(sourceWorker, updatedWorker); err != nil {
+		return fmt.Errorf("failed to copy worker struct: %v", err)
 	}
 
 	if updatedWorker.ResourceVersion != worker.ResourceVersion {

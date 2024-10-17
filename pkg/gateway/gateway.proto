@@ -467,6 +467,7 @@ message Worker {
   int64 free_memory = 11;
   uint32 free_gpu_count = 12;
   repeated Container active_containers = 13;
+  string build_version = 14;
 }
 
 message ListWorkersRequest {}

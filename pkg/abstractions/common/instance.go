@@ -215,7 +215,7 @@ func (i *AutoscaledInstance) Monitor() error {
 
 				if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 					if time.Now().After(ignoreScalingEventWindow) {
-						log.Printf("<%s> throttled by concurrency limit", i.Name)
+						log.Printf("<%s> throttled by concurrency limit\n", i.Name)
 						ignoreScalingEventWindow = time.Now().Add(IgnoreScalingEventInterval)
 					}
 				}
