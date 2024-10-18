@@ -241,7 +241,9 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 
 	status, err := runc.Monitor.Wait(cmd, ec)
 	if err == nil && status != 0 {
-		return fmt.Errorf("unable to copy image: %v", cmd.String())
+		return &types.ExitCodeError{
+			ExitCode: types.WorkerContainerExitCodeInvalidCustomImage,
+		}
 	}
 
 	tmpBundlePath := filepath.Join(baseTmpBundlePath, imageId)
