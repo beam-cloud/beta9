@@ -131,7 +131,7 @@ RUN if [ "$(uname -m)" = "x86_64" ]; then \
     apt-get install -y /tmp/cuno_1.2.6_amd64_glibc.deb && rm /tmp/cuno_1.2.6_amd64_glibc.deb; \
     fi
 
-RUN apt-get remove -y curl gpg && \
+RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
     rm -rf /var/lib/apt/lists/* /var/log/*
 
