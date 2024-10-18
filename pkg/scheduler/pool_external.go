@@ -350,6 +350,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
 		Priority:      wpc.workerPool.Priority,
+		BuildVersion:  wpc.config.Worker.ImageTag,
 	}, nil
 }
 

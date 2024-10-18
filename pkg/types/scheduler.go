@@ -29,6 +29,7 @@ type Worker struct {
 	ResourceVersion      int64        `json:"resource_version" redis:"resource_version"`
 	RequiresPoolSelector bool         `json:"requires_pool_selector" redis:"requires_pool_selector"`
 	Priority             int32        `json:"priority" redis:"priority"`
+	BuildVersion         string       `json:"build_version" redis:"build_version"`
 }
 
 type CapacityUpdateType int

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
+	"strconv"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -18,25 +20,30 @@ func SerializeHttpPayload(ctx echo.Context) (*types.TaskPayload, error) {
 	// Decode the JSON directly from the reader
 	payload := map[string]interface{}{}
 	if err := decoder.Decode(&payload); err != nil {
-		if err == io.EOF {
-			return &types.TaskPayload{
-				Args:   nil,
-				Kwargs: make(map[string]interface{}),
-			}, nil
+		if err != io.EOF {
+			return nil, errors.New("invalid request payload")
 		}
-		return nil, errors.New("invalid request payload")
 	}
 
-	// Handle empty JSON object
-	if len(payload) == 0 {
-		return &types.TaskPayload{
-			Args:   nil,
-			Kwargs: make(map[string]interface{}),
-		}, nil
+	taskPayload := &types.TaskPayload{
+		Args:   nil,
+		Kwargs: make(map[string]interface{}),
 	}
 
-	taskPayload := &types.TaskPayload{}
+	if len(payload) > 0 {
+		parseRequestPayload(payload, taskPayload)
+	}
 
+	// Parse query params into kwargs entries
+	queryParams := ctx.Request().URL.Query()
+	if len(queryParams) > 0 {
+		parseRequestArgs(queryParams, taskPayload)
+	}
+
+	return taskPayload, nil
+}
+
+func parseRequestPayload(payload map[string]interface{}, taskPayload *types.TaskPayload) {
 	// Check if payload is a list (args)
 	if args, ok := payload["args"].([]interface{}); ok {
 		taskPayload.Args = args
@@ -51,6 +58,44 @@ func SerializeHttpPayload(ctx echo.Context) (*types.TaskPayload, error) {
 		// Remaining payload is treated as kwargs if not empty
 		taskPayload.Kwargs = payload
 	}
+}
 
-	return taskPayload, nil
+func parseRequestArgs(queryParams url.Values, taskPayload *types.TaskPayload) {
+	if taskPayload.Kwargs == nil {
+		taskPayload.Kwargs = make(map[string]interface{})
+	}
+
+	for key, values := range queryParams {
+		// Check if query param is singular or a list
+		if len(values) == 1 {
+			taskPayload.Kwargs[key] = tryParseNumeric(values[0])
+			continue
+		}
+
+		allFloat := true
+		floats := make([]float64, len(values))
+
+		for i, value := range values {
+			convertedValue := tryParseNumeric(value)
+			switch v := convertedValue.(type) {
+			case float64:
+				floats[i] = v
+			default:
+				allFloat = false
+				continue
+			}
+		}
+		if allFloat {
+			taskPayload.Kwargs[key] = floats
+		} else {
+			taskPayload.Kwargs[key] = values
+		}
+	}
+}
+
+func tryParseNumeric(s string) interface{} {
+	if floatVal, err := strconv.ParseFloat(s, 64); err == nil {
+		return floatVal
+	}
+	return s
 }

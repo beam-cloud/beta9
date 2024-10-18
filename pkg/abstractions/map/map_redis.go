@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	pb "github.com/beam-cloud/beta9/proto"
+)
+
+const (
+	maxMapValueSize = (1024 * 1024) + 13 // 1 MiB + 13 bytes for cloudpickle header
+	maxMapValueTtls = 7 * 24 * time.Hour // 1 week
 )
 
 type RedisMapService struct {
@@ -26,7 +32,15 @@ func NewRedisMapService(rdb *common.RedisClient) (MapService, error) {
 func (m *RedisMapService) MapSet(ctx context.Context, in *pb.MapSetRequest) (*pb.MapSetResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	err := m.rdb.Set(ctx, Keys.MapEntry(authInfo.Workspace.Name, in.Name, in.Key), in.Value, 0).Err()
+	if len(in.Value) > maxMapValueSize {
+		return &pb.MapSetResponse{Ok: false, ErrMsg: "Value cannot be larger than 1 MiB"}, nil
+	}
+
+	if time.Duration(in.Ttl)*time.Second > maxMapValueTtls {
+		return &pb.MapSetResponse{Ok: false, ErrMsg: "TTL cannot be longer than 1 week"}, nil
+	}
+
+	err := m.rdb.Set(ctx, Keys.MapEntry(authInfo.Workspace.Name, in.Name, in.Key), in.Value, time.Duration(in.Ttl)*time.Second).Err()
 	if err != nil {
 		return &pb.MapSetResponse{Ok: false}, nil
 	}

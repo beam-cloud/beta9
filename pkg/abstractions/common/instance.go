@@ -10,7 +10,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"go.opentelemetry.io/otel/attribute"
 )
 
 const IgnoreScalingEventInterval = 10 * time.Second
@@ -94,6 +93,7 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 
 	instance := &AutoscaledInstance{
 		Lock:                     lock,
+		InstanceLockKey:          cfg.InstanceLockKey,
 		Ctx:                      ctx,
 		CancelFunc:               cancelFunc,
 		IsActive:                 true,
@@ -178,7 +178,6 @@ func (i *AutoscaledInstance) ConsumeContainerEvent(event types.ContainerEvent) {
 }
 
 func (i *AutoscaledInstance) Monitor() error {
-
 	go i.Autoscaler.Start(i.Ctx) // Start the autoscaler
 	ignoreScalingEventWindow := time.Now().Add(-IgnoreScalingEventInterval)
 
@@ -212,22 +211,19 @@ func (i *AutoscaledInstance) Monitor() error {
 			if err := i.HandleScalingEvent(desiredContainers); err != nil {
 				if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 					if time.Now().After(ignoreScalingEventWindow) {
-						log.Printf("<%s> throttled by concurrency limit", i.Name)
+						log.Printf("<%s> throttled by concurrency limit\n", i.Name)
 						ignoreScalingEventWindow = time.Now().Add(IgnoreScalingEventInterval)
 					}
 				}
 				continue
 			}
+
 		}
 	}
 }
 
 func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
-	trace := common.TraceFunc(i.Ctx, "pkg/abstractions/common", "AutoscaledInstance.HandleScalingEvent",
-		attribute.String("stub.id", i.Stub.ExternalId))
-	defer trace.End()
-
-	err := i.Lock.Acquire(i.Ctx, i.InstanceLockKey, common.RedisLockOptions{TtlS: 10, Retries: 0})
+	err := i.Lock.Acquire(context.Background(), i.InstanceLockKey, common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
 	}
@@ -264,10 +260,6 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 }
 
 func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
-	trace := common.TraceFunc(i.Ctx, "pkg/abstractions/common", "AutoscaledInstance.State",
-		attribute.String("stub.id", i.Stub.ExternalId))
-	defer trace.End()
-
 	containers, err := i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
 	if err != nil {
 		return nil, err
