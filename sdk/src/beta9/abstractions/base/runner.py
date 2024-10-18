@@ -57,7 +57,7 @@ _stub_creation_lock = threading.Lock()
 _stub_created_for_workspace = False
 
 
-def _get_stub_created_for_workspace() -> bool:
+def _is_stub_created_for_workspace() -> bool:
     global _stub_created_for_workspace
     _stub_created_for_workspace = False
     return _stub_created_for_workspace
@@ -395,7 +395,7 @@ class RunnerAbstraction(BaseAbstraction):
                 ),
                 concurrent_requests=self.concurrent_requests,
             )
-            if _get_stub_created_for_workspace():
+            if _is_stub_created_for_workspace():
                 stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
                     stub_request
                 )
