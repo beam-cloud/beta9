@@ -14,6 +14,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/bsm/redislock"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -311,19 +312,22 @@ func (l *RedisLock) Release(key string) error {
 	return redislock.ErrLockNotHeld
 }
 
-// Attempts to copy field values of the same name from the src to the dst struct.
-func CopyStruct(src, dst interface{}) {
-	srcVal := reflect.ValueOf(src).Elem()
-	dstVal := reflect.ValueOf(dst).Elem()
-
-	for i := 0; i < srcVal.NumField(); i++ {
-		srcField := srcVal.Type().Field(i).Name
-		dstField := dstVal.FieldByName(srcField)
-
-		if dstField.IsValid() && dstField.CanSet() {
-			dstField.Set(srcVal.Field(i))
-		}
+func CopyStruct(src, dst any) error {
+	config := mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           dst,
 	}
+
+	decoder, err := mapstructure.NewDecoder(&config)
+	if err != nil {
+		return err
+	}
+
+	if err := decoder.Decode(src); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Copies the result of HGetAll to a provided struct.
