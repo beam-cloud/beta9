@@ -127,10 +127,9 @@ func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {
 func (wpc *ExternalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := wpc.generateWorkerId()
 	worker := &types.Worker{
-		Id:         workerId,
-		FreeCpu:    cpu,
-		FreeMemory: memory,
-		// Gpu:          gpuType,
+		Id:           workerId,
+		FreeCpu:      cpu,
+		FreeMemory:   memory,
 		FreeGpuCount: gpuCount,
 		Status:       types.WorkerStatusPending,
 		PoolName:     wpc.poolName,
