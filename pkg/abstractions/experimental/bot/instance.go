@@ -70,7 +70,7 @@ func (i *botInstance) Start() error {
 
 			log.Printf("bot config: %v\n", i.botConfig)
 
-			time.Sleep(time.Second)
+			time.Sleep(time.Duration(i.appConfig.Abstractions.Bot.StepIntervalS) * time.Second)
 		}
 	}
 }
