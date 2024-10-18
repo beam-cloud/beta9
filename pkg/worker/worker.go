@@ -43,11 +43,8 @@ type Worker struct {
 	imageMountPath          string
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
-<<<<<<< HEAD
 	cedanaClient            *CedanaClient
-=======
 	fileCacheManager        *FileCacheManager
->>>>>>> main
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
 	containerMountManager   *ContainerMountManager
@@ -314,7 +311,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
-<<<<<<< HEAD
 	if request.CheckpointEnabled && s.config.Checkpointing.Enabled {
 		port, err := getRandomFreePort()
 		if err != nil {
@@ -331,13 +327,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		}
 	}
 
-	err = s.containerMountManager.SetupContainerMounts(request.ContainerId, request.Mounts)
-	if err != nil {
-		return err
-	}
-
-=======
->>>>>>> main
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
 
