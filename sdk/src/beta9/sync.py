@@ -1,6 +1,7 @@
 import hashlib
 import os
 import tempfile
+import threading
 import zipfile
 from pathlib import Path
 from queue import Queue
@@ -24,6 +25,23 @@ from .config import get_settings
 from .env import is_local
 
 _settings = get_settings()
+_sync_lock = threading.Lock()
+
+# Global workspace object id to signal to any other threads that the workspace has already been synced
+_workspace_object_id = ""
+
+
+def set_workspace_object_id(object_id: str) -> None:
+    global _workspace_object_id
+    _workspace_object_id = object_id
+
+
+def get_workspace_object_id() -> str:
+    global _workspace_object_id
+    if not _workspace_object_id:
+        _workspace_object_id = ""
+    return _workspace_object_id
+
 
 CHUNK_SIZE = 1024 * 1024 * 4
 IGNORE_FILE_NAME = f".{_settings.name}ignore".lower()
@@ -117,6 +135,13 @@ class FileSyncer:
         return hasher.hexdigest()
 
     def sync(self) -> FileSyncResult:
+        with _sync_lock:
+            if get_workspace_object_id() != "":
+                terminal.header("Files already synced")
+                return FileSyncResult(success=True, object_id=get_workspace_object_id())
+            return self._sync()
+
+    def _sync(self) -> FileSyncResult:
         terminal.header("Syncing files")
 
         self._init_ignore_file()
@@ -151,9 +176,13 @@ class FileSyncer:
 
             terminal.header("Uploading")
             put_response = self.gateway_stub.put_object_stream(stream_requests())
+            if put_response.ok:
+                global _workspace_object_id
+                _workspace_object_id = put_response.object_id
 
         elif head_response.exists and head_response.ok:
-            terminal.header("Files synced")
+            terminal.header("Files already synced")
+            set_workspace_object_id(head_response.object_id)
             return FileSyncResult(success=True, object_id=head_response.object_id)
 
         os.remove(temp_zip_name)

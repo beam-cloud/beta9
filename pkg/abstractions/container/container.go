@@ -171,6 +171,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		Workspace:   *authInfo.Workspace,
 		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.container", base64.StdEncoding.EncodeToString(in.Command)},
 		Mounts:      mounts,
+		Stub:        *stub,
 	})
 	if err != nil {
 		return err

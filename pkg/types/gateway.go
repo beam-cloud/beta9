@@ -5,6 +5,7 @@ import (
 )
 
 const (
+	DefaultGatewayServiceName          string        = "gateway"
 	DefaultExtractedObjectPath         string        = "/data/unpacked"
 	DefaultVolumesPath                 string        = "/data/volumes"
 	DefaultObjectPath                  string        = "/data/objects"

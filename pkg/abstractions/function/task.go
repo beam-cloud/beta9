@@ -158,6 +158,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		Workspace:   stub.Workspace,
 		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
 		Mounts:      mounts,
+		Stub:        *stub,
 	})
 	if err != nil {
 		return err

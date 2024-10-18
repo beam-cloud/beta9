@@ -1,6 +1,6 @@
 import glob
 from pathlib import Path
-from typing import Iterable, Union
+from typing import Iterable, List, Union
 
 import click
 from rich.table import Column, Table, box
@@ -142,7 +142,7 @@ def ls(service: ServiceClient, remote_path: str):
 @extraclick.pass_service_client
 def cp(service: ServiceClient, local_path: str, remote_path: str):
     local_path = str(Path(local_path).resolve())
-    files_to_upload = []
+    files_to_upload: List[Path] = []
 
     for match in glob.glob(local_path, recursive=True):
         mpath = Path(match)
@@ -159,7 +159,7 @@ def cp(service: ServiceClient, local_path: str, remote_path: str):
 
     desc_width = max((len(f.name) for f in files_to_upload))
     for file in files_to_upload:
-        dst = str(remote_path / file.relative_to(Path.cwd()))
+        dst = (remote_path / file.relative_to(Path.cwd())).as_posix()
         req = (
             CopyPathRequest(path=dst, content=chunk)
             for chunk in read_with_progress(file, desc_width=desc_width)

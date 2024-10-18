@@ -79,6 +79,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			Workspace:   *i.Workspace,
 			EntryPoint:  i.EntryPoint,
 			Mounts:      mounts,
+			Stub:        *i.Stub,
 		}
 
 		err := i.Scheduler.Run(runRequest)

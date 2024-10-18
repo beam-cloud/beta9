@@ -84,6 +84,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			Workspace:   *i.Workspace,
 			EntryPoint:  i.EntryPoint,
 			Mounts:      mounts,
+			Stub:        *i.Stub,
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers
@@ -96,7 +97,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 
 		err := i.Scheduler.Run(runRequest)
 		if err != nil {
-			log.Printf("<%s> unable to run  container: %v", i.Name, err)
+			log.Printf("<%s> unable to run container: %v", i.Name, err)
 			return err
 		}
 

@@ -185,7 +185,9 @@ type WorkerConfig struct {
 	ImagePullSecrets           []string                    `key:"imagePullSecrets" json:"image_pull_secrets"`
 	Namespace                  string                      `key:"namespace" json:"namespace"`
 	ServiceAccountName         string                      `key:"serviceAccountName" json:"service_account_name"`
-	ResourcesEnforced          bool                        `key:"resourcesEnforced" json:"resources_enforced"`
+	JobResourcesEnforced       bool                        `key:"jobResourcesEnforced" json:"job_resources_enforced"`
+	RunCResourcesEnforced      bool                        `key:"runcResourcesEnforced" json:"runc_resources_enforced"`
+	EagerCacheStubCode         bool                        `key:"eagerCacheStubCode" json:"eager_cache_stub_code"`
 	DefaultWorkerCPURequest    int64                       `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
 	DefaultWorkerMemoryRequest int64                       `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
 	ImagePVCName               string                      `key:"imagePVCName" json:"image_pvc_name"`
@@ -322,15 +324,23 @@ type MonitoringConfig struct {
 	Prometheus               PrometheusConfig `key:"prometheus" json:"prometheus"`
 	OpenMeter                OpenMeterConfig  `key:"openmeter" json:"openmeter"`
 	FluentBit                FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
-	ContainerMetricsInterval time.Duration    `key:"containerMetricsInterval"`
+	Telemetry                TelemetryConfig  `key:"telemetry" json:"telemetry"`
+	ContainerMetricsInterval time.Duration    `key:"containerMetricsInterval" json:"container_metrics_interval"`
 }
-
 type PrometheusConfig struct {
 	AgentUrl      string `key:"agentUrl" json:"agent_url"`
 	AgentUsername string `key:"agentUsername" json:"agent_username"`
 	AgentPassword string `key:"agentPassword" json:"agent_password"`
 	ScrapeWorkers bool   `key:"scrapeWorkers" json:"scrape_workers"`
 	Port          int    `key:"port" json:"port"`
+}
+
+type TelemetryConfig struct {
+	Enabled          bool          `key:"enabled" json:"enabled"`
+	Endpoint         string        `key:"endpoint" json:"endpoint"`
+	MeterInterval    time.Duration `key:"meterInterval" json:"meter_interval"`
+	TraceInterval    time.Duration `key:"traceInterval" json:"trace_interval"`
+	TraceSampleRatio float64       `key:"traceSampleRatio" json:"trace_sample_ratio"`
 }
 
 type OpenMeterConfig struct {

@@ -12,7 +12,7 @@ from ..clients.image import (
     VerifyImageBuildRequest,
     VerifyImageBuildResponse,
 )
-from ..type import PythonVersion
+from ..type import PythonVersion, PythonVersionAlias
 
 try:
     from typing import TypeAlias
@@ -51,7 +51,7 @@ class Image(BaseAbstraction):
 
     def __init__(
         self,
-        python_version: Union[PythonVersion, str] = PythonVersion.Python310,
+        python_version: PythonVersionAlias = PythonVersion.Python310,
         python_packages: Union[List[str], str] = [],
         commands: List[str] = [],
         base_image: Optional[str] = None,
@@ -242,7 +242,7 @@ class Image(BaseAbstraction):
             self.build_steps.append(BuildStep(command=command, type="shell"))
         return self
 
-    def add_python_packages(self, packages: Sequence[str]) -> "Image":
+    def add_python_packages(self, packages: Union[Sequence[str], str]) -> "Image":
         """
         Add python packages that will be installed when building the image.
 
@@ -250,11 +250,20 @@ class Image(BaseAbstraction):
         order they are added.
 
         Parameters:
-            packages: The Python packages to add. Valid package names are: numpy, pandas==2.2.2, etc.
+            packages: The Python packages to add or the path to a requirements.txt file. Valid package names are: numpy, pandas==2.2.2, etc.
 
         Returns:
             Image: The Image object.
         """
+
+        if isinstance(packages, str):
+            try:
+                packages = self._sanitize_python_packages(self._load_requirements_file(packages))
+            except FileNotFoundError:
+                raise ValueError(
+                    f"Could not find valid requirements.txt file at {packages}. Libraries must be specified as a list of valid package names or a path to a requirements.txt file."
+                )
+
         for package in packages:
             self.build_steps.append(BuildStep(command=package, type="pip"))
         return self

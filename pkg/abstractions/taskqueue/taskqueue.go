@@ -142,6 +142,19 @@ func NewRedisTaskQueueService(
 	return tq, nil
 }
 
+func (tq *RedisTaskQueue) isPublic(stubId string) (*types.Workspace, error) {
+	instance, err := tq.getOrCreateQueueInstance(stubId)
+	if err != nil {
+		return nil, err
+	}
+
+	if instance.StubConfig.Authorized {
+		return nil, errors.New("unauthorized")
+	}
+
+	return instance.Workspace, nil
+}
+
 func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
 	return &TaskQueueTask{
 		tq:  tq,
@@ -539,6 +552,7 @@ func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...fun
 	// Create base autoscaled instance
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(tq.ctx, &abstractions.AutoscaledInstanceConfig{
 		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
+		AppConfig:           tq.config,
 		Rdb:                 tq.rdb,
 		Stub:                stub,
 		StubConfig:          stubConfig,

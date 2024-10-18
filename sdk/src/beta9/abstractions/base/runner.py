@@ -65,6 +65,7 @@ class RunnerAbstraction(BaseAbstraction):
         gpu: GpuTypeAlias = GpuType.NoGPU,
         image: Image = Image(),
         workers: int = 1,
+        concurrent_requests: int = 1,
         keep_warm_seconds: float = 10.0,
         max_pending_tasks: int = 100,
         retries: int = 3,
@@ -102,6 +103,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.volumes = volumes or []
         self.secrets = [SecretVar(name=s) for s in (secrets or [])]
         self.workers = workers
+        self.concurrent_requests = concurrent_requests
         self.keep_warm_seconds = keep_warm_seconds
         self.max_pending_tasks = max_pending_tasks
         self.autoscaler = autoscaler
@@ -382,6 +384,7 @@ class RunnerAbstraction(BaseAbstraction):
                         timeout=self.task_policy.timeout,
                         ttl=self.task_policy.ttl,
                     ),
+                    concurrent_requests=self.concurrent_requests,
                     extra=json.dumps(self.extra),
                 )
             )
