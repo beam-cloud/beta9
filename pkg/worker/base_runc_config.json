@@ -173,12 +173,12 @@
 		},
 		{
 			"destination": "/usr/lib/worker/x86_64-linux-gnu",
-			"type": "tmpfs",
+			"type": "bind",
 			"source": "/usr/lib/x86_64-linux-gnu",
 			"options": [
 				"rbind",
-				"rprivate",
 				"nosuid",
+				"rslave",
 				"nodev",
 				"rw"
 			]

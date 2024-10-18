@@ -145,7 +145,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		wpc.config.Worker.ImageRegistry,
 		wpc.config.Worker.ImageName,
 		// wpc.config.Worker.ImageTag,
-		"devel",
+		"devel1",
 	)
 
 	resources := corev1.ResourceRequirements{}
