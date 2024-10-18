@@ -299,8 +299,15 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
-	if request.CheckpointEnabled {
-		cedanaClient, err := NewCedanaClient(context.TODO())
+	if request.CheckpointEnabled && s.config.Checkpointing.Enabled {
+		port, err := getRandomFreePort()
+		if err != nil {
+			log.Printf("<%s> - failed to get random port for cedana, trying default (%d): %v\n", containerId, DefaultCedanaPort, err)
+			port = DefaultCedanaPort
+		}
+
+		gpuEnabled := request.Gpu != ""
+		cedanaClient, err := NewCedanaClient(s.ctx, s.config.Checkpointing.Cedana, port, gpuEnabled)
 		if err != nil {
 			log.Printf("<%s> - C/R unavailable, failed to create cedana client: %v\n", containerId, err)
 		} else {
@@ -311,15 +318,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	err = s.containerMountManager.SetupContainerMounts(request.ContainerId, request.Mounts)
 	if err != nil {
 		return err
-	}
-
-	if request.CheckpointEnabled {
-		cedanaClient, err := NewCedanaClient(context.TODO())
-		if err != nil {
-			log.Printf("<%s> - C/R unavailable, failed to create cedana client: %v\n", containerId, err)
-		} else {
-			s.cedanaClient = cedanaClient
-		}
 	}
 
 	// Read spec from bundle
@@ -353,8 +351,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	// Start the container
 	go s.spawn(request, spec, outputChan, opts)
 
-	log.Printf("<%s> - checkpoint enabled: %t\n", request.ContainerId, request.CheckpointEnabled)
-	if request.CheckpointEnabled && s.cedanaClient != nil {
+	if s.cedanaClient != nil {
 		go s.createCheckpoint(request)
 	}
 
@@ -414,47 +411,45 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 	}
 }
 
-// TODO: might be better to just encapsulate this logic directly in the cedana client
-// as long as it has access to the containerInstances map, I think that's all it needs
+// Waits for the endpoint to be ready to checkpoint at the desired point in execution, ie.
+// after all endpoint workers have reached a checkpointable state. /health is configured to
+// return 200 only when all workers are ready.
 func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
-	// TODO: we need a reliable way to detect that the container is completely booted
-
 	log.Printf("<%s> - waiting for container to be ready for checkpoint\n", request.ContainerId)
 
 	start := time.Now()
 	timeout := time.Duration(containerCheckpointTimeout)
 	ready := false
-	healthCheckOk := false
+	managing := false
+	gpuEnabled := request.Gpu != ""
 	for time.Since(start) < timeout {
-		if !healthCheckOk {
-			details, err := s.cedanaClient.DetailedHealthCheck(context.TODO())
-			if err == nil && details != nil && len(details.UnhealthyReasons) == 0 {
-				log.Printf("<%s> - cedana health check OK: %+v\n", request.ContainerId, details)
-				healthCheckOk = true
+		instance, exists := s.containerInstances.Get(request.ContainerId)
+		if exists {
+			// Start managing the container with Cedana
+			if !managing {
+				err := s.cedanaClient.Manage(s.ctx, instance.Id, gpuEnabled)
+				if err == nil {
+					managing = true
+				} else {
+					log.Printf("<%s> - cedana manage failed, container may not be started yet: %+v\n", instance.Id, err)
+				}
 			} else {
-				if err == nil && len(details.UnhealthyReasons) > 0 {
-					log.Printf("<%s> - cedana health check failed: %+v\n", request.ContainerId, details.UnhealthyReasons)
+				// Endpoint already configured to ensure /health is successful only if all
+				// concurrent workers are ready, and are roughly at the same point in execution
+				resp, err := http.Get(fmt.Sprintf("http://0.0.0.0:%d/health", instance.Port))
+				log.Printf("<%s> - endpoint health check response: %+v\n", request.ContainerId, resp)
+				if err == nil && resp.StatusCode == 200 {
+					ready = true
 					break
+				} else {
+					log.Printf("<%s> - endpoint not ready for checkpoint: %+v\n", instance.Id, err)
 				}
 				if err != nil {
 					log.Printf("<%s> - cedana health check failed: %+v\n", request.ContainerId, err)
 				}
 			}
 		} else {
-			instance, exists := s.containerInstances.Get(request.ContainerId)
-			if !exists {
-				return
-			}
-			// Endpoint already configured to ensure /health is successful only if all
-			// concurrent workers are ready, and are roughly at the same point in execution
-			resp, err := http.Get(fmt.Sprintf("http://0.0.0.0:%d/health", instance.Port))
-			log.Printf("<%s> - health check response: %+v\n", request.ContainerId, resp)
-			if err == nil && resp.StatusCode == 200 {
-				ready = true
-				break
-			} else {
-				log.Printf("<%s> - container not ready for checkpoint: %+v\n", request.ContainerId, err)
-			}
+			log.Printf("<%s> - container instance not found yet\n", request.ContainerId)
 		}
 
 		time.Sleep(time.Second)
@@ -465,8 +460,7 @@ func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
 		return
 	}
 
-	gpuEnabled := request.Gpu != ""
-	err := s.cedanaClient.Checkpoint(context.TODO(), request.ContainerId, gpuEnabled)
+	err := s.cedanaClient.Checkpoint(s.ctx, request.ContainerId)
 	if err != nil {
 		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
 		return
@@ -774,7 +768,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
-		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled),
+		fmt.Sprintf("CHECKPOINT_ENABLED=%t", s.cedanaClient != nil),
 		"PYTHONUNBUFFERED=1",
 	}
 
@@ -847,82 +841,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart = nil
 	}
 
-	if request.CheckpointEnabled {
-		// XXX: Modify the entrypoint to start process using cedana. Won't be needed once daemon is started in
-		// worker instead as cedana will be able to checkpoint/restore the container directly.
-		configJSON, err := json.Marshal(s.config.Checkpointing.Cedana)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse cedana config: %v", err)
-		}
-		gpuEnabled := request.Gpu != ""
-		originalArgs := "\"" + strings.Join(spec.Process.Args, " ") + "\""
-		cudaVersion := "12.4" // XXX: Should detect and modify if using custom image
-		cedanaArgs := fmt.Sprintf("%s daemon start --gpu-enabled=%t --cuda %s --config='%s' & %s exec %s -w %s -i %s --attach --gpu-enabled=%t",
-			CedanaPath,
-			gpuEnabled,
-			cudaVersion,
-			configJSON,
-			CedanaPath,
-			originalArgs,
-			defaultContainerDirectory,
-			request.ContainerId,
-			gpuEnabled)
-		spec.Process.Args = []string{"/bin/bash", "-c", cedanaArgs}
-		spec.Process.Env = append(spec.Process.Env, "CEDANA_CLI_WAIT_FOR_READY=true")
-		// TODO: kill daemon when container is stopped
-
-		// Add privileged capabilities for C/R
-		// XXX: Probably more than we need for now. Anyways won't be needed in future when running
-		// cedana as a daemon in the worker instead.
-		capabilities := []string{
-			"CAP_CHOWN",
-			"CAP_DAC_OVERRIDE",
-			"CAP_DAC_READ_SEARCH",
-			"CAP_FOWNER",
-			"CAP_FSETID",
-			"CAP_KILL",
-			"CAP_SETGID",
-			"CAP_SETUID",
-			"CAP_SETPCAP",
-			"CAP_LINUX_IMMUTABLE",
-			"CAP_NET_BIND_SERVICE",
-			"CAP_NET_BROADCAST",
-			"CAP_NET_ADMIN",
-			"CAP_NET_RAW",
-			"CAP_IPC_LOCK",
-			"CAP_IPC_OWNER",
-			"CAP_SYS_MODULE",
-			"CAP_SYS_RAWIO",
-			"CAP_SYS_CHROOT",
-			"CAP_SYS_PTRACE",
-			"CAP_SYS_PACCT",
-			"CAP_SYS_ADMIN",
-			"CAP_SYS_BOOT",
-			"CAP_SYS_NICE",
-			"CAP_SYS_RESOURCE",
-			"CAP_SYS_TIME",
-			"CAP_SYS_TTY_CONFIG",
-			"CAP_MKNOD",
-			"CAP_LEASE",
-			"CAP_AUDIT_WRITE",
-			"CAP_AUDIT_CONTROL",
-			"CAP_SETFCAP",
-			"CAP_MAC_OVERRIDE",
-			"CAP_MAC_ADMIN",
-			"CAP_SYSLOG",
-			"CAP_WAKE_ALARM",
-			"CAP_BLOCK_SUSPEND",
-			"CAP_AUDIT_READ",
-			"CAP_PERFMON",
-			"CAP_BPF",
-			"CAP_CHECKPOINT_RESTORE",
-		}
-
-		spec.Process.Capabilities.Bounding = append(spec.Process.Capabilities.Bounding, capabilities...)
-		spec.Process.Capabilities.Effective = append(spec.Process.Capabilities.Effective, capabilities...)
-		spec.Process.Capabilities.Inheritable = append(spec.Process.Capabilities.Inheritable, capabilities...)
-		spec.Process.Capabilities.Permitted = append(spec.Process.Capabilities.Permitted, capabilities...)
-		spec.Process.Capabilities.Ambient = append(spec.Process.Capabilities.Ambient, capabilities...)
+	// We need to modify the spec to support Cedana C/R, only for GPU containers
+	if s.cedanaClient != nil && request.Gpu != "" {
+		// TODO: add cedana GPU stuff
+		// spec.Hooks.Prestart = nil
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
