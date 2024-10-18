@@ -100,19 +100,19 @@ worker:
         minFreeMemory: 32Gi
         sharedMemoryLimitPct: 100%
     # example gpu worker pool
-    nvidia:
-      mode: local
-      gpuType: any
-      runtime: nvidia
-      jobSpec:
-        nodeSelector: {}
-      poolSizing:
-        defaultWorkerCpu: 1000m
-        defaultWorkerGpuType: ""
-        defaultWorkerMemory: 1Gi
-        minFreeCpu:
-        minFreeGpu:
-        minFreeMemory:
+    # nvidia:
+    #   mode: local
+    #   gpuType: any
+    #   runtime: nvidia
+    #   jobSpec:
+    #     nodeSelector: {}
+    #   poolSizing:
+    #     defaultWorkerCpu: 1000m
+    #     defaultWorkerGpuType: ""
+    #     defaultWorkerMemory: 1Gi
+    #     minFreeCpu:
+    #     minFreeGpu:
+    #     minFreeMemory:
   # global pool attributes
   useHostResolvConf: true
   hostNetwork: false
