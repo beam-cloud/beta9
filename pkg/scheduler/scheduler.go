@@ -278,10 +278,10 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 }
 
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
-	gpuRequestsMap := map[string]bool{}
+	gpuRequestsMap := map[string]int{}
 
-	for _, gpu := range request.GpuRequest {
-		gpuRequestsMap[gpu] = true
+	for index, gpu := range request.GpuRequest {
+		gpuRequestsMap[gpu] = index
 	}
 
 	filteredWorkers := []*types.Worker{}
@@ -298,10 +298,12 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 
 		if len(gpuRequestsMap) > 0 {
 			// Validate GPU resource availability
-			_, validGpu := gpuRequestsMap[worker.Gpu]
+			priorityModifier, validGpu := gpuRequestsMap[worker.Gpu]
 			if !validGpu || worker.FreeGpuCount < request.GpuCount {
 				continue
 			}
+
+			worker.Priority -= int32(priorityModifier) // This will account for the preset priorities for the pool type as well as the order of the GPU requests
 		}
 
 		filteredWorkers = append(filteredWorkers, worker)
