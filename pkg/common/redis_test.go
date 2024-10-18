@@ -90,7 +90,7 @@ func TestCopyStruct(t *testing.T) {
 	tests := []struct {
 		name     string
 		src      any
-		dest     any
+		dst      any
 		expected any
 	}{
 		{
@@ -100,7 +100,7 @@ func TestCopyStruct(t *testing.T) {
 				PoolSize:        10,
 				ConnMaxLifetime: time.Second,
 			},
-			dest: &types.RedisConfig{},
+			dst: &types.RedisConfig{},
 			expected: &types.RedisConfig{
 				ClientName:      "hello",
 				PoolSize:        10,
@@ -114,7 +114,7 @@ func TestCopyStruct(t *testing.T) {
 				PoolSize:        10,
 				ConnMaxLifetime: time.Second,
 			},
-			dest: &types.RedisConfig{
+			dst: &types.RedisConfig{
 				ClientName: "world",
 				PoolSize:   20,
 			},
@@ -143,7 +143,7 @@ func TestCopyStruct(t *testing.T) {
 				Priority:             -1,
 				BuildVersion:         "0.1.0",
 			},
-			dest: &types.Worker{
+			dst: &types.Worker{
 				Id:                   "456",
 				Status:               types.WorkerStatusDisabled,
 				TotalCpu:             100000,
@@ -197,7 +197,7 @@ func TestCopyStruct(t *testing.T) {
 				AutoConsolidate:   true,
 				AgentVersion:      "0.1.0",
 			},
-			dest: &types.ProviderMachineState{
+			dst: &types.ProviderMachineState{
 				MachineId:         "456",
 				PoolName:          "to be overwritten",
 				Status:            types.MachineStatusPending,
@@ -239,7 +239,7 @@ func TestCopyStruct(t *testing.T) {
 				Status:   types.WorkerStatusAvailable,
 				TotalCpu: 10,
 			},
-			dest: &types.Worker{},
+			dst: &types.Worker{},
 			expected: &types.Worker{
 				Id:                   "123",
 				Status:               types.WorkerStatusAvailable,
@@ -269,7 +269,7 @@ func TestCopyStruct(t *testing.T) {
 					Id: 5,
 				},
 			},
-			dest: &types.ContainerRequest{},
+			dst: &types.ContainerRequest{},
 			expected: &types.ContainerRequest{
 				ContainerId: "123",
 				Env: []string{
@@ -285,9 +285,9 @@ func TestCopyStruct(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			CopyStruct(test.src, test.dest)
+			CopyStruct(test.src, test.dst)
 
-			assert.Equal(t, test.src, test.dest)
+			assert.Equal(t, test.expected, test.dst)
 		})
 	}
 }
