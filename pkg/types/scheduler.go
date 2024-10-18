@@ -67,8 +67,6 @@ type ContainerState struct {
 	Memory      int64           `redis:"memory" json:"memory"`
 }
 
-type GpuRequest []string
-
 type ContainerRequest struct {
 	ContainerId      string          `json:"container_id"`
 	EntryPoint       []string        `json:"entry_point"`
@@ -76,7 +74,7 @@ type ContainerRequest struct {
 	Cpu              int64           `json:"cpu"`
 	Memory           int64           `json:"memory"`
 	Gpu              string          `json:"gpu"`
-	GpuRequest       GpuRequest      `json:"gpu_request"`
+	GpuRequest       []string        `json:"gpu_request"`
 	GpuCount         uint32          `json:"gpu_count"`
 	SourceImage      *string         `json:"source_image"`
 	SourceImageCreds string          `json:"source_image_creds"`

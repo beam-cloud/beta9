@@ -80,13 +80,12 @@ func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
 }
 
-func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := wpc.generateWorkerId()
 	worker := &types.Worker{
 		Id:           workerId,
 		FreeCpu:      cpu,
 		FreeMemory:   memory,
-		Gpu:          gpuType,
 		FreeGpuCount: gpuCount,
 		Status:       types.WorkerStatusPending,
 	}
@@ -125,13 +124,13 @@ func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
 }
 
-func (wpc *ExternalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+func (wpc *ExternalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := wpc.generateWorkerId()
 	worker := &types.Worker{
-		Id:           workerId,
-		FreeCpu:      cpu,
-		FreeMemory:   memory,
-		Gpu:          gpuType,
+		Id:         workerId,
+		FreeCpu:    cpu,
+		FreeMemory: memory,
+		// Gpu:          gpuType,
 		FreeGpuCount: gpuCount,
 		Status:       types.WorkerStatusPending,
 		PoolName:     wpc.poolName,
@@ -343,13 +342,13 @@ func TestGetController(t *testing.T) {
 			t.Errorf("Expected default controller, got %v, error: %v", defaultController, err)
 		}
 
-		a10gRequest := &types.ContainerRequest{Gpu: "A10G"}
+		a10gRequest := &types.ContainerRequest{GpuRequest: []string{"A10G"}}
 		a10gController, err := wb.getControllers(a10gRequest)
 		if err != nil || a10gController[0].Name() != "beta9-a10g" {
 			t.Errorf("Expected beta9-a10g controller, got %v, error: %v", a10gController, err)
 		}
 
-		t4Request := &types.ContainerRequest{Gpu: "T4"}
+		t4Request := &types.ContainerRequest{GpuRequest: []string{"T4"}}
 		t4Controller, err := wb.getControllers(t4Request)
 		if err != nil || t4Controller[0].Name() != "beta9-t4" {
 			t.Errorf("Expected beta9-t4 controller, got %v, error: %v", t4Controller, err)
@@ -363,7 +362,7 @@ func TestGetController(t *testing.T) {
 	})
 
 	t.Run("returns error if no suitable controller found", func(t *testing.T) {
-		unknownRequest := &types.ContainerRequest{Gpu: "UNKNOWN_GPU"}
+		unknownRequest := &types.ContainerRequest{GpuRequest: []string{"UNKNOWN_GPU"}}
 		_, err := wb.getControllers(unknownRequest)
 		if err == nil {
 			t.Errorf("Expected error for unknown GPU type, got nil")

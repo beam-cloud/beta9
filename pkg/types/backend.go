@@ -318,6 +318,14 @@ func (g *GpuType) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (g *GpuType) MarshalJSON() ([]byte, error) {
+	if *g == "" {
+		return []byte("0"), nil
+	}
+
+	return json.Marshal(string(*g))
+}
+
 func (g *GpuType) String() string {
 	return string(*g)
 }

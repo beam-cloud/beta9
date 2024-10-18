@@ -68,6 +68,11 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 		gpuCount = 1
 	}
 
+	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)
+	if i.StubConfig.Runtime.Gpu != "" {
+		gpuRequest = append(gpuRequest, i.StubConfig.Runtime.Gpu.String())
+	}
+
 	for c := 0; c < containersToRun; c++ {
 		containerId := i.genContainerId()
 
@@ -76,7 +81,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			Env:         env,
 			Cpu:         i.StubConfig.Runtime.Cpu,
 			Memory:      i.StubConfig.Runtime.Memory,
-			GpuRequest:  types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus),
+			GpuRequest:  gpuRequest,
 			GpuCount:    uint32(gpuCount),
 			ImageId:     i.StubConfig.Runtime.ImageId,
 			StubId:      i.Stub.ExternalId,

@@ -164,10 +164,6 @@ func (s *Scheduler) Stop(containerId string) error {
 func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoolController, error) {
 	controllers := []WorkerPoolController{}
 	combinedRequestedGpu := request.GpuRequest
-	if request.Gpu != "" {
-		// This is for backwards compatibility
-		combinedRequestedGpu = append(combinedRequestedGpu, request.Gpu)
-	}
 
 	if request.PoolSelector != "" {
 		wp, ok := s.workerPoolManager.GetPool(request.PoolSelector)
@@ -188,10 +184,10 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 				controllers = append(controllers, wp.Controller)
 			}
 		}
+	}
 
-		if len(controllers) == 0 {
-			return nil, errors.New("no controller found for request")
-		}
+	if len(controllers) == 0 {
+		return nil, errors.New("no controller found for request")
 	}
 
 	return controllers, nil
@@ -216,22 +212,23 @@ func (s *Scheduler) StartProcessingRequests() {
 			// We didn't find a Worker that fit the ContainerRequest's requirements. Let's find a controller
 			// so we can add a new worker.
 
-			controller, err := s.getControllers(request)
+			controllers, err := s.getControllers(request)
 			if err != nil {
 				log.Printf("No controller found for request: %+v, error: %v\n", request, err)
 				continue
 			}
 
 			go func() {
-				for _, c := range controller {
+				for _, c := range controllers {
 					// Iterates through controllers in the order of prioritized gpus to attempt to add a worker
 					if c == nil {
 						continue
 					}
 
-					newWorker, err := c.AddWorker(request.Cpu, request.Memory, request.Gpu, request.GpuCount)
+					newWorker, err := c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
 					if err == nil {
 						log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
+
 						err = s.scheduleRequest(newWorker, request)
 						if err != nil {
 							log.Printf("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
@@ -281,15 +278,10 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 }
 
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
-	gpuRequestsMap := map[string]string{}
+	gpuRequestsMap := map[string]bool{}
 
 	for _, gpu := range request.GpuRequest {
-		gpuRequestsMap[gpu] = ""
-	}
-
-	// Backwards compatibility
-	if request.Gpu != "" {
-		gpuRequestsMap[request.Gpu] = ""
+		gpuRequestsMap[gpu] = true
 	}
 
 	filteredWorkers := []*types.Worker{}

@@ -59,7 +59,6 @@ class RunnerAbstraction(BaseAbstraction):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
-        backup_gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         image: Image = Image(),
         workers: int = 1,
         concurrent_requests: int = 1,
@@ -97,7 +96,6 @@ class RunnerAbstraction(BaseAbstraction):
         self.cpu = cpu
         self.memory = self._parse_memory(memory) if isinstance(memory, str) else memory
         self.gpu = gpu
-        self.backup_gpu = backup_gpu
         self.volumes = volumes or []
         self.secrets = [SecretVar(name=s) for s in (secrets or [])]
         self.workers = workers
@@ -348,12 +346,6 @@ class RunnerAbstraction(BaseAbstraction):
             self.gpu = self._parse_gpu(self.gpu)
         except ValueError:
             terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
-            return False
-
-        try:
-            self.backup_gpu = self._parse_gpu(self.backup_gpu)
-        except ValueError:
-            terminal.error(f"Invalid backup GPU type: {self.backup_gpu}", exit=False)
             return False
 
         autoscaler_type = _AUTOSCALER_TYPES.get(type(self.autoscaler), "")
