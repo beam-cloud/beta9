@@ -183,7 +183,7 @@ func TestCopyStruct(t *testing.T) {
 			},
 		},
 		{
-			name: "copy struct validate nested struct and nil values",
+			name: "copy struct validate nested struct, nil values, and slices",
 			src: &types.ContainerRequest{
 				ContainerId: "123",
 				Env: []string{
