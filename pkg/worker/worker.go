@@ -704,27 +704,21 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	defer containerInstance.Overlay.Cleanup()
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
-	// // Setup container network namespace / devices
-	// err = s.containerNetworkManager.Setup(containerId, spec)
-	// if err != nil {
-	// 	log.Printf("<%s> failed to setup container network: %v", containerId, err)
-	// 	containerErr = err
-	// 	return
-	// }
+	// Setup container network namespace / devices
+	err = s.containerNetworkManager.Setup(containerId, spec)
+	if err != nil {
+		log.Printf("<%s> failed to setup container network: %v", containerId, err)
+		containerErr = err
+		return
+	}
 
-	// // Expose the bind port
-	// err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
-	// if err != nil {
-	// 	log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
-	// 	containerErr = err
-	// 	return
-	// }
-
-	// // Expose cedana port
-	// err = s.containerNetworkManager.ExposePort(containerId, CedanaPort, CedanaPort)
-	// if err != nil {
-	// 	log.Printf("<%s> failed to expose cedana port, C/R unavailable: %v", containerId, err)
-	// }
+	// Expose the bind port
+	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
+	if err != nil {
+		log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
+		containerErr = err
+		return
+	}
 
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
