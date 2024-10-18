@@ -87,12 +87,133 @@ func TestRedisLockWithTTLAndRetry(t *testing.T) {
 }
 
 func TestCopyStruct(t *testing.T) {
-	options1 := &types.RedisConfig{ClientName: "hello", PoolSize: 10, ConnMaxLifetime: time.Second}
-	options2 := &types.RedisConfig{}
+	tests := []struct {
+		name     string
+		src      any
+		dest     any
+		expected any
+	}{
+		{
+			name: "copy struct basic",
+			src: &types.RedisConfig{
+				ClientName:      "hello",
+				PoolSize:        10,
+				ConnMaxLifetime: time.Second,
+			},
+			dest: &types.RedisConfig{},
+			expected: &types.RedisConfig{
+				ClientName:      "hello",
+				PoolSize:        10,
+				ConnMaxLifetime: time.Second,
+			},
+		},
+		{
+			name: "copy struct overwriting fields on destination",
+			src: &types.RedisConfig{
+				ClientName:      "hello",
+				PoolSize:        10,
+				ConnMaxLifetime: time.Second,
+			},
+			dest: &types.RedisConfig{
+				ClientName: "world",
+				PoolSize:   20,
+			},
+			expected: &types.RedisConfig{
+				ClientName:      "hello",
+				PoolSize:        10,
+				ConnMaxLifetime: time.Second,
+			},
+		},
+		{
+			name: "copy struct overwriting fields on destination part 2",
+			src: &types.Worker{
+				Id:       "123",
+				Status:   types.WorkerStatusAvailable,
+				TotalCpu: 10,
+			},
+			dest: &types.Worker{
+				Id:           "456",
+				Status:       types.WorkerStatusPending,
+				TotalCpu:     20,
+				TotalMemory:  0,
+				BuildVersion: "0.1.0",
+			},
+			expected: &types.Worker{
+				Id:                   "123",
+				Status:               types.WorkerStatusAvailable,
+				TotalCpu:             10,
+				TotalMemory:          0,
+				TotalGpuCount:        0,
+				FreeCpu:              0,
+				FreeMemory:           0,
+				FreeGpuCount:         0,
+				Gpu:                  "",
+				PoolName:             "",
+				MachineId:            "",
+				ResourceVersion:      0,
+				RequiresPoolSelector: false,
+				Priority:             0,
+				BuildVersion:         "",
+			},
+		},
+		{
+			name: "copy struct validate default values",
+			src: &types.Worker{
+				Id:       "123",
+				Status:   types.WorkerStatusAvailable,
+				TotalCpu: 10,
+			},
+			dest: &types.Worker{},
+			expected: &types.Worker{
+				Id:                   "123",
+				Status:               types.WorkerStatusAvailable,
+				TotalCpu:             10,
+				TotalMemory:          0,
+				TotalGpuCount:        0,
+				FreeCpu:              0,
+				FreeMemory:           0,
+				FreeGpuCount:         0,
+				Gpu:                  "",
+				PoolName:             "",
+				MachineId:            "",
+				ResourceVersion:      0,
+				RequiresPoolSelector: false,
+				Priority:             0,
+				BuildVersion:         "",
+			},
+		},
+		{
+			name: "copy struct validate nested struct and nil values",
+			src: &types.ContainerRequest{
+				ContainerId: "123",
+				Env: []string{
+					"key1=val1",
+				},
+				Workspace: types.Workspace{
+					Id: 5,
+				},
+			},
+			dest: &types.ContainerRequest{},
+			expected: &types.ContainerRequest{
+				ContainerId: "123",
+				Env: []string{
+					"key1=val1",
+				},
+				Workspace: types.Workspace{
+					Id: 5,
+				},
+				SourceImage: nil,
+			},
+		},
+	}
 
-	CopyStruct(options1, options2)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			CopyStruct(test.src, test.dest)
 
-	assert.Equal(t, options1, options2)
+			assert.Equal(t, test.expected, test.dest)
+		})
+	}
 }
 
 func TestToSlice(t *testing.T) {
