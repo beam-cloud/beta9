@@ -44,6 +44,7 @@ class Config:
     callback_url: str
     task_id: str
     bind_port: int
+    checkpoint_enabled: bool
     volume_cache_map: Dict
 
     @classmethod
@@ -61,6 +62,7 @@ class Config:
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
+        checkpoint_enabled = os.getenv("CHECKPOINT_ENABLED", "false").lower() == "true"
         volume_cache_map = json.loads(os.getenv("VOLUME_CACHE_MAP", "{}"))
 
         if workers <= 0:
@@ -83,6 +85,7 @@ class Config:
             task_id=task_id,
             bind_port=bind_port,
             timeout=timeout,
+            checkpoint_enabled=checkpoint_enabled,
             volume_cache_map=volume_cache_map,
         )
 

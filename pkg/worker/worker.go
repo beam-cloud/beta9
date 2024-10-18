@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,6 +30,7 @@ import (
 const (
 	requestProcessingInterval     time.Duration = 100 * time.Millisecond
 	containerStatusUpdateInterval time.Duration = 30 * time.Second
+	containerCheckpointTimeout    time.Duration = 120 * time.Second
 )
 
 type Worker struct {
@@ -41,7 +43,11 @@ type Worker struct {
 	imageMountPath          string
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
+<<<<<<< HEAD
+	cedanaClient            *CedanaClient
+=======
 	fileCacheManager        *FileCacheManager
+>>>>>>> main
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
 	containerMountManager   *ContainerMountManager
@@ -308,6 +314,30 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
+<<<<<<< HEAD
+	if request.CheckpointEnabled && s.config.Checkpointing.Enabled {
+		port, err := getRandomFreePort()
+		if err != nil {
+			log.Printf("<%s> - failed to get random port for cedana, trying default (%d): %v\n", containerId, DefaultCedanaPort, err)
+			port = DefaultCedanaPort
+		}
+
+		gpuEnabled := request.Gpu != ""
+		cedanaClient, err := NewCedanaClient(s.ctx, s.config.Checkpointing.Cedana, port, gpuEnabled)
+		if err != nil {
+			log.Printf("<%s> - C/R unavailable, failed to create cedana client: %v\n", containerId, err)
+		} else {
+			s.cedanaClient = cedanaClient
+		}
+	}
+
+	err = s.containerMountManager.SetupContainerMounts(request.ContainerId, request.Mounts)
+	if err != nil {
+		return err
+	}
+
+=======
+>>>>>>> main
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
 
@@ -343,6 +373,10 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 	// Start the container
 	go s.spawn(request, spec, outputChan, opts)
+
+	if s.cedanaClient != nil {
+		go s.createCheckpoint(request)
+	}
 
 	log.Printf("<%s> - spawned successfully.\n", containerId)
 	return nil
@@ -398,6 +432,64 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			}()
 		}
 	}
+}
+
+// Waits for the endpoint to be ready to checkpoint at the desired point in execution, ie.
+// after all endpoint workers have reached a checkpointable state. /health is configured to
+// return 200 only when all workers are ready.
+func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
+	log.Printf("<%s> - waiting for container to be ready for checkpoint\n", request.ContainerId)
+
+	start := time.Now()
+	timeout := time.Duration(containerCheckpointTimeout)
+	ready := false
+	managing := false
+	gpuEnabled := request.Gpu != ""
+	for time.Since(start) < timeout {
+		instance, exists := s.containerInstances.Get(request.ContainerId)
+		if exists {
+			// Start managing the container with Cedana
+			if !managing {
+				err := s.cedanaClient.Manage(s.ctx, instance.Id, gpuEnabled)
+				if err == nil {
+					managing = true
+				} else {
+					log.Printf("<%s> - cedana manage failed, container may not be started yet: %+v\n", instance.Id, err)
+				}
+			} else {
+				// Endpoint already configured to ensure /health is successful only if all
+				// concurrent workers are ready, and are roughly at the same point in execution
+				resp, err := http.Get(fmt.Sprintf("http://0.0.0.0:%d/health", instance.Port))
+				log.Printf("<%s> - endpoint health check response: %+v\n", request.ContainerId, resp)
+				if err == nil && resp.StatusCode == 200 {
+					ready = true
+					break
+				} else {
+					log.Printf("<%s> - endpoint not ready for checkpoint: %+v\n", instance.Id, err)
+				}
+				if err != nil {
+					log.Printf("<%s> - cedana health check failed: %+v\n", request.ContainerId, err)
+				}
+			}
+		} else {
+			log.Printf("<%s> - container instance not found yet\n", request.ContainerId)
+		}
+
+		time.Sleep(time.Second)
+	}
+
+	if !ready {
+		log.Printf("<%s> - checkpoint timed out after %s\n", request.ContainerId, time.Since(start))
+		return
+	}
+
+	err := s.cedanaClient.Checkpoint(s.ctx, request.ContainerId)
+	if err != nil {
+		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
+		return
+	}
+
+	log.Printf("<%s> - checkpoint done\n", request.ContainerId)
 }
 
 // stopContainer stops a running container by containerId, if it exists on this worker
@@ -509,7 +601,6 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		if err != nil {
 			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
 		}
-
 	}()
 }
 
@@ -558,6 +649,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Create overlayfs for container
 	overlay := s.createOverlay(request, opts.BundlePath)
 
+	// Get the instance port
+	address, _ := s.containerRepo.GetContainerAddress(containerId)
+	port, _ := strconv.Atoi(strings.Split(address, ":")[1])
+
+	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
 		Id:         containerId,
 		StubId:     request.StubId,
@@ -565,6 +661,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		Overlay:    overlay,
 		Spec:       spec,
 		ExitCode:   -1,
+		Port:       port,
 		OutputWriter: common.NewOutputWriter(func(s string) {
 			outputChan <- common.OutputMsg{
 				Msg:     string(s),
@@ -618,21 +715,27 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	defer containerInstance.Overlay.Cleanup()
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
-	// Setup container network namespace / devices
-	err = s.containerNetworkManager.Setup(containerId, spec)
-	if err != nil {
-		log.Printf("<%s> failed to setup container network: %v", containerId, err)
-		containerErr = err
-		return
-	}
+	// // Setup container network namespace / devices
+	// err = s.containerNetworkManager.Setup(containerId, spec)
+	// if err != nil {
+	// 	log.Printf("<%s> failed to setup container network: %v", containerId, err)
+	// 	containerErr = err
+	// 	return
+	// }
 
-	// Expose the bind port
-	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
-	if err != nil {
-		log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
-		containerErr = err
-		return
-	}
+	// // Expose the bind port
+	// err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
+	// if err != nil {
+	// 	log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
+	// 	containerErr = err
+	// 	return
+	// }
+
+	// // Expose cedana port
+	// err = s.containerNetworkManager.ExposePort(containerId, CedanaPort, CedanaPort)
+	// if err != nil {
+	// 	log.Printf("<%s> failed to expose cedana port, C/R unavailable: %v", containerId, err)
+	// }
 
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
@@ -688,6 +791,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
+		fmt.Sprintf("CHECKPOINT_ENABLED=%t", s.cedanaClient != nil),
 		"PYTHONUNBUFFERED=1",
 	}
 
@@ -782,9 +886,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		env = append(env, fmt.Sprintf("NVIDIA_VISIBLE_DEVICES=%s", assignedGpus.String()))
 
 		spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, assignedGpus.devices...)
-
 	} else {
 		spec.Hooks.Prestart = nil
+	}
+
+	// We need to modify the spec to support Cedana C/R, only for GPU containers
+	if s.cedanaClient != nil && request.Gpu != "" {
+		// TODO: add cedana GPU stuff
+		// spec.Hooks.Prestart = nil
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
@@ -843,12 +952,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		Type:        "none",
 		Source:      "/workspace/resolv.conf",
 		Destination: "/etc/resolv.conf",
-		Options: []string{"ro",
+		Options: []string{
+			"ro",
 			"rbind",
 			"rprivate",
 			"nosuid",
 			"noexec",
-			"nodev"},
+			"nodev",
+		},
 	}
 
 	if s.config.Worker.UseHostResolvConf {
