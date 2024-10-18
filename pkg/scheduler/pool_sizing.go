@@ -104,7 +104,6 @@ func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*
 		newWorker, err = s.controller.AddWorker(
 			s.workerPoolSizingConfig.DefaultWorkerCpu,
 			s.workerPoolSizingConfig.DefaultWorkerMemory,
-			s.workerPoolSizingConfig.DefaultWorkerGpuType,
 			s.workerPoolSizingConfig.DefaultWorkerGpuCount,
 		)
 		if err != nil {

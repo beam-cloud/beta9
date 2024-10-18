@@ -74,6 +74,7 @@ type ContainerRequest struct {
 	Cpu              int64           `json:"cpu"`
 	Memory           int64           `json:"memory"`
 	Gpu              string          `json:"gpu"`
+	GpuRequest       []string        `json:"gpu_request"`
 	GpuCount         uint32          `json:"gpu_count"`
 	SourceImage      *string         `json:"source_image"`
 	SourceImageCreds string          `json:"source_image_creds"`
@@ -81,11 +82,11 @@ type ContainerRequest struct {
 	StubId           string          `json:"stub_id"`
 	WorkspaceId      string          `json:"workspace_id"`
 	Workspace        Workspace       `json:"workspace"`
-	Stub             StubWithRelated `json:"stub"`
 	Timestamp        time.Time       `json:"timestamp"`
 	Mounts           []Mount         `json:"mounts"`
 	RetryCount       int             `json:"retry_count"`
 	PoolSelector     string          `json:"pool_selector"`
+	Stub             StubWithRelated `json:"stub"`
 }
 
 const ContainerExitCodeTtlS int = 300
