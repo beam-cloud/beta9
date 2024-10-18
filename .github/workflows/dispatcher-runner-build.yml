@@ -50,4 +50,8 @@ jobs:
           registry: ${{ steps.login-ecr.outputs.registry }}
           repository: ${{ steps.login-ecr.outputs.registry }}/beta9-runner
           add_git_labels: true
+<<<<<<< HEAD
           tag_with_ref: true
+=======
+          tag_with_ref: true
+>>>>>>> main

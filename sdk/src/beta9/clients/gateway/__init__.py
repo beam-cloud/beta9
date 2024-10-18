@@ -278,6 +278,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     secrets: List["SecretVar"] = betterproto.message_field(21)
     autoscaler: "Autoscaler" = betterproto.message_field(22)
     task_policy: "TaskPolicy" = betterproto.message_field(23)
+    concurrent_requests: int = betterproto.uint32_field(24)
 
 
 @dataclass(eq=False, repr=False)
@@ -285,6 +286,7 @@ class GetOrCreateStubResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     stub_id: str = betterproto.string_field(2)
     err_msg: str = betterproto.string_field(3)
+    warn_msg: str = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -514,6 +516,83 @@ class DeleteTokenResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
 
 
+@dataclass(eq=False, repr=False)
+class GetUrlRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    deployment_id: str = betterproto.string_field(2)
+    url_type: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class GetUrlResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    url: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class Worker(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    status: str = betterproto.string_field(2)
+    gpu: str = betterproto.string_field(3)
+    pool_name: str = betterproto.string_field(4)
+    machine_id: str = betterproto.string_field(5)
+    priority: int = betterproto.int32_field(6)
+    total_cpu: int = betterproto.int64_field(7)
+    total_memory: int = betterproto.int64_field(8)
+    total_gpu_count: int = betterproto.uint32_field(9)
+    free_cpu: int = betterproto.int64_field(10)
+    free_memory: int = betterproto.int64_field(11)
+    free_gpu_count: int = betterproto.uint32_field(12)
+    active_containers: List["Container"] = betterproto.message_field(13)
+    build_version: str = betterproto.string_field(14)
+
+
+@dataclass(eq=False, repr=False)
+class ListWorkersRequest(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class ListWorkersResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    workers: List["Worker"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class CordonWorkerRequest(betterproto.Message):
+    worker_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class CordonWorkerResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class UncordonWorkerRequest(betterproto.Message):
+    worker_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class UncordonWorkerResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class DrainWorkerRequest(betterproto.Message):
+    worker_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class DrainWorkerResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
 class GatewayServiceStub(SyncServiceStub):
     def authorize(self, authorize_request: "AuthorizeRequest") -> "AuthorizeResponse":
         return self._unary_unary(
@@ -633,6 +712,13 @@ class GatewayServiceStub(SyncServiceStub):
             DeployStubResponse,
         )(deploy_stub_request)
 
+    def get_url(self, get_url_request: "GetUrlRequest") -> "GetUrlResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetURL",
+            GetUrlRequest,
+            GetUrlResponse,
+        )(get_url_request)
+
     def list_deployments(
         self, list_deployments_request: "ListDeploymentsRequest"
     ) -> "ListDeploymentsResponse":
@@ -729,3 +815,39 @@ class GatewayServiceStub(SyncServiceStub):
             DeleteTokenRequest,
             DeleteTokenResponse,
         )(delete_token_request)
+
+    def list_workers(
+        self, list_workers_request: "ListWorkersRequest"
+    ) -> "ListWorkersResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListWorkers",
+            ListWorkersRequest,
+            ListWorkersResponse,
+        )(list_workers_request)
+
+    def cordon_worker(
+        self, cordon_worker_request: "CordonWorkerRequest"
+    ) -> "CordonWorkerResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CordonWorker",
+            CordonWorkerRequest,
+            CordonWorkerResponse,
+        )(cordon_worker_request)
+
+    def uncordon_worker(
+        self, uncordon_worker_request: "UncordonWorkerRequest"
+    ) -> "UncordonWorkerResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/UncordonWorker",
+            UncordonWorkerRequest,
+            UncordonWorkerResponse,
+        )(uncordon_worker_request)
+
+    def drain_worker(
+        self, drain_worker_request: "DrainWorkerRequest"
+    ) -> "DrainWorkerResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DrainWorker",
+            DrainWorkerRequest,
+            DrainWorkerResponse,
+        )(drain_worker_request)

@@ -17,21 +17,21 @@ func configureEchoLogger(e *echo.Echo, debug bool) {
 		}).With().Timestamp().Logger()
 
 		e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
-			LogURI:       true,
 			LogStatus:    true,
 			LogRoutePath: true,
+			LogURIPath:   true,
 			LogError:     true,
 			LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
 				if v.Error != nil {
 					logger.Err(v.Error).
 						Str("method", c.Request().Method).
-						Str("URI", v.URI).
+						Str("URI", v.URIPath).
 						Int("status", v.Status).
 						Msg("")
 				} else {
 					logger.Info().
 						Str("method", c.Request().Method).
-						Str("URI", v.URI).
+						Str("URI", v.URIPath).
 						Int("status", v.Status).
 						Msg("")
 				}

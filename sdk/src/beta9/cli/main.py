@@ -8,7 +8,19 @@ import grpc
 
 from ..channel import handle_grpc_error, prompt_first_auth
 from ..config import SDKSettings, is_config_empty, set_settings
-from . import config, container, deployment, machine, pool, secret, serve, task, token, volume
+from . import (
+    config,
+    container,
+    deployment,
+    machine,
+    pool,
+    secret,
+    serve,
+    task,
+    token,
+    volume,
+    worker,
+)
 from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCollection
 
 click.formatting.FORCED_WIDTH = shutil.get_terminal_size().columns
@@ -39,8 +51,8 @@ class CLI:
             context_settings=context_settings,
         )
 
-    def __call__(self) -> None:
-        self.common_group.main(prog_name=self.settings.name.lower())
+    def __call__(self, **kwargs) -> None:
+        self.common_group.main(prog_name=self.settings.name.lower(), **kwargs)
 
     def register(self, module: ModuleType) -> None:
         if hasattr(module, "common"):
@@ -87,6 +99,7 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(machine)
     cli.register(secret)
     cli.register(token)
+    cli.register(worker)
 
     if check_config:
         cli.check_config()

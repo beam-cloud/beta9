@@ -75,6 +75,9 @@ class TaskQueue(RunnerAbstraction):
         name (Optional[str]):
             An optional name for this task_queue, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
+        authorized (Optional[str]):
+            If false, allows the endpoint to be invoked without an auth token.
+            Default is True.
         autoscaler (Autoscaler):
             Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
             various autoscaling strategies. Default is QueueDepthAutoscaler().
@@ -111,6 +114,7 @@ class TaskQueue(RunnerAbstraction):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
+        authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
     ) -> None:
@@ -129,6 +133,7 @@ class TaskQueue(RunnerAbstraction):
             volumes=volumes,
             secrets=secrets,
             name=name,
+            authorized=authorized,
             autoscaler=autoscaler,
             task_policy=task_policy,
         )
@@ -168,7 +173,7 @@ class _CallableWrapper(DeployableMixin):
         return self.func(*args, **kwargs)
 
     @with_grpc_error_handling
-    def serve(self, timeout: int = 0) -> bool:
+    def serve(self, timeout: int = 0, url_type: str = ""):
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=TASKQUEUE_SERVE_STUB_TYPE, force_create_stub=True
         ):
@@ -176,13 +181,7 @@ class _CallableWrapper(DeployableMixin):
 
         try:
             with terminal.progress("Serving taskqueue..."):
-                base_url = self.parent.settings.api_host
-                if not base_url.startswith(("http://", "https://")):
-                    base_url = f"http://{base_url}"
-
-                self.parent.print_invocation_snippet(
-                    invocation_url=f"{base_url}/taskqueue/id/{self.parent.stub_id}"
-                )
+                self.parent.print_invocation_snippet(url_type=url_type)
 
                 return self._serve(
                     dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout

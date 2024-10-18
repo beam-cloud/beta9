@@ -40,6 +40,7 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		1,
 		timeoutDuration,
 	)
+	defer instance.Rdb.Del(context.Background(), Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId))
 
 	container, err := instance.WaitForContainer(ctx, taskQueueServeContainerTimeout)
 	if err != nil {

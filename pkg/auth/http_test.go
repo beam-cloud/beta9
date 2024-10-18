@@ -1,12 +1,14 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -14,9 +16,11 @@ import (
 )
 
 type MockDetails struct {
-	backendRepo  repository.BackendRepository
-	mock         sqlmock.Sqlmock
-	tokenForTest types.Token
+	backendRepo   repository.BackendRepository
+	workspaceRepo repository.WorkspaceRepository
+	mock          sqlmock.Sqlmock
+	tokenForTest  types.Token
+	mockRedis     *common.RedisClient
 }
 
 func addTokenRow(
@@ -65,10 +69,18 @@ func mockBackendWithValidToken() MockDetails {
 		UpdatedAt:   time.Now(),
 	}
 
+	mockRedis, err := repository.NewRedisClientForTest()
+	if err != nil {
+		panic(err)
+	}
+	workspaceRepo := repository.NewWorkspaceRedisRepositoryForTest(mockRedis)
+
 	return MockDetails{
-		backendRepo:  backendRepo,
-		mock:         mock,
-		tokenForTest: tokenForTest,
+		backendRepo:   backendRepo,
+		workspaceRepo: workspaceRepo,
+		mock:          mock,
+		mockRedis:     mockRedis,
+		tokenForTest:  tokenForTest,
 	}
 }
 
@@ -76,7 +88,7 @@ func TestAuthMiddleWare(t *testing.T) {
 	mockDetails := mockBackendWithValidToken()
 
 	e := echo.New()
-	e.Use(AuthMiddleware(mockDetails.backendRepo))
+	e.Use(AuthMiddleware(mockDetails.backendRepo, mockDetails.workspaceRepo))
 
 	// 1. Test with valid token
 	e.GET("/", func(ctx echo.Context) error {
@@ -109,6 +121,7 @@ func TestAuthMiddleWare(t *testing.T) {
 			tokenKey:       mockDetails.tokenForTest.Key,
 			expectedStatus: 200,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, mockDetails.tokenForTest)
 			},
 		},
@@ -117,6 +130,7 @@ func TestAuthMiddleWare(t *testing.T) {
 			tokenKey:       "invalid",
 			expectedStatus: 401,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
 					WillReturnError(errors.New("invalid token"))
 			},
@@ -125,7 +139,9 @@ func TestAuthMiddleWare(t *testing.T) {
 			name:           "Test with empty token. Should pass through",
 			tokenKey:       "",
 			expectedStatus: 200,
-			prepares:       func() {},
+			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
+			},
 		},
 	}
 
@@ -151,7 +167,7 @@ func TestAuthMiddleWare(t *testing.T) {
 func TestWithAuth(t *testing.T) {
 	mockDetails := mockBackendWithValidToken()
 	e := echo.New()
-	e.Use(AuthMiddleware(mockDetails.backendRepo))
+	e.Use(AuthMiddleware(mockDetails.backendRepo, mockDetails.workspaceRepo))
 
 	e.GET("/", WithAuth(func(c echo.Context) error {
 		cc, ok := c.(*HttpAuthContext)
@@ -180,6 +196,7 @@ func TestWithAuth(t *testing.T) {
 			tokenKey:       mockDetails.tokenForTest.Key,
 			expectedStatus: 200,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, mockDetails.tokenForTest)
 			},
 		},
@@ -188,6 +205,7 @@ func TestWithAuth(t *testing.T) {
 			tokenKey:       "invalid",
 			expectedStatus: 401,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
 					WillReturnError(errors.New("invalid token"))
 			},
@@ -196,7 +214,9 @@ func TestWithAuth(t *testing.T) {
 			name:           "Test with empty token. Should fail to authenticate",
 			tokenKey:       "",
 			expectedStatus: 401,
-			prepares:       func() {},
+			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
+			},
 		},
 	}
 
@@ -221,7 +241,7 @@ func TestWithAuth(t *testing.T) {
 func TestWithWorkspaceAuth(t *testing.T) {
 	mockDetails := mockBackendWithValidToken()
 	e := echo.New()
-	e.Use(AuthMiddleware(mockDetails.backendRepo))
+	e.Use(AuthMiddleware(mockDetails.backendRepo, mockDetails.workspaceRepo))
 
 	e.GET("/:workspaceId", WithWorkspaceAuth(func(c echo.Context) error {
 		if c.(*HttpAuthContext).AuthInfo.Token.TokenType == types.TokenTypeClusterAdmin {
@@ -248,6 +268,7 @@ func TestWithWorkspaceAuth(t *testing.T) {
 			workspaceId:    mockDetails.tokenForTest.Workspace.ExternalId,
 			expectedStatus: 200,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, mockDetails.tokenForTest)
 			},
 		},
@@ -257,6 +278,7 @@ func TestWithWorkspaceAuth(t *testing.T) {
 			workspaceId:    "invalid",
 			expectedStatus: 401,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, mockDetails.tokenForTest)
 			},
 		},
@@ -266,6 +288,7 @@ func TestWithWorkspaceAuth(t *testing.T) {
 			workspaceId:    "invalid",
 			expectedStatus: 200,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				tokenForTest := mockDetails.tokenForTest
 				tokenForTest.TokenType = types.TokenTypeClusterAdmin
 				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, tokenForTest)
@@ -277,6 +300,7 @@ func TestWithWorkspaceAuth(t *testing.T) {
 			workspaceId:    mockDetails.tokenForTest.Workspace.ExternalId,
 			expectedStatus: 200,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				tokenForTest := mockDetails.tokenForTest
 				tokenForTest.TokenType = types.TokenTypeClusterAdmin
 				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, tokenForTest)
@@ -288,6 +312,7 @@ func TestWithWorkspaceAuth(t *testing.T) {
 			workspaceId:    mockDetails.tokenForTest.Workspace.ExternalId,
 			expectedStatus: 401,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
 					WillReturnError(errors.New("invalid token"))
 			},
@@ -296,6 +321,7 @@ func TestWithWorkspaceAuth(t *testing.T) {
 			name:        "Test no authorization header",
 			workspaceId: mockDetails.tokenForTest.Workspace.ExternalId,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
 					WillReturnError(errors.New("invalid token"))
 			},
@@ -325,7 +351,7 @@ func TestWithWorkspaceAuth(t *testing.T) {
 func TestWithClusterAdminAuth(t *testing.T) {
 	mockDetails := mockBackendWithValidToken()
 	e := echo.New()
-	e.Use(AuthMiddleware(mockDetails.backendRepo))
+	e.Use(AuthMiddleware(mockDetails.backendRepo, mockDetails.workspaceRepo))
 
 	e.GET("/", WithClusterAdminAuth(func(c echo.Context) error {
 		assert.NotNil(t, c.(*HttpAuthContext).AuthInfo.Token)
@@ -344,6 +370,7 @@ func TestWithClusterAdminAuth(t *testing.T) {
 			tokenKey:       mockDetails.tokenForTest.Key,
 			expectedStatus: 401,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, mockDetails.tokenForTest)
 			},
 		},
@@ -352,6 +379,7 @@ func TestWithClusterAdminAuth(t *testing.T) {
 			tokenKey:       mockDetails.tokenForTest.Key,
 			expectedStatus: 200,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				tokenForTest := mockDetails.tokenForTest
 				tokenForTest.TokenType = types.TokenTypeClusterAdmin
 				addTokenRow(mockDetails.mock, *mockDetails.tokenForTest.Workspace, tokenForTest)
@@ -362,6 +390,7 @@ func TestWithClusterAdminAuth(t *testing.T) {
 			tokenKey:       "invalid",
 			expectedStatus: 401,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
 					WillReturnError(errors.New("invalid token"))
 			},
@@ -370,6 +399,7 @@ func TestWithClusterAdminAuth(t *testing.T) {
 			name:           "Test no authorization header",
 			expectedStatus: 401,
 			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
 				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
 					WillReturnError(errors.New("invalid token"))
 			},

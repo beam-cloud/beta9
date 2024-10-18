@@ -66,7 +66,7 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 				if _, ok := err.(*types.ProviderNotImplemented); ok {
 					return
 				} else {
-					log.Printf("<provider %s>: unable to list machines - %v\n", "providerName", err)
+					log.Printf("<provider %s>: unable to list machines - %v\n", p.Name, err)
 					continue
 				}
 			}

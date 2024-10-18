@@ -81,8 +81,10 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			ImageId:           i.StubConfig.Runtime.ImageId,
 			StubId:            i.Stub.ExternalId,
 			WorkspaceId:       i.Workspace.ExternalId,
+			Workspace:         *i.Workspace,
 			EntryPoint:        i.EntryPoint,
 			Mounts:            mounts,
+			Stub:              *i.Stub,
 			CheckpointEnabled: true, // XXX: Hardcoded for testing
 		}
 
@@ -96,7 +98,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 
 		err := i.Scheduler.Run(runRequest)
 		if err != nil {
-			log.Printf("<%s> unable to run  container: %v", i.Name, err)
+			log.Printf("<%s> unable to run container: %v", i.Name, err)
 			return err
 		}
 
