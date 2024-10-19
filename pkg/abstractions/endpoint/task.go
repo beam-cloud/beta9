@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
-	"go.opentelemetry.io/otel/attribute"
 )
 
 type EndpointTask struct {
@@ -16,19 +14,12 @@ type EndpointTask struct {
 }
 
 func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) error {
-	trace := common.TraceFunc(ctx, "pkg/abstractions/endpoint", "EndpointTask.Execute",
-		attribute.String("task.id", t.msg.TaskId),
-		attribute.String("stub.id", t.msg.StubId),
-		attribute.String("workspace.name", t.msg.WorkspaceName))
-	defer trace.End()
-
 	var err error = nil
 	echoCtx := options[0].(echo.Context)
 	instance, err := t.es.getOrCreateEndpointInstance(ctx, t.msg.StubId)
 	if err != nil {
 		return err
 	}
-	trace.Span.AddEvent("Created endpoint instance")
 
 	_, err = t.es.backendRepo.CreateTask(context.Background(), &types.TaskParams{
 		TaskId:      t.msg.TaskId,
@@ -38,7 +29,6 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 	if err != nil {
 		return err
 	}
-	trace.Span.AddEvent("Created task")
 
 	return instance.buffer.ForwardRequest(echoCtx, t)
 }

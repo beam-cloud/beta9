@@ -545,6 +545,7 @@ class Worker(betterproto.Message):
     free_memory: int = betterproto.int64_field(11)
     free_gpu_count: int = betterproto.uint32_field(12)
     active_containers: List["Container"] = betterproto.message_field(13)
+    build_version: str = betterproto.string_field(14)
 
 
 @dataclass(eq=False, repr=False)
