@@ -87,12 +87,209 @@ func TestRedisLockWithTTLAndRetry(t *testing.T) {
 }
 
 func TestCopyStruct(t *testing.T) {
-	options1 := &types.RedisConfig{ClientName: "hello", PoolSize: 10, ConnMaxLifetime: time.Second}
-	options2 := &types.RedisConfig{}
+	tests := []struct {
+		name     string
+		src      any
+		dst      any
+		expected any
+	}{
+		{
+			name: "copy struct basic",
+			src: &types.RedisConfig{
+				ClientName:      "hello",
+				PoolSize:        10,
+				ConnMaxLifetime: time.Second,
+			},
+			dst: &types.RedisConfig{},
+			expected: &types.RedisConfig{
+				ClientName:      "hello",
+				PoolSize:        10,
+				ConnMaxLifetime: time.Second,
+			},
+		},
+		{
+			name: "copy struct overwriting fields on destination on redisconfig struct",
+			src: &types.RedisConfig{
+				ClientName:      "hello",
+				PoolSize:        10,
+				ConnMaxLifetime: time.Second,
+			},
+			dst: &types.RedisConfig{
+				ClientName: "world",
+				PoolSize:   20,
+			},
+			expected: &types.RedisConfig{
+				ClientName:      "hello",
+				PoolSize:        10,
+				ConnMaxLifetime: time.Second,
+			},
+		},
+		{
+			name: "copy struct overwriting fields on destination on worker struct",
+			src: &types.Worker{
+				Id:                   "123",
+				Status:               types.WorkerStatusAvailable,
+				TotalCpu:             10,
+				TotalMemory:          1000,
+				TotalGpuCount:        4,
+				FreeCpu:              1,
+				FreeMemory:           500,
+				FreeGpuCount:         2,
+				Gpu:                  "A10G",
+				PoolName:             "pool1",
+				MachineId:            "machine1",
+				ResourceVersion:      1,
+				RequiresPoolSelector: true,
+				Priority:             -1,
+				BuildVersion:         "0.1.0",
+			},
+			dst: &types.Worker{
+				Id:                   "456",
+				Status:               types.WorkerStatusDisabled,
+				TotalCpu:             100000,
+				TotalMemory:          100000,
+				TotalGpuCount:        100000,
+				FreeCpu:              100000,
+				FreeMemory:           100000,
+				FreeGpuCount:         100000,
+				Gpu:                  "to be overwritten",
+				PoolName:             "to be overwritten",
+				MachineId:            "to be overwritten",
+				ResourceVersion:      50000,
+				RequiresPoolSelector: false,
+				Priority:             -99,
+				BuildVersion:         "dev",
+			},
+			expected: &types.Worker{
+				Id:                   "123",
+				Status:               types.WorkerStatusAvailable,
+				TotalCpu:             10,
+				TotalMemory:          1000,
+				TotalGpuCount:        4,
+				FreeCpu:              1,
+				FreeMemory:           500,
+				FreeGpuCount:         2,
+				Gpu:                  "A10G",
+				PoolName:             "pool1",
+				MachineId:            "machine1",
+				ResourceVersion:      1,
+				RequiresPoolSelector: true,
+				Priority:             -1,
+				BuildVersion:         "0.1.0",
+			},
+		},
+		{
+			name: "copy struct overwriting fields on destination on providermachinestate struct",
+			src: &types.ProviderMachineState{
+				MachineId:         "123",
+				PoolName:          "pool1",
+				Status:            types.MachineStatusRegistered,
+				HostName:          "host1",
+				Token:             "token1",
+				Cpu:               10,
+				Memory:            1000,
+				Gpu:               "A10G",
+				GpuCount:          4,
+				RegistrationToken: "regtoken1",
+				Created:           "2037-01-01",
+				LastWorkerSeen:    "2037-01-01",
+				LastKeepalive:     "",
+				AutoConsolidate:   true,
+				AgentVersion:      "0.1.0",
+			},
+			dst: &types.ProviderMachineState{
+				MachineId:         "456",
+				PoolName:          "to be overwritten",
+				Status:            types.MachineStatusPending,
+				HostName:          "to be overwritten",
+				Token:             "to be overwritten",
+				Cpu:               100000,
+				Memory:            100000,
+				Gpu:               "to be overwritten",
+				GpuCount:          100000,
+				RegistrationToken: "to be overwritten",
+				Created:           "to be overwritten",
+				LastWorkerSeen:    "to be overwritten",
+				LastKeepalive:     "to be overwritten",
+				AutoConsolidate:   false,
+				AgentVersion:      "to be overwritten",
+			},
+			expected: &types.ProviderMachineState{
+				MachineId:         "123",
+				PoolName:          "pool1",
+				Status:            types.MachineStatusRegistered,
+				HostName:          "host1",
+				Token:             "token1",
+				Cpu:               10,
+				Memory:            1000,
+				Gpu:               "A10G",
+				GpuCount:          4,
+				RegistrationToken: "regtoken1",
+				Created:           "2037-01-01",
+				LastWorkerSeen:    "2037-01-01",
+				LastKeepalive:     "",
+				AutoConsolidate:   true,
+				AgentVersion:      "0.1.0",
+			},
+		},
+		{
+			name: "copy struct validate default values",
+			src: &types.Worker{
+				Id:       "123",
+				Status:   types.WorkerStatusAvailable,
+				TotalCpu: 10,
+			},
+			dst: &types.Worker{},
+			expected: &types.Worker{
+				Id:                   "123",
+				Status:               types.WorkerStatusAvailable,
+				TotalCpu:             10,
+				TotalMemory:          0,
+				TotalGpuCount:        0,
+				FreeCpu:              0,
+				FreeMemory:           0,
+				FreeGpuCount:         0,
+				Gpu:                  "",
+				PoolName:             "",
+				MachineId:            "",
+				ResourceVersion:      0,
+				RequiresPoolSelector: false,
+				Priority:             0,
+				BuildVersion:         "",
+			},
+		},
+		{
+			name: "copy struct validate nested struct, nil values, and slices",
+			src: &types.ContainerRequest{
+				ContainerId: "123",
+				Env: []string{
+					"key1=val1",
+				},
+				Workspace: types.Workspace{
+					Id: 5,
+				},
+			},
+			dst: &types.ContainerRequest{},
+			expected: &types.ContainerRequest{
+				ContainerId: "123",
+				Env: []string{
+					"key1=val1",
+				},
+				Workspace: types.Workspace{
+					Id: 5,
+				},
+				SourceImage: nil,
+			},
+		},
+	}
 
-	CopyStruct(options1, options2)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			CopyStruct(test.src, test.dst)
 
-	assert.Equal(t, options1, options2)
+			assert.Equal(t, test.expected, test.dst)
+		})
+	}
 }
 
 func TestToSlice(t *testing.T) {
