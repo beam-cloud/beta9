@@ -46,11 +46,13 @@ func (e *ExitCodeError) Error() string {
 
 var (
 	WorkerContainerExitCodeInvalidCustomImage = 3
+	WorkerContainerExitCodeIncorrectImageArch = 4
 	WorkerContainerExitCodeUnknownError       = 1
 )
 
 var WorkerContainerExitCodes = map[int]string{
 	0: "Success",
 	1: "UnknownError",
-	WorkerContainerExitCodeInvalidCustomImage: "InvalidCustomImage",
+	WorkerContainerExitCodeIncorrectImageArch: "InvalidArch: Image is not amd64/x86_64",
+	WorkerContainerExitCodeInvalidCustomImage: "InvalidCustomImage: Could not find custom image",
 }
