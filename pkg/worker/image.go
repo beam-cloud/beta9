@@ -243,6 +243,12 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 		}
 	}
 
+	if imageInfo["Os"] != "linux" {
+		return &types.ExitCodeError{
+			ExitCode: types.WorkerContainerExitCodeIncorrectImageOs,
+		}
+	}
+
 	return nil
 }
 
