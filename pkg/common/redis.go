@@ -14,6 +14,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/bsm/redislock"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -277,27 +278,21 @@ func NewRedisLock(client *RedisClient, opts ...RedisLockOption) *RedisLock {
 }
 
 func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptions) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	var retryStrategy redislock.RetryStrategy = nil
 	if opts.Retries > 0 {
 		retryStrategy = redislock.LimitRetry(redislock.LinearBackoff(100*time.Millisecond), opts.Retries)
 	}
-
 	lock, err := redislock.Obtain(ctx, l.client, key, time.Duration(opts.TtlS)*time.Second, &redislock.Options{
 		RetryStrategy: retryStrategy,
 	})
-	if err != nil && err != redislock.ErrNotObtained {
-		return err // unexpected error, return it
+	if err != nil {
+		return err
 	}
 
-	if err == nil {
-		l.locks[key] = lock
-		return nil
-	}
-
-	return redislock.ErrNotObtained
+	l.mu.Lock()
+	l.locks[key] = lock
+	l.mu.Unlock()
+	return nil
 }
 
 func (l *RedisLock) Release(key string) error {
@@ -305,7 +300,11 @@ func (l *RedisLock) Release(key string) error {
 	defer l.mu.Unlock()
 
 	if lock, ok := l.locks[key]; ok {
-		lock.Release(context.TODO())
+		err := lock.Release(context.Background())
+		if err != nil {
+			return err
+		}
+
 		delete(l.locks, key)
 		return nil
 	}
@@ -313,19 +312,22 @@ func (l *RedisLock) Release(key string) error {
 	return redislock.ErrLockNotHeld
 }
 
-// Attempts to copy field values of the same name from the src to the dst struct.
-func CopyStruct(src, dst interface{}) {
-	srcVal := reflect.ValueOf(src).Elem()
-	dstVal := reflect.ValueOf(dst).Elem()
-
-	for i := 0; i < srcVal.NumField(); i++ {
-		srcField := srcVal.Type().Field(i).Name
-		dstField := dstVal.FieldByName(srcField)
-
-		if dstField.IsValid() && dstField.CanSet() {
-			dstField.Set(srcVal.Field(i))
-		}
+func CopyStruct(src, dst any) error {
+	config := mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           dst,
 	}
+
+	decoder, err := mapstructure.NewDecoder(&config)
+	if err != nil {
+		return err
+	}
+
+	if err := decoder.Decode(src); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Copies the result of HGetAll to a provided struct.

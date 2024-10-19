@@ -37,7 +37,7 @@ from ..runner.common import (
 from ..type import LifeCycleMethod, TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
-TASK_POLLING_INTERVAL = 0.01
+TASK_POLLING_INTERVAL = 0.1
 TASK_MANAGER_INTERVAL = 0.1
 
 
