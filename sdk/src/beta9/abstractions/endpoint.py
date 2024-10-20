@@ -1,5 +1,6 @@
 import os
 import threading
+import traceback
 from typing import Any, Callable, List, Optional, Union
 
 from .. import terminal
@@ -276,7 +277,8 @@ class ASGI(Endpoint):
         self.is_asgi = True
 
 
-REALTIME_ASGI_SLEEP_INTERVAL = 0.1
+REALTIME_ASGI_SLEEP_INTERVAL_SECONDS = 0.1
+REALTIME_ASGI_HEALTH_CHECK_INTERVAL_SECONDS = 5
 
 
 class RealtimeASGI(ASGI):
@@ -329,29 +331,56 @@ class RealtimeASGI(ASGI):
 
         @internal_asgi_app.websocket("/")
         async def stream(websocket: WebSocket):
+            async def _heartbeat():
+                while True:
+                    try:
+                        await websocket.send_json({"type": "ping"})
+                        await asyncio.sleep(REALTIME_ASGI_HEALTH_CHECK_INTERVAL_SECONDS)
+                    except (WebSocketDisconnect, WebSocketException, RuntimeError):
+                        break
+
             await websocket.accept()
 
+            heartbeat_task = asyncio.create_task(_heartbeat())
             try:
                 while True:
-                    data = await websocket.receive_text()
-                    internal_asgi_app.input_queue.put(data)
+                    try:
+                        message = await websocket.receive()
 
-                    while not internal_asgi_app.input_queue.empty():
-                        output = internal_asgi_app.handler(
-                            context=internal_asgi_app.context,
-                            input=internal_asgi_app.input_queue.get(),
-                        )
-
-                        if isinstance(output, str):
-                            await websocket.send_text(output)
-                        elif isinstance(output, dict):
-                            await websocket.send_json(output)
+                        if "text" in message:
+                            data = message["text"]
+                        elif "bytes" in message:
+                            data = message["bytes"]
+                        elif "json" in message:
+                            data = message["json"]
+                        elif message.get("type") == "websocket.disconnect":
+                            return
                         else:
-                            await websocket.send_bytes(output)
+                            print(f"WS stream error - unknown message type: {message}")
+                            continue
 
-                    await asyncio.sleep(REALTIME_ASGI_SLEEP_INTERVAL)
-            except (WebSocketDisconnect, WebSocketException):
-                return
+                        internal_asgi_app.input_queue.put(data)
+
+                        while not internal_asgi_app.input_queue.empty():
+                            output = internal_asgi_app.handler(
+                                context=internal_asgi_app.context,
+                                input=internal_asgi_app.input_queue.get(),
+                            )
+
+                            if isinstance(output, str):
+                                await websocket.send_text(output)
+                            elif isinstance(output, dict):
+                                await websocket.send_json(output)
+                            else:
+                                await websocket.send_bytes(output)
+
+                        await asyncio.sleep(REALTIME_ASGI_SLEEP_INTERVAL_SECONDS)
+                    except (WebSocketDisconnect, WebSocketException, RuntimeError):
+                        return
+                    except BaseException:
+                        print(f"Unhandled exception in websocket stream: {traceback.format_exc()}")
+            finally:
+                heartbeat_task.cancel()
 
         func.internal_asgi_app = internal_asgi_app
         return _CallableWrapper(func, self)
