@@ -336,7 +336,7 @@ class RealtimeASGI(ASGI):
                     data = await websocket.receive_text()
                     internal_asgi_app.input_queue.put(data)
 
-                    if not internal_asgi_app.input_queue.empty():
+                    while not internal_asgi_app.input_queue.empty():
                         output = internal_asgi_app.handler(
                             context=internal_asgi_app.context,
                             input=internal_asgi_app.input_queue.get(),
