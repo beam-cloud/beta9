@@ -72,7 +72,7 @@ RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 
 # final image
 # ========================
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS release
+FROM nvidia/cuda:12.3.1-base-ubuntu20.04 AS release
 FROM release AS dev
 
 FROM ${BASE_STAGE} AS final
@@ -105,7 +105,7 @@ EOT
 ARG CEDANA_VERSION=0.9.228
 RUN <<EOT
 set -eux
-apt-get install -y libgpgme-dev
+apt-get install -y libgpgme11
 curl -L -o cedana_amd64.deb https://github.com/cedana/cedana/releases/download/v${CEDANA_VERSION}/cedana_${CEDANA_VERSION}_amd64.deb
 dpkg -i cedana_amd64.deb
 rm cedana_amd64.deb

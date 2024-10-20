@@ -11,6 +11,7 @@ add-apt-repository ppa:deadsnakes/ppa
 apt-get update
 EOT
 
+
 # Python 3.12
 # ========================
 FROM base as py312
