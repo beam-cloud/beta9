@@ -3,6 +3,8 @@ import threading
 import traceback
 from typing import Any, Callable, List, Optional, Union
 
+from uvicorn.protocols.utils import ClientDisconnected
+
 from .. import terminal
 from ..abstractions.base.runner import (
     ASGI_DEPLOYMENT_STUB_TYPE,
@@ -375,7 +377,12 @@ class RealtimeASGI(ASGI):
                                 await websocket.send_bytes(output)
 
                         await asyncio.sleep(REALTIME_ASGI_SLEEP_INTERVAL_SECONDS)
-                    except (WebSocketDisconnect, WebSocketException, RuntimeError):
+                    except (
+                        WebSocketDisconnect,
+                        WebSocketException,
+                        RuntimeError,
+                        ClientDisconnected,
+                    ):
                         return
                     except BaseException:
                         print(f"Unhandled exception in websocket stream: {traceback.format_exc()}")
