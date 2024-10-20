@@ -276,6 +276,82 @@ class ASGI(Endpoint):
         self.is_asgi = True
 
 
+REALTIME_ASGI_SLEEP_INTERVAL = 0.1
+
+
+class RealtimeASGI(ASGI):
+    def __init__(
+        self,
+        cpu: Union[int, float, str] = 1.0,
+        memory: Union[int, str] = 128,
+        gpu: GpuTypeAlias = GpuType.NoGPU,
+        image: Image = Image(),
+        timeout: int = 180,
+        workers: int = 1,
+        concurrent_requests: int = 1,
+        keep_warm_seconds: int = 180,
+        max_pending_tasks: int = 100,
+        on_start: Optional[Callable] = None,
+        volumes: Optional[List[Volume]] = None,
+        secrets: Optional[List[str]] = None,
+        name: Optional[str] = None,
+        authorized: bool = True,
+        autoscaler: Autoscaler = QueueDepthAutoscaler(),
+        callback_url: Optional[str] = None,
+    ):
+        super().__init__(
+            cpu=cpu,
+            memory=memory,
+            gpu=gpu,
+            image=image,
+            timeout=timeout,
+            workers=workers,
+            keep_warm_seconds=keep_warm_seconds,
+            max_pending_tasks=max_pending_tasks,
+            on_start=on_start,
+            volumes=volumes,
+            secrets=secrets,
+            name=name,
+            authorized=authorized,
+            autoscaler=autoscaler,
+            callback_url=callback_url,
+            concurrent_requests=concurrent_requests,
+        )
+
+    def __call__(self, func):
+        import asyncio
+        from queue import Queue
+
+        from fastapi import FastAPI, WebSocket, WebSocketDisconnect, WebSocketException
+
+        internal_asgi_app = FastAPI()
+        internal_asgi_app.input_queue = Queue()
+
+        @internal_asgi_app.websocket("/")
+        async def stream(websocket: WebSocket):
+            await websocket.accept()
+
+            try:
+                while True:
+                    data = await websocket.receive_text()
+                    websocket.send_bytes
+                    internal_asgi_app.input_queue.put(data)
+
+                    if not internal_asgi_app.input_queue.empty():
+                        output = internal_asgi_app.handler(
+                            context=internal_asgi_app.context,
+                            input=internal_asgi_app.input_queue.get(),
+                        )
+                        await websocket.send_text(output)
+
+                    await asyncio.sleep(REALTIME_ASGI_SLEEP_INTERVAL)
+            except (WebSocketDisconnect, WebSocketException):
+                return
+
+        func.internal_asgi_app = internal_asgi_app
+        return _CallableWrapper(func, self)
+
+
 class _CallableWrapper(DeployableMixin):
     deployment_stub_type = ENDPOINT_DEPLOYMENT_STUB_TYPE
 
