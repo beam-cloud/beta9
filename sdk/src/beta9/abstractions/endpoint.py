@@ -304,8 +304,6 @@ class RealtimeASGI(ASGI):
         timeout (Optional[int]):
             The maximum number of seconds a task can run before it times out.
             Default is 3600. Set it to -1 to disable the timeout.
-        retries (Optional[int]):
-            The maximum number of times a task will be retried if the container crashes. Default is 3.
         workers (Optional[int]):
             The number of processes handling tasks per container.
             Modifying this parameter can improve throughput for certain workloads.
@@ -340,9 +338,6 @@ class RealtimeASGI(ASGI):
             various autoscaling strategies (Defaults to QueueDepthAutoscaler())
         callback_url (Optional[str]):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
-        task_policy (TaskPolicy):
-            The task policy for the function. This helps manage the lifecycle of an individual task.
-            Setting values here will override timeout and retries.
     Example:
         ```python
         from beta9 import realtime
