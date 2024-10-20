@@ -43,6 +43,7 @@ class SDKSettings:
     api_host: str = DEFAULT_API_HOST
     config_path: Path = Path("~/.beta9/config.ini").expanduser()
     ascii_logo: str = DEFAULT_ASCII_LOGO
+    use_defaults_in_prompt: bool = False
 
     def __post_init__(self, **kwargs):
         if p := os.getenv("CONFIG_PATH"):
@@ -66,6 +67,9 @@ class ConfigContext:
         if self.gateway_port in [443, "443"]:
             return True
         return False
+
+    def is_valid(self) -> bool:
+        return all([self.token, self.gateway_host, self.gateway_port])
 
 
 def set_settings(s: Optional[SDKSettings] = None) -> None:
@@ -133,9 +137,9 @@ def is_config_empty(path: Optional[Union[Path, str]] = None) -> bool:
 
 
 def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
-    config = load_config()
-    if name in config:
-        return config[name]
+    contexts = load_config()
+    if name in contexts:
+        return contexts[name]
 
     gateway_host = os.getenv("BETA9_GATEWAY_HOST", None)
     gateway_port = os.getenv("BETA9_GATEWAY_PORT", None)
@@ -149,8 +153,9 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
         )
 
     terminal.header(f"Context '{name}' does not exist. Let's try setting it up.")
-    _, config = prompt_for_config_context(name=name)
-    return config
+    contexts[name] = prompt_for_config_context(name=name, require_token=True)[1]
+    save_config(contexts)
+    return contexts[name]
 
 
 def prompt_for_config_context(
@@ -158,13 +163,13 @@ def prompt_for_config_context(
     token: Optional[str] = None,
     gateway_host: Optional[str] = None,
     gateway_port: Optional[int] = None,
+    require_token: bool = False,
 ) -> Tuple[str, ConfigContext]:
     settings = get_settings()
 
     prompt_name = functools.partial(
         terminal.prompt, text="Context Name", default=name or DEFAULT_CONTEXT_NAME
     )
-    # TODO: validate host by talking to gateway?
     prompt_gateway_host = functools.partial(
         terminal.prompt, text="Gateway Host", default=gateway_host or settings.gateway_host
     )
@@ -173,16 +178,26 @@ def prompt_for_config_context(
     )
 
     try:
-        while not (name := prompt_name()) or not isinstance(name, str):
-            pass
+        while not name and not (name := prompt_name()):
+            terminal.warn("Name is invalid.")
 
-        while not (gateway_host := prompt_gateway_host()) or not validate_ip_or_dns(gateway_host):
-            pass
+        if settings.use_defaults_in_prompt:
+            gateway_host = settings.gateway_host
+            gateway_port = settings.gateway_port
+        else:
+            while not (gateway_host := prompt_gateway_host()) or not validate_ip_or_dns(
+                gateway_host
+            ):
+                terminal.warn("Gateway host is invalid or unreachable.")
 
-        while not (gateway_port := prompt_gateway_port()) or not validate_port(gateway_port):
-            pass
+            while not (gateway_port := prompt_gateway_port()) or not validate_port(gateway_port):
+                terminal.warn("Gateway port is invalid.")
 
-        token = terminal.prompt(text="Token", default=None)
+        if require_token:
+            while not (token := terminal.prompt(text="Token", default=None)) or len(token) < 64:
+                terminal.warn("Token is invalid.")
+        else:
+            token = terminal.prompt(text="Token", default=None)
 
     except (KeyboardInterrupt, EOFError):
         os._exit(1)

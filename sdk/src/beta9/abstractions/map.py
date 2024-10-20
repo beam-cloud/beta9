@@ -69,10 +69,27 @@ class Map(BaseAbstraction):
     def stub(self, value: MapServiceStub):
         self._stub = value
 
-    def set(self, key: str, value: Any) -> bool:
+    def set(self, key: str, value: Any, ttl: int = 604_800) -> bool:
+        """
+        Set a key in the map.
+
+        Args:
+            key: The key to set.
+            value: The value to set. The max value size is 1 MiB.
+            ttl: The time to live for the key in seconds. Cannot be more than 7 days. Defaults to 7 days.
+
+        Raises:
+            ValueError: If the key could not be set.
+
+        Returns:
+            bool: True if the key was set, False otherwise.
+        """
         r: MapSetResponse = self.stub.map_set(
-            MapSetRequest(name=self.name, key=key, value=cloudpickle.dumps(value))
+            MapSetRequest(name=self.name, key=key, value=cloudpickle.dumps(value), ttl=ttl)
         )
+
+        if not r.ok:
+            raise ValueError(r.err_msg)
 
         return r.ok
 

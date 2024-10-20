@@ -1,10 +1,12 @@
+import functools
 import io
 import json
 import sys
+from typing import Any
 
 
 class StdoutJsonInterceptor(io.TextIOBase):
-    def __init__(self, stream=sys.__stdout__, **ctx):
+    def __init__(self, stream=sys.__stdout__, **ctx: Any):
         self.ctx = ctx
         self.stream = stream
 
@@ -38,3 +40,20 @@ class StdoutJsonInterceptor(io.TextIOBase):
 
     def fileno(self) -> int:
         return -1
+
+
+def json_output_interceptor(**ctx: Any):
+    """
+    A class decorator that intercepts stdout and stderr and writes the output
+    as JSON objects to the original stdout.
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            with StdoutJsonInterceptor(**ctx):
+                return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator

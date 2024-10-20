@@ -50,6 +50,7 @@ type TaskFilter struct {
 	CreatedAtEnd   string      `query:"created_at_end"`
 	MinDuration    uint        `query:"min_duration"`
 	MaxDuration    uint        `query:"max_duration"`
+	Interval       string      `query:"interval"`
 	Cursor         string      `query:"cursor"`
 }
 
@@ -60,6 +61,13 @@ type StubFilter struct {
 	StubTypes   StringSlice `query:"stub_types"`
 	Cursor      string      `query:"cursor"`
 	Pagination  bool        `query:"pagination"`
+}
+
+type StubGetURLFilter struct {
+	StubId       string `param:"stubId"`
+	WorkspaceId  string `param:"workspaceId"`
+	DeploymentId string `param:"deploymentId"`
+	URLType      string `query:"urlType"`
 }
 
 func ParseConditionFromQueryFilters(out interface{}, queryFilters ...QueryFilter) {

@@ -3,10 +3,10 @@ import sys
 import traceback
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from typing import Any, Callable, List, NewType, Optional, Tuple, cast
+from typing import Any, Callable, Generator, List, NewType, Optional, Tuple, cast
 
 import grpc
-from grpc import ChannelCredentials
+from grpc import ChannelCredentials, RpcError
 from grpc._interceptor import _Channel as InterceptorChannel
 
 from . import terminal
@@ -111,6 +111,8 @@ def handle_grpc_error(error: grpc.RpcError):
         terminal.error("Unable to connect to gateway.")
     elif code == grpc.StatusCode.CANCELLED:
         return
+    elif code == grpc.StatusCode.RESOURCE_EXHAUSTED:
+        terminal.error("Please ensure your payload or function arguments are less than 4 MiB.")
     elif code == grpc.StatusCode.UNKNOWN:
         terminal.error(f"Error {details}")
     else:
@@ -173,17 +175,25 @@ def prompt_first_auth(settings: SDKSettings) -> None:
     save_config(contexts, settings.config_path)
 
 
-@contextmanager
-def runner_context():
-    exit_code = 0
-
-    try:
+def pass_channel(func: Callable) -> Callable:
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
         config = get_config_context()
-        channel: Channel = get_channel(config)
-        yield channel
+        with get_channel(config) as channel:
+            return func(*args, **kwargs, channel=channel)
+
+    return wrapper
+
+
+@contextmanager
+def handle_error(print_traceback: bool = False):
+    exit_code = 0
+    try:
+        yield
+    except RpcError as exc:
+        handle_grpc_error(exc)
     except RunnerException as exc:
         exit_code = exc.code
-        raise
     except SystemExit as exc:
         exit_code = exc.code
         raise
@@ -191,9 +201,17 @@ def runner_context():
         exit_code = 1
     finally:
         if exit_code != 0:
-            print(traceback.format_exc())
+            if print_traceback:
+                print(traceback.format_exc())
             sys.exit(exit_code)
 
+
+@contextmanager
+def runner_context() -> Generator[Channel, None, None]:
+    with handle_error(print_traceback=True):
+        config = get_config_context()
+        channel = get_channel(config)
+        yield channel
         channel.close()
 
 

@@ -22,7 +22,7 @@ type IAutoscaler interface {
 }
 
 const (
-	MaxReplicas uint          = 5                                      // Maximum number of desired replicas that can be returned
+	MaxReplicas uint          = 10                                     // Maximum number of desired replicas that can be returned
 	windowSize  int           = 60                                     // Number of samples in the sampling window
 	sampleRate  time.Duration = time.Duration(1000) * time.Millisecond // Time between samples
 )

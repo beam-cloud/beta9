@@ -28,13 +28,13 @@ type WorkspaceSecretService struct {
 
 var secretRoutePrefix = "/secret"
 
-func NewSecretService(backendRepo repository.BackendRepository, routeGroup *echo.Group) SecretService {
+func NewSecretService(backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, routeGroup *echo.Group) SecretService {
 	ss := &WorkspaceSecretService{
 		backendRepo: backendRepo,
 	}
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(backendRepo)
+	authMiddleware := auth.AuthMiddleware(backendRepo, workspaceRepo)
 	registerSecretRoutes(routeGroup.Group(secretRoutePrefix, authMiddleware), ss)
 
 	return ss

@@ -74,6 +74,7 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 		if deployments, err := g.backendRepo.ListDeploymentsWithRelated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list deployments")
 		} else {
+			sanitizeDeployments(deployments)
 			return ctx.JSON(http.StatusOK, deployments)
 		}
 
@@ -93,6 +94,7 @@ func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 	} else if deployment == nil {
 		return HTTPNotFound()
 	} else {
+		deployment.Stub.SanitizeConfig()
 		return ctx.JSON(http.StatusOK, deployment)
 	}
 }
@@ -178,6 +180,7 @@ func (g *DeploymentGroup) ListLatestDeployments(ctx echo.Context) error {
 	if deployments, err := g.backendRepo.ListLatestDeploymentsWithRelatedPaginated(ctx.Request().Context(), filters); err != nil {
 		return HTTPInternalServerError("Failed to list deployments")
 	} else {
+		sanitizeDeployments(deployments.Data)
 		return ctx.JSON(http.StatusOK, deployments)
 	}
 }
@@ -202,6 +205,13 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 
 func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRelated, ctx echo.Context) error {
 	for _, deployment := range deployments {
+		// Stop scheduled job
+		if deployment.StubType == types.StubTypeScheduledJobDeployment {
+			if scheduledJob, err := g.backendRepo.GetScheduledJob(ctx.Request().Context(), deployment.Id); err == nil {
+				g.backendRepo.DeleteScheduledJob(ctx.Request().Context(), scheduledJob)
+			}
+		}
+
 		// Stop active containers
 		containers, err := g.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
 		if err == nil {
@@ -230,4 +240,10 @@ func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRela
 
 func getPackagePath(workspaceName, objectId string) string {
 	return path.Join("/data/objects/", workspaceName, objectId)
+}
+
+func sanitizeDeployments(deployments []types.DeploymentWithRelated) {
+	for i := range deployments {
+		deployments[i].Stub.SanitizeConfig()
+	}
 }

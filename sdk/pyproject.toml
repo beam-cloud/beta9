@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "beta9"
-version = "0.1.72"
+version = "0.1.92"
 description = ""
 authors = ["beam.cloud <support@beam.cloud>"]
 packages = [
@@ -62,8 +62,13 @@ exclude_also = [
 
 [tool.ruff]
 line-length = 100
-exclude = ["src/beta9/clients"]
+exclude = ["src/beta9/clients", "vendor"]
 src = ["src", "test", "bin"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/beta9/__init__.py" = ["F403"]
+
+[tool.vendoring]
+destination = "src/beta9/vendor"
+requirements = "vendors.txt"
+namespace = "beta9.vendor"

@@ -16,8 +16,10 @@ import (
 	"syscall"
 	"time"
 
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"k8s.io/utils/ptr"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -42,6 +44,7 @@ type Worker struct {
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
 	cedanaClient            *CedanaClient
+	fileCacheManager        *FileCacheManager
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
 	containerMountManager   *ContainerMountManager
@@ -145,7 +148,16 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	imageClient, err := NewImageClient(config, workerId, workerRepo)
+	var cacheClient *blobcache.BlobCacheClient = nil
+	if config.Worker.BlobCacheEnabled {
+		cacheClient, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
+		if err != nil {
+			log.Printf("[WARNING] Cache unavailable, performance may be degraded: %+v\n", err)
+		}
+	}
+
+	fileCacheManager := NewFileCacheManager(config, cacheClient)
+	imageClient, err := NewImageClient(config, workerId, workerRepo, fileCacheManager)
 	if err != nil {
 		return nil, err
 	}
@@ -184,10 +196,11 @@ func NewWorker() (*Worker, error) {
 		gpuCount:                uint32(gpuCount),
 		runcHandle:              runc.Runc{},
 		runcServer:              runcServer,
+		fileCacheManager:        fileCacheManager,
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		redisClient:             redisClient,
-		containerMountManager:   NewContainerMountManager(),
+		containerMountManager:   NewContainerMountManager(config),
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
 		podHostName:             podHostName,
@@ -276,7 +289,6 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerId := request.ContainerId
-
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Pull image
@@ -315,11 +327,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		}
 	}
 
-	err = s.containerMountManager.SetupContainerMounts(request.ContainerId, request.Mounts)
-	if err != nil {
-		return err
-	}
-
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
 
@@ -327,6 +334,11 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		BundlePath:  bundlePath,
 		BindPort:    bindPort,
 		InitialSpec: initialBundleSpec,
+	}
+
+	err = s.containerMountManager.SetupContainerMounts(request)
+	if err != nil {
+		s.containerLogger.Log(request.ContainerId, request.StubId, fmt.Sprintf("failed to setup container mounts: %v", err))
 	}
 
 	// Generate dynamic runc spec for this container
@@ -443,6 +455,9 @@ func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
 					break
 				} else {
 					log.Printf("<%s> - endpoint not ready for checkpoint: %+v\n", instance.Id, err)
+				}
+				if err != nil {
+					log.Printf("<%s> - cedana health check failed: %+v\n", request.ContainerId, err)
 				}
 			}
 		} else {
@@ -796,6 +811,21 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 	return &newSpec, nil
 }
 
+const (
+	standardCPUShare  uint64 = 1024
+	standardCPUPeriod int64  = 100_000
+)
+
+func calculateCPUShares(millicores int64) uint64 {
+	shares := uint64(millicores) * standardCPUShare / 1000
+	return shares
+}
+
+func calculateCPUQuota(millicores int64) int64 {
+	quota := millicores * standardCPUPeriod / 1000
+	return quota
+}
+
 // Generate a runc spec from a given request
 func (s *Worker) specFromRequest(request *types.ContainerRequest, options *ContainerOptions) (*specs.Spec, error) {
 	os.MkdirAll(filepath.Join(baseConfigPath, request.ContainerId), os.ModePerm)
@@ -808,6 +838,17 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
+
+	if s.config.Worker.RunCResourcesEnforced {
+		spec.Linux.Resources.CPU = &specs.LinuxCPU{
+			Shares: ptr.To(calculateCPUShares(request.Cpu)),
+			Quota:  ptr.To(calculateCPUQuota(request.Cpu)),
+			Period: ptr.To(uint64(standardCPUPeriod)),
+		}
+		spec.Linux.Resources.Memory = &specs.LinuxMemory{
+			Limit: ptr.To(request.Memory * 1024 * 1024),
+		}
+	}
 
 	env := s.getContainerEnvironment(request, options)
 	if request.Gpu != "" {
@@ -841,11 +882,26 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Env = append(spec.Process.Env, env...)
 	spec.Root.Readonly = false
 
-	// Create local workspace path so we can symlink volumes before the container starts
-	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
+	var volumeCacheMap map[string]string = make(map[string]string)
 
 	// Add bind mounts to runc spec
 	for _, m := range request.Mounts {
+		// Skip mountpoint storage if the local path does not exist (mounting failed)
+		if m.MountType == storage.StorageModeMountPoint {
+			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
+				continue
+			}
+		} else {
+			volumeCacheMap[filepath.Base(m.MountPath)] = m.LocalPath
+
+			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
+				err := os.MkdirAll(m.LocalPath, 0755)
+				if err != nil {
+					log.Printf("<%s> - failed to create mount directory: %v\n", request.ContainerId, err)
+				}
+			}
+		}
+
 		mode := "rw"
 		if m.ReadOnly {
 			mode = "ro"
@@ -854,15 +910,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		if m.LinkPath != "" {
 			err = forceSymlink(m.MountPath, m.LinkPath)
 			if err != nil {
-				log.Printf("unable to symlink volume: %v", err)
-			}
-		}
-
-		// If the local mount path does not exist, create it
-		if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
-			err := os.MkdirAll(m.LocalPath, 0755)
-			if err != nil {
-				log.Printf("<%s> - failed to create mount directory: %v\n", request.ContainerId, err)
+				log.Printf("<%s> - unable to symlink volume: %v", request.ContainerId, err)
 			}
 		}
 
@@ -872,6 +920,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			Destination: m.MountPath,
 			Options:     []string{"rbind", mode},
 		})
+	}
+
+	// If volume caching is enabled, set it up and add proper mounts to spec
+	if s.fileCacheManager.CacheAvailable() && request.Workspace.VolumeCacheEnabled {
+		err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
+		if err != nil {
+			log.Printf("<%s> - failed to setup volume caching: %v", request.ContainerId, err)
+		}
 	}
 
 	// Configure resolv.conf
@@ -951,7 +1007,7 @@ func (s *Worker) startup() error {
 
 	err = os.MkdirAll(containerLogsPath, os.ModePerm)
 	if err != nil {
-		return fmt.Errorf("failed to create logs directory: %w", err)
+		return fmt.Errorf("failed to create logs directory: %v", err)
 	}
 
 	go s.eventRepo.PushWorkerStartedEvent(s.workerId)
@@ -964,7 +1020,6 @@ func (s *Worker) shutdown() error {
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
 	var errs error
-
 	if worker, err := s.workerRepo.GetWorkerById(s.workerId); err != nil {
 		errs = errors.Join(errs, err)
 	} else if worker != nil {

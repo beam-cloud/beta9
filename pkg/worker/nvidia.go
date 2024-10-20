@@ -271,7 +271,7 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string, options *ContainerO
 
 func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
 	// /usr/local/cuda already points to the installed CUDA lib in the worker
-  // XXX: Could remove hardcoded defaultContainerCudaVersion from this file
+	// XXX: Could remove hardcoded defaultContainerCudaVersion from this file
 	cudaPaths := []string{"/usr/local/cuda", "/usr/local/nvidia/lib64"}
 
 	for _, path := range cudaPaths {
@@ -294,6 +294,21 @@ func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Moun
 			},
 		}...)
 	}
+
+	mounts = append(mounts, []specs.Mount{
+		{
+			Type:        "bind",
+			Source:      fmt.Sprintf("/usr/local/cuda-%s", defaultContainerCudaVersion),
+			Destination: "/usr/local/cuda",
+			Options: []string{
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev",
+				"rw",
+			},
+		},
+	}...)
 
 	return mounts
 }

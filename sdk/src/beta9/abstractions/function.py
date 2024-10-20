@@ -2,7 +2,7 @@ import concurrent.futures
 import inspect
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
+from typing import Any, Callable, Iterator, List, Optional, Sequence, Union
 
 import cloudpickle
 
@@ -23,7 +23,7 @@ from ..clients.function import (
     FunctionScheduleRequest,
     FunctionServiceStub,
 )
-from ..env import is_local
+from ..env import called_on_import, is_local
 from ..sync import FileSyncer
 from ..type import GpuType, GpuTypeAlias, TaskPolicy
 from .mixins import DeployableMixin
@@ -135,6 +135,9 @@ class _CallableWrapper(DeployableMixin):
 
     @with_grpc_error_handling
     def __call__(self, *args, **kwargs) -> Any:
+        if called_on_import():
+            return
+
         if not is_local():
             return self.local(*args, **kwargs)
 
@@ -218,14 +221,14 @@ class ScheduleWrapper(_CallableWrapper):
     base_stub_type = SCHEDULE_STUB_TYPE
     deployment_stub_type = SCHEDULE_DEPLOYMENT_STUB_TYPE
 
-    def deploy(self, *args: List[Any], **kwargs: Dict[str, Any]) -> bool:
+    def deploy(self, *args: Any, **kwargs: Any) -> bool:
         deployed = super().deploy(invocation_details_func=self.invocation_details, *args, **kwargs)
         if deployed:
             res = self.parent.function_stub.function_schedule(
                 FunctionScheduleRequest(
                     stub_id=self.parent.stub_id,
                     when=self.parent.when,
-                    deployment_id=self.deployment_id,
+                    deployment_id=self.parent.deployment_id,
                 )
             )
             if not res.ok:
@@ -233,7 +236,7 @@ class ScheduleWrapper(_CallableWrapper):
                 return False
         return deployed
 
-    def invocation_details(self) -> None:
+    def invocation_details(self, **kwargs) -> None:
         """
         Print the schedule details.
 

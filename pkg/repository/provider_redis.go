@@ -7,9 +7,10 @@ import (
 	"strings"
 	"time"
 
+	redis "github.com/redis/go-redis/v9"
+
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
-	redis "github.com/redis/go-redis/v9"
 )
 
 type ProviderRedisRepository struct {
@@ -370,4 +371,31 @@ func (r *ProviderRedisRepository) GetGPUAvailability(pools map[string]types.Work
 	}
 
 	return gpuAvailability, nil
+}
+
+func (r *ProviderRedisRepository) GetGPUCounts(pools map[string]types.WorkerPoolConfig) (map[string]int, error) {
+	gpuCounts := map[string]int{}
+	gpuTypes := types.AllGPUTypes()
+	for _, gpuType := range gpuTypes {
+		gpuCounts[gpuType.String()] = 0
+	}
+
+	for poolName, pool := range pools {
+		if pool.Provider == nil {
+			continue
+		}
+
+		machines, err := r.ListAllMachines(string(*pool.Provider), poolName, false)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, machine := range machines {
+			if machine.Metrics != nil {
+				gpuCounts[machine.State.Gpu] += machine.Metrics.FreeGpuCount
+			}
+		}
+	}
+
+	return gpuCounts, nil
 }

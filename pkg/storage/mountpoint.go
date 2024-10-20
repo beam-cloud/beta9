@@ -46,7 +46,9 @@ func (s *MountPointStorage) Mount(localPath string) error {
 
 	output, err := s.mountCmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("error: %+v, %s", err, string(output))
+		// Cleanup the temporary mountpoint directory if the mount fails
+		os.RemoveAll(localPath)
+		return fmt.Errorf("%+v, %s", err, string(output))
 	}
 
 	return nil
@@ -63,6 +65,8 @@ func (s *MountPointStorage) Unmount(localPath string) error {
 	if err != nil {
 		return fmt.Errorf("error executing mount-s3 umount: %v, output: %s", err, string(output))
 	}
+
+	os.RemoveAll(localPath)
 
 	return nil
 }

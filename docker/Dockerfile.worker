@@ -131,7 +131,7 @@ RUN if [ "$(uname -m)" = "x86_64" ]; then \
     apt-get install -y /tmp/cuno_1.2.6_amd64_glibc.deb && rm /tmp/cuno_1.2.6_amd64_glibc.deb; \
     fi
 
-RUN apt-get remove -y curl gpg && \
+RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
     rm -rf /var/lib/apt/lists/* /var/log/*
 
@@ -140,6 +140,7 @@ COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
 COPY --from=skopeo /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=skopeo /workspace/default-policy.json /etc/containers/policy.json
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
+COPY ./bin/volume_cache.so /usr/local/lib/volume_cache.so
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
 COPY ./sdk/src/beta9 /workspace/sdk
 
