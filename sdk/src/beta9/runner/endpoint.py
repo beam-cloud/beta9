@@ -148,7 +148,7 @@ class EndpointManager:
             )
 
             app: Union[FastAPI, None] = None
-            internal_asgi_app = self.handler.handler.func.internal_asgi_app
+            internal_asgi_app = getattr(self.handler.handler.func, "internal_asgi_app", None)
             if internal_asgi_app is not None:
                 app = internal_asgi_app
                 app.context = context

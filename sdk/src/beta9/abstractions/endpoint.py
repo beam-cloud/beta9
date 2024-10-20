@@ -334,7 +334,6 @@ class RealtimeASGI(ASGI):
             try:
                 while True:
                     data = await websocket.receive_text()
-                    websocket.send_bytes
                     internal_asgi_app.input_queue.put(data)
 
                     if not internal_asgi_app.input_queue.empty():
@@ -342,7 +341,13 @@ class RealtimeASGI(ASGI):
                             context=internal_asgi_app.context,
                             input=internal_asgi_app.input_queue.get(),
                         )
-                        await websocket.send_text(output)
+
+                        if isinstance(output, str):
+                            await websocket.send_text(output)
+                        elif isinstance(output, dict):
+                            await websocket.send_json(output)
+                        else:
+                            await websocket.send_bytes(output)
 
                     await asyncio.sleep(REALTIME_ASGI_SLEEP_INTERVAL)
             except (WebSocketDisconnect, WebSocketException):
