@@ -284,6 +284,82 @@ REALTIME_ASGI_HEALTH_CHECK_INTERVAL_SECONDS = 5
 
 
 class RealtimeASGI(ASGI):
+    """
+    Decorator which allows you to create a realtime application built on top of ASGI / websockets.
+    Your handler function will run every time a message is received over the websocket.
+
+    Parameters:
+        cpu (Union[int, float, str]):
+            The number of CPU cores allocated to the container. Default is 1.0.
+        memory (Union[int, str]):
+            The amount of memory allocated to the container. It should be specified in
+            MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
+        gpu (Union[GpuType, str]):
+            The type or name of the GPU device to be used for GPU-accelerated tasks. If not
+            applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
+        image (Union[Image, dict]):
+            The container image used for the task execution. Default is [Image](#image).
+        volumes (Optional[List[Volume]]):
+            A list of volumes to be mounted to the ASGI application. Default is None.
+        timeout (Optional[int]):
+            The maximum number of seconds a task can run before it times out.
+            Default is 3600. Set it to -1 to disable the timeout.
+        retries (Optional[int]):
+            The maximum number of times a task will be retried if the container crashes. Default is 3.
+        workers (Optional[int]):
+            The number of processes handling tasks per container.
+            Modifying this parameter can improve throughput for certain workloads.
+            Workers will share the CPU, Memory, and GPU defined.
+            You may need to increase these values to increase concurrency.
+            Default is 1.
+        concurrent_requests (int):
+            The maximum number of concurrent requests the ASGI application can handle.
+            Unlike regular endpoints that process requests synchronously, ASGI applications
+            can handle multiple requests concurrently. This parameter allows you to specify
+            the level of concurrency. For applications with blocking operations, this can
+            improve throughput by allowing the application to process other requests while
+            waiting for blocking operations to complete. Default is 1.
+        keep_warm_seconds (int):
+            The duration in seconds to keep the task queue warm even if there are no pending
+            tasks. Keeping the queue warm helps to reduce the latency when new tasks arrive.
+            Default is 10s.
+        max_pending_tasks (int):
+            The maximum number of tasks that can be pending in the queue. If the number of
+            pending tasks exceeds this value, the task queue will stop accepting new tasks.
+            Default is 100.
+        secrets (Optional[List[str]):
+            A list of secrets that are injected into the container as environment variables. Default is [].
+        name (Optional[str]):
+            An optional name for this ASGI application, used during deployment. If not specified, you must
+            specify the name at deploy time with the --name argument
+        authorized (Optional[str]):
+            If false, allows the ASGI application to be invoked without an auth token.
+            Default is True.
+        autoscaler (Optional[Autoscaler]):
+            Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
+            various autoscaling strategies (Defaults to QueueDepthAutoscaler())
+        callback_url (Optional[str]):
+            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        task_policy (TaskPolicy):
+            The task policy for the function. This helps manage the lifecycle of an individual task.
+            Setting values here will override timeout and retries.
+    Example:
+        ```python
+        from beta9 import realtime, Image
+
+        def generate_text():
+            return ["this", "could", "be", "anything"]
+
+        @realtime(
+            cpu=1.0,
+            memory=128,
+            gpu="T4"
+        )
+        def handler(context):
+            return generate_text()
+        ```
+    """
+
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
@@ -371,7 +447,7 @@ class RealtimeASGI(ASGI):
 
                             if isinstance(output, str):
                                 await websocket.send_text(output)
-                            elif isinstance(output, dict):
+                            elif isinstance(output, dict) or isinstance(output, list):
                                 await websocket.send_json(output)
                             else:
                                 await websocket.send_bytes(output)
