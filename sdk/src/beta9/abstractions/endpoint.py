@@ -345,7 +345,7 @@ class RealtimeASGI(ASGI):
             Setting values here will override timeout and retries.
     Example:
         ```python
-        from beta9 import realtime, Image
+        from beta9 import realtime
 
         def generate_text():
             return ["this", "could", "be", "anything"]
