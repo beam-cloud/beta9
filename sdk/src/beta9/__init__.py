@@ -3,6 +3,7 @@ from .abstractions import experimental
 from .abstractions.container import Container
 from .abstractions.endpoint import ASGI as asgi
 from .abstractions.endpoint import Endpoint as endpoint
+from .abstractions.endpoint import RealtimeASGI as realtime
 from .abstractions.function import Function as function
 from .abstractions.function import Schedule as schedule
 from .abstractions.image import Image
@@ -24,6 +25,7 @@ __all__ = [
     "function",
     "endpoint",
     "asgi",
+    "realtime",
     "Container",
     "env",
     "GpuType",
