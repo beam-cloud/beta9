@@ -200,12 +200,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	var hostname string
-
 	mctx, mcancel := context.WithCancel(ctx)
 	go b.monitorContainerForPreloadErrors(mctx, containerId, outputChan)
 
-	hostname, err = b.containerRepo.GetWorkerAddress(ctx, containerId)
+	hostname, err := b.containerRepo.GetWorkerAddress(ctx, containerId)
 	mcancel()
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
