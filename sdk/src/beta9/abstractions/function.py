@@ -1,5 +1,6 @@
 import concurrent.futures
 import inspect
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterator, List, Optional, Sequence, Union
@@ -147,8 +148,12 @@ class _CallableWrapper(DeployableMixin):
         ):
             return
 
-        with terminal.progress("Working..."):
-            return self._call_remote(*args, **kwargs)
+        try:
+            with terminal.progress("Working..."):
+                return self._call_remote(*args, **kwargs)
+        except KeyboardInterrupt:
+            terminal.error("Application interrupted. Remote function is still running.")
+            os._exit(0)
 
     @with_grpc_error_handling
     def _call_remote(self, *args, **kwargs) -> Any:
