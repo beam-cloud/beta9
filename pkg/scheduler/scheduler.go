@@ -330,7 +330,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 		}
 
 		log.Printf("Giving up on request <%s> after %d attempts or due to max retry duration exceeded\n", request.ContainerId, request.RetryCount)
-		s.containerRepo.DeleteContainerState(&types.ContainerRequest{ContainerId: request.ContainerId})
+		s.containerRepo.DeleteContainerState(request.ContainerId)
 	}()
 
 	return nil

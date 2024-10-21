@@ -161,9 +161,7 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 	return nil
 }
 
-func (cr *ContainerRedisRepository) DeleteContainerState(request *types.ContainerRequest) error {
-	containerId := request.ContainerId
-
+func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) error {
 	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
