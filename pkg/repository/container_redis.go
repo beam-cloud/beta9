@@ -161,7 +161,7 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 	return nil
 }
 
-func (cr *ContainerRedisRepository) UpdateContainerGPU(containerId string, gpuType string) error {
+func (cr *ContainerRedisRepository) UpdateAssignedContainerGPU(containerId string, gpuType string) error {
 	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err

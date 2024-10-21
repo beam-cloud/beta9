@@ -258,7 +258,7 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 	go s.schedulerMetrics.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
 
-	if err := s.containerRepo.UpdateContainerGPU(request.ContainerId, worker.Gpu); err != nil {
+	if err := s.containerRepo.UpdateAssignedContainerGPU(request.ContainerId, worker.Gpu); err != nil {
 		return err
 	}
 
