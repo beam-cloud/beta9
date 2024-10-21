@@ -82,11 +82,11 @@ type ContainerRequest struct {
 	StubId           string          `json:"stub_id"`
 	WorkspaceId      string          `json:"workspace_id"`
 	Workspace        Workspace       `json:"workspace"`
+	Stub             StubWithRelated `json:"stub"`
 	Timestamp        time.Time       `json:"timestamp"`
 	Mounts           []Mount         `json:"mounts"`
 	RetryCount       int             `json:"retry_count"`
 	PoolSelector     string          `json:"pool_selector"`
-	Stub             StubWithRelated `json:"stub"`
 }
 
 const ContainerExitCodeTtlS int = 300
