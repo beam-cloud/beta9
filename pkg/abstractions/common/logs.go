@@ -42,7 +42,7 @@ type LogStream struct {
 }
 
 func (l *LogStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
-	hostname, err := l.containerRepo.GetWorkerAddress(containerId)
+	hostname, err := l.containerRepo.GetWorkerAddress(ctx, containerId)
 	if err != nil {
 		return err
 	}
