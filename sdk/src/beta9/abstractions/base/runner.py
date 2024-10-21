@@ -288,11 +288,7 @@ class RunnerAbstraction(BaseAbstraction):
             terminal.warn(str(e))
 
     def _parse_gpu(self, gpu: Union[GpuTypeAlias, List[GpuTypeAlias]]) -> str:
-        if (
-            not isinstance(gpu, GpuTypeAlias)
-            and not isinstance(gpu, str)
-            and not isinstance(gpu, list)
-        ):
+        if not isinstance(gpu, str) and not isinstance(gpu, list):
             raise ValueError("Invalid GPU type")
 
         if isinstance(gpu, list):
