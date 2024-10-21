@@ -44,16 +44,17 @@ func (e *ExitCodeError) Error() string {
 	return fmt.Sprintf("exit code error: %s", WorkerContainerExitCodes[e.ExitCode])
 }
 
-var (
-	WorkerContainerExitCodeInvalidCustomImage = 3
-	WorkerContainerExitCodeIncorrectImageArch = 4
-	WorkerContainerExitCodeIncorrectImageOs   = 5
+const (
+	WorkerContainerExitCodeInvalidCustomImage = 555
+	WorkerContainerExitCodeIncorrectImageArch = 556
+	WorkerContainerExitCodeIncorrectImageOs   = 557
 	WorkerContainerExitCodeUnknownError       = 1
+	WorkerContainerExitCodeSuccess            = 0
 )
 
 var WorkerContainerExitCodes = map[int]string{
-	0: "Success",
-	1: "UnknownError",
+	WorkerContainerExitCodeSuccess:            "Success",
+	WorkerContainerExitCodeUnknownError:       "UnknownError",
 	WorkerContainerExitCodeIncorrectImageArch: "InvalidArch: Image is not amd64/x86_64",
 	WorkerContainerExitCodeInvalidCustomImage: "InvalidCustomImage: Could not find custom image",
 	WorkerContainerExitCodeIncorrectImageOs:   "InvalidOs: Image is not built for linux",

@@ -282,7 +282,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 
 	status, err := runc.Monitor.Wait(cmd, ec)
 	if err == nil && status != 0 {
-		return fmt.Errorf("unable to pull image: %v", status)
+		return fmt.Errorf("unable to copy image: %v", cmd.String())
 	}
 
 	tmpBundlePath := filepath.Join(baseTmpBundlePath, imageId)
