@@ -198,7 +198,7 @@ func (cr *ContainerRedisRepository) SetWorkerAddress(containerId string, addr st
 }
 
 func (cr *ContainerRedisRepository) GetWorkerAddress(ctx context.Context, containerId string) (string, error) {
-	cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	var hostname string = ""
@@ -209,10 +209,13 @@ func (cr *ContainerRedisRepository) GetWorkerAddress(ctx context.Context, contai
 
 	for {
 		select {
-		case <-cctx.Done():
-			return "", errors.New("timeout reached while trying to get worker addr")
+		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				return "", errors.New("timeout reached while trying to get worker addr")
+			}
+			return "", errors.New("context cancelled while trying to get worker addr")
 		case <-ticker.C:
-			hostname, err = cr.rdb.Get(cctx, common.RedisKeys.SchedulerWorkerAddress(containerId)).Result()
+			hostname, err = cr.rdb.Get(ctx, common.RedisKeys.SchedulerWorkerAddress(containerId)).Result()
 			if err == nil {
 				return hostname, nil
 			}
