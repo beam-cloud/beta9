@@ -73,7 +73,7 @@ class RunnerAbstraction(BaseAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: GpuTypeAlias = GpuType.NoGPU,
+        gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         image: Image = Image(),
         workers: int = 1,
         concurrent_requests: int = 1,
@@ -287,6 +287,15 @@ class RunnerAbstraction(BaseAbstraction):
         except Exception as e:
             terminal.warn(str(e))
 
+    def _parse_gpu(self, gpu: Union[GpuTypeAlias, List[GpuTypeAlias]]) -> str:
+        if not isinstance(gpu, str) and not isinstance(gpu, list):
+            raise ValueError("Invalid GPU type")
+
+        if isinstance(gpu, list):
+            return ",".join([GpuType(g).value for g in gpu])
+        else:
+            return GpuType(gpu).value
+
     def sync_dir_to_workspace(
         self, *, dir: str, object_id: str, on_event: Optional[Callable] = None
     ) -> ReplaceObjectContentResponse:
@@ -350,7 +359,7 @@ class RunnerAbstraction(BaseAbstraction):
                 return False
 
         try:
-            self.gpu = GpuType(self.gpu).value
+            self.gpu = self._parse_gpu(self.gpu)
         except ValueError:
             terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
             return False

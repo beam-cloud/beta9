@@ -80,13 +80,12 @@ func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
 }
 
-func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := wpc.generateWorkerId()
 	worker := &types.Worker{
 		Id:           workerId,
 		FreeCpu:      cpu,
 		FreeMemory:   memory,
-		Gpu:          gpuType,
 		FreeGpuCount: gpuCount,
 		Status:       types.WorkerStatusPending,
 	}
@@ -125,13 +124,12 @@ func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
 }
 
-func (wpc *ExternalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+func (wpc *ExternalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := wpc.generateWorkerId()
 	worker := &types.Worker{
 		Id:           workerId,
 		FreeCpu:      cpu,
 		FreeMemory:   memory,
-		Gpu:          gpuType,
 		FreeGpuCount: gpuCount,
 		Status:       types.WorkerStatusPending,
 		PoolName:     wpc.poolName,
@@ -338,33 +336,33 @@ func TestGetController(t *testing.T) {
 
 	t.Run("returns correct controller", func(t *testing.T) {
 		cpuRequest := &types.ContainerRequest{Gpu: ""}
-		defaultController, err := wb.getController(cpuRequest)
-		if err != nil || defaultController.Name() != "default" {
+		defaultController, err := wb.getControllers(cpuRequest)
+		if err != nil || defaultController[0].Name() != "default" {
 			t.Errorf("Expected default controller, got %v, error: %v", defaultController, err)
 		}
 
-		a10gRequest := &types.ContainerRequest{Gpu: "A10G"}
-		a10gController, err := wb.getController(a10gRequest)
-		if err != nil || a10gController.Name() != "beta9-a10g" {
+		a10gRequest := &types.ContainerRequest{GpuRequest: []string{"A10G"}}
+		a10gController, err := wb.getControllers(a10gRequest)
+		if err != nil || a10gController[0].Name() != "beta9-a10g" {
 			t.Errorf("Expected beta9-a10g controller, got %v, error: %v", a10gController, err)
 		}
 
-		t4Request := &types.ContainerRequest{Gpu: "T4"}
-		t4Controller, err := wb.getController(t4Request)
-		if err != nil || t4Controller.Name() != "beta9-t4" {
+		t4Request := &types.ContainerRequest{GpuRequest: []string{"T4"}}
+		t4Controller, err := wb.getControllers(t4Request)
+		if err != nil || t4Controller[0].Name() != "beta9-t4" {
 			t.Errorf("Expected beta9-t4 controller, got %v, error: %v", t4Controller, err)
 		}
 
 		buildRequest := &types.ContainerRequest{PoolSelector: "beta9-build"}
-		buildController, err := wb.getController(buildRequest)
-		if err != nil || buildController.Name() != "beta9-build" {
+		buildController, err := wb.getControllers(buildRequest)
+		if err != nil || buildController[0].Name() != "beta9-build" {
 			t.Errorf("Expected beta9-build controller, got %v, error: %v", buildController, err)
 		}
 	})
 
 	t.Run("returns error if no suitable controller found", func(t *testing.T) {
-		unknownRequest := &types.ContainerRequest{Gpu: "UNKNOWN_GPU"}
-		_, err := wb.getController(unknownRequest)
+		unknownRequest := &types.ContainerRequest{GpuRequest: []string{"UNKNOWN_GPU"}}
+		_, err := wb.getControllers(unknownRequest)
 		if err == nil {
 			t.Errorf("Expected error for unknown GPU type, got nil")
 		}
@@ -468,6 +466,159 @@ func TestSelectCPUWorker(t *testing.T) {
 	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
 	assert.Equal(t, "", updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusPending, updatedWorker.Status)
+
+	newWorker2 := &types.Worker{
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Gpu:        "",
+	}
+
+	thirdRequest := &types.ContainerRequest{
+		Cpu:    1000,
+		Memory: 1000,
+	}
+
+	// Create a new worker
+	err = wb.workerRepo.AddWorker(newWorker2)
+	assert.Nil(t, err)
+
+	worker, err = wb.selectWorker(thirdRequest)
+	assert.Nil(t, err)
+	assert.Equal(t, "", worker.Gpu)
+}
+
+func stringInSlice(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSelectWorkersWithBackupGPU(t *testing.T) {
+	tests := []struct {
+		name               string
+		requests           []*types.ContainerRequest
+		expectedGpuResults []string
+		gpus               []string
+	}{
+		{
+			name: "simple",
+			requests: []*types.ContainerRequest{
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G"},
+				},
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G", "T4"},
+				},
+			},
+			expectedGpuResults: []string{"A10G", "T4"},
+			gpus:               []string{"A10G", "T4"},
+		},
+		{
+			name: "complex",
+			requests: []*types.ContainerRequest{
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G"},
+				},
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"T4", "A6000"},
+				},
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G", "T4", "A6000"},
+				},
+			},
+			expectedGpuResults: []string{"A10G", "T4", "A6000"},
+			gpus:               []string{"A10G", "T4", "A6000"},
+		},
+		{
+			name: "not enough backup GPUs",
+			requests: []*types.ContainerRequest{
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G", "T4"},
+				},
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G", "T4"},
+				},
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"A10G", "T4"},
+				},
+			},
+			expectedGpuResults: []string{"A10G", "T4", ""},
+			gpus:               []string{"A10G", "T4", "A6000"},
+		},
+		{
+			name: "backward compatibility",
+			requests: []*types.ContainerRequest{
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					Gpu:        "A10G",
+					GpuRequest: []string{"T4"},
+				},
+			},
+			expectedGpuResults: []string{"A10G"},
+			gpus:               []string{"A10G", "T4"},
+		},
+	}
+
+	for _, tt := range tests {
+		wb, err := NewSchedulerForTest()
+		assert.Nil(t, err)
+		assert.NotNil(t, wb)
+
+		t.Run(tt.name, func(t *testing.T) {
+			for _, gpu := range tt.gpus {
+				newWorker := &types.Worker{
+					Id:         uuid.New().String(),
+					Status:     types.WorkerStatusPending,
+					FreeCpu:    1000,
+					FreeMemory: 1000,
+					Gpu:        gpu,
+				}
+
+				// Create a new worker
+				err = wb.workerRepo.AddWorker(newWorker)
+				assert.Nil(t, err)
+			}
+
+			for i, req := range tt.requests {
+				worker, err := wb.selectWorker(req)
+				if err != nil {
+					assert.EqualError(t, err, (&types.ErrNoSuitableWorkerFound{}).Error())
+					assert.Equal(t, tt.expectedGpuResults[i], "")
+					continue
+				}
+
+				reqGpus := req.GpuRequest
+				if req.Gpu != "" {
+					reqGpus = append(reqGpus, req.Gpu)
+				}
+				assert.True(t, stringInSlice(worker.Gpu, reqGpus))
+
+				err = wb.scheduleRequest(worker, req)
+				assert.Nil(t, err)
+			}
+		})
+	}
 }
 
 func TestRequiresPoolSelectorWorker(t *testing.T) {
