@@ -149,8 +149,11 @@ class _CallableWrapper(DeployableMixin):
         ):
             return
 
-        with terminal.progress("Working..."):
-            return self._call_remote(*args, **kwargs)
+        try:
+            with terminal.progress("Working..."):
+                return self._call_remote(*args, **kwargs)
+        except KeyboardInterrupt:
+            terminal.error("Exiting Shell. Your function will continue running remotely.")
 
     @with_grpc_error_handling
     def _call_remote(self, *args, **kwargs) -> Any:

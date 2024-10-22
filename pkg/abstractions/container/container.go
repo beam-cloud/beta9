@@ -182,7 +182,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		return err
 	}
 
-	hostname, err := cs.containerRepo.GetWorkerAddress(task.ContainerId)
+	hostname, err := cs.containerRepo.GetWorkerAddress(ctx, task.ContainerId)
 	if err != nil {
 		return err
 	}

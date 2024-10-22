@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 const (
 	WorkerLifecycleStatsKey        string        = "beta9.worker.usage.spawner.lifecycle"
@@ -31,4 +34,28 @@ type Mount struct {
 	ReadOnly         bool              `json:"read_only"`
 	MountType        string            `json:"mount_type"`
 	MountPointConfig *MountPointConfig `json:"mountpoint_config"`
+}
+
+type ExitCodeError struct {
+	ExitCode int
+}
+
+func (e *ExitCodeError) Error() string {
+	return fmt.Sprintf("exit code error: %s", WorkerContainerExitCodes[e.ExitCode])
+}
+
+const (
+	WorkerContainerExitCodeInvalidCustomImage = 555
+	WorkerContainerExitCodeIncorrectImageArch = 556
+	WorkerContainerExitCodeIncorrectImageOs   = 557
+	WorkerContainerExitCodeUnknownError       = 1
+	WorkerContainerExitCodeSuccess            = 0
+)
+
+var WorkerContainerExitCodes = map[int]string{
+	WorkerContainerExitCodeSuccess:            "Success",
+	WorkerContainerExitCodeUnknownError:       "UnknownError",
+	WorkerContainerExitCodeIncorrectImageArch: "InvalidArch: Image is not amd64/x86_64",
+	WorkerContainerExitCodeInvalidCustomImage: "InvalidCustomImage: Could not find custom image",
+	WorkerContainerExitCodeIncorrectImageOs:   "InvalidOs: Image is not built for linux",
 }
