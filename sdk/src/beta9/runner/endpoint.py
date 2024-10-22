@@ -35,7 +35,6 @@ from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
 from .common import is_asgi3
 
-CHECKPOINT_TIMEOUT = cfg.timeout  # XXX: not sure if this is the right value
 workers_ready = Value("i", 0)
 
 
@@ -97,6 +96,12 @@ class GunicornApplication(BaseApplication):
             with workers_ready.get_lock():
                 workers_ready.value += 1
                 print(f"Worker PID {worker.pid} is ready")
+
+            print(f"workers_ready.value: {workers_ready.value}, cfg.workers: {cfg.workers}")
+            if workers_ready.value == cfg.workers:
+                print("creating READY_FOR_CHECKPOINT file")
+                Path("/cedana/READY_FOR_CHECKPOINT").touch(exist_ok=True)
+
         except EOFError:
             return
         except BaseException:
@@ -118,11 +123,6 @@ class OnStartMethodHandler:
     async def start(self):
         loop = asyncio.get_running_loop()
         task = loop.create_task(self._keep_worker_alive())
-
-        print(f"cfg.checkpoint_enabled: {cfg.checkpoint_enabled}")
-        if cfg.checkpoint_enabled:
-            loop.create_task(self._wait_for_workers_to_start())
-
         result = await loop.run_in_executor(None, execute_lifecycle_method, LifeCycleMethod.OnStart)
         self._is_running = False
         await task
@@ -132,17 +132,6 @@ class OnStartMethodHandler:
         while self._is_running:
             self._worker.notify()
             await asyncio.sleep(1)
-
-    async def _wait_for_workers_to_start(self) -> None:
-        while True:
-            with workers_ready.get_lock():
-                print(f"workers_ready.value: {workers_ready.value}")
-                if workers_ready.value == cfg.workers:
-                    break
-            await asyncio.sleep(1)
-
-        print("creating READY_FOR_CHECKPOINT file")
-        Path("/cedana/READY_FOR_CHECKPOINT").touch(exist_ok=True)
 
 
 def get_task_lifecycle_data(request: Request):
