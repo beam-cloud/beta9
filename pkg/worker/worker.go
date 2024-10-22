@@ -255,6 +255,12 @@ func (s *Worker) Run() error {
 
 					// Set a non-zero exit code for the container (both in memory, and in repo)
 					exitCode := 1
+
+					serr, ok := err.(*types.ExitCodeError)
+					if ok {
+						exitCode = serr.ExitCode
+					}
+
 					err := s.containerRepo.SetContainerExitCode(containerId, exitCode)
 					if err != nil {
 						log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
