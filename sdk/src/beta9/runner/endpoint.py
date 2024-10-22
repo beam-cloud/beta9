@@ -141,6 +141,7 @@ class OnStartMethodHandler:
                     break
             await asyncio.sleep(1)
 
+        print("creating READY_FOR_CHECKPOINT file")
         Path("/cedana/READY_FOR_CHECKPOINT").touch(exist_ok=True)
 
 
