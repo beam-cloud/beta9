@@ -2,6 +2,7 @@ import inspect
 import os
 import sys
 import tempfile
+import threading
 import time
 from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
@@ -51,6 +52,20 @@ TASKQUEUE_SERVE_STUB_TYPE = "taskqueue/serve"
 ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
 ASGI_SERVE_STUB_TYPE = "asgi/serve"
 FUNCTION_SERVE_STUB_TYPE = "function/serve"
+
+_stub_creation_lock = threading.Lock()
+_stub_created_for_workspace = False
+
+
+def _is_stub_created_for_workspace() -> bool:
+    global _stub_created_for_workspace
+    _stub_created_for_workspace = False
+    return _stub_created_for_workspace
+
+
+def _set_stub_created_for_workspace(value: bool) -> None:
+    global _stub_created_for_workspace
+    _stub_created_for_workspace = value
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -349,39 +364,47 @@ class RunnerAbstraction(BaseAbstraction):
             return False
 
         if not self.stub_created:
-            stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
-                GetOrCreateStubRequest(
-                    object_id=self.object_id,
-                    image_id=self.image_id,
-                    stub_type=stub_type,
-                    name=stub_name,
-                    python_version=self.image.python_version,
-                    cpu=self.cpu,
-                    memory=self.memory,
-                    gpu=self.gpu,
-                    handler=self.handler,
-                    on_start=self.on_start,
-                    callback_url=self.callback_url,
-                    keep_warm_seconds=self.keep_warm_seconds,
-                    workers=self.workers,
-                    max_pending_tasks=self.max_pending_tasks,
-                    volumes=[v.export() for v in self.volumes],
-                    secrets=self.secrets,
-                    force_create=force_create_stub,
-                    authorized=self.authorized,
-                    autoscaler=AutoscalerProto(
-                        type=autoscaler_type,
-                        max_containers=self.autoscaler.max_containers,
-                        tasks_per_container=self.autoscaler.tasks_per_container,
-                    ),
-                    task_policy=TaskPolicyProto(
-                        max_retries=self.task_policy.max_retries,
-                        timeout=self.task_policy.timeout,
-                        ttl=self.task_policy.ttl,
-                    ),
-                    concurrent_requests=self.concurrent_requests,
-                )
+            stub_request = GetOrCreateStubRequest(
+                object_id=self.object_id,
+                image_id=self.image_id,
+                stub_type=stub_type,
+                name=stub_name,
+                python_version=self.image.python_version,
+                cpu=self.cpu,
+                memory=self.memory,
+                gpu=self.gpu,
+                handler=self.handler,
+                on_start=self.on_start,
+                callback_url=self.callback_url,
+                keep_warm_seconds=self.keep_warm_seconds,
+                workers=self.workers,
+                max_pending_tasks=self.max_pending_tasks,
+                volumes=[v.export() for v in self.volumes],
+                secrets=self.secrets,
+                force_create=force_create_stub,
+                authorized=self.authorized,
+                autoscaler=AutoscalerProto(
+                    type=autoscaler_type,
+                    max_containers=self.autoscaler.max_containers,
+                    tasks_per_container=self.autoscaler.tasks_per_container,
+                ),
+                task_policy=TaskPolicyProto(
+                    max_retries=self.task_policy.max_retries,
+                    timeout=self.task_policy.timeout,
+                    ttl=self.task_policy.ttl,
+                ),
+                concurrent_requests=self.concurrent_requests,
             )
+            if _is_stub_created_for_workspace():
+                stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
+                    stub_request
+                )
+            else:
+                with _stub_creation_lock:
+                    stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
+                        stub_request
+                    )
+                    _set_stub_created_for_workspace(True)
 
             if stub_response.ok:
                 self.stub_created = True
