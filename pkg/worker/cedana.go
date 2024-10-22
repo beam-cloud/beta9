@@ -52,7 +52,7 @@ func NewCedanaClient(ctx context.Context, config types.Config, port int, gpuEnab
 		fmt.Sprintf("--gpu-enabled=%t", gpuEnabled))
 	daemon.Stdout = os.Stdout
 	daemon.Stderr = os.Stderr
-	// XXX: Set config as env var until config JSON parsing is fixed
+	// XXX: Set config using env until config JSON parsing is fixed
 	daemon.Env = append(os.Environ(), fmt.Sprintf("CEDANA_LOG_LEVEL=%s", logLevel))
 	daemon.Env = append(daemon.Env, fmt.Sprintf("CEDANA_CLIENT_LEAVE_RUNNING=%t", config.Client.LeaveRunning))
 	daemon.Env = append(daemon.Env, fmt.Sprintf("CEDANA_DUMP_STORAGE_DIR=%s", config.SharedStorage.DumpStorageDir))
@@ -145,6 +145,14 @@ func (c *CedanaClient) prepareContainerSpec(spec *specs.Spec, gpuEnabled bool) e
 		},
 	})
 
+	// XXX: Remove /usr/lib/worker/x86_64-linux-gnu from mounts
+	for i, m := range spec.Mounts {
+		if m.Destination == "/usr/lib/worker/x86_64-linux-gnu" {
+			spec.Mounts = append(spec.Mounts[:i], spec.Mounts[i+1:]...)
+			break
+		}
+	}
+
 	spec.Process.Env = append(spec.Process.Env, "LD_PRELOAD="+sharedLibPath)
 
 	return nil
@@ -172,7 +180,7 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) error
 	ctx, cancel := context.WithTimeout(ctx, defaultCheckpointDeadline)
 	defer cancel()
 
-	external := []string{""} // Add any external mounts here
+	external := []string{} // Add any external mounts that cause CRIU failures here
 
 	args := api.JobDumpArgs{
 		Type: api.CRType_LOCAL,
@@ -182,6 +190,7 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) error
 			LeaveRunning:   true,
 			External:       external,
 		},
+		Dir: fmt.Sprintf("%s/%s", checkpointPathBase, containerId),
 	}
 	res, err := c.service.JobDump(ctx, &args)
 	if err != nil {

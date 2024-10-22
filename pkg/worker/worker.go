@@ -66,6 +66,7 @@ type Worker struct {
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
+	checkpointingAvailable  bool
 }
 
 type ContainerInstance struct {
@@ -324,6 +325,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 			log.Printf("<%s> - C/R unavailable, failed to create cedana client: %v\n", containerId, err)
 		} else {
 			s.cedanaClient = cedanaClient
+			s.checkpointingAvailable = true
 		}
 	}
 
@@ -363,7 +365,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	// Start the container
 	go s.spawn(request, spec, outputChan, opts)
 
-	if s.cedanaClient != nil {
+	if s.checkpointingAvailable {
 		go s.createCheckpoint(request)
 	}
 
@@ -774,7 +776,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
-		fmt.Sprintf("CHECKPOINT_ENABLED=%t", s.cedanaClient != nil),
+		fmt.Sprintf("CHECKPOINT_ENABLED=%t", s.checkpointingAvailable),
 		"PYTHONUNBUFFERED=1",
 	}
 
@@ -874,7 +876,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	// We need to modify the spec to support Cedana C/R
-	if s.cedanaClient != nil {
+	if s.checkpointingAvailable {
 		s.cedanaClient.prepareContainerSpec(spec, request.Gpu != "")
 	}
 
