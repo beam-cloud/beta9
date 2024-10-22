@@ -6,6 +6,7 @@ import traceback
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from multiprocessing import Value
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 
 from fastapi import Depends, FastAPI, Request
@@ -35,7 +36,7 @@ from ..type import LifeCycleMethod, TaskStatus
 from .common import is_asgi3
 
 CHECKPOINT_TIMEOUT = cfg.timeout  # XXX: not sure if this is the right value
-workersReady = Value("i", 0)
+workers_ready = Value("i", 0)
 
 
 class EndpointFilter(logging.Filter):
@@ -93,8 +94,8 @@ class GunicornApplication(BaseApplication):
             # Override the default starlette app
             worker.app.callable = asgi_app
 
-            with workersReady.get_lock():
-                workersReady.value += 1
+            with workers_ready.get_lock():
+                workers_ready.value += 1
                 print(f"Worker PID {worker.pid} is ready")
         except EOFError:
             return
@@ -117,6 +118,10 @@ class OnStartMethodHandler:
     async def start(self):
         loop = asyncio.get_running_loop()
         task = loop.create_task(self._keep_worker_alive())
+
+        if cfg.checkpoint_enabled:
+            loop.create_task(self._wait_for_workers_to_start())
+
         result = await loop.run_in_executor(None, execute_lifecycle_method, LifeCycleMethod.OnStart)
         self._is_running = False
         await task
@@ -126,6 +131,15 @@ class OnStartMethodHandler:
         while self._is_running:
             self._worker.notify()
             await asyncio.sleep(1)
+
+    async def _wait_for_workers_to_start(self) -> None:
+        while True:
+            with workers_ready.get_lock():
+                if workers_ready.value == cfg.workers:
+                    break
+            await asyncio.sleep(1)
+
+        Path("/cedana/READY_FOR_CHECKPOINT").touch(exist_ok=True)
 
 
 def get_task_lifecycle_data(request: Request):
@@ -180,12 +194,6 @@ class EndpointManager:
 
         @self.app.get("/health")
         async def health():
-            if cfg.checkpoint_enabled:
-                while True:
-                    with workersReady.get_lock():
-                        if workersReady.value == cfg.workers:
-                            break
-                    await asyncio.sleep(0.1)
             return Response(status_code=HTTPStatus.OK)
 
         if self.is_asgi_stub:

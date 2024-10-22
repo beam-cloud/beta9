@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -443,6 +442,7 @@ func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
 	ready := false
 	managing := false
 	gpuEnabled := request.Gpu != ""
+
 	for time.Since(start) < timeout {
 		instance, exists := s.containerInstances.Get(request.ContainerId)
 		if exists {
@@ -455,19 +455,14 @@ func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
 					log.Printf("<%s> - cedana manage failed, container may not be started yet: %+v\n", instance.Id, err)
 				}
 			} else {
-				// Endpoint already configured to ensure /health is successful only if all
-				// concurrent workers are ready, and are roughly at the same point in execution
-				resp, err := http.Get(fmt.Sprintf("http://0.0.0.0:%d/health", instance.Port))
-				log.Printf("<%s> - endpoint health check response: %+v\n", request.ContainerId, resp)
-				if err == nil && resp.StatusCode == 200 {
+				// Check if the endpoint is ready for checkpoint by verifying the existence of the file
+				if _, err := os.Stat(fmt.Sprintf("/tmp/%s/cedana/READY_FOR_CHECKPOINT", instance.Id)); err == nil {
+					log.Printf("<%s> - endpoint is ready for checkpoint.\n", instance.Id)
 					ready = true
 					break
-				} else {
-					log.Printf("<%s> - endpoint not ready for checkpoint: %+v\n", instance.Id, err)
 				}
-				if err != nil {
-					log.Printf("<%s> - endpoint health check failed: %+v\n", request.ContainerId, err)
-				}
+
+				log.Printf("<%s> - endpoint not ready for checkpoint.\n", instance.Id)
 			}
 		} else {
 			log.Printf("<%s> - container instance not found yet\n", request.ContainerId)
@@ -938,6 +933,22 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			Destination: m.MountPath,
 			Options:     []string{"rbind", mode},
 		})
+	}
+
+	if s.checkpointingAvailable && request.CheckpointEnabled {
+		os.MkdirAll(checkpointDir(request.ContainerId), os.ModePerm)
+
+		checkpointMount := specs.Mount{
+			Type:        "bind",
+			Source:      checkpointDir(request.ContainerId),
+			Destination: "/cedana",
+			Options: []string{
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"},
+		}
+		spec.Mounts = append(spec.Mounts, checkpointMount)
 	}
 
 	// If volume caching is enabled, set it up and add proper mounts to spec

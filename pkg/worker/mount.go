@@ -94,3 +94,7 @@ func (c *ContainerMountManager) setupMountPointS3(containerId string, m types.Mo
 func tempUserCodeDir(containerId string) string {
 	return fmt.Sprintf("/tmp/%s/code", containerId)
 }
+
+func checkpointDir(containerId string) string {
+	return fmt.Sprintf("/tmp/%s/cedana", containerId)
+}
