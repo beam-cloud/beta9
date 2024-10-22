@@ -144,7 +144,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 	workerImage := fmt.Sprintf("%s/%s:%s",
 		wpc.config.Worker.ImageRegistry,
 		wpc.config.Worker.ImageName,
-		wpc.config.Worker.ImageTag,
+		"cedana-w1", //wpc.config.Worker.ImageTag,
 	)
 
 	resources := corev1.ResourceRequirements{}

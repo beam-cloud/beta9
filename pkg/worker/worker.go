@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -648,7 +649,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Get the instance port
 	address, _ := s.containerRepo.GetContainerAddress(containerId)
-	port, _ := strconv.Atoi(strings.Split(address, ":")[1])
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		log.Printf("Error parsing address: %v\n", err)
+		return
+	}
+
+	portNumber, err := strconv.Atoi(port)
+	if err != nil {
+		log.Printf("Error converting port to integer: %v\n", err)
+		return
+	}
 
 	// Add the container instance to the runningContainers map
 	containerInstance := &ContainerInstance{
@@ -658,7 +669,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		Overlay:    overlay,
 		Spec:       spec,
 		ExitCode:   -1,
-		Port:       port,
+		Port:       portNumber,
 		OutputWriter: common.NewOutputWriter(func(s string) {
 			outputChan <- common.OutputMsg{
 				Msg:     string(s),
@@ -703,7 +714,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}()
 
 	// Setup container overlay filesystem
-	err := containerInstance.Overlay.Setup()
+	err = containerInstance.Overlay.Setup()
 	if err != nil {
 		log.Printf("<%s> failed to setup overlay: %v", containerId, err)
 		containerErr = err
@@ -712,21 +723,21 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	defer containerInstance.Overlay.Cleanup()
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
-	// // Setup container network namespace / devices
-	// err = s.containerNetworkManager.Setup(containerId, spec)
-	// if err != nil {
-	// 	log.Printf("<%s> failed to setup container network: %v", containerId, err)
-	// 	containerErr = err
-	// 	return
-	// }
+	// Setup container network namespace / devices
+	err = s.containerNetworkManager.Setup(containerId, spec)
+	if err != nil {
+		log.Printf("<%s> failed to setup container network: %v", containerId, err)
+		containerErr = err
+		return
+	}
 
-	// // Expose the bind port
-	// err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
-	// if err != nil {
-	// 	log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
-	// 	containerErr = err
-	// 	return
-	// }
+	// Expose the bind port
+	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
+	if err != nil {
+		log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
+		containerErr = err
+		return
+	}
 
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
