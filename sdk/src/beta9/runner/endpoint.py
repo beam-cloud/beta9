@@ -119,6 +119,7 @@ class OnStartMethodHandler:
         loop = asyncio.get_running_loop()
         task = loop.create_task(self._keep_worker_alive())
 
+        print(f"cfg.checkpoint_enabled: {cfg.checkpoint_enabled}")
         if cfg.checkpoint_enabled:
             loop.create_task(self._wait_for_workers_to_start())
 
@@ -135,6 +136,7 @@ class OnStartMethodHandler:
     async def _wait_for_workers_to_start(self) -> None:
         while True:
             with workers_ready.get_lock():
+                print(f"workers_ready.value: {workers_ready.value}")
                 if workers_ready.value == cfg.workers:
                     break
             await asyncio.sleep(1)
