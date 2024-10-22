@@ -22,6 +22,9 @@ import (
 const (
 	baseConfigPath            string = "/tmp"
 	defaultContainerDirectory string = "/mnt/code"
+
+	exitCodeSigterm int = 143 // Means the container received a SIGTERM by the underlying operating system
+	exitCodeSigkill int = 137 // Means the container received a SIGKILL by the underlying operating system
 )
 
 var (
@@ -78,14 +81,12 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 	return nil
 }
 
-const ExitCodeSigterm = 143
-
 func (s *Worker) finalizeContainer(containerId string, request *types.ContainerRequest, exitCode *int) {
 	defer s.containerWg.Done()
 
 	if *exitCode < 0 {
 		*exitCode = 1
-	} else if *exitCode == ExitCodeSigterm {
+	} else if *exitCode == exitCodeSigterm {
 		*exitCode = 0
 	}
 
