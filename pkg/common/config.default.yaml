@@ -107,12 +107,13 @@ worker:
     #   jobSpec:
     #     nodeSelector: {}
     #   poolSizing:
-    #     defaultWorkerCpu: 1000m
+    #     defaultWorkerCpu: 8000m
     #     defaultWorkerGpuType: ""
-    #     defaultWorkerMemory: 1Gi
+    #     defaultWorkerMemory: 12Gi
     #     minFreeCpu:
     #     minFreeGpu:
     #     minFreeMemory:
+    #     sharedMemoryLimitPct: 100%
   # global pool attributes
   useHostResolvConf: true
   hostNetwork: false

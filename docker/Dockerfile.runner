@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-FROM ubuntu:20.04 as base
+FROM ubuntu:22.04 as base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -10,6 +10,7 @@ apt-get install -y software-properties-common curl git gcc python3-dev
 add-apt-repository ppa:deadsnakes/ppa
 apt-get update
 EOT
+
 
 # Python 3.12
 # ========================
