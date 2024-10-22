@@ -191,9 +191,14 @@ var Keys = &keys{}
 type keys struct{}
 
 var (
-	botKeepWarmLock string = "bot:%s:%s:keep_warm_lock:%s"
+	botKeepWarmLock   string = "bot:%s:%s:keep_warm_lock:%s"
+	botSessionHistory string = "bot:%s:%s:session_history:%s"
 )
 
 func (k *keys) botKeepWarmLock(workspaceName, stubId, containerId string) string {
 	return fmt.Sprintf(botKeepWarmLock, workspaceName, stubId, containerId)
+}
+
+func (k *keys) botSessionHistory(workspaceName, stubId, sessionId string) string {
+	return fmt.Sprintf(botSessionHistory, workspaceName, stubId, sessionId)
 }
