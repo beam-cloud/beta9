@@ -311,7 +311,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
-	if request.CheckpointEnabled && s.config.Checkpointing.Enabled {
+	if !s.isBuildRequest(request) && request.CheckpointEnabled && s.config.Checkpointing.Enabled {
 		port, err := getRandomFreePort()
 		if err != nil {
 			log.Printf("<%s> - failed to get random port for cedana, trying default (%d): %v\n", containerId, DefaultCedanaPort, err)
@@ -457,7 +457,7 @@ func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
 					log.Printf("<%s> - endpoint not ready for checkpoint: %+v\n", instance.Id, err)
 				}
 				if err != nil {
-					log.Printf("<%s> - cedana health check failed: %+v\n", request.ContainerId, err)
+					log.Printf("<%s> - endpoint health check failed: %+v\n", request.ContainerId, err)
 				}
 			}
 		} else {
@@ -704,21 +704,21 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	defer containerInstance.Overlay.Cleanup()
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
-	// Setup container network namespace / devices
-	err = s.containerNetworkManager.Setup(containerId, spec)
-	if err != nil {
-		log.Printf("<%s> failed to setup container network: %v", containerId, err)
-		containerErr = err
-		return
-	}
+	// // Setup container network namespace / devices
+	// err = s.containerNetworkManager.Setup(containerId, spec)
+	// if err != nil {
+	// 	log.Printf("<%s> failed to setup container network: %v", containerId, err)
+	// 	containerErr = err
+	// 	return
+	// }
 
-	// Expose the bind port
-	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
-	if err != nil {
-		log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
-		containerErr = err
-		return
-	}
+	// // Expose the bind port
+	// err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
+	// if err != nil {
+	// 	log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
+	// 	containerErr = err
+	// 	return
+	// }
 
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
@@ -873,10 +873,9 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart = nil
 	}
 
-	// We need to modify the spec to support Cedana C/R, only for GPU containers
-	if s.cedanaClient != nil && request.Gpu != "" {
-		// TODO: add cedana GPU stuff
-		// spec.Hooks.Prestart = nil
+	// We need to modify the spec to support Cedana C/R
+	if s.cedanaClient != nil {
+		s.cedanaClient.prepareContainerSpec(spec, request.Gpu != "")
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
