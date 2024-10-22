@@ -45,6 +45,7 @@ type ContainerRepository interface {
 	SetContainerAddress(containerId string, addr string) error
 	GetContainerAddress(containerId string) (string, error)
 	UpdateContainerStatus(string, types.ContainerStatus, time.Duration) error
+	UpdateAssignedContainerGPU(string, string) error
 	DeleteContainerState(containerId string) error
 	SetWorkerAddress(containerId string, addr string) error
 	SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error

@@ -39,9 +39,11 @@ class Function(RunnerAbstraction):
         memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
             MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
-        gpu (Union[GpuType, str]):
+        gpu (Union[GpuTypeAlias, List[GpuTypeAlias]]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
-            applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
+            applicable or no GPU required, leave it empty.
+            You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify multiple
+            GPUs, the container will load balance across them with equal priority.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         timeout (Optional[int]):
@@ -84,7 +86,7 @@ class Function(RunnerAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: GpuTypeAlias = GpuType.NoGPU,
+        gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,
