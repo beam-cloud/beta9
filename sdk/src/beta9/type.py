@@ -158,4 +158,4 @@ _AUTOSCALER_TYPES: Dict[Type[Autoscaler], str] = {
 
 class TokenType(str, Enum):
     Workspace = "workspace"
-    WorkspacePublic = "workspace_public"
+    Public = "public"

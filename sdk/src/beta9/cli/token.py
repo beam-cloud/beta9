@@ -114,8 +114,8 @@ def list_tokens(
     "--type",
     "token_type",
     default=TokenType.Workspace,
-    type=click.Choice((TokenType.Workspace, TokenType.WorkspacePublic)),
-    help="The type of permissions to give to the token. Options are 'workspace' or 'workspace_public'.",
+    type=click.Choice((TokenType.Workspace, TokenType.Public)),
+    help="The type of permissions to give to the token. Options are 'workspace' or 'public'.",
 )
 @extraclick.pass_service_client
 def create_token(

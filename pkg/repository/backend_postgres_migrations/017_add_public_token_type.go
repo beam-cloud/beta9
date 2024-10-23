@@ -13,7 +13,7 @@ func init() {
 }
 
 func upAddPublicTokenType(ctx context.Context, tx *sql.Tx) error {
-	newTokenTypes := []string{"workspace_public"}
+	newTokenTypes := []string{"public"}
 
 	for _, tokenType := range newTokenTypes {
 		addEnumSQL := fmt.Sprintf(`
