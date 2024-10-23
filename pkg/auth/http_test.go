@@ -16,11 +16,12 @@ import (
 )
 
 type MockDetails struct {
-	backendRepo   repository.BackendRepository
-	workspaceRepo repository.WorkspaceRepository
-	mock          sqlmock.Sqlmock
-	tokenForTest  types.Token
-	mockRedis     *common.RedisClient
+	backendRepo        repository.BackendRepository
+	workspaceRepo      repository.WorkspaceRepository
+	mock               sqlmock.Sqlmock
+	tokenForTest       types.Token
+	publicTokenForTest types.Token
+	mockRedis          *common.RedisClient
 }
 
 func addTokenRow(
@@ -67,6 +68,20 @@ func mockBackendWithValidToken() MockDetails {
 		Workspace:   &workspaceForTest,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
+		TokenType:   types.TokenTypeWorkspace,
+	}
+
+	publicTokenForTest := types.Token{
+		Id:          2,
+		ExternalId:  "public",
+		Key:         "public",
+		Active:      true,
+		Reusable:    true,
+		WorkspaceId: &workspaceForTest.Id,
+		Workspace:   &workspaceForTest,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+		TokenType:   types.TokenTypeWorkspacePublic,
 	}
 
 	mockRedis, err := repository.NewRedisClientForTest()
@@ -76,11 +91,12 @@ func mockBackendWithValidToken() MockDetails {
 	workspaceRepo := repository.NewWorkspaceRedisRepositoryForTest(mockRedis)
 
 	return MockDetails{
-		backendRepo:   backendRepo,
-		workspaceRepo: workspaceRepo,
-		mock:          mock,
-		mockRedis:     mockRedis,
-		tokenForTest:  tokenForTest,
+		backendRepo:        backendRepo,
+		workspaceRepo:      workspaceRepo,
+		mock:               mock,
+		mockRedis:          mockRedis,
+		tokenForTest:       tokenForTest,
+		publicTokenForTest: publicTokenForTest,
 	}
 }
 
@@ -179,8 +195,6 @@ func TestWithAuth(t *testing.T) {
 		assert.NotNil(t, cc.AuthInfo.Token)
 		assert.NotNil(t, cc.AuthInfo.Workspace)
 		assert.NotNil(t, cc.AuthInfo.Workspace.ExternalId)
-		assert.Equal(t, cc.AuthInfo.Token.ExternalId, mockDetails.tokenForTest.ExternalId)
-		assert.Equal(t, cc.AuthInfo.Token.Key, mockDetails.tokenForTest.Key)
 
 		return c.String(200, "OK")
 	}))
@@ -216,6 +230,15 @@ func TestWithAuth(t *testing.T) {
 			expectedStatus: 401,
 			prepares: func() {
 				mockDetails.mockRedis.FlushAll(context.Background())
+			},
+		},
+		{
+			name:           "Test with public token. Should succeed",
+			tokenKey:       mockDetails.publicTokenForTest.Key,
+			expectedStatus: 200,
+			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
+				addTokenRow(mockDetails.mock, *mockDetails.publicTokenForTest.Workspace, mockDetails.publicTokenForTest)
 			},
 		},
 	}
@@ -327,6 +350,16 @@ func TestWithWorkspaceAuth(t *testing.T) {
 			},
 			expectedStatus: 401,
 		},
+		{
+			name:        "Test with public token",
+			tokenKey:    mockDetails.publicTokenForTest.Key,
+			workspaceId: mockDetails.publicTokenForTest.Workspace.ExternalId,
+			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
+				addTokenRow(mockDetails.mock, *mockDetails.publicTokenForTest.Workspace, mockDetails.publicTokenForTest)
+			},
+			expectedStatus: 401,
+		},
 	}
 
 	for _, tt := range tests {
@@ -402,6 +435,15 @@ func TestWithClusterAdminAuth(t *testing.T) {
 				mockDetails.mockRedis.FlushAll(context.Background())
 				mockDetails.mock.ExpectQuery("SELECT (.+) FROM token").
 					WillReturnError(errors.New("invalid token"))
+			},
+		},
+		{
+			name:           "Test with public token",
+			tokenKey:       mockDetails.publicTokenForTest.Key,
+			expectedStatus: 401,
+			prepares: func() {
+				mockDetails.mockRedis.FlushAll(context.Background())
+				addTokenRow(mockDetails.mock, *mockDetails.publicTokenForTest.Workspace, mockDetails.publicTokenForTest)
 			},
 		},
 	}

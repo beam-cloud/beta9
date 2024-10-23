@@ -74,6 +74,11 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 		return nil, false
 	}
 
+	if token.TokenType == types.TokenTypeWorkspacePublic {
+		// For now disable public tokens
+		return nil, false
+	}
+
 	return &AuthInfo{
 		Token:     token,
 		Workspace: workspace,
@@ -101,6 +106,7 @@ func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 			if !ai.isAuthRequired(info.FullMethod) {
 				return handler(srv, stream)
 			}
+
 			return status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 

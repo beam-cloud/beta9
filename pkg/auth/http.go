@@ -106,7 +106,8 @@ func WithWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Context)
 			return echo.NewHTTPError(http.StatusUnauthorized)
 		}
 
-		if cc.AuthInfo.Workspace.ExternalId != workspaceId && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		if (cc.AuthInfo.Workspace.ExternalId != workspaceId && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin) ||
+			cc.AuthInfo.Token.TokenType == types.TokenTypeWorkspacePublic {
 			return echo.NewHTTPError(http.StatusUnauthorized)
 		}
 
