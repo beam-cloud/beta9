@@ -62,7 +62,7 @@ def square(i: int):
 Deploy with a single command:
 
 ```
-$ beam deploy app.py:square --name inference
+$ beta9 deploy app.py:square --name inference
 => Building image
 => Using cached image
 => Deployed 🎉
