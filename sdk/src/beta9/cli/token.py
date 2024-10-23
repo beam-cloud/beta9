@@ -15,6 +15,7 @@ from ..clients.gateway import (
     ToggleTokenRequest,
     ToggleTokenResponse,
 )
+from ..type import TokenType
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
@@ -109,12 +110,24 @@ def list_tokens(
       \b
     """,
 )
+@click.option(
+    "--type",
+    "token_type",
+    default=TokenType.Workspace,
+    type=click.Choice((TokenType.Workspace, TokenType.WorkspacePublic)),
+    help="The type of permissions to give to the token. Options are 'workspace' or 'workspace_public'.",
+)
 @extraclick.pass_service_client
 def create_token(
     service: ServiceClient,
+    token_type: TokenType,
 ):
     res: CreateTokenResponse
-    res = service.gateway.create_token(CreateTokenRequest())
+    res = service.gateway.create_token(
+        CreateTokenRequest(
+            token_type=token_type,
+        )
+    )
 
     if not res.ok:
         terminal.error(res.err_msg)

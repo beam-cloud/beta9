@@ -154,3 +154,8 @@ class TaskPolicy:
 _AUTOSCALER_TYPES: Dict[Type[Autoscaler], str] = {
     QueueDepthAutoscaler: QUEUE_DEPTH_AUTOSCALER_TYPE,
 }
+
+
+class TokenType(str, Enum):
+    Workspace = "workspace"
+    WorkspacePublic = "workspace_public"
