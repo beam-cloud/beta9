@@ -2,7 +2,9 @@ package image
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -114,12 +116,21 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 	go is.builder.Build(ctx, buildOptions, outputChan)
 
+	archivingStage := false
 	var lastMessage common.OutputMsg
 	for o := range outputChan {
+		if archivingStage && !o.Archiving {
+			continue
+		}
+
 		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId}); err != nil {
 			log.Println("failed to complete build: ", err)
 			lastMessage = o
 			break
+		}
+
+		if o.Archiving {
+			archivingStage = true
 		}
 
 		if o.Done {
@@ -153,7 +164,8 @@ func (is RuncImageService) getBaseImageTag(pythonVersion string, micromambaEnabl
 		ok  bool
 	)
 	if micromambaEnabled {
-		tag, ok = is.config.ImageService.Runner.Tags["micromamba"]
+		s := strings.Replace(pythonVersion, "python", "", 1)
+		tag, ok = is.config.ImageService.Runner.Tags[fmt.Sprintf("micromamba%s", s)]
 	} else {
 		tag, ok = is.config.ImageService.Runner.Tags[pythonVersion]
 	}

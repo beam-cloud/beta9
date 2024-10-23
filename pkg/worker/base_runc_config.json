@@ -16,7 +16,8 @@
 			"LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:$LD_LIBRARY_PATH",
 			"TERM=xterm",
 			"LAMBDA_TASK_ROOT=/workspace",
-			"MAMBA_ROOT_PREFIX=/micromamba"
+			"MAMBA_ROOT_PREFIX=/micromamba",
+			"MAMBA_DISABLE_LOCKFILE=TRUE"
 		],
 		"cwd": "/",
 		"capabilities": {
@@ -425,7 +426,7 @@
 			]
 		},
 		{
-			"destination": "/micromamba/envs/beam/lib/python3.10/site-packages/beam",
+			"destination": "/micromamba/envs/beta9/lib/python3.8/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": [
@@ -437,7 +438,103 @@
 			]
 		},
 		{
-			"destination": "/micromamba/envs/beam/lib/python3.10/site-packages/beta9",
+			"destination": "/micromamba/envs/beta9/lib/python3.8/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.9/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.9/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.10/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.10/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.11/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.11/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.12/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.12/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": [

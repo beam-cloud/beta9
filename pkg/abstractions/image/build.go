@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
-	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -174,7 +173,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	sourceImage := fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
 	containerId := b.genContainerId()
-	slog.Info("building base image", "image", sourceImage)
 
 	// Allow config to override default build container settings
 	cpu := defaultBuildContainerCpu
@@ -279,27 +277,17 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	log.Printf("container <%v> building with options: %s\n", containerId, opts)
 	startTime := time.Now()
 
-	slog.Info("python version", "python version", opts.PythonVersion)
-	if opts.Micromamba {
-		// Micromamba will complain if it can't lock this file
-		_, err := client.Exec(containerId, "mkdir -p /root/.mamba/pkgs")
-		if err != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
-			return err
-		}
-	} else {
-		// Detect if python3.x is installed in the container, if not install it
-		checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-		if resp, err := client.Exec(containerId, checkPythonVersionCmd); err != nil || !resp.Ok {
-			outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
-			installCmd := b.getPythonInstallCommand(opts.PythonVersion)
-			opts.Commands = append([]string{installCmd}, opts.Commands...)
-		}
+	// Detect if python3.x is installed in the container, if not install it
+	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
+	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !opts.Micromamba {
+		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
+		installCmd := b.getPythonInstallCommand(opts.PythonVersion)
+		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
 
-	slog.Info("commands", "commands", opts.Commands)
-
 	// Generate the commands to run in the container
+	replaceIndex := -1
+	mambaCommands := []string{}
 	for _, step := range opts.BuildSteps {
 		switch step.Type {
 		case shellCommandType:
@@ -307,8 +295,14 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		case pipCommandType:
 			opts.Commands = append(opts.Commands, b.generatePipInstallCommand([]string{step.Command}, opts.PythonVersion))
 		case micromambaCommandType:
-			opts.Commands = append(opts.Commands, b.generateMicromambaInstallCommand([]string{step.Command}, opts.MicromambaChannels))
+			opts.Commands = append(opts.Commands, "")
+			replaceIndex = len(opts.Commands) - 1
+			mambaCommands = append(mambaCommands, step.Command)
 		}
+	}
+
+	if len(mambaCommands) > 0 {
+		opts.Commands[replaceIndex] = b.generateMicromambaInstallCommand(mambaCommands, opts.MicromambaChannels)
 	}
 
 	for _, cmd := range opts.Commands {
@@ -331,14 +325,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 	log.Printf("container <%v> build took %v\n", containerId, time.Since(startTime))
 
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "\nSaving image, this may take a few minutes...\n"}
 	err = client.Archive(ctx, containerId, imageId, outputChan)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+		outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: false, Msg: err.Error() + "\n"}
 		return err
 	}
 
-	outputChan <- common.OutputMsg{Done: true, Success: true, ImageId: imageId}
+	outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: true, ImageId: imageId}
 	return nil
 }
 
@@ -476,7 +469,7 @@ func (b *Builder) generatePipInstallCommand(pythonPackages []string, pythonVersi
 func (b *Builder) generateMicromambaInstallCommand(pythonPackages []string, channels []string) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
-	command := fmt.Sprintf("%s install -y -n beam", micromambaCommandType)
+	command := fmt.Sprintf("%s install -y -n beta9", micromambaCommandType)
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")
 	}

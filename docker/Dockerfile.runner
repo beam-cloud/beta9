@@ -196,9 +196,9 @@ EOT
 
 VOLUME ["/volumes", "/snapshot"]
 
-# Micromamba
+# Micromamba-base
 # ========================
-FROM base as micromamba
+FROM base as micromamba-base
 
 WORKDIR /workspace
 
@@ -207,6 +207,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/micromamba/bin:$PATH \
     MAMBA_ROOT_PREFIX=/micromamba \
     MAMBA_EXE=/bin/micromamba \
+    MAMBA_DISABLE_LOCKFILE=TRUE \
     SHELL=/bin/bash
 
 COPY ./pkg/abstractions/image/base_requirements.txt /workspace/requirements.txt
@@ -229,18 +230,11 @@ fi
 curl -L "https://micro.mamba.pm/api/micromamba/linux-${MAMBA_ARCH}/${VERSION}" \
 | tar -xj -C "/" "bin/micromamba"
 
-/bin/micromamba create -n beam python=3.10 -y
-/bin/micromamba run -n beam pip install -r /workspace/requirements.txt
+mkdir -p /micromamba
 
-sh -c 'echo "#!/bin/sh\nexec micromamba run -n beam python3 \"\$@\""' > /micromamba/mpy
+sh -c 'echo "#!/bin/sh\nexec micromamba run -n beta9 python3 \"\$@\""' > /micromamba/mpy
 chmod +x /micromamba/mpy
-ln -s /micromamba/mpy /usr/bin/python3.10
 
-echo 'export MAMBA_ROOT_PREFIX=/micromamba' >> /root/.bashrc
-echo 'eval "$(/bin/micromamba shell hook --shell bash)"' >> /root/.bashrc
-echo 'micromamba activate beam' >> /root/.bashrc
-
-micromamba clean --all --yes
 apt-get clean -y
 apt-get autoremove -y
 rm -rf /var/lib/apt/lists/*
@@ -251,5 +245,27 @@ rm -rf /root/.cache/*
 rm -rf /tmp/*
 EOT
 
+
+VOLUME ["/volumes", "/snapshot"]
+
+# Micromamba 3.10
+# ========================
+ARG PYTHON_VERSION=3.10
+FROM micromamba-base as micromamba
+
+WORKDIR /workspace
+
+COPY --from=micromamba-base /micromamba /micromamba
+
+RUN <<EOT
+set -eux
+
+/bin/micromamba create -n beta9 python=${PYTHON_VERSION} -y
+/bin/micromamba run -n beta9 pip install -r /workspace/requirements.txt
+
+ln -sf /micromamba/mpy /usr/bin/python${PYTHON_VERSION}
+
+/bin/micromamba clean --all --yes
+EOT
 
 VOLUME ["/volumes", "/snapshot"]
