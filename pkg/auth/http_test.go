@@ -81,7 +81,7 @@ func mockBackendWithValidToken() MockDetails {
 		Workspace:   &workspaceForTest,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
-		TokenType:   types.TokenTypeWorkspacePublic,
+		TokenType:   types.TokenTypePublic,
 	}
 
 	mockRedis, err := repository.NewRedisClientForTest()

@@ -57,7 +57,7 @@ func (gws *GatewayService) CreateToken(ctx context.Context, req *pb.CreateTokenR
 		tokenType = types.TokenTypeWorkspace
 	}
 
-	if tokenType != types.TokenTypeWorkspace && tokenType != types.TokenTypeWorkspacePublic {
+	if tokenType != types.TokenTypeWorkspace && tokenType != types.TokenTypePublic {
 		return &pb.CreateTokenResponse{
 			Token:  &pb.Token{},
 			Ok:     false,

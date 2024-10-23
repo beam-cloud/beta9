@@ -53,7 +53,7 @@ func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
 		req.TokenType = types.TokenTypeWorkspace
 	}
 
-	if req.TokenType != types.TokenTypeWorkspace && req.TokenType != types.TokenTypeWorkspacePublic {
+	if req.TokenType != types.TokenTypeWorkspace && req.TokenType != types.TokenTypePublic {
 		return HTTPBadRequest("Invalid token type")
 	}
 

@@ -74,7 +74,7 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 		return nil, false
 	}
 
-	if token.TokenType == types.TokenTypeWorkspacePublic {
+	if token.TokenType == types.TokenTypePublic {
 		// For now disable public tokens
 		return nil, false
 	}

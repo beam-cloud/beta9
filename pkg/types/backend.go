@@ -24,11 +24,11 @@ type Workspace struct {
 }
 
 const (
-	TokenTypeClusterAdmin    string = "admin"
-	TokenTypeWorkspace       string = "workspace"
-	TokenTypeWorker          string = "worker"
-	TokenTypeMachine         string = "machine"
-	TokenTypeWorkspacePublic string = "public" // TODO: naming could be improved
+	TokenTypeClusterAdmin string = "admin"
+	TokenTypeWorkspace    string = "workspace"
+	TokenTypeWorker       string = "worker"
+	TokenTypeMachine      string = "machine"
+	TokenTypePublic       string = "public" // TODO: naming could be improved
 )
 
 type Token struct {
