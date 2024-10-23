@@ -7,7 +7,7 @@
 
 ### Cross-Cloud Serverless Engine
 
-Run serverless workloads with fast cold boots on bare-metal anywhere in the world
+Run serverless workloads with fast cold starts on bare-metal servers anywhere in the world
 
 <p align="center">
   <a href="https://docs.beam.cloud">
@@ -47,7 +47,7 @@ Run serverless workloads with fast cold boots on bare-metal anywhere in the worl
 
 Add an `endpoint` decorator to your code, and you'll get a load-balanced HTTP endpoint (with auth!) to invoke your code.
 
-You can also run long-running functions with `@function`, deploy task queues with `@task_queue`, and scheduled jobs with `@schedule`:
+You can also run long-running functions with `@function`, deploy task queues using `@task_queue`, and schedule jobs with `@schedule`:
 
 ```python
 from beta9 import endpoint
@@ -59,7 +59,7 @@ def square(i: int):
     return i**2
 ```
 
-Deploy in one command:
+Deploy with a single command:
 
 ```
 $ beam deploy app.py:square --name inference
@@ -80,7 +80,7 @@ Connect any GPU to your cluster with one CLI command and a cURL.
 ```sh
 $ beta9 machine create --pool lambda-a100-40
 
-=> Created machine with ID: '9541cbd2'. Use the following command to setup the node:
+=> Created machine with ID: '9541cbd2'. Use the following command to set up the node:
 
 #!/bin/bash
 sudo curl -L -o agent https://release.beam.cloud/agent/agent && \
@@ -148,7 +148,7 @@ If you need support, you can reach out through any of these channels:
 
 - [Slack](https://join.slack.com/t/beam-cloud/shared_invite/zt-2f16bwiiq-oP8weCLWNrf_9lJZIDf0Fg) \(Chat live with maintainers and community members\)
 - [GitHub issues](https://github.com/beam-cloud/issues) \(Bug reports, feature requests, and anything roadmap related)
-- [Twitter](https://twitter.com/beam_cloud) \(Updates on releases and stuff)
+- [Twitter](https://twitter.com/beam_cloud) \(Updates on releases and more)
 
 ## Thanks to Our Contributors
 
