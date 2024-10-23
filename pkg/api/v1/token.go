@@ -32,14 +32,32 @@ func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, conf
 	return group
 }
 
+type CreateTokenRequest struct {
+	TokenType string `json:"token_type"`
+}
+
 func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
+
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
 		return HTTPBadRequest("Invalid workspace ID")
 	}
 
-	token, err := g.backendRepo.CreateToken(ctx.Request().Context(), workspace.Id, types.TokenTypeWorkspace, true)
+	var req CreateTokenRequest
+	if err := ctx.Bind(&req); err != nil {
+		return HTTPBadRequest("Invalid request")
+	}
+
+	if req.TokenType == "" {
+		req.TokenType = types.TokenTypeWorkspace
+	}
+
+	if req.TokenType != types.TokenTypeWorkspace && req.TokenType != types.TokenTypeWorkspacePublic {
+		return HTTPBadRequest("Invalid token type")
+	}
+
+	token, err := g.backendRepo.CreateToken(ctx.Request().Context(), workspace.Id, req.TokenType, true)
 	if err != nil {
 		return HTTPInternalServerError("Unable to create token")
 	}

@@ -52,7 +52,20 @@ func (gws *GatewayService) ListTokens(ctx context.Context, req *pb.ListTokensReq
 func (gws *GatewayService) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	token, err := gws.backendRepo.CreateToken(ctx, authInfo.Workspace.Id, types.TokenTypeWorkspace, true)
+	tokenType := req.TokenType
+	if tokenType == "" {
+		tokenType = types.TokenTypeWorkspace
+	}
+
+	if tokenType != types.TokenTypeWorkspace && tokenType != types.TokenTypeWorkspacePublic {
+		return &pb.CreateTokenResponse{
+			Token:  &pb.Token{},
+			Ok:     false,
+			ErrMsg: "Invalid token type.",
+		}, nil
+	}
+
+	token, err := gws.backendRepo.CreateToken(ctx, authInfo.Workspace.Id, tokenType, true)
 	if err != nil {
 		return &pb.CreateTokenResponse{
 			Token:  &pb.Token{},
