@@ -16,7 +16,7 @@ type EndpointTask struct {
 func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) error {
 	var err error = nil
 	echoCtx := options[0].(echo.Context)
-	instance, err := t.es.getOrCreateEndpointInstance(t.msg.StubId)
+	instance, err := t.es.getOrCreateEndpointInstance(ctx, t.msg.StubId)
 	if err != nil {
 		return err
 	}

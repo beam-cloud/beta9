@@ -56,6 +56,7 @@ type RequestBuffer struct {
 	buffer                  *abstractions.RingBuffer[*request]
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
+	maxTokens               int
 	isASGI                  bool
 }
 
@@ -84,7 +85,13 @@ func NewRequestBuffer(
 		httpClient:              &http.Client{},
 		tailscale:               tailscale,
 		tsConfig:                tsConfig,
+		maxTokens:               int(stubConfig.Workers),
 		isASGI:                  isASGI,
+	}
+
+	if stubConfig.ConcurrentRequests > 1 && isASGI {
+		// Floor is set to the number of workers
+		b.maxTokens = max(int(stubConfig.ConcurrentRequests), b.maxTokens)
 	}
 
 	go b.discoverContainers()
@@ -201,7 +208,7 @@ func (rb *RequestBuffer) discoverContainers() {
 
 					// Let's say we have 5 workers available, and there are three tokens left in this bucket
 					// that means we currently have 5-3 -> 2 requests in flight
-					inFlightRequests := int(rb.stubConfig.Workers) - availableTokens
+					inFlightRequests := rb.maxTokens - availableTokens
 
 					if rb.checkAddressIsReady(containerAddress) {
 						availableContainersChan <- container{
@@ -245,15 +252,13 @@ func (rb *RequestBuffer) requestTokens(containerId string) (int, error) {
 	if err != nil && err != redis.Nil {
 		return 0, err
 	} else if err == redis.Nil {
-		maxTokens := int(rb.stubConfig.Workers)
-
-		created, err := rb.rdb.SetNX(rb.ctx, tokenKey, maxTokens, 0).Result()
+		created, err := rb.rdb.SetNX(rb.ctx, tokenKey, rb.maxTokens, 0).Result()
 		if err != nil {
 			return 0, err
 		}
 
 		if created {
-			return maxTokens, nil
+			return rb.maxTokens, nil
 		}
 
 		tokens, err := rb.rdb.Get(rb.ctx, tokenKey).Int()
@@ -400,6 +405,15 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	}
 
 	containerUrl := fmt.Sprintf("http://%s/%s", c.address, req.ctx.Param("subPath"))
+
+	// Forward query params to the container if ASGI
+	if rb.isASGI {
+		queryParams := req.ctx.QueryString()
+		if queryParams != "" {
+			containerUrl += "?" + queryParams
+		}
+	}
+
 	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, requestBody)
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{

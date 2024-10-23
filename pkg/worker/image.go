@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -215,9 +216,49 @@ func (c *ImageClient) Cleanup() error {
 	return nil
 }
 
+func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage string, creds string) error {
+	args := []string{"inspect", fmt.Sprintf("docker://%s", sourceImage)}
+
+	args = append(args, c.inspectArgs(creds)...)
+	cmd := exec.CommandContext(ctx, c.pullCommand, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	output, err := exec.CommandContext(ctx, c.pullCommand, args...).Output()
+	if err != nil {
+		return &types.ExitCodeError{
+			ExitCode: types.WorkerContainerExitCodeInvalidCustomImage,
+		}
+	}
+
+	var imageInfo map[string]interface{}
+	err = json.Unmarshal(output, &imageInfo)
+	if err != nil {
+		return err
+	}
+
+	if imageInfo["Architecture"] != "amd64" {
+		return &types.ExitCodeError{
+			ExitCode: types.WorkerContainerExitCodeIncorrectImageArch,
+		}
+	}
+
+	if imageInfo["Os"] != "linux" {
+		return &types.ExitCodeError{
+			ExitCode: types.WorkerContainerExitCodeIncorrectImageOs,
+		}
+	}
+
+	return nil
+}
+
 func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds string) error {
 	baseImage, err := image.ExtractImageNameAndTag(sourceImage)
 	if err != nil {
+		return err
+	}
+
+	if err := c.InspectAndVerifyImage(ctx, sourceImage, creds); err != nil {
 		return err
 	}
 
@@ -227,7 +268,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
 
-	args = append(args, c.args(creds)...)
+	args = append(args, c.copyArgs(creds)...)
 	cmd := exec.CommandContext(ctx, c.pullCommand, args...)
 	cmd.Env = os.Environ()
 	cmd.Dir = c.imageBundlePath
@@ -262,7 +303,7 @@ func (c *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
 	return runc.Monitor.Start(cmd)
 }
 
-func (c *ImageClient) args(creds string) (out []string) {
+func (c *ImageClient) copyArgs(creds string) (out []string) {
 	if creds != "" {
 		out = append(out, "--src-creds", creds)
 	} else if creds == "" {
@@ -277,6 +318,30 @@ func (c *ImageClient) args(creds string) (out []string) {
 
 	if !c.config.ImageService.EnableTLS {
 		out = append(out, []string{"--src-tls-verify=false", "--dest-tls-verify=false"}...)
+	}
+
+	if c.debug {
+		out = append(out, "--debug")
+	}
+
+	return out
+}
+
+func (c *ImageClient) inspectArgs(creds string) (out []string) {
+	if creds != "" {
+		out = append(out, "--creds", creds)
+	} else if creds == "" {
+		out = append(out, "--no-creds")
+	} else if c.creds != "" {
+		out = append(out, "--creds", c.creds)
+	}
+
+	if c.commandTimeout > 0 {
+		out = append(out, "--command-timeout", fmt.Sprintf("%d", c.commandTimeout))
+	}
+
+	if !c.config.ImageService.EnableTLS {
+		out = append(out, []string{"--tls-verify=false"}...)
 	}
 
 	if c.debug {

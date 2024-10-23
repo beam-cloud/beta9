@@ -3,6 +3,7 @@ package task
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,10 +12,18 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-func setupEchoContext(jsonBody string) echo.Context {
+func setupEchoContext(jsonBody string, queryParams url.Values) echo.Context {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(jsonBody))
+	reqURL := "/"
+	if len(queryParams) > 0 {
+		reqURL += "?" + queryParams.Encode()
+	}
+	req := httptest.NewRequest(http.MethodPost, reqURL, strings.NewReader(jsonBody))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+
+	// Parse the query params into the request
+	req.URL.RawQuery = queryParams.Encode()
+
 	rec := httptest.NewRecorder()
 	return e.NewContext(req, rec)
 }
@@ -23,6 +32,7 @@ func TestSerializeHttpPayload(t *testing.T) {
 	tests := []struct {
 		name        string
 		body        string
+		queryParams url.Values
 		wantPayload *types.TaskPayload
 		wantErr     bool
 	}{
@@ -67,7 +77,7 @@ func TestSerializeHttpPayload(t *testing.T) {
 			body: `{"args": [1, 2, 3]}`,
 			wantPayload: &types.TaskPayload{
 				Args:   []interface{}{1.0, 2.0, 3.0},
-				Kwargs: nil,
+				Kwargs: make(map[string]interface{}),
 			},
 			wantErr: false,
 		},
@@ -95,11 +105,76 @@ func TestSerializeHttpPayload(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name:        "list of strings",
+			body:        `{}`,
+			queryParams: url.Values{"listOfStrings": []string{"a", "b", "c"}},
+			wantPayload: &types.TaskPayload{
+				Args:   nil,
+				Kwargs: map[string]interface{}{"listOfStrings": []string{"a", "b", "c"}},
+			},
+			wantErr: false,
+		},
+		{
+			name:        "single number",
+			body:        `{}`,
+			queryParams: url.Values{"sleep": []string{"100"}},
+			wantPayload: &types.TaskPayload{
+				Args:   nil,
+				Kwargs: map[string]interface{}{"sleep": float64(100)},
+			},
+			wantErr: false,
+		},
+		{
+			name:        "single number no body",
+			queryParams: url.Values{"sleep": []string{"100"}},
+			wantPayload: &types.TaskPayload{
+				Args:   nil,
+				Kwargs: map[string]interface{}{"sleep": float64(100)},
+			},
+			wantErr: false,
+		},
+		{
+			name:        "list of ints",
+			queryParams: url.Values{"sleep": []string{"100", "200", "300"}},
+			wantPayload: &types.TaskPayload{
+				Args:   nil,
+				Kwargs: map[string]interface{}{"sleep": []float64{100, 200, 300}},
+			},
+			wantErr: false,
+		},
+		{
+			name:        "list of floats",
+			queryParams: url.Values{"sleep": []string{"100.1", "200.2", "300.3"}},
+			wantPayload: &types.TaskPayload{
+				Args:   nil,
+				Kwargs: map[string]interface{}{"sleep": []float64{100.1, 200.2, 300.3}},
+			},
+			wantErr: false,
+		},
+		{
+			name:        "list of mixed ints and floats",
+			queryParams: url.Values{"sleep": []string{"100", "200.2", "300"}},
+			wantPayload: &types.TaskPayload{
+				Args:   nil,
+				Kwargs: map[string]interface{}{"sleep": []float64{100.0, 200.2, 300.0}},
+			},
+			wantErr: false,
+		},
+		{
+			name:        "mix of strings and numbers",
+			queryParams: url.Values{"sleep": []string{"Today", "200.2", "300"}},
+			wantPayload: &types.TaskPayload{
+				Args:   nil,
+				Kwargs: map[string]interface{}{"sleep": []string{"Today", "200.2", "300"}},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := setupEchoContext(tt.body)
+			ctx := setupEchoContext(tt.body, tt.queryParams)
 			got, err := SerializeHttpPayload(ctx)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("SerializeHttpPayload() error = %v, wantErr %v", err, tt.wantErr)

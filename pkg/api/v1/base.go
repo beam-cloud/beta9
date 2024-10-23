@@ -25,6 +25,10 @@ func HTTPInternalServerError(message string) error {
 	return NewHTTPError(http.StatusInternalServerError, message)
 }
 
+func HTTPConflict(message string) error {
+	return NewHTTPError(http.StatusConflict, message)
+}
+
 func HTTPUnauthorized(message string) error {
 	return NewHTTPError(http.StatusUnauthorized, message)
 }

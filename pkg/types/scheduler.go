@@ -29,6 +29,7 @@ type Worker struct {
 	ResourceVersion      int64        `json:"resource_version" redis:"resource_version"`
 	RequiresPoolSelector bool         `json:"requires_pool_selector" redis:"requires_pool_selector"`
 	Priority             int32        `json:"priority" redis:"priority"`
+	BuildVersion         string       `json:"build_version" redis:"build_version"`
 }
 
 type CapacityUpdateType int
@@ -67,23 +68,25 @@ type ContainerState struct {
 }
 
 type ContainerRequest struct {
-	ContainerId      string    `json:"container_id"`
-	EntryPoint       []string  `json:"entry_point"`
-	Env              []string  `json:"env"`
-	Cpu              int64     `json:"cpu"`
-	Memory           int64     `json:"memory"`
-	Gpu              string    `json:"gpu"`
-	GpuCount         uint32    `json:"gpu_count"`
-	SourceImage      *string   `json:"source_image"`
-	SourceImageCreds string    `json:"source_image_creds"`
-	ImageId          string    `json:"image_id"`
-	StubId           string    `json:"stub_id"`
-	WorkspaceId      string    `json:"workspace_id"`
-	Workspace        Workspace `json:"workspace"`
-	Timestamp        time.Time `json:"timestamp"`
-	Mounts           []Mount   `json:"mounts"`
-	RetryCount       int       `json:"retry_count"`
-	PoolSelector     string    `json:"pool_selector"`
+	ContainerId      string          `json:"container_id"`
+	EntryPoint       []string        `json:"entry_point"`
+	Env              []string        `json:"env"`
+	Cpu              int64           `json:"cpu"`
+	Memory           int64           `json:"memory"`
+	Gpu              string          `json:"gpu"`
+	GpuRequest       []string        `json:"gpu_request"`
+	GpuCount         uint32          `json:"gpu_count"`
+	SourceImage      *string         `json:"source_image"`
+	SourceImageCreds string          `json:"source_image_creds"`
+	ImageId          string          `json:"image_id"`
+	StubId           string          `json:"stub_id"`
+	WorkspaceId      string          `json:"workspace_id"`
+	Workspace        Workspace       `json:"workspace"`
+	Stub             StubWithRelated `json:"stub"`
+	Timestamp        time.Time       `json:"timestamp"`
+	Mounts           []Mount         `json:"mounts"`
+	RetryCount       int             `json:"retry_count"`
+	PoolSelector     string          `json:"pool_selector"`
 }
 
 const ContainerExitCodeTtlS int = 300
@@ -93,7 +96,7 @@ const (
 	ContainerResourceUsageEmissionInterval time.Duration = 3 * time.Second
 )
 const ContainerStateTtlSWhilePending int = 600
-const ContainerStateTtlS int = 60
+const ContainerStateTtlS int = 120
 const WorkspaceQuotaTtlS int = 600
 
 type ErrContainerStateNotFound struct {

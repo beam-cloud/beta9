@@ -76,6 +76,7 @@ def list_workers(
         Column("Memory Available"),
         Column("GPUs Available"),
         Column("Containers"),
+        Column("Version"),
         box=box.SIMPLE,
     )
 
@@ -97,6 +98,7 @@ def list_workers(
             terminal.humanize_memory(worker.free_memory * 1024 * 1024),
             str(worker.free_gpu_count),
             str(len(worker.active_containers)),
+            worker.build_version,
         )
 
     table.add_section()

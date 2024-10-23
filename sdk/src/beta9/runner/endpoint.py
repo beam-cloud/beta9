@@ -5,7 +5,7 @@ import signal
 import traceback
 from contextlib import asynccontextmanager
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -146,7 +146,17 @@ class EndpointManager:
                 task_id=None,
                 on_start_value=self.on_start_value,
             )
-            self.app = self.handler(context)
+
+            app: Union[FastAPI, None] = None
+            internal_asgi_app = getattr(self.handler.handler.func, "internal_asgi_app", None)
+            if internal_asgi_app is not None:
+                app = internal_asgi_app
+                app.context = context
+                app.handler = self.handler
+            else:
+                app = self.handler(context)
+
+            self.app = app
             if not is_asgi3(self.app):
                 raise ValueError("Invalid ASGI app returned from handler")
 

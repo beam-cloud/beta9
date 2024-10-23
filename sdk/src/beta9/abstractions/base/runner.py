@@ -2,6 +2,7 @@ import inspect
 import os
 import sys
 import tempfile
+import threading
 import time
 from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
@@ -52,15 +53,30 @@ ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
 ASGI_SERVE_STUB_TYPE = "asgi/serve"
 FUNCTION_SERVE_STUB_TYPE = "function/serve"
 
+_stub_creation_lock = threading.Lock()
+_stub_created_for_workspace = False
+
+
+def _is_stub_created_for_workspace() -> bool:
+    global _stub_created_for_workspace
+    _stub_created_for_workspace = False
+    return _stub_created_for_workspace
+
+
+def _set_stub_created_for_workspace(value: bool) -> None:
+    global _stub_created_for_workspace
+    _stub_created_for_workspace = value
+
 
 class RunnerAbstraction(BaseAbstraction):
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: GpuTypeAlias = GpuType.NoGPU,
+        gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         image: Image = Image(),
         workers: int = 1,
+        concurrent_requests: int = 1,
         keep_warm_seconds: float = 10.0,
         max_pending_tasks: int = 100,
         retries: int = 3,
@@ -98,6 +114,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.volumes = volumes or []
         self.secrets = [SecretVar(name=s) for s in (secrets or [])]
         self.workers = workers
+        self.concurrent_requests = concurrent_requests
         self.keep_warm_seconds = keep_warm_seconds
         self.max_pending_tasks = max_pending_tasks
         self.autoscaler = autoscaler
@@ -270,6 +287,15 @@ class RunnerAbstraction(BaseAbstraction):
         except Exception as e:
             terminal.warn(str(e))
 
+    def _parse_gpu(self, gpu: Union[GpuTypeAlias, List[GpuTypeAlias]]) -> str:
+        if not isinstance(gpu, str) and not isinstance(gpu, list):
+            raise ValueError("Invalid GPU type")
+
+        if isinstance(gpu, list):
+            return ",".join([GpuType(g).value for g in gpu])
+        else:
+            return GpuType(gpu).value
+
     def sync_dir_to_workspace(
         self, *, dir: str, object_id: str, on_event: Optional[Callable] = None
     ) -> ReplaceObjectContentResponse:
@@ -333,7 +359,7 @@ class RunnerAbstraction(BaseAbstraction):
                 return False
 
         try:
-            self.gpu = GpuType(self.gpu).value
+            self.gpu = self._parse_gpu(self.gpu)
         except ValueError:
             terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
             return False
@@ -347,38 +373,47 @@ class RunnerAbstraction(BaseAbstraction):
             return False
 
         if not self.stub_created:
-            stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
-                GetOrCreateStubRequest(
-                    object_id=self.object_id,
-                    image_id=self.image_id,
-                    stub_type=stub_type,
-                    name=stub_name,
-                    python_version=self.image.python_version,
-                    cpu=self.cpu,
-                    memory=self.memory,
-                    gpu=self.gpu,
-                    handler=self.handler,
-                    on_start=self.on_start,
-                    callback_url=self.callback_url,
-                    keep_warm_seconds=self.keep_warm_seconds,
-                    workers=self.workers,
-                    max_pending_tasks=self.max_pending_tasks,
-                    volumes=[v.export() for v in self.volumes],
-                    secrets=self.secrets,
-                    force_create=force_create_stub,
-                    authorized=self.authorized,
-                    autoscaler=AutoscalerProto(
-                        type=autoscaler_type,
-                        max_containers=self.autoscaler.max_containers,
-                        tasks_per_container=self.autoscaler.tasks_per_container,
-                    ),
-                    task_policy=TaskPolicyProto(
-                        max_retries=self.task_policy.max_retries,
-                        timeout=self.task_policy.timeout,
-                        ttl=self.task_policy.ttl,
-                    ),
-                )
+            stub_request = GetOrCreateStubRequest(
+                object_id=self.object_id,
+                image_id=self.image_id,
+                stub_type=stub_type,
+                name=stub_name,
+                python_version=self.image.python_version,
+                cpu=self.cpu,
+                memory=self.memory,
+                gpu=self.gpu,
+                handler=self.handler,
+                on_start=self.on_start,
+                callback_url=self.callback_url,
+                keep_warm_seconds=self.keep_warm_seconds,
+                workers=self.workers,
+                max_pending_tasks=self.max_pending_tasks,
+                volumes=[v.export() for v in self.volumes],
+                secrets=self.secrets,
+                force_create=force_create_stub,
+                authorized=self.authorized,
+                autoscaler=AutoscalerProto(
+                    type=autoscaler_type,
+                    max_containers=self.autoscaler.max_containers,
+                    tasks_per_container=self.autoscaler.tasks_per_container,
+                ),
+                task_policy=TaskPolicyProto(
+                    max_retries=self.task_policy.max_retries,
+                    timeout=self.task_policy.timeout,
+                    ttl=self.task_policy.ttl,
+                ),
+                concurrent_requests=self.concurrent_requests,
             )
+            if _is_stub_created_for_workspace():
+                stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
+                    stub_request
+                )
+            else:
+                with _stub_creation_lock:
+                    stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
+                        stub_request
+                    )
+                    _set_stub_created_for_workspace(True)
 
             if stub_response.ok:
                 self.stub_created = True

@@ -161,9 +161,40 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 	return nil
 }
 
-func (cr *ContainerRedisRepository) DeleteContainerState(request *types.ContainerRequest) error {
-	containerId := request.ContainerId
+func (cr *ContainerRedisRepository) UpdateAssignedContainerGPU(containerId string, gpuType string) error {
+	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+	if err != nil {
+		return err
+	}
+	defer cr.lock.Release(common.RedisKeys.SchedulerContainerLock(containerId))
 
+	// Get current state
+	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
+	res, err := cr.rdb.HGetAll(context.TODO(), stateKey).Result()
+	if err != nil {
+		return err
+	}
+
+	// Convert response to struct
+	state := &types.ContainerState{}
+	err = common.ToStruct(res, state)
+	if err != nil {
+		return fmt.Errorf("failed to deserialize container state: %v", err)
+	}
+
+	// Update GPU
+	state.Gpu = gpuType
+
+	// Save state to database
+	err = cr.rdb.HSet(context.TODO(), stateKey, common.ToSlice(state)).Err()
+	if err != nil {
+		return fmt.Errorf("failed to update container state gpu <%v>: %w", stateKey, err)
+	}
+
+	return nil
+}
+
+func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) error {
 	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
@@ -197,8 +228,8 @@ func (cr *ContainerRedisRepository) SetWorkerAddress(containerId string, addr st
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerAddress(containerId), addr, 0).Err()
 }
 
-func (cr *ContainerRedisRepository) GetWorkerAddress(containerId string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+func (cr *ContainerRedisRepository) GetWorkerAddress(ctx context.Context, containerId string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	var hostname string = ""
@@ -210,7 +241,10 @@ func (cr *ContainerRedisRepository) GetWorkerAddress(containerId string) (string
 	for {
 		select {
 		case <-ctx.Done():
-			return "", errors.New("timeout reached while trying to get worker addr")
+			if ctx.Err() == context.DeadlineExceeded {
+				return "", errors.New("timeout reached while trying to get worker addr")
+			}
+			return "", errors.New("context cancelled while trying to get worker addr")
 		case <-ticker.C:
 			hostname, err = cr.rdb.Get(ctx, common.RedisKeys.SchedulerWorkerAddress(containerId)).Result()
 			if err == nil {

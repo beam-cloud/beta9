@@ -131,7 +131,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 	}
 
 	gpuCount := 0
-	if stubConfig.Runtime.Gpu != "" {
+	if len(stubConfig.Runtime.Gpus) > 0 {
 		gpuCount = 1
 	}
 
@@ -145,12 +145,17 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 
 	env = append(secrets, env...)
 
+	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
+	if stubConfig.Runtime.Gpu != "" {
+		gpuRequest = append(gpuRequest, stubConfig.Runtime.Gpu.String())
+	}
+
 	err = t.fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: t.containerId,
 		Env:         env,
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
-		Gpu:         string(stubConfig.Runtime.Gpu),
+		GpuRequest:  gpuRequest,
 		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,
@@ -158,6 +163,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		Workspace:   stub.Workspace,
 		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
 		Mounts:      mounts,
+		Stub:        *stub,
 	})
 	if err != nil {
 		return err

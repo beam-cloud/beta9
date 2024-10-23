@@ -37,6 +37,10 @@ jobs:
             }
 
             const release = context.payload.release;
+
+            // log the release object to help debug failed actions
+            console.log(release);
+
             const lines = release.body.split('\n');
 
             const feats = [];
@@ -66,7 +70,7 @@ jobs:
               return;
             }
 
-            core.setOutput('name', release.name.replace(/(:\s)/g, '-v'));
+            core.setOutput('name', release.tag_name);
             core.setOutput('new_feats', JSON.stringify(feats));
             core.setOutput('new_fixes', JSON.stringify(fixes));
             core.setOutput('created_at', formatDate(release.created_at));

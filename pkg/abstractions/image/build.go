@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	defaultBuildContainerCpu      int64         = 1000
-	defaultBuildContainerMemory   int64         = 1024
-	defaultContainerSpinupTimeout time.Duration = 180 * time.Second
+	defaultImageBuildGracefulShutdownS               = 5 * time.Second
+	defaultBuildContainerCpu           int64         = 1000
+	defaultBuildContainerMemory        int64         = 1024
+	defaultContainerSpinupTimeout      time.Duration = 180 * time.Second
 
 	pipCommandType   string = "pip"
 	shellCommandType string = "shell"
@@ -199,7 +200,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	hostname, err := b.containerRepo.GetWorkerAddress(containerId)
+	mctx, mcancel := context.WithCancel(ctx)
+	go b.monitorContainerForPreloadErrors(mctx, containerId, outputChan)
+
+	hostname, err := b.containerRepo.GetWorkerAddress(ctx, containerId)
+	mcancel()
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
@@ -299,7 +304,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 				errMsg = err.Error() + "\n"
 			}
 
-			time.Sleep(1 * time.Second) // Wait for logs to be passed through
+			time.Sleep(defaultImageBuildGracefulShutdownS) // Wait for logs to be passed through
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: errMsg}
 			return err
 		}
@@ -315,6 +320,27 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	outputChan <- common.OutputMsg{Done: true, Success: true, ImageId: imageId}
 	return nil
+}
+
+func (b *Builder) monitorContainerForPreloadErrors(ctx context.Context, containerId string, outputChan chan common.OutputMsg) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(1 * time.Second):
+			if exitCode, err := b.containerRepo.GetContainerExitCode(containerId); err == nil {
+				if exitCode != 0 {
+					msg, ok := types.WorkerContainerExitCodes[exitCode]
+					if !ok {
+						msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+					}
+
+					outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
+				}
+				return
+			}
+		}
+	}
 }
 
 func (b *Builder) genContainerId() string {

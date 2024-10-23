@@ -122,7 +122,6 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	}
 
 	if !lastMessage.Success {
-		log.Println("build failed")
 		return errors.New("build failed")
 	}
 
