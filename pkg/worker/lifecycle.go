@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -229,6 +230,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		return nil, err
 	}
 
+	slog.Info("entrypoint", "entrypoint", request.EntryPoint)
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
 

@@ -72,6 +72,7 @@ imageService:
       python3.10: py310-latest
       python3.11: py311-latest
       python3.12: py312-latest
+      micromamba: micromamba-latest
 worker:
   pools:
     default:

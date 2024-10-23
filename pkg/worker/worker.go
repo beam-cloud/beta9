@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"log/slog"
 
 	"errors"
 	"fmt"
@@ -95,6 +96,8 @@ func NewWorker() (*Worker, error) {
 	gpuType := os.Getenv("GPU_TYPE")
 	workerId := os.Getenv("WORKER_ID")
 	podHostName := os.Getenv("HOSTNAME")
+
+	slog.Info("Worker starting up", "workerId", workerId, "podHostName", podHostName)
 
 	podAddr, err := GetPodAddr()
 	if err != nil {

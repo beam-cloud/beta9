@@ -55,20 +55,23 @@ func NewRuncImageService(
 func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
 	var valid bool = true
 
-	baseImageTag, ok := is.config.ImageService.Runner.Tags[in.PythonVersion]
+	baseImageTag, ok := is.getBaseImageTag(in.PythonVersion, in.Micromamba)
 	if !ok {
+		// FIXME: update to account for micromamba
 		return nil, errors.Errorf("Python version not supportted: %s", in.PythonVersion)
 	}
 
 	opts := &BuildOpts{
-		BaseImageTag:      baseImageTag,
-		BaseImageName:     is.config.ImageService.Runner.BaseImageName,
-		BaseImageRegistry: is.config.ImageService.Runner.BaseImageRegistry,
-		PythonVersion:     in.PythonVersion,
-		PythonPackages:    in.PythonPackages,
-		Commands:          in.Commands,
-		BuildSteps:        convertBuildSteps(in.BuildSteps),
-		ExistingImageUri:  in.ExistingImageUri,
+		BaseImageTag:       baseImageTag,
+		BaseImageName:      is.config.ImageService.Runner.BaseImageName,
+		BaseImageRegistry:  is.config.ImageService.Runner.BaseImageRegistry,
+		PythonVersion:      in.PythonVersion,
+		PythonPackages:     in.PythonPackages,
+		Commands:           in.Commands,
+		BuildSteps:         convertBuildSteps(in.BuildSteps),
+		ExistingImageUri:   in.ExistingImageUri,
+		Micromamba:         in.Micromamba,
+		MicromambaChannels: in.MicromambaChannels,
 	}
 
 	if in.ExistingImageUri != "" {
@@ -90,8 +93,10 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
 	log.Printf("incoming image build request: %+v", in)
 
+	baseImageTag, _ := is.getBaseImageTag(in.PythonVersion, in.Micromamba)
+
 	buildOptions := &BuildOpts{
-		BaseImageTag:       is.config.ImageService.Runner.Tags[in.PythonVersion],
+		BaseImageTag:       baseImageTag,
 		BaseImageName:      is.config.ImageService.Runner.BaseImageName,
 		BaseImageRegistry:  is.config.ImageService.Runner.BaseImageRegistry,
 		PythonVersion:      in.PythonVersion,
@@ -100,6 +105,8 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		BuildSteps:         convertBuildSteps(in.BuildSteps),
 		ExistingImageUri:   in.ExistingImageUri,
 		ExistingImageCreds: in.ExistingImageCreds,
+		Micromamba:         in.Micromamba,
+		MicromambaChannels: in.MicromambaChannels,
 	}
 
 	ctx := stream.Context()
@@ -138,4 +145,17 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 		}
 	}
 	return steps
+}
+
+func (is RuncImageService) getBaseImageTag(pythonVersion string, micromambaEnabled bool) (string, bool) {
+	var (
+		tag string
+		ok  bool
+	)
+	if micromambaEnabled {
+		tag, ok = is.config.ImageService.Runner.Tags["micromamba"]
+	} else {
+		tag, ok = is.config.ImageService.Runner.Tags[pythonVersion]
+	}
+	return tag, ok
 }

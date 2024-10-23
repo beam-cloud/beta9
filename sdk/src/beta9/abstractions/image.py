@@ -118,6 +118,8 @@ class Image(BaseAbstraction):
         self.build_steps = []
         self.base_image = base_image or ""
         self.base_image_creds = base_image_creds or {}
+        self.use_micromamba = False
+        self.micromamba_channels = []
         self._stub: Optional[ImageServiceStub] = None
 
     @property
@@ -160,6 +162,8 @@ class Image(BaseAbstraction):
                 build_steps=self.build_steps,
                 force_rebuild=False,
                 existing_image_uri=self.base_image,
+                micromamba=self.use_micromamba,
+                micromamba_channels=self.micromamba_channels,
             )
         )
 
@@ -183,6 +187,8 @@ class Image(BaseAbstraction):
                     build_steps=self.build_steps,
                     existing_image_uri=self.base_image,
                     existing_image_creds=self.get_credentials_from_env(),
+                    micromamba=self.use_micromamba,
+                    micromamba_channels=self.micromamba_channels,
                 )
             ):
                 if r.msg != "":
@@ -216,6 +222,39 @@ class Image(BaseAbstraction):
             else:
                 raise ImageCredentialValueNotFound(key)
         return creds
+
+    def micromamba(self) -> "Image":
+        """
+        Use micromamba to manage python packages.
+        """
+        self.use_micromamba = True
+        return self
+
+    def micromamba_packages(
+        self, packages: Union[Sequence[str], str], channels: Optional[Sequence[str]] = None
+    ) -> "Image":
+        """
+        Add micromamba packages that will be installed when building the image.
+
+        These will be executed at the end of the image build and in the
+        order they are added. If a single string is provided, it will be
+        interpreted as a path to a requirements.txt file.
+
+        Parameters:
+            packages: The micromamba packages to add or the path to a requirements.txt file.
+            channels: The micromamba channels to use.
+        """
+        # Check if we were given a .txt requirement file
+        if isinstance(packages, str):
+            packages = self._sanitize_python_packages(self._load_requirements_file(packages))
+
+        for package in packages:
+            self.build_steps.append(BuildStep(command=package, type="micromamba"))
+
+        if channels:
+            self.micromamba_channels = channels
+
+        return self
 
     def add_commands(self, commands: Sequence[str]) -> "Image":
         """
