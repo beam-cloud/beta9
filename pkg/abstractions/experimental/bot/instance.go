@@ -33,7 +33,13 @@ type botInstance struct {
 func newBotInstance(ctx context.Context, appConfig types.AppConfig, scheduler *scheduler.Scheduler, token *types.Token, stub *types.StubWithRelated, stubConfig *types.StubConfigV1, botConfig BotConfig, botStateManager *botStateManager) (*botInstance, error) {
 	ctx, cancelFunc := context.WithCancel(ctx)
 
-	botInterface, err := NewBotInterface(appConfig, botConfig)
+	botInterface, err := NewBotInterface(botInterfaceOpts{
+		AppConfig:    appConfig,
+		BotConfig:    botConfig,
+		StateManager: botStateManager,
+		Workspace:    &stub.Workspace,
+		Stub:         stub,
+	})
 	if err != nil {
 		cancelFunc()
 		return nil, err
@@ -114,6 +120,7 @@ func (i *botInstance) runTransition(transitionName string) error {
 }
 
 func (i *botInstance) step() {
+	// todo: this is where we actually run transition and update the petri net state
 }
 
 func (i *botInstance) genContainerId(botContainerType string) string {

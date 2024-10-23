@@ -37,39 +37,6 @@ type BotServiceOpts struct {
 	EventRepo      repository.EventRepository
 }
 
-// BotConfig holds the overall configuration for the bot
-type BotConfig struct {
-	Model       string                         `json:"model"`
-	Locations   map[string]BotLocationConfig   `json:"locations"`
-	Transitions map[string]BotTransitionConfig `json:"transitions"`
-}
-
-// BotLocationConfig holds the configuration for a specific location
-type BotLocationConfig struct {
-	Name   string            `json:"name"`
-	Marker map[string]string `json:"marker"`
-}
-
-// BotTransitionConfig holds the configuration for a transition
-type BotTransitionConfig struct {
-	Cpu         int64          `json:"cpu"`
-	Gpu         types.GpuType  `json:"gpu"`
-	Memory      int64          `json:"memory"`
-	ImageId     string         `json:"image_id"`
-	Timeout     int            `json:"timeout"`
-	KeepWarm    int            `json:"keep_warm"`
-	MaxPending  int            `json:"max_pending"`
-	Volumes     []string       `json:"volumes"`
-	Secrets     []string       `json:"secrets"`
-	Handler     string         `json:"handler"`
-	OnStart     string         `json:"on_start"`
-	CallbackUrl string         `json:"callback_url"`
-	TaskPolicy  string         `json:"task_policy"`
-	Name        string         `json:"name"`
-	Inputs      map[string]int `json:"inputs"`
-	Outputs     map[string]int `json:"outputs"`
-}
-
 type BotService interface {
 	pb.BotServiceServer
 	StartBotServe(in *pb.StartBotServeRequest, stream pb.BotService_StartBotServeServer) error
@@ -191,14 +158,29 @@ var Keys = &keys{}
 type keys struct{}
 
 var (
-	botKeepWarmLock   string = "bot:%s:%s:keep_warm_lock:%s"
-	botSessionHistory string = "bot:%s:%s:session_history:%s"
+	botKeepWarmLock     string = "bot:%s:%s:keep_warm_lock:%s"
+	botSessionStateLock string = "bot:%s:%s:session_state_lock:%s"
+	botSessionState     string = "bot:%s:%s:session_state:%s"
+	botMarkerIndex      string = "bot:%s:%s:marker_index"
+	botMarkers          string = "bot:%s:%s:markers"
 )
 
 func (k *keys) botKeepWarmLock(workspaceName, stubId, containerId string) string {
 	return fmt.Sprintf(botKeepWarmLock, workspaceName, stubId, containerId)
 }
 
-func (k *keys) botSessionHistory(workspaceName, stubId, sessionId string) string {
-	return fmt.Sprintf(botSessionHistory, workspaceName, stubId, sessionId)
+func (k *keys) botSessionStateLock(workspaceName, stubId, sessionId string) string {
+	return fmt.Sprintf(botSessionStateLock, workspaceName, stubId, sessionId)
+}
+
+func (k *keys) botSessionState(workspaceName, stubId, sessionId string) string {
+	return fmt.Sprintf(botSessionState, workspaceName, stubId, sessionId)
+}
+
+func (k *keys) botMarkerIndex(workspaceName, stubId string) string {
+	return fmt.Sprintf(botMarkerIndex, workspaceName, stubId)
+}
+
+func (k *keys) botMarkers(workspaceName, stubId string) string {
+	return fmt.Sprintf(botMarkers, workspaceName, stubId)
 }

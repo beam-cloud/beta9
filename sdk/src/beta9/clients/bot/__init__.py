@@ -83,7 +83,7 @@ class PopBotMarkerResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class PushBotMarkerRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
-    marker: str = betterproto.string_field(2)
+    data: bytes = betterproto.bytes_field(2)
 
 
 @dataclass(eq=False, repr=False)

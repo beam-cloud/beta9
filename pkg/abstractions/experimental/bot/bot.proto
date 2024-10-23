@@ -48,6 +48,7 @@ message PopBotMarkerResponse { string marker = 1; }
 
 message PushBotMarkerRequest {
   string stub_id = 1;
-  string marker = 2;
+  bytes data = 2;
 }
+
 message PushBotMarkerResponse { bool ok = 1; }
