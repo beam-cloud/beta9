@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -76,7 +75,7 @@ func (bi *BotInterface) initSession(sessionId string) error {
 
 		networkLayoutPrompt := BotChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
-			Content: fmt.Sprintf("Transitions you can perform: %v", bi.botConfig.Transitions),
+			Content: fmt.Sprintf("Transitions that can be performed: %v", bi.botConfig.Transitions),
 		}
 
 		state.Messages = []BotChatCompletionMessage{setupPrompt, networkStructurePrompt, networkLayoutPrompt}
@@ -134,22 +133,18 @@ func (bi *BotInterface) getSessionHistory(sessionId string) ([]openai.ChatComple
 		return nil, err
 	}
 
-	log.Printf("loaded session state! ====> %v\n", state)
-
 	return state.GetMessagesInOpenAIFormat(), nil
 }
 
 func (bi *BotInterface) SendPrompt(sessionId, prompt string) error {
-	userMessage := openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: prompt,
-	}
-
 	messages, err := bi.getSessionHistory(sessionId)
 	if err != nil {
 		return err
 	}
-	messages = append(messages, userMessage)
+	messages = append(messages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: prompt,
+	})
 
 	resp, err := bi.client.CreateChatCompletion(
 		context.Background(),
