@@ -7,7 +7,7 @@
 
 ### Cross-Cloud Serverless Engine
 
-Run serverless workloads with fast cold starts on bare-metal servers anywhere in the world
+Run serverless workloads with fast cold starts on bare-metal servers, anywhere in the world
 
 <p align="center">
   <a href="https://docs.beam.cloud">
@@ -37,7 +37,7 @@ Run serverless workloads with fast cold starts on bare-metal servers anywhere in
 - Run serverless workloads using a friendly Python interface
 - Autoscaling and automatic scale-to-zero
 - Read large files at the edge using distributed, cross-region storage
-- Connect bare metal nodes to your cluster with a single cURL command
+- Connect bare-metal nodes to your cluster with a single cURL command
 - Manage your fleet of servers using a Tailscale-powered service mesh
 - Securely run workloads with end-to-end encryption through WireGuard
 
@@ -73,7 +73,7 @@ curl -X POST 'https://inference.beam.cloud/v1' \
 -d '{}'
 ```
 
-### Run on Bare Metal Servers Around the World
+### Run on Bare-Metal Servers Around the World
 
 Connect any GPU to your cluster with one CLI command and a cURL.
 
