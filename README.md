@@ -5,7 +5,9 @@
 
 ---
 
-### The Serverless GPU Cloud
+### Cross-Cloud Serverless Engine
+
+Run serverless workloads with fast cold boots on bare-metal anywhere in the world
 
 <p align="center">
   <a href="https://docs.beam.cloud">
@@ -30,21 +32,22 @@
 
 </div>
 
-## What is Beta9?
+## Features
 
-Beta9 is an open source container orchestrator, designed for running GPU workloads across different cloud environments.
-
-- Connect VMs to your cluster with a single cURL command
+- Run serverless workloads using a friendly Python interface
+- Autoscaling and automatic scale-to-zero
 - Read large files at the edge using distributed, cross-region storage
-- Manage your fleet of GPUs using a Tailscale-powered service mesh
+- Connect bare metal nodes to your cluster with a single cURL command
+- Manage your fleet of servers using a Tailscale-powered service mesh
 - Securely run workloads with end-to-end encryption through WireGuard
-- Run workloads using a friendly Python interface
 
-## How does it work?
+## How Does It Work?
 
-### Deploy Serverless Web Endpoints
+### Run Serverless Workloads in Pure Python
 
-Add an `endpoint` decorator to your code, and you'll get a load-balanced HTTP endpoint (with auth!) to invoke your code:
+Add an `endpoint` decorator to your code, and you'll get a load-balanced HTTP endpoint (with auth!) to invoke your code.
+
+You can also run long-running functions with `@function`, deploy task queues with `@task_queue`, and scheduled jobs with `@schedule`:
 
 ```python
 from beta9 import endpoint
@@ -70,21 +73,7 @@ curl -X POST 'https://inference.beam.cloud/v1' \
 -d '{}'
 ```
 
-### Autoscale to Hundreds of GPUs
-
-Offload any workload to your remote machines by adding a Python decorator to your code.
-
-```python
-from beta9 import function
-
-
-# This will run on a remote A100-40 in your cluster
-@function(workers=10, cpu=16, memory=128, gpu="A100-40")
-def square(i: int):
-    return i**2
-```
-
-### Provision GPUs Anywhere
+### Run on Bare Metal Servers Around the World
 
 Connect any GPU to your cluster with one CLI command and a cURL.
 
@@ -106,9 +95,9 @@ sudo ./agent --token "AUTH_TOKEN" \
 
 You can run this install script on your VM to connect it to your cluster.
 
-### Manage Your GPU Fleet
+### Manage Your CPU or GPU Fleet
 
-Manage your distributed cross-region GPU cluster using a centralized control plane.
+Manage your distributed cross-region cluster using a centralized control plane.
 
 ```sh
 $ beta9 machine list
