@@ -74,6 +74,7 @@ type ContainerRequest struct {
 	Cpu              int64           `json:"cpu"`
 	Memory           int64           `json:"memory"`
 	Gpu              string          `json:"gpu"`
+	GpuRequest       []string        `json:"gpu_request"`
 	GpuCount         uint32          `json:"gpu_count"`
 	SourceImage      *string         `json:"source_image"`
 	SourceImageCreds string          `json:"source_image_creds"`
@@ -95,7 +96,7 @@ const (
 	ContainerResourceUsageEmissionInterval time.Duration = 3 * time.Second
 )
 const ContainerStateTtlSWhilePending int = 600
-const ContainerStateTtlS int = 60
+const ContainerStateTtlS int = 120
 const WorkspaceQuotaTtlS int = 600
 
 type ErrContainerStateNotFound struct {

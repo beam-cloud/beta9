@@ -45,10 +45,11 @@ type ContainerRepository interface {
 	SetContainerAddress(containerId string, addr string) error
 	GetContainerAddress(containerId string) (string, error)
 	UpdateContainerStatus(string, types.ContainerStatus, time.Duration) error
-	DeleteContainerState(*types.ContainerRequest) error
+	UpdateAssignedContainerGPU(string, string) error
+	DeleteContainerState(containerId string) error
 	SetWorkerAddress(containerId string, addr string) error
 	SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
-	GetWorkerAddress(containerId string) (string, error)
+	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
