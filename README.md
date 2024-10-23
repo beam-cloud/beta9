@@ -119,9 +119,6 @@ k3d is used for local development. You'll need Docker to get started.
 
 To use our fully automated setup, run the `setup` make target.
 
-> [!NOTE]
-> This will overwrite some of the tools you may already have installed. Review the [setup.sh](bin/setup.sh) to learn more.
-
 ```bash
 make setup
 ```
@@ -129,9 +126,6 @@ make setup
 ### Setting Up the SDK
 
 The SDK is written in Python. You'll need Python 3.8 or higher. Use the `setup-sdk` make target to get started.
-
-> [!NOTE]
-> This will install the Poetry package manager.
 
 ```bash
 make setup-sdk
