@@ -5,7 +5,7 @@
 
 ---
 
-### Run GPU Workloads Across Multiple Clouds
+### The Serverless GPU Cloud
 
 <p align="center">
   <a href="https://docs.beam.cloud">
@@ -32,7 +32,7 @@
 
 ## What is Beta9?
 
-Beta9 is an open source container orchestrator, designed for running GPU workloads across different cloud environments in different regions.
+Beta9 is an open source container orchestrator, designed for running GPU workloads across different cloud environments.
 
 - Connect VMs to your cluster with a single cURL command
 - Read large files at the edge using distributed, cross-region storage
@@ -41,6 +41,48 @@ Beta9 is an open source container orchestrator, designed for running GPU workloa
 - Run workloads using a friendly Python interface
 
 ## How does it work?
+
+### Deploy Serverless Web Endpoints
+
+Add an `endpoint` decorator to your code, and you'll get a load-balanced HTTP endpoint (with auth!) to invoke your code:
+
+```python
+from beta9 import endpoint
+
+
+# This will run on a remote A100-40 in your cluster
+@endpoint(cpu=1, memory=128, gpu="A100-40")
+def square(i: int):
+    return i**2
+```
+
+Deploy in one command:
+
+```
+$ beam deploy app.py:square --name inference
+=> Building image
+=> Using cached image
+=> Deployed 🎉
+
+curl -X POST 'https://inference.beam.cloud/v1' \
+-H 'Authorization: Bearer [YOUR_AUTH_TOKEN]' \
+-H 'Content-Type: application/json' \
+-d '{}'
+```
+
+### Autoscale to Hundreds of GPUs
+
+Offload any workload to your remote machines by adding a Python decorator to your code.
+
+```python
+from beta9 import function
+
+
+# This will run on a remote A100-40 in your cluster
+@function(workers=10, cpu=16, memory=128, gpu="A100-40")
+def square(i: int):
+    return i**2
+```
 
 ### Provision GPUs Anywhere
 
@@ -76,20 +118,6 @@ $ beta9 machine list
 | edc9c2d2 | 30,000m | 222.16 GiB | A10G    | registered | lambda-a10g |
 | d87ad026 | 30,000m | 216.25 GiB | A100-40 | registered | gcp-a100-40 |
 
-```
-
-### Run Workloads in Python
-
-Offload any workload to your remote machines by adding a Python decorator to your code.
-
-```python
-from beta9 import function
-
-
-# This will run on a remote A100-40 in your cluster
-@function(cpu=1, memory=128, gpu="A100-40")
-def square(i: int):
-    return i**2
 ```
 
 # Local Installation
