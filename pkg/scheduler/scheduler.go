@@ -283,8 +283,16 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		gpuRequestsMap[gpu] = index
 	}
 
+	log.Println("gpuRequestsMap: ", gpuRequestsMap)
+
+	requiresGPU := len(gpuRequestsMap) > 0
+
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
+		if requiresGPU && worker.Gpu == "" {
+			continue
+		}
+
 		// Check if the worker has enough free cpu and memory to run the container
 		if worker.FreeCpu < int64(request.Cpu) || worker.FreeMemory < int64(request.Memory) {
 			continue
@@ -295,10 +303,14 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 			continue
 		}
 
+		log.Println("worker.Gpu: ", worker.Gpu)
+
 		if worker.Gpu != "" {
 			// Validate GPU resource availability
 			priorityModifier, validGpu := gpuRequestsMap[worker.Gpu]
 			if !validGpu || worker.FreeGpuCount < request.GpuCount {
+				log.Println("validGpu: ", validGpu, "worker.FreeGpuCount: ", worker.FreeGpuCount, "request.GpuCount: ", request.GpuCount)
+				log.Printf("worker %s does not have enough free GPUs to run the container\n", worker.Id)
 				continue
 			}
 
