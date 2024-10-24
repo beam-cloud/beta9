@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"sort"
@@ -119,7 +118,6 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 		case <-rb.ctx.Done():
 			return nil
 		case <-ctx.Request().Context().Done():
-			log.Println("REQUEST CANCELLED")
 			if !req.processed {
 				rb.cancelInFlightTask(req.task)
 			}
@@ -387,8 +385,6 @@ func (rb *RequestBuffer) handleWSRequest(req *request, c container) {
 	if err != nil {
 		return
 	}
-
-	log.Println("WS Connection closed")
 }
 
 func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
@@ -568,7 +564,7 @@ func forwardWSConn(src net.Conn, dst net.Conn) {
 		dst.Close()
 	}()
 
-	_, err := io.Copy(dst, src)
+	_, err := io.Copy(src, dst)
 	if err != nil {
 		return
 	}
