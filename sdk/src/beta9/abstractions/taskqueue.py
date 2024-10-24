@@ -43,7 +43,7 @@ class TaskQueue(RunnerAbstraction):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty.
             You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify multiple
-            GPUs, the container will load balance across them with equal priority.
+            GPUs, the earlier GPUs will be prioritized over the later ones.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         timeout (Optional[int]):
