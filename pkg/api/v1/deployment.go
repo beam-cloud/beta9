@@ -216,7 +216,7 @@ func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRela
 		containers, err := g.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
 		if err == nil {
 			for _, container := range containers {
-				g.scheduler.Stop(container.ContainerId)
+				g.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId})
 			}
 		}
 

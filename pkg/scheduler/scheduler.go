@@ -138,19 +138,22 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 	return quota, nil
 }
 
-func (s *Scheduler) Stop(containerId string) error {
-	log.Printf("Received STOP request: %s\n", containerId)
+func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
+	log.Printf("Received STOP request: %+v\n", stopArgs)
 
-	err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
+	err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
+	if err != nil {
+		return err
+	}
+
+	eventArgs, err := stopArgs.ToMap()
 	if err != nil {
 		return err
 	}
 
 	_, err = s.eventBus.Send(&common.Event{
-		Type: common.EventTypeStopContainer,
-		Args: map[string]any{
-			"container_id": containerId,
-		},
+		Type:          common.EventTypeStopContainer,
+		Args:          eventArgs,
 		LockAndDelete: false,
 	})
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -60,7 +61,7 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 		}, nil
 	}
 
-	err = gws.scheduler.Stop(in.ContainerId)
+	err = gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: in.ContainerId})
 	if err != nil {
 		return &pb.StopContainerResponse{
 			Ok:       false,
