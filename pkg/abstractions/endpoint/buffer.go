@@ -552,7 +552,6 @@ func (rb *RequestBuffer) proxyWebsocketConnection(r *request, c container, diale
 	}
 
 	go rb.heartBeat(r, c.id) // Send heartbeat via redis for duration of request
-
 	go forwardWSConn(wsSrc.NetConn(), wsDst.NetConn())
 	forwardWSConn(wsDst.NetConn(), wsSrc.NetConn())
 	return nil
