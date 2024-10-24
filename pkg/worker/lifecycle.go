@@ -493,8 +493,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	pidChan := make(chan int, 1)
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pidChan)
 
-	if s.checkpointingAvailable {
+	status, createCheckpoint := s.shouldCreateCheckpoint(request)
+	if s.checkpointingAvailable && createCheckpoint {
 		go s.createCheckpoint(ctx, request)
+	}
+
+	// TODO: actually
+	if status == types.CheckpointStatusAvailable {
+		// s.cedanaClient.Restore(ctx, request.ContainerId)
+		log.Printf("<%s> - checkpoint found! not creating a new one\n", request.ContainerId)
 	}
 
 	// Invoke runc process (launch the container)
@@ -534,12 +541,11 @@ func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 }
 
 // Waits for the endpoint to be ready to checkpoint at the desired point in execution, ie.
-// after all endpoint workers have reached a checkpointable state. /health is configured to
-// return 200 only when all workers are ready.
+// after all endpoint workers have reached a checkpointable state
 func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest) {
 	log.Printf("<%s> - waiting for container to be ready for checkpoint\n", request.ContainerId)
 
-	timeout := time.Duration(containerCheckpointTimeout)
+	timeout := defaultCheckpointDeadline
 	managing := false
 	gpuEnabled := request.Gpu != ""
 
@@ -591,5 +597,37 @@ waitForReady:
 		return
 	}
 
-	log.Printf("<%s> - checkpoint done\n", request.ContainerId)
+	s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
+		Status:      types.CheckpointStatusAvailable,
+		ContainerId: request.ContainerId, // We store this just as a reference to which container we initially checkpointed
+		StubId:      request.StubId,
+	})
+
+	log.Printf("<%s> - checkpoint created successfully\n", request.ContainerId)
+}
+
+// shouldCreateCheckpoint checks if a checkpoint should be created for a given container
+func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.CheckpointStatus, bool) {
+	if !s.checkpointingAvailable || !request.CheckpointEnabled {
+		return "", false
+	}
+
+	state, err := s.containerRepo.GetCheckpointState(request.Workspace.Name, request.StubId)
+	if err != nil {
+		// Checkpoint is enabled, but no checkpoint state found, attempt a checkpoint
+		if _, ok := err.(*types.ErrCheckpointNotFound); ok {
+			return types.CheckpointStatusNotFound, true
+		}
+
+		return "", false
+	}
+
+	if state.Status == types.CheckpointStatusAvailable {
+		return types.CheckpointStatusAvailable, false
+	} else if state.Status == types.CheckpointStatusFailed {
+		return types.CheckpointStatusFailed, false
+	}
+
+	// TODO: figure out this case
+	return types.CheckpointStatusNotFound, false
 }

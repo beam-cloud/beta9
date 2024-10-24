@@ -26,7 +26,6 @@ import (
 const (
 	requestProcessingInterval     time.Duration = 100 * time.Millisecond
 	containerStatusUpdateInterval time.Duration = 30 * time.Second
-	containerCheckpointTimeout    time.Duration = 120 * time.Second
 
 	containerLogsPath          string  = "/var/log/worker"
 	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes

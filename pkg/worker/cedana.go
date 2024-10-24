@@ -9,6 +9,7 @@ import (
 
 	api "github.com/cedana/cedana/pkg/api/services/task"
 	types "github.com/cedana/cedana/pkg/types"
+
 	"github.com/opencontainers/runtime-spec/specs-go"
 
 	"google.golang.org/grpc"
@@ -16,7 +17,6 @@ import (
 )
 
 const (
-	DefaultCedanaPort          = 8080
 	host                       = "0.0.0.0"
 	binPath                    = "/usr/bin/cedana"
 	cedanaSharedLibPath        = "/usr/local/lib/libcedana-gpu.so"
@@ -33,6 +33,7 @@ type CedanaClient struct {
 	conn    *grpc.ClientConn
 	service api.TaskServiceClient
 	daemon  *exec.Cmd
+	config  types.Config
 }
 
 func NewCedanaClient(ctx context.Context, config types.Config, gpuEnabled bool) (*CedanaClient, error) {
@@ -66,6 +67,7 @@ func NewCedanaClient(ctx context.Context, config types.Config, gpuEnabled bool) 
 	daemon.Env = append(daemon.Env, fmt.Sprintf("CEDANA_DUMP_STORAGE_DIR=%s", config.SharedStorage.DumpStorageDir))
 	daemon.Env = append(daemon.Env, fmt.Sprintf("CEDANA_URL=%s", config.Connection.CedanaUrl))
 	daemon.Env = append(daemon.Env, fmt.Sprintf("CEDANA_AUTH_TOKEN=%s", config.Connection.CedanaAuthToken))
+
 	err = daemon.Start()
 	if err != nil {
 		return nil, fmt.Errorf("failed to start cedana daemon: %v", err)
@@ -81,20 +83,23 @@ func NewCedanaClient(ctx context.Context, config types.Config, gpuEnabled bool) 
 		service: taskClient,
 		conn:    taskConn,
 		daemon:  daemon,
+		config:  config,
 	}
 
 	// Wait for the daemon to be ready, and do health check
-	_, err = client.DetailedHealthCheckWait(ctx)
-	// if err != nil || len(details.UnhealthyReasons) > 0 {
-	// 	defer daemon.Process.Kill()
-	// 	defer taskConn.Close()
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("cedana health check failed: %v", err)
-	// 	}
-	// 	if len(details.UnhealthyReasons) > 0 {
-	// 		return nil, fmt.Errorf("cedana health failed with reasons: %v", details.UnhealthyReasons)
-	// 	}
-	// }
+	details, err := client.DetailedHealthCheckWait(ctx)
+	if err != nil || len(details.UnhealthyReasons) > 0 {
+		defer daemon.Process.Kill()
+		defer taskConn.Close()
+
+		if err != nil {
+			return nil, fmt.Errorf("cedana health check failed: %v", err)
+		}
+
+		if len(details.UnhealthyReasons) > 0 {
+			return nil, fmt.Errorf("cedana health failed with reasons: %v", details.UnhealthyReasons)
+		}
+	}
 
 	return client, nil
 }
@@ -163,7 +168,6 @@ func (c *CedanaClient) prepareContainerSpec(spec *specs.Spec, gpuEnabled bool) e
 	}
 
 	spec.Process.Env = append(spec.Process.Env, "LD_PRELOAD="+cedanaSharedLibPath)
-
 	return nil
 }
 

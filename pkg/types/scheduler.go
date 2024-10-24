@@ -165,3 +165,25 @@ type QuotaDoesNotExistError struct{}
 func (e *QuotaDoesNotExistError) Error() string {
 	return "quota_does_not_exist"
 }
+
+type CheckpointStatus string
+
+const (
+	CheckpointStatusAvailable CheckpointStatus = "available"
+	CheckpointStatusFailed    CheckpointStatus = "failed"
+	CheckpointStatusNotFound  CheckpointStatus = "not_found"
+)
+
+type CheckpointState struct {
+	StubId      string           `redis:"stub_id" json:"stub_id"`
+	ContainerId string           `redis:"container_id" json:"container_id"`
+	Status      CheckpointStatus `redis:"status" json:"status"`
+}
+
+type ErrCheckpointNotFound struct {
+	StubId string
+}
+
+func (e *ErrCheckpointNotFound) Error() string {
+	return fmt.Sprintf("checkpoint state not found: %s", e.StubId)
+}
