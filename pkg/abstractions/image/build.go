@@ -59,8 +59,6 @@ type BuildOpts struct {
 	ExistingImageUri   string
 	ExistingImageCreds map[string]string
 	ForceRebuild       bool
-	Micromamba         bool
-	MicromambaChannels []string
 }
 
 func (o *BuildOpts) String() string {
@@ -276,13 +274,14 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	log.Printf("container <%v> building with options: %s\n", containerId, opts)
 	startTime := time.Now()
 
-	if opts.Micromamba {
+	micromambaEnv := strings.Contains(opts.PythonVersion, "micromamba")
+	if micromambaEnv {
 		client.Exec(containerId, "micromamba config set use_lockfiles False")
 	}
 
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !opts.Micromamba {
+	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
 		installCmd := b.getPythonInstallCommand(opts.PythonVersion)
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
@@ -305,7 +304,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	if len(mambaCommands) > 0 {
-		opts.Commands[replaceIndex] = b.generateMicromambaInstallCommand(mambaCommands, opts.MicromambaChannels)
+		opts.Commands[replaceIndex] = b.generateMicromambaInstallCommand(mambaCommands)
 	}
 
 	for _, cmd := range opts.Commands {
@@ -469,15 +468,12 @@ func (b *Builder) generatePipInstallCommand(pythonPackages []string, pythonVersi
 	return command
 }
 
-func (b *Builder) generateMicromambaInstallCommand(pythonPackages []string, channels []string) string {
+func (b *Builder) generateMicromambaInstallCommand(pythonPackages []string) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
 	command := fmt.Sprintf("%s install -y -n beta9", micromambaCommandType)
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")
-	}
-	if len(channels) > 0 {
-		command += " --channel " + strings.Join(channels, " ")
 	}
 	if len(packages) > 0 {
 		command += " " + strings.Join(packages, " ")

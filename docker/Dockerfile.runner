@@ -262,7 +262,7 @@ set -eux
 /bin/micromamba create -n beta9 python=${PYTHON_VERSION} -y
 /bin/micromamba run -n beta9 pip install -r /workspace/requirements.txt
 
-ln -sf /micromamba/mpy /usr/bin/python${PYTHON_VERSION}
+ln -sf /micromamba/mpy /usr/bin/micromamba${PYTHON_VERSION}
 
 /bin/micromamba clean --all --yes
 EOT

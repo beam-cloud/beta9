@@ -118,8 +118,6 @@ class Image(BaseAbstraction):
         self.build_steps = []
         self.base_image = base_image or ""
         self.base_image_creds = base_image_creds or {}
-        self.use_micromamba = False
-        self.micromamba_channels = []
         self._stub: Optional[ImageServiceStub] = None
 
     @property
@@ -162,8 +160,6 @@ class Image(BaseAbstraction):
                 build_steps=self.build_steps,
                 force_rebuild=False,
                 existing_image_uri=self.base_image,
-                micromamba=self.use_micromamba,
-                micromamba_channels=self.micromamba_channels,
             )
         )
 
@@ -187,8 +183,6 @@ class Image(BaseAbstraction):
                     build_steps=self.build_steps,
                     existing_image_uri=self.base_image,
                     existing_image_creds=self.get_credentials_from_env(),
-                    micromamba=self.use_micromamba,
-                    micromamba_channels=self.micromamba_channels,
                 )
             ):
                 if r.msg != "":
@@ -227,11 +221,11 @@ class Image(BaseAbstraction):
         """
         Use micromamba to manage python packages.
         """
-        self.use_micromamba = True
+        self.python_version = self.python_version.replace("python", "micromamba")
         return self
 
     def add_micromamba_packages(
-        self, packages: Union[Sequence[str], str], channels: Optional[Sequence[str]] = None
+        self, packages: Union[Sequence[str], str], channels: Optional[Sequence[str]] = []
     ) -> "Image":
         """
         Add micromamba packages that will be installed when building the image.
@@ -244,6 +238,10 @@ class Image(BaseAbstraction):
             packages: The micromamba packages to add or the path to a requirements.txt file.
             channels: The micromamba channels to use.
         """
+        # Error if micromamba is not enabled
+        if not self.python_version.startswith("micromamba"):
+            raise ValueError("Micromamba must be enabled to use this method.")
+
         # Check if we were given a .txt requirement file
         if isinstance(packages, str):
             packages = self._sanitize_python_packages(self._load_requirements_file(packages))
@@ -251,8 +249,8 @@ class Image(BaseAbstraction):
         for package in packages:
             self.build_steps.append(BuildStep(command=package, type="micromamba"))
 
-        if channels:
-            self.micromamba_channels = channels
+        for channel in channels:
+            self.build_steps.append(BuildStep(command=f"-c {channel}", type="micromamba"))
 
         return self
 
