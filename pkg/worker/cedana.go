@@ -19,7 +19,7 @@ const (
 	DefaultCedanaPort          = 8080
 	host                       = "0.0.0.0"
 	binPath                    = "/usr/bin/cedana"
-	sharedLibPath              = "/usr/local/lib/libcedana-gpu.so"
+	cedanaSharedLibPath        = "/usr/local/lib/libcedana-gpu.so"
 	runcRoot                   = "/run/runc"
 	logLevel                   = "debug"
 	checkpointPathBase         = "/data"
@@ -112,8 +112,8 @@ func (c *CedanaClient) prepareContainerSpec(spec *specs.Spec, gpuEnabled bool) e
 	}
 
 	// First check if shared library is on worker
-	if _, err := os.Stat(sharedLibPath); os.IsNotExist(err) {
-		return fmt.Errorf("%s not found on worker. Was the daemon started with GPU enabled?", sharedLibPath)
+	if _, err := os.Stat(cedanaSharedLibPath); os.IsNotExist(err) {
+		return fmt.Errorf("%s not found on worker. Was the daemon started with GPU enabled?", cedanaSharedLibPath)
 	}
 
 	// Remove nvidia prestart hook as we don't need actual device mounts
@@ -126,6 +126,7 @@ func (c *CedanaClient) prepareContainerSpec(spec *specs.Spec, gpuEnabled bool) e
 			break
 		}
 	}
+
 	spec.Mounts = append(spec.Mounts, specs.Mount{
 		Destination: "/dev/shm",
 		Source:      "/dev/shm",
@@ -141,8 +142,8 @@ func (c *CedanaClient) prepareContainerSpec(spec *specs.Spec, gpuEnabled bool) e
 
 	// Add the shared library to the container
 	spec.Mounts = append(spec.Mounts, specs.Mount{
-		Destination: sharedLibPath,
-		Source:      sharedLibPath,
+		Destination: cedanaSharedLibPath,
+		Source:      cedanaSharedLibPath,
 		Type:        "bind",
 		Options: []string{
 			"rbind",
@@ -161,7 +162,7 @@ func (c *CedanaClient) prepareContainerSpec(spec *specs.Spec, gpuEnabled bool) e
 		}
 	}
 
-	spec.Process.Env = append(spec.Process.Env, "LD_PRELOAD="+sharedLibPath)
+	spec.Process.Env = append(spec.Process.Env, "LD_PRELOAD="+cedanaSharedLibPath)
 
 	return nil
 }

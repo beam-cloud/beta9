@@ -196,10 +196,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	// Start the container
 	go s.spawn(request, spec, outputChan, opts)
 
-	if s.checkpointingAvailable {
-		go s.createCheckpoint(request)
-	}
-
 	log.Printf("<%s> - spawned successfully.\n", containerId)
 	return nil
 }
@@ -497,6 +493,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	pidChan := make(chan int, 1)
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pidChan)
 
+	if s.checkpointingAvailable {
+		go s.createCheckpoint(ctx, request)
+	}
+
 	// Invoke runc process (launch the container)
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
 		OutputWriter: containerInstance.OutputWriter,
@@ -536,49 +536,56 @@ func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 // Waits for the endpoint to be ready to checkpoint at the desired point in execution, ie.
 // after all endpoint workers have reached a checkpointable state. /health is configured to
 // return 200 only when all workers are ready.
-func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
+func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest) {
 	log.Printf("<%s> - waiting for container to be ready for checkpoint\n", request.ContainerId)
 
-	start := time.Now()
 	timeout := time.Duration(containerCheckpointTimeout)
-	ready := false
 	managing := false
 	gpuEnabled := request.Gpu != ""
 
-	for time.Since(start) < timeout {
-		instance, exists := s.containerInstances.Get(request.ContainerId)
-		if exists {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+waitForReady:
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("<%s> - exited createCheckpoint", request.ContainerId)
+			return
+		case <-ticker.C:
+			instance, exists := s.containerInstances.Get(request.ContainerId)
+			if !exists {
+				log.Printf("<%s> - container instance not found yet\n", request.ContainerId)
+				continue
+			}
+
 			// Start managing the container with Cedana
 			if !managing {
-				err := s.cedanaClient.Manage(s.ctx, instance.Id, gpuEnabled)
+				err := s.cedanaClient.Manage(ctx, instance.Id, gpuEnabled)
 				if err == nil {
 					managing = true
 				} else {
 					log.Printf("<%s> - cedana manage failed, container may not be started yet: %+v\n", instance.Id, err)
 				}
-			} else {
-				// Check if the endpoint is ready for checkpoint by verifying the existence of the file
-				if _, err := os.Stat(fmt.Sprintf("/tmp/%s/cedana/READY_FOR_CHECKPOINT", instance.Id)); err == nil {
-					log.Printf("<%s> - endpoint is ready for checkpoint.\n", instance.Id)
-					ready = true
-					break
-				}
+				continue
+			}
 
+			// Check if the endpoint is ready for checkpoint by verifying the existence of the file
+			readyFilePath := fmt.Sprintf("/tmp/%s/cedana/READY_FOR_CHECKPOINT", instance.Id)
+			if _, err := os.Stat(readyFilePath); err == nil {
+				log.Printf("<%s> - endpoint is ready for checkpoint.\n", instance.Id)
+				break waitForReady
+			} else {
 				log.Printf("<%s> - endpoint not ready for checkpoint.\n", instance.Id)
 			}
-		} else {
-			log.Printf("<%s> - container instance not found yet\n", request.ContainerId)
 		}
-
-		time.Sleep(time.Second)
 	}
 
-	if !ready {
-		log.Printf("<%s> - checkpoint timed out after %s\n", request.ContainerId, time.Since(start))
-		return
-	}
-
-	err := s.cedanaClient.Checkpoint(s.ctx, request.ContainerId)
+	// Proceed to create the checkpoint
+	err := s.cedanaClient.Checkpoint(ctx, request.ContainerId)
 	if err != nil {
 		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
 		return
