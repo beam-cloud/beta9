@@ -283,8 +283,6 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		gpuRequestsMap[gpu] = index
 	}
 
-	log.Println("gpuRequestsMap: ", gpuRequestsMap)
-
 	requiresGPU := len(gpuRequestsMap) > 0
 
 	filteredWorkers := []*types.Worker{}
@@ -303,14 +301,10 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 			continue
 		}
 
-		log.Println("worker.Gpu: ", worker.Gpu)
-
 		if worker.Gpu != "" {
 			// Validate GPU resource availability
 			priorityModifier, validGpu := gpuRequestsMap[worker.Gpu]
 			if !validGpu || worker.FreeGpuCount < request.GpuCount {
-				log.Println("validGpu: ", validGpu, "worker.FreeGpuCount: ", worker.FreeGpuCount, "request.GpuCount: ", request.GpuCount)
-				log.Printf("worker %s does not have enough free GPUs to run the container\n", worker.Id)
 				continue
 			}
 
