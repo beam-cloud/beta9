@@ -35,9 +35,15 @@ type CedanaClient struct {
 	daemon  *exec.Cmd
 }
 
-func NewCedanaClient(ctx context.Context, config types.Config, port int, gpuEnabled bool) (*CedanaClient, error) {
+func NewCedanaClient(ctx context.Context, config types.Config, gpuEnabled bool) (*CedanaClient, error) {
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+	port, err := getRandomFreePort()
+	if err != nil {
+		return nil, err
+	}
+
 	addr := fmt.Sprintf("%s:%d", host, port)
 	taskConn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
@@ -50,8 +56,10 @@ func NewCedanaClient(ctx context.Context, config types.Config, port int, gpuEnab
 	daemon := exec.CommandContext(ctx, binPath, "daemon", "start",
 		fmt.Sprintf("--port=%d", port),
 		fmt.Sprintf("--gpu-enabled=%t", gpuEnabled))
+
 	daemon.Stdout = os.Stdout
 	daemon.Stderr = os.Stderr
+
 	// XXX: Set config using env until config JSON parsing is fixed
 	daemon.Env = append(os.Environ(), fmt.Sprintf("CEDANA_LOG_LEVEL=%s", logLevel))
 	daemon.Env = append(daemon.Env, fmt.Sprintf("CEDANA_CLIENT_LEAVE_RUNNING=%t", config.Client.LeaveRunning))

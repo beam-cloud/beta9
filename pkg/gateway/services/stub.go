@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
@@ -26,7 +27,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	if in.Gpu != "" {
+	gpus := types.GPUTypesFromString(in.Gpu)
+
+	if len(gpus) > 0 {
 		concurrencyLimit, err := gws.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, authInfo.Workspace.ExternalId)
 		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
 			return &pb.GetOrCreateStubResponse{
@@ -44,8 +47,16 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 
 		// T4s are currently in a different pool than other GPUs and won't show up in gpu counts
-		if gpuCounts[in.Gpu] <= 1 && in.Gpu != types.GPU_T4.String() {
-			warning = fmt.Sprintf("GPU capacity for %s is currently low.", in.Gpu)
+		lowGpus := []string{}
+
+		for _, gpu := range gpus {
+			if gpuCounts[gpu.String()] <= 1 && gpu.String() != types.GPU_T4.String() {
+				lowGpus = append(lowGpus, gpu.String())
+			}
+		}
+
+		if len(lowGpus) > 0 {
+			warning = fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowGpus, ", "))
 		}
 	}
 
@@ -70,7 +81,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:     in.Cpu,
-			Gpu:     types.GpuType(in.Gpu),
+			Gpus:    gpus,
 			Memory:  in.Memory,
 			ImageId: in.ImageId,
 		},

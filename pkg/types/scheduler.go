@@ -74,6 +74,7 @@ type ContainerRequest struct {
 	Cpu               int64           `json:"cpu"`
 	Memory            int64           `json:"memory"`
 	Gpu               string          `json:"gpu"`
+	GpuRequest        []string        `json:"gpu_request"`
 	GpuCount          uint32          `json:"gpu_count"`
 	SourceImage       *string         `json:"source_image"`
 	SourceImageCreds  string          `json:"source_image_creds"`

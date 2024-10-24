@@ -2,16 +2,13 @@ package worker
 
 import (
 	"context"
-	_ "embed"
-	"encoding/json"
+
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"os"
-	"path/filepath"
+	"os/signal"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -19,7 +16,6 @@ import (
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"k8s.io/utils/ptr"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -31,6 +27,9 @@ const (
 	requestProcessingInterval     time.Duration = 100 * time.Millisecond
 	containerStatusUpdateInterval time.Duration = 30 * time.Second
 	containerCheckpointTimeout    time.Duration = 120 * time.Second
+
+	containerLogsPath          string  = "/var/log/worker"
+	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
 )
 
 type Worker struct {
@@ -93,15 +92,6 @@ type stopContainerEvent struct {
 	Kill        bool
 }
 
-var (
-	//go:embed base_runc_config.json
-	baseRuncConfigRaw          string
-	baseConfigPath             string  = "/tmp"
-	containerLogsPath          string  = "/var/log/worker"
-	defaultContainerDirectory  string  = "/mnt/code"
-	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
-)
-
 func NewWorker() (*Worker, error) {
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
 
@@ -163,6 +153,14 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	var cedanaClient *CedanaClient = nil
+	if config.Checkpointing.Enabled {
+		cedanaClient, err = NewCedanaClient(context.Background(), config.Checkpointing.Cedana, gpuType != "")
+		if err != nil {
+			log.Printf("[WARNING] C/R unavailable, failed to create cedana client: %v\n", err)
+		}
+	}
+
 	runcServer, err := NewRunCServer(containerInstances, imageClient)
 	if err != nil {
 		return nil, err
@@ -204,6 +202,8 @@ func NewWorker() (*Worker, error) {
 		containerMountManager:   NewContainerMountManager(config),
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
+		cedanaClient:            cedanaClient,
+		checkpointingAvailable:  cedanaClient != nil,
 		podHostName:             podHostName,
 		eventBus:                nil,
 		workerId:                workerId,
@@ -229,12 +229,9 @@ func (s *Worker) Run() error {
 		return err
 	}
 
+	go s.listenForShutdown()
 	go s.manageWorkerCapacity()
 	go s.processStopContainerEvents()
-	defer func() {
-		close(s.completedRequests)
-		close(s.stopContainerChan)
-	}()
 
 	lastContainerRequest := time.Now()
 	for {
@@ -285,708 +282,113 @@ func (s *Worker) Run() error {
 	return s.shutdown()
 }
 
-// Only exit if there are no containers running, and no containers have recently been spun up on this worker
-func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
-	if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
-		return true
-	}
-	return false
+// listenForShutdown listens for SIGINT and SIGTERM signals and cancels the worker context
+func (s *Worker) listenForShutdown() {
+	terminate := make(chan os.Signal, 1)
+	signal.Notify(terminate, syscall.SIGINT, syscall.SIGTERM)
+
+	<-terminate
+	log.Println("Shutdown signal received.")
+
+	s.cancel()
 }
 
-// Spawn a single container and stream output to stdout/stderr
-func (s *Worker) RunContainer(request *types.ContainerRequest) error {
-	containerId := request.ContainerId
-	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
-
-	// Pull image
-	log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
-	err := s.imageClient.PullLazy(request)
-	if err != nil && request.SourceImage != nil {
-		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
-		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
-		if err == nil {
-			err = s.imageClient.PullLazy(request)
+// Exit if there are no containers running and no containers have recently been spun up on this
+// worker, or if a shutdown signal has been received.
+func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
+	select {
+	case <-s.ctx.Done():
+		return true
+	default:
+		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
+			return true
 		}
+		return false
 	}
-	if err != nil {
-		return err
-	}
-
-	bindPort, err := getRandomFreePort()
-	if err != nil {
-		return err
-	}
-	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
-
-	if !s.isBuildRequest(request) && request.CheckpointEnabled && s.config.Checkpointing.Enabled {
-		port, err := getRandomFreePort()
-		if err != nil {
-			log.Printf("<%s> - failed to get random port for cedana, trying default (%d): %v\n", containerId, DefaultCedanaPort, err)
-			port = DefaultCedanaPort
-		}
-
-		gpuEnabled := request.Gpu != ""
-		cedanaClient, err := NewCedanaClient(s.ctx, s.config.Checkpointing.Cedana, port, gpuEnabled)
-		if err != nil {
-			log.Printf("<%s> - C/R unavailable, failed to create cedana client: %v\n", containerId, err)
-		} else {
-			s.cedanaClient = cedanaClient
-			s.checkpointingAvailable = true
-		}
-	}
-
-	// Read spec from bundle
-	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
-
-	opts := &ContainerOptions{
-		BundlePath:  bundlePath,
-		BindPort:    bindPort,
-		InitialSpec: initialBundleSpec,
-	}
-
-	err = s.containerMountManager.SetupContainerMounts(request)
-	if err != nil {
-		s.containerLogger.Log(request.ContainerId, request.StubId, fmt.Sprintf("failed to setup container mounts: %v", err))
-	}
-
-	// Generate dynamic runc spec for this container
-	spec, err := s.specFromRequest(request, opts)
-	if err != nil {
-		return err
-	}
-	log.Printf("<%s> - successfully created spec from request.\n", containerId)
-
-	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
-	// gateway may need to directly interact with this pod/container.
-	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, bindPort)
-	err = s.containerRepo.SetContainerAddress(request.ContainerId, containerAddr)
-	if err != nil {
-		return err
-	}
-	log.Printf("<%s> - set container address.\n", containerId)
-
-	outputChan := make(chan common.OutputMsg)
-	go s.containerWg.Add(1)
-
-	// Start the container
-	go s.spawn(request, spec, outputChan, opts)
-
-	if s.checkpointingAvailable {
-		go s.createCheckpoint(request)
-	}
-
-	log.Printf("<%s> - spawned successfully.\n", containerId)
-	return nil
 }
 
 func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
+	ticker := time.NewTicker(containerStatusUpdateInterval)
+	defer ticker.Stop()
+
 	for {
-		time.Sleep(containerStatusUpdateInterval)
-
-		s.containerLock.Lock()
-		_, exists := s.containerInstances.Get(request.ContainerId)
-		s.containerLock.Unlock()
-
-		if !exists {
+		select {
+		case <-s.ctx.Done():
 			return nil
-		}
+		case <-ticker.C:
+			s.containerLock.Lock()
+			_, exists := s.containerInstances.Get(request.ContainerId)
+			s.containerLock.Unlock()
 
-		log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
-
-		// Stop container if it is "orphaned" - meaning it's running but has no associated state
-		state, err := s.containerRepo.GetContainerState(request.ContainerId)
-		if err != nil {
-			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-				log.Printf("<%s> - container state not found, stopping container\n", request.ContainerId)
-				s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
+			if !exists {
 				return nil
 			}
 
-			continue
-		}
+			log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
 
-		err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
-		if err != nil {
-			log.Printf("<%s> - unable to update container state: %v\n", request.ContainerId, err)
-		}
-
-		// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
-		// ensure it is killed after that
-		if state.Status == types.ContainerStatusStopping {
-			go func() {
-				time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
-
-				_, exists := s.containerInstances.Get(request.ContainerId)
-				if !exists {
-					return
+			// Stop container if it is "orphaned" - meaning it's running but has no associated state
+			state, err := s.containerRepo.GetContainerState(request.ContainerId)
+			if err != nil {
+				if _, ok := err.(*types.ErrContainerStateNotFound); ok {
+					log.Printf("<%s> - container state not found, stopping container\n", request.ContainerId)
+					s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
+					return nil
 				}
 
-				log.Printf("<%s> - container still running after stop event %ds ago - force killing\n", request.ContainerId, s.config.Worker.TerminationGracePeriod)
-				s.stopContainerChan <- stopContainerEvent{
-					ContainerId: request.ContainerId,
-					Kill:        true,
-				}
-			}()
-		}
-	}
-}
-
-// Waits for the endpoint to be ready to checkpoint at the desired point in execution, ie.
-// after all endpoint workers have reached a checkpointable state. /health is configured to
-// return 200 only when all workers are ready.
-func (s *Worker) createCheckpoint(request *types.ContainerRequest) {
-	log.Printf("<%s> - waiting for container to be ready for checkpoint\n", request.ContainerId)
-
-	start := time.Now()
-	timeout := time.Duration(containerCheckpointTimeout)
-	ready := false
-	managing := false
-	gpuEnabled := request.Gpu != ""
-
-	for time.Since(start) < timeout {
-		instance, exists := s.containerInstances.Get(request.ContainerId)
-		if exists {
-			// Start managing the container with Cedana
-			if !managing {
-				err := s.cedanaClient.Manage(s.ctx, instance.Id, gpuEnabled)
-				if err == nil {
-					managing = true
-				} else {
-					log.Printf("<%s> - cedana manage failed, container may not be started yet: %+v\n", instance.Id, err)
-				}
-			} else {
-				// Check if the endpoint is ready for checkpoint by verifying the existence of the file
-				if _, err := os.Stat(fmt.Sprintf("/tmp/%s/cedana/READY_FOR_CHECKPOINT", instance.Id)); err == nil {
-					log.Printf("<%s> - endpoint is ready for checkpoint.\n", instance.Id)
-					ready = true
-					break
-				}
-
-				log.Printf("<%s> - endpoint not ready for checkpoint.\n", instance.Id)
+				continue
 			}
-		} else {
-			log.Printf("<%s> - container instance not found yet\n", request.ContainerId)
+
+			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
+			if err != nil {
+				log.Printf("<%s> - unable to update container state: %v\n", request.ContainerId, err)
+			}
+
+			// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
+			// ensure it is killed after that
+			if state.Status == types.ContainerStatusStopping {
+				go func() {
+					time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
+
+					_, exists := s.containerInstances.Get(request.ContainerId)
+					if !exists {
+						return
+					}
+
+					log.Printf("<%s> - container still running after stop event %ds ago - force killing\n", request.ContainerId, s.config.Worker.TerminationGracePeriod)
+					s.stopContainerChan <- stopContainerEvent{
+						ContainerId: request.ContainerId,
+						Kill:        true,
+					}
+				}()
+			}
 		}
-
-		time.Sleep(time.Second)
 	}
-
-	if !ready {
-		log.Printf("<%s> - checkpoint timed out after %s\n", request.ContainerId, time.Since(start))
-		return
-	}
-
-	err := s.cedanaClient.Checkpoint(s.ctx, request.ContainerId)
-	if err != nil {
-		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
-		return
-	}
-
-	log.Printf("<%s> - checkpoint done\n", request.ContainerId)
-}
-
-// stopContainer stops a running container by containerId, if it exists on this worker
-func (s *Worker) stopContainer(event *common.Event) bool {
-	s.containerLock.Lock()
-	defer s.containerLock.Unlock()
-
-	containerId := event.Args["container_id"].(string)
-
-	var err error = nil
-	if _, exists := s.containerInstances.Get(containerId); exists {
-		log.Printf("<%s> - received stop container event.\n", containerId)
-		s.stopContainerChan <- stopContainerEvent{ContainerId: containerId, Kill: false}
-	}
-
-	return err == nil
 }
 
 func (s *Worker) processStopContainerEvents() {
 	for event := range s.stopContainerChan {
-		log.Printf("<%s> - stopping container.\n", event.ContainerId)
-
-		instance, exists := s.containerInstances.Get(event.ContainerId)
-		if !exists {
-			continue
-		}
-
-		// Container has already exited, just skip this event
-		if instance.ExitCode >= 0 {
-			continue
-		}
-
-		signal := int(syscall.SIGTERM)
-		if event.Kill {
-			signal = int(syscall.SIGKILL)
-		}
-
-		err := s.runcHandle.Kill(s.ctx, event.ContainerId, signal, &runc.KillOpts{
-			All: true,
-		})
-		if err != nil {
-			log.Printf("<%s> - unable to stop container: %v\n", event.ContainerId, err)
-
-			if strings.Contains(err.Error(), "container does not exist") {
-				// In case container network is still around for some reason, get rid of it
-				s.containerNetworkManager.TearDown(event.ContainerId)
-				continue
-			}
-
-			s.stopContainerChan <- event
-			time.Sleep(time.Second)
-			continue
-		}
-
-		log.Printf("<%s> - container stopped.\n", event.ContainerId)
-	}
-}
-
-const ExitCodeSigterm = 143
-
-func (s *Worker) terminateContainer(containerId string, request *types.ContainerRequest, exitCode *int, containerErr *error) {
-	defer s.containerWg.Done()
-
-	if *exitCode < 0 {
-		*exitCode = 1
-	} else if *exitCode == ExitCodeSigterm {
-		*exitCode = 0
-	}
-
-	err := s.containerRepo.SetContainerExitCode(containerId, *exitCode)
-	if err != nil {
-		log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
-	}
-
-	s.clearContainer(containerId, request, time.Duration(s.config.Worker.TerminationGracePeriod)*time.Second, *exitCode)
-}
-
-func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, delay time.Duration, exitCode int) {
-	s.containerLock.Lock()
-
-	// De-allocate GPU devices so they are available for new containers
-	if request.Gpu != "" {
-		s.containerCudaManager.UnassignGPUDevices(containerId)
-	}
-
-	// Tear down container network components
-	err := s.containerNetworkManager.TearDown(request.ContainerId)
-	if err != nil {
-		log.Printf("<%s> - failed to clean up container network: %v\n", request.ContainerId, err)
-	}
-
-	s.completedRequests <- request
-	s.containerLock.Unlock()
-
-	// Set container exit code on instance
-	instance, exists := s.containerInstances.Get(containerId)
-	if exists {
-		instance.ExitCode = exitCode
-		s.containerInstances.Set(containerId, instance)
-	}
-
-	go func() {
-		// Allow for some time to pass before clearing the container. This way we can handle some last
-		// minute logs or events or if the user wants to inspect the container before it's cleared.
-		time.Sleep(delay)
-
-		s.containerInstances.Delete(containerId)
-		err := s.containerRepo.DeleteContainerState(request)
-		if err != nil {
-			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
-		}
-	}()
-}
-
-// isBuildRequest checks if the sourceImage field is not-nil, which means the container request is for a build container
-func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
-	return request.SourceImage != nil
-}
-
-func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
-	// For images that have a rootfs, set that as the root path
-	// otherwise, assume runc config files are in the rootfs themselves
-	rootPath := filepath.Join(bundlePath, "rootfs")
-	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
-		rootPath = bundlePath
-	}
-
-	overlayPath := baseConfigPath
-	if s.isBuildRequest(request) {
-		overlayPath = "/dev/shm"
-	}
-
-	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
-}
-
-// spawn a container using runc binary
-func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputChan chan common.OutputMsg, opts *ContainerOptions) {
-	ctx, cancel := context.WithCancel(s.ctx)
-
-	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
-	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
-	defer cancel()
-
-	var containerErr error = nil
-
-	exitCode := -1
-	containerId := request.ContainerId
-
-	// Unmount external s3 buckets
-	defer s.containerMountManager.RemoveContainerMounts(containerId)
-
-	// Clear out all files in the container's directory
-	defer func() {
-		s.terminateContainer(containerId, request, &exitCode, &containerErr)
-	}()
-
-	// Create overlayfs for container
-	overlay := s.createOverlay(request, opts.BundlePath)
-
-	// Get the instance port
-	address, _ := s.containerRepo.GetContainerAddress(containerId)
-	_, port, err := net.SplitHostPort(address)
-	if err != nil {
-		log.Printf("Error parsing address: %v\n", err)
-		return
-	}
-
-	portNumber, err := strconv.Atoi(port)
-	if err != nil {
-		log.Printf("Error converting port to integer: %v\n", err)
-		return
-	}
-
-	// Add the container instance to the runningContainers map
-	containerInstance := &ContainerInstance{
-		Id:         containerId,
-		StubId:     request.StubId,
-		BundlePath: opts.BundlePath,
-		Overlay:    overlay,
-		Spec:       spec,
-		ExitCode:   -1,
-		Port:       portNumber,
-		OutputWriter: common.NewOutputWriter(func(s string) {
-			outputChan <- common.OutputMsg{
-				Msg:     string(s),
-				Done:    false,
-				Success: false,
-			}
-		}),
-		LogBuffer: common.NewLogBuffer(),
-	}
-	s.containerInstances.Set(containerId, containerInstance)
-
-	// Every 30 seconds, update container status
-	go s.updateContainerStatus(request)
-
-	// Set worker hostname
-	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
-	s.containerRepo.SetWorkerAddress(request.ContainerId, hostname)
-
-	// Handle stdout/stderr from spawned container
-	go s.containerLogger.CaptureLogs(request.ContainerId, outputChan)
-
-	go func() {
-		time.Sleep(time.Second)
-
-		s.containerLock.Lock()
-		defer s.containerLock.Unlock()
-
-		_, exists := s.containerInstances.Get(containerId)
-		if !exists {
+		select {
+		case <-s.ctx.Done():
 			return
-		}
-
-		if _, err := s.containerRepo.GetContainerState(containerId); err != nil {
-			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-				log.Printf("<%s> - container state not found, returning\n", containerId)
-				return
-			}
-		}
-
-		// Update container status to running
-		s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
-	}()
-
-	// Setup container overlay filesystem
-	err = containerInstance.Overlay.Setup()
-	if err != nil {
-		log.Printf("<%s> failed to setup overlay: %v", containerId, err)
-		containerErr = err
-		return
-	}
-	defer containerInstance.Overlay.Cleanup()
-	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
-
-	// Setup container network namespace / devices
-	err = s.containerNetworkManager.Setup(containerId, spec)
-	if err != nil {
-		log.Printf("<%s> failed to setup container network: %v", containerId, err)
-		containerErr = err
-		return
-	}
-
-	// Expose the bind port
-	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
-	if err != nil {
-		log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
-		containerErr = err
-		return
-	}
-
-	// Write runc config spec to disk
-	configContents, err := json.MarshalIndent(spec, "", " ")
-	if err != nil {
-		containerErr = err
-		return
-	}
-
-	configPath := filepath.Join(baseConfigPath, containerId, "config.json")
-	err = os.WriteFile(configPath, configContents, 0644)
-	if err != nil {
-		containerErr = err
-		return
-	}
-
-	// Log metrics
-	go s.workerMetrics.EmitContainerUsage(ctx, request)
-	go s.eventRepo.PushContainerStartedEvent(request.ContainerId, s.workerId, request)
-	defer func() { go s.eventRepo.PushContainerStoppedEvent(request.ContainerId, s.workerId, request) }()
-
-	// Capture resource usage (cpu/mem/gpu)
-	pidChan := make(chan int, 1)
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pidChan)
-
-	// Invoke runc process (launch the container)
-	exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
-		OutputWriter: containerInstance.OutputWriter,
-		ConfigPath:   configPath,
-		Started:      pidChan,
-	})
-
-	// Send last log message since the container has exited
-	outputChan <- common.OutputMsg{
-		Msg:     "",
-		Done:    true,
-		Success: err == nil,
-	}
-
-	if err != nil {
-		containerErr = err
-		return
-	}
-
-	if exitCode != 0 {
-		containerErr = fmt.Errorf("unable to run container: %d", exitCode)
-	}
-}
-
-func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
-	env := []string{
-		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
-		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)),
-		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
-		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
-		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
-		fmt.Sprintf("CHECKPOINT_ENABLED=%t", s.checkpointingAvailable),
-		"PYTHONUNBUFFERED=1",
-	}
-
-	env = append(env, request.Env...)
-	return env
-}
-
-func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
-	imageConfigPath := filepath.Join(s.imageMountPath, imageId, "initial_config.json")
-
-	data, err := os.ReadFile(imageConfigPath)
-	if err != nil {
-		return nil, err
-	}
-
-	specTemplate := strings.TrimSpace(string(data))
-	var spec specs.Spec
-
-	err = json.Unmarshal([]byte(specTemplate), &spec)
-	if err != nil {
-		return nil, err
-	}
-
-	return &spec, nil
-}
-
-func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
-	var newSpec specs.Spec
-	specTemplate := strings.TrimSpace(string(baseRuncConfigRaw))
-	err := json.Unmarshal([]byte(specTemplate), &newSpec)
-	if err != nil {
-		return nil, err
-	}
-	return &newSpec, nil
-}
-
-const (
-	standardCPUShare  uint64 = 1024
-	standardCPUPeriod int64  = 100_000
-)
-
-func calculateCPUShares(millicores int64) uint64 {
-	shares := uint64(millicores) * standardCPUShare / 1000
-	return shares
-}
-
-func calculateCPUQuota(millicores int64) int64 {
-	quota := millicores * standardCPUPeriod / 1000
-	return quota
-}
-
-// Generate a runc spec from a given request
-func (s *Worker) specFromRequest(request *types.ContainerRequest, options *ContainerOptions) (*specs.Spec, error) {
-	os.MkdirAll(filepath.Join(baseConfigPath, request.ContainerId), os.ModePerm)
-	configPath := filepath.Join(baseConfigPath, request.ContainerId, "config.json")
-
-	spec, err := s.newSpecTemplate()
-	if err != nil {
-		return nil, err
-	}
-
-	spec.Process.Cwd = defaultContainerDirectory
-	spec.Process.Args = request.EntryPoint
-
-	if s.config.Worker.RunCResourcesEnforced {
-		spec.Linux.Resources.CPU = &specs.LinuxCPU{
-			Shares: ptr.To(calculateCPUShares(request.Cpu)),
-			Quota:  ptr.To(calculateCPUQuota(request.Cpu)),
-			Period: ptr.To(uint64(standardCPUPeriod)),
-		}
-		spec.Linux.Resources.Memory = &specs.LinuxMemory{
-			Limit: ptr.To(request.Memory * 1024 * 1024),
-		}
-	}
-
-	env := s.getContainerEnvironment(request, options)
-	if request.Gpu != "" {
-		spec.Hooks.Prestart[0].Args = append(spec.Hooks.Prestart[0].Args, configPath, "prestart")
-
-		existingCudaFound := false
-		env, existingCudaFound = s.containerCudaManager.InjectEnvVars(env, options)
-		if !existingCudaFound {
-			// If the container image does not have cuda libraries installed, mount cuda libs from the host
-			spec.Mounts = s.containerCudaManager.InjectMounts(spec.Mounts)
-		}
-
-		// Assign n-number of GPUs to a container
-		assignedGpus, err := s.containerCudaManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
-		if err != nil {
-			return nil, err
-		}
-		env = append(env, fmt.Sprintf("NVIDIA_VISIBLE_DEVICES=%s", assignedGpus.String()))
-
-		spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, assignedGpus.devices...)
-	} else {
-		spec.Hooks.Prestart = nil
-	}
-
-	// We need to modify the spec to support Cedana C/R
-	if s.checkpointingAvailable {
-		s.cedanaClient.prepareContainerSpec(spec, request.Gpu != "")
-	}
-
-	spec.Process.Env = append(spec.Process.Env, env...)
-	spec.Root.Readonly = false
-
-	var volumeCacheMap map[string]string = make(map[string]string)
-
-	// Add bind mounts to runc spec
-	for _, m := range request.Mounts {
-		// Skip mountpoint storage if the local path does not exist (mounting failed)
-		if m.MountType == storage.StorageModeMountPoint {
-			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
-				continue
-			}
-		} else {
-			volumeCacheMap[filepath.Base(m.MountPath)] = m.LocalPath
-
-			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
-				err := os.MkdirAll(m.LocalPath, 0755)
-				if err != nil {
-					log.Printf("<%s> - failed to create mount directory: %v\n", request.ContainerId, err)
-				}
-			}
-		}
-
-		mode := "rw"
-		if m.ReadOnly {
-			mode = "ro"
-		}
-
-		if m.LinkPath != "" {
-			err = forceSymlink(m.MountPath, m.LinkPath)
+		default:
+			err := s.stopContainer(event.ContainerId, event.Kill)
 			if err != nil {
-				log.Printf("<%s> - unable to symlink volume: %v", request.ContainerId, err)
+				s.stopContainerChan <- event
+				time.Sleep(time.Second)
 			}
 		}
-
-		spec.Mounts = append(spec.Mounts, specs.Mount{
-			Type:        "none",
-			Source:      m.LocalPath,
-			Destination: m.MountPath,
-			Options:     []string{"rbind", mode},
-		})
 	}
-
-	if s.checkpointingAvailable && request.CheckpointEnabled {
-		os.MkdirAll(checkpointDir(request.ContainerId), os.ModePerm)
-
-		checkpointMount := specs.Mount{
-			Type:        "bind",
-			Source:      checkpointDir(request.ContainerId),
-			Destination: "/cedana",
-			Options: []string{
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"nodev"},
-		}
-		spec.Mounts = append(spec.Mounts, checkpointMount)
-	}
-
-	// If volume caching is enabled, set it up and add proper mounts to spec
-	if s.fileCacheManager.CacheAvailable() && request.Workspace.VolumeCacheEnabled {
-		err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
-		if err != nil {
-			log.Printf("<%s> - failed to setup volume caching: %v", request.ContainerId, err)
-		}
-	}
-
-	// Configure resolv.conf
-	resolvMount := specs.Mount{
-		Type:        "none",
-		Source:      "/workspace/resolv.conf",
-		Destination: "/etc/resolv.conf",
-		Options: []string{
-			"ro",
-			"rbind",
-			"rprivate",
-			"nosuid",
-			"noexec",
-			"nodev",
-		},
-	}
-
-	if s.config.Worker.UseHostResolvConf {
-		resolvMount.Source = "/etc/resolv.conf"
-	}
-
-	spec.Mounts = append(spec.Mounts, resolvMount)
-
-	return spec, nil
 }
 
 func (s *Worker) manageWorkerCapacity() {
 	for request := range s.completedRequests {
 		err := s.processCompletedRequest(request)
 		if err != nil {
+			if _, ok := err.(*types.ErrWorkerNotFound); ok {
+				s.cancel()
+				return
+			}
+
 			log.Printf("Unable to process completed request: %v\n", err)
 			s.completedRequests <- request
 			continue
@@ -1018,7 +420,7 @@ func (s *Worker) keepalive() {
 }
 
 func (s *Worker) startup() error {
-	log.Printf("Worker starting up.")
+	log.Println("Worker starting up.")
 
 	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
 	if err != nil {
@@ -1027,7 +429,7 @@ func (s *Worker) startup() error {
 
 	eventBus := common.NewEventBus(
 		s.redisClient,
-		common.EventBusSubscriber{Type: common.EventTypeStopContainer, Callback: s.stopContainer},
+		common.EventBusSubscriber{Type: common.EventTypeStopContainer, Callback: s.handleStopContainerEvent},
 	)
 
 	s.eventBus = eventBus
@@ -1048,6 +450,17 @@ func (s *Worker) shutdown() error {
 	log.Println("Shutting down...")
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
+	// Stops goroutines
+	s.cancel()
+
+	// Stop all running containers forcefully
+	s.containerInstances.Range(func(containerId string, _ *ContainerInstance) bool {
+		if err := s.stopContainer(containerId, true); err != nil {
+			log.Printf("Failed to stop container: %v\n", err)
+		}
+		return true // continue iterating
+	})
+
 	var errs error
 	if worker, err := s.workerRepo.GetWorkerById(s.workerId); err != nil {
 		errs = errors.Join(errs, err)
@@ -1058,7 +471,6 @@ func (s *Worker) shutdown() error {
 		}
 	}
 
-	s.cancel()
 	err := s.storage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to unmount storage: %v", err))
