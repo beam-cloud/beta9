@@ -116,6 +116,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 	go is.builder.Build(ctx, buildOptions, outputChan)
 
+	// This is a switch to stop sending build log messages once the archiving stage is reached
 	archivingStage := false
 	var lastMessage common.OutputMsg
 	for o := range outputChan {
