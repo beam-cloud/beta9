@@ -276,6 +276,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	log.Printf("container <%v> building with options: %s\n", containerId, opts)
 	startTime := time.Now()
 
+	if opts.Micromamba {
+		client.Exec(containerId, "micromamba config set use_lockfiles False")
+	}
+
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
 	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !opts.Micromamba {

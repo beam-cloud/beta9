@@ -207,7 +207,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/micromamba/bin:$PATH \
     MAMBA_ROOT_PREFIX=/micromamba \
     MAMBA_EXE=/bin/micromamba \
-    MAMBA_DISABLE_LOCKFILE=TRUE \
     SHELL=/bin/bash
 
 COPY ./pkg/abstractions/image/base_requirements.txt /workspace/requirements.txt
