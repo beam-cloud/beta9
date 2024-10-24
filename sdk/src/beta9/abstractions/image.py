@@ -230,7 +230,7 @@ class Image(BaseAbstraction):
         self.use_micromamba = True
         return self
 
-    def micromamba_packages(
+    def add_micromamba_packages(
         self, packages: Union[Sequence[str], str], channels: Optional[Sequence[str]] = None
     ) -> "Image":
         """

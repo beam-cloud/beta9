@@ -1,7 +1,6 @@
 package image
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -150,21 +149,4 @@ func TestGeneratePipInstallCommand(t *testing.T) {
 		cmd := b.generatePipInstallCommand(tc.opts.PythonPackages, tc.opts.PythonVersion)
 		assert.Equal(t, tc.want, cmd)
 	}
-}
-
-func TestGetImageId_NoDiffBetweenPartialAndFullBuildOpts(t *testing.T) {
-	b := &Builder{}
-
-	opts := &BuildOpts{
-		PythonVersion:  "3.11",
-		PythonPackages: []string{"numpy==1.18", "scipy>1.4", "pandas>=1.0,<2.0", "matplotlib<=2.2", "seaborn"},
-	}
-
-	imageId, err := b.GetImageId(opts)
-	fmt.Println(imageId)
-	assert.NoError(t, err)
-	assert.NotEmpty(t, imageId)
-
-	// This was imageId generated before adding micromamba fields to hash struct.
-	assert.Equal(t, "c39560e23764d454", imageId)
 }

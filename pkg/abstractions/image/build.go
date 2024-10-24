@@ -151,7 +151,6 @@ func (i *BaseImage) String() string {
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	// TODO: handle micromamba in custom base image build
 	if opts.ExistingImageUri != "" {
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
