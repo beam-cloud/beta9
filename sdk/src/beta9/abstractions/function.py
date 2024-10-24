@@ -42,8 +42,8 @@ class Function(RunnerAbstraction):
         gpu (Union[GpuTypeAlias, List[GpuTypeAlias]]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty.
-            You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify multiple
-            GPUs, the earlier GPUs will be prioritized over the later ones.
+            You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
+            the scheduler prioritizes their selection based on their order in the list.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         timeout (Optional[int]):
