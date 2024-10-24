@@ -284,8 +284,8 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	}
 
 	requiresGPU := len(gpuRequestsMap) > 0
-
 	filteredWorkers := []*types.Worker{}
+
 	for _, worker := range workers {
 		// Check if the worker has enough free cpu and memory to run the container
 		if worker.FreeCpu < int64(request.Cpu) || worker.FreeMemory < int64(request.Memory) {
