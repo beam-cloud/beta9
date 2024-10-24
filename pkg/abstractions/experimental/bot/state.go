@@ -74,6 +74,6 @@ func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string)
 	return m.rdb.Del(context.TODO(), stateKey).Err()
 }
 
-// func (m *botStateManager) addMarkerToLocation() error {
-// 	return nil
-// }
+func (m *botStateManager) addMarkerToLocation() error {
+	return nil
+}

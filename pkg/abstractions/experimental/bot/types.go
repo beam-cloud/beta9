@@ -38,6 +38,12 @@ type BotChatCompletionMessage struct {
 	Name string `json:"name,omitempty" redis:"name,omitempty"`
 }
 
+const botSchemaName = "beam_bot"
+
+type BotResponse struct {
+	UserMessage string `json:"user_message"`
+}
+
 // BotConfig holds the overall configuration for the bot
 type BotConfig struct {
 	Model       string                         `json:"model" redis:"model"`

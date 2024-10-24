@@ -8,6 +8,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	openai "github.com/sashabaranov/go-openai"
+	"github.com/sashabaranov/go-openai/jsonschema"
 )
 
 type BotInterface struct {
@@ -20,6 +21,7 @@ type BotInterface struct {
 	stateManager *botStateManager
 	workspace    *types.Workspace
 	stub         *types.StubWithRelated
+	schema       *jsonschema.Definition
 }
 
 type botInterfaceOpts struct {
@@ -45,7 +47,15 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 
 	bi.outputBuffer.Push(fmt.Sprintf("Starting bot, using model<%s>\n", bi.model))
 
-	err := bi.initSession("testsession")
+	// Generate the schema for each response
+	var r BotResponse
+	schema, err := jsonschema.GenerateSchemaForType(r)
+	if err != nil {
+		return nil, err
+	}
+	bi.schema = schema
+
+	err = bi.initSession("testsession")
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +161,14 @@ func (bi *BotInterface) SendPrompt(sessionId, prompt string) error {
 		openai.ChatCompletionRequest{
 			Model:    bi.model,
 			Messages: messages,
+			ResponseFormat: &openai.ChatCompletionResponseFormat{
+				Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
+				JSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+					Name:   botSchemaName,
+					Schema: bi.schema,
+					Strict: true,
+				},
+			},
 		},
 	)
 	if err != nil {
