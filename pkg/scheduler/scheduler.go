@@ -299,7 +299,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 			continue
 		}
 
-		if (requiresGPU && !isGpuWorker) || !requiresGPU && isGpuWorker {
+		if (requiresGPU && !isGpuWorker) || (!requiresGPU && isGpuWorker) {
 			// If the worker doesn't have a GPU and the request requires one, skip
 			// Likewise, if the worker has a GPU and the request doesn't require one, skip
 			continue
