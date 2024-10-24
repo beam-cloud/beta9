@@ -28,6 +28,7 @@ const (
 	TokenTypeWorkspace    string = "workspace"
 	TokenTypeWorker       string = "worker"
 	TokenTypeMachine      string = "machine"
+	TokenTypePublic       string = "public" // TODO: naming could be improved
 )
 
 type Token struct {
