@@ -1,9 +1,11 @@
 package common
 
 type OutputMsg struct {
-	Msg     string
-	Done    bool
-	Success bool
+	Msg       string
+	Done      bool
+	Success   bool
+	Archiving bool
+
 	ImageId string
 }
 

@@ -29,8 +29,9 @@ const (
 	defaultBuildContainerMemory        int64         = 1024
 	defaultContainerSpinupTimeout      time.Duration = 180 * time.Second
 
-	pipCommandType   string = "pip"
-	shellCommandType string = "shell"
+	pipCommandType        string = "pip"
+	shellCommandType      string = "shell"
+	micromambaCommandType string = "micromamba"
 )
 
 type Builder struct {
@@ -273,22 +274,37 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	log.Printf("container <%v> building with options: %s\n", containerId, opts)
 	startTime := time.Now()
 
+	micromambaEnv := strings.Contains(opts.PythonVersion, "micromamba")
+	if micromambaEnv {
+		client.Exec(containerId, "micromamba config set use_lockfiles False")
+	}
+
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	if resp, err := client.Exec(containerId, checkPythonVersionCmd); err != nil || !resp.Ok {
+	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
 		installCmd := b.getPythonInstallCommand(opts.PythonVersion)
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
 
 	// Generate the commands to run in the container
+	replaceIndex := -1
+	mambaCommands := []string{}
 	for _, step := range opts.BuildSteps {
 		switch step.Type {
 		case shellCommandType:
 			opts.Commands = append(opts.Commands, step.Command)
 		case pipCommandType:
 			opts.Commands = append(opts.Commands, b.generatePipInstallCommand([]string{step.Command}, opts.PythonVersion))
+		case micromambaCommandType:
+			opts.Commands = append(opts.Commands, "")
+			replaceIndex = len(opts.Commands) - 1
+			mambaCommands = append(mambaCommands, step.Command)
 		}
+	}
+
+	if len(mambaCommands) > 0 {
+		opts.Commands[replaceIndex] = b.generateMicromambaInstallCommand(mambaCommands)
 	}
 
 	for _, cmd := range opts.Commands {
@@ -311,14 +327,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 	log.Printf("container <%v> build took %v\n", containerId, time.Since(startTime))
 
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "\nSaving image, this may take a few minutes...\n"}
 	err = client.Archive(ctx, containerId, imageId, outputChan)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+		outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: false, Msg: err.Error() + "\n"}
 		return err
 	}
 
-	outputChan <- common.OutputMsg{Done: true, Success: true, ImageId: imageId}
+	outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: true, ImageId: imageId}
 	return nil
 }
 
@@ -364,6 +379,7 @@ func (b *Builder) extractPackageName(pkg string) string {
 	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
 }
 
+// handleCustomBaseImage validates the custom base image and parses its details into build options
 func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.OutputMsg) error {
 	if outputChan != nil {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Using custom base image: %s\n", opts.ExistingImageUri)}
@@ -439,19 +455,23 @@ func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 }
 
 func (b *Builder) generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
-	var flagLines []string
-	var packages []string
-	var flags = []string{"--", "-"}
-
-	for _, pkg := range pythonPackages {
-		if hasAnyPrefix(pkg, flags) {
-			flagLines = append(flagLines, pkg)
-		} else {
-			packages = append(packages, fmt.Sprintf("%q", pkg))
-		}
-	}
+	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
 	command := fmt.Sprintf("%s -m pip install --root-user-action=ignore", pythonVersion)
+	if len(flagLines) > 0 {
+		command += " " + strings.Join(flagLines, " ")
+	}
+	if len(packages) > 0 {
+		command += " " + strings.Join(packages, " ")
+	}
+
+	return command
+}
+
+func (b *Builder) generateMicromambaInstallCommand(pythonPackages []string) string {
+	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
+
+	command := fmt.Sprintf("%s install -y -n beta9", micromambaCommandType)
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")
 	}
@@ -511,4 +531,19 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+func parseFlagLinesAndPackages(pythonPackages []string) ([]string, []string) {
+	var flagLines []string
+	var packages []string
+	var flags = []string{"--", "-"}
+
+	for _, pkg := range pythonPackages {
+		if hasAnyPrefix(pkg, flags) {
+			flagLines = append(flagLines, pkg)
+		} else {
+			packages = append(packages, fmt.Sprintf("%q", pkg))
+		}
+	}
+	return flagLines, packages
 }

@@ -57,6 +57,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 
 	baseImageTag, ok := is.config.ImageService.Runner.Tags[in.PythonVersion]
 	if !ok {
+		// FIXME: update to account for micromamba
 		return nil, errors.Errorf("Python version not supportted: %s", in.PythonVersion)
 	}
 
@@ -90,8 +91,10 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
 	log.Printf("incoming image build request: %+v", in)
 
+	baseImageTag := is.config.ImageService.Runner.Tags[in.PythonVersion]
+
 	buildOptions := &BuildOpts{
-		BaseImageTag:       is.config.ImageService.Runner.Tags[in.PythonVersion],
+		BaseImageTag:       baseImageTag,
 		BaseImageName:      is.config.ImageService.Runner.BaseImageName,
 		BaseImageRegistry:  is.config.ImageService.Runner.BaseImageRegistry,
 		PythonVersion:      in.PythonVersion,
@@ -107,12 +110,22 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 	go is.builder.Build(ctx, buildOptions, outputChan)
 
+	// This is a switch to stop sending build log messages once the archiving stage is reached
+	archivingStage := false
 	var lastMessage common.OutputMsg
 	for o := range outputChan {
+		if archivingStage && !o.Archiving {
+			continue
+		}
+
 		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId}); err != nil {
 			log.Println("failed to complete build: ", err)
 			lastMessage = o
 			break
+		}
+
+		if o.Archiving {
+			archivingStage = true
 		}
 
 		if o.Done {
