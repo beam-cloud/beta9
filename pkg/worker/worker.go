@@ -362,7 +362,10 @@ func (s *Worker) processStopContainerEvents() {
 			if err != nil {
 				s.stopContainerChan <- event
 				time.Sleep(time.Second)
+				continue
 			}
+
+			s.containerInstances.Delete(event.ContainerId)
 		}
 	}
 }
