@@ -87,8 +87,8 @@ class Endpoint(RunnerAbstraction):
             Setting values here will override timeout and retries.
         checkpoint_enabled (bool):
             (experimental) Whether to enable checkpointing for the endpoint. Default is False.
-            If enabled, the task queue will use be checkpointed after the on_start function has completed.
-            On next invocation, the task queue will restore from the checkpoint and resume execution instead of
+            If enabled, the app will be checkpointed after the on_start function has completed.
+            On next invocation, each container will restore from a checkpoint and resume execution instead of
             booting up from cold.
     Example:
         ```python
@@ -225,8 +225,8 @@ class ASGI(Endpoint):
             Setting values here will override timeout and retries.
         checkpoint_enabled (bool):
             (experimental) Whether to enable checkpointing for the endpoint. Default is False.
-            If enabled, the task queue will use be checkpointed after the on_start function has completed.
-            On next invocation, the task queue will restore from the checkpoint and resume execution instead of
+            If enabled, the app will be checkpointed after the on_start function has completed.
+            On next invocation, each container will restore from a checkpoint and resume execution instead of
             booting up from cold.
     Example:
         ```python
@@ -356,8 +356,8 @@ class RealtimeASGI(ASGI):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
         checkpoint_enabled (bool):
             (experimental) Whether to enable checkpointing for the endpoint. Default is False.
-            If enabled, the task queue will use be checkpointed after the on_start function has completed.
-            On next invocation, the task queue will restore from the checkpoint and resume execution instead of
+            If enabled, the app will be checkpointed after the on_start function has completed.
+            On next invocation, each container will restore from a checkpoint and resume execution instead of
             booting up from cold.
     Example:
         ```python
