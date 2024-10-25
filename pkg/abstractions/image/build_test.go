@@ -140,13 +140,12 @@ func TestGeneratePipInstallCommand(t *testing.T) {
 			opts: &BuildOpts{
 				PythonPackages: []string{"--extra-index-url https://download.pytorch.org/whl/cu121", "numpy==1.18", "scipy>1.4", "pandas>=1.0,<2.0", "matplotlib<=2.2", "seaborn"},
 			},
-			want: ` -m pip install --root-user-action=ignore --extra-index-url https://download.pytorch.org/whl/cu121 "numpy==1.18" "scipy>1.4" "pandas>=1.0,<2.0" "matplotlib<=2.2" "seaborn"`,
+			want: `uv pip install --root-user-action=ignore --extra-index-url https://download.pytorch.org/whl/cu121 "numpy==1.18" "scipy>1.4" "pandas>=1.0,<2.0" "matplotlib<=2.2" "seaborn"`,
 		},
 	}
 
 	for _, tc := range testCases {
-		b := &Builder{}
-		cmd := b.generatePipInstallCommand(tc.opts.PythonPackages)
+		cmd := generatePipInstallCommand(tc.opts.PythonPackages)
 		assert.Equal(t, tc.want, cmd)
 	}
 }
