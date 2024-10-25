@@ -85,6 +85,11 @@ class Endpoint(RunnerAbstraction):
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
+        checkpoint_enabled (bool):
+            (experimental) Whether to enable checkpointing for the endpoint. Default is False.
+            If enabled, the task queue will use be checkpointed after the on_start function has completed.
+            On next invocation, the task queue will restore from the checkpoint and resume execution instead of
+            booting up from cold.
     Example:
         ```python
         from beta9 import endpoint, Image
@@ -123,6 +128,7 @@ class Endpoint(RunnerAbstraction):
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
         task_policy: TaskPolicy = TaskPolicy(),
+        checkpoint_enabled: bool = False,
     ):
         super().__init__(
             cpu=cpu,
@@ -143,6 +149,7 @@ class Endpoint(RunnerAbstraction):
             callback_url=callback_url,
             task_policy=task_policy,
             concurrent_requests=self.concurrent_requests,
+            checkpoint_enabled=checkpoint_enabled,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
@@ -216,6 +223,11 @@ class ASGI(Endpoint):
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
+        checkpoint_enabled (bool):
+            (experimental) Whether to enable checkpointing for the endpoint. Default is False.
+            If enabled, the task queue will use be checkpointed after the on_start function has completed.
+            On next invocation, the task queue will restore from the checkpoint and resume execution instead of
+            booting up from cold.
     Example:
         ```python
         from beta9 import asgi, Image
@@ -258,6 +270,7 @@ class ASGI(Endpoint):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
+        checkpoint_enabled: bool = False,
     ):
         self.concurrent_requests = concurrent_requests
         super().__init__(
@@ -276,6 +289,7 @@ class ASGI(Endpoint):
             authorized=authorized,
             autoscaler=autoscaler,
             callback_url=callback_url,
+            checkpoint_enabled=checkpoint_enabled,
         )
 
         self.is_asgi = True
@@ -341,7 +355,7 @@ class RealtimeASGI(ASGI):
         callback_url (Optional[str]):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
         checkpoint_enabled (bool):
-            (experimental) Whether to enable checkpointing for the task queue. Default is False.
+            (experimental) Whether to enable checkpointing for the endpoint. Default is False.
             If enabled, the task queue will use be checkpointed after the on_start function has completed.
             On next invocation, the task queue will restore from the checkpoint and resume execution instead of
             booting up from cold.
