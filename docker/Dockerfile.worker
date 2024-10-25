@@ -108,7 +108,7 @@ RUN MOUNT_S3_URL=$(if [ "$TARGETARCH" = "arm64" ]; then echo $MOUNT_S3_URL_ARM64
     mv mount-s3/bin/mount-s3 /usr/local/bin/ms3 && chmod +x /usr/local/bin/ms3 && \
     rm -rf mount-s3 $TARBALL
 
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+RUN curl --proto '=https' --tlsv1.2 -LsSf https://github.com/astral-sh/uv/releases/download/0.4.26/uv-installer.sh | sh
 
 RUN if [ "$(uname -m)" = "x86_64" ]; then \
     curl -L https://beam-runner-python-deps.s3.amazonaws.com/cuno_1.2.6_amd64_glibc.deb -o /tmp/cuno_1.2.6_amd64_glibc.deb && \
