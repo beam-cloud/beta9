@@ -549,6 +549,8 @@ func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
 func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest) error {
+	os.MkdirAll(filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, request.Workspace.Name), os.ModePerm)
+
 	timeout := defaultCheckpointDeadline
 	managing := false
 	gpuEnabled := request.Gpu != ""
@@ -601,7 +603,8 @@ waitForReady:
 	}
 
 	// Move compressed checkpoint file to long-term storage directory
-	err = moveFile(filepath.Join(checkpointPathBase, fmt.Sprintf("%s.tar", request.ContainerId)), s.config.Worker.Checkpointing.Storage.MountPath)
+	archiveName := fmt.Sprintf("%s.tar", request.ContainerId)
+	err = moveFile(filepath.Join(checkpointPathBase, archiveName), filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, request.Workspace.Name, archiveName))
 	if err != nil {
 		log.Printf("<%s> - failed to copy checkpoint to storage: %v\n", request.ContainerId, err)
 		return err

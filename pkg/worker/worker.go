@@ -161,9 +161,11 @@ func NewWorker() (*Worker, error) {
 			log.Printf("[WARNING] C/R unavailable, failed to create cedana client: %v\n", err)
 		}
 
+		os.MkdirAll(config.Worker.Checkpointing.Storage.MountPath, os.ModePerm)
+
+		log.Printf("Checkpoint storage mode: %s\n", config.Worker.Checkpointing.Storage.Mode)
+
 		if config.Worker.Checkpointing.Storage.Mode == string(types.CheckpointStorageModeS3) {
-			os.MkdirAll(config.Worker.Checkpointing.Storage.MountPath, os.ModePerm)
-		} else if config.Worker.Checkpointing.Storage.Mode == string(types.CheckpointStorageModeS3) {
 			checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
 				S3Bucket:    config.Worker.Checkpointing.Storage.ObjectStore.BucketName,
 				AccessKey:   config.Worker.Checkpointing.Storage.ObjectStore.AccessKey,
