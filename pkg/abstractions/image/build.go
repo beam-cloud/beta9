@@ -563,14 +563,13 @@ func generateCommands(buildSteps []BuildStep, pythonVersion string) []string {
 			mambaGroup = append(mambaGroup, step.Command)
 		}
 
-		// Non-pip command - flush any pending pip group
+		// Flush any pending pip or mamba groups
 		if pipStart != -1 && step.Type != pipCommandType {
 			commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion)
 			pipStart = -1
 			pipGroup = nil
 		}
 
-		// Non-mamba command - flush any pending mamba group
 		if mambaStart != -1 && step.Type != micromambaCommandType {
 			commands[mambaStart] = generateMicromambaInstallCommand(mambaGroup)
 			mambaStart = -1
@@ -578,7 +577,6 @@ func generateCommands(buildSteps []BuildStep, pythonVersion string) []string {
 		}
 	}
 
-	// Handle final groups if they exist
 	if mambaStart != -1 {
 		commands[mambaStart] = generateMicromambaInstallCommand(mambaGroup)
 	}
