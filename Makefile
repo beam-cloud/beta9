@@ -67,4 +67,4 @@ verify-protocol:
 	./bin/verify_proto.sh
 
 test-pkg:
-	go test -v ./pkg/... -bench=./pkg/...
+	go test -v ./pkg/... -bench=./pkg/..
