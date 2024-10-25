@@ -282,14 +282,19 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	// Generate the commands to run in the container
+	pipCommands := []string{}
+	pipIndex := -1
 	for _, step := range opts.BuildSteps {
 		switch step.Type {
 		case shellCommandType:
 			opts.Commands = append(opts.Commands, step.Command)
 		case pipCommandType:
-			opts.Commands = append(opts.Commands, b.generatePipInstallCommand([]string{step.Command}))
+			opts.Commands = append(opts.Commands, "")
+			pipIndex = len(opts.Commands) - 1
+			pipCommands = append(pipCommands, step.Command)
 		}
 	}
+	opts.Commands[pipIndex] = b.generatePipInstallCommand(pipCommands)
 
 	for _, cmd := range opts.Commands {
 		if cmd == "" {
