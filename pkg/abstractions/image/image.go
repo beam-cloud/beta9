@@ -90,10 +90,8 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
 	log.Printf("incoming image build request: %+v", in)
 
-	baseImageTag := is.config.ImageService.Runner.Tags[in.PythonVersion]
-
 	buildOptions := &BuildOpts{
-		BaseImageTag:       baseImageTag,
+		BaseImageTag:       is.config.ImageService.Runner.Tags[in.PythonVersion],
 		BaseImageName:      is.config.ImageService.Runner.BaseImageName,
 		BaseImageRegistry:  is.config.ImageService.Runner.BaseImageRegistry,
 		PythonVersion:      in.PythonVersion,
