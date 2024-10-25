@@ -267,7 +267,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	// Generate the pip install command and prepend it to the commands list
 	if len(opts.PythonPackages) > 0 {
-		pipInstallCmd := b.generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
+		pipInstallCmd := generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
 	}
 
@@ -283,29 +283,12 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
 	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
-		installCmd := b.getPythonInstallCommand(opts.PythonVersion)
+		installCmd := getPythonInstallCommand(opts.PythonVersion)
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
 
 	// Generate the commands to run in the container
-	replaceIndex := -1
-	mambaCommands := []string{}
-	for _, step := range opts.BuildSteps {
-		switch step.Type {
-		case shellCommandType:
-			opts.Commands = append(opts.Commands, step.Command)
-		case pipCommandType:
-			opts.Commands = append(opts.Commands, b.generatePipInstallCommand([]string{step.Command}, opts.PythonVersion))
-		case micromambaCommandType:
-			opts.Commands = append(opts.Commands, "")
-			replaceIndex = len(opts.Commands) - 1
-			mambaCommands = append(mambaCommands, step.Command)
-		}
-	}
-
-	if len(mambaCommands) > 0 {
-		opts.Commands[replaceIndex] = b.generateMicromambaInstallCommand(mambaCommands)
-	}
+	opts.Commands = generateCommands(opts.BuildSteps, opts.PythonVersion)
 
 	for _, cmd := range opts.Commands {
 		if cmd == "" {
@@ -438,50 +421,6 @@ func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
 }
 
-func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
-	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common gcc curl git"
-	components := []string{
-		"python3-future",
-		pythonVersion,
-		fmt.Sprintf("%s-distutils", pythonVersion),
-		fmt.Sprintf("%s-dev", pythonVersion),
-	}
-
-	installCmd := strings.Join(components, " ")
-	installPipCmd := fmt.Sprintf("curl -sS https://bootstrap.pypa.io/get-pip.py | %s", pythonVersion)
-	postInstallCmd := fmt.Sprintf("rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/%s /usr/bin/python && ln -s /usr/bin/%s /usr/bin/python3 && %s", pythonVersion, pythonVersion, installPipCmd)
-
-	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
-}
-
-func (b *Builder) generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
-	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
-
-	command := fmt.Sprintf("%s -m pip install --root-user-action=ignore", pythonVersion)
-	if len(flagLines) > 0 {
-		command += " " + strings.Join(flagLines, " ")
-	}
-	if len(packages) > 0 {
-		command += " " + strings.Join(packages, " ")
-	}
-
-	return command
-}
-
-func (b *Builder) generateMicromambaInstallCommand(pythonPackages []string) string {
-	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
-
-	command := fmt.Sprintf("%s install -y -n beta9", micromambaCommandType)
-	if len(flagLines) > 0 {
-		command += " " + strings.Join(flagLines, " ")
-	}
-	if len(packages) > 0 {
-		command += " " + strings.Join(packages, " ")
-	}
-
-	return command
-}
-
 var imageNamePattern = regexp.MustCompile(
 	`^` + // Assert position at the start of the string
 		`(?:(?P<Registry>(?:(?:localhost|[\w.-]+(?:\.[\w.-]+)+)(?::\d+)?)|[\w]+:\d+)\/)?` + // Optional registry, which can be localhost, a domain with optional port, or a simple registry with port
@@ -524,6 +463,50 @@ func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
 	}, nil
 }
 
+func getPythonInstallCommand(pythonVersion string) string {
+	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common gcc curl git"
+	components := []string{
+		"python3-future",
+		pythonVersion,
+		fmt.Sprintf("%s-distutils", pythonVersion),
+		fmt.Sprintf("%s-dev", pythonVersion),
+	}
+
+	installCmd := strings.Join(components, " ")
+	installPipCmd := fmt.Sprintf("curl -sS https://bootstrap.pypa.io/get-pip.py | %s", pythonVersion)
+	postInstallCmd := fmt.Sprintf("rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/%s /usr/bin/python && ln -s /usr/bin/%s /usr/bin/python3 && %s", pythonVersion, pythonVersion, installPipCmd)
+
+	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
+}
+
+func generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
+	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
+
+	command := fmt.Sprintf("%s -m pip install --root-user-action=ignore", pythonVersion)
+	if len(flagLines) > 0 {
+		command += " " + strings.Join(flagLines, " ")
+	}
+	if len(packages) > 0 {
+		command += " " + strings.Join(packages, " ")
+	}
+
+	return command
+}
+
+func generateMicromambaInstallCommand(pythonPackages []string) string {
+	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
+
+	command := fmt.Sprintf("%s install -y -n beta9", micromambaCommandType)
+	if len(flagLines) > 0 {
+		command += " " + strings.Join(flagLines, " ")
+	}
+	if len(packages) > 0 {
+		command += " " + strings.Join(packages, " ")
+	}
+
+	return command
+}
+
 func hasAnyPrefix(s string, prefixes []string) bool {
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(s, prefix) {
@@ -546,4 +529,63 @@ func parseFlagLinesAndPackages(pythonPackages []string) ([]string, []string) {
 		}
 	}
 	return flagLines, packages
+}
+
+// Generate the commands to run in the container. This function will coalesce pip and mamba commands
+// into a single command if they are adjacent to each other.
+func generateCommands(buildSteps []BuildStep, pythonVersion string) []string {
+	commands := []string{}
+	var (
+		mambaStart int = -1
+		mambaGroup []string
+		pipStart   int = -1
+		pipGroup   []string
+	)
+
+	for _, step := range buildSteps {
+		if step.Type == shellCommandType {
+			commands = append(commands, step.Command)
+		}
+
+		if step.Type == pipCommandType {
+			if pipStart == -1 {
+				pipStart = len(commands)
+				commands = append(commands, "")
+			}
+			pipGroup = append(pipGroup, step.Command)
+		}
+
+		if step.Type == micromambaCommandType {
+			if mambaStart == -1 {
+				mambaStart = len(commands)
+				commands = append(commands, "")
+			}
+			mambaGroup = append(mambaGroup, step.Command)
+		}
+
+		// Non-pip command - flush any pending pip group
+		if pipStart != -1 && step.Type != pipCommandType {
+			commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion)
+			pipStart = -1
+			pipGroup = nil
+		}
+
+		// Non-mamba command - flush any pending mamba group
+		if mambaStart != -1 && step.Type != micromambaCommandType {
+			commands[mambaStart] = generateMicromambaInstallCommand(mambaGroup)
+			mambaStart = -1
+			mambaGroup = nil
+		}
+	}
+
+	// Handle final groups if they exist
+	if mambaStart != -1 {
+		commands[mambaStart] = generateMicromambaInstallCommand(mambaGroup)
+	}
+
+	if pipStart != -1 {
+		commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion)
+	}
+
+	return commands
 }
