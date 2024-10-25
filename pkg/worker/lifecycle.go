@@ -600,6 +600,15 @@ waitForReady:
 		return err
 	}
 
+	// Move compressed checkpoint file to long-term storage directory
+	err = moveFile(filepath.Join(checkpointPathBase, fmt.Sprintf("%s.tar", request.ContainerId)), s.config.Worker.Checkpointing.Storage.MountPath)
+	if err != nil {
+		log.Printf("<%s> - failed to copy checkpoint to storage: %v\n", request.ContainerId, err)
+		return err
+	}
+
+	// TODO: Delete checkpoint files from local disk
+
 	log.Printf("<%s> - checkpoint created successfully\n", request.ContainerId)
 	return s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
 		Status:      types.CheckpointStatusAvailable,

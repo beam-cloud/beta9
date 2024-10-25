@@ -22,10 +22,10 @@ const (
 	cedanaSharedLibPath        = "/usr/local/lib/libcedana-gpu.so"
 	runcRoot                   = "/run/runc"
 	logLevel                   = "debug"
-	checkpointPathBase         = "/data"
+	checkpointPathBase         = "/tmp"
 	defaultManageDeadline      = 10 * time.Second
 	defaultCheckpointDeadline  = 2 * time.Minute
-	defaultRestoreDeadline     = 2 * time.Minute
+	defaultRestoreDeadline     = 5 * time.Minute
 	defaultHealthCheckDeadline = 30 * time.Second
 )
 

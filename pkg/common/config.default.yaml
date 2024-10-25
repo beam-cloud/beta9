@@ -135,6 +135,14 @@ worker:
   blobCacheEnabled: false
   checkpointing:
     enabled: false
+    storage:
+      mountPath: /data/checkpoints
+      mode: local
+      objectStoreConfig:
+        bucketName: beta9-checkpoints
+        accessKey: test
+        secretKey: test
+        endpointURL: http://localstack:4566
     cedana:
       client:
         leaveRunning: true
@@ -143,6 +151,7 @@ worker:
       connection:
         cedanaUrl: url
         cedanaAuthToken: token
+
 providers:
   ec2:
     accessKey:

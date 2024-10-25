@@ -54,8 +54,8 @@ type ContainerRepository interface {
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
 	GetFailedContainerCountByStubId(stubId string) (int, error)
-	UpdateCheckpointState(workspaceName, stubId string, checkpointState *types.CheckpointState) error
-	GetCheckpointState(workspaceName, stubId string) (*types.CheckpointState, error)
+	UpdateCheckpointState(workspaceName, checkpointId string, checkpointState *types.CheckpointState) error
+	GetCheckpointState(workspaceName, checkpointId string) (*types.CheckpointState, error)
 }
 
 type WorkspaceRepository interface {

@@ -378,6 +378,15 @@ type FluentBitEventMapping struct {
 	Tag  string `key:"tag" json:"tag"`
 }
 
+type ObjectStoreConfig struct {
+	BucketName  string `key:"bucketName" json:"bucket_name"`
+	AccessKey   string `key:"accessKey" json:"access_key"`
+	SecretKey   string `key:"secretKey" json:"secret_key"`
+	EndpointURL string `key:"endpointURL" json:"bucket_url"`
+	Region      string `key:"region" json:"region"`
+	ReadOnly    bool   `key:"readOnly" json:"read_only"`
+}
+
 type FluentBitEventConfig struct {
 	Endpoint        string                  `key:"endpoint" json:"endpoint"`
 	MaxConns        int                     `key:"maxConns" json:"max_conns"`
@@ -389,6 +398,20 @@ type FluentBitEventConfig struct {
 }
 
 type CheckpointingConfig struct {
-	Enabled bool          `key:"enabled" json:"enabled"`
-	Cedana  cedana.Config `key:"cedana" json:"cedana"`
+	Enabled bool                    `key:"enabled" json:"enabled"`
+	Storage CheckpointStorageConfig `key:"storage" json:"storage"`
+	Cedana  cedana.Config           `key:"cedana" json:"cedana"`
 }
+
+type CheckpointStorageConfig struct {
+	MountPath   string            `key:"mountPath" json:"mount_path"`
+	Mode        string            `key:"mode" json:"mode"`
+	ObjectStore ObjectStoreConfig `key:"objectStoreConfig" json:"object_store_config"`
+}
+
+type CheckpointStorageMode string
+
+var (
+	CheckpointStorageModeLocal CheckpointStorageMode = "local"
+	CheckpointStorageModeS3    CheckpointStorageMode = "s3"
+)

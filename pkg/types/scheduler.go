@@ -169,9 +169,10 @@ func (e *QuotaDoesNotExistError) Error() string {
 type CheckpointStatus string
 
 const (
-	CheckpointStatusAvailable CheckpointStatus = "available"
-	CheckpointStatusFailed    CheckpointStatus = "failed"
-	CheckpointStatusNotFound  CheckpointStatus = "not_found"
+	CheckpointStatusAvailable        CheckpointStatus = "available"
+	CheckpointStatusCheckpointFailed CheckpointStatus = "checkpoint_failed"
+	CheckpointStatusRestoreFailed    CheckpointStatus = "restore_failed"
+	CheckpointStatusNotFound         CheckpointStatus = "not_found"
 )
 
 type CheckpointState struct {
@@ -181,9 +182,9 @@ type CheckpointState struct {
 }
 
 type ErrCheckpointNotFound struct {
-	StubId string
+	CheckpointId string
 }
 
 func (e *ErrCheckpointNotFound) Error() string {
-	return fmt.Sprintf("checkpoint state not found: %s", e.StubId)
+	return fmt.Sprintf("checkpoint state not found: %s", e.CheckpointId)
 }

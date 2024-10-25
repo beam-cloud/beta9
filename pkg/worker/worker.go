@@ -61,7 +61,8 @@ type Worker struct {
 	stopContainerChan       chan stopContainerEvent
 	workerRepo              repo.WorkerRepository
 	eventRepo               repo.EventRepository
-	storage                 storage.Storage
+	userDataStorage         storage.Storage
+	checkpointStorage       storage.Storage
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
@@ -133,7 +134,7 @@ func NewWorker() (*Worker, error) {
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
-	storage, err := storage.NewStorage(config.Storage)
+	userDataStorage, err := storage.NewStorage(config.Storage)
 	if err != nil {
 		return nil, err
 	}
@@ -153,10 +154,30 @@ func NewWorker() (*Worker, error) {
 	}
 
 	var cedanaClient *CedanaClient = nil
+	var checkpointStorage storage.Storage = nil
 	if config.Worker.Checkpointing.Enabled {
 		cedanaClient, err = NewCedanaClient(context.Background(), config.Worker.Checkpointing.Cedana, gpuType != "")
 		if err != nil {
 			log.Printf("[WARNING] C/R unavailable, failed to create cedana client: %v\n", err)
+		}
+
+		if config.Worker.Checkpointing.Storage.Mode == string(types.CheckpointStorageModeS3) {
+			os.MkdirAll(config.Worker.Checkpointing.Storage.MountPath, os.ModePerm)
+		} else if config.Worker.Checkpointing.Storage.Mode == string(types.CheckpointStorageModeS3) {
+			checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
+				S3Bucket:    config.Worker.Checkpointing.Storage.ObjectStore.BucketName,
+				AccessKey:   config.Worker.Checkpointing.Storage.ObjectStore.AccessKey,
+				SecretKey:   config.Worker.Checkpointing.Storage.ObjectStore.SecretKey,
+				EndpointURL: config.Worker.Checkpointing.Storage.ObjectStore.EndpointURL,
+				Region:      config.Worker.Checkpointing.Storage.ObjectStore.Region,
+				ReadOnly:    false,
+			})
+
+			err := checkpointStorage.Mount(config.Worker.Checkpointing.Storage.MountPath)
+			if err != nil {
+				log.Printf("[WARNING] C/R unavailable, unable to mount checkpoint storage: %v\n", err)
+				cedanaClient = nil
+			}
 		}
 	}
 
@@ -218,7 +239,8 @@ func NewWorker() (*Worker, error) {
 		eventRepo:         eventRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
 		stopContainerChan: make(chan stopContainerEvent, 1000),
-		storage:           storage,
+		userDataStorage:   userDataStorage,
+		checkpointStorage: checkpointStorage,
 	}, nil
 }
 
@@ -470,9 +492,16 @@ func (s *Worker) shutdown() error {
 		}
 	}
 
-	err := s.storage.Unmount(s.config.Storage.FilesystemPath)
+	err := s.userDataStorage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
-		errs = errors.Join(errs, fmt.Errorf("failed to unmount storage: %v", err))
+		errs = errors.Join(errs, fmt.Errorf("failed to unmount data storage: %v", err))
+	}
+
+	if s.checkpointStorage != nil {
+		err = s.checkpointStorage.Unmount(s.config.Worker.Checkpointing.Storage.MountPath)
+		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to unmount checkpoint storage: %v", err))
+		}
 	}
 
 	err = s.imageClient.Cleanup()

@@ -417,8 +417,8 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 	return nil
 }
 
-func (cr *ContainerRedisRepository) UpdateCheckpointState(workspaceName, stubId string, checkpointState *types.CheckpointState) error {
-	stateKey := common.RedisKeys.SchedulerCheckpointState(workspaceName, stubId)
+func (cr *ContainerRedisRepository) UpdateCheckpointState(workspaceName, checkpointId string, checkpointState *types.CheckpointState) error {
+	stateKey := common.RedisKeys.SchedulerCheckpointState(workspaceName, checkpointId)
 	err := cr.rdb.HSet(
 		context.TODO(), stateKey,
 		"stub_id", checkpointState.StubId,
@@ -432,8 +432,8 @@ func (cr *ContainerRedisRepository) UpdateCheckpointState(workspaceName, stubId 
 	return nil
 }
 
-func (cr *ContainerRedisRepository) GetCheckpointState(workspaceName, stubId string) (*types.CheckpointState, error) {
-	stateKey := common.RedisKeys.SchedulerCheckpointState(workspaceName, stubId)
+func (cr *ContainerRedisRepository) GetCheckpointState(workspaceName, checkpointId string) (*types.CheckpointState, error) {
+	stateKey := common.RedisKeys.SchedulerCheckpointState(workspaceName, checkpointId)
 
 	res, err := cr.rdb.HGetAll(context.TODO(), stateKey).Result()
 	if err != nil && err != redis.Nil {
@@ -441,7 +441,7 @@ func (cr *ContainerRedisRepository) GetCheckpointState(workspaceName, stubId str
 	}
 
 	if len(res) == 0 {
-		return nil, &types.ErrCheckpointNotFound{StubId: stubId}
+		return nil, &types.ErrCheckpointNotFound{CheckpointId: checkpointId}
 	}
 
 	state := &types.CheckpointState{}

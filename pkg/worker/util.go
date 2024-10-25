@@ -46,6 +46,14 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, input, 0644)
 }
 
+func moveFile(src, dst string) error {
+	err := os.Rename(src, dst)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type FileLock struct {
 	file *os.File
 	path string
