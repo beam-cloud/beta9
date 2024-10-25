@@ -52,9 +52,7 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 	return true
 }
 
-// stopContainer stops a runc container.
-// It will remove the container state if the contaienr is forcefully killed.
-// Otherwise, the container state will be removed after the termination grace period in clearContainer().
+// stopContainer stops a runc container. When force is true, a SIGKILL signal is sent to the container.
 func (s *Worker) stopContainer(containerId string, kill bool) error {
 	log.Printf("<%s> - stopping container.\n", containerId)
 
@@ -472,9 +470,21 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
 
-	// Capture resource usage (cpu/mem/gpu)
+	pid := 0
 	pidChan := make(chan int, 1)
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pidChan)
+
+	go func() {
+		// Wait for runc to start the container
+		pid = <-pidChan
+
+		// Capture resource usage (cpu/mem/gpu)
+		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
+
+		// Check for OOM kills
+		go s.watchForOOMKills(ctx, containerId)
+
+		<-ctx.Done()
+	}()
 
 	// Invoke runc process (launch the container)
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
@@ -510,4 +520,20 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 // isBuildRequest checks if the sourceImage field is not-nil, which means the container request is for a build container
 func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 	return request.SourceImage != nil
+}
+
+func (s *Worker) watchForOOMKills(ctx context.Context, containerId string) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if c, ok := s.containerInstances.Get(containerId); ok && c.isOOMKilled() {
+				log.Printf("<%s> - [WARNING] A process in the container was killed due to out-of-memory conditions.\n", containerId)
+			}
+		}
+	}
 }

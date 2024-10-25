@@ -1,7 +1,9 @@
 package worker
 
 import (
+	"bufio"
 	"context"
+	"strings"
 
 	"errors"
 	"fmt"
@@ -76,6 +78,63 @@ type ContainerInstance struct {
 	Port         int
 	OutputWriter *common.OutputWriter
 	LogBuffer    *common.LogBuffer
+
+	memoryEvents MemoryEvents
+}
+
+func (i *ContainerInstance) isOOMKilled() bool {
+	podUID := os.Getenv("POD_UID")
+	if podUID == "" {
+		return false
+	}
+
+	memoryEventsPath := fmt.Sprintf("/sys/fs/cgroup/kubepods/besteffort/pod%s/%s/memory.events", podUID, i.Id)
+	file, err := os.Open(memoryEventsPath)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	updatedMemoryEvents := MemoryEvents{}
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		parts := strings.Fields(line)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := parts[0]
+		value, err := strconv.ParseUint(parts[1], 10, 64)
+		if err != nil {
+			continue
+		}
+
+		switch key {
+		case "oom_kill":
+			updatedMemoryEvents.oomKill = uint(value)
+		case "oom_group_kill":
+			updatedMemoryEvents.oomGroupKill = uint(value)
+		}
+	}
+
+	if updatedMemoryEvents.oomKill > i.memoryEvents.oomKill || updatedMemoryEvents.oomGroupKill > i.memoryEvents.oomGroupKill {
+		i.memoryEvents = updatedMemoryEvents
+		return true
+	}
+
+	return false
+}
+
+type MemoryEvents struct {
+	// This counter increments whenever a process in the cgroup
+	// is terminated by the OOM killer due to memory exhaustion.
+	oomKill uint
+	// This counter increments when the OOM killer terminates
+	// all processes in the cgroup as a group due to memory exhaustion.
+	oomGroupKill uint
 }
 
 type ContainerOptions struct {
