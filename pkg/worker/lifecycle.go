@@ -261,8 +261,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart = nil
 	}
 
-	// We need to modify the spec to support Cedana C/R
-	if s.checkpointingAvailable {
+	// We need to modify the spec to support Cedana C/R if checkpointing is enabled
+	if s.checkpointingAvailable && request.CheckpointEnabled {
 		s.cedanaClient.prepareContainerSpec(spec, request.Gpu != "")
 	}
 
