@@ -89,6 +89,7 @@ class RunnerAbstraction(BaseAbstraction):
         name: Optional[str] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
+        checkpoint_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -123,7 +124,7 @@ class RunnerAbstraction(BaseAbstraction):
             timeout=task_policy.timeout or timeout,
             ttl=task_policy.ttl,
         )
-
+        self.checkpoint_enabled = checkpoint_enabled
         if on_start is not None:
             self._map_callable_to_attr(attr="on_start", func=on_start)
 
@@ -403,6 +404,7 @@ class RunnerAbstraction(BaseAbstraction):
                     ttl=self.task_policy.ttl,
                 ),
                 concurrent_requests=self.concurrent_requests,
+                checkpoint_enabled=self.checkpoint_enabled,
             )
             if _is_stub_created_for_workspace():
                 stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(

@@ -133,6 +133,16 @@ worker:
   terminationGracePeriod: 30
   addWorkerTimeout: 10m
   blobCacheEnabled: false
+  checkpointing:
+    enabled: false
+    cedana:
+      client:
+        leaveRunning: true
+      sharedStorage:
+        dumpStorageDir: /data
+      connection:
+        cedanaUrl: url
+        cedanaAuthToken: token
 providers:
   ec2:
     accessKey:
@@ -189,13 +199,3 @@ monitoring:
   openmeter:
     serverUrl: ""
     apiKey: ""
-checkpointing:
-  enabled: true
-  cedana:
-    client:
-      leaveRunning: true
-    sharedStorage:
-      dumpStorageDir: /data
-    connection:
-      cedanaUrl: url
-      cedanaAuthToken: token

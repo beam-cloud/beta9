@@ -254,6 +254,7 @@ message GetOrCreateStubRequest {
   Autoscaler autoscaler = 22;
   TaskPolicy task_policy = 23;
   uint32 concurrent_requests = 24;
+  bool checkpoint_enabled = 25;
 }
 
 message GetOrCreateStubResponse {
@@ -478,27 +479,21 @@ message ListWorkersResponse {
   repeated Worker workers = 3;
 }
 
-message CordonWorkerRequest {
-  string worker_id = 1;
-}
+message CordonWorkerRequest { string worker_id = 1; }
 
 message CordonWorkerResponse {
   bool ok = 1;
   string err_msg = 2;
 }
 
-message UncordonWorkerRequest {
-  string worker_id = 1;
-}
+message UncordonWorkerRequest { string worker_id = 1; }
 
 message UncordonWorkerResponse {
   bool ok = 1;
   string err_msg = 2;
 }
 
-message DrainWorkerRequest {
-  string worker_id = 1;
-}
+message DrainWorkerRequest { string worker_id = 1; }
 
 message DrainWorkerResponse {
   bool ok = 1;

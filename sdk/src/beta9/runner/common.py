@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
+from multiprocessing import Value
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
 
 import requests
@@ -131,6 +133,9 @@ class FunctionContext:
             timeout=config.timeout,
             on_start_value=on_start_value,
         )
+
+
+workers_ready = Value("i", 0)
 
 
 class FunctionHandler:
@@ -335,3 +340,21 @@ class ThreadPoolExecutorOverride(ThreadPoolExecutor):
     def __exit__(self, *_, **__):
         # cancel_futures added in 3.9
         self.shutdown(cancel_futures=True)
+
+
+CHECKPOINT_SIGNAL_FILE = "/cedana/READY_FOR_CHECKPOINT"
+
+
+def wait_for_checkpoint():
+    with workers_ready.get_lock():
+        workers_ready.value += 1
+
+    if workers_ready.value == config.workers:
+        Path(CHECKPOINT_SIGNAL_FILE).touch(exist_ok=True)
+        return
+
+    while True:
+        with workers_ready.get_lock():
+            if workers_ready.value == config.workers:
+                break
+        time.sleep(1)

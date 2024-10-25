@@ -21,7 +21,6 @@ type AppConfig struct {
 	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
 	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
-	Checkpointing  CheckpointingConfig       `key:"checkpointing" json:"checkpointing"`
 }
 
 type DatabaseConfig struct {
@@ -195,6 +194,7 @@ type WorkerConfig struct {
 	AddWorkerTimeout           time.Duration               `key:"addWorkerTimeout" json:"add_worker_timeout"`
 	TerminationGracePeriod     int64                       `key:"terminationGracePeriod"`
 	BlobCacheEnabled           bool                        `key:"blobCacheEnabled" json:"blob_cache_enabled"`
+	Checkpointing              CheckpointingConfig         `key:"checkpointing" json:"checkpointing"`
 }
 
 type PoolMode string

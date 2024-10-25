@@ -279,6 +279,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     autoscaler: "Autoscaler" = betterproto.message_field(22)
     task_policy: "TaskPolicy" = betterproto.message_field(23)
     concurrent_requests: int = betterproto.uint32_field(24)
+    checkpoint_enabled: bool = betterproto.bool_field(25)
 
 
 @dataclass(eq=False, repr=False)

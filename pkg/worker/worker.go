@@ -42,6 +42,7 @@ type Worker struct {
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
 	cedanaClient            *CedanaClient
+	checkpointingAvailable  bool
 	fileCacheManager        *FileCacheManager
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
@@ -64,7 +65,6 @@ type Worker struct {
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
-	checkpointingAvailable  bool
 }
 
 type ContainerInstance struct {
@@ -153,8 +153,8 @@ func NewWorker() (*Worker, error) {
 	}
 
 	var cedanaClient *CedanaClient = nil
-	if config.Checkpointing.Enabled {
-		cedanaClient, err = NewCedanaClient(context.Background(), config.Checkpointing.Cedana, gpuType != "")
+	if config.Worker.Checkpointing.Enabled {
+		cedanaClient, err = NewCedanaClient(context.Background(), config.Worker.Checkpointing.Cedana, gpuType != "")
 		if err != nil {
 			log.Printf("[WARNING] C/R unavailable, failed to create cedana client: %v\n", err)
 		}

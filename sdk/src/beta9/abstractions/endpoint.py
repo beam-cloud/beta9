@@ -340,6 +340,11 @@ class RealtimeASGI(ASGI):
             various autoscaling strategies (Defaults to QueueDepthAutoscaler())
         callback_url (Optional[str]):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        checkpoint_enabled (bool):
+            (experimental) Whether to enable checkpointing for the task queue. Default is False.
+            If enabled, the task queue will use be checkpointed after the on_start function has completed.
+            On next invocation, the task queue will restore from the checkpoint and resume execution instead of
+            booting up from cold.
     Example:
         ```python
         from beta9 import realtime
@@ -375,6 +380,7 @@ class RealtimeASGI(ASGI):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
+        checkpoint_enabled: bool = False,
     ):
         super().__init__(
             cpu=cpu,
@@ -393,6 +399,7 @@ class RealtimeASGI(ASGI):
             autoscaler=autoscaler,
             callback_url=callback_url,
             concurrent_requests=concurrent_requests,
+            checkpoint_enabled=checkpoint_enabled,
         )
 
     def __call__(self, func):

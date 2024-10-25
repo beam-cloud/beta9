@@ -90,7 +90,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			EntryPoint:        i.EntryPoint,
 			Mounts:            mounts,
 			Stub:              *i.Stub,
-			CheckpointEnabled: true, // XXX: Hardcoded for testing
+			CheckpointEnabled: i.StubConfig.CheckpointEnabled,
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers

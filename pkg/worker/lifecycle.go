@@ -542,8 +542,8 @@ func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 	return request.SourceImage != nil
 }
 
-// Waits for the endpoint to be ready to checkpoint at the desired point in execution, ie.
-// after all endpoint workers have reached a checkpointable state
+// Waits for the container to be ready to checkpoint at the desired point in execution, ie.
+// after all processes within a container have reached a checkpointable state
 func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest) error {
 	timeout := defaultCheckpointDeadline
 	managing := false

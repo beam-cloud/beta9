@@ -182,11 +182,7 @@ type StubConfigV1 struct {
 	Volumes            []*pb.Volume `json:"volumes"`
 	Secrets            []Secret     `json:"secrets,omitempty"`
 	Autoscaler         *Autoscaler  `json:"autoscaler"`
-	Experimental       Experimental `json:"experimental"`
-}
-
-type Experimental struct {
-	CheckpointEnabled bool `json:"checkpoint_enabled"`
+	CheckpointEnabled  bool         `json:"checkpoint_enabled"`
 }
 
 type AutoscalerType string
