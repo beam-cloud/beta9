@@ -9,7 +9,6 @@ import (
 )
 
 const (
-	StorageModeLocal      string = "local"
 	StorageModeJuiceFS    string = "juicefs"
 	StorageModeCunoFS     string = "cunofs"
 	StorageModeMountPoint string = "mountpoint"
