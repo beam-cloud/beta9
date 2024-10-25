@@ -214,7 +214,7 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) error
 }
 
 // Restore a runc container
-func (c *CedanaClient) Restore(ctx context.Context, containerId string) error {
+func (c *CedanaClient) Restore(ctx context.Context, containerId string) (*api.ProcessState, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCheckpointDeadline)
 	defer cancel()
 
@@ -225,10 +225,11 @@ func (c *CedanaClient) Restore(ctx context.Context, containerId string) error {
 	}
 	res, err := c.service.JobRestore(ctx, args)
 	if err != nil {
-		return err
+		return nil, err
 	}
+
 	_ = res.RestoreStats
-	return nil
+	return res.State, nil
 }
 
 // Perform a detailed health check of cedana C/R capabilities
