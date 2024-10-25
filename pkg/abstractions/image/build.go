@@ -281,6 +281,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
 
+	// Install uv
+	opts.Commands = append([]string{fmt.Sprintf("%s -m pip install --root-user-action=ignore uv", opts.PythonVersion)}, opts.Commands...)
+
 	// Generate the commands to run in the container
 	for _, step := range opts.BuildSteps {
 		switch step.Type {
@@ -451,7 +454,7 @@ func (b *Builder) generatePipInstallCommand(pythonPackages []string, pythonVersi
 		}
 	}
 
-	command := fmt.Sprintf("%s -m pip install --root-user-action=ignore", pythonVersion)
+	command := "uv pip install --system --link-mode=copy"
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")
 	}
