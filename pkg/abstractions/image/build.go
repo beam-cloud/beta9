@@ -288,7 +288,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	// Generate the commands to run in the container
-	opts.Commands = generateCommands(opts.BuildSteps, opts.PythonVersion)
+	opts.Commands = parseBuildSteps(opts.BuildSteps, opts.PythonVersion)
 
 	for _, cmd := range opts.Commands {
 		if cmd == "" {
@@ -533,7 +533,7 @@ func parseFlagLinesAndPackages(pythonPackages []string) ([]string, []string) {
 
 // Generate the commands to run in the container. This function will coalesce pip and mamba commands
 // into a single command if they are adjacent to each other.
-func generateCommands(buildSteps []BuildStep, pythonVersion string) []string {
+func parseBuildSteps(buildSteps []BuildStep, pythonVersion string) []string {
 	commands := []string{}
 	var (
 		mambaStart int = -1

@@ -57,7 +57,6 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 
 	baseImageTag, ok := is.config.ImageService.Runner.Tags[in.PythonVersion]
 	if !ok {
-		// FIXME: update to account for micromamba
 		return nil, errors.Errorf("Python version not supportted: %s", in.PythonVersion)
 	}
 

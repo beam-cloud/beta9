@@ -247,7 +247,7 @@ EOT
 
 VOLUME ["/volumes", "/snapshot"]
 
-# Micromamba 3.10
+# Micromamba final
 # ========================
 ARG PYTHON_VERSION=3.10
 FROM micromamba-base as micromamba
