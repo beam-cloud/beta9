@@ -146,8 +146,8 @@ func (rk *redisKeys) SchedulerContainerExitCode(containerId string) string {
 	return fmt.Sprintf(schedulerContainerExitCode, containerId)
 }
 
-func (rk *redisKeys) SchedulerCheckpointState(workspaceName, stubId string) string {
-	return fmt.Sprintf(schedulerCheckpointState, workspaceName, stubId)
+func (rk *redisKeys) SchedulerCheckpointState(workspaceName, checkpointId string) string {
+	return fmt.Sprintf(schedulerCheckpointState, workspaceName, checkpointId)
 }
 
 // Gateway keys
