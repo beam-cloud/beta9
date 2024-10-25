@@ -494,11 +494,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	pidChan := make(chan int, 1)
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pidChan)
 
+	// Handle checkpoint creation & restore	if applicable
 	if request.CheckpointEnabled && s.checkpointingAvailable {
 		state, createCheckpoint := s.shouldCreateCheckpoint(request)
 
 		// If checkpointing is enabled, attempt to create a checkpoint
-		if s.checkpointingAvailable && createCheckpoint {
+		if createCheckpoint {
 			go s.createCheckpoint(ctx, request)
 		} else if state.Status == types.CheckpointStatusAvailable {
 			processState, err := s.cedanaClient.Restore(ctx, state.ContainerId)
@@ -506,6 +507,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				log.Printf("<%s> - failed to restore checkpoint: %v\n", request.ContainerId, err)
 			}
 
+			// TODO: if restore fails, update checkpoint state to restore_failed
+
+			// pidChan <- int(processState.PID)
 			log.Printf("<%s> - checkpoint found and restored, process state: %+v\n", request.ContainerId, processState)
 		}
 	}
@@ -592,6 +596,7 @@ waitForReady:
 			} else {
 				log.Printf("<%s> - endpoint not ready for checkpoint.\n", instance.Id)
 			}
+
 		}
 	}
 
@@ -599,28 +604,37 @@ waitForReady:
 	err := s.cedanaClient.Checkpoint(ctx, request.ContainerId)
 	if err != nil {
 		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
+
+		s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
+			Status:      types.CheckpointStatusCheckpointFailed,
+			ContainerId: request.ContainerId,
+			StubId:      request.StubId,
+		})
 		return err
 	}
 
 	// Move compressed checkpoint file to long-term storage directory
 	archiveName := fmt.Sprintf("%s.tar", request.ContainerId)
-	err = moveFile(filepath.Join(checkpointPathBase, archiveName), filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, request.Workspace.Name, archiveName))
+	remoteKey := fmt.Sprintf("%s/%s", request.Workspace.Name, archiveName)
+	err = copyFile(filepath.Join(checkpointPathBase, archiveName), filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, remoteKey))
 	if err != nil {
 		log.Printf("<%s> - failed to copy checkpoint to storage: %v\n", request.ContainerId, err)
 		return err
 	}
 
-	// TODO: Delete checkpoint files from local disk
+	// TODO: Delete checkpoint files from local disk in /tmp
 
 	log.Printf("<%s> - checkpoint created successfully\n", request.ContainerId)
 	return s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
 		Status:      types.CheckpointStatusAvailable,
 		ContainerId: request.ContainerId, // We store this as a reference to the container that we initially checkpointed
 		StubId:      request.StubId,
+		RemoteKey:   remoteKey,
 	})
 }
 
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container
+// NOTE: this currently only works for deployments since functions can run multiple containers
 func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.CheckpointState, bool) {
 	if !s.checkpointingAvailable || !request.CheckpointEnabled {
 		return types.CheckpointState{}, false

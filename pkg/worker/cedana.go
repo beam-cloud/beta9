@@ -24,9 +24,9 @@ const (
 	logLevel                   = "debug"
 	checkpointPathBase         = "/tmp/checkpoints"
 	defaultManageDeadline      = 10 * time.Second
-	defaultCheckpointDeadline  = 2 * time.Minute
+	defaultCheckpointDeadline  = 10 * time.Minute
 	defaultRestoreDeadline     = 5 * time.Minute
-	defaultHealthCheckDeadline = 30 * time.Second
+	defaultHealthCheckDeadline = 5 * time.Second
 )
 
 type CedanaClient struct {
@@ -123,6 +123,8 @@ func (c *CedanaClient) prepareContainerSpec(spec *specs.Spec, gpuEnabled bool) e
 
 	// Remove nvidia prestart hook as we don't need actual device mounts
 	spec.Hooks.Prestart = nil
+
+	// TODO: will this causes issues on multi-gpu nodes...?
 
 	// Add shared memory mount from worker instead, remove existing /dev/shm mount
 	for i, m := range spec.Mounts {

@@ -163,8 +163,7 @@ func NewWorker() (*Worker, error) {
 
 		os.MkdirAll(config.Worker.Checkpointing.Storage.MountPath, os.ModePerm)
 
-		log.Printf("Checkpoint storage mode: %s\n", config.Worker.Checkpointing.Storage.Mode)
-
+		// If storage mode is S3, mount the checkpoint storage as a FUSE filesystem
 		if config.Worker.Checkpointing.Storage.Mode == string(types.CheckpointStorageModeS3) {
 			checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
 				S3Bucket:    config.Worker.Checkpointing.Storage.ObjectStore.BucketName,

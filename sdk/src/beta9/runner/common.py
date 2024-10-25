@@ -353,6 +353,7 @@ def wait_for_checkpoint():
         Path(CHECKPOINT_SIGNAL_FILE).touch(exist_ok=True)
         return
 
+    # TODO: add timeout
     while True:
         with workers_ready.get_lock():
             if workers_ready.value == config.workers:

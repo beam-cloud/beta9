@@ -179,6 +179,7 @@ type CheckpointState struct {
 	StubId      string           `redis:"stub_id" json:"stub_id"`
 	ContainerId string           `redis:"container_id" json:"container_id"`
 	Status      CheckpointStatus `redis:"status" json:"status"`
+	RemoteKey   string           `redis:"remote_key" json:"remote_key"`
 }
 
 type ErrCheckpointNotFound struct {
