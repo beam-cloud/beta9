@@ -261,6 +261,11 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart = nil
 	}
 
+	// We need to modify the spec to support Cedana C/R if checkpointing is enabled
+	if s.checkpointingAvailable && request.CheckpointEnabled {
+		s.cedanaClient.prepareContainerSpec(spec, request.Gpu != "")
+	}
+
 	spec.Process.Env = append(spec.Process.Env, env...)
 	spec.Root.Readonly = false
 
@@ -310,6 +315,22 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		if err != nil {
 			log.Printf("<%s> - failed to setup volume caching: %v", request.ContainerId, err)
 		}
+	}
+
+	if s.checkpointingAvailable && request.CheckpointEnabled {
+		os.MkdirAll(checkpointDir(request.ContainerId), os.ModePerm)
+
+		checkpointMount := specs.Mount{
+			Type:        "bind",
+			Source:      checkpointDir(request.ContainerId),
+			Destination: "/cedana",
+			Options: []string{
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"},
+		}
+		spec.Mounts = append(spec.Mounts, checkpointMount)
 	}
 
 	// Configure resolv.conf
@@ -472,6 +493,19 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	pidChan := make(chan int, 1)
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pidChan)
 
+	// If checkpointing is enabled, attempt to create a checkpoint
+	state, createCheckpoint := s.shouldCreateCheckpoint(request)
+	if s.checkpointingAvailable && createCheckpoint {
+		go s.createCheckpoint(ctx, request)
+	} else if s.checkpointingAvailable && state.Status == types.CheckpointStatusAvailable {
+		processState, err := s.cedanaClient.Restore(ctx, state.ContainerId)
+		if err != nil {
+			log.Printf("<%s> - failed to restore checkpoint: %v\n", request.ContainerId, err)
+		}
+
+		log.Printf("<%s> - checkpoint found and restored, process state: %+v\n", request.ContainerId, processState)
+	}
+
 	// Invoke runc process (launch the container)
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
 		OutputWriter: containerInstance.OutputWriter,
@@ -506,4 +540,92 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 // isBuildRequest checks if the sourceImage field is not-nil, which means the container request is for a build container
 func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 	return request.SourceImage != nil
+}
+
+// Waits for the endpoint to be ready to checkpoint at the desired point in execution, ie.
+// after all endpoint workers have reached a checkpointable state
+func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest) error {
+	timeout := defaultCheckpointDeadline
+	managing := false
+	gpuEnabled := request.Gpu != ""
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+waitForReady:
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("checkpoint deadline exceeded or container exited")
+		case <-ticker.C:
+			instance, exists := s.containerInstances.Get(request.ContainerId)
+			if !exists {
+				log.Printf("<%s> - container instance not found yet\n", request.ContainerId)
+				continue
+			}
+
+			// Start managing the container with Cedana
+			if !managing {
+				err := s.cedanaClient.Manage(ctx, instance.Id, gpuEnabled)
+				if err == nil {
+					managing = true
+				} else {
+					log.Printf("<%s> - cedana manage failed, container may not be started yet: %+v\n", instance.Id, err)
+				}
+				continue
+			}
+
+			// Check if the endpoint is ready for checkpoint by verifying the existence of the file
+			readyFilePath := fmt.Sprintf("/tmp/%s/cedana/READY_FOR_CHECKPOINT", instance.Id)
+			if _, err := os.Stat(readyFilePath); err == nil {
+				log.Printf("<%s> - endpoint is ready for checkpoint.\n", instance.Id)
+				break waitForReady
+			} else {
+				log.Printf("<%s> - endpoint not ready for checkpoint.\n", instance.Id)
+			}
+		}
+	}
+
+	// Proceed to create the checkpoint
+	err := s.cedanaClient.Checkpoint(ctx, request.ContainerId)
+	if err != nil {
+		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
+		return err
+	}
+
+	log.Printf("<%s> - checkpoint created successfully\n", request.ContainerId)
+	return s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
+		Status:      types.CheckpointStatusAvailable,
+		ContainerId: request.ContainerId, // We store this as a reference to the container that we initially checkpointed
+		StubId:      request.StubId,
+	})
+}
+
+// shouldCreateCheckpoint checks if a checkpoint should be created for a given container
+func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (*types.CheckpointState, bool) {
+	if !s.checkpointingAvailable || !request.CheckpointEnabled {
+		return nil, false
+	}
+
+	state, err := s.containerRepo.GetCheckpointState(request.Workspace.Name, request.StubId)
+	if err != nil {
+		// Checkpoint is enabled, but no checkpoint state found, attempt a checkpoint
+		if _, ok := err.(*types.ErrCheckpointNotFound); ok {
+			return &types.CheckpointState{Status: types.CheckpointStatusNotFound}, true
+		}
+
+		return nil, false
+	}
+
+	if state.Status == types.CheckpointStatusAvailable {
+		return state, false
+	} else if state.Status == types.CheckpointStatusFailed {
+		return state, false
+	}
+
+	// TODO: figure out this case
+	return state, false
 }

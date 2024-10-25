@@ -5,6 +5,8 @@ import signal
 import traceback
 from contextlib import asynccontextmanager
 from http import HTTPStatus
+from multiprocessing import Value
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 
 from fastapi import Depends, FastAPI, Request
@@ -32,6 +34,8 @@ from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
 from .common import is_asgi3
+
+workers_ready = Value("i", 0)
 
 
 class EndpointFilter(logging.Filter):
@@ -88,6 +92,16 @@ class GunicornApplication(BaseApplication):
 
             # Override the default starlette app
             worker.app.callable = asgi_app
+
+            with workers_ready.get_lock():
+                workers_ready.value += 1
+                print(f"Worker PID {worker.pid} is ready")
+
+            print(f"workers_ready.value: {workers_ready.value}, cfg.workers: {cfg.workers}")
+            if workers_ready.value == cfg.workers:
+                print("creating READY_FOR_CHECKPOINT file")
+                Path("/cedana/READY_FOR_CHECKPOINT").touch(exist_ok=True)
+
         except EOFError:
             return
         except BaseException:

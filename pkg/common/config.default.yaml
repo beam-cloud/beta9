@@ -101,17 +101,19 @@ worker:
         sharedMemoryLimitPct: 100%
     # example gpu worker pool
     # nvidia:
-    #   gpuType: A40
+    #   mode: local
+    #   gpuType: any
     #   runtime: nvidia
     #   jobSpec:
     #     nodeSelector: {}
     #   poolSizing:
-    #     defaultWorkerCpu: 1000m
+    #     defaultWorkerCpu: 8000m
     #     defaultWorkerGpuType: ""
-    #     defaultWorkerMemory: 1Gi
+    #     defaultWorkerMemory: 12Gi
     #     minFreeCpu:
     #     minFreeGpu:
     #     minFreeMemory:
+    #     sharedMemoryLimitPct: 100%
   # global pool attributes
   useHostResolvConf: true
   hostNetwork: false
@@ -187,3 +189,13 @@ monitoring:
   openmeter:
     serverUrl: ""
     apiKey: ""
+checkpointing:
+  enabled: true
+  cedana:
+    client:
+      leaveRunning: true
+    sharedStorage:
+      dumpStorageDir: /data
+    connection:
+      cedanaUrl: url
+      cedanaAuthToken: token

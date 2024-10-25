@@ -416,3 +416,38 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 
 	return nil
 }
+
+func (cr *ContainerRedisRepository) UpdateCheckpointState(workspaceName, stubId string, checkpointState *types.CheckpointState) error {
+	stateKey := common.RedisKeys.SchedulerCheckpointState(workspaceName, stubId)
+	err := cr.rdb.HSet(
+		context.TODO(), stateKey,
+		"stub_id", checkpointState.StubId,
+		"container_id", checkpointState.ContainerId,
+		"status", string(checkpointState.Status),
+	).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set checkpoint state <%v>: %w", stateKey, err)
+	}
+
+	return nil
+}
+
+func (cr *ContainerRedisRepository) GetCheckpointState(workspaceName, stubId string) (*types.CheckpointState, error) {
+	stateKey := common.RedisKeys.SchedulerCheckpointState(workspaceName, stubId)
+
+	res, err := cr.rdb.HGetAll(context.TODO(), stateKey).Result()
+	if err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("failed to get container state: %w", err)
+	}
+
+	if len(res) == 0 {
+		return nil, &types.ErrCheckpointNotFound{StubId: stubId}
+	}
+
+	state := &types.CheckpointState{}
+	if err = common.ToStruct(res, state); err != nil {
+		return nil, fmt.Errorf("failed to deserialize checkpoint state <%v>: %v", stateKey, err)
+	}
+
+	return state, nil
+}

@@ -41,6 +41,7 @@ type Worker struct {
 	imageMountPath          string
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
+	cedanaClient            *CedanaClient
 	fileCacheManager        *FileCacheManager
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
@@ -63,6 +64,7 @@ type Worker struct {
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
+	checkpointingAvailable  bool
 }
 
 type ContainerInstance struct {
@@ -150,6 +152,14 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
+	var cedanaClient *CedanaClient = nil
+	if config.Checkpointing.Enabled {
+		cedanaClient, err = NewCedanaClient(context.Background(), config.Checkpointing.Cedana, gpuType != "")
+		if err != nil {
+			log.Printf("[WARNING] C/R unavailable, failed to create cedana client: %v\n", err)
+		}
+	}
+
 	runcServer, err := NewRunCServer(containerInstances, imageClient)
 	if err != nil {
 		return nil, err
@@ -191,6 +201,8 @@ func NewWorker() (*Worker, error) {
 		containerMountManager:   NewContainerMountManager(config),
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
+		cedanaClient:            cedanaClient,
+		checkpointingAvailable:  cedanaClient != nil,
 		podHostName:             podHostName,
 		eventBus:                nil,
 		workerId:                workerId,
