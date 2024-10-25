@@ -41,8 +41,15 @@ proxy:
 	docker push localhost:5001/beta9-proxy:$(tag)
 
 runner:
+	# You can specify the platform as either 'linux/arm64' or 'linux/amd64'.
+	# Example: make runner platform=linux/arm64
+	@if [ -z "$(platform)" ]; then \
+		platform_flag=""; \
+	else \
+		platform_flag="--platform=$(platform)"; \
+	fi; \
 	for target in py312 py311 py310 py39 py38; do \
-		docker build . --no-cache --target $$target --platform=linux/amd64 -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:$$target-$(runnerTag); \
+		docker build . --no-cache --target $$target $$platform_flag -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:$$target-$(runnerTag); \
 		docker push localhost:5001/beta9-runner:$$target-$(runnerTag); \
 	done
 
@@ -60,4 +67,4 @@ verify-protocol:
 	./bin/verify_proto.sh
 
 test-pkg:
-	go test -v ./pkg/... -bench=./pkg/..
+	go test -v ./pkg/... -bench=./pkg/...

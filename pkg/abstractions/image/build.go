@@ -266,7 +266,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	// Generate the pip install command and prepend it to the commands list
 	if len(opts.PythonPackages) > 0 {
-		pipInstallCmd := b.generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
+		pipInstallCmd := b.generatePipInstallCommand(opts.PythonPackages)
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
 	}
 
@@ -281,16 +281,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
 
-	// Install uv
-	opts.Commands = append([]string{fmt.Sprintf("%s -m pip install --root-user-action=ignore uv", opts.PythonVersion)}, opts.Commands...)
-
 	// Generate the commands to run in the container
 	for _, step := range opts.BuildSteps {
 		switch step.Type {
 		case shellCommandType:
 			opts.Commands = append(opts.Commands, step.Command)
 		case pipCommandType:
-			opts.Commands = append(opts.Commands, b.generatePipInstallCommand([]string{step.Command}, opts.PythonVersion))
+			opts.Commands = append(opts.Commands, b.generatePipInstallCommand([]string{step.Command}))
 		}
 	}
 
@@ -441,7 +438,7 @@ func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
 }
 
-func (b *Builder) generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
+func (b *Builder) generatePipInstallCommand(pythonPackages []string) string {
 	var flagLines []string
 	var packages []string
 	var flags = []string{"--", "-"}
