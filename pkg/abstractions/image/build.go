@@ -464,10 +464,10 @@ func (b *Builder) generatePipInstallCommand(pythonPackages []string, pythonVersi
 
 var imageNamePattern = regexp.MustCompile(
 	`^` + // Assert position at the start of the string
-		`(?:(?P<Registry>(?:(?:localhost|[\w][\w.-]*(?:\.[\w.-]+)+)(?::\d+)?)|(?:\d+\.\d+\.\d+\.\d+(?::\d+)?))/)?` + // Optional registry
+		`(?:(?P<Registry>(?:(?:localhost|[\w.-]+(?:\.[\w.-]+)+)(?::\d+)?)|[\w]+:\d+)\/)?` + // Optional registry, which can be localhost, a domain with optional port, or a simple registry with port
 		`(?P<Repo>(?:[\w][\w.-]*(?:/[\w][\w.-]*)*))?` + // Full repository path including namespace
-		`(?::(?P<Tag>[\w][\w.-]*))?` + // Optional tag
-		`(?:@(?P<Digest>sha256:[a-fA-F0-9]{64}))?` + // Optional digest with specific sha256 format
+		`(?::(?P<Tag>[\w][\w.-]{0,127}))?` + // Optional tag, which starts with a word character and can contain word characters, dots, and hyphens
+		`(?:@(?P<Digest>[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9A-Fa-f]{32,}))?` + // Optional digest, which is a hash algorithm followed by a colon and a hexadecimal hash
 		`$`, // Assert position at the end of the string
 )
 
