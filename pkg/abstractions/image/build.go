@@ -31,8 +31,6 @@ const (
 
 	pipCommandType   string = "pip"
 	shellCommandType string = "shell"
-
-	pythonFallback = "python"
 )
 
 type Builder struct {
@@ -266,19 +264,21 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go client.StreamLogs(ctx, containerId, outputChan)
 
-	log.Printf("container <%v> building with options: %s\n", containerId, opts)
-	startTime := time.Now()
-
-	// Attempt to install the requested python version and fallback to existing python version on failure
-	err = setupPythonVersion(opts, client, containerId, outputChan)
-	if err != nil {
-		return err
-	}
-
 	// Generate the pip install command and prepend it to the commands list
 	if len(opts.PythonPackages) > 0 {
 		pipInstallCmd := b.generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
+	}
+
+	log.Printf("container <%v> building with options: %s\n", containerId, opts)
+	startTime := time.Now()
+
+	// Detect if python3.x is installed in the container, if not install it
+	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
+	if resp, err := client.Exec(containerId, checkPythonVersionCmd); err != nil || !resp.Ok {
+		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
+		installCmd := b.getPythonInstallCommand(opts.PythonVersion)
+		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
 
 	// Generate the commands to run in the container
@@ -422,7 +422,7 @@ func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
 }
 
-func getPythonInstallCommand(pythonVersion string) string {
+func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common gcc curl git"
 	components := []string{
 		"python3-future",
@@ -464,15 +464,18 @@ func (b *Builder) generatePipInstallCommand(pythonPackages []string, pythonVersi
 
 var imageNamePattern = regexp.MustCompile(
 	`^` + // Assert position at the start of the string
-		`(?:(?P<Registry>(?:(?:localhost|[\w.-]+(?:\.[\w.-]+)+)(?::\d+)?)|[\w]+:\d+)\/)?` + // Optional registry, which can be localhost, a domain with optional port, or a simple registry with port
-		`(?P<Namespace>(?:[a-z0-9]+(?:(?:[._]|__|[-]*)[a-z0-9]+)*)\/)*` + // Optional namespace, which can contain multiple segments separated by slashes
-		`(?P<Repo>[a-z0-9][-a-z0-9._]+)` + // Required repository name, must start with alphanumeric and can contain alphanumerics, hyphens, dots, and underscores
-		`(?::(?P<Tag>[\w][\w.-]{0,127}))?` + // Optional tag, which starts with a word character and can contain word characters, dots, and hyphens
-		`(?:@(?P<Digest>[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9A-Fa-f]{32,}))?` + // Optional digest, which is a hash algorithm followed by a colon and a hexadecimal hash
+		`(?:(?P<Registry>(?:(?:localhost|[\w][\w.-]*(?:\.[\w.-]+)+)(?::\d+)?)|(?:\d+\.\d+\.\d+\.\d+(?::\d+)?))/)?` + // Optional registry
+		`(?P<Repo>(?:[\w][\w.-]*(?:/[\w][\w.-]*)*))?` + // Full repository path including namespace
+		`(?::(?P<Tag>[\w][\w.-]*))?` + // Optional tag
+		`(?:@(?P<Digest>sha256:[a-fA-F0-9]{64}))?` + // Optional digest with specific sha256 format
 		`$`, // Assert position at the end of the string
 )
 
 func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
+	if imageRef == "" {
+		return BaseImage{}, errors.New("invalid image URI format")
+	}
+
 	matches := imageNamePattern.FindStringSubmatch(imageRef)
 	if matches == nil {
 		return BaseImage{}, errors.New("invalid image URI format")
@@ -490,7 +493,11 @@ func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
 		registry = "docker.io"
 	}
 
-	repo := result["Namespace"] + result["Repo"]
+	repo := result["Repo"]
+	if repo == "" {
+		return BaseImage{}, errors.New("invalid image URI format")
+	}
+
 	tag, digest := result["Tag"], result["Digest"]
 	if tag == "" && digest == "" {
 		tag = "latest"
@@ -511,35 +518,4 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 		}
 	}
 	return false
-}
-
-func setupPythonVersion(opts *BuildOpts, client *common.RunCClient, containerId string, outputChan chan common.OutputMsg) error {
-	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	if resp, err := client.Exec(containerId, checkPythonVersionCmd); err == nil && resp.Ok {
-		return nil
-	}
-
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("request python version (%s) is not detected, attempting to install it for you...\n", opts.PythonVersion)}
-	resp, err := client.Exec(containerId, getPythonInstallCommand(opts.PythonVersion))
-	if err == nil && resp.Ok {
-		return nil
-	}
-
-	// Check if there is a default python version available
-	resp, err = client.Exec(containerId, fmt.Sprintf("%s --version", pythonFallback))
-	if err != nil || !resp.Ok {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to install python and no default python version was detected.\n"}
-		return errors.New("failed to install python and no default python version was detected")
-	}
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Failed to install %s, will continue with image's default version\n", opts.PythonVersion)}
-	opts.PythonVersion = pythonFallback
-
-	// When falling back to the default python version, we might have an old version of pip so we upgrade it
-	resp, err = client.Exec(containerId, fmt.Sprintf("%s -m pip install --upgrade pip", opts.PythonVersion))
-	if err != nil || !resp.Ok {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to upgrade pip for default python version.\n"}
-		return errors.New("failed to upgrade pip for default python version")
-	}
-
-	return nil
 }
