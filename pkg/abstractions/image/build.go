@@ -31,6 +31,8 @@ const (
 
 	pipCommandType   string = "pip"
 	shellCommandType string = "shell"
+
+	pythonFallback = "python"
 )
 
 type Builder struct {
@@ -264,21 +266,19 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go client.StreamLogs(ctx, containerId, outputChan)
 
+	log.Printf("container <%v> building with options: %s\n", containerId, opts)
+	startTime := time.Now()
+
+	// Attempt to install the requested python version and fallback to existing python version on failure
+	err = setupPythonVersion(opts, client, containerId, outputChan)
+	if err != nil {
+		return err
+	}
+
 	// Generate the pip install command and prepend it to the commands list
 	if len(opts.PythonPackages) > 0 {
 		pipInstallCmd := b.generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
-	}
-
-	log.Printf("container <%v> building with options: %s\n", containerId, opts)
-	startTime := time.Now()
-
-	// Detect if python3.x is installed in the container, if not install it
-	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	if resp, err := client.Exec(containerId, checkPythonVersionCmd); err != nil || !resp.Ok {
-		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
-		installCmd := b.getPythonInstallCommand(opts.PythonVersion)
-		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
 
 	// Generate the commands to run in the container
@@ -422,7 +422,7 @@ func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
 }
 
-func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
+func getPythonInstallCommand(pythonVersion string) string {
 	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common gcc curl git"
 	components := []string{
 		"python3-future",
@@ -511,4 +511,35 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+func setupPythonVersion(opts *BuildOpts, client *common.RunCClient, containerId string, outputChan chan common.OutputMsg) error {
+	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
+	if resp, err := client.Exec(containerId, checkPythonVersionCmd); err == nil && resp.Ok {
+		return nil
+	}
+
+	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("request python version (%s) is not detected, attempting to install it for you...\n", opts.PythonVersion)}
+	resp, err := client.Exec(containerId, getPythonInstallCommand(opts.PythonVersion))
+	if err == nil && resp.Ok {
+		return nil
+	}
+
+	// Check if there is a default python version available
+	resp, err = client.Exec(containerId, fmt.Sprintf("%s --version", pythonFallback))
+	if err != nil || !resp.Ok {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to install python and no default python version was detected.\n"}
+		return errors.New("failed to install python and no default python version was detected")
+	}
+	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Failed to install %s, will continue with image's default version\n", opts.PythonVersion)}
+	opts.PythonVersion = pythonFallback
+
+	// When falling back to the default python version, we might have an old version of pip so we upgrade it
+	resp, err = client.Exec(containerId, fmt.Sprintf("%s -m pip install --upgrade pip", opts.PythonVersion))
+	if err != nil || !resp.Ok {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to upgrade pip for default python version.\n"}
+		return errors.New("failed to upgrade pip for default python version")
+	}
+
+	return nil
 }
