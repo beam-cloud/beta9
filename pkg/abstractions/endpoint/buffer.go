@@ -558,6 +558,11 @@ func (rb *RequestBuffer) proxyWebsocketConnection(r *request, c container, diale
 }
 
 func forwardWSConn(src net.Conn, dst net.Conn) {
+	defer func() {
+		src.Close()
+		dst.Close()
+	}()
+
 	_, err := io.Copy(src, dst)
 	if err != nil {
 		return
