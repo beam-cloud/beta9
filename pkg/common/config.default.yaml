@@ -53,6 +53,9 @@ imageService:
   registryStore: local
   registryCredentialProvider: docker
   buildContainerPoolSelector: build
+  imageArchitectures:
+    - amd64
+    - arm64
   registries:
     docker:
       username: beamcloud

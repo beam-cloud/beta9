@@ -266,7 +266,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	// Generate the pip install command and prepend it to the commands list
 	if len(opts.PythonPackages) > 0 {
-		pipInstallCmd := b.generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
+		pipInstallCmd := generatePipInstallCommand(opts.PythonPackages)
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
 	}
 
@@ -277,19 +277,12 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
 	if resp, err := client.Exec(containerId, checkPythonVersionCmd); err != nil || !resp.Ok {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
-		installCmd := b.getPythonInstallCommand(opts.PythonVersion)
+		installCmd := getPythonInstallCommand(opts.PythonVersion)
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
 
 	// Generate the commands to run in the container
-	for _, step := range opts.BuildSteps {
-		switch step.Type {
-		case shellCommandType:
-			opts.Commands = append(opts.Commands, step.Command)
-		case pipCommandType:
-			opts.Commands = append(opts.Commands, b.generatePipInstallCommand([]string{step.Command}, opts.PythonVersion))
-		}
-	}
+	opts.Commands = parseBuildSteps(opts.BuildSteps, opts.PythonVersion)
 
 	for _, cmd := range opts.Commands {
 		if cmd == "" {
@@ -422,7 +415,7 @@ func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
 }
 
-func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
+func getPythonInstallCommand(pythonVersion string) string {
 	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common gcc curl git"
 	components := []string{
 		"python3-future",
@@ -438,7 +431,7 @@ func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
 	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
 }
 
-func (b *Builder) generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
+func generatePipInstallCommand(pythonPackages []string) string {
 	var flagLines []string
 	var packages []string
 	var flags = []string{"--", "-"}
@@ -451,7 +444,7 @@ func (b *Builder) generatePipInstallCommand(pythonPackages []string, pythonVersi
 		}
 	}
 
-	command := fmt.Sprintf("%s -m pip install --root-user-action=ignore", pythonVersion)
+	command := "uv pip install --system --link-mode=copy"
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")
 	}
@@ -511,4 +504,42 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+// Generate the commands to run in the container. This function will coalesce pip and mamba commands
+// into a single command if they are adjacent to each other.
+func parseBuildSteps(buildSteps []BuildStep, pythonVersion string) []string {
+	commands := []string{}
+	var (
+		pipStart int = -1
+		pipGroup []string
+	)
+
+	for _, step := range buildSteps {
+		if step.Type == shellCommandType {
+			commands = append(commands, step.Command)
+		}
+
+		if step.Type == pipCommandType {
+			if pipStart == -1 {
+				pipStart = len(commands)
+				commands = append(commands, "")
+			}
+			pipGroup = append(pipGroup, step.Command)
+		}
+
+		// Flush any pending pip or mamba groups
+		if pipStart != -1 && step.Type != pipCommandType {
+			commands[pipStart] = generatePipInstallCommand(pipGroup)
+			pipStart = -1
+			pipGroup = nil
+		}
+
+	}
+
+	if pipStart != -1 {
+		commands[pipStart] = generatePipInstallCommand(pipGroup)
+	}
+
+	return commands
 }

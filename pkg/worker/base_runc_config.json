@@ -172,6 +172,18 @@
 			]
 		},
 		{
+			"destination": "/usr/local/bin/uv",
+			"type": "bind",
+			"source": "/root/.cargo/bin/uv",
+			"options": [
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev",
+				"ro"
+			]
+		},
+		{
 			"destination": "/usr/lib/worker/x86_64-linux-gnu",
 			"type": "bind",
 			"source": "/usr/lib/x86_64-linux-gnu",
