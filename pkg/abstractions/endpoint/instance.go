@@ -64,7 +64,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 	env = append(secrets, env...)
 
 	gpuCount := 0
-	if len(i.StubConfig.Runtime.Gpus) > 0 {
+	if len(i.StubConfig.Runtime.Gpus) > 0 || i.StubConfig.Runtime.Gpu != "" {
 		gpuCount = 1
 	}
 
