@@ -31,8 +31,6 @@ const (
 
 	pipCommandType   string = "pip"
 	shellCommandType string = "shell"
-
-	pythonFallback = "python"
 )
 
 type Builder struct {
@@ -525,23 +523,33 @@ func setupPythonVersion(opts *BuildOpts, client *common.RunCClient, containerId 
 	if resp, err := client.Exec(containerId, checkPythonVersionCmd); err == nil && resp.Ok {
 		return nil
 	}
+
 	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("request python version (%s) is not detected, attempting to install it for you...\n", opts.PythonVersion)}
 	resp, err := client.Exec(containerId, getPythonInstallCommand(opts.PythonVersion))
 	if err == nil && resp.Ok {
 		return nil
 	}
+
 	// Check if there is a default python version available
-	resp, err = client.Exec(containerId, fmt.Sprintf("%s --version", pythonFallback))
+	resp, err = client.Exec(containerId, "python --version")
 	if err != nil || !resp.Ok {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to install python and no default python version was detected.\n"}
 		return errors.New("failed to install python and no default python version was detected")
 	}
+
 	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Failed to install %s, will continue with image's default version\n", opts.PythonVersion)}
-	opts.PythonVersion = pythonFallback
+
+	// Hacky way to avoid needing to update the python version in the stub
+	resp, err = client.Exec(containerId, fmt.Sprintf("ln -s $(which python) /usr/local/bin/%s", opts.PythonVersion))
+	if err != nil || !resp.Ok {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to fall back to default python version.\n"}
+		return errors.New("failed to create symlink for python3")
+	}
+
 	// When falling back to the default python version, we might have an old version of pip so we upgrade it
 	resp, err = client.Exec(containerId, fmt.Sprintf("%s -m pip install --upgrade pip", opts.PythonVersion))
 	if err != nil || !resp.Ok {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to upgrade pip for default python version.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to fall back to default python version.\n"}
 		return errors.New("failed to upgrade pip for default python version")
 	}
 	return nil

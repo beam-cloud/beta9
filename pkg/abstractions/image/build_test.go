@@ -151,8 +151,7 @@ func TestGeneratePipInstallCommand(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		b := &Builder{}
-		cmd := b.generatePipInstallCommand(tc.opts.PythonPackages, tc.opts.PythonVersion)
+		cmd := generatePipInstallCommand(tc.opts.PythonPackages, tc.opts.PythonVersion)
 		assert.Equal(t, tc.want, cmd)
 	}
 }

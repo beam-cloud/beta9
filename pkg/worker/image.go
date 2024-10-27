@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -237,7 +238,7 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 		return err
 	}
 
-	if imageInfo["Architecture"] != "amd64" {
+	if !slices.Contains(c.config.ImageService.ImageArchitectures, imageInfo["Architecture"].(string)) {
 		return &types.ExitCodeError{
 			ExitCode: types.WorkerContainerExitCodeIncorrectImageArch,
 		}
