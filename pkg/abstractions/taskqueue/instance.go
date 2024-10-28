@@ -60,14 +60,14 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 
 	env = append(secrets, env...)
 
-	gpuCount := 0
-	if len(i.StubConfig.Runtime.Gpus) > 0 || i.StubConfig.Runtime.Gpu != "" {
-		gpuCount = 1
-	}
-
 	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)
 	if i.StubConfig.Runtime.Gpu != "" {
 		gpuRequest = append(gpuRequest, i.StubConfig.Runtime.Gpu.String())
+	}
+
+	gpuCount := 0
+	if len(gpuRequest) > 0 {
+		gpuCount = 1
 	}
 
 	for c := 0; c < containersToRun; c++ {

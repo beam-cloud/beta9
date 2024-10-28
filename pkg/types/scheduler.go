@@ -90,6 +90,10 @@ type ContainerRequest struct {
 	PoolSelector     string          `json:"pool_selector"`
 }
 
+func (c *ContainerRequest) RequiresGPU() bool {
+	return len(c.GpuRequest) > 0
+}
+
 const ContainerExitCodeTtlS int = 300
 
 const (
