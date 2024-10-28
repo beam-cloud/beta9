@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -153,14 +154,14 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 
 	env = append(secrets, env...)
 
-	gpuCount := 0
-	if len(stubConfig.Runtime.Gpus) > 0 || stubConfig.Runtime.Gpu != "" {
-		gpuCount = 1
-	}
-
 	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
 	if stubConfig.Runtime.Gpu != "" {
 		gpuRequest = append(gpuRequest, stubConfig.Runtime.Gpu.String())
+	}
+
+	gpuCount := 0
+	if len(gpuRequest) > 0 {
+		gpuCount = 1
 	}
 
 	err = cs.scheduler.Run(&types.ContainerRequest{
@@ -168,6 +169,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		Env:         env,
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
+		Gpu:         strings.Join(gpuRequest, ","),
 		GpuRequest:  gpuRequest,
 		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,

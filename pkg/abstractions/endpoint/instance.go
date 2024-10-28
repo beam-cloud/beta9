@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -63,14 +64,14 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 
 	env = append(secrets, env...)
 
-	gpuCount := 0
-	if len(i.StubConfig.Runtime.Gpus) > 0 || i.StubConfig.Runtime.Gpu != "" {
-		gpuCount = 1
-	}
-
 	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)
 	if i.StubConfig.Runtime.Gpu != "" {
 		gpuRequest = append(gpuRequest, i.StubConfig.Runtime.Gpu.String())
+	}
+
+	gpuCount := 0
+	if len(gpuRequest) > 0 {
+		gpuCount = 1
 	}
 
 	for c := 0; c < containersToRun; c++ {
@@ -81,6 +82,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			Env:         env,
 			Cpu:         i.StubConfig.Runtime.Cpu,
 			Memory:      i.StubConfig.Runtime.Memory,
+			Gpu:         strings.Join(gpuRequest, ","),
 			GpuRequest:  gpuRequest,
 			GpuCount:    uint32(gpuCount),
 			ImageId:     i.StubConfig.Runtime.ImageId,

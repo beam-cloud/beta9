@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -130,11 +131,6 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		return err
 	}
 
-	gpuCount := 0
-	if len(stubConfig.Runtime.Gpus) > 0 || stubConfig.Runtime.Gpu != "" {
-		gpuCount = 1
-	}
-
 	env := []string{
 		fmt.Sprintf("TASK_ID=%s", t.msg.TaskId),
 		fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
@@ -150,11 +146,17 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		gpuRequest = append(gpuRequest, stubConfig.Runtime.Gpu.String())
 	}
 
+	gpuCount := 0
+	if len(gpuRequest) > 0 {
+		gpuCount = 1
+	}
+
 	err = t.fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: t.containerId,
 		Env:         env,
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
+		Gpu:         strings.Join(gpuRequest, ","),
 		GpuRequest:  gpuRequest,
 		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,

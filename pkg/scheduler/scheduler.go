@@ -280,14 +280,13 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 }
 
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
+	requiresGPU := request.RequiresGPU()
 
 	for index, gpu := range request.GpuRequest {
 		gpuRequestsMap[gpu] = index
 	}
-
-	requiresGPU := len(gpuRequestsMap) > 0
-	filteredWorkers := []*types.Worker{}
 
 	for _, worker := range workers {
 		isGpuWorker := worker.Gpu != ""
@@ -375,7 +374,7 @@ const maxScheduleRetryCount = 3
 const maxScheduleRetryDuration = 10 * time.Minute
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
-	if len(request.GpuRequest) > 0 && request.GpuCount <= 0 {
+	if request.RequiresGPU() {
 		request.GpuCount = 1
 	}
 
