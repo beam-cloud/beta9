@@ -374,7 +374,7 @@ const maxScheduleRetryCount = 3
 const maxScheduleRetryDuration = 10 * time.Minute
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
-	if request.RequiresGPU() {
+	if request.RequiresGPU() && request.GpuCount <= 0 {
 		request.GpuCount = 1
 	}
 
