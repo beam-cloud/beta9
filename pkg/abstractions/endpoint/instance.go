@@ -125,7 +125,7 @@ func (i *endpointInstance) stopContainers(containersToStop int) error {
 		idx := rnd.Intn(len(containerIds))
 		containerId := containerIds[idx]
 
-		err := i.Scheduler.Stop(containerId)
+		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
 		if err != nil {
 			log.Printf("<%s> unable to stop container: %v", i.Name, err)
 			return err

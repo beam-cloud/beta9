@@ -38,11 +38,15 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 	s.containerLock.Lock()
 	defer s.containerLock.Unlock()
 
-	containerId := event.Args["container_id"].(string)
+	stopArgs, err := types.ToStopContainerArgs(event.Args)
+	if err != nil {
+		log.Printf("failed to parse stop container args: %v\n", err)
+		return false
+	}
 
-	if _, exists := s.containerInstances.Get(containerId); exists {
-		log.Printf("<%s> - received stop container event.\n", containerId)
-		s.stopContainerChan <- stopContainerEvent{ContainerId: containerId, Kill: false}
+	if _, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
+		log.Printf("<%s> - received stop container event.\n", stopArgs.ContainerId)
+		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
 	return true
