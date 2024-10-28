@@ -14,13 +14,14 @@ app.get_fastapi_app()
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Mapping, Optional, SimpleNamespace, Tuple, Union
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
-from ....abstractions.endpoint import ASGI
-from ....abstractions.image import Image
-from ....abstractions.mixins import DeployableMixin
-from ....abstractions.volume import Volume
-from ....type import GpuType, GpuTypeAlias
+from ...abstractions.endpoint import ASGI, _CallableWrapper
+from ...abstractions.image import Image
+from ...config import ConfigContext
+from ...type import GpuType, GpuTypeAlias
+from ..volume import Volume
 
 
 # vllm/engine/arg_utils.py:EngineArgs
@@ -128,7 +129,7 @@ class EngineConfig:
     disable_log_requests: bool = False
 
 
-class VLLM(ASGI, DeployableMixin):
+class VLLM(ASGI):
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
@@ -139,7 +140,6 @@ class VLLM(ASGI, DeployableMixin):
         concurrent_requests: int = 1,
         keep_warm_seconds: float = 10.0,
         max_pending_tasks: int = 100,
-        retries: int = 3,
         timeout: int = 3600,
         authorized: bool = True,
         name: Optional[str] = None,
@@ -160,11 +160,11 @@ class VLLM(ASGI, DeployableMixin):
             cpu=cpu,
             memory=memory,
             gpu=gpu,
+            image=image,
             workers=workers,
             concurrent_requests=concurrent_requests,
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
-            retries=retries,
             timeout=timeout,
             authorized=authorized,
             name=name,
@@ -184,28 +184,41 @@ class VLLM(ASGI, DeployableMixin):
             disable_log_stats=disable_log_stats,
         )
 
-    def asgi_app(self):
+    def deploy(
+        self,
+        name: Optional[str] = None,
+        context: Optional[ConfigContext] = None,
+        invocation_details_func: Optional[Callable[..., None]] = None,
+        **invocation_details_options: Any,
+    ) -> bool:
         # Create the vllm app using the configuration
-        import asyncio
+        def _create_app():
+            import asyncio
 
-        from fastapi import FastAPI
+            from fastapi import FastAPI
+            from vllm.engine.arg_utils import AsyncEngineArgs
+            from vllm.entrypoints.openai.api_server import (
+                build_async_engine_client_from_engine_args,
+                init_app_state,
+            )
 
-        from vllm.engine.arg_utils import AsyncEngineArgs
-        from vllm.entrypoints.openai.api_server import (
-            build_async_engine_client_from_engine_args,
-            init_app_state,
+            engine_args = AsyncEngineArgs.from_cli_args(self.engine_config)
+            engine_client = build_async_engine_client_from_engine_args(engine_args)
+            app = FastAPI()
+            model_config = asyncio.run(engine_args.create_model_config())
+
+            init_app_state(
+                engine_client,
+                model_config,
+                app.state,
+                self.vllm_args,
+            )
+
+            return self.app
+
+        return _CallableWrapper(_create_app, self).deploy(
+            name=name,
+            context=context,
+            invocation_details_func=invocation_details_func,
+            **invocation_details_options,
         )
-
-        engine_args = AsyncEngineArgs.from_cli_args(self.engine_config)
-        engine_client = build_async_engine_client_from_engine_args(engine_args)
-        app = FastAPI()
-        model_config = asyncio.run(engine_args.create_model_config())
-
-        init_app_state(
-            engine_client,
-            model_config,
-            app.state,
-            self.vllm_args,
-        )
-
-        return self.app
