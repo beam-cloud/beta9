@@ -154,7 +154,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 	env = append(secrets, env...)
 
 	gpuCount := 0
-	if len(stubConfig.Runtime.Gpus) > 0 {
+	if len(stubConfig.Runtime.Gpus) > 0 || stubConfig.Runtime.Gpu != "" {
 		gpuCount = 1
 	}
 
