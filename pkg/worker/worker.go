@@ -1,9 +1,7 @@
 package worker
 
 import (
-	"bufio"
 	"context"
-	"strings"
 
 	"errors"
 	"fmt"
@@ -17,7 +15,6 @@ import (
 
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/go-runc"
-	"github.com/opencontainers/runtime-spec/specs-go"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -65,82 +62,6 @@ type Worker struct {
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
-}
-
-type ContainerInstance struct {
-	Id           string
-	StubId       string
-	BundlePath   string
-	Overlay      *common.ContainerOverlay
-	Spec         *specs.Spec
-	Err          error
-	ExitCode     int
-	Port         int
-	OutputWriter *common.OutputWriter
-	LogBuffer    *common.LogBuffer
-
-	memoryEvents MemoryEvents
-}
-
-func (i *ContainerInstance) isOOMKilled() bool {
-	podUID := os.Getenv("POD_UID")
-	if podUID == "" {
-		return false
-	}
-
-	memoryEventsPath := fmt.Sprintf("/sys/fs/cgroup/kubepods/besteffort/pod%s/%s/memory.events", podUID, i.Id)
-	file, err := os.Open(memoryEventsPath)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
-
-	updatedMemoryEvents := MemoryEvents{}
-	scanner := bufio.NewScanner(file)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		parts := strings.Fields(line)
-		if len(parts) != 2 {
-			continue
-		}
-
-		key := parts[0]
-		value, err := strconv.ParseUint(parts[1], 10, 64)
-		if err != nil {
-			continue
-		}
-
-		switch key {
-		case "oom_kill":
-			updatedMemoryEvents.oomKill = uint(value)
-		case "oom_group_kill":
-			updatedMemoryEvents.oomGroupKill = uint(value)
-		}
-	}
-
-	if updatedMemoryEvents.oomKill > i.memoryEvents.oomKill || updatedMemoryEvents.oomGroupKill > i.memoryEvents.oomGroupKill {
-		i.memoryEvents = updatedMemoryEvents
-		return true
-	}
-
-	return false
-}
-
-type MemoryEvents struct {
-	// This counter increments whenever a process in the cgroup
-	// is terminated by the OOM killer due to memory exhaustion.
-	oomKill uint
-	// This counter increments when the OOM killer terminates
-	// all processes in the cgroup as a group due to memory exhaustion.
-	oomGroupKill uint
-}
-
-type ContainerOptions struct {
-	BundlePath  string
-	BindPort    int
-	InitialSpec *specs.Spec
 }
 
 type stopContainerEvent struct {
@@ -370,8 +291,6 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				return nil
 			}
 
-			log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
-
 			// Stop container if it is "orphaned" - meaning it's running but has no associated state
 			state, err := s.containerRepo.GetContainerState(request.ContainerId)
 			if err != nil {
@@ -383,6 +302,8 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 
 				continue
 			}
+
+			log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
 
 			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
 			if err != nil {
@@ -421,10 +342,7 @@ func (s *Worker) processStopContainerEvents() {
 			if err != nil {
 				s.stopContainerChan <- event
 				time.Sleep(time.Second)
-				continue
 			}
-
-			s.containerInstances.Delete(event.ContainerId)
 		}
 	}
 }
