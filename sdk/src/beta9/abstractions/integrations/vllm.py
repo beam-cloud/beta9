@@ -13,15 +13,24 @@ Then on deploy, we set this up as an ASGI app by having some getter that returns
 app.get_fastapi_app()
 """
 
+import os
+import threading
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
 from ... import terminal
-from ...abstractions.base.runner import ASGI_DEPLOYMENT_STUB_TYPE
+from ...abstractions.base.runner import ASGI_DEPLOYMENT_STUB_TYPE, ASGI_SERVE_STUB_TYPE
 from ...abstractions.endpoint import ASGI
 from ...abstractions.image import Image
 from ...abstractions.volume import Volume
+from ...channel import with_grpc_error_handling
+from ...clients.endpoint import (
+    EndpointServeKeepAliveRequest,
+    StartEndpointServeRequest,
+    StartEndpointServeResponse,
+    StopEndpointServeRequest,
+)
 from ...clients.gateway import DeployStubRequest, DeployStubResponse
 from ...config import ConfigContext
 from ...type import GpuType, GpuTypeAlias
@@ -270,3 +279,56 @@ class VLLM(ASGI):
                 self.print_invocation_snippet(**invocation_details_options)
 
         return deploy_response.ok
+
+    @with_grpc_error_handling
+    def serve(self, timeout: int = 0, url_type: str = ""):
+        if not self.prepare_runtime(stub_type=ASGI_SERVE_STUB_TYPE, force_create_stub=True):
+            return False
+
+        try:
+            with terminal.progress("Serving endpoint..."):
+                self.print_invocation_snippet(url_type=url_type)
+
+                return self._serve(dir=os.getcwd(), object_id=self.object_id, timeout=timeout)
+
+        except KeyboardInterrupt:
+            self._handle_serve_interrupt()
+
+    def _handle_serve_interrupt(self) -> None:
+        terminal.header("Stopping serve container")
+        self.endpoint_stub.stop_endpoint_serve(StopEndpointServeRequest(stub_id=self.stub_id))
+        terminal.print("Goodbye 👋")
+        os._exit(0)  # kills all threads immediately
+
+    def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
+        def notify(*_, **__):
+            self.endpoint_stub.endpoint_serve_keep_alive(
+                EndpointServeKeepAliveRequest(
+                    stub_id=self.stub_id,
+                    timeout=timeout,
+                )
+            )
+
+        threading.Thread(
+            target=self.sync_dir_to_workspace,
+            kwargs={"dir": dir, "object_id": object_id, "on_event": notify},
+            daemon=True,
+        ).start()
+
+        r: Optional[StartEndpointServeResponse] = None
+        for r in self.endpoint_stub.start_endpoint_serve(
+            StartEndpointServeRequest(
+                stub_id=self.stub_id,
+                timeout=timeout,
+            )
+        ):
+            if r.output != "":
+                terminal.detail(r.output, end="")
+
+            if r.done or r.exit_code != 0:
+                break
+
+        if r is None or not r.done or r.exit_code != 0:
+            terminal.error("Serve container failed ❌")
+
+        terminal.warn("VLLM serve timed out. Container has been stopped.")
