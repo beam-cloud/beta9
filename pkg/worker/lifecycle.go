@@ -232,10 +232,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		return nil, err
 	}
 
-	// Standardize cgroup path. Since it starts with a slash,
-	// it will be appended to the cgroup root path /sys/fs/cgroup.
-	spec.Linux.CgroupsPath = fmt.Sprintf("/%s/%s", s.workerId, request.ContainerId)
-
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
 
