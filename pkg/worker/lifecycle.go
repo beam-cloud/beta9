@@ -625,7 +625,7 @@ func (s *Worker) watchForOOMKills(ctx context.Context, containerId string, outpu
 		case <-ticker.C:
 			if c, ok := s.containerInstances.Get(containerId); ok && c.isOOMKilled() {
 				output <- common.OutputMsg{
-					Msg: fmt.Sprintf("<%s> - [WARNING] A process in the container was killed due to out-of-memory conditions.\n", containerId),
+					Msg: fmt.Sprintf("[WARNING] A process in the container was killed due to out-of-memory conditions.\n"),
 				}
 			}
 		}
