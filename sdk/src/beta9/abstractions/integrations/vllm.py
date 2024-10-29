@@ -138,7 +138,9 @@ class VLLM(ASGI):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
-        image: Image = Image(python_version="python3.11").add_python_packages(["fastapi", "vllm"]),
+        image: Image = Image(python_version="python3.11")
+        .add_commands(["export VLLM_TARGET_DEVICE=empty"])
+        .add_python_packages(["fastapi", "vllm"]),
         workers: int = 1,
         concurrent_requests: int = 1,
         keep_warm_seconds: float = 10.0,
@@ -201,16 +203,20 @@ class VLLM(ASGI):
 
         from fastapi import FastAPI
         from vllm.engine.arg_utils import AsyncEngineArgs
+        from vllm.engine.async_llm_engine import AsyncLLMEngine
         from vllm.entrypoints.openai.api_server import (
-            build_async_engine_client_from_engine_args,
             init_app_state,
         )
+        from vllm.usage.usage_lib import UsageContext
 
         engine_args = AsyncEngineArgs.from_cli_args(self.engine_config)
-        engine_client = build_async_engine_client_from_engine_args(engine_args)
-        app = FastAPI()
-        model_config = asyncio.run(engine_args.create_model_config())
+        engine_client = AsyncLLMEngine.from_engine_args(
+            engine_args, usage_context=UsageContext.OPENAI_API_SERVER
+        )
 
+        app = FastAPI()
+
+        model_config = asyncio.run(engine_client.get_model_config())
         init_app_state(
             engine_client,
             model_config,
