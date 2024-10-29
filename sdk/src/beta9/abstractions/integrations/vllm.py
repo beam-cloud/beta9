@@ -157,8 +157,11 @@ class VLLM(ASGI):
         chat_template: Optional[str] = None,
         return_tokens_as_token_ids: bool = False,
         enable_auto_tools: bool = False,
+        enable_auto_tool_choice: bool = False,
         tool_call_parser: Optional[str] = None,
         disable_log_stats: bool = False,
+        disable_log_requests: bool = False,
+        max_log_len: Optional[int] = None,
     ):
         # ASGI initialization
         super().__init__(
@@ -179,11 +182,15 @@ class VLLM(ASGI):
         self.engine_config = engine_config
         self.vllm_args = SimpleNamespace(
             model=engine_config.model,
+            served_model_name=engine_config.served_model_name,
+            disable_log_requests=disable_log_requests,
+            max_log_len=max_log_len,
             response_role=response_role,
             lora_modules=lora_modules,
             prompt_adapters=prompt_adapters,
             chat_template=chat_template,
             return_tokens_as_token_ids=return_tokens_as_token_ids,
+            enable_auto_tool_choice=enable_auto_tool_choice,
             enable_auto_tools=enable_auto_tools,
             tool_call_parser=tool_call_parser,
             disable_log_stats=disable_log_stats,
@@ -206,6 +213,7 @@ class VLLM(ASGI):
         from vllm.engine.async_llm_engine import AsyncLLMEngine
         from vllm.entrypoints.openai.api_server import (
             init_app_state,
+            router,
         )
         from vllm.usage.usage_lib import UsageContext
 
@@ -213,8 +221,8 @@ class VLLM(ASGI):
         engine_client = AsyncLLMEngine.from_engine_args(
             engine_args, usage_context=UsageContext.OPENAI_API_SERVER
         )
-
         app = FastAPI()
+        app.include_router(router)
 
         model_config = asyncio.run(engine_client.get_model_config())
         init_app_state(
