@@ -257,14 +257,14 @@ func (s *Scheduler) StartProcessingRequests() {
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	go s.schedulerMetrics.CounterIncContainerScheduled(request)
-	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
-
 	if err := s.containerRepo.UpdateAssignedContainerGPU(request.ContainerId, worker.Gpu); err != nil {
 		return err
 	}
 
 	request.Gpu = worker.Gpu
+
+	go s.schedulerMetrics.CounterIncContainerScheduled(request)
+	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 
@@ -280,14 +280,13 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 }
 
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
+	requiresGPU := request.RequiresGPU()
 
 	for index, gpu := range request.GpuRequest {
 		gpuRequestsMap[gpu] = index
 	}
-
-	requiresGPU := len(gpuRequestsMap) > 0
-	filteredWorkers := []*types.Worker{}
 
 	for _, worker := range workers {
 		isGpuWorker := worker.Gpu != ""
@@ -375,7 +374,7 @@ const maxScheduleRetryCount = 3
 const maxScheduleRetryDuration = 10 * time.Minute
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
-	if request.Gpu != "" && request.GpuCount <= 0 {
+	if request.RequiresGPU() && request.GpuCount <= 0 {
 		request.GpuCount = 1
 	}
 
