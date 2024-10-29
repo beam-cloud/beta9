@@ -17,11 +17,14 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
-from ...abstractions.endpoint import ASGI, _CallableWrapper
+from ... import terminal
+from ...abstractions.base.runner import ASGI_DEPLOYMENT_STUB_TYPE
+from ...abstractions.endpoint import ASGI
 from ...abstractions.image import Image
+from ...abstractions.volume import Volume
+from ...clients.gateway import DeployStubRequest, DeployStubResponse
 from ...config import ConfigContext
 from ...type import GpuType, GpuTypeAlias
-from ..volume import Volume
 
 
 # vllm/engine/arg_utils.py:EngineArgs
@@ -135,7 +138,7 @@ class VLLM(ASGI):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
-        image: Image = Image().add_python_packages(["vllm", "fastapi"]),
+        image: Image = Image(python_version="python3.11").add_python_packages(["fastapi", "vllm"]),
         workers: int = 1,
         concurrent_requests: int = 1,
         keep_warm_seconds: float = 10.0,
@@ -184,6 +187,39 @@ class VLLM(ASGI):
             disable_log_stats=disable_log_stats,
         )
 
+    def __name__(self) -> str:
+        return self.name or "vllm"
+
+    def set_handler(self, handler: str):
+        self.handler = handler
+
+    def func(self, *args: Any, **kwargs: Any):
+        pass
+
+    def __call__(self, *args: Any, **kwargs: Any):
+        import asyncio
+
+        from fastapi import FastAPI
+        from vllm.engine.arg_utils import AsyncEngineArgs
+        from vllm.entrypoints.openai.api_server import (
+            build_async_engine_client_from_engine_args,
+            init_app_state,
+        )
+
+        engine_args = AsyncEngineArgs.from_cli_args(self.engine_config)
+        engine_client = build_async_engine_client_from_engine_args(engine_args)
+        app = FastAPI()
+        model_config = asyncio.run(engine_args.create_model_config())
+
+        init_app_state(
+            engine_client,
+            model_config,
+            app.state,
+            self.vllm_args,
+        )
+
+        return app
+
     def deploy(
         self,
         name: Optional[str] = None,
@@ -191,34 +227,32 @@ class VLLM(ASGI):
         invocation_details_func: Optional[Callable[..., None]] = None,
         **invocation_details_options: Any,
     ) -> bool:
-        # Create the vllm app using the configuration
-        def _create_app():
-            import asyncio
-
-            from fastapi import FastAPI
-            from vllm.engine.arg_utils import AsyncEngineArgs
-            from vllm.entrypoints.openai.api_server import (
-                build_async_engine_client_from_engine_args,
-                init_app_state,
+        self.name = name or self.name
+        if not self.name:
+            terminal.error(
+                "You must specify an app name (either in the decorator or via the --name argument)."
             )
 
-            engine_args = AsyncEngineArgs.from_cli_args(self.engine_config)
-            engine_client = build_async_engine_client_from_engine_args(engine_args)
-            app = FastAPI()
-            model_config = asyncio.run(engine_args.create_model_config())
+        if context is not None:
+            self.config_context = context
 
-            init_app_state(
-                engine_client,
-                model_config,
-                app.state,
-                self.vllm_args,
-            )
+        if not self.prepare_runtime(
+            stub_type=ASGI_DEPLOYMENT_STUB_TYPE,
+            force_create_stub=True,
+        ):
+            return False
 
-            return self.app
-
-        return _CallableWrapper(_create_app, self).deploy(
-            name=name,
-            context=context,
-            invocation_details_func=invocation_details_func,
-            **invocation_details_options,
+        terminal.header("Deploying")
+        deploy_response: DeployStubResponse = self.gateway_stub.deploy_stub(
+            DeployStubRequest(stub_id=self.stub_id, name=self.name)
         )
+
+        self.deployment_id = deploy_response.deployment_id
+        if deploy_response.ok:
+            terminal.header("Deployed 🎉")
+            if invocation_details_func:
+                invocation_details_func(**invocation_details_options)
+            else:
+                self.print_invocation_snippet(**invocation_details_options)
+
+        return deploy_response.ok
