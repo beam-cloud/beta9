@@ -15,6 +15,7 @@ import (
 
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/go-runc"
+	"github.com/opencontainers/runtime-spec/specs-go"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -62,6 +63,25 @@ type Worker struct {
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
+}
+
+type ContainerInstance struct {
+	Id           string
+	StubId       string
+	BundlePath   string
+	Overlay      *common.ContainerOverlay
+	Spec         *specs.Spec
+	Err          error
+	ExitCode     int
+	Port         int
+	OutputWriter *common.OutputWriter
+	LogBuffer    *common.LogBuffer
+}
+
+type ContainerOptions struct {
+	BundlePath  string
+	BindPort    int
+	InitialSpec *specs.Spec
 }
 
 type stopContainerEvent struct {

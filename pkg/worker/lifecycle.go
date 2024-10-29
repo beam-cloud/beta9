@@ -17,10 +17,6 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
-
-	"github.com/containerd/cgroups/v3"
-	"github.com/containerd/cgroups/v3/cgroup1"
-	"github.com/containerd/cgroups/v3/cgroup2"
 )
 
 const (
@@ -35,89 +31,6 @@ var (
 	//go:embed base_runc_config.json
 	baseRuncConfigRaw string
 )
-
-type ContainerInstance struct {
-	Id           string
-	StubId       string
-	BundlePath   string
-	Overlay      *common.ContainerOverlay
-	Spec         *specs.Spec
-	Err          error
-	ExitCode     int
-	Port         int
-	OutputWriter *common.OutputWriter
-	LogBuffer    *common.LogBuffer
-
-	memoryEvents MemoryEvents
-}
-
-type MemoryEvents struct {
-	// This counter increments whenever a process in the cgroup
-	// is terminated by the OOM killer due to memory exhaustion.
-	oomKill uint
-	// This counter increments when the OOM killer terminates
-	// all processes in the cgroup as a group due to memory exhaustion.
-	// TODO: Use this field once this issue is addressed https://github.com/containerd/cgroups/issues/274
-	oomGroupKill uint
-}
-
-func (i *ContainerInstance) isOOMKilled() bool {
-	memoryEvents, err := getMemoryEvents(i)
-	if err != nil {
-		log.Printf("<%s> - failed to get memory events: %v\n", i.Id, err)
-		return false
-	}
-
-	if memoryEvents.oomKill > i.memoryEvents.oomKill || memoryEvents.oomGroupKill > i.memoryEvents.oomGroupKill {
-		i.memoryEvents = memoryEvents
-		return true
-	}
-
-	return false
-}
-
-func getMemoryEvents(i *ContainerInstance) (MemoryEvents, error) {
-	me := MemoryEvents{}
-
-	switch cgroups.Mode() {
-	case cgroups.Legacy:
-		c, err := cgroup1.Load(cgroup1.StaticPath(i.Spec.Linux.CgroupsPath))
-		if err != nil {
-			return me, err
-		}
-
-		stat, err := c.Stat()
-		if err != nil {
-			return me, err
-		}
-
-		me.oomKill = uint(stat.MemoryOomControl.GetOomKill())
-
-	case cgroups.Unified:
-		c, err := cgroup2.Load(i.Spec.Linux.CgroupsPath)
-		if err != nil {
-			return me, err
-		}
-
-		stat, err := c.Stat()
-		if err != nil {
-			return me, err
-		}
-
-		me.oomKill = uint(stat.GetMemoryEvents().GetOomKill())
-
-	default:
-		return me, fmt.Errorf("unknown cgroups mode")
-	}
-
-	return me, nil
-}
-
-type ContainerOptions struct {
-	BundlePath  string
-	BindPort    int
-	InitialSpec *specs.Spec
-}
 
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
@@ -573,7 +486,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
 
 		// Check for OOM kills
-		go s.watchForOOMKills(ctx, containerId, outputChan)
+		go s.watchOOMEvents(ctx, containerId, outputChan)
 
 		<-ctx.Done()
 	}()
@@ -614,7 +527,16 @@ func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 	return request.SourceImage != nil
 }
 
-func (s *Worker) watchForOOMKills(ctx context.Context, containerId string, output chan common.OutputMsg) {
+func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output chan common.OutputMsg) {
+	time.Sleep(time.Second)
+
+	ch, err := s.runcHandle.Events(ctx, containerId, time.Second)
+	if err != nil {
+		return
+	}
+
+	// Keep track of seen events to avoid duplicates
+	seenEvents := make(map[string]struct{})
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
@@ -623,9 +545,19 @@ func (s *Worker) watchForOOMKills(ctx context.Context, containerId string, outpu
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if c, ok := s.containerInstances.Get(containerId); ok && c.isOOMKilled() {
+			seenEvents = make(map[string]struct{})
+		default:
+			event := <-ch
+
+			if _, ok := seenEvents[event.Type]; ok {
+				continue
+			}
+
+			seenEvents[event.Type] = struct{}{}
+
+			if event.Type == "oom" {
 				output <- common.OutputMsg{
-					Msg: fmt.Sprintf("[WARNING] A process in the container was killed due to out-of-memory conditions.\n"),
+					Msg: fmt.Sprintln("[WARNING] A process in the container was killed due to out-of-memory conditions."),
 				}
 			}
 		}
