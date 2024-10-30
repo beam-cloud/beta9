@@ -12,12 +12,7 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 )
 
-func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, pidChan <-chan int) {
-	containerPid := <-pidChan
-	if containerPid == 0 {
-		return
-	}
-
+func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, containerPid int) {
 	ticker := time.NewTicker(w.config.Monitoring.ContainerMetricsInterval)
 	defer ticker.Stop()
 

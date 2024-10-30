@@ -16,6 +16,12 @@ func TestDeploymentScaleFuncWithDefaults(t *testing.T) {
 		MaxContainers:     1,
 		TasksPerContainer: 1,
 	}
+	autoscaledInstance.AppConfig = types.AppConfig{}
+	autoscaledInstance.AppConfig.GatewayService = types.GatewayServiceConfig{
+		StubLimits: types.StubLimits{
+			MaxReplicas: 10,
+		},
+	}
 
 	instance := &taskQueueInstance{}
 	instance.AutoscaledInstance = autoscaledInstance
@@ -55,6 +61,12 @@ func TestDeploymentScaleFuncWithMaxTasksPerContainer(t *testing.T) {
 		Type:              "queue_depth",
 		MaxContainers:     3,
 		TasksPerContainer: 1,
+	}
+	autoscaledInstance.AppConfig = types.AppConfig{}
+	autoscaledInstance.AppConfig.GatewayService = types.GatewayServiceConfig{
+		StubLimits: types.StubLimits{
+			MaxReplicas: 10,
+		},
 	}
 
 	// Make sure we scale up to max containers

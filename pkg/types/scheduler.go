@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -89,6 +90,10 @@ type ContainerRequest struct {
 	PoolSelector     string          `json:"pool_selector"`
 }
 
+func (c *ContainerRequest) RequiresGPU() bool {
+	return len(c.GpuRequest) > 0
+}
+
 const ContainerExitCodeTtlS int = 300
 
 const (
@@ -163,4 +168,37 @@ type QuotaDoesNotExistError struct{}
 
 func (e *QuotaDoesNotExistError) Error() string {
 	return "quota_does_not_exist"
+}
+
+type StopContainerArgs struct {
+	ContainerId string `json:"container_id"`
+	Force       bool   `json:"force"`
+}
+
+func (a StopContainerArgs) ToMap() (map[string]any, error) {
+	data, err := json.Marshal(a)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func ToStopContainerArgs(m map[string]any) (*StopContainerArgs, error) {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+
+	var result StopContainerArgs
+	if err = json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
 }
