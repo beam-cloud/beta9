@@ -481,10 +481,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		// Capture resource usage (cpu/mem/gpu)
 		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
 
-		// Check for OOM kills
+		// Watch for OOM events
 		go s.watchOOMEvents(ctx, containerId, outputChan)
 
-		<-ctx.Done()
 	}()
 
 	// Invoke runc process (launch the container)
@@ -543,7 +542,11 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 		case <-ticker.C:
 			seenEvents = make(map[string]struct{})
 		default:
-			event := <-ch
+			event, ok := <-ch
+			if !ok {
+				log.Println("event channel closed")
+				return
+			}
 
 			if _, ok := seenEvents[event.Type]; ok {
 				continue
