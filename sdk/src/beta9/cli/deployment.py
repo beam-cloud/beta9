@@ -128,8 +128,6 @@ def create_deployment(service: ServiceClient, name: str, entrypoint: str, url_ty
             f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{obj_name}'"
         )
 
-    # Class based integrations should have a set_handler method so they don't end up inspecting the sdk when
-    # trying to get the handler
     if hasattr(user_obj, "set_handler"):
         user_obj.set_handler(f"{module_name}:{obj_name}")
 

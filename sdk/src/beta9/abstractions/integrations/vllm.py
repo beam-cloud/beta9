@@ -23,7 +23,7 @@ from ...type import GpuType, GpuTypeAlias
 
 # vllm/engine/arg_utils.py:EngineArgs
 @dataclass
-class EngineConfig:
+class VLLMEngineConfig:
     """
     The configuration for the vLLM engine. For more information, see the vllm documentation:
     https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html#command-line-arguments-for-the-server
@@ -214,7 +214,7 @@ class vllm(ASGI):
         authorized: bool = True,
         name: Optional[str] = None,
         # vLLM engine config
-        engine_config: EngineConfig = EngineConfig(),
+        engine_config: VLLMEngineConfig = VLLMEngineConfig(),
         # vLLM args
         response_role: Optional[str] = None,
         lora_modules: Optional[List[str]] = None,
