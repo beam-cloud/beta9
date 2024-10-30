@@ -24,6 +24,7 @@ type botInstance struct {
 	scheduler       *scheduler.Scheduler
 	token           *types.Token
 	stub            *types.StubWithRelated
+	workspace       *types.Workspace
 	stubConfig      *types.StubConfigV1
 	botConfig       BotConfig
 	cancelFunc      context.CancelFunc
@@ -52,6 +53,7 @@ func newBotInstance(ctx context.Context, appConfig types.AppConfig, scheduler *s
 		token:           token,
 		scheduler:       scheduler,
 		stub:            stub,
+		workspace:       &stub.Workspace,
 		stubConfig:      stubConfig,
 		botConfig:       botConfig,
 		cancelFunc:      cancelFunc,
@@ -70,13 +72,11 @@ func (i *botInstance) Start() error {
 			if err == nil {
 				err = i.botInterface.SendPrompt("testsession", prompt)
 				if err != nil {
-					log.Printf("failed to send prompt: %v\n", err)
 					continue
 				}
 			}
 
-			log.Printf("bot config: %v\n", i.botConfig)
-
+			i.step()
 			time.Sleep(time.Duration(i.appConfig.Abstractions.Bot.StepIntervalS) * time.Second)
 		}
 	}
@@ -121,9 +121,18 @@ func (i *botInstance) runTransition(transitionName string) error {
 }
 
 func (i *botInstance) step() {
-	// For each active session, we need to check each transition function, and see if there are
-	// enough markers to run the transition.
+	// Count the markers
+	for _, location := range i.botConfig.Locations {
+		log.Println("location: ", location.Name)
+		markers, err := i.botStateManager.countMarkers(i.workspace.Name, i.stub.ExternalId, "testsession", location.Name)
+		if err != nil {
+			continue
+		}
 
+		log.Println("MARKERS: ", markers)
+	}
+
+	// Determine which transitions can fire (this should be locked)
 }
 
 func (i *botInstance) genContainerId(botContainerType string) string {

@@ -154,14 +154,14 @@ var Keys = &keys{}
 type keys struct{}
 
 var (
-	botSessionStateLock string = "bot:%s:%s:session_state_lock:%s"
-	botSessionState     string = "bot:%s:%s:session_state:%s"
-	botMarkerIndex      string = "bot:%s:%s:marker_index:%s"
-	botMarkers          string = "bot:%s:%s:markers:%s:%s"
+	botLock         string = "bot:%s:%s:session_state_lock:%s"
+	botSessionState string = "bot:%s:%s:session_state:%s"
+	botMarkerIndex  string = "bot:%s:%s:marker_index:%s"
+	botMarkers      string = "bot:%s:%s:markers:%s:%s"
 )
 
-func (k *keys) botSessionStateLock(workspaceName, stubId, sessionId string) string {
-	return fmt.Sprintf(botSessionStateLock, workspaceName, stubId, sessionId)
+func (k *keys) botLock(workspaceName, stubId, sessionId string) string {
+	return fmt.Sprintf(botLock, workspaceName, stubId, sessionId)
 }
 
 func (k *keys) botSessionState(workspaceName, stubId, sessionId string) string {

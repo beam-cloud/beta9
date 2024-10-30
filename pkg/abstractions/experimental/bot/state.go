@@ -23,11 +23,11 @@ func newBotStateManager(rdb *common.RedisClient) *botStateManager {
 }
 
 func (m *botStateManager) loadSession(workspaceName, stubId, sessionId string) (*BotSession, error) {
-	err := m.lock.Acquire(context.TODO(), Keys.botSessionStateLock(workspaceName, stubId, sessionId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+	err := m.lock.Acquire(context.TODO(), Keys.botLock(workspaceName, stubId, sessionId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return nil, err
 	}
-	defer m.lock.Release(Keys.botSessionStateLock(workspaceName, stubId, sessionId))
+	defer m.lock.Release(Keys.botLock(workspaceName, stubId, sessionId))
 
 	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
 	jsonData, err := m.rdb.Get(context.TODO(), stateKey).Result()
@@ -47,12 +47,12 @@ func (m *botStateManager) loadSession(workspaceName, stubId, sessionId string) (
 	return session, nil
 }
 
-func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string, state *BotSession) error {
-	err := m.lock.Acquire(context.TODO(), Keys.botSessionStateLock(workspaceName, stubId, sessionId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string, state *BotSession, config *BotConfig) error {
+	err := m.lock.Acquire(context.TODO(), Keys.botLock(workspaceName, stubId, sessionId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
 	}
-	defer m.lock.Release(Keys.botSessionStateLock(workspaceName, stubId, sessionId))
+	defer m.lock.Release(Keys.botLock(workspaceName, stubId, sessionId))
 
 	jsonData, err := json.Marshal(state)
 	if err != nil {
@@ -64,7 +64,13 @@ func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string,
 	// Session not found, create it
 	_, err = m.rdb.Get(context.TODO(), stateKey).Result()
 	if err == redis.Nil {
-
+		indexKey := Keys.botMarkerIndex(workspaceName, stubId, sessionId)
+		for _, location := range config.Locations {
+			err = m.rdb.SAdd(context.TODO(), indexKey, Keys.botMarkers(workspaceName, stubId, sessionId, location.Name)).Err()
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	err = m.rdb.Set(context.TODO(), stateKey, jsonData, 0).Err()

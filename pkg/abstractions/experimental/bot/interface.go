@@ -111,7 +111,7 @@ func (bi *BotInterface) initSession(sessionId string) error {
 		Content: responseMessage.Content,
 	})
 
-	err = bi.stateManager.updateSession(bi.workspace.Name, bi.stub.ExternalId, sessionId, state)
+	err = bi.stateManager.updateSession(bi.workspace.Name, bi.stub.ExternalId, sessionId, state, &bi.botConfig)
 	if err != nil {
 		return err
 	}
@@ -130,7 +130,7 @@ func (bi *BotInterface) addMessageToSessionHistory(sessionId string, message ope
 		Content: message.Content,
 	})
 
-	err = bi.stateManager.updateSession(bi.workspace.Name, bi.stub.ExternalId, sessionId, state)
+	err = bi.stateManager.updateSession(bi.workspace.Name, bi.stub.ExternalId, sessionId, state, &bi.botConfig)
 	if err != nil {
 		return err
 	}
