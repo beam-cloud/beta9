@@ -225,6 +225,43 @@ class Image(BaseAbstraction):
                 raise ImageCredentialValueNotFound(key)
         return creds
 
+    def micromamba(self) -> "Image":
+        """
+        Use micromamba to manage python packages.
+        """
+        self.python_version = self.python_version.replace("python", "micromamba")
+        return self
+
+    def add_micromamba_packages(
+        self, packages: Union[Sequence[str], str], channels: Optional[Sequence[str]] = []
+    ) -> "Image":
+        """
+        Add micromamba packages that will be installed when building the image.
+
+        These will be executed at the end of the image build and in the
+        order they are added. If a single string is provided, it will be
+        interpreted as a path to a requirements.txt file.
+
+        Parameters:
+            packages: The micromamba packages to add or the path to a requirements.txt file.
+            channels: The micromamba channels to use.
+        """
+        # Error if micromamba is not enabled
+        if not self.python_version.startswith("micromamba"):
+            raise ValueError("Micromamba must be enabled to use this method.")
+
+        # Check if we were given a .txt requirement file
+        if isinstance(packages, str):
+            packages = self._sanitize_python_packages(self._load_requirements_file(packages))
+
+        for package in packages:
+            self.build_steps.append(BuildStep(command=package, type="micromamba"))
+
+        for channel in channels:
+            self.build_steps.append(BuildStep(command=f"-c {channel}", type="micromamba"))
+
+        return self
+
     def add_commands(self, commands: Sequence[str]) -> "Image":
         """
         Add shell commands that will be executed when building the image.
