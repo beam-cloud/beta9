@@ -19,10 +19,6 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-var (
-	botContainerPrefix string = "bot"
-)
-
 type BotServiceOpts struct {
 	Config         types.AppConfig
 	RedisClient    *common.RedisClient

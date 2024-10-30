@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	botContainerPrefix         string = "bot"
 	botContainerTypeModel      string = "model" // TODO: only need this in the case where we host the model on beta9 using vllm (or similar)
 	botContainerTypeTransition string = "transition"
 )

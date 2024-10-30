@@ -56,20 +56,20 @@ type MarkerField struct {
 	FieldValue string `json:"field_value" redis:"field_value"`
 }
 
-// BotConfig holds the overall configuration for the bot
+// BotConfig holds the overall config for the bot
 type BotConfig struct {
 	Model       string                         `json:"model" redis:"model"`
 	Locations   map[string]BotLocationConfig   `json:"locations" redis:"locations"`
 	Transitions map[string]BotTransitionConfig `json:"transitions" redis:"transitions"`
 }
 
-// BotLocationConfig holds the configuration for a specific location
+// BotLocationConfig holds the config for a location in the bot network
 type BotLocationConfig struct {
 	Name   string            `json:"name" redis:"name"`
 	Marker map[string]string `json:"marker" redis:"marker"`
 }
 
-// BotTransitionConfig holds the configuration for a transition
+// BotTransitionConfig holds the config for a transition
 type BotTransitionConfig struct {
 	Cpu         int64          `json:"cpu" redis:"cpu"`
 	Gpu         types.GpuType  `json:"gpu" redis:"gpu"`

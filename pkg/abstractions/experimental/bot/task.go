@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -36,24 +37,7 @@ func (t *BotTask) Execute(ctx context.Context, options ...interface{}) error {
 }
 
 func (t *BotTask) Retry(ctx context.Context) error {
-	_, err := t.pbs.getOrCreateBotInstance(t.msg.StubId)
-	if err != nil {
-		return err
-	}
-
-	task, err := t.pbs.backendRepo.GetTask(ctx, t.msg.TaskId)
-	if err != nil {
-		return err
-	}
-
-	task.Status = types.TaskStatusRetry
-	_, err = t.pbs.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
-	if err != nil {
-		return err
-	}
-
-	// return t.tq.queueClient.Push(ctx, t.msg)
-	return nil
+	return errors.New("retry not implemented")
 }
 
 func (t *BotTask) HeartBeat(ctx context.Context) (bool, error) {
