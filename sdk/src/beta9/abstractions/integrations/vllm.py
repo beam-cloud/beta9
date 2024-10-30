@@ -1,18 +1,3 @@
-"""
-beta9 deploy app.py:app
-
-where app.py is just a simple file with the instance of the vllm app
-
-# app.py
-from beta9 import vllm
-
-app = vllm(stub_args, vllm_args)
-
-Then on deploy, we set this up as an ASGI app by having some getter that returns the FASTAPI instance.
-
-app.get_fastapi_app()
-"""
-
 import os
 import threading
 from dataclasses import dataclass
@@ -39,6 +24,12 @@ from ...type import GpuType, GpuTypeAlias
 # vllm/engine/arg_utils.py:EngineArgs
 @dataclass
 class EngineConfig:
+    """
+    The configuration for the vLLM engine. For more information, see the vllm documentation:
+    https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html#command-line-arguments-for-the-server
+    Each of these arguments corresponds to a command line argument for the vllm server.
+    """
+
     model: str = "facebook/opt-125m"
     served_model_name: Optional[Union[str, List[str]]] = None
     tokenizer: Optional[str] = None
@@ -142,6 +133,71 @@ class EngineConfig:
 
 
 class VLLM(ASGI):
+    """
+    VLLM is a wrapper around the vLLM library that allows you to deploy it as an ASGI app.
+
+    Parameters:
+        cpu (Union[int, float, str]):
+            The number of CPU cores allocated to the container. Default is 1.0.
+        memory (Union[int, str]):
+            The amount of memory allocated to the container. It should be specified in
+            MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
+        gpu (Union[GpuType, str]):
+            The type or name of the GPU device to be used for GPU-accelerated tasks. If not
+            applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
+        image (Union[Image, dict]):
+            The container image used for the task execution. If you override this, it must include
+            the vllm package and the fastapi package.
+        workers (int):
+            The number of workers to run in the container. Default is 1.
+        concurrent_requests (int):
+            The maximum number of concurrent requests to handle. Default is 1.
+        keep_warm_seconds (float):
+            The number of seconds to keep the container warm after the last request. Default is 10.0.
+        max_pending_tasks (int):
+            The maximum number of pending tasks to allow in the container. Default is 100.
+        timeout (int):
+            The maximum number of seconds to wait for the container to start. Default is 3600.
+        authorized (bool):
+            Whether the endpoints require authorization. Default is True.
+        name (str):
+            The name of the container. Default is none, which means you must provide it during deployment.
+        engine_config (EngineConfig):
+            The configuration for the vLLM engine.
+        response_role (str):
+            The role of the response.
+        lora_modules (List[str]):
+            The LoRA modules to use.
+        prompt_adapters (List[str]):
+            The prompt adapters to use.
+        chat_template (str):
+            The chat template to use.
+        return_tokens_as_token_ids (bool):
+            Whether to return tokens as token ids.
+        enable_auto_tools (bool):
+            Whether to enable auto tools.
+        enable_auto_tool_choice (bool):
+            Whether to enable auto tool choice.
+        tool_call_parser (str):
+            The tool call parser to use.
+        disable_log_stats (bool):
+            Whether to disable log stats.
+        disable_log_requests (bool):
+            Whether to disable log requests.
+        max_log_len (Optional[int]):
+            The maximum length of the log.
+
+    Example:
+        ```python
+        from beta9 import integrations
+
+        e = integrations.EngineConfig()
+        e.device = "cpu"
+
+        vllm_app = integrations.VLLM(name="vllm-abstraction-1", engine_config=e)
+        ```
+    """
+
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
