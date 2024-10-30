@@ -132,9 +132,9 @@ class EngineConfig:
     disable_log_requests: bool = False
 
 
-class VLLM(ASGI):
+class vllm(ASGI):
     """
-    VLLM is a wrapper around the vLLM library that allows you to deploy it as an ASGI app.
+    vllm is a wrapper around the vLLM library that allows you to deploy it as an ASGI app.
 
     Parameters:
         cpu (Union[int, float, str]):
