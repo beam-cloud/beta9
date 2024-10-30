@@ -36,6 +36,7 @@ type DeploymentFilter struct {
 	CreatedAtStart string      `query:"created_at_start"`
 	CreatedAtEnd   string      `query:"created_at_end"`
 	Pagination     bool        `query:"pagination"`
+	Subdomain      string      `query:"subdomain"`
 	SearchQuery    string      `query:"search_query"`
 }
 
