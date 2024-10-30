@@ -146,8 +146,7 @@ def create_context(config_path: Path, **kwargs):
     contexts[name] = context
     save_config(contexts=contexts, path=config_path)
 
-    rel_path = str(config_path).replace(str(Path.home()), "~")
-    terminal.success(f"Added new context to {rel_path}")
+    terminal.success(f"Added new context to {config_path}")
 
 
 @management.command(
