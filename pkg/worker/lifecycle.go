@@ -483,7 +483,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 		// Watch for OOM events
 		go s.watchOOMEvents(ctx, containerId, outputChan)
-
 	}()
 
 	// Invoke runc process (launch the container)
@@ -544,8 +543,11 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 		default:
 			event, ok := <-ch
 			if !ok {
-				log.Println("event channel closed")
-				return
+				ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
+				if err != nil {
+					time.Sleep(time.Second)
+				}
+				continue
 			}
 
 			if _, ok := seenEvents[event.Type]; ok {
