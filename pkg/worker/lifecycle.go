@@ -522,18 +522,17 @@ func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 }
 
 func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output chan common.OutputMsg) {
-	time.Sleep(time.Second)
+	seenEvents := make(map[string]struct{})
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 
 	ch, err := s.runcHandle.Events(ctx, containerId, time.Second)
 	if err != nil {
 		return
 	}
 
-	// Keep track of seen events to avoid duplicates
-	seenEvents := make(map[string]struct{})
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
+	maxTries, tries := 5, 0 // Used for re-opening the channel if it's closed
 	for {
 		select {
 		case <-ctx.Done():
@@ -542,11 +541,17 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 			seenEvents = make(map[string]struct{})
 		default:
 			event, ok := <-ch
-			if !ok {
-				ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
-				if err != nil {
-					time.Sleep(time.Second)
+			if !ok { // If the channel is closed, try to re-open it
+				if tries == maxTries-1 {
+					output <- common.OutputMsg{
+						Msg: fmt.Sprintln("[WARNING] Unable to watch for OOM events."),
+					}
+					return
 				}
+
+				tries++
+				time.Sleep(time.Second)
+				ch, _ = s.runcHandle.Events(ctx, containerId, time.Second)
 				continue
 			}
 
@@ -558,7 +563,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 
 			if event.Type == "oom" {
 				output <- common.OutputMsg{
-					Msg: fmt.Sprintln("[WARNING] A process in the container was killed due to out-of-memory conditions."),
+					Msg: fmt.Sprintln("[ERROR] A process in the container was killed due to out-of-memory conditions."),
 				}
 			}
 		}
