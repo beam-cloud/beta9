@@ -48,6 +48,7 @@ gateway:
   shutdownTimeout: 180s
   stubLimits:
     memory: 32768
+    maxReplicas: 10
 imageService:
   localCacheEnabled: true
   registryStore: local
