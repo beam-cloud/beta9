@@ -73,17 +73,22 @@ class SendBotMessageResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class PopBotMarkerRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
+    session_id: str = betterproto.string_field(2)
+    location_name: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)
 class PopBotMarkerResponse(betterproto.Message):
-    marker: str = betterproto.string_field(1)
+    ok: bool = betterproto.bool_field(1)
+    marker: bytes = betterproto.bytes_field(2)
 
 
 @dataclass(eq=False, repr=False)
 class PushBotMarkerRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
-    data: bytes = betterproto.bytes_field(2)
+    session_id: str = betterproto.string_field(2)
+    location_name: str = betterproto.string_field(3)
+    marker: bytes = betterproto.bytes_field(4)
 
 
 @dataclass(eq=False, repr=False)

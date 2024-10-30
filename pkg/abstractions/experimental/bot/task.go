@@ -26,9 +26,9 @@ func (t *BotTask) Execute(ctx context.Context, options ...interface{}) error {
 		return err
 	}
 
-	// err = t.tq.queueClient.Push(ctx, t.msg)
+	// err = t.pbs.botStateManager.pushMarkerToLocation(t.msg.WorkspaceName, t.msg.StubId, "", "", MarkerData{})
 	// if err != nil {
-	// 	t.tq.backendRepo.DeleteTask(context.TODO(), t.msg.TaskId)
+	// 	t.pbs.backendRepo.DeleteTask(context.TODO(), t.msg.TaskId)
 	// 	return err
 	// }
 

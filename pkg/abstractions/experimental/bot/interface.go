@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -181,7 +182,21 @@ func (bi *BotInterface) SendPrompt(sessionId, prompt string) error {
 		return err
 	}
 
-	responseMsgContent := responseMessage.Content
+	formattedResponse := BotResponse{}
+	err = json.Unmarshal([]byte(responseMessage.Content), &formattedResponse)
+	if err != nil {
+		return err
+	}
+
+	// If we have a complete marker, push it to session state
+	if formattedResponse.CompleteMarker {
+		err = bi.stateManager.pushMarker(bi.workspace.Name, bi.stub.ExternalId, sessionId, formattedResponse.MarkerData.LocationName, formattedResponse.MarkerData)
+		if err != nil {
+			return err
+		}
+	}
+
+	responseMsgContent := responseMessage.Content // formattedResponse.UserMessage
 	if !strings.HasSuffix(responseMsgContent, "\n") {
 		responseMsgContent += "\n"
 	}

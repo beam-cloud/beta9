@@ -43,12 +43,22 @@ message SendBotMessageRequest {
 
 message SendBotMessageResponse { bool ok = 1; }
 
-message PopBotMarkerRequest { string stub_id = 1; }
-message PopBotMarkerResponse { string marker = 1; }
+message PopBotMarkerRequest {
+  string stub_id = 1;
+  string session_id = 2;
+  string location_name = 3;
+}
+
+message PopBotMarkerResponse {
+  bool ok = 1;
+  bytes marker = 2;
+}
 
 message PushBotMarkerRequest {
   string stub_id = 1;
-  bytes data = 2;
+  string session_id = 2;
+  string location_name = 3;
+  bytes marker = 4;
 }
 
 message PushBotMarkerResponse { bool ok = 1; }

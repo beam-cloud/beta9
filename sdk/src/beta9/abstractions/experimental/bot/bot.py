@@ -46,6 +46,7 @@ class BotTransition:
         handler: Optional[str] = None,
         inputs: dict = {},
         outputs: dict = {},
+        description: Optional[str] = None,
         bot_instance: Optional["Bot"] = None,  # Reference to parent Bot instance
     ):
         self.handler: str = handler
@@ -66,8 +67,9 @@ class BotTransition:
             "callback_url": callback_url or "",
             "task_policy": task_policy or "",
             "handler": handler or "",
-            "inputs": inputs or {},
-            "outputs": outputs or {},
+            "inputs": {k.__name__ if isinstance(k, type) else k: v for k, v in inputs.items()},
+            "outputs": {k.__name__ if isinstance(k, type) else k: v for k, v in outputs.items()},
+            "description": description or "",
         }
 
         self.bot_instance: Optional["Bot"] = bot_instance
@@ -163,6 +165,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         secrets: Optional[List[str]] = None,
         callback_url: Optional[str] = None,
         on_start: Optional[Callable] = None,
+        description: Optional[str] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -182,6 +185,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         self.extra: Dict[str, Dict[str, dict]] = {}
         self.extra["model"] = model
         self.extra["locations"] = {}
+        self.extra["description"] = description
 
         for location in self.locations:
             location_config = location.to_dict()

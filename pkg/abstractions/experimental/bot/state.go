@@ -61,6 +61,12 @@ func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string,
 
 	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
 
+	// Session not found, create it
+	_, err = m.rdb.Get(context.TODO(), stateKey).Result()
+	if err == redis.Nil {
+
+	}
+
 	err = m.rdb.Set(context.TODO(), stateKey, jsonData, 0).Err()
 	if err != nil {
 		return fmt.Errorf("failed to store session state: %v", err)
@@ -69,11 +75,44 @@ func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string,
 	return nil
 }
 
+func (m *botStateManager) pushMarker(workspaceName, stubId, sessionId, locationName string, markerData Marker) error {
+	markerKey := Keys.botMarkers(workspaceName, stubId, sessionId, locationName)
+	jsonData, err := json.Marshal(markerData)
+	if err != nil {
+		return err
+	}
+
+	return m.rdb.RPush(context.TODO(), markerKey, jsonData).Err()
+}
+
+func (m *botStateManager) popMarker(workspaceName, stubId, sessionId, locationName string) (*Marker, error) {
+	bytes, err := m.rdb.LPop(context.TODO(), Keys.botMarkers(workspaceName, stubId, sessionId, locationName)).Bytes()
+	if err != nil {
+		return nil, err
+	}
+
+	marker := &Marker{}
+	err = json.Unmarshal(bytes, marker)
+	if err != nil {
+		return nil, err
+	}
+
+	return marker, nil
+}
+
+func (m *botStateManager) countMarkers(workspaceName, stubId, sessionId, locationName string) (int64, error) {
+	return m.rdb.LLen(context.TODO(), Keys.botMarkers(workspaceName, stubId, sessionId, locationName)).Result()
+}
+
+func (m *botStateManager) pushTask(workspaceName, stubId, sessionId, locationName string, markerData Marker) error {
+	return nil
+}
+
+func (m *botStateManager) popTask(workspaceName, stubId, sessionId, locationName string, markerData Marker) error {
+	return nil
+}
+
 func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string) error {
 	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
 	return m.rdb.Del(context.TODO(), stateKey).Err()
-}
-
-func (m *botStateManager) addMarkerToLocation() error {
-	return nil
 }

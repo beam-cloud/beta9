@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	botContainerTypeModel      string = "model" // TODO: only need this in the case where we host the model on beta9 using vllm
+	botContainerTypeModel      string = "model" // TODO: only need this in the case where we host the model on beta9 using vllm (or similar)
 	botContainerTypeTransition string = "transition"
 )
 
@@ -120,7 +120,9 @@ func (i *botInstance) runTransition(transitionName string) error {
 }
 
 func (i *botInstance) step() {
-	// todo: this is where we actually run transition and update the petri net state
+	// For each active session, we need to check each transition function, and see if there are
+	// enough markers to run the transition.
+
 }
 
 func (i *botInstance) genContainerId(botContainerType string) string {

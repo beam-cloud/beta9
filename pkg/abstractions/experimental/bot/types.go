@@ -41,7 +41,19 @@ type BotChatCompletionMessage struct {
 const botSchemaName = "beam_bot"
 
 type BotResponse struct {
-	UserMessage string `json:"user_message"`
+	UserMessage    string `json:"user_message" redis:"user_message"`
+	MarkerData     Marker `json:"marker_data" redis:"marker_data"`
+	CompleteMarker bool   `json:"complete_marker" redis:"complete_marker"`
+}
+
+type Marker struct {
+	LocationName string        `json:"location_name" redis:"location_name"`
+	Fields       []MarkerField `json:"marker_data" redis:"marker_data"`
+}
+
+type MarkerField struct {
+	FieldName  string `json:"field_name" redis:"field_name"`
+	FieldValue string `json:"field_value" redis:"field_value"`
 }
 
 // BotConfig holds the overall configuration for the bot
@@ -75,4 +87,5 @@ type BotTransitionConfig struct {
 	Name        string         `json:"name" redis:"name"`
 	Inputs      map[string]int `json:"inputs" redis:"inputs"`
 	Outputs     map[string]int `json:"outputs" redis:"outputs"`
+	Description string         `json:"description" redis:"description"`
 }

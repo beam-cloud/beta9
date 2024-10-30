@@ -158,16 +158,11 @@ var Keys = &keys{}
 type keys struct{}
 
 var (
-	botKeepWarmLock     string = "bot:%s:%s:keep_warm_lock:%s"
 	botSessionStateLock string = "bot:%s:%s:session_state_lock:%s"
 	botSessionState     string = "bot:%s:%s:session_state:%s"
-	botMarkerIndex      string = "bot:%s:%s:marker_index"
-	botMarkers          string = "bot:%s:%s:markers"
+	botMarkerIndex      string = "bot:%s:%s:marker_index:%s"
+	botMarkers          string = "bot:%s:%s:markers:%s:%s"
 )
-
-func (k *keys) botKeepWarmLock(workspaceName, stubId, containerId string) string {
-	return fmt.Sprintf(botKeepWarmLock, workspaceName, stubId, containerId)
-}
 
 func (k *keys) botSessionStateLock(workspaceName, stubId, sessionId string) string {
 	return fmt.Sprintf(botSessionStateLock, workspaceName, stubId, sessionId)
@@ -177,10 +172,10 @@ func (k *keys) botSessionState(workspaceName, stubId, sessionId string) string {
 	return fmt.Sprintf(botSessionState, workspaceName, stubId, sessionId)
 }
 
-func (k *keys) botMarkerIndex(workspaceName, stubId string) string {
-	return fmt.Sprintf(botMarkerIndex, workspaceName, stubId)
+func (k *keys) botMarkerIndex(workspaceName, stubId, sessionId string) string {
+	return fmt.Sprintf(botMarkerIndex, workspaceName, stubId, sessionId)
 }
 
-func (k *keys) botMarkers(workspaceName, stubId string) string {
-	return fmt.Sprintf(botMarkers, workspaceName, stubId)
+func (k *keys) botMarkers(workspaceName, stubId, sessionId, locationName string) string {
+	return fmt.Sprintf(botMarkers, workspaceName, stubId, sessionId, locationName)
 }
