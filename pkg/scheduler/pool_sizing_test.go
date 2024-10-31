@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -216,6 +217,7 @@ func TestOccupyAvailableMachines(t *testing.T) {
 
 	lambdaPoolName := "LambdaLabsPool"
 	controller := &ExternalWorkerPoolControllerForTest{
+		ctx:          context.Background(),
 		name:         lambdaPoolName,
 		workerRepo:   workerRepo,
 		providerRepo: providerRepo,
