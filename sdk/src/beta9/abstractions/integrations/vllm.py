@@ -20,6 +20,8 @@ from ...clients.gateway import DeployStubRequest, DeployStubResponse
 from ...config import ConfigContext
 from ...type import GpuType, GpuTypeAlias
 
+DEFAULT_VLLM_CACHE_DIR = "./vllm-cache"
+
 
 # vllm/engine/arg_utils.py:EngineArgs
 @dataclass
@@ -38,7 +40,7 @@ class VLLMEngineConfig:
     tokenizer_mode: str = "auto"
     chat_template_text_format: str = "string"
     trust_remote_code: bool = False
-    download_dir: Optional[str] = None
+    download_dir: Optional[str] = DEFAULT_VLLM_CACHE_DIR
     load_format: str = "auto"
     config_format: str = "auto"
     dtype: str = "auto"
@@ -152,8 +154,8 @@ class VLLM(ASGI):
             The number of workers to run in the container. Default is 1.
         concurrent_requests (int):
             The maximum number of concurrent requests to handle. Default is 1.
-        keep_warm_seconds (float):
-            The number of seconds to keep the container warm after the last request. Default is 10.0.
+        keep_warm_seconds (int):
+            The number of seconds to keep the container warm after the last request. Default is 30.
         max_pending_tasks (int):
             The maximum number of pending tasks to allow in the container. Default is 100.
         timeout (int):
@@ -162,6 +164,9 @@ class VLLM(ASGI):
             Whether the endpoints require authorization. Default is True.
         name (str):
             The name of the container. Default is none, which means you must provide it during deployment.
+        volumes (List[Volume]):
+            The volumes to mount into the container. Default is a single volume named "vllm-cache" mounted to "./vllm-cache".
+            It is used as the download directory for vLLM models.
         engine_config (EngineConfig):
             The configuration for the vLLM engine.
         response_role (str):
@@ -206,11 +211,14 @@ class VLLM(ASGI):
         image: Image = Image(python_version="python3.11").add_python_packages(["fastapi", "vllm"]),
         workers: int = 1,
         concurrent_requests: int = 1,
-        keep_warm_seconds: float = 10.0,
+        keep_warm_seconds: int = 30,
         max_pending_tasks: int = 100,
         timeout: int = 3600,
         authorized: bool = True,
         name: Optional[str] = None,
+        volumes: Optional[List[Volume]] = [
+            Volume(name="vllm-cache", mount_path=DEFAULT_VLLM_CACHE_DIR)
+        ],
         # vLLM engine config
         engine_config: VLLMEngineConfig = VLLMEngineConfig(),
         # vLLM args
@@ -239,7 +247,7 @@ class VLLM(ASGI):
             timeout=timeout,
             authorized=authorized,
             name=name,
-            volumes=[Volume(name="vllm-cache", mount_path="/vllm-cache")],
+            volumes=volumes,
         )
 
         self.engine_config = engine_config
