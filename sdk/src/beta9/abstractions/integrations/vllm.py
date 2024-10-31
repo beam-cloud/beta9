@@ -132,7 +132,7 @@ class VLLMEngineConfig:
     disable_log_requests: bool = False
 
 
-class vllm(ASGI):
+class VLLM(ASGI):
     """
     vllm is a wrapper around the vLLM library that allows you to deploy it as an ASGI app.
 
@@ -203,9 +203,7 @@ class vllm(ASGI):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
-        image: Image = Image(python_version="python3.11")
-        .add_commands(["export VLLM_TARGET_DEVICE=empty"])
-        .add_python_packages(["fastapi", "vllm"]),
+        image: Image = Image(python_version="python3.11").add_python_packages(["fastapi", "vllm"]),
         workers: int = 1,
         concurrent_requests: int = 1,
         keep_warm_seconds: float = 10.0,
