@@ -13,26 +13,54 @@ import (
 func (gws GatewayService) ListContainers(ctx context.Context, in *pb.ListContainersRequest) (*pb.ListContainersResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	workspaceId := authInfo.Workspace.ExternalId
-
-	containerStates, err := gws.containerRepo.GetActiveContainersByWorkspaceId(workspaceId)
-	if err != nil {
-		return &pb.ListContainersResponse{
-			Ok:       false,
-			ErrorMsg: "Unable to list containers",
-		}, nil
+	type containerDetails struct {
+		WorkerId  string
+		MachineId string
 	}
 
-	containers := make([]*pb.Container, 0, len(containerStates))
+	var (
+		workspaceId        = authInfo.Workspace.ExternalId
+		containerStates    = []types.ContainerState{}
+		containerWorkerMap = map[string]containerDetails{}
+	)
 
-	for _, state := range containerStates {
-		containers = append(containers, &pb.Container{
+	if isAdmin, _ := isClusterAdmin(ctx); isAdmin {
+		workers, err := gws.workerRepo.GetAllWorkers()
+		if err != nil {
+			return &pb.ListContainersResponse{Ok: false, ErrorMsg: "Unable to list workers"}, nil
+		}
+
+		for _, worker := range workers {
+			states, err := gws.containerRepo.GetActiveContainersByWorkerId(worker.Id)
+			if err != nil {
+				return &pb.ListContainersResponse{Ok: false, ErrorMsg: "Unable to list containers"}, nil
+			}
+
+			containerStates = append(containerStates, states...)
+
+			for _, state := range states {
+				containerWorkerMap[state.ContainerId] = containerDetails{WorkerId: worker.Id, MachineId: worker.MachineId}
+			}
+		}
+	} else {
+		var err error
+		containerStates, err = gws.containerRepo.GetActiveContainersByWorkspaceId(workspaceId)
+		if err != nil {
+			return &pb.ListContainersResponse{Ok: false, ErrorMsg: "Unable to list containers"}, nil
+		}
+	}
+
+	containers := make([]*pb.Container, len(containerStates))
+	for i, state := range containerStates {
+		containers[i] = &pb.Container{
 			ContainerId: state.ContainerId,
 			StubId:      state.StubId,
 			WorkspaceId: state.WorkspaceId,
 			Status:      string(state.Status),
 			ScheduledAt: timestamppb.New(time.Unix(state.ScheduledAt, 0)),
-		})
+			WorkerId:    containerWorkerMap[state.ContainerId].WorkerId,
+			MachineId:   containerWorkerMap[state.ContainerId].MachineId,
+		}
 	}
 
 	return &pb.ListContainersResponse{
