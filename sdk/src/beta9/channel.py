@@ -207,7 +207,7 @@ def handle_error():
 
 @contextmanager
 def runner_context() -> Generator[Channel, None, None]:
-    with handle_error(print_traceback=True):
+    with handle_error():
         config = get_config_context()
         channel = get_channel(config)
         yield channel
