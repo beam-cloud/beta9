@@ -162,7 +162,7 @@ class FunctionHandler:
             self.pass_context = "context" in sig.parameters
             self.is_async = asyncio.iscoroutinefunction(self.handler.func)
         except BaseException:
-            raise RunnerException()
+            raise RunnerException(f"Error loading handler: {traceback.format_exc()}")
 
     def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
         if self.handler is None:

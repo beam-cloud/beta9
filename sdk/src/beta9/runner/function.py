@@ -227,6 +227,7 @@ def invoke_function(
             callback_url=callback_url,
         )
     except BaseException as e:
+        print(f"{traceback.format_exc()}")
         return InvokeResult(
             result=result,
             exception=e,
