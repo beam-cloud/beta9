@@ -197,6 +197,13 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 
 func (s *Scheduler) StartProcessingRequests() {
 	for {
+		select {
+		case <-s.ctx.Done():
+			log.Println("Stopping scheduler")
+			return
+		default:
+		}
+
 		if s.requestBacklog.Len() == 0 {
 			time.Sleep(requestProcessingInterval)
 			continue
