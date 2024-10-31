@@ -58,13 +58,13 @@ type containerDetails struct {
 }
 
 func (gws GatewayService) getContainersAsAdmin() ([]types.ContainerState, map[string]containerDetails, error) {
-	containerWorkerMap := map[string]containerDetails{}
-	containerStates := []types.ContainerState{}
-
 	workers, err := gws.workerRepo.GetAllWorkers()
 	if err != nil {
 		return nil, nil, errors.New("unable to list workers")
 	}
+
+	containerStates := []types.ContainerState{}
+	containerWorkerMap := map[string]containerDetails{}
 
 	for _, worker := range workers {
 		states, err := gws.containerRepo.GetActiveContainersByWorkerId(worker.Id)
