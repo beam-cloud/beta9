@@ -221,6 +221,7 @@ func (s *Scheduler) StartProcessingRequests() {
 			}
 
 			go func() {
+				var err error
 				for _, c := range controllers {
 					// Iterates through controllers in the order of prioritized gpus to attempt to add a worker
 					if c == nil {
