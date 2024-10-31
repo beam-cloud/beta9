@@ -316,7 +316,6 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 
 		if requiresGPU && !requiresAnyGPU {
 			// Validate GPU resource availability
-
 			priorityModifier, validGpu := gpuRequestsMap[worker.Gpu]
 			if !validGpu || worker.FreeGpuCount < request.GpuCount {
 				continue
