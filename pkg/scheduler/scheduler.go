@@ -228,7 +228,8 @@ func (s *Scheduler) StartProcessingRequests() {
 						continue
 					}
 
-					newWorker, err := c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
+					var newWorker *types.Worker
+					newWorker, err = c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
 					if err == nil {
 						log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
 
