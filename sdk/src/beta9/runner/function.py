@@ -136,7 +136,7 @@ def _monitor_task(
 
 
 @json_output_interceptor(task_id=config.task_id)
-@handle_error(print_traceback=True)
+@handle_error()
 @pass_channel
 def main(channel: Channel):
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
