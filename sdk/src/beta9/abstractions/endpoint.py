@@ -237,6 +237,8 @@ class ASGI(Endpoint):
             @app.post("/warmup")
             async def warmup():
                 return {"status": "warm"}
+
+            return app
         ```
     """
 
@@ -439,7 +441,7 @@ class RealtimeASGI(ASGI):
                         while not internal_asgi_app.input_queue.empty():
                             output = internal_asgi_app.handler(
                                 context=internal_asgi_app.context,
-                                input=internal_asgi_app.input_queue.get(),
+                                event=internal_asgi_app.input_queue.get(),
                             )
 
                             if isinstance(output, str):

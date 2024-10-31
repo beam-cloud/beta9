@@ -221,13 +221,15 @@ func (s *Scheduler) StartProcessingRequests() {
 			}
 
 			go func() {
+				var err error
 				for _, c := range controllers {
 					// Iterates through controllers in the order of prioritized gpus to attempt to add a worker
 					if c == nil {
 						continue
 					}
 
-					newWorker, err := c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
+					var newWorker *types.Worker
+					newWorker, err = c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
 					if err == nil {
 						log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
 

@@ -118,6 +118,8 @@ class Container(betterproto.Message):
     status: str = betterproto.string_field(3)
     scheduled_at: datetime = betterproto.message_field(4)
     workspace_id: str = betterproto.string_field(5)
+    worker_id: str = betterproto.string_field(6)
+    machine_id: str = betterproto.string_field(7)
 
 
 @dataclass(eq=False, repr=False)

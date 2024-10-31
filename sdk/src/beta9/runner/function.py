@@ -136,7 +136,7 @@ def _monitor_task(
 
 
 @json_output_interceptor(task_id=config.task_id)
-@handle_error(print_traceback=False)
+@handle_error()
 @pass_channel
 def main(channel: Channel):
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
@@ -174,7 +174,6 @@ def main(channel: Channel):
     if result.exception:
         thread_pool.shutdown(wait=False)
         handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
-        print(result.exception)
         raise result.exception
 
     # End the task and send callback

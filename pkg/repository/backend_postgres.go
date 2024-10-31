@@ -1054,6 +1054,10 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 		qb = qb.Where(squirrel.Eq{"d.stub_type": filters.StubType})
 	}
 
+	if filters.Subdomain != "" {
+		qb = qb.Where(squirrel.Eq{"d.subdomain": filters.Subdomain})
+	}
+
 	if filters.SearchQuery != "" {
 		if err := uuid.Validate(filters.SearchQuery); err == nil {
 			qb = qb.Where(squirrel.Eq{"d.external_id": filters.SearchQuery})
