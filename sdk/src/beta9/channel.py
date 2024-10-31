@@ -186,7 +186,7 @@ def pass_channel(func: Callable) -> Callable:
 
 
 @contextmanager
-def handle_error(print_traceback: bool = False):
+def handle_error():
     exit_code = 0
     try:
         yield
@@ -201,8 +201,7 @@ def handle_error(print_traceback: bool = False):
         exit_code = 1
     finally:
         if exit_code != 0:
-            if print_traceback:
-                print(traceback.format_exc())
+            print(traceback.format_exc())
             sys.exit(exit_code)
 
 
