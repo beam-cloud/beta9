@@ -237,6 +237,8 @@ class ASGI(Endpoint):
             @app.post("/warmup")
             async def warmup():
                 return {"status": "warm"}
+
+            return app
         ```
     """
 
