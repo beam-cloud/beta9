@@ -197,6 +197,14 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 
 func (s *Scheduler) StartProcessingRequests() {
 	for {
+		select {
+		case <-s.ctx.Done():
+			// Context has been cancelled
+			return
+		default:
+			// Continue processing requests
+		}
+
 		if s.requestBacklog.Len() == 0 {
 			time.Sleep(requestProcessingInterval)
 			continue
