@@ -199,9 +199,10 @@ func (s *Scheduler) StartProcessingRequests() {
 	for {
 		select {
 		case <-s.ctx.Done():
-			log.Println("Stopping scheduler")
+			// Context has been cancelled
 			return
 		default:
+			// Continue processing requests
 		}
 
 		if s.requestBacklog.Len() == 0 {
