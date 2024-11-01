@@ -66,6 +66,8 @@ verify-protocol:
 test-pkg:
 	go test -v ./pkg/... -bench=./pkg/..
 
+# build-test can be run with "local" to run extra tests when pointing to your local 
+# dev setup. It will also exclude custom image tests due to arm64 issues on mac.
 build-test:
 	poetry config virtualenvs.in-project true
 	poetry install -C sdk

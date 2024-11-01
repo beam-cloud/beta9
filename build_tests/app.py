@@ -51,7 +51,6 @@ def nv_cuda_1222_torch_img():
     return "pass"
 
 
-# take one optional argument "local" which defaults to False
 if __name__ == "__main__":
     local = len(sys.argv) > 1 and sys.argv[1] == "local"
 
