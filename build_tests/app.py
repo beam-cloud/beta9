@@ -23,6 +23,23 @@ nv_cuda_1222_torch_img = (
     .add_python_packages(["torch"])
     .add_commands([f"echo 1-{uuid.uuid4()}"])
 )
+nv_cuda_1231_ubuntu2004_img = Image(
+    python_version="python3.11",
+    commands=[
+        "apt-get update -y && apt-get install -y git",
+    ],
+    base_image="docker.io/nvidia/cuda:12.3.1-runtime-ubuntu20.04",
+)
+torch_img = Image(
+    base_image="pytorch/pytorch:2.3.1-cuda11.8-cudnn8-runtime",
+    python_version="python3.11",
+).add_commands(
+    [
+        "apt-get update -y",
+        "apt-get install git -y",
+        "apt-get install ffmpeg libsm6 libxext6 libgl1-mesa-glx -y",
+    ]
+)
 
 
 @function(image=numpy_310_img)
@@ -39,12 +56,25 @@ def ffmpeg():
 
 
 @function(image=nv_cuda_1222_img)
-def nv_cuda_1222_img():
+def nv_cuda_1222():
     return "pass"
 
 
 @function(image=nv_cuda_1222_torch_img)
-def nv_cuda_1222_torch_img():
+def nv_cuda_1222_torch():
+    import torch
+
+    _ = torch.rand(5, 3)
+    return "pass"
+
+
+@function(image=nv_cuda_1231_ubuntu2004_img)
+def nv_cuda_1231_ubuntu2004():
+    return "pass"
+
+
+@function(image=torch_img)
+def torch_cuda():
     import torch
 
     _ = torch.rand(5, 3)
@@ -75,5 +105,7 @@ if __name__ == "__main__":
     assert ffmpeg.remote() == "pass"
 
     if not local:
-        assert nv_cuda_1222_img.remote() == "pass"
-        assert nv_cuda_1222_torch_img.remote() == "pass"
+        assert nv_cuda_1222.remote() == "pass"
+        assert nv_cuda_1222_torch.remote() == "pass"
+        assert nv_cuda_1231_ubuntu2004.remote() == "pass"
+        assert torch_cuda.remote() == "pass"
