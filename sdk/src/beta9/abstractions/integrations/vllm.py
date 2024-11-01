@@ -297,12 +297,24 @@ class VLLM(ASGI):
         )
         from vllm.usage.usage_lib import UsageContext
 
+        # TODO: better way to do this
+        if self.vllm_args.chat_template and not os.path.exists("./vllm_cache/chat_templates"):
+            os.system(
+                "git clone https://github.com/chujiezheng/chat_templates.git ./vllm-cache/chat_templates"
+            )
+
+        app = FastAPI()
+
+        @app.get("/health")
+        async def health_check():
+            return {"status": "healthy"}
+
+        app.include_router(router)
+
         engine_args = AsyncEngineArgs.from_cli_args(self.engine_config)
         engine_client = AsyncLLMEngine.from_engine_args(
             engine_args, usage_context=UsageContext.OPENAI_API_SERVER
         )
-        app = FastAPI()
-        app.include_router(router)
 
         model_config = asyncio.run(engine_client.get_model_config())
         init_app_state(
