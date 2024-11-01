@@ -70,4 +70,4 @@ build-test:
 	poetry config virtualenvs.in-project true
 	poetry install -C sdk
 	poetry shell -C sdk
-	cd build_tests && python app.py
+	cd build_tests && python app.py $(MODE)

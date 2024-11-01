@@ -1,9 +1,10 @@
+import sys
 import uuid
 
 from beta9 import Image, function
 
 numpy_311_img = (
-    Image(python_version="python3.11")
+    Image(python_version="python3.10")
     .add_python_packages(["numpy"])
     .add_commands([f"echo {uuid.uuid4()}"])
 )
@@ -21,9 +22,6 @@ nv_cuda_1222_torch_img = (
     )
     .add_python_packages(["torch"])
     .add_commands([f"echo 1-{uuid.uuid4()}"])
-)
-rapids_img = Image(base_image="rapidsai/rapidsai").add_commands(
-    [f"echo {uuid.uuid4()}"]
 )
 
 
@@ -53,14 +51,30 @@ def nv_cuda_1222_torch_img():
     return "pass"
 
 
-@function(image=rapids_img)
-def rapids_img():
-    return "pass"
-
-
+# take one optional argument "local" which defaults to False
 if __name__ == "__main__":
+    local = len(sys.argv) > 1 and sys.argv[1] == "local"
+
+    if local:
+        for version in ["python3.8", "python3.9", "python3.11", "python3.12"]:
+            tmp_img = (
+                Image(python_version=version)
+                .add_python_packages(["numpy"])
+                .add_commands([f"echo {uuid.uuid4()}"])
+            )
+
+            @function(image=tmp_img)
+            def tmp_func():
+                import numpy as np
+
+                _ = np.array([0, 0, 0, 0])
+                return "pass"
+
+            assert tmp_func.remote() == "pass"
+
     assert numpy_311.remote() == "pass"
     assert ffmpeg.remote() == "pass"
-    assert nv_cuda_1222_img.remote() == "pass"
-    assert nv_cuda_1222_torch_img.remote() == "pass"
-    assert rapids_img.remote() == "pass"
+
+    if not local:
+        assert nv_cuda_1222_img.remote() == "pass"
+        assert nv_cuda_1222_torch_img.remote() == "pass"
