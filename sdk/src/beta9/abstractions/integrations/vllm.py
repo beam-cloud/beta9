@@ -18,7 +18,7 @@ from ...clients.endpoint import (
 )
 from ...clients.gateway import DeployStubRequest, DeployStubResponse
 from ...config import ConfigContext
-from ...type import GpuType, GpuTypeAlias
+from ...type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
 
 DEFAULT_VLLM_CACHE_DIR = "./vllm-cache"
 
@@ -167,6 +167,10 @@ class VLLM(ASGI):
         volumes (List[Volume]):
             The volumes to mount into the container. Default is a single volume named "vllm-cache" mounted to "./vllm-cache".
             It is used as the download directory for vLLM models.
+        secrets (List[str]):
+            The secrets to pass to the container. If you need huggingface authentication to download models, you should set HF_TOKEN in the secrets.
+        autoscaler (Autoscaler):
+            The autoscaler to use. Default is a queue depth autoscaler.
         engine_config (EngineConfig):
             The configuration for the vLLM engine.
         response_role (str):
@@ -219,6 +223,8 @@ class VLLM(ASGI):
         volumes: Optional[List[Volume]] = [
             Volume(name="vllm-cache", mount_path=DEFAULT_VLLM_CACHE_DIR)
         ],
+        secrets: Optional[List[str]] = None,
+        autoscaler: Autoscaler = QueueDepthAutoscaler(),
         # vLLM engine config
         engine_config: VLLMEngineConfig = VLLMEngineConfig(),
         # vLLM args
@@ -248,6 +254,8 @@ class VLLM(ASGI):
             authorized=authorized,
             name=name,
             volumes=volumes,
+            secrets=secrets,
+            autoscaler=autoscaler,
         )
 
         self.engine_config = engine_config
@@ -278,6 +286,7 @@ class VLLM(ASGI):
 
     def __call__(self, *args: Any, **kwargs: Any):
         import asyncio
+        import logging
 
         from fastapi import FastAPI
         from vllm.engine.arg_utils import AsyncEngineArgs
@@ -302,6 +311,16 @@ class VLLM(ASGI):
             app.state,
             self.vllm_args,
         )
+
+        logging.info("Available routes are:")
+        for route in app.routes:
+            methods = getattr(route, "methods", None)
+            path = getattr(route, "path", None)
+
+            if methods is None or path is None:
+                continue
+
+            logging.info("Route: %s, Methods: %s", path, ", ".join(methods))
 
         return app
 
