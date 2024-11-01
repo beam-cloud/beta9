@@ -424,17 +424,14 @@ func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 var imageNamePattern = regexp.MustCompile(
 	`^` + // Assert position at the start of the string
 		`(?:(?P<Registry>(?:(?:localhost|[\w.-]+(?:\.[\w.-]+)+)(?::\d+)?)|[\w]+:\d+)\/)?` + // Optional registry, which can be localhost, a domain with optional port, or a simple registry with port
-		`(?P<Repo>(?:[\w][\w.-]*(?:/[\w][\w.-]*)*))?` + // Full repository path including namespace
+		`(?P<Namespace>(?:[a-z0-9]+(?:(?:[._]|__|[-]*)[a-z0-9]+)*)\/)*` + // Optional namespace, which can contain multiple segments separated by slashes
+		`(?P<Repo>[a-z0-9][-a-z0-9._]+)` + // Required repository name, must start with alphanumeric and can contain alphanumerics, hyphens, dots, and underscores
 		`(?::(?P<Tag>[\w][\w.-]{0,127}))?` + // Optional tag, which starts with a word character and can contain word characters, dots, and hyphens
 		`(?:@(?P<Digest>[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9A-Fa-f]{32,}))?` + // Optional digest, which is a hash algorithm followed by a colon and a hexadecimal hash
 		`$`, // Assert position at the end of the string
 )
 
 func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
-	if imageRef == "" {
-		return BaseImage{}, errors.New("invalid image URI format")
-	}
-
 	matches := imageNamePattern.FindStringSubmatch(imageRef)
 	if matches == nil {
 		return BaseImage{}, errors.New("invalid image URI format")
@@ -452,11 +449,7 @@ func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
 		registry = "docker.io"
 	}
 
-	repo := result["Repo"]
-	if repo == "" {
-		return BaseImage{}, errors.New("invalid image URI format")
-	}
-
+	repo := result["Namespace"] + result["Repo"]
 	tag, digest := result["Tag"], result["Digest"]
 	if tag == "" && digest == "" {
 		tag = "latest"

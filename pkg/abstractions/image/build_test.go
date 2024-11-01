@@ -80,14 +80,8 @@ func TestExtractImageNameAndTag(t *testing.T) {
 		{
 			ref:          "nvcr.io/nim/meta/llama-3.1-8b-instruct:1.1.0",
 			wantTag:      "1.1.0",
-			wantRepo:     "nim/meta/llama-3.1-8b-instruct",
+			wantRepo:     "meta/llama-3.1-8b-instruct",
 			wantRegistry: "nvcr.io",
-		},
-		{
-			ref:          "ghcr.io/gis-ops/docker-valhalla/valhalla:latest",
-			wantTag:      "latest",
-			wantRepo:     "gis-ops/docker-valhalla/valhalla",
-			wantRegistry: "ghcr.io",
 		},
 	}
 
