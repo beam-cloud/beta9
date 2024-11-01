@@ -52,6 +52,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	workerPoolManager := NewWorkerPoolManager()
 	for name, pool := range config.Worker.Pools {
 		workerPoolManager.SetPool(name, pool, &LocalWorkerPoolControllerForTest{
+			ctx:        context.Background(),
 			name:       name,
 			config:     config,
 			workerRepo: workerRepo,
@@ -72,9 +73,14 @@ func NewSchedulerForTest() (*Scheduler, error) {
 }
 
 type LocalWorkerPoolControllerForTest struct {
+	ctx        context.Context
 	name       string
 	config     types.AppConfig
 	workerRepo repo.WorkerRepository
+}
+
+func (wpc *LocalWorkerPoolControllerForTest) Context() context.Context {
+	return wpc.ctx
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
@@ -114,11 +120,16 @@ func (wpc *LocalWorkerPoolControllerForTest) FreeCapacity() (*WorkerPoolCapacity
 }
 
 type ExternalWorkerPoolControllerForTest struct {
+	ctx          context.Context
 	name         string
 	workerRepo   repo.WorkerRepository
 	providerRepo repository.ProviderRepository
 	poolName     string
 	providerName string
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) Context() context.Context {
+	return wpc.ctx
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {
