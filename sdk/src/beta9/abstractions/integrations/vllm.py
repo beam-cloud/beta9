@@ -257,8 +257,9 @@ class VLLM(ASGI):
         vllm_engine_config: VLLMEngineConfig = VLLMEngineConfig(),
         vllm_args: VLLMArgs = VLLMArgs(),
     ):
-        # Add default vllm cache volume to preserve it if custom volumes are specified for chat templates
-        volumes.append(Volume(name="vllm_cache", mount_path=DEFAULT_VLLM_CACHE_DIR))
+        if vllm_engine_config.download_dir == DEFAULT_VLLM_CACHE_DIR:
+            # Add default vllm cache volume to preserve it if custom volumes are specified for chat templates
+            volumes.append(Volume(name="vllm_cache", mount_path=DEFAULT_VLLM_CACHE_DIR))
 
         super().__init__(
             cpu=cpu,
@@ -318,12 +319,16 @@ class VLLM(ASGI):
 
             chat_template_filename = self.chat_template_url.split("/")[-1]
 
-            if not os.path.exists(f"{DEFAULT_VLLM_CACHE_DIR}/{chat_template_filename}"):
+            if not os.path.exists(f"{self.engine_config.download_dir}/{chat_template_filename}"):
                 response = requests.get(self.chat_template_url)
-                with open(f"{DEFAULT_VLLM_CACHE_DIR}/{chat_template_filename}", "wb") as file:
+                with open(
+                    f"{self.engine_config.download_dir}/{chat_template_filename}", "wb"
+                ) as file:
                     file.write(response.content)
 
-            self.vllm_args.chat_template = f"{DEFAULT_VLLM_CACHE_DIR}/{chat_template_filename}"
+            self.vllm_args.chat_template = (
+                f"{self.engine_config.download_dir}/{chat_template_filename}"
+            )
 
         app = FastAPI()
 
