@@ -180,7 +180,9 @@ class VLLM(ASGI):
         prompt_adapters (List[str]):
             The prompt adapters to use.
         chat_template (str):
-            The chat template to use.
+            The chat template to use. Unlike vLLM, this template is expected to be a downloadable link to a jinja template file.
+            That template will be downloaded and used. Here is a good repo of chat templates that you can link to:
+            https://github.com/chujiezheng/chat_templates/tree/main.
         return_tokens_as_token_ids (bool):
             Whether to return tokens as token ids.
         enable_auto_tools (bool):
@@ -286,22 +288,20 @@ class VLLM(ASGI):
 
     def __call__(self, *args: Any, **kwargs: Any):
         import asyncio
-        import logging
 
+        import vllm.entrypoints.openai.api_server as api_server
         from fastapi import FastAPI
         from vllm.engine.arg_utils import AsyncEngineArgs
         from vllm.engine.async_llm_engine import AsyncLLMEngine
-        from vllm.entrypoints.openai.api_server import (
-            init_app_state,
-            router,
-        )
         from vllm.usage.usage_lib import UsageContext
 
-        # TODO: better way to do this
-        if self.vllm_args.chat_template and not os.path.exists("./vllm_cache/chat_templates"):
-            os.system(
-                "git clone https://github.com/chujiezheng/chat_templates.git ./vllm-cache/chat_templates"
-            )
+        if self.vllm_args.chat_template:
+            import requests
+
+            response = requests.get(self.vllm_args.chat_template)
+            with open("./vllm-cache/chat_template.jinja", "wb") as file:
+                file.write(response.content)
+            self.vllm_args.chat_template = "./vllm-cache/chat_template.jinja"
 
         app = FastAPI()
 
@@ -309,30 +309,21 @@ class VLLM(ASGI):
         async def health_check():
             return {"status": "healthy"}
 
-        app.include_router(router)
+        app.include_router(api_server.router)
 
         engine_args = AsyncEngineArgs.from_cli_args(self.engine_config)
+
         engine_client = AsyncLLMEngine.from_engine_args(
             engine_args, usage_context=UsageContext.OPENAI_API_SERVER
         )
 
         model_config = asyncio.run(engine_client.get_model_config())
-        init_app_state(
+        api_server.init_app_state(
             engine_client,
             model_config,
             app.state,
             self.vllm_args,
         )
-
-        logging.info("Available routes are:")
-        for route in app.routes:
-            methods = getattr(route, "methods", None)
-            path = getattr(route, "path", None)
-
-            if methods is None or path is None:
-                continue
-
-            logging.info("Route: %s, Methods: %s", path, ", ".join(methods))
 
         return app
 
