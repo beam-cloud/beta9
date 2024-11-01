@@ -180,6 +180,9 @@ class VLLM(ASGI):
         prompt_adapters (List[str]):
             The prompt adapters to use.
         chat_template (str):
+            This is the path to the chat template you wish to use if one is in your working directory.
+            It can be left empty for the default template of `NONE` or you can use `chat_template_url` instead.
+        chat_template_url (str):
             The chat template to use. Unlike vLLM, this template is expected to be a downloadable link to a jinja template file.
             That template will be downloaded and used. Here is a good repo of chat templates that you can link to:
             https://github.com/chujiezheng/chat_templates/tree/main.
