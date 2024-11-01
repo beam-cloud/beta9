@@ -134,6 +134,54 @@ class VLLMEngineConfig:
     disable_log_requests: bool = False
 
 
+@dataclass
+class VLLMArgs:
+    """
+    VLLMArgs are used to configure the setup and behavior of the model.
+
+    response_role (str):
+        The role of the response. Default is "assistant".
+    lora_modules (List[str]):
+        The LoRA modules to use.
+    prompt_adapters (List[str]):
+        The prompt adapters to use.
+    chat_template (str):
+        This is the path to the chat template you wish to use if one is in your working directory.
+        It can be left empty for the default template of `NONE` or you can use `chat_template_url` instead.
+    chat_template_url (str):
+        The chat template to use. Unlike vLLM, this template is expected to be a downloadable link to a jinja template file.
+        That template will be downloaded and used. Here is a good repo of chat templates that you can link to:
+        https://github.com/chujiezheng/chat_templates/tree/main.
+    return_tokens_as_token_ids (bool):
+        Whether to return tokens as token ids.
+    enable_auto_tools (bool):
+        Whether to enable auto tools.
+    enable_auto_tool_choice (bool):
+        Whether to enable auto tool choice.
+    tool_call_parser (str):
+        The tool call parser to use.
+    disable_log_stats (bool):
+        Whether to disable log stats.
+    disable_log_requests (bool):
+        Whether to disable log requests.
+    max_log_len (Optional[int]):
+        The maximum length of the log.
+    """
+
+    response_role: Optional[str] = "assistant"
+    lora_modules: Optional[List[str]] = (None,)
+    prompt_adapters: Optional[List[str]] = (None,)
+    chat_template: Optional[str] = (None,)
+    chat_template_url: Optional[str] = (None,)
+    return_tokens_as_token_ids: bool = (False,)
+    enable_auto_tools: bool = (False,)
+    enable_auto_tool_choice: bool = (False,)
+    tool_call_parser: Optional[str] = (None,)
+    disable_log_stats: bool = (False,)
+    disable_log_requests: bool = (False,)
+    max_log_len: Optional[int] = (None,)
+
+
 class VLLM(ASGI):
     """
     vllm is a wrapper around the vLLM library that allows you to deploy it as an ASGI app.
@@ -155,7 +203,7 @@ class VLLM(ASGI):
         concurrent_requests (int):
             The maximum number of concurrent requests to handle. Default is 1.
         keep_warm_seconds (int):
-            The number of seconds to keep the container warm after the last request. Default is 30.
+            The number of seconds to keep the container warm after the last request. Default is 60.
         max_pending_tasks (int):
             The maximum number of pending tasks to allow in the container. Default is 100.
         timeout (int):
@@ -171,44 +219,22 @@ class VLLM(ASGI):
             The secrets to pass to the container. If you need huggingface authentication to download models, you should set HF_TOKEN in the secrets.
         autoscaler (Autoscaler):
             The autoscaler to use. Default is a queue depth autoscaler.
-        engine_config (EngineConfig):
+        vllm_engine_config (VLLMEngineConfig):
             The configuration for the vLLM engine.
-        response_role (str):
-            The role of the response.
-        lora_modules (List[str]):
-            The LoRA modules to use.
-        prompt_adapters (List[str]):
-            The prompt adapters to use.
-        chat_template (str):
-            This is the path to the chat template you wish to use if one is in your working directory.
-            It can be left empty for the default template of `NONE` or you can use `chat_template_url` instead.
-        chat_template_url (str):
-            The chat template to use. Unlike vLLM, this template is expected to be a downloadable link to a jinja template file.
-            That template will be downloaded and used. Here is a good repo of chat templates that you can link to:
-            https://github.com/chujiezheng/chat_templates/tree/main.
-        return_tokens_as_token_ids (bool):
-            Whether to return tokens as token ids.
-        enable_auto_tools (bool):
-            Whether to enable auto tools.
-        enable_auto_tool_choice (bool):
-            Whether to enable auto tool choice.
-        tool_call_parser (str):
-            The tool call parser to use.
-        disable_log_stats (bool):
-            Whether to disable log stats.
-        disable_log_requests (bool):
-            Whether to disable log requests.
-        max_log_len (Optional[int]):
-            The maximum length of the log.
+        vllm_args (VLLMArgs):
+            The arguments for the vLLM model.
 
     Example:
         ```python
         from beta9 import integrations
 
-        e = integrations.EngineConfig()
+        e = integrations.VLLMEngineConfig()
         e.device = "cpu"
 
-        vllm_app = integrations.VLLM(name="vllm-abstraction-1", engine_config=e)
+        a = integrations.VLLMArgs()
+        a.chat_template = "./chatml.jinja"
+
+        vllm_app = integrations.VLLM(name="vllm-abstraction-1", vllm_engine_config=e, vllm_args=a)
         ```
     """
 
@@ -220,7 +246,7 @@ class VLLM(ASGI):
         image: Image = Image(python_version="python3.11").add_python_packages(["fastapi", "vllm"]),
         workers: int = 1,
         concurrent_requests: int = 1,
-        keep_warm_seconds: int = 30,
+        keep_warm_seconds: int = 60,
         max_pending_tasks: int = 100,
         timeout: int = 3600,
         authorized: bool = True,
@@ -230,21 +256,8 @@ class VLLM(ASGI):
         ],
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
-        # vLLM engine config
-        engine_config: VLLMEngineConfig = VLLMEngineConfig(),
-        # vLLM args
-        response_role: Optional[str] = None,
-        lora_modules: Optional[List[str]] = None,
-        prompt_adapters: Optional[List[str]] = None,
-        chat_template: Optional[str] = None,
-        chat_template_url: Optional[str] = None,
-        return_tokens_as_token_ids: bool = False,
-        enable_auto_tools: bool = False,
-        enable_auto_tool_choice: bool = False,
-        tool_call_parser: Optional[str] = None,
-        disable_log_stats: bool = False,
-        disable_log_requests: bool = False,
-        max_log_len: Optional[int] = None,
+        vllm_engine_config: VLLMEngineConfig = VLLMEngineConfig(),
+        vllm_args: VLLMArgs = VLLMArgs(),
     ):
         # ASGI initialization
         super().__init__(
@@ -264,22 +277,22 @@ class VLLM(ASGI):
             autoscaler=autoscaler,
         )
 
-        self.chat_template_url = chat_template_url
-        self.engine_config = engine_config
+        self.chat_template_url = vllm_args.chat_template_url
+        self.engine_config = vllm_engine_config
         self.vllm_args = SimpleNamespace(
-            model=engine_config.model,
-            served_model_name=engine_config.served_model_name,
-            disable_log_requests=disable_log_requests,
-            max_log_len=max_log_len,
-            response_role=response_role,
-            lora_modules=lora_modules,
-            prompt_adapters=prompt_adapters,
-            chat_template=chat_template,
-            return_tokens_as_token_ids=return_tokens_as_token_ids,
-            enable_auto_tool_choice=enable_auto_tool_choice,
-            enable_auto_tools=enable_auto_tools,
-            tool_call_parser=tool_call_parser,
-            disable_log_stats=disable_log_stats,
+            model=vllm_engine_config.model,
+            served_model_name=vllm_engine_config.served_model_name,
+            disable_log_requests=vllm_args.disable_log_requests,
+            max_log_len=vllm_args.max_log_len,
+            response_role=vllm_args.response_role,
+            lora_modules=vllm_args.lora_modules,
+            prompt_adapters=vllm_args.prompt_adapters,
+            chat_template=vllm_args.chat_template,
+            return_tokens_as_token_ids=vllm_args.return_tokens_as_token_ids,
+            enable_auto_tool_choice=vllm_args.enable_auto_tool_choice,
+            enable_auto_tools=vllm_args.enable_auto_tools,
+            tool_call_parser=vllm_args.tool_call_parser,
+            disable_log_stats=vllm_args.disable_log_stats,
         )
 
     def __name__(self) -> str:
