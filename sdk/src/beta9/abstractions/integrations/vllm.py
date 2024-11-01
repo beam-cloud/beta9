@@ -20,7 +20,7 @@ from ...clients.gateway import DeployStubRequest, DeployStubResponse
 from ...config import ConfigContext
 from ...type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
 
-DEFAULT_VLLM_CACHE_DIR = "./vllm-cache"
+DEFAULT_VLLM_CACHE_DIR = "./vllm_cache"
 
 
 # vllm/engine/arg_utils.py:EngineArgs
@@ -213,7 +213,7 @@ class VLLM(ASGI):
         name (str):
             The name of the container. Default is none, which means you must provide it during deployment.
         volumes (List[Volume]):
-            The volumes to mount into the container. Default is a single volume named "vllm-cache" mounted to "./vllm-cache".
+            The volumes to mount into the container. Default is a single volume named "vllm_cache" mounted to "./vllm_cache".
             It is used as the download directory for vLLM models.
         secrets (List[str]):
             The secrets to pass to the container. If you need huggingface authentication to download models, you should set HF_TOKEN in the secrets.
@@ -251,15 +251,15 @@ class VLLM(ASGI):
         timeout: int = 3600,
         authorized: bool = True,
         name: Optional[str] = None,
-        volumes: Optional[List[Volume]] = [
-            Volume(name="vllm-cache", mount_path=DEFAULT_VLLM_CACHE_DIR)
-        ],
+        volumes: Optional[List[Volume]] = [],
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         vllm_engine_config: VLLMEngineConfig = VLLMEngineConfig(),
         vllm_args: VLLMArgs = VLLMArgs(),
     ):
-        # ASGI initialization
+        # Add default vllm cache volume to preserve it if custom volumes are specified for chat templates
+        volumes.append(Volume(name="vllm_cache", mount_path=DEFAULT_VLLM_CACHE_DIR))
+
         super().__init__(
             cpu=cpu,
             memory=memory,
@@ -316,10 +316,14 @@ class VLLM(ASGI):
         if self.chat_template_url:
             import requests
 
-            response = requests.get(self.chat_template_url)
-            with open("./vllm-cache/chat_template.jinja", "wb") as file:
-                file.write(response.content)
-            self.vllm_args.chat_template = "./vllm-cache/chat_template.jinja"
+            chat_template_filename = self.chat_template_url.split("/")[-1]
+
+            if not os.path.exists(f"{DEFAULT_VLLM_CACHE_DIR}/{chat_template_filename}"):
+                response = requests.get(self.chat_template_url)
+                with open(f"{DEFAULT_VLLM_CACHE_DIR}/{chat_template_filename}", "wb") as file:
+                    file.write(response.content)
+
+            self.vllm_args.chat_template = f"{DEFAULT_VLLM_CACHE_DIR}/{chat_template_filename}"
 
         app = FastAPI()
 
