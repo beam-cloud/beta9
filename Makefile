@@ -42,11 +42,11 @@ proxy:
 
 runner:
 	for target in py312 py311 py310 py39 py38; do \
-		docker build . --target $$target --platform=linux/amd64 -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:$$target-$(runnerTag); \
+		docker build . --target $$target --platform=linux/arm64 -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:$$target-$(runnerTag); \
 		docker push localhost:5001/beta9-runner:$$target-$(runnerTag); \
 	done
 	for version in "3.12" "3.11" "3.10" "3.9" "3.8"; do \
-		docker build . --build-arg PYTHON_VERSION=$$version --target micromamba --platform=linux/amd64 -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:micromamba$$version-$(runnerTag); \
+		docker build . --build-arg PYTHON_VERSION=$$version --target micromamba --platform=linux/arm64 -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:micromamba$$version-$(runnerTag); \
 		docker push localhost:5001/beta9-runner:micromamba$$version-$(runnerTag); \
 	done
 
@@ -65,3 +65,9 @@ verify-protocol:
 
 test-pkg:
 	go test -v ./pkg/... -bench=./pkg/..
+
+build-test:
+	poetry config virtualenvs.in-project true
+	poetry install -C sdk
+	poetry shell -C sdk
+	cd build_tests && python app.py
