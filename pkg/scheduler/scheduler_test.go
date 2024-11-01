@@ -59,6 +59,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	}
 
 	return &Scheduler{
+		ctx:               context.Background(),
 		eventBus:          eventBus,
 		workerRepo:        workerRepo,
 		workerPoolManager: workerPoolManager,
