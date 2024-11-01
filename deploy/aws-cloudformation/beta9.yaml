@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Deploy Beta9 instance and setup the project environment
+
+Parameters:
+  SSHKey:
+    Description: Key pair for SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: beta9key
+
+Resources:
+  Beta9VPC:
+      Type: AWS::EC2::VPC
+      Properties:
+        CidrBlock: 10.0.0.0/16
+        EnableDnsSupport: true
+        EnableDnsHostnames: true
+        Tags:
+          - Key: Name
+            Value: Beta9VPC
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref Beta9VPC
+      GroupDescription: Enable SSH access and custom ports
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        # uncomment bellow for allowing remote execution, note that config.ini should be taken from the instance
+        # - IpProtocol: tcp
+        #   FromPort: 1993
+        #   ToPort: 1993
+        #   CidrIp: 0.0.0.0/0
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Beta9VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  Beta9Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Beta9VPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Beta9VPC
+
+  Route:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetARouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref Beta9Subnet
+
+  Beta9Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3a.2xlarge # instance needs to have at least CPU 8 cores to run
+      KeyName: !Ref SSHKey
+      SecurityGroupIds:
+       - !GetAtt InstanceSecurityGroup.GroupId
+      ImageId: ami-04b70fa74e45c3917
+      SubnetId: !Ref Beta9Subnet
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sda1"
+          Ebs:
+            VolumeSize: 60
+            VolumeType: "gp3"
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          export DEBIAN_FRONTEND=noninteractive
+          apt install -y software-properties-common
+          add-apt-repository -y ppa:deadsnakes/ppa
+          apt update
+          apt install -y python3.8
+          apt install -y python3.8-venv
+          apt-get update -y
+          apt-get install -y git make docker.io
+          systemctl start docker
+          systemctl enable docker
+          apt install -y docker-buildx
+          sudo chgrp -R ubuntu /usr/local/bin
+          sudo chmod -R g+w /usr/local/bin
+          sudo chmod 666 /var/run/docker.sock
+          sudo -u ubuntu bash <<EOF
+          cd ~/
+          curl -OL https://go.dev/dl/go1.22.4.linux-amd64.tar.gz
+          sudo tar -C /usr/local -xzf go1.22.4.linux-amd64.tar.gz
+          echo "export PATH=$PATH:/usr/local/go/bin:/home/ubuntu/.local/bin/:/home/ubuntu/go/bin" >> ~/.bashrc
+          echo "export DOCKER_BUILDKIT=1" >> ~/.bashrc
+          sudo apt install -y protobuf-compiler
+          sudo apt install -y golang-goprotobuf-dev
+          sudo apt install -y python3-poetry
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          cd /usr/local/bin/
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | sudo bash
+          cd ~/
+          git clone https://github.com/beam-cloud/beta9.git
+          # Navigate to the project directory
+          cd beta9
+          python3.8 -m venv beta9env
+          source beta9env/bin/activate
+          curl -sSL https://install.python-poetry.org | python3 -
+          export PATH="$HOME/.local/bin/:$PATH"
+          poetry config virtualenvs.in-project true
+          make setup
+          source ~/.bashrc
+          make setup-sdk
+          echo "source ~/beta9/beta9env/bin/activate" >> ~/.bashrc
+          EOF
