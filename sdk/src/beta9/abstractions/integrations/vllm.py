@@ -234,6 +234,7 @@ class VLLM(ASGI):
         lora_modules: Optional[List[str]] = None,
         prompt_adapters: Optional[List[str]] = None,
         chat_template: Optional[str] = None,
+        chat_template_url: Optional[str] = None,
         return_tokens_as_token_ids: bool = False,
         enable_auto_tools: bool = False,
         enable_auto_tool_choice: bool = False,
@@ -260,6 +261,7 @@ class VLLM(ASGI):
             autoscaler=autoscaler,
         )
 
+        self.chat_template_url = chat_template_url
         self.engine_config = engine_config
         self.vllm_args = SimpleNamespace(
             model=engine_config.model,
@@ -295,10 +297,10 @@ class VLLM(ASGI):
         from vllm.engine.async_llm_engine import AsyncLLMEngine
         from vllm.usage.usage_lib import UsageContext
 
-        if self.vllm_args.chat_template:
+        if self.chat_template_url:
             import requests
 
-            response = requests.get(self.vllm_args.chat_template)
+            response = requests.get(self.chat_template_url)
             with open("./vllm-cache/chat_template.jinja", "wb") as file:
                 file.write(response.content)
             self.vllm_args.chat_template = "./vllm-cache/chat_template.jinja"
