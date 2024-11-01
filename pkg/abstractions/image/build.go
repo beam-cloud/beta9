@@ -288,7 +288,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	// Generate the commands to run in the container
-	opts.Commands = parseBuildSteps(opts.BuildSteps, opts.PythonVersion)
+	opts.Commands = append(parseBuildSteps(opts.BuildSteps, opts.PythonVersion), opts.Commands...)
 
 	for _, cmd := range opts.Commands {
 		if cmd == "" {
