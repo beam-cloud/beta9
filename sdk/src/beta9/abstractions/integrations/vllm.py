@@ -367,6 +367,14 @@ class VLLM(ASGI):
                 "You must specify an app name (either in the decorator or via the --name argument)."
             )
 
+        if (
+            self.engine_config.download_dir != DEFAULT_VLLM_CACHE_DIR
+            and self.engine_config.download_dir not in [v.mount_path for v in self.volumes]
+        ):
+            terminal.error(
+                "The engine's download directory must match a mount path in the volumes list."
+            )
+
         if context is not None:
             self.config_context = context
 
