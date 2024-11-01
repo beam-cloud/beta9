@@ -48,6 +48,7 @@ gateway:
   shutdownTimeout: 180s
   stubLimits:
     memory: 32768
+    maxReplicas: 10
 imageService:
   localCacheEnabled: true
   registryStore: local
@@ -72,6 +73,11 @@ imageService:
       python3.10: py310-latest
       python3.11: py311-latest
       python3.12: py312-latest
+      micromamba3.8: micromamba3.8-latest
+      micromamba3.9: micromamba3.9-latest
+      micromamba3.10: micromamba3.10-latest
+      micromamba3.11: micromamba3.11-latest
+      micromamba3.12: micromamba3.12-latest
 worker:
   pools:
     default:

@@ -44,8 +44,8 @@ class Endpoint(RunnerAbstraction):
         gpu (Union[GpuTypeAlias, List[GpuTypeAlias]]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty.
-            You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify multiple
-            GPUs, the container will load balance across them with equal priority.
+            You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
+            the scheduler prioritizes their selection based on their order in the list.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Volume]]):
@@ -237,6 +237,8 @@ class ASGI(Endpoint):
             @app.post("/warmup")
             async def warmup():
                 return {"status": "warm"}
+
+            return app
         ```
     """
 
@@ -439,7 +441,7 @@ class RealtimeASGI(ASGI):
                         while not internal_asgi_app.input_queue.empty():
                             output = internal_asgi_app.handler(
                                 context=internal_asgi_app.context,
-                                input=internal_asgi_app.input_queue.get(),
+                                event=internal_asgi_app.input_queue.get(),
                             )
 
                             if isinstance(output, str):

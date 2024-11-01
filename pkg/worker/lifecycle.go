@@ -38,19 +38,21 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 	s.containerLock.Lock()
 	defer s.containerLock.Unlock()
 
-	containerId := event.Args["container_id"].(string)
+	stopArgs, err := types.ToStopContainerArgs(event.Args)
+	if err != nil {
+		log.Printf("failed to parse stop container args: %v\n", err)
+		return false
+	}
 
-	if _, exists := s.containerInstances.Get(containerId); exists {
-		log.Printf("<%s> - received stop container event.\n", containerId)
-		s.stopContainerChan <- stopContainerEvent{ContainerId: containerId, Kill: false}
+	if _, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
+		log.Printf("<%s> - received stop container event.\n", stopArgs.ContainerId)
+		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
 	return true
 }
 
-// stopContainer stops a runc container.
-// It will remove the container state if the contaienr is forcefully killed.
-// Otherwise, the container state will be removed after the termination grace period in clearContainer().
+// stopContainer stops a runc container. When force is true, a SIGKILL signal is sent to the container.
 func (s *Worker) stopContainer(containerId string, kill bool) error {
 	log.Printf("<%s> - stopping container.\n", containerId)
 
@@ -63,6 +65,7 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 	if kill {
 		signal = int(syscall.SIGKILL)
 		s.containerRepo.DeleteContainerState(containerId)
+		defer s.containerInstances.Delete(containerId)
 	}
 
 	err := s.runcHandle.Kill(context.Background(), containerId, signal, &runc.KillOpts{All: true})
@@ -468,9 +471,19 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
 
-	// Capture resource usage (cpu/mem/gpu)
+	pid := 0
 	pidChan := make(chan int, 1)
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pidChan)
+
+	go func() {
+		// Wait for runc to start the container
+		pid = <-pidChan
+
+		// Capture resource usage (cpu/mem/gpu)
+		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
+
+		// Watch for OOM events
+		go s.watchOOMEvents(ctx, containerId, outputChan)
+	}()
 
 	// Invoke runc process (launch the container)
 	exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
@@ -506,4 +519,53 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 // isBuildRequest checks if the sourceImage field is not-nil, which means the container request is for a build container
 func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 	return request.SourceImage != nil
+}
+
+func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output chan common.OutputMsg) {
+	seenEvents := make(map[string]struct{})
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	ch, err := s.runcHandle.Events(ctx, containerId, time.Second)
+	if err != nil {
+		return
+	}
+
+	maxTries, tries := 5, 0 // Used for re-opening the channel if it's closed
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			seenEvents = make(map[string]struct{})
+		default:
+			event, ok := <-ch
+			if !ok { // If the channel is closed, try to re-open it
+				if tries == maxTries-1 {
+					output <- common.OutputMsg{
+						Msg: fmt.Sprintln("[WARNING] Unable to watch for OOM events."),
+					}
+					return
+				}
+
+				tries++
+				time.Sleep(time.Second)
+				ch, _ = s.runcHandle.Events(ctx, containerId, time.Second)
+				continue
+			}
+
+			if _, ok := seenEvents[event.Type]; ok {
+				continue
+			}
+
+			seenEvents[event.Type] = struct{}{}
+
+			if event.Type == "oom" {
+				output <- common.OutputMsg{
+					Msg: fmt.Sprintln("[ERROR] A process in the container was killed due to out-of-memory conditions."),
+				}
+			}
+		}
+	}
 }

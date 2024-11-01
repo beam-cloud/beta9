@@ -30,6 +30,8 @@ AVAILABLE_LIST_COLUMNS = {
     "status": "Status",
     "stub_id": "Stub Id",
     "scheduled_at": "Scheduled At",
+    "worker_id": "Worker Id",
+    "machine_id": "Machine Id",
 }
 
 
@@ -77,6 +79,12 @@ def list_containers(ctx: click.Context, service: ServiceClient, format: str, col
             return
 
         table_cols.append(Column(AVAILABLE_LIST_COLUMNS[col]))
+
+    add_admin_columns = all(c.worker_id for c in res.containers)
+    if add_admin_columns:
+        for column_name in ["worker_id", "machine_id"]:
+            desired_columns.append(column_name)
+            table_cols.append(Column(AVAILABLE_LIST_COLUMNS[column_name]))
 
     if len(res.containers) == 0:
         terminal.print("No containers found.")

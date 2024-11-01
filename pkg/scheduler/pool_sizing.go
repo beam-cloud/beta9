@@ -37,10 +37,17 @@ func NewWorkerPoolSizer(controller WorkerPoolController,
 }
 
 func (s *WorkerPoolSizer) Start() {
+	ctx := s.controller.Context()
 	ticker := time.NewTicker(poolMonitoringInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
+		select {
+		case <-ctx.Done():
+			return // Context has been cancelled
+		default: // Continue processing requests
+		}
+
 		func() {
 			freeCapacity, err := s.controller.FreeCapacity()
 			if err != nil {

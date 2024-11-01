@@ -62,23 +62,26 @@ def serve(
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
 
-    module_path, func_name, *_ = entrypoint.split(":") if ":" in entrypoint else (entrypoint, "")
+    module_path, obj_name, *_ = entrypoint.split(":") if ":" in entrypoint else (entrypoint, "")
     module_name = module_path.replace(".py", "").replace(os.path.sep, ".")
 
     if not Path(module_path).exists():
         terminal.error(f"Unable to find file: '{module_path}'")
 
-    if not func_name:
+    if not obj_name:
         terminal.error(
             "Invalid handler function specified. Expected format: beam serve [file.py]:[function]"
         )
 
     module = importlib.import_module(module_name)
 
-    user_func = getattr(module, func_name, None)
-    if user_func is None:
+    user_obj = getattr(module, obj_name, None)
+    if user_obj is None:
         terminal.error(
-            f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{func_name}'"
+            f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{obj_name}'"
         )
 
-    user_func.serve(timeout=int(timeout), url_type=url_type)  # type:ignore
+    if hasattr(user_obj, "set_handler"):
+        user_obj.set_handler(f"{module_name}:{obj_name}")
+
+    user_obj.serve(timeout=int(timeout), url_type=url_type)  # type:ignore

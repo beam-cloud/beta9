@@ -93,9 +93,13 @@ func NewExternalWorkerPoolController(
 	}
 
 	// Reconcile nodes with state
-	go provider.Reconcile(context.Background(), wpc.name)
+	go provider.Reconcile(ctx, wpc.name)
 
 	return wpc, nil
+}
+
+func (wpc *ExternalWorkerPoolController) Context() context.Context {
+	return wpc.ctx
 }
 
 func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {

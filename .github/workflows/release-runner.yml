@@ -11,7 +11,29 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['py38', 'py39', 'py310', 'py311', 'py312']
+        include:
+          # Python versions
+          - version: '3.8'
+            target: 'py38'
+          - version: '3.9'
+            target: 'py39'
+          - version: '3.10'
+            target: 'py310'
+          - version: '3.11'
+            target: 'py311'
+          - version: '3.12'
+            target: 'py312'
+          # Micromamba versions
+          - version: '3.8'
+            target: 'micromamba'
+          - version: '3.9'
+            target: 'micromamba'
+          - version: '3.10'
+            target: 'micromamba'
+          - version: '3.11'
+            target: 'micromamba'
+          - version: '3.12'
+            target: 'micromamba'
 
     steps:
       - name: Checkout code
@@ -34,14 +56,17 @@ jobs:
       - name: Extract tag name
         run: echo "RUNNER_TAG=${GITHUB_REF#refs/tags/runner-}" >> $GITHUB_ENV
 
-      - name: Build and push Docker image for ${{ matrix.python-version }}
+      - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
           context: .
           file: ./docker/Dockerfile.runner
           push: true
-          tags:  ${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.python-version }}-${{ env.RUNNER_TAG }},${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.python-version }}-latest
-          target: ${{ matrix.python-version }}
+          tags: ${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.target == 'micromamba' && format('micromamba{0}', matrix.version) || matrix.target }}-${{ env.RUNNER_TAG }},${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.target == 'micromamba' && format('micromamba{0}', matrix.version) || matrix.target }}-latest
+          target: ${{ matrix.target }}
+          build-args: |
+            ${{ matrix.target == 'micromamba' && format('PYTHON_VERSION={0}', matrix.version) || '' }}
+          platforms: linux/amd64
           load: false
           registry: ${{ steps.login-ecr.outputs.registry }}
           repository: ${{ steps.login-ecr.outputs.registry }}/beta9-runner
