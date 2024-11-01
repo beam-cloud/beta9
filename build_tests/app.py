@@ -3,7 +3,7 @@ import uuid
 
 from beta9 import Image, function
 
-numpy_311_img = (
+numpy_310_img = (
     Image(python_version="python3.10")
     .add_python_packages(["numpy"])
     .add_commands([f"echo {uuid.uuid4()}"])
@@ -25,8 +25,8 @@ nv_cuda_1222_torch_img = (
 )
 
 
-@function(image=numpy_311_img)
-def numpy_311():
+@function(image=numpy_310_img)
+def numpy_310():
     import numpy as np
 
     _ = np.array([0, 0, 0, 0])
@@ -72,7 +72,7 @@ if __name__ == "__main__":
 
             assert tmp_func.remote() == "pass"
 
-    assert numpy_311.remote() == "pass"
+    assert numpy_310.remote() == "pass"
     assert ffmpeg.remote() == "pass"
 
     if not local:
