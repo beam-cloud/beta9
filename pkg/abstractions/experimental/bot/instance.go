@@ -8,13 +8,13 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/scheduler"
+	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 )
 
 const (
 	botContainerPrefix         string = "bot"
-	botContainerTypeModel      string = "model" // TODO: only need this in the case where we host the model on beta9 using vllm (or similar)
 	botContainerTypeTransition string = "transition"
 )
 
@@ -30,17 +30,30 @@ type botInstance struct {
 	cancelFunc      context.CancelFunc
 	botStateManager *botStateManager
 	botInterface    *BotInterface
+	taskDispatcher  *task.Dispatcher
 }
 
-func newBotInstance(ctx context.Context, appConfig types.AppConfig, scheduler *scheduler.Scheduler, token *types.Token, stub *types.StubWithRelated, stubConfig *types.StubConfigV1, botConfig BotConfig, botStateManager *botStateManager) (*botInstance, error) {
+type botInstanceOpts struct {
+	AppConfig      types.AppConfig
+	Scheduler      *scheduler.Scheduler
+	Token          *types.Token
+	Stub           *types.StubWithRelated
+	StubConfig     *types.StubConfigV1
+	BotConfig      BotConfig
+	StateManager   *botStateManager
+	TaskDispatcher *task.Dispatcher
+}
+
+func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, error) {
 	ctx, cancelFunc := context.WithCancel(ctx)
 
 	botInterface, err := NewBotInterface(botInterfaceOpts{
-		AppConfig:    appConfig,
-		BotConfig:    botConfig,
-		StateManager: botStateManager,
-		Workspace:    &stub.Workspace,
-		Stub:         stub,
+		AppConfig:    opts.AppConfig,
+		BotConfig:    opts.BotConfig,
+		StateManager: opts.StateManager,
+		Workspace:    &opts.Stub.Workspace,
+		Stub:         opts.Stub,
+		SessionId:    "testsession",
 	})
 	if err != nil {
 		cancelFunc()
@@ -49,16 +62,17 @@ func newBotInstance(ctx context.Context, appConfig types.AppConfig, scheduler *s
 
 	return &botInstance{
 		ctx:             ctx,
-		appConfig:       appConfig,
-		token:           token,
-		scheduler:       scheduler,
-		stub:            stub,
-		workspace:       &stub.Workspace,
-		stubConfig:      stubConfig,
-		botConfig:       botConfig,
+		appConfig:       opts.AppConfig,
+		token:           opts.Token,
+		scheduler:       opts.Scheduler,
+		stub:            opts.Stub,
+		workspace:       &opts.Stub.Workspace,
+		stubConfig:      opts.StubConfig,
+		botConfig:       opts.BotConfig,
 		cancelFunc:      cancelFunc,
-		botStateManager: botStateManager,
+		botStateManager: opts.StateManager,
 		botInterface:    botInterface,
+		taskDispatcher:  opts.TaskDispatcher,
 	}, nil
 }
 
@@ -68,21 +82,92 @@ func (i *botInstance) Start() error {
 		case <-i.ctx.Done():
 			return nil
 		default:
-			prompt, err := i.botInterface.inputBuffer.Pop()
-			if err == nil {
-				err = i.botInterface.SendPrompt("testsession", prompt)
-				if err != nil {
+			activeSessions := []string{"testsession"}
+
+			for _, sessionId := range activeSessions {
+				if prompt, err := i.botInterface.inputBuffer.Pop(); err == nil {
+					if err := i.botInterface.SendPrompt(sessionId, prompt); err != nil {
+						continue
+					}
+				}
+
+				select {
+				case <-i.ctx.Done():
+					return nil
+				case <-time.After(time.Duration(i.appConfig.Abstractions.Bot.StepIntervalS) * time.Second):
+					i.step(sessionId)
 					continue
 				}
 			}
-
-			i.step()
-			time.Sleep(time.Duration(i.appConfig.Abstractions.Bot.StepIntervalS) * time.Second)
 		}
 	}
 }
 
-func (i *botInstance) runTransition(transitionName string) error {
+func (i *botInstance) step(sessionId string) {
+	err := i.botStateManager.acquireLock(i.workspace.Name, i.stub.ExternalId, sessionId)
+	if err != nil {
+		return
+	}
+
+	func() {
+		defer i.botStateManager.releaseLock(i.workspace.Name, i.stub.ExternalId, sessionId)
+
+		for _, transition := range i.botConfig.Transitions {
+			currentMarkerCounts := make(map[string]int64)
+
+			markersToPop := make(map[string]int64)
+			canFire := true
+
+			for locationName, requiredCount := range transition.Inputs {
+				count, err := i.botStateManager.countMarkers(i.workspace.Name, i.stub.ExternalId, sessionId, locationName)
+				if err != nil {
+					continue
+				}
+
+				log.Printf("locationName: %s, currentCount: %d, requiredCount: %d", locationName, count, requiredCount)
+				currentMarkerCounts[locationName] = count
+				if count < int64(requiredCount) {
+					canFire = false
+					break
+				}
+
+				markersToPop[locationName] = int64(requiredCount)
+			}
+
+			// If this transition can fire, we need to pop the required markers and dispatch a task
+			if canFire {
+				markers := []Marker{}
+
+				for locationName, requiredCount := range markersToPop {
+					for idx := 0; idx < int(requiredCount); idx++ {
+						marker, err := i.botStateManager.popMarker(i.workspace.Name, i.stub.ExternalId, sessionId, locationName)
+						if err != nil {
+							continue
+						}
+
+						markers = append(markers, *marker)
+					}
+				}
+
+				taskPayload := &types.TaskPayload{
+					Kwargs: map[string]interface{}{
+						"markers": markers,
+					},
+				}
+
+				// TODO: send and dispatch task my guy
+				log.Printf("taskPayload: %v", taskPayload)
+				_, err := i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), nil, i.stub.ExternalId, taskPayload, i.stubConfig.TaskPolicy)
+				if err != nil {
+					log.Printf("error sending and executing task: %v", err)
+				}
+
+			}
+		}
+	}()
+}
+
+func (i *botInstance) run(transitionName, sessionId string) error {
 	transitionConfig, ok := i.botConfig.Transitions[transitionName]
 	if !ok {
 		return errors.New("transition not found")
@@ -101,7 +186,7 @@ func (i *botInstance) runTransition(transitionName string) error {
 	}
 
 	err := i.scheduler.Run(&types.ContainerRequest{
-		ContainerId: i.genContainerId(botContainerTypeTransition),
+		ContainerId: i.genContainerId(botContainerTypeTransition, sessionId),
 		Env:         env,
 		Cpu:         transitionConfig.Cpu,
 		Memory:      transitionConfig.Memory,
@@ -120,21 +205,6 @@ func (i *botInstance) runTransition(transitionName string) error {
 	return nil
 }
 
-func (i *botInstance) step() {
-	// Count the markers
-	for _, location := range i.botConfig.Locations {
-		log.Println("location: ", location.Name)
-		markers, err := i.botStateManager.countMarkers(i.workspace.Name, i.stub.ExternalId, "testsession", location.Name)
-		if err != nil {
-			continue
-		}
-
-		log.Println("MARKERS: ", markers)
-	}
-
-	// Determine which transitions can fire (this should be locked)
-}
-
-func (i *botInstance) genContainerId(botContainerType string) string {
-	return fmt.Sprintf("%s-%s-%s-%s", botContainerPrefix, botContainerType, i.stub.ExternalId, uuid.New().String()[:8])
+func (i *botInstance) genContainerId(botContainerType, sessionId string) string {
+	return fmt.Sprintf("%s-%s-%s-%s-%s", botContainerPrefix, botContainerType, i.stub.ExternalId, sessionId, uuid.New().String()[:8])
 }

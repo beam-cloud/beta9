@@ -123,7 +123,16 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 		return nil, err
 	}
 
-	instance, err = newBotInstance(pbs.ctx, pbs.config, pbs.scheduler, token, stub, stubConfig, botConfig, pbs.botStateManager)
+	instance, err = newBotInstance(pbs.ctx, botInstanceOpts{
+		AppConfig:      pbs.config,
+		Scheduler:      pbs.scheduler,
+		Token:          token,
+		Stub:           stub,
+		StubConfig:     stubConfig,
+		BotConfig:      botConfig,
+		StateManager:   pbs.botStateManager,
+		TaskDispatcher: pbs.taskDispatcher,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +165,6 @@ type keys struct{}
 var (
 	botLock         string = "bot:%s:%s:session_state_lock:%s"
 	botSessionState string = "bot:%s:%s:session_state:%s"
-	botMarkerIndex  string = "bot:%s:%s:marker_index:%s"
 	botMarkers      string = "bot:%s:%s:markers:%s:%s"
 )
 
@@ -166,10 +174,6 @@ func (k *keys) botLock(workspaceName, stubId, sessionId string) string {
 
 func (k *keys) botSessionState(workspaceName, stubId, sessionId string) string {
 	return fmt.Sprintf(botSessionState, workspaceName, stubId, sessionId)
-}
-
-func (k *keys) botMarkerIndex(workspaceName, stubId, sessionId string) string {
-	return fmt.Sprintf(botMarkerIndex, workspaceName, stubId, sessionId)
 }
 
 func (k *keys) botMarkers(workspaceName, stubId, sessionId, locationName string) string {

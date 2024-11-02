@@ -9,6 +9,7 @@ from typing import (
     AsyncIterator,
     Dict,
     Iterator,
+    List,
     Optional,
 )
 
@@ -71,16 +72,35 @@ class SendBotMessageResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class PopBotMarkerRequest(betterproto.Message):
+class PopBotTaskRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     session_id: str = betterproto.string_field(2)
-    location_name: str = betterproto.string_field(3)
+    transition_name: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)
-class PopBotMarkerResponse(betterproto.Message):
+class PopBotTaskResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
-    marker: bytes = betterproto.bytes_field(2)
+    markers: Dict[str, "PopBotTaskResponseMarkerList"] = betterproto.map_field(
+        2, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
+    )
+
+
+@dataclass(eq=False, repr=False)
+class PopBotTaskResponseMarkerList(betterproto.Message):
+    markers: List["Marker"] = betterproto.message_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class MarkerField(betterproto.Message):
+    field_name: str = betterproto.string_field(1)
+    field_value: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class Marker(betterproto.Message):
+    location_name: str = betterproto.string_field(1)
+    fields: List["MarkerField"] = betterproto.message_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -134,14 +154,14 @@ class BotServiceStub(SyncServiceStub):
             SendBotMessageResponse,
         )(send_bot_message_request)
 
-    def pop_bot_marker(
-        self, pop_bot_marker_request: "PopBotMarkerRequest"
-    ) -> "PopBotMarkerResponse":
+    def pop_bot_task(
+        self, pop_bot_task_request: "PopBotTaskRequest"
+    ) -> "PopBotTaskResponse":
         return self._unary_unary(
-            "/bot.BotService/PopBotMarker",
-            PopBotMarkerRequest,
-            PopBotMarkerResponse,
-        )(pop_bot_marker_request)
+            "/bot.BotService/PopBotTask",
+            PopBotTaskRequest,
+            PopBotTaskResponse,
+        )(pop_bot_task_request)
 
     def push_bot_marker(
         self, push_bot_marker_request: "PushBotMarkerRequest"

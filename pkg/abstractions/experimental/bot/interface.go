@@ -23,6 +23,7 @@ type BotInterface struct {
 	workspace    *types.Workspace
 	stub         *types.StubWithRelated
 	schema       *jsonschema.Definition
+	sessionId    string
 }
 
 type botInterfaceOpts struct {
@@ -31,6 +32,7 @@ type botInterfaceOpts struct {
 	StateManager *botStateManager
 	Workspace    *types.Workspace
 	Stub         *types.StubWithRelated
+	SessionId    string
 }
 
 func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
@@ -44,6 +46,7 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 		stateManager: opts.StateManager,
 		workspace:    opts.Workspace,
 		stub:         opts.Stub,
+		sessionId:    opts.SessionId,
 	}
 
 	bi.outputBuffer.Push(fmt.Sprintf("Starting bot, using model<%s>\n", bi.model))
@@ -56,7 +59,7 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 	}
 	bi.schema = schema
 
-	err = bi.initSession("testsession")
+	err = bi.initSession(bi.sessionId)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +114,7 @@ func (bi *BotInterface) initSession(sessionId string) error {
 		Content: responseMessage.Content,
 	})
 
-	err = bi.stateManager.updateSession(bi.workspace.Name, bi.stub.ExternalId, sessionId, state, &bi.botConfig)
+	err = bi.stateManager.updateSession(bi.workspace.Name, bi.stub.ExternalId, sessionId, state)
 	if err != nil {
 		return err
 	}
@@ -130,7 +133,7 @@ func (bi *BotInterface) addMessageToSessionHistory(sessionId string, message ope
 		Content: message.Content,
 	})
 
-	err = bi.stateManager.updateSession(bi.workspace.Name, bi.stub.ExternalId, sessionId, state, &bi.botConfig)
+	err = bi.stateManager.updateSession(bi.workspace.Name, bi.stub.ExternalId, sessionId, state)
 	if err != nil {
 		return err
 	}
@@ -207,6 +210,8 @@ func (bi *BotInterface) SendPrompt(sessionId, prompt string) error {
 func (bi *BotInterface) pushInput(msg string) error {
 	return bi.inputBuffer.Push(msg)
 }
+
+// TODO: should this be in state manager instead so it's distributed across replicas?
 
 type messageBuffer struct {
 	Messages  []string

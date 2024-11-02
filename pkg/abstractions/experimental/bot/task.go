@@ -27,12 +27,6 @@ func (t *BotTask) Execute(ctx context.Context, options ...interface{}) error {
 		return err
 	}
 
-	// err = t.pbs.botStateManager.pushMarkerToLocation(t.msg.WorkspaceName, t.msg.StubId, "", "", MarkerData{})
-	// if err != nil {
-	// 	t.pbs.backendRepo.DeleteTask(context.TODO(), t.msg.TaskId)
-	// 	return err
-	// }
-
 	return nil
 }
 
@@ -41,12 +35,7 @@ func (t *BotTask) Retry(ctx context.Context) error {
 }
 
 func (t *BotTask) HeartBeat(ctx context.Context) (bool, error) {
-	// res, err := t.tq.rdb.Exists(ctx, Keys.taskQueueTaskHeartbeat(t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)).Result()
-	// if err != nil {
-	// 	return false, err
-	// }
-
-	return true, nil // res > 0, nil
+	return true, nil
 }
 
 func (t *BotTask) Cancel(ctx context.Context, reason types.TaskCancellationReason) error {
