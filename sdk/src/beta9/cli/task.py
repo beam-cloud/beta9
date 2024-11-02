@@ -35,8 +35,11 @@ def management():
       # List the first 10 tasks
       {cli_name} task list --limit 10
 
-      # List tasks with status 'running' or 'pending' and stub-id 'function/test:handler'
-      {cli_name} task list --filter status=running,pending --filter stub-id=function/test:handler
+      # List tasks with two different statuses and a specific stub name
+      {cli_name} task list --filter status=running,pending --filter stub-name=function/test:handler
+
+      # List tasks that belong to two different stubs
+      {cli_name} task list --filter stub-id=function/test:handler,endpoint/test:handler
 
       # List tasks and output in JSON format
       {cli_name} task list --format json
