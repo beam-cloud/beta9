@@ -39,7 +39,10 @@ def management():
       {cli_name} task list --filter status=running,pending --filter stub-name=function/test:handler
 
       # List tasks that belong to two different stubs
-      {cli_name} task list --filter stub-id=function/test:handler,endpoint/test:handler
+      {cli_name} task list --filter stub-id=function/test:handler1,endpoint/test:handler2
+
+      # List tasks that are on a specific container
+      {cli_name} task list --filter container-id=endpoint-05cc6c0d-fef2-491c-b9b7-313cc21c3496-3cef29e8
 
       # List tasks and output in JSON format
       {cli_name} task list --format json
