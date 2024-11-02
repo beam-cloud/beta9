@@ -27,6 +27,7 @@ func (t *BotTask) Execute(ctx context.Context, options ...interface{}) error {
 		return err
 	}
 
+	instance.run("transitionName", "sessionId")
 	return nil
 }
 

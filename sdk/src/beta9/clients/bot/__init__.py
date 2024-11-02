@@ -39,16 +39,6 @@ class StartBotServeResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class StopBotServeRequest(betterproto.Message):
-    stub_id: str = betterproto.string_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class StopBotServeResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-
-
-@dataclass(eq=False, repr=False)
 class BotServeKeepAliveRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     timeout: int = betterproto.int32_field(2)
@@ -56,18 +46,6 @@ class BotServeKeepAliveRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class BotServeKeepAliveResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class SendBotMessageRequest(betterproto.Message):
-    stub_id: str = betterproto.string_field(1)
-    message: str = betterproto.string_field(2)
-    session_id: str = betterproto.string_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class SendBotMessageResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
@@ -127,15 +105,6 @@ class BotServiceStub(SyncServiceStub):
         )(start_bot_serve_request):
             yield response
 
-    def stop_bot_serve(
-        self, stop_bot_serve_request: "StopBotServeRequest"
-    ) -> "StopBotServeResponse":
-        return self._unary_unary(
-            "/bot.BotService/StopBotServe",
-            StopBotServeRequest,
-            StopBotServeResponse,
-        )(stop_bot_serve_request)
-
     def bot_serve_keep_alive(
         self, bot_serve_keep_alive_request: "BotServeKeepAliveRequest"
     ) -> "BotServeKeepAliveResponse":
@@ -144,15 +113,6 @@ class BotServiceStub(SyncServiceStub):
             BotServeKeepAliveRequest,
             BotServeKeepAliveResponse,
         )(bot_serve_keep_alive_request)
-
-    def send_bot_message(
-        self, send_bot_message_request: "SendBotMessageRequest"
-    ) -> "SendBotMessageResponse":
-        return self._unary_unary(
-            "/bot.BotService/SendBotMessage",
-            SendBotMessageRequest,
-            SendBotMessageResponse,
-        )(send_bot_message_request)
 
     def pop_bot_task(
         self, pop_bot_task_request: "PopBotTaskRequest"

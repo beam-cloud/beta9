@@ -9,6 +9,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 
@@ -17,6 +18,10 @@ import (
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/task"
 	pb "github.com/beam-cloud/beta9/proto"
+)
+
+const (
+	botRoutePrefix string = "/bot"
 )
 
 type BotServiceOpts struct {
@@ -36,9 +41,7 @@ type BotServiceOpts struct {
 type BotService interface {
 	pb.BotServiceServer
 	StartBotServe(in *pb.StartBotServeRequest, stream pb.BotService_StartBotServeServer) error
-	StopBotServe(ctx context.Context, in *pb.StopBotServeRequest) (*pb.StopBotServeResponse, error)
 	BotServeKeepAlive(ctx context.Context, in *pb.BotServeKeepAliveRequest) (*pb.BotServeKeepAliveResponse, error)
-	SendBotMessage(ctx context.Context, in *pb.SendBotMessageRequest) (*pb.SendBotMessageResponse, error)
 }
 
 type PetriBotService struct {
@@ -47,6 +50,7 @@ type PetriBotService struct {
 	config          types.AppConfig
 	rdb             *common.RedisClient
 	keyEventManager *common.KeyEventManager
+	routeGroup      *echo.Group
 	scheduler       *scheduler.Scheduler
 	backendRepo     repository.BackendRepository
 	workspaceRepo   repository.WorkspaceRepository
@@ -70,6 +74,7 @@ func NewPetriBotService(ctx context.Context, opts BotServiceOpts) (BotService, e
 		config:          opts.Config,
 		rdb:             opts.RedisClient,
 		keyEventManager: keyEventManager,
+		routeGroup:      opts.RouteGroup,
 		scheduler:       opts.Scheduler,
 		backendRepo:     opts.BackendRepo,
 		workspaceRepo:   opts.WorkspaceRepo,
@@ -84,6 +89,10 @@ func NewPetriBotService(ctx context.Context, opts BotServiceOpts) (BotService, e
 
 	// Register task dispatcher
 	pbs.taskDispatcher.Register(string(types.ExecutorBot), pbs.botTaskFactory)
+
+	// Register HTTP routes
+	authMiddleware := auth.AuthMiddleware(pbs.backendRepo, pbs.workspaceRepo)
+	registerBotRoutes(pbs.routeGroup.Group(botRoutePrefix, authMiddleware), pbs)
 
 	return pbs, nil
 }
@@ -147,15 +156,6 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 	}(instance)
 
 	return instance, nil
-}
-
-func (s *PetriBotService) SendBotMessage(ctx context.Context, in *pb.SendBotMessageRequest) (*pb.SendBotMessageResponse, error) {
-	instance, err := s.getOrCreateBotInstance(in.StubId)
-	if err != nil {
-		return &pb.SendBotMessageResponse{Ok: false}, nil
-	}
-
-	return &pb.SendBotMessageResponse{Ok: instance.botInterface.pushInput(in.Message) == nil}, nil
 }
 
 var Keys = &keys{}

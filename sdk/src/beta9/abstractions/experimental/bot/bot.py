@@ -17,10 +17,8 @@ from ....channel import with_grpc_error_handling
 from ....clients.bot import (
     BotServeKeepAliveRequest,
     BotServiceStub,
-    SendBotMessageRequest,
     StartBotServeRequest,
     StartBotServeResponse,
-    StopBotServeRequest,
 )
 from ....sync import FileSyncer
 from ....type import GpuType, GpuTypeAlias
@@ -233,9 +231,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
             while True:
                 user_input = terminal.prompt(text="#")
                 if user_input:
-                    self.bot_stub.send_bot_message(
-                        SendBotMessageRequest(stub_id=self.stub_id, message=user_input)
-                    )
+                    pass
 
         threading.Thread(
             target=self.sync_dir_to_workspace,
@@ -265,6 +261,5 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
     def _handle_serve_interrupt(self) -> None:
         terminal.header("Stopping all bot containers")
-        self.bot_stub.stop_bot_serve(StopBotServeRequest(stub_id=self.stub_id))
         terminal.print("Goodbye 👋")
         os._exit(0)

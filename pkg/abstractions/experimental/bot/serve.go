@@ -40,10 +40,6 @@ func (pbs *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb
 	}
 }
 
-func (s *PetriBotService) StopBotServe(ctx context.Context, in *pb.StopBotServeRequest) (*pb.StopBotServeResponse, error) {
-	return &pb.StopBotServeResponse{Ok: true}, nil
-}
-
 func (s *PetriBotService) BotServeKeepAlive(ctx context.Context, in *pb.BotServeKeepAliveRequest) (*pb.BotServeKeepAliveResponse, error) {
 	return &pb.BotServeKeepAliveResponse{Ok: true}, nil
 }
