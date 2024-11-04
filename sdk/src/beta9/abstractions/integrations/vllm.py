@@ -169,17 +169,17 @@ class VLLMArgs:
     """
 
     response_role: Optional[str] = "assistant"
-    lora_modules: Optional[List[str]] = (None,)
-    prompt_adapters: Optional[List[str]] = (None,)
-    chat_template: Optional[str] = (None,)
-    chat_template_url: Optional[str] = (None,)
-    return_tokens_as_token_ids: bool = (False,)
-    enable_auto_tools: bool = (False,)
-    enable_auto_tool_choice: bool = (False,)
-    tool_call_parser: Optional[str] = (None,)
-    disable_log_stats: bool = (False,)
-    disable_log_requests: bool = (False,)
-    max_log_len: Optional[int] = (None,)
+    lora_modules: Optional[List[str]] = None
+    prompt_adapters: Optional[List[str]] = None
+    chat_template: Optional[str] = None
+    chat_template_url: Optional[str] = None
+    return_tokens_as_token_ids: bool = False
+    enable_auto_tools: bool = False
+    enable_auto_tool_choice: bool = False
+    tool_call_parser: Optional[str] = None
+    disable_log_stats: bool = False
+    disable_log_requests: bool = False
+    max_log_len: Optional[int] = None
 
 
 class VLLM(ASGI):
