@@ -196,8 +196,8 @@ class VLLM(ASGI):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
         image (Union[Image, dict]):
-            The container image used for the task execution. If you override this, it must include
-            the vllm package and the fastapi package.
+            The container image used for the task execution. Whatever you pass here will have an additional `add_python_packages` call
+            with `["fastapi", "vllm", "huggingface_hub"]` added to it to ensure that we can run vLLM in the container.
         workers (int):
             The number of workers to run in the container. Default is 1.
         concurrent_requests (int):
@@ -243,7 +243,7 @@ class VLLM(ASGI):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
-        image: Image = Image(python_version="python3.11").add_python_packages(["fastapi", "vllm"]),
+        image: Image = Image(python_version="python3.11"),
         workers: int = 1,
         concurrent_requests: int = 1,
         keep_warm_seconds: int = 60,
@@ -260,6 +260,8 @@ class VLLM(ASGI):
         if vllm_engine_config.download_dir == DEFAULT_VLLM_CACHE_DIR:
             # Add default vllm cache volume to preserve it if custom volumes are specified for chat templates
             volumes.append(Volume(name="vllm_cache", mount_path=DEFAULT_VLLM_CACHE_DIR))
+
+        image = image.add_python_packages(["fastapi", "vllm", "huggingface_hub"])
 
         super().__init__(
             cpu=cpu,
@@ -329,6 +331,12 @@ class VLLM(ASGI):
             self.vllm_args.chat_template = (
                 f"{self.engine_config.download_dir}/{chat_template_filename}"
             )
+
+        if "HF_TOKEN" in os.environ:
+            hf_token = os.environ["HF_TOKEN"]
+            import huggingface_hub
+
+            huggingface_hub.login(hf_token)
 
         app = FastAPI()
 
