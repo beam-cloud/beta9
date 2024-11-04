@@ -102,7 +102,7 @@ _stream:
 			}
 
 		case <-ctx.Done():
-			// This ensures when the sdk exists, the message printed is
+			// This ensures when the sdk exits, the message printed is
 			// that the container timed out.
 			if err := l.exitCallback(0); err != nil {
 				break _stream
