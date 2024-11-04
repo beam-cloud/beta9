@@ -396,6 +396,7 @@ class RealtimeASGI(ASGI):
             callback_url=callback_url,
             concurrent_requests=concurrent_requests,
         )
+        self.is_websocket = True
 
     def __call__(self, func):
         import asyncio

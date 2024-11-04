@@ -158,6 +158,17 @@ class RunnerAbstraction(BaseAbstraction):
             ),
             "-d '{}'",
         ]
+
+        if self.is_websocket:
+            commands = [
+                f"websocat '{res.url.replace('http://', 'ws://').replace('https://', 'wss://')}' \\",
+                *(
+                    [f"-H 'Authorization: Bearer {self.config_context.token}'"]
+                    if self.authorized
+                    else []
+                ),
+            ]
+
         terminal.print("\n".join(commands), crop=False, overflow="ignore")
 
     def _parse_memory(self, memory_str: str) -> int:
