@@ -43,10 +43,12 @@ type DeploymentFilter struct {
 type TaskFilter struct {
 	BaseFilter
 	WorkspaceID    uint        `query:"workspace_id"`
-	TaskId         string      `query:"task_id"`
-	StubType       string      `query:"stub_type"`
+	TaskIds        StringSlice `query:"task_ids"`
 	StubIds        StringSlice `query:"stub_ids"`
+	StubNames      StringSlice `query:"stub_names"`
+	StubTypes      StringSlice `query:"stub_types"`
 	Status         string      `query:"status"`
+	ContainerIds   StringSlice `query:"container_ids"`
 	CreatedAtStart string      `query:"created_at_start"`
 	CreatedAtEnd   string      `query:"created_at_end"`
 	MinDuration    uint        `query:"min_duration"`
