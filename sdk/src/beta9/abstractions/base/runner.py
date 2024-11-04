@@ -20,6 +20,7 @@ from ...clients.gateway import (
     GetOrCreateStubRequest,
     GetOrCreateStubResponse,
     GetUrlRequest,
+    GetUrlResponse,
     ReplaceObjectContentOperation,
     ReplaceObjectContentRequest,
     ReplaceObjectContentResponse,
@@ -138,7 +139,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.config_context: ConfigContext = get_config_context()
         self.tmp_files: List[tempfile.NamedTemporaryFile] = []
 
-    def print_invocation_snippet(self, url_type: str = "") -> None:
+    def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
         """Print curl request to call deployed container URL"""
 
         res = self.gateway_stub.get_url(
@@ -164,6 +165,7 @@ class RunnerAbstraction(BaseAbstraction):
             "-d '{}'",
         ]
         terminal.print("\n".join(commands), crop=False, overflow="ignore")
+        return res
 
     def _parse_memory(self, memory_str: str) -> int:
         """Parse memory str (with units) to megabytes."""

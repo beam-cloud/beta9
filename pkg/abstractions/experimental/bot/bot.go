@@ -163,9 +163,10 @@ var Keys = &keys{}
 type keys struct{}
 
 var (
-	botLock         string = "bot:%s:%s:session_state_lock:%s"
-	botSessionState string = "bot:%s:%s:session_state:%s"
-	botMarkers      string = "bot:%s:%s:markers:%s:%s"
+	botLock            string = "bot:%s:%s:session_state_lock:%s"
+	botSessionState    string = "bot:%s:%s:session_state:%s"
+	botMarkers         string = "bot:%s:%s:markers:%s:%s"
+	botTransitionTasks string = "bot:%s:%s:transition_tasks:%s:%s"
 )
 
 func (k *keys) botLock(workspaceName, stubId, sessionId string) string {
@@ -178,4 +179,8 @@ func (k *keys) botSessionState(workspaceName, stubId, sessionId string) string {
 
 func (k *keys) botMarkers(workspaceName, stubId, sessionId, locationName string) string {
 	return fmt.Sprintf(botMarkers, workspaceName, stubId, sessionId, locationName)
+}
+
+func (k *keys) botTransitionTasks(workspaceName, stubId, sessionId, transitionName string) string {
+	return fmt.Sprintf(botTransitionTasks, workspaceName, stubId, sessionId, transitionName)
 }

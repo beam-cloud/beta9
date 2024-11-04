@@ -53,7 +53,6 @@ func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, er
 		StateManager: opts.StateManager,
 		Workspace:    &opts.Stub.Workspace,
 		Stub:         opts.Stub,
-		SessionId:    "testsession",
 	})
 	if err != nil {
 		cancelFunc()

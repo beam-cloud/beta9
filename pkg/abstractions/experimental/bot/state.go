@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -98,12 +99,29 @@ func (m *botStateManager) countMarkers(workspaceName, stubId, sessionId, locatio
 	return m.rdb.LLen(context.TODO(), Keys.botMarkers(workspaceName, stubId, sessionId, locationName)).Result()
 }
 
-func (m *botStateManager) pushTask(workspaceName, stubId, sessionId, locationName string, markerData Marker) error {
-	return nil
+func (m *botStateManager) pushTask(workspaceName, stubId, sessionId, transitionName string, payload *types.TaskPayload) error {
+	taskKey := Keys.botTransitionTasks(workspaceName, stubId, sessionId, transitionName)
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	return m.rdb.RPush(context.TODO(), taskKey, jsonData).Err()
 }
 
-func (m *botStateManager) popTask(workspaceName, stubId, sessionId, locationName string, markerData Marker) error {
-	return nil
+func (m *botStateManager) popTask(workspaceName, stubId, sessionId, transitionName string) (*types.TaskPayload, error) {
+	bytes, err := m.rdb.LPop(context.TODO(), Keys.botTransitionTasks(workspaceName, stubId, sessionId, transitionName)).Bytes()
+	if err != nil {
+		return nil, err
+	}
+
+	payload := &types.TaskPayload{}
+	err = json.Unmarshal(bytes, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	return payload, nil
 }
 
 func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string) error {

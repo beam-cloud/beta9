@@ -40,6 +40,11 @@ type BotChatCompletionMessage struct {
 
 const botSchemaName = "beam_bot"
 
+type UserRequest struct {
+	Msg       string `json:"msg" redis:"msg"`
+	SessionId string `json:"session_id" redis:"session_id"`
+}
+
 type BotResponse struct {
 	UserMessage    string `json:"user_message" redis:"user_message"`
 	MarkerData     Marker `json:"marker_data" redis:"marker_data"`

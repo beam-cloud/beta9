@@ -23,7 +23,6 @@ type BotInterface struct {
 	workspace    *types.Workspace
 	stub         *types.StubWithRelated
 	schema       *jsonschema.Definition
-	sessionId    string
 }
 
 type botInterfaceOpts struct {
@@ -32,7 +31,6 @@ type botInterfaceOpts struct {
 	StateManager *botStateManager
 	Workspace    *types.Workspace
 	Stub         *types.StubWithRelated
-	SessionId    string
 }
 
 func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
@@ -46,7 +44,6 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 		stateManager: opts.StateManager,
 		workspace:    opts.Workspace,
 		stub:         opts.Stub,
-		sessionId:    opts.SessionId,
 	}
 
 	bi.outputBuffer.Push(fmt.Sprintf("Starting bot, using model<%s>\n", bi.model))
@@ -59,10 +56,10 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 	}
 	bi.schema = schema
 
-	err = bi.initSession(bi.sessionId)
-	if err != nil {
-		return nil, err
-	}
+	// err = bi.initSession(bi.sessionId)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	return bi, nil
 }

@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -90,23 +91,23 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 		return err
 	}
 
-	// Keep connection alive and handle messages
 	for {
-		messageType, message, err := ws.ReadMessage()
+		_, message, err := ws.ReadMessage()
 		if err != nil {
 			break
 		}
 
-		// Handle incoming messages
-		if err := instance.botInterface.pushInput(string(message)); err != nil {
+		// Deserialize message to UserRequest
+		var userRequest UserRequest
+		if err := json.Unmarshal(message, &userRequest); err != nil {
+			continue
+		}
+
+		if err := instance.botInterface.pushInput(userRequest.Msg); err != nil {
 			ws.WriteMessage(websocket.TextMessage, []byte(err.Error()))
 			continue
 		}
 
-		// Echo back the message for now
-		if err := ws.WriteMessage(messageType, message); err != nil {
-			break
-		}
 	}
 
 	return nil

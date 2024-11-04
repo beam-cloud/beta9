@@ -1,7 +1,7 @@
+import asyncio
 import inspect
+import json
 import os
-import threading
-import time
 from typing import Callable, Dict, List, Optional, Union
 
 from .... import terminal
@@ -211,35 +211,69 @@ class Bot(RunnerAbstraction, DeployableMixin):
             return False
 
         try:
-            self.print_invocation_snippet(url_type=url_type)
-            return self._serve(dir=os.getcwd(), object_id=self.object_id, timeout=timeout)
-
+            res = self.print_invocation_snippet(url_type=url_type)
+            return self._serve(url=res.url, timeout=timeout)
         except KeyboardInterrupt:
             self._handle_serve_interrupt()
 
-    def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
-        def notify(*_, **__):
-            self.bot_stub.bot_serve_keep_alive(
-                BotServeKeepAliveRequest(
-                    stub_id=self.stub_id,
-                    timeout=timeout,
-                )
-            )
+    def _serve(self, *, url: str, timeout: int = 0):
+        ws_url = url.replace("http://", "ws://").replace("https://", "wss://")
 
-        def capture_and_send_message():
-            time.sleep(0.1)
-            while True:
-                user_input = terminal.prompt(text="#")
-                if user_input:
-                    pass
+        import websockets
 
-        threading.Thread(
-            target=self.sync_dir_to_workspace,
-            kwargs={"dir": dir, "object_id": object_id, "on_event": notify},
-            daemon=True,
-        ).start()
+        async def handle_websocket_connection():
+            async with websockets.connect(
+                ws_url,
+                extra_headers={"Authorization": f"Bearer {self.config_context.token}"},
+            ) as websocket:
 
-        threading.Thread(target=capture_and_send_message, daemon=True).start()
+                async def send_keep_alive():
+                    while True:
+                        self.bot_stub.bot_serve_keep_alive(
+                            BotServeKeepAliveRequest(
+                                stub_id=self.stub_id,
+                                timeout=timeout,
+                            )
+                        )
+                        await asyncio.sleep(timeout or 30)
+
+                keep_alive_task = asyncio.create_task(send_keep_alive())
+
+                async def recv_messages():
+                    try:
+                        while True:
+                            message = await websocket.recv()
+                            terminal.detail(f"Received: {message}")
+                    except websockets.exceptions.ConnectionClosed as e:
+                        terminal.error(f"WebSocket connection closed: {e}")
+                    except asyncio.CancelledError:
+                        pass
+
+                async def send_user_input():
+                    loop = asyncio.get_event_loop()
+
+                    try:
+                        while True:
+                            msg = await loop.run_in_executor(
+                                None, lambda: terminal.prompt(text="#")
+                            )
+                            if msg:
+                                user_request = json.dumps({"msg": msg})
+                                await websocket.send(user_request)
+                    except asyncio.CancelledError:
+                        pass
+
+                recv_task = asyncio.create_task(recv_messages())
+                input_task = asyncio.create_task(send_user_input())
+
+                await asyncio.gather(recv_task, input_task)
+
+                keep_alive_task.cancel()
+
+        try:
+            asyncio.run(handle_websocket_connection())
+        except KeyboardInterrupt:
+            self._handle_serve_interrupt()
 
         r: Optional[StartBotServeResponse] = None
         for r in self.bot_stub.start_bot_serve(
@@ -251,11 +285,11 @@ class Bot(RunnerAbstraction, DeployableMixin):
             if r.output != "":
                 terminal.detail(r.output, end="")
 
-            if r.done or r.exit_code != 0:
+            if r.done:
                 break
 
-        if r is None or not r.done or r.exit_code != 0:
-            terminal.error("Serve container failed ❌")
+        if r is None or not r.done:
+            terminal.error("Serve failed ❌")
 
         terminal.warn("Bot serve timed out. All containers have been stopped.")
 

@@ -21,7 +21,6 @@ message StartBotServeRequest {
 message StartBotServeResponse {
   string output = 1;
   bool done = 2;
-  int32 exit_code = 3;
 }
 
 message BotServeKeepAliveRequest {
