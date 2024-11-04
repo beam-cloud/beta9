@@ -160,7 +160,7 @@ class RunnerAbstraction(BaseAbstraction):
             "-d '{}'",
         ]
 
-        if getattr(self, "is_websocket", False):
+        if self.is_websocket:
             commands = [
                 f"websocat '{res.url.replace('http://', 'ws://').replace('https://', 'wss://')}' \\",
                 *(
