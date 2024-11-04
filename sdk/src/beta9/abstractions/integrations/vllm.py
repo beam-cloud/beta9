@@ -243,7 +243,9 @@ class VLLM(ASGI):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
-        image: Image = Image(python_version="python3.11").add_python_packages(["fastapi", "vllm"]),
+        image: Image = Image(python_version="python3.11").add_python_packages(
+            ["fastapi", "vllm", "huggingface_hub"]
+        ),
         workers: int = 1,
         concurrent_requests: int = 1,
         keep_warm_seconds: int = 60,
