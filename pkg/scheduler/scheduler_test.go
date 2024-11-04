@@ -814,7 +814,6 @@ func TestPreemptableWorker(t *testing.T) {
 	// Select a worker for the request, this one should succeed since there is an available preemptable worker
 	worker, err := wb.selectWorker(nonPreemptableRequest)
 	assert.Nil(t, err)
-
 	assert.Equal(t, worker.Id, newNonPreemptableWorker.Id)
 }
 
