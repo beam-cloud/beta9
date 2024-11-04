@@ -330,7 +330,9 @@ class VLLM(ASGI):
                 f"{self.engine_config.download_dir}/{chat_template_filename}"
             )
 
+        print("Checking for Hugging Face token")
         if "HF_TOKEN" in os.environ:
+            print("Logging into Hugging Face")
             hf_token = os.environ["HF_TOKEN"]
             import huggingface_hub
 
