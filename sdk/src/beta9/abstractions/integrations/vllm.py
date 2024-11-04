@@ -330,6 +330,12 @@ class VLLM(ASGI):
                 f"{self.engine_config.download_dir}/{chat_template_filename}"
             )
 
+        if "HF_TOKEN" in os.environ:
+            hf_token = os.environ["HF_TOKEN"]
+            import huggingface_hub
+
+            huggingface_hub.login(hf_token)
+
         app = FastAPI()
 
         @app.get("/health")
