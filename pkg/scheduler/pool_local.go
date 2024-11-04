@@ -68,6 +68,10 @@ func (wpc *LocalKubernetesWorkerPoolController) Context() context.Context {
 	return wpc.ctx
 }
 
+func (wpc *LocalKubernetesWorkerPoolController) IsPreemptable() bool {
+	return wpc.workerPool.Preemptable
+}
+
 func (wpc *LocalKubernetesWorkerPoolController) Name() string {
 	return wpc.name
 }
@@ -235,6 +239,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		Status:        types.WorkerStatusPending,
 		Priority:      wpc.workerPool.Priority,
 		BuildVersion:  wpc.config.Worker.ImageTag,
+		Preemptable:   wpc.workerPool.Preemptable,
 	}
 }
 

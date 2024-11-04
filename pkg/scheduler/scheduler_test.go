@@ -83,6 +83,10 @@ func (wpc *LocalWorkerPoolControllerForTest) Context() context.Context {
 	return wpc.ctx
 }
 
+func (wpc *LocalWorkerPoolControllerForTest) IsPreemptable() bool {
+	return false
+}
+
 func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
 }
@@ -130,6 +134,10 @@ type ExternalWorkerPoolControllerForTest struct {
 
 func (wpc *ExternalWorkerPoolControllerForTest) Context() context.Context {
 	return wpc.ctx
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) IsPreemptable() bool {
+	return false
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {
