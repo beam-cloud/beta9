@@ -46,6 +46,21 @@ func (m *WorkerPoolManager) GetPoolByGPU(gpuType string) (*WorkerPool, bool) {
 	return wp, ok
 }
 
+// GetPoolsByGPU retrieves all WorkerPools by their GPU type.
+// It returns a slice of matching WorkerPools.
+func (m *WorkerPoolManager) GetPoolsByGPU(gpuType string) []*WorkerPool {
+	var pools []*WorkerPool
+
+	m.poolMap.Range(func(key string, value *WorkerPool) bool {
+		if value.Config.GPUType == gpuType {
+			pools = append(pools, value)
+		}
+		return true
+	})
+
+	return pools
+}
+
 func (m *WorkerPoolManager) SetPool(name string, config types.WorkerPoolConfig, controller WorkerPoolController) {
 	m.poolMap.Set(name, &WorkerPool{Name: name, Config: config, Controller: controller})
 }

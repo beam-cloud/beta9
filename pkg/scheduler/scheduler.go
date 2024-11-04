@@ -173,21 +173,25 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 			return nil, errors.New("no controller found for request")
 		}
 		controllers = append(controllers, wp.Controller)
-	} else if len(request.GpuRequest) == 0 {
-		wp, ok := s.workerPoolManager.GetPool("default")
+
+	} else if !request.RequiresGPU() {
+		wp, ok := s.workerPoolManager.GetPool(types.DefaultCPUWorkerPoolName)
 		if !ok {
 			return nil, errors.New("no controller found for request")
 		}
 		controllers = append(controllers, wp.Controller)
+
 	} else {
 		for _, gpu := range request.GpuRequest {
-			wp, ok := s.workerPoolManager.GetPoolByGPU(gpu)
-			if ok {
-				controllers = append(controllers, wp.Controller)
+			pools := s.workerPoolManager.GetPoolsByGPU(gpu)
+
+			for _, pool := range pools {
+				controllers = append(controllers, pool.Controller)
 			}
 		}
 	}
 
+	controllers = filterControllersByFlags(controllers, request)
 	if len(controllers) == 0 {
 		return nil, errors.New("no controller found for request")
 	}
@@ -246,6 +250,7 @@ func (s *Scheduler) StartProcessingRequests() {
 							log.Printf("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
 							s.addRequestToBacklog(request)
 						}
+
 						return
 					}
 				}
@@ -276,6 +281,19 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 	go s.schedulerMetrics.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
+}
+
+func filterControllersByFlags(controllers []WorkerPoolController, request *types.ContainerRequest) []WorkerPoolController {
+	filteredControllers := []WorkerPoolController{}
+	for _, controller := range controllers {
+		if !request.Preemptable && controller.IsPreemptable() {
+			continue
+		}
+
+		filteredControllers = append(filteredControllers, controller)
+	}
+
+	return filteredControllers
 }
 
 func filterWorkersByPoolSelector(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
@@ -334,6 +352,19 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	return filteredWorkers
 }
 
+func filterWorkersByFlags(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	filteredWorkers := []*types.Worker{}
+	for _, worker := range workers {
+		if !request.Preemptable && worker.Preemptable {
+			continue
+		}
+
+		filteredWorkers = append(filteredWorkers, worker)
+	}
+
+	return filteredWorkers
+}
+
 type scoredWorker struct {
 	worker *types.Worker
 	score  int32
@@ -352,6 +383,7 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 
 	filteredWorkers := filterWorkersByPoolSelector(workers, request)     // Filter workers by pool selector
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request) // Filter workers resource requirements
+	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)     // Filter workers by flags
 
 	if len(filteredWorkers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}

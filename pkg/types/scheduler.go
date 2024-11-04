@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+const (
+	DefaultCPUWorkerPoolName = "default"
+)
+
 type WorkerStatus string
 
 const (
@@ -30,6 +34,7 @@ type Worker struct {
 	ResourceVersion      int64        `json:"resource_version" redis:"resource_version"`
 	RequiresPoolSelector bool         `json:"requires_pool_selector" redis:"requires_pool_selector"`
 	Priority             int32        `json:"priority" redis:"priority"`
+	Preemptable          bool         `json:"preemptable" redis:"preemptable"`
 	BuildVersion         string       `json:"build_version" redis:"build_version"`
 }
 
@@ -88,6 +93,7 @@ type ContainerRequest struct {
 	Mounts           []Mount         `json:"mounts"`
 	RetryCount       int             `json:"retry_count"`
 	PoolSelector     string          `json:"pool_selector"`
+	Preemptable      bool            `json:"preemptable"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {

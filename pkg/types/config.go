@@ -213,6 +213,7 @@ type WorkerPoolConfig struct {
 	DefaultMachineCost   float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
 	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
 	Priority             int32                             `key:"priority" json:"priority"`
+	Preemptable          bool                              `key:"preemptable" json:"preemptable"`
 }
 
 type WorkerPoolJobSpecConfig struct {

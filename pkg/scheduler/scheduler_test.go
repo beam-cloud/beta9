@@ -83,6 +83,10 @@ func (wpc *LocalWorkerPoolControllerForTest) Context() context.Context {
 	return wpc.ctx
 }
 
+func (wpc *LocalWorkerPoolControllerForTest) IsPreemptable() bool {
+	return false
+}
+
 func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
 }
@@ -130,6 +134,10 @@ type ExternalWorkerPoolControllerForTest struct {
 
 func (wpc *ExternalWorkerPoolControllerForTest) Context() context.Context {
 	return wpc.ctx
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) IsPreemptable() bool {
+	return false
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {
@@ -748,6 +756,65 @@ func TestRequiresPoolSelectorWorker(t *testing.T) {
 	assert.Equal(t, int64(1000), updatedWorker.FreeMemory)
 	assert.Equal(t, "", updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusAvailable, updatedWorker.Status)
+}
+
+func TestPreemptableWorker(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	assert.NotNil(t, wb)
+
+	newPreemptableWorker := &types.Worker{
+		Id:          "worker1",
+		Status:      types.WorkerStatusAvailable,
+		FreeCpu:     2000,
+		FreeMemory:  2000,
+		Gpu:         "",
+		PoolName:    "cpu",
+		Preemptable: true,
+	}
+
+	// Create a new worker that is preemptable
+	err = wb.workerRepo.AddWorker(newPreemptableWorker)
+	assert.Nil(t, err)
+
+	nonPreemptableRequest := &types.ContainerRequest{
+		Cpu:    1000,
+		Memory: 1000,
+		Gpu:    "",
+	}
+
+	// Select a worker for the request, this one should not succeed since the only available worker is preemptable
+	_, err = wb.selectWorker(nonPreemptableRequest)
+	assert.Equal(t, &types.ErrNoSuitableWorkerFound{}, err)
+
+	preemptableRequest := &types.ContainerRequest{
+		Cpu:         1000,
+		Memory:      1000,
+		Gpu:         "",
+		Preemptable: true,
+	}
+
+	// Select a worker for the request, this one should succeed since there is an available preemptable worker
+	_, err = wb.selectWorker(preemptableRequest)
+	assert.Nil(t, err)
+
+	newNonPreemptableWorker := &types.Worker{
+		Id:         "worker2",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    2000,
+		FreeMemory: 2000,
+		Gpu:        "",
+		PoolName:   "cpu2",
+	}
+
+	// Create a new worker that is non preemptable
+	err = wb.workerRepo.AddWorker(newNonPreemptableWorker)
+	assert.Nil(t, err)
+
+	// Select a worker for the request, this one should succeed since there is an available preemptable worker
+	worker, err := wb.selectWorker(nonPreemptableRequest)
+	assert.Nil(t, err)
+	assert.Equal(t, worker.Id, newNonPreemptableWorker.Id)
 }
 
 func TestPoolPriority(t *testing.T) {
