@@ -379,6 +379,10 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 				},
 			},
 		},
+		{
+			Name:  "PREEMPTABLE",
+			Value: strconv.FormatBool(wpc.workerPool.Preemptable),
+		},
 	}
 
 	if wpc.config.Worker.UseGatewayServiceHostname {

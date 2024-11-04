@@ -246,6 +246,7 @@ func (s *Scheduler) StartProcessingRequests() {
 							log.Printf("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
 							s.addRequestToBacklog(request)
 						}
+
 						return
 					}
 				}

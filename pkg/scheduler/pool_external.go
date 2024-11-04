@@ -410,6 +410,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 			Name:  "NETWORK_PREFIX",
 			Value: machineId,
 		},
+		{
+			Name:  "PREEMPTABLE",
+			Value: strconv.FormatBool(wpc.workerPool.Preemptable),
+		},
 	}
 
 	remoteConfig, err := providers.GetRemoteConfig(wpc.config, wpc.tailscale)
