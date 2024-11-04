@@ -1077,7 +1077,7 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 	}
 
 	if filters.Name != "" {
-		qb = qb.Where(squirrel.Like{"d.name": filters.Name})
+		qb = qb.Where(squirrel.Like{"d.name": fmt.Sprintf("%%%s%%", filters.Name)})
 	}
 
 	if filters.Active != nil {
