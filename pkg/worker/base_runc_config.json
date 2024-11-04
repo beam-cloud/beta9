@@ -181,7 +181,7 @@
 				"rprivate",
 				"nosuid",
 				"nodev",
-				"rw"
+				"ro"
 			]
 		},
 		{
