@@ -154,6 +154,8 @@ func (i *AutoscaledInstance) WaitForContainer(ctx context.Context, duration time
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		case <-i.Ctx.Done():
+			return nil, errors.New("instance context done")
 		case <-timeout:
 			return nil, errors.New("timed out waiting for a container")
 		case <-ticker.C:

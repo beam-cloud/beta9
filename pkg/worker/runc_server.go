@@ -140,6 +140,12 @@ func (s *RunCServer) RunCStreamLogs(req *pb.RunCStreamLogsRequest, stream pb.Run
 	logEntry := &pb.RunCLogEntry{}
 
 	for {
+		select {
+		case <-stream.Context().Done():
+			return errors.New("context cancelled")
+		default:
+		}
+
 		n, err := instance.LogBuffer.Read(buffer)
 		if err == io.EOF {
 			break

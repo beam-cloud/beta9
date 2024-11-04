@@ -497,6 +497,8 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-rb.ctx.Done():
+			return
 		case <-ticker.C:
 			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId), containerId, endpointRequestHeartbeatInterval)
 		}
