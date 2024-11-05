@@ -62,9 +62,20 @@ def common(**_):
     help="The type of URL to get back. [default is determined by the server] ",
     type=click.Choice(["host", "path"]),
 )
+@click.option(
+    "--force-rebuild",
+    help="Force a rebuild of the deployment.",
+    is_flag=True,
+)
 @click.pass_context
-def deploy(ctx: click.Context, name: str, entrypoint: str, url_type: str):
-    ctx.invoke(create_deployment, name=name, entrypoint=entrypoint, url_type=url_type)
+def deploy(ctx: click.Context, name: str, entrypoint: str, url_type: str, force_rebuild: bool):
+    ctx.invoke(
+        create_deployment,
+        name=name,
+        entrypoint=entrypoint,
+        url_type=url_type,
+        force_rebuild=force_rebuild,
+    )
 
 
 @click.group(
@@ -103,8 +114,15 @@ def management():
     help="The type of URL to get back. [default is determined by the server] ",
     type=click.Choice(["host", "path"]),
 )
+@click.option(
+    "--force-rebuild",
+    help="Force a rebuild of the deployment.",
+    is_flag=True,
+)
 @extraclick.pass_service_client
-def create_deployment(service: ServiceClient, name: str, entrypoint: str, url_type: str):
+def create_deployment(
+    service: ServiceClient, name: str, entrypoint: str, url_type: str, force_rebuild: bool
+):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
@@ -131,7 +149,9 @@ def create_deployment(service: ServiceClient, name: str, entrypoint: str, url_ty
     if hasattr(user_obj, "set_handler"):
         user_obj.set_handler(f"{module_name}:{obj_name}")
 
-    if not user_obj.deploy(name=name, context=service._config, url_type=url_type):  # type: ignore
+    if not user_obj.deploy(
+        name=name, context=service._config, force_rebuild=force_rebuild, url_type=url_type
+    ):  # type: ignore
         terminal.error("Deployment failed ☠️")
 
 

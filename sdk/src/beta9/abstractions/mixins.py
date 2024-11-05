@@ -27,6 +27,7 @@ class DeployableMixin:
         self,
         name: Optional[str] = None,
         context: Optional[ConfigContext] = None,
+        force_rebuild: bool = False,
         invocation_details_func: Optional[Callable[..., None]] = None,
         **invocation_details_options: Any,
     ) -> bool:
@@ -42,7 +43,10 @@ class DeployableMixin:
             self.parent.config_context = context
 
         if not self.parent.prepare_runtime(
-            func=self.func, stub_type=self.deployment_stub_type, force_create_stub=True
+            func=self.func,
+            stub_type=self.deployment_stub_type,
+            force_create_stub=True,
+            force_rebuild=force_rebuild,
         ):
             return False
 

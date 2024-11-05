@@ -49,6 +49,11 @@ def common(**_):
     help="The type of URL to get back. [default is determined by the server] ",
     type=click.Choice(["host", "path"]),
 )
+@click.option(
+    "--force-rebuild",
+    help="Force a rebuild of the deployment.",
+    is_flag=True,
+)
 @extraclick.pass_service_client
 @click.pass_context
 def serve(
@@ -57,6 +62,7 @@ def serve(
     entrypoint: str,
     timeout: Optional[int] = None,
     url_type: str = "path",
+    force_rebuild: bool = False,
 ):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
@@ -84,4 +90,4 @@ def serve(
     if hasattr(user_obj, "set_handler"):
         user_obj.set_handler(f"{module_name}:{obj_name}")
 
-    user_obj.serve(timeout=int(timeout), url_type=url_type)  # type:ignore
+    user_obj.serve(timeout=int(timeout), url_type=url_type, force_rebuild=force_rebuild)  # type:ignore

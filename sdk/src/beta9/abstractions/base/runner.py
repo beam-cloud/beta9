@@ -330,6 +330,7 @@ class RunnerAbstraction(BaseAbstraction):
         func: Optional[Callable] = None,
         stub_type: str,
         force_create_stub: bool = False,
+        force_rebuild: bool = False,
     ) -> bool:
         if called_on_import():
             return False
@@ -345,7 +346,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.cpu = self._parse_cpu_to_millicores(self.cpu)
 
         if not self.image_available:
-            image_build_result: ImageBuildResult = self.image.build()
+            image_build_result: ImageBuildResult = self.image.build(force_rebuild=force_rebuild)
 
             if image_build_result and image_build_result.success:
                 self.image_available = True

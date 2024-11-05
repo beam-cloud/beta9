@@ -492,14 +492,14 @@ class _CallableWrapper(DeployableMixin):
         return self.func(*args, **kwargs)
 
     @with_grpc_error_handling
-    def serve(self, timeout: int = 0, url_type: str = ""):
+    def serve(self, timeout: int = 0, url_type: str = "", force_rebuild: bool = False):
         stub_type = ENDPOINT_SERVE_STUB_TYPE
 
         if getattr(self.parent, "is_asgi", None):
             stub_type = ASGI_SERVE_STUB_TYPE
 
         if not self.parent.prepare_runtime(
-            func=self.func, stub_type=stub_type, force_create_stub=True
+            func=self.func, stub_type=stub_type, force_create_stub=True, force_rebuild=force_rebuild
         ):
             return False
 

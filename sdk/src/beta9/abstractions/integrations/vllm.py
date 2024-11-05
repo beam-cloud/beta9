@@ -366,6 +366,7 @@ class VLLM(ASGI):
         self,
         name: Optional[str] = None,
         context: Optional[ConfigContext] = None,
+        force_rebuild: bool = False,
         invocation_details_func: Optional[Callable[..., None]] = None,
         **invocation_details_options: Any,
     ) -> bool:
@@ -389,6 +390,7 @@ class VLLM(ASGI):
         if not self.prepare_runtime(
             stub_type=ASGI_DEPLOYMENT_STUB_TYPE,
             force_create_stub=True,
+            force_rebuild=force_rebuild,
         ):
             return False
 
@@ -408,8 +410,10 @@ class VLLM(ASGI):
         return deploy_response.ok
 
     @with_grpc_error_handling
-    def serve(self, timeout: int = 0, url_type: str = ""):
-        if not self.prepare_runtime(stub_type=ASGI_SERVE_STUB_TYPE, force_create_stub=True):
+    def serve(self, timeout: int = 0, url_type: str = "", force_rebuild: bool = False):
+        if not self.prepare_runtime(
+            stub_type=ASGI_SERVE_STUB_TYPE, force_create_stub=True, force_rebuild=force_rebuild
+        ):
             return False
 
         try:

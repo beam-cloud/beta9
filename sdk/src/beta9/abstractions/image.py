@@ -165,11 +165,11 @@ class Image(BaseAbstraction):
 
         return (r.exists, ImageBuildResult(success=r.exists, image_id=r.image_id))
 
-    def build(self) -> ImageBuildResult:
+    def build(self, force_rebuild: bool = False) -> ImageBuildResult:
         terminal.header("Building image")
 
         exists, exists_response = self.exists()
-        if exists:
+        if exists and not force_rebuild:
             terminal.header("Using cached image")
             return ImageBuildResult(success=True, image_id=exists_response.image_id)
 
