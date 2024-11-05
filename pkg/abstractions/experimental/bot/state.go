@@ -49,25 +49,71 @@ func (m *botStateManager) loadSession(workspaceName, stubId, sessionId string) (
 }
 
 func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string, state *BotSession) error {
-	err := m.lock.Acquire(context.TODO(), Keys.botLock(workspaceName, stubId, sessionId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+	ctx := context.TODO()
+	err := m.lock.Acquire(ctx, Keys.botLock(workspaceName, stubId, sessionId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
 	}
 	defer m.lock.Release(Keys.botLock(workspaceName, stubId, sessionId))
+	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
+
+	exists, err := m.rdb.Exists(ctx, stateKey).Result()
+	if err != nil {
+		return err
+	}
+
+	// State not found, add to index
+	if exists == 0 {
+		indexKey := Keys.botSessionIndex(workspaceName, stubId)
+		err = m.rdb.SAdd(ctx, indexKey, sessionId).Err()
+		if err != nil {
+			return err
+		}
+	}
 
 	jsonData, err := json.Marshal(state)
 	if err != nil {
-		return fmt.Errorf("failed to serialize session state: %v", err)
+		return err
 	}
 
-	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
-
-	err = m.rdb.Set(context.TODO(), stateKey, jsonData, 0).Err()
+	err = m.rdb.Set(ctx, stateKey, jsonData, 0).Err()
 	if err != nil {
 		return fmt.Errorf("failed to store session state: %v", err)
 	}
 
 	return nil
+}
+
+func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string) error {
+	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
+	indexKey := Keys.botSessionIndex(workspaceName, stubId)
+
+	err := m.rdb.Del(context.TODO(), stateKey).Err()
+	if err != nil {
+		return err
+	}
+
+	return m.rdb.SRem(context.TODO(), indexKey, sessionId).Err()
+}
+
+func (m *botStateManager) getActiveSessions(workspaceName, stubId string) ([]*BotSession, error) {
+	sessions := []*BotSession{}
+
+	sessionIds, err := m.rdb.SMembers(context.TODO(), Keys.botSessionIndex(workspaceName, stubId)).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, sessionId := range sessionIds {
+		state, err := m.loadSession(workspaceName, stubId, sessionId)
+		if err != nil {
+			return nil, err
+		}
+
+		sessions = append(sessions, state)
+	}
+
+	return sessions, nil
 }
 
 func (m *botStateManager) pushMarker(workspaceName, stubId, sessionId, locationName string, markerData Marker) error {
@@ -122,11 +168,6 @@ func (m *botStateManager) popTask(workspaceName, stubId, sessionId, transitionNa
 	}
 
 	return payload, nil
-}
-
-func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string) error {
-	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
-	return m.rdb.Del(context.TODO(), stateKey).Err()
 }
 
 func (m *botStateManager) acquireLock(workspaceName, stubId, sessionId string) error {

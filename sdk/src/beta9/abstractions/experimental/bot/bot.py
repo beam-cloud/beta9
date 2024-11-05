@@ -1,7 +1,8 @@
-import asyncio
 import inspect
 import json
 import os
+import threading
+import time
 from typing import Callable, Dict, List, Optional, Union
 
 from .... import terminal
@@ -217,81 +218,67 @@ class Bot(RunnerAbstraction, DeployableMixin):
             self._handle_serve_interrupt()
 
     def _serve(self, *, url: str, timeout: int = 0):
-        ws_url = url.replace("http://", "ws://").replace("https://", "wss://")
+        def _connect_to_session(*, session_id: str):
+            import websocket
 
-        import websockets
+            def on_message(ws, message):
+                terminal.detail(f"Received: {message}")
 
-        async def handle_websocket_connection():
-            async with websockets.connect(
-                ws_url,
-                extra_headers={"Authorization": f"Bearer {self.config_context.token}"},
-            ) as websocket:
+            def on_error(ws, error):
+                terminal.error(f"Error: {error}")
 
-                async def send_keep_alive():
+            def on_close(ws, close_status_code, close_msg):
+                terminal.error(f"Connection closed: {close_status_code} - {close_msg}")
+
+            def on_open(ws):
+                def _send_keep_alive():
                     while True:
                         self.bot_stub.bot_serve_keep_alive(
                             BotServeKeepAliveRequest(
                                 stub_id=self.stub_id,
+                                session_id=session_id,
                                 timeout=timeout,
                             )
                         )
-                        await asyncio.sleep(timeout or 30)
+                        time.sleep(timeout or 30)
 
-                keep_alive_task = asyncio.create_task(send_keep_alive())
+                def _send_user_input():
+                    while True:
+                        msg = terminal.prompt(text="#")
+                        if msg:
+                            user_request = json.dumps({"msg": msg})
+                            ws.send(user_request)
 
-                async def recv_messages():
-                    try:
-                        while True:
-                            message = await websocket.recv()
-                            terminal.detail(f"Received: {message}")
-                    except websockets.exceptions.ConnectionClosed as e:
-                        terminal.error(f"WebSocket connection closed: {e}")
-                    except asyncio.CancelledError:
-                        pass
+                threading.Thread(target=_send_keep_alive, daemon=True).start()
+                threading.Thread(target=_send_user_input, daemon=True).start()
 
-                async def send_user_input():
-                    loop = asyncio.get_event_loop()
+            ws_url = url.replace("http://", "ws://").replace("https://", "wss://")
+            ws = websocket.WebSocketApp(
+                ws_url,
+                on_open=on_open,
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+                header={"Authorization": f"Bearer {self.config_context.token}"},
+            )
+            ws.run_forever()
 
-                    try:
-                        while True:
-                            msg = await loop.run_in_executor(
-                                None, lambda: terminal.prompt(text="#")
-                            )
-                            if msg:
-                                user_request = json.dumps({"msg": msg})
-                                await websocket.send(user_request)
-                    except asyncio.CancelledError:
-                        pass
-
-                recv_task = asyncio.create_task(recv_messages())
-                input_task = asyncio.create_task(send_user_input())
-
-                await asyncio.gather(recv_task, input_task)
-
-                keep_alive_task.cancel()
-
-        try:
-            asyncio.run(handle_websocket_connection())
-        except KeyboardInterrupt:
-            self._handle_serve_interrupt()
-
-        r: Optional[StartBotServeResponse] = None
-        for r in self.bot_stub.start_bot_serve(
+        r: StartBotServeResponse = self.bot_stub.start_bot_serve(
             StartBotServeRequest(
                 stub_id=self.stub_id,
                 timeout=timeout,
             )
-        ):
-            if r.output != "":
-                terminal.detail(r.output, end="")
-
-            if r.done:
-                break
-
-        if r is None or not r.done:
+        )
+        if r is None or not r.session_id:
             terminal.error("Serve failed ❌")
+            return
 
-        terminal.warn("Bot serve timed out. All containers have been stopped.")
+        try:
+            _connect_to_session(session_id=r.session_id)
+        except KeyboardInterrupt:
+            self._handle_serve_interrupt()
+
+        # terminal.warn("Bot serve timed out. All containers have been stopped.")
 
     def _handle_serve_interrupt(self) -> None:
         terminal.header("Stopping all bot containers")

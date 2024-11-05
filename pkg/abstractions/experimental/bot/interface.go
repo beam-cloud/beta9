@@ -13,9 +13,11 @@ import (
 )
 
 type BotInterface struct {
-	client       *openai.Client
-	botConfig    BotConfig
-	model        string
+	client    *openai.Client
+	botConfig BotConfig
+	model     string
+
+	// TODO: move both of these buffers to state manager and filter by session id
 	inputBuffer  *messageBuffer
 	outputBuffer *messageBuffer
 	systemPrompt string
@@ -56,11 +58,6 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 	}
 	bi.schema = schema
 
-	// err = bi.initSession(bi.sessionId)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
 	return bi, nil
 }
 
@@ -72,7 +69,9 @@ func (bi *BotInterface) initSession(sessionId string) error {
 
 	// New session, create a state object to store message history and other session metadata
 	if err != nil && err == ErrBotSessionNotFound {
-		state = &BotSession{}
+		state = &BotSession{
+			Id: sessionId,
+		}
 
 		setupPrompt := BotChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
@@ -106,6 +105,7 @@ func (bi *BotInterface) initSession(sessionId string) error {
 	}
 
 	responseMessage := resp.Choices[0].Message
+
 	state.Messages = append(state.Messages, BotChatCompletionMessage{
 		Role:    responseMessage.Role,
 		Content: responseMessage.Content,

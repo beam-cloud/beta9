@@ -6,9 +6,7 @@
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
-    AsyncIterator,
     Dict,
-    Iterator,
     List,
     Optional,
 )
@@ -33,15 +31,15 @@ class StartBotServeRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class StartBotServeResponse(betterproto.Message):
-    output: str = betterproto.string_field(1)
-    done: bool = betterproto.bool_field(2)
-    exit_code: int = betterproto.int32_field(3)
+    ok: bool = betterproto.bool_field(1)
+    session_id: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
 class BotServeKeepAliveRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     timeout: int = betterproto.int32_field(2)
+    session_id: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -97,13 +95,12 @@ class PushBotMarkerResponse(betterproto.Message):
 class BotServiceStub(SyncServiceStub):
     def start_bot_serve(
         self, start_bot_serve_request: "StartBotServeRequest"
-    ) -> Iterator["StartBotServeResponse"]:
-        for response in self._unary_stream(
+    ) -> "StartBotServeResponse":
+        return self._unary_unary(
             "/bot.BotService/StartBotServe",
             StartBotServeRequest,
             StartBotServeResponse,
-        )(start_bot_serve_request):
-            yield response
+        )(start_bot_serve_request)
 
     def bot_serve_keep_alive(
         self, bot_serve_keep_alive_request: "BotServeKeepAliveRequest"

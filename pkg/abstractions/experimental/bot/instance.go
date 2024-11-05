@@ -76,27 +76,37 @@ func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, er
 }
 
 func (i *botInstance) Start() error {
+	stepInterval := time.Duration(i.appConfig.Abstractions.Bot.StepIntervalS) * time.Second
+
 	for {
 		select {
 		case <-i.ctx.Done():
 			return nil
 		default:
-			activeSessions := []string{"testsession"}
+			activeSessions, err := i.botStateManager.getActiveSessions(i.workspace.Name, i.stub.ExternalId)
+			if err != nil || len(activeSessions) == 0 {
+				select {
+				case <-i.ctx.Done():
+					return nil
+				case <-time.After(stepInterval):
+					continue
+				}
+			}
 
-			for _, sessionId := range activeSessions {
+			for _, session := range activeSessions {
 				if prompt, err := i.botInterface.inputBuffer.Pop(); err == nil {
-					if err := i.botInterface.SendPrompt(sessionId, prompt); err != nil {
+					if err := i.botInterface.SendPrompt(session.Id, prompt); err != nil {
 						continue
 					}
 				}
 
-				select {
-				case <-i.ctx.Done():
-					return nil
-				case <-time.After(time.Duration(i.appConfig.Abstractions.Bot.StepIntervalS) * time.Second):
-					i.step(sessionId)
-					continue
-				}
+				i.step(session.Id)
+			}
+
+			select {
+			case <-i.ctx.Done():
+				return nil
+			case <-time.After(stepInterval):
 			}
 		}
 	}

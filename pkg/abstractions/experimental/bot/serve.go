@@ -2,42 +2,33 @@ package bot
 
 import (
 	"context"
-	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/google/uuid"
 
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-func (pbs *PetriBotService) StartBotServe(in *pb.StartBotServeRequest, stream pb.BotService_StartBotServeServer) error {
-	ctx := stream.Context()
+func (pbs *PetriBotService) StartBotServe(ctx context.Context, in *pb.StartBotServeRequest) (*pb.StartBotServeResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	instance, err := pbs.getOrCreateBotInstance(in.StubId)
 	if err != nil {
-		return err
+		return &pb.StartBotServeResponse{Ok: false}, nil
 	}
 
 	if authInfo.Workspace.ExternalId != instance.stub.Workspace.ExternalId {
-		stream.Send(&pb.StartBotServeResponse{Done: true, Output: "Invalid stub", ExitCode: 1})
 		instance.cancelFunc()
-		return nil
+		return &pb.StartBotServeResponse{Ok: false}, nil
 	}
 
-	for {
-		select {
-		case <-stream.Context().Done():
-			instance.cancelFunc()
-			return nil
-		default:
-			resp, err := instance.botInterface.outputBuffer.Pop()
-			if err == nil {
-				stream.Send(&pb.StartBotServeResponse{Done: false, Output: resp})
-			} else {
-				time.Sleep(time.Millisecond * 100)
-			}
-		}
+	sessionId := uuid.New().String()[:6]
+	err = instance.botInterface.initSession(sessionId)
+	if err != nil {
+		return &pb.StartBotServeResponse{Ok: false}, nil
 	}
+
+	return &pb.StartBotServeResponse{Ok: true, SessionId: sessionId}, nil
 }
 
 func (s *PetriBotService) BotServeKeepAlive(ctx context.Context, in *pb.BotServeKeepAliveRequest) (*pb.BotServeKeepAliveResponse, error) {

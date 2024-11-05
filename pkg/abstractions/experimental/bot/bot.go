@@ -40,7 +40,7 @@ type BotServiceOpts struct {
 
 type BotService interface {
 	pb.BotServiceServer
-	StartBotServe(in *pb.StartBotServeRequest, stream pb.BotService_StartBotServeServer) error
+	StartBotServe(ctx context.Context, in *pb.StartBotServeRequest) (*pb.StartBotServeResponse, error)
 	BotServeKeepAlive(ctx context.Context, in *pb.BotServeKeepAliveRequest) (*pb.BotServeKeepAliveResponse, error)
 }
 
@@ -164,6 +164,7 @@ type keys struct{}
 
 var (
 	botLock            string = "bot:%s:%s:session_state_lock:%s"
+	botSessionIndex    string = "bot:%s:%s:session_index"
 	botSessionState    string = "bot:%s:%s:session_state:%s"
 	botMarkers         string = "bot:%s:%s:markers:%s:%s"
 	botTransitionTasks string = "bot:%s:%s:transition_tasks:%s:%s"
@@ -171,6 +172,10 @@ var (
 
 func (k *keys) botLock(workspaceName, stubId, sessionId string) string {
 	return fmt.Sprintf(botLock, workspaceName, stubId, sessionId)
+}
+
+func (k *keys) botSessionIndex(workspaceName, stubId string) string {
+	return fmt.Sprintf(botSessionIndex, workspaceName, stubId)
 }
 
 func (k *keys) botSessionState(workspaceName, stubId, sessionId string) string {

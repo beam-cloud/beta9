@@ -10,6 +10,7 @@ import (
 var ErrBotSessionNotFound = fmt.Errorf("bot session not found")
 
 type BotSession struct {
+	Id       string                     `json:"id" redis:"id"`
 	Messages []BotChatCompletionMessage `json:"messages" redis:"messages"`
 }
 
