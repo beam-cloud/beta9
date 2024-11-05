@@ -138,6 +138,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.settings: SDKSettings = get_settings()
         self.config_context: ConfigContext = get_config_context()
         self.tmp_files: List[tempfile.NamedTemporaryFile] = []
+        self.is_websocket: bool = False
 
     def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
         """Print curl request to call deployed container URL"""
@@ -164,6 +165,17 @@ class RunnerAbstraction(BaseAbstraction):
             ),
             "-d '{}'",
         ]
+
+        if self.is_websocket:
+            commands = [
+                f"websocat '{res.url.replace('http://', 'ws://').replace('https://', 'wss://')}' \\",
+                *(
+                    [f"-H 'Authorization: Bearer {self.config_context.token}'"]
+                    if self.authorized
+                    else []
+                ),
+            ]
+
         terminal.print("\n".join(commands), crop=False, overflow="ignore")
         return res
 

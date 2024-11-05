@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "Deleting worker jobs..."
-kubectl delete job -l run.beam.cloud/role=worker
+kubectl delete job --now --cascade=foreground -l run.beam.cloud/role=worker
 
 echo "Deleting scheduler keys..."
 if kubectl get sts redis-master &> /dev/null; then

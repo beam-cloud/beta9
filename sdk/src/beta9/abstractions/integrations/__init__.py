@@ -1,3 +1,3 @@
-from .vllm import VLLM, VLLMEngineConfig
+from .vllm import VLLM, VLLMArgs, VLLMEngineConfig
 
-__all__ = ["VLLM", "VLLMEngineConfig"]
+__all__ = ["VLLM", "VLLMArgs", "VLLMEngineConfig"]
