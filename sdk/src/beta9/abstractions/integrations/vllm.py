@@ -49,6 +49,7 @@ class VLLMArgs:
     tokenizer: Optional[str] = None
     skip_tokenizer_init: bool = False
     tokenizer_mode: str = "auto"
+    task: str = "auto"
     trust_remote_code: bool = False
     download_dir: Optional[str] = DEFAULT_VLLM_CACHE_DIR
     load_format: str = "auto"
@@ -240,7 +241,6 @@ class VLLM(ASGI):
             chat_template=vllm_args.chat_template,
             return_tokens_as_token_ids=vllm_args.return_tokens_as_token_ids,
             enable_auto_tool_choice=vllm_args.enable_auto_tool_choice,
-            enable_auto_tools=vllm_args.enable_auto_tools,
             tool_call_parser=vllm_args.tool_call_parser,
             disable_log_stats=vllm_args.disable_log_stats,
         )
