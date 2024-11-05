@@ -261,6 +261,7 @@ class VLLM(ASGI):
         from fastapi import FastAPI
         from vllm.engine.arg_utils import AsyncEngineArgs
         from vllm.engine.async_llm_engine import AsyncLLMEngine
+        from vllm.entrypoints.openai.tool_parsers import ToolParserManager
         from vllm.usage.usage_lib import UsageContext
 
         if self.chat_template_url:
@@ -284,6 +285,16 @@ class VLLM(ASGI):
             import huggingface_hub
 
             huggingface_hub.login(hf_token)
+
+        if self.engine_args.tool_parser_plugin and len(self.engine_args.tool_parser_plugin) > 3:
+            ToolParserManager.import_tool_parser(self.engine_args.tool_parser_plugin)
+
+        valide_tool_parses = ToolParserManager.tool_parsers.keys()
+        if args.enable_auto_tool_choice and args.tool_call_parser not in valide_tool_parses:
+            raise KeyError(
+                f"invalid tool call parser: {args.tool_call_parser} "
+                f"(chose from {{ {','.join(valide_tool_parses)} }})"
+            )
 
         app = FastAPI()
 
