@@ -84,26 +84,6 @@
 			"source": "proc"
 		},
 		{
-			"destination": "/tmp2",
-			"type": "tmpfs",
-			"source": "tmpfs",
-			"options": [
-				"nosuid",
-				"strictatime",
-				"mode=755"
-			]
-		},
-		{
-			"destination": "/root",
-			"type": "overlay",
-			"source": "overlay",
-			"options": [
-				"lowerdir=/root",
-				"upperdir=/tmp2/upper",
-				"workdir=/tmp2/work"
-			]
-		},
-		{
 			"destination": "/volumes",
 			"type": "tmpfs",
 			"source": "tmpfs",

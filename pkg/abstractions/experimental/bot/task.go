@@ -29,7 +29,7 @@ func (t *BotTask) Execute(ctx context.Context, options ...interface{}) error {
 
 	transitionName := t.msg.Kwargs["transition_name"].(string)
 	sessionId := t.msg.Kwargs["session_id"].(string)
-	markers := t.msg.Args[0].(*types.TaskPayload).Kwargs["markers"].([]Marker)
+	markers := t.msg.Kwargs["markers"].([]Marker)
 
 	err = t.pbs.botStateManager.pushTask(instance.workspace.Name, instance.stub.ExternalId, sessionId, transitionName, markers)
 	if err != nil {
