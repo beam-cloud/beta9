@@ -25,20 +25,31 @@ DEFAULT_VLLM_CACHE_DIR = "./vllm_cache"
 
 # vllm/engine/arg_utils.py:EngineArgs
 @dataclass
-class VLLMEngineConfig:
+class VLLMArgs:
     """
     The configuration for the vLLM engine. For more information, see the vllm documentation:
     https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html#command-line-arguments-for-the-server
     Each of these arguments corresponds to a command line argument for the vllm server.
     """
 
+    response_role: Optional[str] = "assistant"
+    lora_modules: Optional[List[str]] = None
+    prompt_adapters: Optional[List[str]] = None
+    chat_template: Optional[str] = None
+    chat_template_url: Optional[str] = None
+    return_tokens_as_token_ids: bool = False
+    enable_auto_tool_choice: bool = False
+    tool_call_parser: Optional[str] = None
+    tool_parser_plugin: Optional[str] = None
+    disable_log_stats: bool = False
+    disable_log_requests: bool = False
+    max_log_len: Optional[int] = None
     model: str = "facebook/opt-125m"
     served_model_name: Optional[Union[str, List[str]]] = None
     tokenizer: Optional[str] = None
-    task: str = "auto"
     skip_tokenizer_init: bool = False
     tokenizer_mode: str = "auto"
-    chat_template_text_format: str = "string"
+    task: str = "auto"
     trust_remote_code: bool = False
     download_dir: Optional[str] = DEFAULT_VLLM_CACHE_DIR
     load_format: str = "auto"
@@ -49,9 +60,6 @@ class VLLMEngineConfig:
     seed: int = 0
     max_model_len: Optional[int] = None
     worker_use_ray: bool = False
-    # Note: Specifying a custom executor backend by passing a class
-    # is intended for expert use only. The API may change without
-    # notice.
     distributed_executor_backend: Optional[Union[str, Any]] = None
     pipeline_parallel_size: int = 1
     tensor_parallel_size: int = 1
@@ -65,7 +73,7 @@ class VLLMEngineConfig:
     gpu_memory_utilization: float = 0.90
     max_num_batched_tokens: Optional[int] = None
     max_num_seqs: int = 256
-    max_logprobs: int = 20  # Default value for OpenAI Chat Completions API
+    max_logprobs: int = 20
     disable_log_stats: bool = False
     revision: Optional[str] = None
     code_revision: Optional[str] = None
@@ -78,9 +86,6 @@ class VLLMEngineConfig:
     max_seq_len_to_capture: int = 8192
     disable_custom_all_reduce: bool = False
     tokenizer_pool_size: int = 0
-    # Note: Specifying a tokenizer pool by passing a class
-    # is intended for expert use only. The API may change without
-    # notice.
     tokenizer_pool_type: Union[str, Any] = "ray"
     tokenizer_pool_extra_config: Optional[dict] = None
     limit_mm_per_prompt: Optional[Mapping[str, int]] = None
@@ -104,12 +109,9 @@ class VLLMEngineConfig:
     model_loader_extra_config: Optional[dict] = None
     ignore_patterns: Optional[Union[str, List[str]]] = None
     preemption_mode: Optional[str] = None
-
     scheduler_delay_factor: float = 0.0
     enable_chunked_prefill: Optional[bool] = None
-
     guided_decoding_backend: str = "outlines"
-    # Speculative decoding configuration.
     speculative_model: Optional[str] = None
     speculative_model_quantization: Optional[str] = None
     speculative_draft_tensor_parallel_size: Optional[int] = None
@@ -124,7 +126,6 @@ class VLLMEngineConfig:
     typical_acceptance_sampler_posterior_alpha: Optional[float] = None
     qlora_adapter_name_or_path: Optional[str] = None
     disable_logprobs_during_spec_decoding: Optional[bool] = None
-
     otlp_traces_endpoint: Optional[str] = None
     collect_detailed_traces: Optional[str] = None
     disable_async_output_proc: bool = False
@@ -132,54 +133,6 @@ class VLLMEngineConfig:
     mm_processor_kwargs: Optional[Dict[str, Any]] = None
     scheduling_policy: Literal["fcfs", "priority"] = "fcfs"
     disable_log_requests: bool = False
-
-
-@dataclass
-class VLLMArgs:
-    """
-    VLLMArgs are used to configure the setup and behavior of the model.
-
-    response_role (str):
-        The role of the response. Default is "assistant".
-    lora_modules (List[str]):
-        The LoRA modules to use.
-    prompt_adapters (List[str]):
-        The prompt adapters to use.
-    chat_template (str):
-        This is the path to the chat template you wish to use if one is in your working directory.
-        It can be left empty for the default template of `NONE` or you can use `chat_template_url` instead.
-    chat_template_url (str):
-        The chat template to use. Unlike vLLM, this template is expected to be a downloadable link to a jinja template file.
-        That template will be downloaded and used. Here is a good repo of chat templates that you can link to:
-        https://github.com/chujiezheng/chat_templates/tree/main.
-    return_tokens_as_token_ids (bool):
-        Whether to return tokens as token ids.
-    enable_auto_tools (bool):
-        Whether to enable auto tools.
-    enable_auto_tool_choice (bool):
-        Whether to enable auto tool choice.
-    tool_call_parser (str):
-        The tool call parser to use.
-    disable_log_stats (bool):
-        Whether to disable log stats.
-    disable_log_requests (bool):
-        Whether to disable log requests.
-    max_log_len (Optional[int]):
-        The maximum length of the log.
-    """
-
-    response_role: Optional[str] = "assistant"
-    lora_modules: Optional[List[str]] = None
-    prompt_adapters: Optional[List[str]] = None
-    chat_template: Optional[str] = None
-    chat_template_url: Optional[str] = None
-    return_tokens_as_token_ids: bool = False
-    enable_auto_tools: bool = False
-    enable_auto_tool_choice: bool = False
-    tool_call_parser: Optional[str] = None
-    disable_log_stats: bool = False
-    disable_log_requests: bool = False
-    max_log_len: Optional[int] = None
 
 
 class VLLM(ASGI):
@@ -219,8 +172,6 @@ class VLLM(ASGI):
             The secrets to pass to the container. If you need huggingface authentication to download models, you should set HF_TOKEN in the secrets.
         autoscaler (Autoscaler):
             The autoscaler to use. Default is a queue depth autoscaler.
-        vllm_engine_config (VLLMEngineConfig):
-            The configuration for the vLLM engine.
         vllm_args (VLLMArgs):
             The arguments for the vLLM model.
 
@@ -228,13 +179,11 @@ class VLLM(ASGI):
         ```python
         from beta9 import integrations
 
-        e = integrations.VLLMEngineConfig()
+        e = integrations.VLLMArgs()
         e.device = "cpu"
+        e.chat_template = "./chatml.jinja"
 
-        a = integrations.VLLMArgs()
-        a.chat_template = "./chatml.jinja"
-
-        vllm_app = integrations.VLLM(name="vllm-abstraction-1", vllm_engine_config=e, vllm_args=a)
+        vllm_app = integrations.VLLM(name="vllm-abstraction-1", vllm_args=e)
         ```
     """
 
@@ -254,10 +203,9 @@ class VLLM(ASGI):
         volumes: Optional[List[Volume]] = [],
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
-        vllm_engine_config: VLLMEngineConfig = VLLMEngineConfig(),
         vllm_args: VLLMArgs = VLLMArgs(),
     ):
-        if vllm_engine_config.download_dir == DEFAULT_VLLM_CACHE_DIR:
+        if vllm_args.download_dir == DEFAULT_VLLM_CACHE_DIR:
             # Add default vllm cache volume to preserve it if custom volumes are specified for chat templates
             volumes.append(Volume(name="vllm_cache", mount_path=DEFAULT_VLLM_CACHE_DIR))
 
@@ -281,10 +229,10 @@ class VLLM(ASGI):
         )
 
         self.chat_template_url = vllm_args.chat_template_url
-        self.engine_config = vllm_engine_config
-        self.vllm_args = SimpleNamespace(
-            model=vllm_engine_config.model,
-            served_model_name=vllm_engine_config.served_model_name,
+        self.engine_args = vllm_args
+        self.app_args = SimpleNamespace(
+            model=vllm_args.model,
+            served_model_name=vllm_args.served_model_name,
             disable_log_requests=vllm_args.disable_log_requests,
             max_log_len=vllm_args.max_log_len,
             response_role=vllm_args.response_role,
@@ -293,7 +241,6 @@ class VLLM(ASGI):
             chat_template=vllm_args.chat_template,
             return_tokens_as_token_ids=vllm_args.return_tokens_as_token_ids,
             enable_auto_tool_choice=vllm_args.enable_auto_tool_choice,
-            enable_auto_tools=vllm_args.enable_auto_tools,
             tool_call_parser=vllm_args.tool_call_parser,
             disable_log_stats=vllm_args.disable_log_stats,
         )
@@ -314,6 +261,7 @@ class VLLM(ASGI):
         from fastapi import FastAPI
         from vllm.engine.arg_utils import AsyncEngineArgs
         from vllm.engine.async_llm_engine import AsyncLLMEngine
+        from vllm.entrypoints.openai.tool_parsers import ToolParserManager
         from vllm.usage.usage_lib import UsageContext
 
         if self.chat_template_url:
@@ -321,15 +269,15 @@ class VLLM(ASGI):
 
             chat_template_filename = self.chat_template_url.split("/")[-1]
 
-            if not os.path.exists(f"{self.engine_config.download_dir}/{chat_template_filename}"):
+            if not os.path.exists(f"{self.engine_args.download_dir}/{chat_template_filename}"):
                 response = requests.get(self.chat_template_url)
                 with open(
-                    f"{self.engine_config.download_dir}/{chat_template_filename}", "wb"
+                    f"{self.engine_args.download_dir}/{chat_template_filename}", "wb"
                 ) as file:
                     file.write(response.content)
 
-            self.vllm_args.chat_template = (
-                f"{self.engine_config.download_dir}/{chat_template_filename}"
+            self.app_args.chat_template = (
+                f"{self.engine_args.download_dir}/{chat_template_filename}"
             )
 
         if "HF_TOKEN" in os.environ:
@@ -337,6 +285,16 @@ class VLLM(ASGI):
             import huggingface_hub
 
             huggingface_hub.login(hf_token)
+
+        if self.engine_args.tool_parser_plugin and len(self.engine_args.tool_parser_plugin) > 3:
+            ToolParserManager.import_tool_parser(self.engine_args.tool_parser_plugin)
+
+        valide_tool_parses = ToolParserManager.tool_parsers.keys()
+        if args.enable_auto_tool_choice and args.tool_call_parser not in valide_tool_parses:
+            raise KeyError(
+                f"invalid tool call parser: {args.tool_call_parser} "
+                f"(chose from {{ {','.join(valide_tool_parses)} }})"
+            )
 
         app = FastAPI()
 
@@ -346,7 +304,7 @@ class VLLM(ASGI):
 
         app.include_router(api_server.router)
 
-        engine_args = AsyncEngineArgs.from_cli_args(self.engine_config)
+        engine_args = AsyncEngineArgs.from_cli_args(self.engine_args)
 
         engine_client = AsyncLLMEngine.from_engine_args(
             engine_args, usage_context=UsageContext.OPENAI_API_SERVER
@@ -357,7 +315,7 @@ class VLLM(ASGI):
             engine_client,
             model_config,
             app.state,
-            self.vllm_args,
+            self.app_args,
         )
 
         return app
@@ -376,8 +334,8 @@ class VLLM(ASGI):
             )
 
         if (
-            self.engine_config.download_dir != DEFAULT_VLLM_CACHE_DIR
-            and self.engine_config.download_dir not in [v.mount_path for v in self.volumes]
+            self.engine_args.download_dir != DEFAULT_VLLM_CACHE_DIR
+            and self.engine_args.download_dir not in [v.mount_path for v in self.volumes]
         ):
             terminal.error(
                 "The engine's download directory must match a mount path in the volumes list."
