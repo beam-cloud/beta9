@@ -170,6 +170,24 @@ func (m *botStateManager) popTask(workspaceName, stubId, sessionId, transitionNa
 	return payload, nil
 }
 
+func (m *botStateManager) pushInputMessage(workspaceName, stubId, sessionId, msg string) error {
+	messageKey := Keys.botInputBuffer(workspaceName, stubId, sessionId)
+	return m.rdb.RPush(context.TODO(), messageKey, msg).Err()
+}
+
+func (m *botStateManager) popInputMessage(workspaceName, stubId, sessionId string) (string, error) {
+	return m.rdb.LPop(context.TODO(), Keys.botInputBuffer(workspaceName, stubId, sessionId)).Result()
+}
+
+func (m *botStateManager) pushOutputMessage(workspaceName, stubId, sessionId, msg string) error {
+	messageKey := Keys.botOutputBuffer(workspaceName, stubId, sessionId)
+	return m.rdb.RPush(context.TODO(), messageKey, msg).Err()
+}
+
+func (m *botStateManager) popOutputMessage(workspaceName, stubId, sessionId string) (string, error) {
+	return m.rdb.LPop(context.TODO(), Keys.botOutputBuffer(workspaceName, stubId, sessionId)).Result()
+}
+
 func (m *botStateManager) acquireLock(workspaceName, stubId, sessionId string) error {
 	return m.lock.Acquire(context.TODO(), Keys.botLock(workspaceName, stubId, sessionId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 }

@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -13,13 +12,9 @@ import (
 )
 
 type BotInterface struct {
-	client    *openai.Client
-	botConfig BotConfig
-	model     string
-
-	// TODO: move both of these buffers to state manager and filter by session id
-	inputBuffer  *messageBuffer
-	outputBuffer *messageBuffer
+	client       *openai.Client
+	botConfig    BotConfig
+	model        string
 	systemPrompt string
 	stateManager *botStateManager
 	workspace    *types.Workspace
@@ -40,15 +35,11 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 		client:       openai.NewClient(opts.AppConfig.Abstractions.Bot.OpenAIKey),
 		botConfig:    opts.BotConfig,
 		model:        opts.BotConfig.Model,
-		inputBuffer:  &messageBuffer{Messages: []string{}, MaxLength: 100},
-		outputBuffer: &messageBuffer{Messages: []string{}, MaxLength: 100},
 		systemPrompt: opts.AppConfig.Abstractions.Bot.SystemPrompt,
 		stateManager: opts.StateManager,
 		workspace:    opts.Workspace,
 		stub:         opts.Stub,
 	}
-
-	bi.outputBuffer.Push(fmt.Sprintf("Starting bot, using model<%s>\n", bi.model))
 
 	// Generate the schema for each response
 	var r BotResponse
@@ -201,35 +192,9 @@ func (bi *BotInterface) SendPrompt(sessionId, prompt string) error {
 		responseMsgContent += "\n"
 	}
 
-	return bi.outputBuffer.Push(responseMsgContent)
+	return bi.stateManager.pushOutputMessage(bi.workspace.Name, bi.stub.ExternalId, sessionId, responseMsgContent)
 }
 
-func (bi *BotInterface) pushInput(msg string) error {
-	return bi.inputBuffer.Push(msg)
-}
-
-// TODO: should this be in state manager instead so it's distributed across replicas?
-
-type messageBuffer struct {
-	Messages  []string
-	MaxLength uint
-}
-
-func (b *messageBuffer) Push(msg string) error {
-	if len(b.Messages) >= int(b.MaxLength) {
-		return errors.New("buffer full")
-	}
-
-	b.Messages = append(b.Messages, msg)
-	return nil
-}
-
-func (b *messageBuffer) Pop() (string, error) {
-	if len(b.Messages) == 0 {
-		return "", errors.New("buffer empty")
-	}
-
-	msg := b.Messages[len(b.Messages)-1]
-	b.Messages = b.Messages[:len(b.Messages)-1]
-	return msg, nil
+func (bi *BotInterface) pushInput(msg, sessionId string) error {
+	return bi.stateManager.pushInputMessage(bi.workspace.Name, bi.stub.ExternalId, sessionId, msg)
 }

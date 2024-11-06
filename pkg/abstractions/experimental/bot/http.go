@@ -103,11 +103,10 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			continue
 		}
 
-		if err := instance.botInterface.pushInput(userRequest.Msg); err != nil {
+		if err := instance.botInterface.pushInput(userRequest.Msg, userRequest.SessionId); err != nil {
 			ws.WriteMessage(websocket.TextMessage, []byte(err.Error()))
 			continue
 		}
-
 	}
 
 	return nil

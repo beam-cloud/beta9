@@ -27,6 +27,9 @@ func (t *BotTask) Execute(ctx context.Context, options ...interface{}) error {
 		return err
 	}
 
+	// TODO: need to think about the logic of how a task is executed.
+	// Does each task execute its own container? If so, its fairly straightforward
+
 	instance.run("transitionName", "sessionId")
 	return nil
 }

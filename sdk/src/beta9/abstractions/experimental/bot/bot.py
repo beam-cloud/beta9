@@ -246,7 +246,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
                     while True:
                         msg = terminal.prompt(text="#")
                         if msg:
-                            user_request = json.dumps({"msg": msg})
+                            user_request = json.dumps({"msg": msg, "session_id": session_id})
                             ws.send(user_request)
 
                 threading.Thread(target=_send_keep_alive, daemon=True).start()
