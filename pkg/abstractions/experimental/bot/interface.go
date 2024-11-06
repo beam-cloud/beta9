@@ -187,10 +187,10 @@ func (bi *BotInterface) SendPrompt(sessionId, prompt string) error {
 		}
 	}
 
-	responseMsgContent := responseMessage.Content // formattedResponse.UserMessage
+	responseMsgContent := responseMessage.Content
 	if !strings.HasSuffix(responseMsgContent, "\n") {
 		responseMsgContent += "\n"
 	}
 
-	return bi.stateManager.pushOutputMessage(bi.workspace.Name, bi.stub.ExternalId, sessionId, responseMsgContent)
+	return bi.stateManager.pushOutputMessage(bi.workspace.Name, bi.stub.ExternalId, sessionId, formattedResponse.UserMessage)
 }

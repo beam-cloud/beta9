@@ -179,6 +179,7 @@ func (i *botInstance) step(sessionId string) {
 					Expires:    time.Now().Add(time.Duration(3600) * time.Second),
 				})
 				if err != nil {
+					// TODO: push markers back
 					log.Printf("error sending and executing task: %v", err)
 				}
 			}
@@ -192,8 +193,6 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		return errors.New("transition not found")
 	}
 
-	log.Printf("running transition: %s, sessionId: %s, taskId: %s", transitionName, sessionId, taskId)
-
 	env := []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", i.token.Key),
 		fmt.Sprintf("HANDLER=%s", transitionConfig.Handler),
@@ -203,7 +202,9 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", transitionConfig.KeepWarm),
 		fmt.Sprintf("PYTHON_VERSION=%s", i.stubConfig.PythonVersion),
 		fmt.Sprintf("CALLBACK_URL=%s", transitionConfig.CallbackUrl),
-		fmt.Sprintf("TIMEOUT=%d", i.stubConfig.TaskPolicy.Timeout), // TODO: add real timeout
+		fmt.Sprintf("TRANSITION_NAME=%s", transitionName),
+		fmt.Sprintf("SESSION_ID=%s", sessionId),
+		fmt.Sprintf("TASK_ID=%s", taskId),
 	}
 
 	err := i.scheduler.Run(&types.ContainerRequest{

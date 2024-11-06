@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -91,6 +93,33 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 		return err
 	}
 
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	sessionIdChan := make(chan string, 1)
+
+	go func() {
+		defer wg.Done()
+
+		sessionId := <-sessionIdChan
+
+		for {
+			select {
+			case <-ctx.Request().Context().Done():
+				return
+			default:
+				msg, err := instance.botStateManager.popOutputMessage(instance.workspace.Name, instance.stub.ExternalId, sessionId)
+				if err != nil {
+					time.Sleep(1 * time.Second)
+					continue
+				}
+
+				ws.WriteMessage(websocket.TextMessage, []byte(msg))
+			}
+		}
+	}()
+
+	sessionStarted := false
 	for {
 		_, message, err := ws.ReadMessage()
 		if err != nil {
@@ -103,11 +132,16 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			continue
 		}
 
+		if !sessionStarted {
+			sessionIdChan <- userRequest.SessionId
+			sessionStarted = true
+		}
+
 		if err := instance.botStateManager.pushInputMessage(instance.workspace.Name, instance.stub.ExternalId, userRequest.SessionId, userRequest.Msg); err != nil {
-			ws.WriteMessage(websocket.TextMessage, []byte(err.Error()))
 			continue
 		}
 	}
 
+	wg.Wait()
 	return nil
 }

@@ -222,7 +222,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
             import websocket
 
             def on_message(ws, message):
-                terminal.detail(f"Received: {message}")
+                terminal.detail(f"{message}")
 
             def on_error(ws, error):
                 terminal.error(f"Error: {error}")
@@ -231,6 +231,8 @@ class Bot(RunnerAbstraction, DeployableMixin):
                 terminal.error(f"Connection closed: {close_status_code} - {close_msg}")
 
             def on_open(ws):
+                ws.send(json.dumps({"msg": "", "session_id": session_id}))
+
                 def _send_keep_alive():
                     while True:
                         self.bot_stub.bot_serve_keep_alive(
