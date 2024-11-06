@@ -290,9 +290,12 @@ class VLLM(ASGI):
             ToolParserManager.import_tool_parser(self.engine_args.tool_parser_plugin)
 
         valide_tool_parses = ToolParserManager.tool_parsers.keys()
-        if args.enable_auto_tool_choice and args.tool_call_parser not in valide_tool_parses:
+        if (
+            self.engine_args.enable_auto_tool_choice
+            and self.engine_args.tool_call_parser not in valide_tool_parses
+        ):
             raise KeyError(
-                f"invalid tool call parser: {args.tool_call_parser} "
+                f"invalid tool call parser: {self.engine_args.tool_call_parser} "
                 f"(chose from {{ {','.join(valide_tool_parses)} }})"
             )
 
