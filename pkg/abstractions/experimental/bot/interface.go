@@ -194,7 +194,3 @@ func (bi *BotInterface) SendPrompt(sessionId, prompt string) error {
 
 	return bi.stateManager.pushOutputMessage(bi.workspace.Name, bi.stub.ExternalId, sessionId, responseMsgContent)
 }
-
-func (bi *BotInterface) pushInput(msg, sessionId string) error {
-	return bi.stateManager.pushInputMessage(bi.workspace.Name, bi.stub.ExternalId, sessionId, msg)
-}

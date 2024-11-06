@@ -27,11 +27,16 @@ func (t *BotTask) Execute(ctx context.Context, options ...interface{}) error {
 		return err
 	}
 
-	// TODO: need to think about the logic of how a task is executed.
-	// Does each task execute its own container? If so, its fairly straightforward
+	transitionName := t.msg.Kwargs["transition_name"].(string)
+	sessionId := t.msg.Kwargs["session_id"].(string)
+	markers := t.msg.Args[0].(*types.TaskPayload).Kwargs["markers"].([]Marker)
 
-	instance.run("transitionName", "sessionId")
-	return nil
+	err = t.pbs.botStateManager.pushTask(instance.workspace.Name, instance.stub.ExternalId, sessionId, transitionName, markers)
+	if err != nil {
+		return err
+	}
+
+	return instance.run(transitionName, sessionId, t.msg.TaskId)
 }
 
 func (t *BotTask) Retry(ctx context.Context) error {

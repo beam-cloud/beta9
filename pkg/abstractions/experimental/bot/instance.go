@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -31,6 +32,7 @@ type botInstance struct {
 	botStateManager *botStateManager
 	botInterface    *BotInterface
 	taskDispatcher  *task.Dispatcher
+	authInfo        *auth.AuthInfo
 }
 
 type botInstanceOpts struct {
@@ -72,6 +74,10 @@ func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, er
 		botStateManager: opts.StateManager,
 		botInterface:    botInterface,
 		taskDispatcher:  opts.TaskDispatcher,
+		authInfo: &auth.AuthInfo{
+			Workspace: &opts.Stub.Workspace,
+			Token:     opts.Token,
+		},
 	}, nil
 }
 
@@ -160,27 +166,33 @@ func (i *botInstance) step(sessionId string) {
 
 				taskPayload := &types.TaskPayload{
 					Kwargs: map[string]interface{}{
-						"markers": markers,
+						"markers":         markers,
+						"session_id":      sessionId,
+						"transition_name": transition.Name,
 					},
 				}
 
-				// TODO: send and dispatch task my guy
-				log.Printf("taskPayload: %v", taskPayload)
-				_, err := i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), nil, i.stub.ExternalId, taskPayload, i.stubConfig.TaskPolicy)
+				_, err := i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
+					MaxRetries: 0,
+					Timeout:    3600,
+					TTL:        3600,
+					Expires:    time.Now().Add(time.Duration(3600) * time.Second),
+				})
 				if err != nil {
 					log.Printf("error sending and executing task: %v", err)
 				}
-
 			}
 		}
 	}()
 }
 
-func (i *botInstance) run(transitionName, sessionId string) error {
+func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 	transitionConfig, ok := i.botConfig.Transitions[transitionName]
 	if !ok {
 		return errors.New("transition not found")
 	}
+
+	log.Printf("running transition: %s, sessionId: %s, taskId: %s", transitionName, sessionId, taskId)
 
 	env := []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", i.token.Key),

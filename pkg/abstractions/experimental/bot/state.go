@@ -145,9 +145,9 @@ func (m *botStateManager) countMarkers(workspaceName, stubId, sessionId, locatio
 	return m.rdb.LLen(context.TODO(), Keys.botMarkers(workspaceName, stubId, sessionId, locationName)).Result()
 }
 
-func (m *botStateManager) pushTask(workspaceName, stubId, sessionId, transitionName string, payload *types.TaskPayload) error {
+func (m *botStateManager) pushTask(workspaceName, stubId, sessionId, transitionName string, markers []Marker) error {
 	taskKey := Keys.botTransitionTasks(workspaceName, stubId, sessionId, transitionName)
-	jsonData, err := json.Marshal(payload)
+	jsonData, err := json.Marshal(markers)
 	if err != nil {
 		return err
 	}
