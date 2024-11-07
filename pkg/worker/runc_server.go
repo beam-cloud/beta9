@@ -18,6 +18,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/go-runc"
 	"github.com/google/shlex"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -125,7 +126,7 @@ func (s *RunCServer) RunCStatus(ctx context.Context, in *pb.RunCStatusRequest) (
 	}
 
 	return &pb.RunCStatusResponse{
-		Running: state.Status == "running",
+		Running: state.Status == types.RuncContainerStatusRunning,
 	}, nil
 }
 
@@ -170,7 +171,7 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not found"})
 	}
 
-	if state.Status != "running" {
+	if state.Status != types.RuncContainerStatusRunning {
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not running"})
 	}
 
