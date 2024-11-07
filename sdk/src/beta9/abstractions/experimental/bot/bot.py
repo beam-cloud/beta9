@@ -3,7 +3,7 @@ import json
 import os
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from .... import terminal
 from ....abstractions.base.runner import (
@@ -203,6 +203,12 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
     def transition(self, *args, **kwargs) -> BotTransition:
         return BotTransition(*args, **kwargs, bot_instance=self)
+
+    def set_handler(self, handler: str):
+        self.handler = handler
+
+    def func(self, *args: Any, **kwargs: Any):
+        pass
 
     @with_grpc_error_handling
     def serve(self, timeout: int = 0, url_type: str = ""):
