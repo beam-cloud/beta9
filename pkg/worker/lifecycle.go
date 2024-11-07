@@ -132,15 +132,21 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		case <-s.ctx.Done():
 		}
 
-		if err := s.stopContainer(containerId, false); err != nil {
-			log.Printf("<%s> - failed to stop container: %v\n", containerId, err)
+		// If the container is still running, stop it. This happens when a sigterm is detected.
+		container, err := s.runcHandle.State(context.TODO(), containerId)
+		if err == nil && container.Status == "running" {
+			if err := s.stopContainer(containerId, false); err != nil {
+				log.Printf("<%s> - failed to stop container: %v\n", containerId, err)
+			}
 		}
 
 		s.containerInstances.Delete(containerId)
-		err := s.containerRepo.DeleteContainerState(containerId)
+		err = s.containerRepo.DeleteContainerState(containerId)
 		if err != nil {
 			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
 		}
+
+		log.Printf("<%s> - finalized container shutdown.\n", containerId)
 	}()
 }
 
