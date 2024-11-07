@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/task"
@@ -209,7 +210,17 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		fmt.Sprintf("TASK_ID=%s", taskId),
 	}
 
-	err := i.scheduler.Run(&types.ContainerRequest{
+	mounts, err := abstractions.ConfigureContainerRequestMounts(
+		i.stub.Object.ExternalId,
+		i.authInfo.Workspace,
+		*i.stubConfig,
+		i.stub.ExternalId,
+	)
+	if err != nil {
+		return err
+	}
+
+	err = i.scheduler.Run(&types.ContainerRequest{
 		ContainerId: i.genContainerId(botContainerTypeTransition, sessionId),
 		Env:         env,
 		Cpu:         transitionConfig.Cpu,
@@ -220,7 +231,7 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		StubId:      i.stub.ExternalId,
 		WorkspaceId: i.stub.Workspace.ExternalId,
 		EntryPoint:  []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.bot.transition"},
-		// Mounts:      [], // TODO: properly configure mounts
+		Mounts:      mounts,
 	})
 	if err != nil {
 		return err
