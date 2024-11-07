@@ -4,19 +4,18 @@ from ...clients.bot import (
     PopBotTaskRequest,  # noqa
     PushBotMarkerRequest,  # noqa
 )
-from ...runner.common import FunctionHandler, config
+from ...runner.common import FunctionContext, FunctionHandler, config
 
 
 class BotTransition:
     @handle_error()
     def __init__(self) -> None:
-        print(config.handler)
-        import os
+        context = FunctionContext.new(config=config, task_id=config.task_id)
+        payload = {}
+        inputs = payload.get("inputs") or {}
 
-        print(os.listdir("./"))
         self.handler = FunctionHandler(handler_path=config.handler)
-        print(self.handler.handler)
-        # self.result = handler(context, *args, **kwargs)
+        self.result = self.handler(context, inputs)
 
     def start(self):
         pass

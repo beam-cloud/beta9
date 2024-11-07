@@ -173,7 +173,11 @@ func (i *botInstance) step(sessionId string) {
 					},
 				}
 
-				// TODO: put an event in the buffer indicating that we launched a container for this particular transition
+				// TODO: correctly format the event values here
+				i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
+					Type:  BotEventTypeTaskStarted,
+					Value: transition.Name,
+				})
 
 				_, err := i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
 					MaxRetries: 0,

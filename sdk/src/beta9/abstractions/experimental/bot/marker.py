@@ -1,11 +1,11 @@
 import json
-from typing import Type
+from typing import Any, Type, Union
 
 from pydantic import BaseModel
 
 
 class BotLocation:
-    def __init__(self, *, marker: Type[BaseModel]) -> None:
+    def __init__(self, *, marker: Union[Type[BaseModel], Any]) -> None:
         if not issubclass(marker, BaseModel):
             raise TypeError("marker must be a subclass of pydantic BaseModel")
 

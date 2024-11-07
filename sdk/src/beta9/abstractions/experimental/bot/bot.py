@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from .... import terminal
+from .... import env, terminal
 from ....abstractions.base.runner import (
     BOT_DEPLOYMENT_STUB_TYPE,
     BOT_SERVE_STUB_TYPE,
@@ -75,6 +75,9 @@ class BotTransition:
         self.bot_instance: Optional["Bot"] = bot_instance
 
         if self.bot_instance.image != self.image:
+            if env.is_remote():
+                return
+
             if not self._build_image_for_transition():
                 return
 
@@ -113,12 +116,23 @@ class BotTransition:
         function_name = func.__name__
         setattr(self, attr, f"{module_name}:{function_name}")
 
-    def __call__(self, func: Callable) -> None:
-        self._map_callable_to_attr(attr="handler", func=func)
+    def local(self, *args, **kwargs) -> Any:
+        return self.func(*args, **kwargs)
+
+    def __call__(self, *args, **kwargs) -> None:
+        if env.called_on_import():
+            self.func = args[0]
+            return self
+
+        if not env.is_local():
+            return self.local(*args, **kwargs)
+
+        self.func = args[0]
+        self._map_callable_to_attr(attr="handler", func=self.func)
         self.config["handler"] = getattr(self, "handler")
 
         transition_data = self.config.copy()
-        transition_data["name"] = func.__name__
+        transition_data["name"] = self.func.__name__
 
         if not hasattr(self.bot_instance, "extra"):
             self.bot_instance.extra = {}
@@ -126,7 +140,9 @@ class BotTransition:
         if "transitions" not in self.bot_instance.extra:
             self.bot_instance.extra["transitions"] = {}
 
-        self.bot_instance.extra["transitions"][func.__name__] = transition_data
+        self.bot_instance.extra["transitions"][self.func.__name__] = transition_data
+
+        return self
 
 
 class Bot(RunnerAbstraction, DeployableMixin):
@@ -189,7 +205,6 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
         for location in self.locations:
             location_config = location.to_dict()
-            print(location_config)
             self.extra["locations"][location.name] = location_config
 
     @property
