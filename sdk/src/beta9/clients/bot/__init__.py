@@ -90,6 +90,19 @@ class PushBotMarkerResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
+@dataclass(eq=False, repr=False)
+class PushBotEventRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    session_id: str = betterproto.string_field(2)
+    event_type: str = betterproto.string_field(3)
+    event_value: str = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class PushBotEventResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+
+
 class BotServiceStub(SyncServiceStub):
     def start_bot_serve(
         self, start_bot_serve_request: "StartBotServeRequest"
@@ -126,3 +139,12 @@ class BotServiceStub(SyncServiceStub):
             PushBotMarkerRequest,
             PushBotMarkerResponse,
         )(push_bot_marker_request)
+
+    def push_bot_event(
+        self, push_bot_event_request: "PushBotEventRequest"
+    ) -> "PushBotEventResponse":
+        return self._unary_unary(
+            "/bot.BotService/PushBotEvent",
+            PushBotEventRequest,
+            PushBotEventResponse,
+        )(push_bot_event_request)

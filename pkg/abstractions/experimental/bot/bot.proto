@@ -10,6 +10,7 @@ service BotService {
       returns (BotServeKeepAliveResponse) {}
   rpc PopBotTask(PopBotTaskRequest) returns (PopBotTaskResponse) {}
   rpc PushBotMarker(PushBotMarkerRequest) returns (PushBotMarkerResponse) {}
+  rpc PushBotEvent(PushBotEventRequest) returns (PushBotEventResponse) {}
 }
 
 message StartBotServeRequest {
@@ -55,3 +56,12 @@ message PushBotMarkerRequest {
 }
 
 message PushBotMarkerResponse { bool ok = 1; }
+
+message PushBotEventRequest {
+  string stub_id = 1;
+  string session_id = 2;
+  string event_type = 3;
+  string event_value = 4;
+}
+
+message PushBotEventResponse { bool ok = 1; }

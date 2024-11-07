@@ -42,6 +42,8 @@ type BotService interface {
 	pb.BotServiceServer
 	StartBotServe(ctx context.Context, in *pb.StartBotServeRequest) (*pb.StartBotServeResponse, error)
 	BotServeKeepAlive(ctx context.Context, in *pb.BotServeKeepAliveRequest) (*pb.BotServeKeepAliveResponse, error)
+	PushBotEvent(ctx context.Context, in *pb.PushBotEventRequest) (*pb.PushBotEventResponse, error)
+	PopBotTask(ctx context.Context, in *pb.PopBotTaskRequest) (*pb.PopBotTaskResponse, error)
 }
 
 type PetriBotService struct {
@@ -156,6 +158,14 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 	}(instance)
 
 	return instance, nil
+}
+
+func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventRequest) (*pb.PushBotEventResponse, error) {
+	return &pb.PushBotEventResponse{Ok: true}, nil
+}
+
+func (s *PetriBotService) PopBotTask(ctx context.Context, in *pb.PopBotTaskRequest) (*pb.PopBotTaskResponse, error) {
+	return &pb.PopBotTaskResponse{Ok: true}, nil
 }
 
 var Keys = &keys{}
