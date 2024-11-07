@@ -161,11 +161,54 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 }
 
 func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventRequest) (*pb.PushBotEventResponse, error) {
+	instance, err := s.getOrCreateBotInstance(in.StubId)
+	if err != nil {
+		return &pb.PushBotEventResponse{Ok: false}, nil
+	}
+
+	err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, &BotEvent{
+		Type:  BotEventType(in.EventType),
+		Value: in.EventValue,
+	})
+	if err != nil {
+		return &pb.PushBotEventResponse{Ok: false}, nil
+	}
+
 	return &pb.PushBotEventResponse{Ok: true}, nil
 }
 
 func (s *PetriBotService) PopBotTask(ctx context.Context, in *pb.PopBotTaskRequest) (*pb.PopBotTaskResponse, error) {
-	return &pb.PopBotTaskResponse{Ok: true}, nil
+	instance, err := s.getOrCreateBotInstance(in.StubId)
+	if err != nil {
+		return &pb.PopBotTaskResponse{Ok: false}, nil
+	}
+
+	markers, err := s.botStateManager.popTask(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, in.TransitionName)
+	if err != nil {
+		return &pb.PopBotTaskResponse{Ok: false}, nil
+	}
+
+	markerMap := map[string]*pb.PopBotTaskResponse_MarkerList{}
+	for _, marker := range markers {
+		if _, ok := markerMap[marker.LocationName]; !ok {
+			markerMap[marker.LocationName] = &pb.PopBotTaskResponse_MarkerList{}
+		}
+
+		fields := []*pb.MarkerField{}
+		for _, field := range marker.Fields {
+			fields = append(fields, &pb.MarkerField{
+				FieldName:  field.FieldName,
+				FieldValue: field.FieldValue,
+			})
+		}
+
+		markerMap[marker.LocationName].Markers = append(markerMap[marker.LocationName].Markers, &pb.Marker{
+			LocationName: marker.LocationName,
+			Fields:       fields,
+		})
+	}
+
+	return &pb.PopBotTaskResponse{Ok: true, Markers: markerMap}, nil
 }
 
 var Keys = &keys{}

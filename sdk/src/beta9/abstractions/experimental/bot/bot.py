@@ -247,16 +247,36 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
             def on_message(ws, message):
                 event = json.loads(message)
+                event_type = event.get("type")
+                event_value = event.get("value")
 
-                if event["type"] == "session_created":
-                    session_id = event["value"]
-                    terminal.header(f"Session started: {session_id}")
-                    session_event.set()  # Signal that session_id is received
-                elif event["type"] == "msg":
+                def _print_bot_event(header_text=None, detail_text=None):
                     sys.stdout.write("\r\033[K")
-                    terminal.detail(f"\t{event['value']}")
+
+                    if header_text:
+                        terminal.header(header_text)
+                    if detail_text:
+                        terminal.detail(detail_text)
+
                     sys.stdout.write("#: ")
                     sys.stdout.flush()
+
+                if event_type == "session_created":
+                    session_id = event_value
+                    terminal.header(f"Session started: {session_id}")
+                    session_event.set()  # Signal that session_id is received
+                elif event_type in ["msg", "task_started", "task_completed", "transition_fired"]:
+                    header_map = {
+                        "msg": None,
+                        "task_started": f"Task started: {event_value}",
+                        "task_completed": f"Task completed: {event_value}",
+                        "transition_fired": f"Transition fired: {event_value}",
+                    }
+
+                    _print_bot_event(
+                        header_text=header_map[event_type],
+                        detail_text=event_value if event_type == "msg" else None,
+                    )
                 else:
                     terminal.detail(f"{message}")
 

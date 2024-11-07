@@ -48,9 +48,11 @@ type UserRequest struct {
 type BotEventType string
 
 const (
-	BotEventTypeMessage        BotEventType = "msg"
-	BotEventTypeSessionCreated BotEventType = "session_created"
-	BotEventTypeTaskStarted    BotEventType = "task_started"
+	BotEventTypeMessage         BotEventType = "msg"
+	BotEventTypeSessionCreated  BotEventType = "session_created"
+	BotEventTypeTransitionFired BotEventType = "transition_fired"
+	BotEventTypeTaskStarted     BotEventType = "task_started"
+	BotEventTypeTaskCompleted   BotEventType = "task_completed"
 )
 
 type BotEvent struct {

@@ -173,22 +173,17 @@ func (i *botInstance) step(sessionId string) {
 					},
 				}
 
-				// TODO: correctly format the event values here
 				i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
-					Type:  BotEventTypeTaskStarted,
+					Type:  BotEventTypeTransitionFired,
 					Value: transition.Name,
 				})
 
-				_, err := i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
+				i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
 					MaxRetries: 0,
 					Timeout:    3600,
 					TTL:        3600,
 					Expires:    time.Now().Add(time.Duration(3600) * time.Second),
 				})
-				if err != nil {
-					// TODO: push markers back
-					log.Printf("error sending and executing task: %v", err)
-				}
 			}
 		}
 	}()

@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -155,19 +154,19 @@ func (m *botStateManager) pushTask(workspaceName, stubId, sessionId, transitionN
 	return m.rdb.RPush(context.TODO(), taskKey, jsonData).Err()
 }
 
-func (m *botStateManager) popTask(workspaceName, stubId, sessionId, transitionName string) (*types.TaskPayload, error) {
+func (m *botStateManager) popTask(workspaceName, stubId, sessionId, transitionName string) ([]Marker, error) {
 	bytes, err := m.rdb.LPop(context.TODO(), Keys.botTransitionTasks(workspaceName, stubId, sessionId, transitionName)).Bytes()
 	if err != nil {
 		return nil, err
 	}
 
-	payload := &types.TaskPayload{}
-	err = json.Unmarshal(bytes, payload)
+	markers := []Marker{}
+	err = json.Unmarshal(bytes, &markers)
 	if err != nil {
 		return nil, err
 	}
 
-	return payload, nil
+	return markers, nil
 }
 
 func (m *botStateManager) pushInputMessage(workspaceName, stubId, sessionId, msg string) error {
