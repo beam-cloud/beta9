@@ -1,6 +1,7 @@
 import inspect
 import json
 import os
+import sys
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -225,6 +226,8 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
     def _serve(self, *, url: str, timeout: int = 0):
         def _connect_to_session():
+            session_event = threading.Event()
+
             import websocket
 
             def on_message(ws, message):
@@ -232,15 +235,21 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
                 if event["type"] == "session_created":
                     session_id = event["value"]
-                    terminal.detail(f"Session started: {session_id}")
+                    terminal.header(f"Session started: {session_id}")
+                    session_event.set()  # Signal that session_id is received
+                elif event["type"] == "msg":
+                    sys.stdout.write("\r\033[K")
+                    terminal.detail(f"\t{event['value']}")
+                    sys.stdout.write("#: ")
+                    sys.stdout.flush()
                 else:
                     terminal.detail(f"{message}")
 
             def on_error(ws, error):
-                terminal.error(f"Error: {error}")
+                pass
 
             def on_close(ws, close_status_code, close_msg):
-                terminal.error(f"Connection closed: {close_status_code} - {close_msg}")
+                pass
 
             def on_open(ws):
                 def _send_keep_alive():
@@ -254,6 +263,9 @@ class Bot(RunnerAbstraction, DeployableMixin):
                         time.sleep(timeout or 30)
 
                 def _send_user_input():
+                    with terminal.progress("Waiting for session to start..."):
+                        session_event.wait()  # Wait until a session_id is received
+
                     while True:
                         msg = terminal.prompt(text="#")
                         if msg:
@@ -280,7 +292,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
                 timeout=timeout,
             )
         )
-        if r is None:
+        if r is None or not r.ok:
             terminal.error("Serve failed ❌")
             return
 
