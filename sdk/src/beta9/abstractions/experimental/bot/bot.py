@@ -224,11 +224,17 @@ class Bot(RunnerAbstraction, DeployableMixin):
             self._handle_serve_interrupt()
 
     def _serve(self, *, url: str, timeout: int = 0):
-        def _connect_to_session(*, session_id: str):
+        def _connect_to_session():
             import websocket
 
             def on_message(ws, message):
-                terminal.detail(f"{message}")
+                event = json.loads(message)
+
+                if event["type"] == "session_created":
+                    session_id = event["value"]
+                    terminal.detail(f"Session started: {session_id}")
+                else:
+                    terminal.detail(f"{message}")
 
             def on_error(ws, error):
                 terminal.error(f"Error: {error}")
@@ -237,14 +243,11 @@ class Bot(RunnerAbstraction, DeployableMixin):
                 terminal.error(f"Connection closed: {close_status_code} - {close_msg}")
 
             def on_open(ws):
-                ws.send(json.dumps({"msg": "", "session_id": session_id}))
-
                 def _send_keep_alive():
                     while True:
                         self.bot_stub.bot_serve_keep_alive(
                             BotServeKeepAliveRequest(
                                 stub_id=self.stub_id,
-                                session_id=session_id,
                                 timeout=timeout,
                             )
                         )
@@ -254,7 +257,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
                     while True:
                         msg = terminal.prompt(text="#")
                         if msg:
-                            user_request = json.dumps({"msg": msg, "session_id": session_id})
+                            user_request = json.dumps({"msg": msg})
                             ws.send(user_request)
 
                 threading.Thread(target=_send_keep_alive, daemon=True).start()
@@ -277,12 +280,12 @@ class Bot(RunnerAbstraction, DeployableMixin):
                 timeout=timeout,
             )
         )
-        if r is None or not r.session_id:
+        if r is None:
             terminal.error("Serve failed ❌")
             return
 
         try:
-            _connect_to_session(session_id=r.session_id)
+            _connect_to_session()
         except KeyboardInterrupt:
             self._handle_serve_interrupt()
 

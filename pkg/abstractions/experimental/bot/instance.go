@@ -172,6 +172,8 @@ func (i *botInstance) step(sessionId string) {
 					},
 				}
 
+				// TODO: put an event in the buffer indicating that we launched a container for this particular transition
+
 				_, err := i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
 					MaxRetries: 0,
 					Timeout:    3600,

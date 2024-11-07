@@ -10,6 +10,7 @@ import (
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 )
@@ -45,6 +46,7 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 	stubId := ctx.Param("stubId")
 	deploymentName := ctx.Param("deploymentName")
 	version := ctx.Param("version")
+	sessionId := ctx.Param("sessionId")
 
 	stubType := types.StubTypeBotDeployment
 
@@ -93,33 +95,49 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 		return err
 	}
 
+	if sessionId == "" {
+		sessionId = uuid.New().String()[:6]
+		err = instance.botInterface.initSession(sessionId)
+		if err != nil {
+			return err
+		}
+
+		err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, sessionId, &BotEvent{
+			Type:  BotEventTypeSessionCreated,
+			Value: sessionId,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
-	sessionIdChan := make(chan string, 1)
-
 	go func() {
 		defer wg.Done()
-
-		sessionId := <-sessionIdChan
 
 		for {
 			select {
 			case <-ctx.Request().Context().Done():
 				return
 			default:
-				msg, err := instance.botStateManager.popOutputMessage(instance.workspace.Name, instance.stub.ExternalId, sessionId)
+				event, err := instance.botStateManager.popEvent(instance.workspace.Name, instance.stub.ExternalId, sessionId)
 				if err != nil {
 					time.Sleep(1 * time.Second)
 					continue
 				}
 
-				ws.WriteMessage(websocket.TextMessage, []byte(msg))
+				serializedEvent, err := json.Marshal(event)
+				if err != nil {
+					continue
+				}
+
+				ws.WriteMessage(websocket.TextMessage, serializedEvent)
 			}
 		}
 	}()
 
-	sessionStarted := false
 	for {
 		_, message, err := ws.ReadMessage()
 		if err != nil {
@@ -132,12 +150,7 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			continue
 		}
 
-		if !sessionStarted {
-			sessionIdChan <- userRequest.SessionId
-			sessionStarted = true
-		}
-
-		if err := instance.botStateManager.pushInputMessage(instance.workspace.Name, instance.stub.ExternalId, userRequest.SessionId, userRequest.Msg); err != nil {
+		if err := instance.botStateManager.pushInputMessage(instance.workspace.Name, instance.stub.ExternalId, sessionId, userRequest.Msg); err != nil {
 			continue
 		}
 	}

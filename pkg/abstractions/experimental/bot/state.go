@@ -179,13 +179,29 @@ func (m *botStateManager) popInputMessage(workspaceName, stubId, sessionId strin
 	return m.rdb.LPop(context.TODO(), Keys.botInputBuffer(workspaceName, stubId, sessionId)).Result()
 }
 
-func (m *botStateManager) pushOutputMessage(workspaceName, stubId, sessionId, msg string) error {
-	messageKey := Keys.botOutputBuffer(workspaceName, stubId, sessionId)
-	return m.rdb.RPush(context.TODO(), messageKey, msg).Err()
+func (m *botStateManager) pushEvent(workspaceName, stubId, sessionId string, event *BotEvent) error {
+	jsonData, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+
+	messageKey := Keys.botEventBuffer(workspaceName, stubId, sessionId)
+	return m.rdb.RPush(context.TODO(), messageKey, jsonData).Err()
 }
 
-func (m *botStateManager) popOutputMessage(workspaceName, stubId, sessionId string) (string, error) {
-	return m.rdb.LPop(context.TODO(), Keys.botOutputBuffer(workspaceName, stubId, sessionId)).Result()
+func (m *botStateManager) popEvent(workspaceName, stubId, sessionId string) (*BotEvent, error) {
+	val, err := m.rdb.LPop(context.TODO(), Keys.botEventBuffer(workspaceName, stubId, sessionId)).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	event := &BotEvent{}
+	err = json.Unmarshal([]byte(val), event)
+	if err != nil {
+		return nil, err
+	}
+
+	return event, nil
 }
 
 func (m *botStateManager) acquireLock(workspaceName, stubId, sessionId string) error {

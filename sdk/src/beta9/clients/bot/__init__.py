@@ -32,14 +32,12 @@ class StartBotServeRequest(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class StartBotServeResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
-    session_id: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
 class BotServeKeepAliveRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     timeout: int = betterproto.int32_field(2)
-    session_id: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)

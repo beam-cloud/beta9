@@ -42,12 +42,24 @@ type BotChatCompletionMessage struct {
 const botSchemaName = "beam_bot"
 
 type UserRequest struct {
-	Msg       string `json:"msg" redis:"msg"`
-	SessionId string `json:"session_id" redis:"session_id"`
+	Msg string `json:"msg" redis:"msg"`
+}
+
+type BotEventType string
+
+const (
+	BotEventTypeMessage        BotEventType = "msg"
+	BotEventTypeSessionCreated BotEventType = "session_created"
+	BotEventTypeTaskStarted    BotEventType = "task_started"
+)
+
+type BotEvent struct {
+	Type  BotEventType `json:"type" redis:"type"`
+	Value string       `json:"value" redis:"value"`
 }
 
 type BotResponse struct {
-	UserMessage    string `json:"user_message" redis:"user_message"`
+	Msg            string `json:"msg" redis:"msg"`
 	MarkerData     Marker `json:"marker_data" redis:"marker_data"`
 	CompleteMarker bool   `json:"complete_marker" redis:"complete_marker"`
 }

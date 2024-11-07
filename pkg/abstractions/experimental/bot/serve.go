@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/google/uuid"
 
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -22,13 +21,7 @@ func (pbs *PetriBotService) StartBotServe(ctx context.Context, in *pb.StartBotSe
 		return &pb.StartBotServeResponse{Ok: false}, nil
 	}
 
-	sessionId := uuid.New().String()[:6]
-	err = instance.botInterface.initSession(sessionId)
-	if err != nil {
-		return &pb.StartBotServeResponse{Ok: false}, nil
-	}
-
-	return &pb.StartBotServeResponse{Ok: true, SessionId: sessionId}, nil
+	return &pb.StartBotServeResponse{Ok: true}, nil
 }
 
 func (s *PetriBotService) BotServeKeepAlive(ctx context.Context, in *pb.BotServeKeepAliveRequest) (*pb.BotServeKeepAliveResponse, error) {

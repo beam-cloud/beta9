@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	openai "github.com/sashabaranov/go-openai"
@@ -187,10 +186,10 @@ func (bi *BotInterface) SendPrompt(sessionId, prompt string) error {
 		}
 	}
 
-	responseMsgContent := responseMessage.Content
-	if !strings.HasSuffix(responseMsgContent, "\n") {
-		responseMsgContent += "\n"
+	event := &BotEvent{
+		Type:  BotEventTypeMessage,
+		Value: formattedResponse.Msg,
 	}
 
-	return bi.stateManager.pushOutputMessage(bi.workspace.Name, bi.stub.ExternalId, sessionId, formattedResponse.UserMessage)
+	return bi.stateManager.pushEvent(bi.workspace.Name, bi.stub.ExternalId, sessionId, event)
 }

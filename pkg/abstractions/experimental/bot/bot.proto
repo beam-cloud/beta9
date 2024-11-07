@@ -17,15 +17,11 @@ message StartBotServeRequest {
   int32 timeout = 2;
 }
 
-message StartBotServeResponse {
-  bool ok = 1;
-  string session_id = 2;
-}
+message StartBotServeResponse { bool ok = 1; }
 
 message BotServeKeepAliveRequest {
   string stub_id = 1;
   int32 timeout = 2;
-  string session_id = 3;
 }
 message BotServeKeepAliveResponse { bool ok = 1; }
 

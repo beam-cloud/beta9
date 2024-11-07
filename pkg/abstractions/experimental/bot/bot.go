@@ -165,7 +165,7 @@ type keys struct{}
 var (
 	botLock            string = "bot:%s:%s:session_state_lock:%s"
 	botInputBuffer     string = "bot:%s:%s:input_buffer:%s"
-	botOutputBuffer    string = "bot:%s:%s:output_buffer:%s"
+	botEventBuffer     string = "bot:%s:%s:event_buffer:%s"
 	botSessionIndex    string = "bot:%s:%s:session_index"
 	botSessionState    string = "bot:%s:%s:session_state:%s"
 	botMarkers         string = "bot:%s:%s:markers:%s:%s"
@@ -184,8 +184,8 @@ func (k *keys) botInputBuffer(workspaceName, stubId, sessionId string) string {
 	return fmt.Sprintf(botInputBuffer, workspaceName, stubId, sessionId)
 }
 
-func (k *keys) botOutputBuffer(workspaceName, stubId, sessionId string) string {
-	return fmt.Sprintf(botOutputBuffer, workspaceName, stubId, sessionId)
+func (k *keys) botEventBuffer(workspaceName, stubId, sessionId string) string {
+	return fmt.Sprintf(botEventBuffer, workspaceName, stubId, sessionId)
 }
 
 func (k *keys) botSessionState(workspaceName, stubId, sessionId string) string {
