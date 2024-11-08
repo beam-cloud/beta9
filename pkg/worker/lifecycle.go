@@ -56,7 +56,8 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 func (s *Worker) stopContainer(containerId string, kill bool) error {
 	log.Printf("<%s> - stopping container.\n", containerId)
 
-	if _, exists := s.containerInstances.Get(containerId); !exists {
+	_, exists := s.containerInstances.Get(containerId)
+	if !exists {
 		log.Printf("<%s> - container not found.\n", containerId)
 		return nil
 	}
@@ -64,8 +65,6 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 	signal := int(syscall.SIGTERM)
 	if kill {
 		signal = int(syscall.SIGKILL)
-		s.containerRepo.DeleteContainerState(containerId)
-		defer s.containerInstances.Delete(containerId)
 	}
 
 	err := s.runcHandle.Kill(context.Background(), containerId, signal, &runc.KillOpts{All: true})
@@ -98,10 +97,10 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 		log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
 	}
 
-	s.clearContainer(containerId, request, time.Duration(s.config.Worker.TerminationGracePeriod)*time.Second, *exitCode)
+	s.clearContainer(containerId, request, *exitCode)
 }
 
-func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, delay time.Duration, exitCode int) {
+func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int) {
 	s.containerLock.Lock()
 
 	// De-allocate GPU devices so they are available for new containers
@@ -128,13 +127,26 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	go func() {
 		// Allow for some time to pass before clearing the container. This way we can handle some last
 		// minute logs or events or if the user wants to inspect the container before it's cleared.
-		time.Sleep(delay)
+		select {
+		case <-time.After(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second):
+		case <-s.ctx.Done():
+		}
+
+		// If the container is still running, stop it. This happens when a sigterm is detected.
+		container, err := s.runcHandle.State(context.TODO(), containerId)
+		if err == nil && container.Status == types.RuncContainerStatusRunning {
+			if err := s.stopContainer(containerId, false); err != nil {
+				log.Printf("<%s> - failed to stop container: %v\n", containerId, err)
+			}
+		}
 
 		s.containerInstances.Delete(containerId)
-		err := s.containerRepo.DeleteContainerState(containerId)
+		err = s.containerRepo.DeleteContainerState(containerId)
 		if err != nil {
 			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
 		}
+
+		log.Printf("<%s> - finalized container shutdown.\n", containerId)
 	}()
 }
 

@@ -182,7 +182,7 @@ func NewWorker() (*Worker, error) {
 		memoryLimit:             memoryLimit,
 		gpuType:                 gpuType,
 		gpuCount:                uint32(gpuCount),
-		runcHandle:              runc.Runc{},
+		runcHandle:              runc.Runc{Debug: config.DebugMode},
 		runcServer:              runcServer,
 		fileCacheManager:        fileCacheManager,
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
@@ -251,7 +251,7 @@ func (s *Worker) Run() error {
 					}
 
 					s.containerLock.Unlock()
-					s.clearContainer(containerId, request, time.Duration(0), exitCode)
+					s.clearContainer(containerId, request, exitCode)
 					continue
 				}
 			}
@@ -439,14 +439,6 @@ func (s *Worker) shutdown() error {
 
 	// Stops goroutines
 	s.cancel()
-
-	// Stop all running containers forcefully
-	s.containerInstances.Range(func(containerId string, _ *ContainerInstance) bool {
-		if err := s.stopContainer(containerId, true); err != nil {
-			log.Printf("Failed to stop container: %v\n", err)
-		}
-		return true // continue iterating
-	})
 
 	var errs error
 	if worker, err := s.workerRepo.GetWorkerById(s.workerId); err != nil {

@@ -1,9 +1,6 @@
 #!/bin/bash
 
-echo "Deleting worker jobs..."
-kubectl delete job -l run.beam.cloud/role=worker
-
-echo "Deleting scheduler keys..."
+echo "Deleting redis keys..."
 if kubectl get sts redis-master &> /dev/null; then
   replicas=$(kubectl get sts redis-master -o jsonpath='{.spec.replicas}')
   for i in $(seq 0 $((replicas-1))); do
@@ -15,5 +12,10 @@ if kubectl get sts redis-master &> /dev/null; then
     kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys worker:*); do redis-cli -c del $k; done' &
   done
 fi
+
+# Workers now handle deleting themselves from redis on shutdown. This will happen faster than when
+# the redis keys are deleted.
+echo "Deleting worker jobs..."
+kubectl delete job -l run.beam.cloud/role=worker
 
 wait

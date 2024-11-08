@@ -1,5 +1,5 @@
 from . import env
-from .abstractions import experimental, integrations
+from .abstractions import experimental
 from .abstractions.container import Container
 from .abstractions.endpoint import ASGI as asgi
 from .abstractions.endpoint import Endpoint as endpoint
@@ -33,7 +33,7 @@ __all__ = [
     "Output",
     "QueueDepthAutoscaler",
     "experimental",
+    "integrations",
     "schedule",
     "TaskPolicy",
-    "integrations",
 ]
