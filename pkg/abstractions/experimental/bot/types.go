@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	openai "github.com/sashabaranov/go-openai"
@@ -83,6 +84,14 @@ type BotConfig struct {
 	Transitions map[string]BotTransitionConfig `json:"transitions" redis:"transitions"`
 }
 
+func (b *BotConfig) FormatTransitions() string {
+	transitions := []string{}
+	for _, transition := range b.Transitions {
+		transitions = append(transitions, transition.FormatTransition())
+	}
+	return strings.Join(transitions, "\n")
+}
+
 // BotLocationConfig holds the config for a location in the bot network
 type BotLocationConfig struct {
 	Name   string            `json:"name" redis:"name"`
@@ -108,4 +117,26 @@ type BotTransitionConfig struct {
 	Inputs      map[string]int `json:"inputs" redis:"inputs"`
 	Outputs     map[string]int `json:"outputs" redis:"outputs"`
 	Description string         `json:"description" redis:"description"`
+}
+
+func (t *BotTransitionConfig) FormatTransition() string {
+	inputs := []string{}
+	for marker, count := range t.Inputs {
+		inputs = append(inputs, fmt.Sprintf("requires %d %s inputs", count, marker))
+	}
+	inputsSection := strings.Join(inputs, ", ")
+
+	outputs := []string{}
+	for marker, count := range t.Outputs {
+		outputs = append(outputs, fmt.Sprintf("produces %d %s outputs", count, marker))
+	}
+	outputsSection := strings.Join(outputs, ", ")
+
+	return fmt.Sprintf(
+		"Transition: %s %s %s\nDescription: %s",
+		t.Name,
+		inputsSection,
+		outputsSection,
+		t.Description,
+	)
 }

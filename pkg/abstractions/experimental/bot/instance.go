@@ -219,18 +219,33 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		return err
 	}
 
+	// gpuRequest := types.GpuTypesToStrings(transitionConfig.Gpu)
+	// if transitionConfig.Gpu != "" {
+	// 	gpuRequest = append(gpuRequest, transitionConfig.Gpu.String())
+	// }
+
+	gpuRequest := []string{}
+
+	gpuCount := uint32(0)
+	if len(gpuRequest) > 0 {
+		gpuCount = 1
+	}
+
 	err = i.scheduler.Run(&types.ContainerRequest{
 		ContainerId: i.genContainerId(botContainerTypeTransition, sessionId),
 		Env:         env,
 		Cpu:         transitionConfig.Cpu,
 		Memory:      transitionConfig.Memory,
 		Gpu:         string(transitionConfig.Gpu),
-		GpuCount:    0,
+		GpuRequest:  gpuRequest,
+		GpuCount:    gpuCount,
 		ImageId:     transitionConfig.ImageId,
 		StubId:      i.stub.ExternalId,
-		WorkspaceId: i.stub.Workspace.ExternalId,
+		WorkspaceId: i.workspace.ExternalId,
+		Workspace:   *i.workspace,
 		EntryPoint:  []string{i.stubConfig.PythonVersion, "-m", "beta9.runner.bot.transition"},
 		Mounts:      mounts,
+		Stub:        *i.stub,
 	})
 	if err != nil {
 		return err

@@ -75,7 +75,7 @@ func (bi *BotInterface) initSession(sessionId string) error {
 
 		networkLayoutPrompt := BotChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
-			Content: fmt.Sprintf("Transitions that can be performed: %v", bi.botConfig.Transitions),
+			Content: fmt.Sprintf("Transitions that can be performed, never mention the input names in your response: %v", bi.botConfig.FormatTransitions()),
 		}
 
 		state.Messages = []BotChatCompletionMessage{setupPrompt, networkStructurePrompt, networkLayoutPrompt}

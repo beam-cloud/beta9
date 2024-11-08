@@ -272,6 +272,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
                     session_id = event_value
                     terminal.header(f"Session started: {session_id}")
                     session_event.set()  # Signal that session_id is received
+
                 elif event_type in ["msg", "task_started", "task_completed", "transition_fired"]:
                     header_map = {
                         "msg": None,
@@ -343,8 +344,8 @@ class Bot(RunnerAbstraction, DeployableMixin):
         except KeyboardInterrupt:
             self._handle_serve_interrupt()
 
-        # TODO: actually stop the containers
-        terminal.warn("Bot serve timed out. All containers have been stopped.")
+        # TODO: actually stop the containers server side
+        terminal.warn("Bot serve session exited. All containers have been stopped.")
 
     def _handle_serve_interrupt(self) -> None:
         terminal.header("Stopping all bot containers")

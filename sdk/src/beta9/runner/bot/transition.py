@@ -32,12 +32,15 @@ class BotTransition:
 
             if marker_name in markers.keys():
                 marker_data = markers[marker_name]
-                formatted_inputs[marker_class] = marker_class(
-                    **{
-                        field.field_name: field.field_value
-                        for field in marker_data.markers[0].fields
-                    }
-                )
+                if marker_class not in formatted_inputs.keys():
+                    formatted_inputs[marker_class] = []
+
+                for marker in marker_data.markers:
+                    formatted_inputs[marker_class].append(
+                        marker_class(
+                            **{field.field_name: field.field_value for field in marker.fields}
+                        )
+                    )
 
         print(f"formatted_inputs: {formatted_inputs}")
         return formatted_inputs
