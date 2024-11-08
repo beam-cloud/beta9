@@ -190,7 +190,6 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 	}
 
 	log.Printf("<bot %s> Created bot instance", instance.stub.ExternalId)
-
 	pbs.botInstances.Set(stubId, instance)
 
 	// Monitor and then clean up the instance once it's done
