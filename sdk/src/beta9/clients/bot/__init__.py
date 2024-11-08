@@ -78,15 +78,21 @@ class Marker(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class PushBotMarkerRequest(betterproto.Message):
+class PushBotMarkersRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     session_id: str = betterproto.string_field(2)
-    location_name: str = betterproto.string_field(3)
-    marker: bytes = betterproto.bytes_field(4)
+    markers: Dict[str, "PushBotMarkersRequestMarkerList"] = betterproto.map_field(
+        3, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
+    )
 
 
 @dataclass(eq=False, repr=False)
-class PushBotMarkerResponse(betterproto.Message):
+class PushBotMarkersRequestMarkerList(betterproto.Message):
+    markers: List["Marker"] = betterproto.message_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class PushBotMarkersResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
@@ -132,13 +138,13 @@ class BotServiceStub(SyncServiceStub):
         )(pop_bot_task_request)
 
     def push_bot_marker(
-        self, push_bot_marker_request: "PushBotMarkerRequest"
-    ) -> "PushBotMarkerResponse":
+        self, push_bot_markers_request: "PushBotMarkersRequest"
+    ) -> "PushBotMarkersResponse":
         return self._unary_unary(
             "/bot.BotService/PushBotMarker",
-            PushBotMarkerRequest,
-            PushBotMarkerResponse,
-        )(push_bot_marker_request)
+            PushBotMarkersRequest,
+            PushBotMarkersResponse,
+        )(push_bot_markers_request)
 
     def push_bot_event(
         self, push_bot_event_request: "PushBotEventRequest"

@@ -9,7 +9,7 @@ service BotService {
   rpc BotServeKeepAlive(BotServeKeepAliveRequest)
       returns (BotServeKeepAliveResponse) {}
   rpc PopBotTask(PopBotTaskRequest) returns (PopBotTaskResponse) {}
-  rpc PushBotMarker(PushBotMarkerRequest) returns (PushBotMarkerResponse) {}
+  rpc PushBotMarker(PushBotMarkersRequest) returns (PushBotMarkersResponse) {}
   rpc PushBotEvent(PushBotEventRequest) returns (PushBotEventResponse) {}
 }
 
@@ -48,14 +48,14 @@ message Marker {
   repeated MarkerField fields = 2;
 }
 
-message PushBotMarkerRequest {
+message PushBotMarkersRequest {
   string stub_id = 1;
   string session_id = 2;
-  string location_name = 3;
-  bytes marker = 4;
+  map<string, MarkerList> markers = 3;
+  message MarkerList { repeated Marker markers = 4; }
 }
 
-message PushBotMarkerResponse { bool ok = 1; }
+message PushBotMarkersResponse { bool ok = 1; }
 
 message PushBotEventRequest {
   string stub_id = 1;

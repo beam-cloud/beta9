@@ -33,7 +33,7 @@ type BotServiceClient interface {
 	StartBotServe(ctx context.Context, in *StartBotServeRequest, opts ...grpc.CallOption) (*StartBotServeResponse, error)
 	BotServeKeepAlive(ctx context.Context, in *BotServeKeepAliveRequest, opts ...grpc.CallOption) (*BotServeKeepAliveResponse, error)
 	PopBotTask(ctx context.Context, in *PopBotTaskRequest, opts ...grpc.CallOption) (*PopBotTaskResponse, error)
-	PushBotMarker(ctx context.Context, in *PushBotMarkerRequest, opts ...grpc.CallOption) (*PushBotMarkerResponse, error)
+	PushBotMarker(ctx context.Context, in *PushBotMarkersRequest, opts ...grpc.CallOption) (*PushBotMarkersResponse, error)
 	PushBotEvent(ctx context.Context, in *PushBotEventRequest, opts ...grpc.CallOption) (*PushBotEventResponse, error)
 }
 
@@ -72,8 +72,8 @@ func (c *botServiceClient) PopBotTask(ctx context.Context, in *PopBotTaskRequest
 	return out, nil
 }
 
-func (c *botServiceClient) PushBotMarker(ctx context.Context, in *PushBotMarkerRequest, opts ...grpc.CallOption) (*PushBotMarkerResponse, error) {
-	out := new(PushBotMarkerResponse)
+func (c *botServiceClient) PushBotMarker(ctx context.Context, in *PushBotMarkersRequest, opts ...grpc.CallOption) (*PushBotMarkersResponse, error) {
+	out := new(PushBotMarkersResponse)
 	err := c.cc.Invoke(ctx, BotService_PushBotMarker_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -97,7 +97,7 @@ type BotServiceServer interface {
 	StartBotServe(context.Context, *StartBotServeRequest) (*StartBotServeResponse, error)
 	BotServeKeepAlive(context.Context, *BotServeKeepAliveRequest) (*BotServeKeepAliveResponse, error)
 	PopBotTask(context.Context, *PopBotTaskRequest) (*PopBotTaskResponse, error)
-	PushBotMarker(context.Context, *PushBotMarkerRequest) (*PushBotMarkerResponse, error)
+	PushBotMarker(context.Context, *PushBotMarkersRequest) (*PushBotMarkersResponse, error)
 	PushBotEvent(context.Context, *PushBotEventRequest) (*PushBotEventResponse, error)
 	mustEmbedUnimplementedBotServiceServer()
 }
@@ -115,7 +115,7 @@ func (UnimplementedBotServiceServer) BotServeKeepAlive(context.Context, *BotServ
 func (UnimplementedBotServiceServer) PopBotTask(context.Context, *PopBotTaskRequest) (*PopBotTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PopBotTask not implemented")
 }
-func (UnimplementedBotServiceServer) PushBotMarker(context.Context, *PushBotMarkerRequest) (*PushBotMarkerResponse, error) {
+func (UnimplementedBotServiceServer) PushBotMarker(context.Context, *PushBotMarkersRequest) (*PushBotMarkersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PushBotMarker not implemented")
 }
 func (UnimplementedBotServiceServer) PushBotEvent(context.Context, *PushBotEventRequest) (*PushBotEventResponse, error) {
@@ -189,7 +189,7 @@ func _BotService_PopBotTask_Handler(srv interface{}, ctx context.Context, dec fu
 }
 
 func _BotService_PushBotMarker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PushBotMarkerRequest)
+	in := new(PushBotMarkersRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func _BotService_PushBotMarker_Handler(srv interface{}, ctx context.Context, dec
 		FullMethod: BotService_PushBotMarker_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BotServiceServer).PushBotMarker(ctx, req.(*PushBotMarkerRequest))
+		return srv.(BotServiceServer).PushBotMarker(ctx, req.(*PushBotMarkersRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
