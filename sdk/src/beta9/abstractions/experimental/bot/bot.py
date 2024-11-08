@@ -203,6 +203,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         self._bot_stub: Optional[BotServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.locations: List[BotLocation] = locations
+        self.parent: "Bot" = self
 
         self.extra: Dict[str, Dict[str, dict]] = {}
         self.extra["model"] = model
