@@ -9,7 +9,7 @@ service BotService {
   rpc BotServeKeepAlive(BotServeKeepAliveRequest)
       returns (BotServeKeepAliveResponse) {}
   rpc PopBotTask(PopBotTaskRequest) returns (PopBotTaskResponse) {}
-  rpc PushBotMarker(PushBotMarkersRequest) returns (PushBotMarkersResponse) {}
+  rpc PushBotMarkers(PushBotMarkersRequest) returns (PushBotMarkersResponse) {}
   rpc PushBotEvent(PushBotEventRequest) returns (PushBotEventResponse) {}
 }
 

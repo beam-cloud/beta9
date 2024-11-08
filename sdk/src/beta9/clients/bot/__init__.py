@@ -137,11 +137,11 @@ class BotServiceStub(SyncServiceStub):
             PopBotTaskResponse,
         )(pop_bot_task_request)
 
-    def push_bot_marker(
+    def push_bot_markers(
         self, push_bot_markers_request: "PushBotMarkersRequest"
     ) -> "PushBotMarkersResponse":
         return self._unary_unary(
-            "/bot.BotService/PushBotMarker",
+            "/bot.BotService/PushBotMarkers",
             PushBotMarkersRequest,
             PushBotMarkersResponse,
         )(push_bot_markers_request)
