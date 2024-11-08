@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Any, Dict
 
 from ...channel import Channel, handle_error, pass_channel
@@ -10,13 +11,14 @@ from ...clients.bot import (
 )
 from ...clients.gateway import (
     EndTaskRequest,
-    EndTaskResponse,
     GatewayServiceStub,
     StartTaskRequest,
     StartTaskResponse,
 )
+from ...exceptions import RunnerException, TaskEndError
 from ...logging import json_output_interceptor
-from ...runner.common import FunctionContext, FunctionHandler, config
+from ...runner.common import FunctionContext, FunctionHandler, config, end_task_and_send_callback
+from ...type import TaskStatus
 
 
 class BotTransition:
@@ -32,15 +34,32 @@ class BotTransition:
 
             if marker_name in markers.keys():
                 marker_data = markers[marker_name]
+
                 if marker_class not in formatted_inputs.keys():
                     formatted_inputs[marker_class] = []
 
                 for marker in marker_data.markers:
-                    formatted_inputs[marker_class].append(
-                        marker_class(
-                            **{field.field_name: field.field_value for field in marker.fields}
-                        )
-                    )
+                    fields_dict = {}
+
+                    for field in marker.fields:
+                        field_name = field.field_name
+                        field_value = field.field_value
+
+                        # Get field type from marker_class
+                        if field_name in marker_class.model_fields:
+                            field_type = marker_class.model_fields[field_name].annotation
+                        else:
+                            field_type = str  # default to string if field not defined
+
+                        # Try to convert field_value to field_type
+                        try:
+                            converted_value = field_type(field_value)
+                        except (ValueError, TypeError):
+                            converted_value = field_value
+
+                        fields_dict[field_name] = converted_value
+
+                    formatted_inputs[marker_class].append(marker_class(**fields_dict))
 
         print(f"formatted_inputs: {formatted_inputs}")
         return formatted_inputs
@@ -72,6 +91,7 @@ def main(channel: Channel):
         )
     )
 
+    # TODO: store tasks one by one instead of in a queue
     task_args: PopBotTaskResponse = bot_stub.pop_bot_task(
         PopBotTaskRequest(
             stub_id=config.stub_id, session_id=session_id, transition_name=transition_name
@@ -79,32 +99,39 @@ def main(channel: Channel):
     )
 
     if not task_args.ok:
-        raise RuntimeError("Failed to pop task.")
+        raise RunnerException("Failed to retrieve task.")
 
     inputs = bt.format_inputs(task_args.markers)
     print(f"inputs: {inputs}")
 
+    start_time = time.time()
     start_task_response: StartTaskResponse = gateway_stub.start_task(
         StartTaskRequest(task_id=task_id, container_id=config.container_id)
     )
     if not start_task_response.ok:
-        raise RuntimeError("Failed to start task.")
+        raise RunnerException("Failed to start task.")
 
     # Run the transition
     output = bt.run(inputs=inputs)  # noqa
 
-    # End the task
-    end_task_response: EndTaskResponse = gateway_stub.end_task(
-        EndTaskRequest(
+    task_status = TaskStatus.Complete
+    task_duration = time.time() - start_time
+
+    end_task_response = end_task_and_send_callback(
+        gateway_stub=gateway_stub,
+        payload={},
+        end_task_request=EndTaskRequest(
             task_id=task_id,
+            task_duration=task_duration,
+            task_status=task_status,
             container_id=config.container_id,
-            keep_warm_seconds=0,
-            task_status="COMPLETE",
-            task_duration=10.0,
-        )
+            container_hostname=config.container_hostname,
+            keep_warm_seconds=config.keep_warm_seconds,
+        ),
     )
+
     if not end_task_response.ok:
-        raise RuntimeError("Failed to end task.")
+        raise TaskEndError
 
     bot_stub.push_bot_event(
         PushBotEventRequest(
