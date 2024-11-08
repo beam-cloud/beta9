@@ -106,10 +106,10 @@ func (i *botInstance) Start() error {
 			// TODO: clean up this logic
 			for _, container := range containers {
 				parts := strings.Split(container.ContainerId, "-")
-				if len(parts) < 7 {
+				if len(parts) < 8 {
 					continue
 				}
-				sessionId := parts[6]
+				sessionId := parts[7]
 				containersBySessionId[sessionId] = append(containersBySessionId[sessionId], container.ContainerId)
 				lastActiveSessionAt = time.Now().Unix()
 			}
