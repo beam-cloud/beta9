@@ -541,9 +541,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 
 	ch, err := s.runcHandle.Events(ctx, containerId, time.Second)
 	if err != nil {
-		output <- common.OutputMsg{
-			Msg: fmt.Sprintf("[WARNING] Failed to open runc events channel %s.", err),
-		}
+		log.Printf("<%s> failed to open runc events channel: %v", containerId, err)
 		return
 	}
 
@@ -557,9 +555,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 		case event, ok := <-ch:
 			if !ok { // If the channel is closed, try to re-open it
 				if tries == maxTries-1 {
-					output <- common.OutputMsg{
-						Msg: fmt.Sprintln("[WARNING] Unable to watch for OOM events."),
-					}
+					log.Printf("<%s> failed to watch for OOM events.", containerId)
 					return
 				}
 
@@ -570,9 +566,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 				case <-time.After(time.Second):
 					ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
 					if err != nil {
-						output <- common.OutputMsg{
-							Msg: fmt.Sprintf("[WARNING] Failed to open runc events channel %s.", err),
-						}
+						log.Printf("<%s> failed to open runc events channel: %v", containerId, err)
 					}
 				}
 				continue
