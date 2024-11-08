@@ -165,8 +165,8 @@ class FunctionHandler:
                 target_module = importlib.import_module(module)
 
             self.handler = getattr(target_module, func)
-            sig = inspect.signature(self.handler.func)
-            self.pass_context = "context" in sig.parameters
+            self.signature = inspect.signature(self.handler.func)
+            self.pass_context = "context" in self.signature.parameters
             self.is_async = asyncio.iscoroutinefunction(self.handler.func)
         except BaseException:
             raise RunnerException(f"Error loading handler: {traceback.format_exc()}")

@@ -67,8 +67,14 @@ class BotTransition:
             "callback_url": callback_url or "",
             "task_policy": task_policy or "",
             "handler": handler or "",
-            "inputs": {k.__name__ if isinstance(k, type) else k: v for k, v in inputs.items()},
-            "outputs": {k.__name__ if isinstance(k, type) else k: v for k, v in outputs.items()},
+            "inputs": {
+                k.__name__ if isinstance(k, type) and env.is_local() else k: v
+                for k, v in inputs.items()
+            },
+            "outputs": {
+                k.__name__ if isinstance(k, type) and env.is_local() else k: v
+                for k, v in outputs.items()
+            },
             "description": description or "",
         }
 
@@ -336,7 +342,8 @@ class Bot(RunnerAbstraction, DeployableMixin):
         except KeyboardInterrupt:
             self._handle_serve_interrupt()
 
-        # terminal.warn("Bot serve timed out. All containers have been stopped.")
+        # TODO: actually stop the containers
+        terminal.warn("Bot serve timed out. All containers have been stopped.")
 
     def _handle_serve_interrupt(self) -> None:
         terminal.header("Stopping all bot containers")

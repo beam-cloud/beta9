@@ -15,6 +15,7 @@ from ...clients.gateway import (
     StartTaskRequest,
     StartTaskResponse,
 )
+from ...logging import json_output_interceptor
 from ...runner.common import FunctionContext, FunctionHandler, config
 
 
@@ -23,10 +24,23 @@ class BotTransition:
         self.handler = FunctionHandler(handler_path=config.handler)
 
     def format_inputs(self, markers: Dict[str, Any]) -> Dict[str, Any]:
-        for location, value in markers.items():
-            print(f"{location}: {value}")
+        expected_inputs = self.handler.handler.config.get("inputs", {})
+        formatted_inputs = {}
 
-        return markers
+        for marker_class in expected_inputs.keys():
+            marker_name = marker_class.__name__
+
+            if marker_name in markers.keys():
+                marker_data = markers[marker_name]
+                formatted_inputs[marker_class] = marker_class(
+                    **{
+                        field.field_name: field.field_value
+                        for field in marker_data.markers[0].fields
+                    }
+                )
+
+        print(f"formatted_inputs: {formatted_inputs}")
+        return formatted_inputs
 
     def run(self, inputs: Dict[str, Any]):
         context = FunctionContext.new(config=config, task_id=config.task_id)
@@ -34,17 +48,17 @@ class BotTransition:
         return outputs
 
 
-# @json_output_interceptor(task_id=config.task_id)
+@json_output_interceptor(task_id=config.task_id)
 @handle_error()
 @pass_channel
 def main(channel: Channel):
-    bt = BotTransition()
+    bt: BotTransition = BotTransition()
 
     bot_stub: BotServiceStub = BotServiceStub(channel)
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
-    task_id = config.task_id
-    session_id = os.environ.get("SESSION_ID")
-    transition_name = os.environ.get("TRANSITION_NAME")
+    task_id: str = config.task_id
+    session_id: str = os.environ.get("SESSION_ID")
+    transition_name: str = os.environ.get("TRANSITION_NAME")
 
     bot_stub.push_bot_event(
         PushBotEventRequest(
@@ -93,7 +107,7 @@ def main(channel: Channel):
         PushBotEventRequest(
             stub_id=config.stub_id,
             session_id=session_id,
-            event_type="task_completed",
+            event_type="task_completed",  # TODO: convert to a enum of different event types
             event_value=task_id,
         )
     )
