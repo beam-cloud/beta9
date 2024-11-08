@@ -11,8 +11,9 @@ import (
 var ErrBotSessionNotFound = fmt.Errorf("bot session not found")
 
 type BotSession struct {
-	Id       string                     `json:"id" redis:"id"`
-	Messages []BotChatCompletionMessage `json:"messages" redis:"messages"`
+	Id            string                     `json:"id" redis:"id"`
+	Messages      []BotChatCompletionMessage `json:"messages" redis:"messages"`
+	LastUpdatedAt int64                      `redis:"last_updated_at" json:"last_updated_at"`
 }
 
 func (s *BotSession) GetMessagesInOpenAIFormat() []openai.ChatCompletionMessage {

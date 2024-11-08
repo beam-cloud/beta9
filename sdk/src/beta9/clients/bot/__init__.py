@@ -35,17 +35,6 @@ class StartBotServeResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class BotServeKeepAliveRequest(betterproto.Message):
-    stub_id: str = betterproto.string_field(1)
-    timeout: int = betterproto.int32_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class BotServeKeepAliveResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-
-
-@dataclass(eq=False, repr=False)
 class PopBotTaskRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     session_id: str = betterproto.string_field(2)
@@ -118,15 +107,6 @@ class BotServiceStub(SyncServiceStub):
             StartBotServeRequest,
             StartBotServeResponse,
         )(start_bot_serve_request)
-
-    def bot_serve_keep_alive(
-        self, bot_serve_keep_alive_request: "BotServeKeepAliveRequest"
-    ) -> "BotServeKeepAliveResponse":
-        return self._unary_unary(
-            "/bot.BotService/BotServeKeepAlive",
-            BotServeKeepAliveRequest,
-            BotServeKeepAliveResponse,
-        )(bot_serve_keep_alive_request)
 
     def pop_bot_task(
         self, pop_bot_task_request: "PopBotTaskRequest"

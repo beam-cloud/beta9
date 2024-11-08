@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -18,6 +20,7 @@ import (
 const (
 	botContainerPrefix         string = "bot"
 	botContainerTypeTransition string = "transition"
+	botInactivityTimeoutS      int64  = 10
 )
 
 type botInstance struct {
@@ -34,6 +37,7 @@ type botInstance struct {
 	botInterface    *BotInterface
 	taskDispatcher  *task.Dispatcher
 	authInfo        *auth.AuthInfo
+	containerRepo   repository.ContainerRepository
 }
 
 type botInstanceOpts struct {
@@ -45,6 +49,7 @@ type botInstanceOpts struct {
 	BotConfig      BotConfig
 	StateManager   *botStateManager
 	TaskDispatcher *task.Dispatcher
+	ContainerRepo  repository.ContainerRepository
 }
 
 func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, error) {
@@ -79,26 +84,54 @@ func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, er
 			Workspace: &opts.Stub.Workspace,
 			Token:     opts.Token,
 		},
+		containerRepo: opts.ContainerRepo,
 	}, nil
 }
 
 func (i *botInstance) Start() error {
 	stepInterval := time.Duration(i.appConfig.Abstractions.Bot.StepIntervalS) * time.Second
+	lastActiveSessionAt := time.Now().Unix()
 
 	for {
 		select {
 		case <-i.ctx.Done():
 			return nil
 		default:
+			containersBySessionId := make(map[string][]string)
+			containers, err := i.containerRepo.GetActiveContainersByStubId(i.stub.ExternalId)
+			if err != nil {
+				continue
+			}
+
+			// TODO: clean up this logic
+			for _, container := range containers {
+				parts := strings.Split(container.ContainerId, "-")
+				if len(parts) < 7 {
+					continue
+				}
+				sessionId := parts[6]
+				containersBySessionId[sessionId] = append(containersBySessionId[sessionId], container.ContainerId)
+				lastActiveSessionAt = time.Now().Unix()
+			}
+
 			activeSessions, err := i.botStateManager.getActiveSessions(i.workspace.Name, i.stub.ExternalId)
 			if err != nil || len(activeSessions) == 0 {
 				select {
 				case <-i.ctx.Done():
 					return nil
 				case <-time.After(stepInterval):
+
+					if time.Now().Unix()-lastActiveSessionAt > botInactivityTimeoutS {
+						log.Printf("<bot %s> No active sessions found, shutting down instance", i.stub.ExternalId)
+						i.cancelFunc()
+						return nil
+					}
+
 					continue
 				}
 			}
+
+			lastActiveSessionAt = time.Now().Unix()
 
 			for _, session := range activeSessions {
 				if msg, err := i.botStateManager.popInputMessage(i.workspace.Name, i.stub.ExternalId, session.Id); err == nil {
@@ -107,7 +140,21 @@ func (i *botInstance) Start() error {
 					}
 				}
 
+				// Run any network transitions that can run
 				i.step(session.Id)
+
+				if time.Now().Unix()-session.LastUpdatedAt > botInactivityTimeoutS {
+					if len(containersBySessionId[session.Id]) > 0 {
+						i.botStateManager.sessionKeepAlive(i.workspace.Name, i.stub.ExternalId, session.Id)
+						continue
+					}
+
+					log.Printf("<bot %s> Session %s has not been updated in a while, marking as inactive", i.stub.ExternalId, session.Id)
+					err = i.botStateManager.deleteSession(i.workspace.Name, i.stub.ExternalId, session.Id)
+					if err != nil {
+						continue
+					}
+				}
 			}
 
 			select {
@@ -140,7 +187,6 @@ func (i *botInstance) step(sessionId string) {
 					continue
 				}
 
-				log.Printf("locationName: %s, currentCount: %d, requiredCount: %d", locationName, count, requiredCount)
 				currentMarkerCounts[locationName] = count
 				if count < int64(requiredCount) {
 					canFire = false

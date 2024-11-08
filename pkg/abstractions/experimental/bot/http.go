@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"context"
+
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -89,6 +91,9 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 	}
 	defer ws.Close()
 
+	ctxWithCancel, cancel := context.WithCancel(ctx.Request().Context())
+	defer cancel()
+
 	// Create or get bot instance
 	instance, err := g.pbs.getOrCreateBotInstance(stubId)
 	if err != nil {
@@ -111,15 +116,32 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 		}
 	}
 
-	wg := sync.WaitGroup{}
+	// Keep session alive for at least as long as they are connected to the WS
+	go func() {
+		for {
+			select {
+			case <-ctxWithCancel.Done():
+				return
+			default:
+				err := instance.botStateManager.sessionKeepAlive(instance.workspace.Name, instance.stub.ExternalId, sessionId)
+				if err != nil {
+					return
+				}
+				time.Sleep(1 * time.Second)
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
 	wg.Add(1)
 
+	// Send bot events to client
 	go func() {
 		defer wg.Done()
 
 		for {
 			select {
-			case <-ctx.Request().Context().Done():
+			case <-ctxWithCancel.Done():
 				return
 			default:
 				event, err := instance.botStateManager.popEvent(instance.workspace.Name, instance.stub.ExternalId, sessionId)
@@ -133,18 +155,23 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 					continue
 				}
 
-				ws.WriteMessage(websocket.TextMessage, serializedEvent)
+				if err := ws.WriteMessage(websocket.TextMessage, serializedEvent); err != nil {
+					// If writing to WebSocket fails, cancel the context
+					cancel()
+					return
+				}
 			}
 		}
 	}()
 
+	// Read user prompts
 	for {
 		_, message, err := ws.ReadMessage()
 		if err != nil {
+			cancel()
 			break
 		}
 
-		// Deserialize message to UserRequest
 		var userRequest UserRequest
 		if err := json.Unmarshal(message, &userRequest); err != nil {
 			continue

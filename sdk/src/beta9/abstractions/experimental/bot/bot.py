@@ -3,7 +3,6 @@ import json
 import os
 import sys
 import threading
-import time
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from .... import env, terminal
@@ -17,7 +16,6 @@ from ....abstractions.image import Image, ImageBuildResult
 from ....abstractions.volume import Volume
 from ....channel import with_grpc_error_handling
 from ....clients.bot import (
-    BotServeKeepAliveRequest,
     BotServiceStub,
     StartBotServeRequest,
     StartBotServeResponse,
@@ -295,16 +293,6 @@ class Bot(RunnerAbstraction, DeployableMixin):
                 pass
 
             def on_open(ws):
-                def _send_keep_alive():
-                    while True:
-                        self.bot_stub.bot_serve_keep_alive(
-                            BotServeKeepAliveRequest(
-                                stub_id=self.stub_id,
-                                timeout=timeout,
-                            )
-                        )
-                        time.sleep(timeout or 30)
-
                 def _send_user_input():
                     with terminal.progress("Waiting for session to start..."):
                         session_event.wait()  # Wait until a session_id is received
@@ -315,7 +303,6 @@ class Bot(RunnerAbstraction, DeployableMixin):
                             user_request = json.dumps({"msg": msg})
                             ws.send(user_request)
 
-                threading.Thread(target=_send_keep_alive, daemon=True).start()
                 threading.Thread(target=_send_user_input, daemon=True).start()
 
             ws_url = url.replace("http://", "ws://").replace("https://", "wss://")

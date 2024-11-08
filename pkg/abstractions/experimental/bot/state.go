@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/redis/go-redis/v9"
@@ -70,6 +71,8 @@ func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string,
 		}
 	}
 
+	state.LastUpdatedAt = time.Now().Unix()
+
 	jsonData, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -78,6 +81,41 @@ func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string,
 	err = m.rdb.Set(ctx, stateKey, jsonData, 0).Err()
 	if err != nil {
 		return fmt.Errorf("failed to store session state: %v", err)
+	}
+
+	return nil
+}
+
+func (m *botStateManager) sessionKeepAlive(workspaceName, stubId, sessionId string) error {
+	ctx := context.TODO()
+	err := m.lock.Acquire(ctx, Keys.botLock(workspaceName, stubId, sessionId), common.RedisLockOptions{TtlS: 10, Retries: 0})
+	if err != nil {
+		return err
+	}
+	defer m.lock.Release(Keys.botLock(workspaceName, stubId, sessionId))
+
+	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
+
+	data, err := m.rdb.Get(ctx, stateKey).Result()
+	if err != nil {
+		return err
+	}
+
+	state := &BotSession{}
+	err = json.Unmarshal([]byte(data), state)
+	if err != nil {
+		return err
+	}
+	state.LastUpdatedAt = time.Now().Unix()
+
+	jsonData, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+
+	err = m.rdb.Set(ctx, stateKey, jsonData, 0).Err()
+	if err != nil {
+		return err
 	}
 
 	return nil

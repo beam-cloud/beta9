@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
 
 	"context"
 
@@ -41,7 +43,6 @@ type BotServiceOpts struct {
 type BotService interface {
 	pb.BotServiceServer
 	StartBotServe(ctx context.Context, in *pb.StartBotServeRequest) (*pb.StartBotServeResponse, error)
-	BotServeKeepAlive(ctx context.Context, in *pb.BotServeKeepAliveRequest) (*pb.BotServeKeepAliveResponse, error)
 	PushBotEvent(ctx context.Context, in *pb.PushBotEventRequest) (*pb.PushBotEventResponse, error)
 	PopBotTask(ctx context.Context, in *pb.PopBotTaskRequest) (*pb.PopBotTaskResponse, error)
 }
@@ -52,6 +53,7 @@ type PetriBotService struct {
 	config          types.AppConfig
 	rdb             *common.RedisClient
 	keyEventManager *common.KeyEventManager
+	keyEventChan    chan common.KeyEvent
 	routeGroup      *echo.Group
 	scheduler       *scheduler.Scheduler
 	backendRepo     repository.BackendRepository
@@ -76,6 +78,7 @@ func NewPetriBotService(ctx context.Context, opts BotServiceOpts) (BotService, e
 		config:          opts.Config,
 		rdb:             opts.RedisClient,
 		keyEventManager: keyEventManager,
+		keyEventChan:    make(chan common.KeyEvent),
 		routeGroup:      opts.RouteGroup,
 		scheduler:       opts.Scheduler,
 		backendRepo:     opts.BackendRepo,
@@ -88,6 +91,10 @@ func NewPetriBotService(ctx context.Context, opts BotServiceOpts) (BotService, e
 		botInstances:    common.NewSafeMap[*botInstance](),
 		botStateManager: newBotStateManager(opts.RedisClient),
 	}
+
+	// Listen for container events with a bot container prefix
+	go keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(botContainerPrefix), pbs.keyEventChan)
+	go pbs.handleBotContainerEvents(ctx)
 
 	// Register task dispatcher
 	pbs.taskDispatcher.Register(string(types.ExecutorBot), pbs.botTaskFactory)
@@ -104,6 +111,39 @@ func (pbs *PetriBotService) botTaskFactory(ctx context.Context, msg types.TaskMe
 		pbs: pbs,
 		msg: &msg,
 	}, nil
+}
+
+func (pbs *PetriBotService) handleBotContainerEvents(ctx context.Context) {
+	for {
+		select {
+		case event := <-pbs.keyEventChan:
+			operation := event.Operation
+			containerId := fmt.Sprintf("%s%s", botContainerPrefix, event.Key)
+
+			// Bot container IDs look like this: "bot-transition-ef3f780c-6fe1-4f38-a201-96d32e825bb3-5886f9-41f80f43"
+			// This part: "ef3f780c-6fe1-4f38-a201-96d32e825bb3" is the stub ID
+			// Session ID is: "5886f9"
+			parts := strings.Split(containerId, "-")
+			if len(parts) < 7 {
+				continue
+			}
+			stubId := strings.Join(parts[2:7], "-")
+
+			switch operation {
+			case common.KeyOperationSet, common.KeyOperationHSet:
+				_, err := pbs.getOrCreateBotInstance(stubId)
+				if err != nil {
+					continue
+				}
+
+			case common.KeyOperationDel, common.KeyOperationExpired:
+				// Do nothing
+			}
+
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance, error) {
@@ -143,10 +183,13 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 		BotConfig:      botConfig,
 		StateManager:   pbs.botStateManager,
 		TaskDispatcher: pbs.taskDispatcher,
+		ContainerRepo:  pbs.containerRepo,
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	log.Printf("<bot %s> Created bot instance", instance.stub.ExternalId)
 
 	pbs.botInstances.Set(stubId, instance)
 
@@ -209,6 +252,22 @@ func (s *PetriBotService) PopBotTask(ctx context.Context, in *pb.PopBotTaskReque
 	}
 
 	return &pb.PopBotTaskResponse{Ok: true, Markers: markerMap}, nil
+}
+
+func (pbs *PetriBotService) StartBotServe(ctx context.Context, in *pb.StartBotServeRequest) (*pb.StartBotServeResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	instance, err := pbs.getOrCreateBotInstance(in.StubId)
+	if err != nil {
+		return &pb.StartBotServeResponse{Ok: false}, nil
+	}
+
+	if authInfo.Workspace.ExternalId != instance.stub.Workspace.ExternalId {
+		instance.cancelFunc()
+		return &pb.StartBotServeResponse{Ok: false}, nil
+	}
+
+	return &pb.StartBotServeResponse{Ok: true}, nil
 }
 
 var Keys = &keys{}
