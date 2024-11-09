@@ -255,19 +255,15 @@ class Bot(RunnerAbstraction, DeployableMixin):
                 event_value = event.get("value")
 
                 def _print_bot_event(header_text=None, detail_text=None):
-                    sys.stdout.write("\r\033")
-
                     if header_text:
+                        sys.stdout.write("\r\033")
                         terminal.header(header_text)
+                        sys.stdout.write("#: ")
+                        sys.stdout.flush()
 
                     if detail_text:
+                        msg_event.set()
                         terminal.detail(detail_text)
-
-                    sys.stdout.write("#: ")
-                    sys.stdout.flush()
-
-                if event_type == "msg":
-                    msg_event.set()
 
                 if event_type == "session_created":
                     session_id = event_value
