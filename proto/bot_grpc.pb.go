@@ -19,7 +19,6 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BotService_StartBotServe_FullMethodName  = "/bot.BotService/StartBotServe"
 	BotService_PopBotTask_FullMethodName     = "/bot.BotService/PopBotTask"
 	BotService_PushBotMarkers_FullMethodName = "/bot.BotService/PushBotMarkers"
 	BotService_PushBotEvent_FullMethodName   = "/bot.BotService/PushBotEvent"
@@ -29,7 +28,6 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BotServiceClient interface {
-	StartBotServe(ctx context.Context, in *StartBotServeRequest, opts ...grpc.CallOption) (*StartBotServeResponse, error)
 	PopBotTask(ctx context.Context, in *PopBotTaskRequest, opts ...grpc.CallOption) (*PopBotTaskResponse, error)
 	PushBotMarkers(ctx context.Context, in *PushBotMarkersRequest, opts ...grpc.CallOption) (*PushBotMarkersResponse, error)
 	PushBotEvent(ctx context.Context, in *PushBotEventRequest, opts ...grpc.CallOption) (*PushBotEventResponse, error)
@@ -41,15 +39,6 @@ type botServiceClient struct {
 
 func NewBotServiceClient(cc grpc.ClientConnInterface) BotServiceClient {
 	return &botServiceClient{cc}
-}
-
-func (c *botServiceClient) StartBotServe(ctx context.Context, in *StartBotServeRequest, opts ...grpc.CallOption) (*StartBotServeResponse, error) {
-	out := new(StartBotServeResponse)
-	err := c.cc.Invoke(ctx, BotService_StartBotServe_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *botServiceClient) PopBotTask(ctx context.Context, in *PopBotTaskRequest, opts ...grpc.CallOption) (*PopBotTaskResponse, error) {
@@ -83,7 +72,6 @@ func (c *botServiceClient) PushBotEvent(ctx context.Context, in *PushBotEventReq
 // All implementations must embed UnimplementedBotServiceServer
 // for forward compatibility
 type BotServiceServer interface {
-	StartBotServe(context.Context, *StartBotServeRequest) (*StartBotServeResponse, error)
 	PopBotTask(context.Context, *PopBotTaskRequest) (*PopBotTaskResponse, error)
 	PushBotMarkers(context.Context, *PushBotMarkersRequest) (*PushBotMarkersResponse, error)
 	PushBotEvent(context.Context, *PushBotEventRequest) (*PushBotEventResponse, error)
@@ -94,9 +82,6 @@ type BotServiceServer interface {
 type UnimplementedBotServiceServer struct {
 }
 
-func (UnimplementedBotServiceServer) StartBotServe(context.Context, *StartBotServeRequest) (*StartBotServeResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StartBotServe not implemented")
-}
 func (UnimplementedBotServiceServer) PopBotTask(context.Context, *PopBotTaskRequest) (*PopBotTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PopBotTask not implemented")
 }
@@ -117,24 +102,6 @@ type UnsafeBotServiceServer interface {
 
 func RegisterBotServiceServer(s grpc.ServiceRegistrar, srv BotServiceServer) {
 	s.RegisterService(&BotService_ServiceDesc, srv)
-}
-
-func _BotService_StartBotServe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StartBotServeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BotServiceServer).StartBotServe(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BotService_StartBotServe_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BotServiceServer).StartBotServe(ctx, req.(*StartBotServeRequest))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _BotService_PopBotTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -198,10 +165,6 @@ var BotService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "bot.BotService",
 	HandlerType: (*BotServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "StartBotServe",
-			Handler:    _BotService_StartBotServe_Handler,
-		},
 		{
 			MethodName: "PopBotTask",
 			Handler:    _BotService_PopBotTask_Handler,

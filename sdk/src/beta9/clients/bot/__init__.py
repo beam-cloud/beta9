@@ -24,17 +24,6 @@ if TYPE_CHECKING:
 
 
 @dataclass(eq=False, repr=False)
-class StartBotServeRequest(betterproto.Message):
-    stub_id: str = betterproto.string_field(1)
-    timeout: int = betterproto.int32_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class StartBotServeResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-
-
-@dataclass(eq=False, repr=False)
 class PopBotTaskRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     session_id: str = betterproto.string_field(2)
@@ -99,15 +88,6 @@ class PushBotEventResponse(betterproto.Message):
 
 
 class BotServiceStub(SyncServiceStub):
-    def start_bot_serve(
-        self, start_bot_serve_request: "StartBotServeRequest"
-    ) -> "StartBotServeResponse":
-        return self._unary_unary(
-            "/bot.BotService/StartBotServe",
-            StartBotServeRequest,
-            StartBotServeResponse,
-        )(start_bot_serve_request)
-
     def pop_bot_task(
         self, pop_bot_task_request: "PopBotTaskRequest"
     ) -> "PopBotTaskResponse":
