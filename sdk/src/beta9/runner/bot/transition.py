@@ -13,6 +13,7 @@ from ...clients.bot import (
     PushBotEventRequest,
     PushBotMarkersRequest,
     PushBotMarkersRequestMarkerList,
+    PushBotMarkersResponse,
 )
 from ...clients.gateway import (
     EndTaskRequest,
@@ -148,11 +149,13 @@ def main(channel: Channel):
         raise RunnerException("Failed to start task.")
 
     # Run the transition
-    outputs = bt.run(inputs=task_args.markers)  # noqa
-    print(f"outputs: {outputs}")
-    bot_stub.push_bot_markers(
+    outputs = bt.run(inputs=task_args.markers)
+
+    push_bot_markers_response: PushBotMarkersResponse = bot_stub.push_bot_markers(
         PushBotMarkersRequest(stub_id=config.stub_id, session_id=session_id, markers=outputs)
     )
+    if not push_bot_markers_response.ok:
+        raise RunnerException("Failed to push markers.")
 
     task_status = TaskStatus.Complete
     task_duration = time.time() - start_time
