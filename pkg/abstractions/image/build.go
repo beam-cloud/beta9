@@ -59,6 +59,7 @@ type BuildOpts struct {
 	ExistingImageUri   string
 	ExistingImageCreds map[string]string
 	ForceRebuild       bool
+	EnvVars            []string
 }
 
 func (o *BuildOpts) String() string {
@@ -112,6 +113,11 @@ func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 			fmt.Fprintf(h, "%s-%s", step.Type, step.Command)
 		}
 	}
+	if len(opts.EnvVars) > 0 {
+		for _, envVar := range opts.EnvVars {
+			fmt.Fprint(h, envVar)
+		}
+	}
 	commandListHash := hex.EncodeToString(h.Sum(nil))
 
 	bodyToHash := &ImageIdHash{
@@ -162,6 +168,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		BaseImageName:     opts.BaseImageName,
 		BaseImageTag:      opts.BaseImageTag,
 		ExistingImageUri:  opts.ExistingImageUri,
+		EnvVars:           opts.EnvVars,
 	})
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
@@ -185,7 +192,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	err = b.scheduler.Run(&types.ContainerRequest{
 		ContainerId:      containerId,
-		Env:              []string{},
+		Env:              opts.EnvVars,
 		Cpu:              cpu,
 		Memory:           memory,
 		ImageId:          baseImageId,

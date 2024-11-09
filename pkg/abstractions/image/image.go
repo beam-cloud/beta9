@@ -69,6 +69,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		Commands:          in.Commands,
 		BuildSteps:        convertBuildSteps(in.BuildSteps),
 		ExistingImageUri:  in.ExistingImageUri,
+		EnvVars:           in.EnvVars,
 	}
 
 	if in.ExistingImageUri != "" {
@@ -100,6 +101,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		BuildSteps:         convertBuildSteps(in.BuildSteps),
 		ExistingImageUri:   in.ExistingImageUri,
 		ExistingImageCreds: in.ExistingImageCreds,
+		EnvVars:            in.EnvVars,
 	}
 
 	ctx := stream.Context()

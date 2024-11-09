@@ -76,6 +76,7 @@ type ContainerInstance struct {
 	Port         int
 	OutputWriter *common.OutputWriter
 	LogBuffer    *common.LogBuffer
+	Request      *types.ContainerRequest
 }
 
 type ContainerOptions struct {

@@ -22,6 +22,8 @@ import (
 const (
 	baseConfigPath            string = "/tmp"
 	defaultContainerDirectory string = "/mnt/code"
+	specBaseName              string = "config.json"
+	initialSpecBaseName       string = "initial_config.json"
 
 	exitCodeSigterm int = 143 // Means the container received a SIGTERM by the underlying operating system
 	exitCodeSigkill int = 137 // Means the container received a SIGKILL by the underlying operating system
@@ -175,7 +177,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
-	// Read spec from bundle
+	// Read spec from bundle. If not found, then this is a container being built on a build worker.
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
 
 	opts := &ContainerOptions{
@@ -216,7 +218,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 }
 
 func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
-	imageConfigPath := filepath.Join(s.imageMountPath, imageId, "initial_config.json")
+	imageConfigPath := filepath.Join(s.imageMountPath, imageId, initialSpecBaseName)
 
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
@@ -237,7 +239,7 @@ func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
 // Generate a runc spec from a given request
 func (s *Worker) specFromRequest(request *types.ContainerRequest, options *ContainerOptions) (*specs.Spec, error) {
 	os.MkdirAll(filepath.Join(baseConfigPath, request.ContainerId), os.ModePerm)
-	configPath := filepath.Join(baseConfigPath, request.ContainerId, "config.json")
+	configPath := filepath.Join(baseConfigPath, request.ContainerId, specBaseName)
 
 	spec, err := s.newSpecTemplate()
 	if err != nil {
@@ -360,6 +362,7 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 }
 
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
+	// Most of these env vars are required to communiate with the gateway and vice versa
 	env := []string{
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)),
@@ -369,7 +372,14 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		"PYTHONUNBUFFERED=1",
 	}
 
-	env = append(env, request.Env...)
+	// Add env vars from request
+	env = append(request.Env, env...)
+
+	// Add env vars from initial spec. This would be the case for regular workers, not build workers.
+	if options.InitialSpec != nil {
+		env = append(options.InitialSpec.Process.Env, env...)
+	}
+
 	return env
 }
 
@@ -408,6 +418,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			}
 		}),
 		LogBuffer: common.NewLogBuffer(),
+		Request:   request,
 	}
 	s.containerInstances.Set(containerId, containerInstance)
 
@@ -472,7 +483,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
-	configPath := filepath.Join(baseConfigPath, containerId, "config.json")
+	configPath := filepath.Join(baseConfigPath, containerId, specBaseName)
 	err = os.WriteFile(configPath, configContents, 0644)
 	if err != nil {
 		return

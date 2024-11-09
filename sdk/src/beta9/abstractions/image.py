@@ -56,6 +56,7 @@ class Image(BaseAbstraction):
         commands: List[str] = [],
         base_image: Optional[str] = None,
         base_image_creds: Optional[ImageCredentials] = None,
+        env_vars: Optional[Union[str, List[str], Dict[str, str]]] = None,
     ):
         """
         Creates an Image instance.
@@ -91,6 +92,11 @@ class Image(BaseAbstraction):
                 for you. Currently only AWS ECR is supported and can be configured by setting the
                 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and `AWS_REGION` keys.
                 Default is None.
+            env_vars (Optional[Union[str, List[str], Dict[str, str]]):
+                Adds environment variables to an image. These will be available when building the image
+                and when the container is running. This can be a string, a list of strings, or a
+                dictionary of strings. The string must be in the format of "KEY=VALUE". If a list of
+                strings is provided, each element should be in the same format. Deafult is None.
 
         Example:
 
@@ -118,7 +124,10 @@ class Image(BaseAbstraction):
         self.build_steps = []
         self.base_image = base_image or ""
         self.base_image_creds = base_image_creds or {}
+        self.env_vars = []
         self._stub: Optional[ImageServiceStub] = None
+
+        self.with_envs(env_vars or [])
 
     @property
     def stub(self) -> ImageServiceStub:
@@ -171,6 +180,7 @@ class Image(BaseAbstraction):
                 build_steps=self.build_steps,
                 force_rebuild=False,
                 existing_image_uri=self.base_image,
+                env_vars=self.env_vars,
             )
         )
 
@@ -194,6 +204,7 @@ class Image(BaseAbstraction):
                     build_steps=self.build_steps,
                     existing_image_uri=self.base_image,
                     existing_image_creds=self.get_credentials_from_env(),
+                    env_vars=self.env_vars,
                 )
             ):
                 if r.msg != "":
@@ -307,3 +318,48 @@ class Image(BaseAbstraction):
         for package in packages:
             self.build_steps.append(BuildStep(command=package, type="pip"))
         return self
+
+    def with_envs(
+        self, env_vars: Union[str, List[str], Dict[str, str]], clear: bool = False
+    ) -> "Image":
+        """
+        Add environment variables to the image.
+
+        These will be available when building the image and when the container is running.
+
+        Parameters:
+            env_vars: Environment variables. This can be a string, a list of strings, or a
+                dictionary of strings. The string must be in the format of "KEY=VALUE". If a list of
+                strings is provided, each element should be in the same format. Deafult is None.
+            clear: Clear existing environment variables before adding the new ones.
+
+        Returns:
+            Image: The Image object.
+        """
+        if isinstance(env_vars, dict):
+            env_vars = [f"{key}={value}" for key, value in env_vars.items()]
+        elif isinstance(env_vars, str):
+            env_vars = [env_vars]
+
+        self.validate_env_vars(env_vars)
+
+        if clear:
+            self.env_vars.clear()
+
+        self.env_vars.extend(env_vars)
+
+        return self
+
+    def validate_env_vars(self, env_vars: List[str]) -> None:
+        for env_var in env_vars:
+            key, sep, value = env_var.partition("=")
+            if not sep:
+                raise ValueError(f"Environment variable must contain '=': {env_var}")
+            if not key:
+                raise ValueError(f"Environment variable key cannot be empty: {env_var}")
+            if not value:
+                raise ValueError(f"Environment variable value cannot be empty: {env_var}")
+            if "=" in value:
+                raise ValueError(
+                    f"Environment variable cannot contain multiple '=' characters: {env_var}"
+                )

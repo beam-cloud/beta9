@@ -181,9 +181,13 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 	}
 
 	// Copy initial config file from the base image bundle
-	err = copyFile(filepath.Join(instance.BundlePath, "config.json"), filepath.Join(instance.Overlay.TopLayerPath(), "initial_config.json"))
+	err = copyFile(filepath.Join(instance.BundlePath, specBaseName), filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName))
 	if err != nil {
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
+	}
+
+	if err := s.addRequestEnvToInitialSpec(instance); err != nil {
+		return err
 	}
 
 	tempConfig := s.baseConfigSpec
@@ -192,12 +196,12 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 	tempConfig.Process.Args = []string{"tail", "-f", "/dev/null"}
 	tempConfig.Root.Readonly = false
 
-	file, err := json.MarshalIndent(tempConfig, "", " ")
+	file, err := json.MarshalIndent(tempConfig, "", "  ")
 	if err != nil {
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
 	}
 
-	configPath := filepath.Join(instance.Overlay.TopLayerPath(), "config.json")
+	configPath := filepath.Join(instance.Overlay.TopLayerPath(), specBaseName)
 	err = os.WriteFile(configPath, file, 0644)
 	if err != nil {
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
@@ -246,4 +250,35 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 
 	close(doneChan)
 	return err
+}
+
+func (s *RunCServer) addRequestEnvToInitialSpec(instance *ContainerInstance) error {
+	if len(instance.Request.Env) == 0 {
+		return nil
+	}
+
+	specPath := filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName)
+
+	bytes, err := os.ReadFile(specPath)
+	if err != nil {
+		return err
+	}
+
+	var spec specs.Spec
+	if err = json.Unmarshal(bytes, &spec); err != nil {
+		return err
+	}
+
+	spec.Process.Env = append(instance.Request.Env, spec.Process.Env...)
+
+	bytes, err = json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	if err = os.WriteFile(specPath, bytes, 0644); err != nil {
+		return err
+	}
+
+	return nil
 }
