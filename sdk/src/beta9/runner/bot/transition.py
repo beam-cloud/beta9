@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from typing import Any, Dict
@@ -5,9 +6,13 @@ from typing import Any, Dict
 from ...channel import Channel, handle_error, pass_channel
 from ...clients.bot import (
     BotServiceStub,
+    Marker,
+    MarkerField,
     PopBotTaskRequest,
     PopBotTaskResponse,
     PushBotEventRequest,
+    PushBotMarkersRequest,
+    PushBotMarkersRequestMarkerList,
 )
 from ...clients.gateway import (
     EndTaskRequest,
@@ -25,7 +30,7 @@ class BotTransition:
     def __init__(self) -> None:
         self.handler = FunctionHandler(handler_path=config.handler)
 
-    def format_inputs(self, markers: Dict[str, Any]) -> Dict[str, Any]:
+    def _format_inputs(self, markers: Dict[str, Any]) -> Dict[str, Any]:
         expected_inputs = self.handler.handler.config.get("inputs", {})
         formatted_inputs = {}
 
@@ -61,13 +66,47 @@ class BotTransition:
 
                     formatted_inputs[marker_class].append(marker_class(**fields_dict))
 
-        print(f"formatted_inputs: {formatted_inputs}")
         return formatted_inputs
+
+    def _format_outputs(self, outputs: Dict[str, Any]) -> Dict[str, Any]:
+        expected_outputs = self.handler.handler.config.get("outputs", {})
+        formatted_outputs = {}
+
+        for output, markers in outputs.items():
+            if output not in expected_outputs:
+                continue
+
+            location_name = output.__name__
+            marker_list = []
+
+            for marker in markers:
+                fields = []
+                marker_dict = marker.model_dump()
+                marker_annotations = marker.__annotations__
+
+                for field_name, field_value in marker_dict.items():
+                    field_type = marker_annotations.get(field_name, str)
+
+                    # Serialize the field_value based on its type
+                    if issubclass(field_type, (bool, int, float, list, dict)):
+                        converted_value = json.dumps(field_value)
+                    else:
+                        converted_value = str(field_value)
+
+                    fields.append(MarkerField(field_name=field_name, field_value=converted_value))
+
+                # Create a Marker for each set of fields
+                marker_list.append(Marker(location_name=location_name, fields=fields))
+
+            # Assign a single PushBotMarkersRequestMarkerList for all markers at this location
+            formatted_outputs[location_name] = PushBotMarkersRequestMarkerList(markers=marker_list)
+
+        return formatted_outputs
 
     def run(self, inputs: Dict[str, Any]):
         context = FunctionContext.new(config=config, task_id=config.task_id)
-        outputs = self.handler(context, inputs)
-        return outputs
+        outputs = self.handler(context, self._format_inputs(inputs))
+        return self._format_outputs(outputs)
 
 
 @json_output_interceptor(task_id=config.task_id)
@@ -101,9 +140,6 @@ def main(channel: Channel):
     if not task_args.ok:
         raise RunnerException("Failed to retrieve task.")
 
-    inputs = bt.format_inputs(task_args.markers)
-    print(f"inputs: {inputs}")
-
     start_time = time.time()
     start_task_response: StartTaskResponse = gateway_stub.start_task(
         StartTaskRequest(task_id=task_id, container_id=config.container_id)
@@ -112,7 +148,11 @@ def main(channel: Channel):
         raise RunnerException("Failed to start task.")
 
     # Run the transition
-    output = bt.run(inputs=inputs)  # noqa
+    outputs = bt.run(inputs=task_args.markers)  # noqa
+    print(f"outputs: {outputs}")
+    bot_stub.push_bot_markers(
+        PushBotMarkersRequest(stub_id=config.stub_id, session_id=session_id, markers=outputs)
+    )
 
     task_status = TaskStatus.Complete
     task_duration = time.time() - start_time

@@ -44,6 +44,7 @@ type BotService interface {
 	pb.BotServiceServer
 	PushBotEvent(ctx context.Context, in *pb.PushBotEventRequest) (*pb.PushBotEventResponse, error)
 	PopBotTask(ctx context.Context, in *pb.PopBotTaskRequest) (*pb.PopBotTaskResponse, error)
+	PushBotMarkers(ctx context.Context, in *pb.PushBotMarkersRequest) (*pb.PushBotMarkersResponse, error)
 }
 
 type PetriBotService struct {
@@ -216,6 +217,39 @@ func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventR
 	}
 
 	return &pb.PushBotEventResponse{Ok: true}, nil
+}
+
+func (s *PetriBotService) PushBotMarkers(ctx context.Context, in *pb.PushBotMarkersRequest) (*pb.PushBotMarkersResponse, error) {
+	instance, err := s.getOrCreateBotInstance(in.StubId)
+	if err != nil {
+		return &pb.PushBotMarkersResponse{Ok: false}, nil
+	}
+
+	log.Printf("<bot %s> Pushing markers: %v", instance.stub.ExternalId, in.Markers)
+
+	for locationName, markerList := range in.Markers {
+		for _, marker := range markerList.Markers {
+			fields := []MarkerField{}
+			for _, field := range marker.Fields {
+				fields = append(fields, MarkerField{
+					FieldName:  field.FieldName,
+					FieldValue: field.FieldValue,
+				})
+			}
+
+			marker := Marker{
+				LocationName: marker.LocationName,
+				Fields:       fields,
+			}
+			err = s.botStateManager.pushMarker(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, locationName, marker)
+			if err != nil {
+				log.Printf("<bot %s> Failed to push marker: %s", instance.stub.ExternalId, err)
+				continue
+			}
+		}
+	}
+
+	return &pb.PushBotMarkersResponse{Ok: true}, nil
 }
 
 func (s *PetriBotService) PopBotTask(ctx context.Context, in *pb.PopBotTaskRequest) (*pb.PopBotTaskResponse, error) {
