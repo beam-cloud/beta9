@@ -2,6 +2,7 @@ package bot
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -50,14 +51,14 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 	version := ctx.Param("version")
 	sessionId := ctx.Param("sessionId")
 
-	stubType := types.StubTypeBotDeployment
+	stubType := types.StubType(types.StubTypeBotDeployment)
 
 	if deploymentName != "" {
 		var deployment *types.DeploymentWithRelated
 
 		if version == "" {
 			var err error
-			deployment, err = g.pbs.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, stubType, true)
+			deployment, err = g.pbs.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, string(stubType), true)
 			if err != nil {
 				return apiv1.HTTPBadRequest("Invalid deployment")
 			}
@@ -67,7 +68,7 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 				return apiv1.HTTPBadRequest("Invalid deployment version")
 			}
 
-			deployment, err = g.pbs.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), stubType)
+			deployment, err = g.pbs.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), string(stubType))
 			if err != nil {
 				return apiv1.HTTPBadRequest("Invalid deployment")
 			}
@@ -115,6 +116,14 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			return err
 		}
 	}
+
+	stubType = types.StubType(instance.stub.Type)
+	defer func() {
+		if stubType.IsServe() {
+			log.Println("killing all containers for this stub and deleting session")
+			// TODO: kill all containers for this stub and delete session
+		}
+	}()
 
 	// Keep session alive for at least as long as they are connected to the WS
 	go func() {

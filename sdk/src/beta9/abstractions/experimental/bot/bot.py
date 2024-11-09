@@ -17,8 +17,6 @@ from ....abstractions.volume import Volume
 from ....channel import with_grpc_error_handling
 from ....clients.bot import (
     BotServiceStub,
-    StartBotServeRequest,
-    StartBotServeResponse,
 )
 from ....sync import FileSyncer
 from ....type import GpuType, GpuTypeAlias
@@ -247,6 +245,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
     def _serve(self, *, url: str, timeout: int = 0):
         def _connect_to_session():
             session_event = threading.Event()
+            msg_event = threading.Event()
 
             import websocket
 
@@ -256,19 +255,24 @@ class Bot(RunnerAbstraction, DeployableMixin):
                 event_value = event.get("value")
 
                 def _print_bot_event(header_text=None, detail_text=None):
-                    sys.stdout.write("\r\033[K")
+                    sys.stdout.write("\r\033")
 
                     if header_text:
                         terminal.header(header_text)
+
                     if detail_text:
                         terminal.detail(detail_text)
 
                     sys.stdout.write("#: ")
                     sys.stdout.flush()
 
+                if event_type == "msg":
+                    msg_event.set()
+
                 if event_type == "session_created":
                     session_id = event_value
                     terminal.header(f"Session started: {session_id}")
+                    terminal.header("💬 Chat with your bot below...")
                     session_event.set()  # Signal that session_id is received
 
                 elif event_type in ["msg", "task_started", "task_completed", "transition_fired"]:
@@ -303,6 +307,10 @@ class Bot(RunnerAbstraction, DeployableMixin):
                             user_request = json.dumps({"msg": msg})
                             ws.send(user_request)
 
+                            with terminal.progress(""):
+                                msg_event.wait()
+                                msg_event.clear()
+
                 threading.Thread(target=_send_user_input, daemon=True).start()
 
             ws_url = url.replace("http://", "ws://").replace("https://", "wss://")
@@ -316,22 +324,11 @@ class Bot(RunnerAbstraction, DeployableMixin):
             )
             ws.run_forever()
 
-        r: StartBotServeResponse = self.bot_stub.start_bot_serve(
-            StartBotServeRequest(
-                stub_id=self.stub_id,
-                timeout=timeout,
-            )
-        )
-        if r is None or not r.ok:
-            terminal.error("Serve failed ❌")
-            return
-
         try:
             _connect_to_session()
         except KeyboardInterrupt:
             self._handle_serve_interrupt()
 
-        # TODO: actually stop the containers server side
         terminal.warn("Bot serve session exited. All containers have been stopped.")
 
     def _handle_serve_interrupt(self) -> None:

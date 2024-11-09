@@ -42,7 +42,6 @@ type BotServiceOpts struct {
 
 type BotService interface {
 	pb.BotServiceServer
-	StartBotServe(ctx context.Context, in *pb.StartBotServeRequest) (*pb.StartBotServeResponse, error)
 	PushBotEvent(ctx context.Context, in *pb.PushBotEventRequest) (*pb.PushBotEventResponse, error)
 	PopBotTask(ctx context.Context, in *pb.PopBotTaskRequest) (*pb.PopBotTaskResponse, error)
 }
@@ -251,22 +250,6 @@ func (s *PetriBotService) PopBotTask(ctx context.Context, in *pb.PopBotTaskReque
 	}
 
 	return &pb.PopBotTaskResponse{Ok: true, Markers: markerMap}, nil
-}
-
-func (pbs *PetriBotService) StartBotServe(ctx context.Context, in *pb.StartBotServeRequest) (*pb.StartBotServeResponse, error) {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
-	instance, err := pbs.getOrCreateBotInstance(in.StubId)
-	if err != nil {
-		return &pb.StartBotServeResponse{Ok: false}, nil
-	}
-
-	if authInfo.Workspace.ExternalId != instance.stub.Workspace.ExternalId {
-		instance.cancelFunc()
-		return &pb.StartBotServeResponse{Ok: false}, nil
-	}
-
-	return &pb.StartBotServeResponse{Ok: true}, nil
 }
 
 var Keys = &keys{}
