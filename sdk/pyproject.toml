@@ -24,6 +24,7 @@ uvicorn = "^0.29.0"
 watchdog = "^4.0.0"
 betterproto-beta9 = {version = "2.0.0b7", extras = ["compiler"]}
 croniter = "^3.0.3"
+websocket-client = "^1.8.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
