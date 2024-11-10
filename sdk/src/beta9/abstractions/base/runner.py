@@ -167,8 +167,9 @@ class RunnerAbstraction(BaseAbstraction):
         ]
 
         if self.is_websocket:
+            res.url = res.url.replace("http://", "ws://").replace("https://", "wss://")
             commands = [
-                f"websocat '{res.url.replace('http://', 'ws://').replace('https://', 'wss://')}' \\",
+                f"websocat '{res.url}' \\",
                 *(
                     [f"-H 'Authorization: Bearer {self.config_context.token}'"]
                     if self.authorized

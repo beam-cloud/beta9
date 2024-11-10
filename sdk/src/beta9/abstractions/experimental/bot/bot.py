@@ -181,6 +181,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
     ) -> None:
         super().__init__()
 
+        self.is_websocket = True
         self._bot_stub: Optional[BotServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.locations: List[BotLocation] = locations
@@ -301,9 +302,8 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
                 threading.Thread(target=_send_user_input, daemon=True).start()
 
-            ws_url = url.replace("http://", "ws://").replace("https://", "wss://")
             ws = websocket.WebSocketApp(
-                ws_url,
+                url,
                 on_open=on_open,
                 on_message=on_message,
                 on_error=on_error,
