@@ -87,6 +87,25 @@ func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, er
 	}, nil
 }
 
+func (i *botInstance) containersBySessionId() (map[string][]string, error) {
+	containersBySessionId := make(map[string][]string)
+	containers, err := i.containerRepo.GetActiveContainersByStubId(i.stub.ExternalId)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, container := range containers {
+		container, err := parseContainerId(container.ContainerId)
+		if err != nil {
+			continue
+		}
+
+		containersBySessionId[container.SessionId] = append(containersBySessionId[container.SessionId], container.ContainerId)
+	}
+
+	return containersBySessionId, nil
+}
+
 func (i *botInstance) Start() error {
 	stepInterval := time.Duration(i.appConfig.Abstractions.Bot.StepIntervalS) * time.Second
 	lastActiveSessionAt := time.Now().Unix()
@@ -96,19 +115,12 @@ func (i *botInstance) Start() error {
 		case <-i.ctx.Done():
 			return nil
 		default:
-			containersBySessionId := make(map[string][]string)
-			containers, err := i.containerRepo.GetActiveContainersByStubId(i.stub.ExternalId)
+			containersBySessionId, err := i.containersBySessionId()
 			if err != nil {
 				continue
 			}
 
-			for _, container := range containers {
-				container, err := parseContainerId(container.ContainerId)
-				if err != nil {
-					continue
-				}
-
-				containersBySessionId[container.SessionId] = append(containersBySessionId[container.SessionId], container.ContainerId)
+			if len(containersBySessionId) > 0 {
 				lastActiveSessionAt = time.Now().Unix()
 			}
 

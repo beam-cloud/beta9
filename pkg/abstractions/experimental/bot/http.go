@@ -123,8 +123,17 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 	stubType = types.StubType(instance.stub.Type)
 	defer func() {
 		if stubType.IsServe() {
-			log.Println("killing all containers for this stub and deleting session")
-			// TODO: kill all containers for this stub and delete session
+			containersBySessionId, err := instance.containersBySessionId()
+			if err != nil {
+				return
+			}
+
+			for _, containerId := range containersBySessionId[sessionId] {
+				err := instance.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
+				if err != nil {
+					log.Println("<bot> Failed to stop bot container", containerId, err)
+				}
+			}
 		}
 	}()
 

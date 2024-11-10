@@ -173,6 +173,17 @@ class Bot(RunnerAbstraction, DeployableMixin):
     deployment_stub_type = BOT_DEPLOYMENT_STUB_TYPE
     base_stub_type = BOT_STUB_TYPE
 
+    VALID_MODELS = [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4",
+        "gpt-3.5-turbo",
+        "gpt-3.5-turbo-instruct",
+        "gpt-3.5-turbo-16k",
+        "gpt-3.5-turbo-0613",
+        "gpt-4-0613",
+    ]
+
     def __init__(
         self,
         model: str = "gpt-4o",
@@ -180,6 +191,11 @@ class Bot(RunnerAbstraction, DeployableMixin):
         description: Optional[str] = None,
     ) -> None:
         super().__init__()
+
+        if model not in self.VALID_MODELS:
+            raise ValueError(
+                f"Invalid model name: {model}. We currently only support: {', '.join(self.VALID_MODELS)}"
+            )
 
         self.is_websocket = True
         self._bot_stub: Optional[BotServiceStub] = None
