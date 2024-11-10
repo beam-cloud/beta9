@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -103,14 +102,13 @@ func (i *botInstance) Start() error {
 				continue
 			}
 
-			// TODO: clean up this logic
 			for _, container := range containers {
-				parts := strings.Split(container.ContainerId, "-")
-				if len(parts) < 8 {
+				container, err := parseContainerId(container.ContainerId)
+				if err != nil {
 					continue
 				}
-				sessionId := parts[7]
-				containersBySessionId[sessionId] = append(containersBySessionId[sessionId], container.ContainerId)
+
+				containersBySessionId[container.SessionId] = append(containersBySessionId[container.SessionId], container.ContainerId)
 				lastActiveSessionAt = time.Now().Unix()
 			}
 
@@ -244,11 +242,10 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 	env := []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", i.token.Key),
 		fmt.Sprintf("HANDLER=%s", transitionConfig.Handler),
-		fmt.Sprintf("ON_START=%s", transitionConfig.Handler),
 		fmt.Sprintf("STUB_ID=%s", i.stub.ExternalId),
 		fmt.Sprintf("STUB_TYPE=%s", i.stub.Type),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", transitionConfig.KeepWarm),
-		fmt.Sprintf("PYTHON_VERSION=%s", i.stubConfig.PythonVersion),
+		fmt.Sprintf("PYTHON_VERSION=%s", transitionConfig.PythonVersion),
 		fmt.Sprintf("CALLBACK_URL=%s", transitionConfig.CallbackUrl),
 		fmt.Sprintf("TRANSITION_NAME=%s", transitionName),
 		fmt.Sprintf("SESSION_ID=%s", sessionId),
@@ -265,12 +262,10 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		return err
 	}
 
-	// gpuRequest := types.GpuTypesToStrings(transitionConfig.Gpu)
-	// if transitionConfig.Gpu != "" {
-	// 	gpuRequest = append(gpuRequest, transitionConfig.Gpu.String())
-	// }
-
-	gpuRequest := []string{}
+	gpuRequest := types.GpuTypesToStrings([]types.GpuType{transitionConfig.Gpu})
+	if transitionConfig.Gpu != "" {
+		gpuRequest = append(gpuRequest, transitionConfig.Gpu.String())
+	}
 
 	gpuCount := uint32(0)
 	if len(gpuRequest) > 0 {

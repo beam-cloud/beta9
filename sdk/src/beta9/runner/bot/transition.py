@@ -149,7 +149,8 @@ def main(channel: Channel):
         raise RunnerException("Failed to start task.")
 
     # Run the transition
-    outputs = bt.run(inputs=task_args.markers)
+    inputs = task_args.markers
+    outputs = bt.run(inputs=inputs)
 
     push_bot_markers_response: PushBotMarkersResponse = bot_stub.push_bot_markers(
         PushBotMarkersRequest(stub_id=config.stub_id, session_id=session_id, markers=outputs)

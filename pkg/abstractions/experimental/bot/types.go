@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -14,6 +15,31 @@ type BotSession struct {
 	Id            string                     `json:"id" redis:"id"`
 	Messages      []BotChatCompletionMessage `json:"messages" redis:"messages"`
 	LastUpdatedAt int64                      `redis:"last_updated_at" json:"last_updated_at"`
+}
+
+type botContainer struct {
+	StubId      string
+	SessionId   string
+	ContainerId string
+}
+
+func parseContainerId(containerId string) (*botContainer, error) {
+	// Bot container IDs look like this: "bot-transition-ef3f780c-6fe1-4f38-a201-96d32e825bb3-5886f9-41f80f43"
+	// This part: "ef3f780c-6fe1-4f38-a201-96d32e825bb3" is the stub ID
+	// Session ID is: "5886f9"
+	parts := strings.Split(containerId, "-")
+	if len(parts) < 8 {
+		return nil, errors.New("invalid container id")
+	}
+
+	stubId := strings.Join(parts[2:7], "-")
+	sessionId := parts[7]
+
+	return &botContainer{
+		StubId:      stubId,
+		SessionId:   sessionId,
+		ContainerId: containerId,
+	}, nil
 }
 
 func (s *BotSession) GetMessagesInOpenAIFormat() []openai.ChatCompletionMessage {
@@ -101,23 +127,24 @@ type BotLocationConfig struct {
 
 // BotTransitionConfig holds the config for a transition
 type BotTransitionConfig struct {
-	Cpu         int64          `json:"cpu" redis:"cpu"`
-	Gpu         types.GpuType  `json:"gpu" redis:"gpu"`
-	Memory      int64          `json:"memory" redis:"memory"`
-	ImageId     string         `json:"image_id" redis:"image_id"`
-	Timeout     int            `json:"timeout" redis:"timeout"`
-	KeepWarm    int            `json:"keep_warm" redis:"keep_warm"`
-	MaxPending  int            `json:"max_pending" redis:"max_pending"`
-	Volumes     []string       `json:"volumes" redis:"volumes"`
-	Secrets     []string       `json:"secrets" redis:"secrets"`
-	Handler     string         `json:"handler" redis:"handler"`
-	OnStart     string         `json:"on_start" redis:"on_start"`
-	CallbackUrl string         `json:"callback_url" redis:"callback_url"`
-	TaskPolicy  string         `json:"task_policy" redis:"task_policy"`
-	Name        string         `json:"name" redis:"name"`
-	Inputs      map[string]int `json:"inputs" redis:"inputs"`
-	Outputs     map[string]int `json:"outputs" redis:"outputs"`
-	Description string         `json:"description" redis:"description"`
+	Cpu           int64          `json:"cpu" redis:"cpu"`
+	Gpu           types.GpuType  `json:"gpu" redis:"gpu"`
+	Memory        int64          `json:"memory" redis:"memory"`
+	PythonVersion string         `json:"python_version" redis:"python_version"`
+	ImageId       string         `json:"image_id" redis:"image_id"`
+	Timeout       int            `json:"timeout" redis:"timeout"`
+	KeepWarm      int            `json:"keep_warm" redis:"keep_warm"`
+	MaxPending    int            `json:"max_pending" redis:"max_pending"`
+	Volumes       []string       `json:"volumes" redis:"volumes"`
+	Secrets       []string       `json:"secrets" redis:"secrets"`
+	Handler       string         `json:"handler" redis:"handler"`
+	OnStart       string         `json:"on_start" redis:"on_start"`
+	CallbackUrl   string         `json:"callback_url" redis:"callback_url"`
+	TaskPolicy    string         `json:"task_policy" redis:"task_policy"`
+	Name          string         `json:"name" redis:"name"`
+	Inputs        map[string]int `json:"inputs" redis:"inputs"`
+	Outputs       map[string]int `json:"outputs" redis:"outputs"`
+	Description   string         `json:"description" redis:"description"`
 }
 
 func (t *BotTransitionConfig) FormatTransition() string {

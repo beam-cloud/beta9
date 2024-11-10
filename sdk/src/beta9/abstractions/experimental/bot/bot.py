@@ -19,7 +19,7 @@ from ....clients.bot import (
     BotServiceStub,
 )
 from ....sync import FileSyncer
-from ....type import GpuType, GpuTypeAlias
+from ....type import GpuType, GpuTypeAlias, PythonVersion
 from ...mixins import DeployableMixin
 from .marker import BotLocation
 
@@ -63,6 +63,7 @@ class BotTransition:
             "callback_url": callback_url or "",
             "task_policy": task_policy or "",
             "handler": handler or "",
+            "python_version": self.image.python_version or PythonVersion.Python310,
             "inputs": {
                 k.__name__ if isinstance(k, type) and env.is_local() else k: v
                 for k, v in inputs.items()
@@ -154,9 +155,9 @@ class Bot(RunnerAbstraction, DeployableMixin):
     """
     Parameters:
         cpu (Union[int, float, str]):
-            The number of CPU cores allocated to the container. Default is 1.0.
+            The number of CPU cores allocated to any spawned containers. Default is 1.0.
         memory (Union[int, str]):
-            The amount of memory allocated to the container. It should be specified in
+            The amount of memory allocated to any spawned containers. It should be specified in
             MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
         gpu (GpuTypeAlias):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
@@ -164,7 +165,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Volume]]):
-            A list of volumes to be mounted to the container. Default is None.
+            A list of volumes to be mounted to any spawned containers. Default is None.
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
         name (Optional[str]):

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 
 	"context"
 
@@ -120,18 +119,14 @@ func (pbs *PetriBotService) handleBotContainerEvents(ctx context.Context) {
 			operation := event.Operation
 			containerId := fmt.Sprintf("%s%s", botContainerPrefix, event.Key)
 
-			// Bot container IDs look like this: "bot-transition-ef3f780c-6fe1-4f38-a201-96d32e825bb3-5886f9-41f80f43"
-			// This part: "ef3f780c-6fe1-4f38-a201-96d32e825bb3" is the stub ID
-			// Session ID is: "5886f9"
-			parts := strings.Split(containerId, "-")
-			if len(parts) < 7 {
+			container, err := parseContainerId(containerId)
+			if err != nil {
 				continue
 			}
-			stubId := strings.Join(parts[2:7], "-")
 
 			switch operation {
 			case common.KeyOperationSet, common.KeyOperationHSet:
-				_, err := pbs.getOrCreateBotInstance(stubId)
+				_, err := pbs.getOrCreateBotInstance(container.StubId)
 				if err != nil {
 					continue
 				}
@@ -189,7 +184,7 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 		return nil, err
 	}
 
-	log.Printf("<bot %s> Created bot instance", instance.stub.ExternalId)
+	log.Printf("<bot %s> Created bot instance: %+v", instance.stub.ExternalId, instance.botConfig)
 	pbs.botInstances.Set(stubId, instance)
 
 	// Monitor and then clean up the instance once it's done
@@ -224,8 +219,6 @@ func (s *PetriBotService) PushBotMarkers(ctx context.Context, in *pb.PushBotMark
 	if err != nil {
 		return &pb.PushBotMarkersResponse{Ok: false}, nil
 	}
-
-	log.Printf("<bot %s> Pushing markers: %v", instance.stub.ExternalId, in.Markers)
 
 	for locationName, markerList := range in.Markers {
 		for _, marker := range markerList.Markers {
