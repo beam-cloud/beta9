@@ -4,6 +4,7 @@ import time
 from typing import Any, Dict
 
 from ...abstractions.experimental.bot.bot import BotEventType
+from ...abstractions.experimental.bot.types import BotFunctionContext
 from ...channel import Channel, handle_error, pass_channel
 from ...clients.bot import (
     BotServiceStub,
@@ -24,7 +25,7 @@ from ...clients.gateway import (
 )
 from ...exceptions import RunnerException, TaskEndError
 from ...logging import json_output_interceptor
-from ...runner.common import FunctionContext, FunctionHandler, config, end_task_and_send_callback
+from ...runner.common import FunctionHandler, config, end_task_and_send_callback
 from ...type import TaskStatus
 
 
@@ -35,8 +36,11 @@ class BotTransitionResult:
 
 
 class BotTransition:
-    def __init__(self) -> None:
+    def __init__(self, session_id: str, transition_name: str, bot_stub: BotServiceStub) -> None:
         self.handler = FunctionHandler(handler_path=config.handler)
+        self.session_id = session_id
+        self.transition_name = transition_name
+        self.bot_stub = bot_stub
 
     def _format_inputs(self, markers: Dict[str, Any]) -> Dict[str, Any]:
         expected_inputs = self.handler.handler.config.get("inputs", {})
@@ -80,6 +84,9 @@ class BotTransition:
         expected_outputs = self.handler.handler.config.get("outputs", {})
         formatted_outputs = {}
 
+        if not isinstance(outputs, dict):
+            return formatted_outputs
+
         for output, markers in outputs.items():
             if output not in expected_outputs:
                 continue
@@ -113,13 +120,22 @@ class BotTransition:
 
     def run(self, inputs: Dict[str, Any]) -> BotTransitionResult:
         result = BotTransitionResult(outputs={}, exception=None)
-        context = FunctionContext.new(config=config, task_id=config.task_id)
+        context: BotFunctionContext = BotFunctionContext.new(
+            config=config,
+            task_id=config.task_id,
+            session_id=self.session_id,
+            transition_name=self.transition_name,
+            bot_stub=self.bot_stub,
+        )
+
+        context.push_bot_event(event_type=BotEventType.TASK_STARTED, event_value=config.task_id)
 
         try:
-            outputs = self.handler(context, self._format_inputs(inputs))
+            outputs = self.handler(context=context, inputs=self._format_inputs(inputs))
             outputs = self._format_outputs(outputs)
             result.outputs = outputs
         except BaseException as exc:
+            print(f"Error occurred in transition<{context.transition_name}>: {exc}")
             result.exception = exc
 
         return result
@@ -129,22 +145,15 @@ class BotTransition:
 @handle_error()
 @pass_channel
 def main(channel: Channel):
-    bt: BotTransition = BotTransition()
-
     bot_stub: BotServiceStub = BotServiceStub(channel)
-    gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
-    task_id: str = config.task_id
     session_id: str = os.environ.get("SESSION_ID")
     transition_name: str = os.environ.get("TRANSITION_NAME")
 
-    bot_stub.push_bot_event(
-        PushBotEventRequest(
-            stub_id=config.stub_id,
-            session_id=session_id,
-            event_type=BotEventType.TASK_STARTED,
-            event_value=task_id,
-        )
+    bt: BotTransition = BotTransition(
+        session_id=session_id, transition_name=transition_name, bot_stub=bot_stub
     )
+    gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
+    task_id: str = config.task_id
 
     task_args: PopBotTaskResponse = bot_stub.pop_bot_task(
         PopBotTaskRequest(

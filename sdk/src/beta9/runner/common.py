@@ -22,6 +22,7 @@ from ..clients.gateway import (
     SignPayloadRequest,
     SignPayloadResponse,
 )
+from ..env import is_remote
 from ..exceptions import RunnerException
 
 USER_CODE_DIR = "/mnt/code"
@@ -87,7 +88,9 @@ class Config:
         )
 
 
-config: Config = Config.load_from_env()
+config: Union[Config, None] = None
+if is_remote():
+    config: Config = Config.load_from_env()
 
 
 @dataclass
@@ -179,7 +182,6 @@ class FunctionHandler:
             kwargs["context"] = context
 
         os.environ["TASK_ID"] = context.task_id or ""
-
         return self.handler(*args, **kwargs)
 
 
