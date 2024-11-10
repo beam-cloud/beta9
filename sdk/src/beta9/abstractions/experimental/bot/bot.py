@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import threading
+from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from .... import env, terminal
@@ -22,6 +23,14 @@ from ....sync import FileSyncer
 from ....type import GpuType, GpuTypeAlias, PythonVersion
 from ...mixins import DeployableMixin
 from .marker import BotLocation
+
+
+class BotEventType(str, Enum):
+    MESSAGE = "msg"
+    SESSION_CREATED = "session_created"
+    TRANSITION_FIRED = "transition_fired"
+    TASK_STARTED = "task_started"
+    TASK_COMPLETED = "task_completed"
 
 
 class BotTransition:
@@ -144,58 +153,30 @@ class BotTransition:
             self.bot_instance.extra["transitions"] = {}
 
         self.bot_instance.extra["transitions"][self.func.__name__] = transition_data
-
         return self
 
 
 class Bot(RunnerAbstraction, DeployableMixin):
+    """
+    Parameters:
+        model (Optional[str]):
+            Which model to use for the bot. Default is "gpt-4o".
+        locations (Optional[List[BotLocation]]):
+            A list of locations that the bot can store markers. Default is [].
+        description (Optional[str]):
+            A description of the bot. Default is None.
+    """
+
     deployment_stub_type = BOT_DEPLOYMENT_STUB_TYPE
     base_stub_type = BOT_STUB_TYPE
 
-    """
-    Parameters:
-        cpu (Union[int, float, str]):
-            The number of CPU cores allocated to any spawned containers. Default is 1.0.
-        memory (Union[int, str]):
-            The amount of memory allocated to any spawned containers. It should be specified in
-            MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
-        gpu (GpuTypeAlias):
-            The type or name of the GPU device to be used for GPU-accelerated tasks. If not
-            applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
-        image (Union[Image, dict]):
-            The container image used for the task execution. Default is [Image](#image).
-        volumes (Optional[List[Volume]]):
-            A list of volumes to be mounted to any spawned containers. Default is None.
-        secrets (Optional[List[str]):
-            A list of secrets that are injected into the container as environment variables. Default is [].
-        name (Optional[str]):
-            A name for the bot. Default is None.
-    """
-
     def __init__(
         self,
-        model: str,
-        locations: List[BotLocation],
-        cpu: Union[int, float, str] = 1.0,
-        memory: Union[int, str] = 128,
-        gpu: GpuTypeAlias = GpuType.NoGPU,
-        image: Image = Image(),
-        volumes: Optional[List[Volume]] = None,
-        secrets: Optional[List[str]] = None,
-        callback_url: Optional[str] = None,
-        on_start: Optional[Callable] = None,
+        model: str = "gpt-4o",
+        locations: List[BotLocation] = [],
         description: Optional[str] = None,
     ) -> None:
-        super().__init__(
-            cpu=cpu,
-            memory=memory,
-            gpu=gpu,
-            image=image,
-            volumes=volumes,
-            secrets=secrets,
-            callback_url=callback_url,
-            on_start=on_start,
-        )
+        super().__init__()
 
         self._bot_stub: Optional[BotServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
@@ -266,23 +247,28 @@ class Bot(RunnerAbstraction, DeployableMixin):
                         msg_event.set()
                         terminal.detail(detail_text)
 
-                if event_type == "session_created":
+                if event_type == BotEventType.SESSION_CREATED:
                     session_id = event_value
                     terminal.header(f"Session started: {session_id}")
                     terminal.header("💬 Chat with your bot below...")
                     session_event.set()  # Signal that session_id is received
 
-                elif event_type in ["msg", "task_started", "task_completed", "transition_fired"]:
+                elif event_type in [
+                    BotEventType.MESSAGE,
+                    BotEventType.TASK_STARTED,
+                    BotEventType.TASK_COMPLETED,
+                    BotEventType.TRANSITION_FIRED,
+                ]:
                     header_map = {
-                        "msg": None,
-                        "task_started": f"Task started: {event_value}",
-                        "task_completed": f"Task completed: {event_value}",
-                        "transition_fired": f"Transition fired: {event_value}",
+                        BotEventType.MESSAGE: None,
+                        BotEventType.TASK_STARTED: f"Task started: {event_value}",
+                        BotEventType.TASK_COMPLETED: f"Task completed: {event_value}",
+                        BotEventType.TRANSITION_FIRED: f"Transition fired: {event_value}",
                     }
 
                     _print_bot_event(
                         header_text=header_map[event_type],
-                        detail_text=event_value if event_type == "msg" else None,
+                        detail_text=event_value if event_type == BotEventType.MESSAGE else None,
                     )
                 else:
                     terminal.detail(f"{message}")

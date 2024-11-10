@@ -43,6 +43,9 @@ func registerBotRoutes(g *echo.Group, pbs *PetriBotService) *botGroup {
 	return group
 }
 
+const keepAliveInterval = 1 * time.Second
+const eventPollingInterval = 1 * time.Second
+
 func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
@@ -136,7 +139,8 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 				if err != nil {
 					return
 				}
-				time.Sleep(1 * time.Second)
+
+				time.Sleep(keepAliveInterval)
 			}
 		}
 	}()
@@ -155,7 +159,7 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			default:
 				event, err := instance.botStateManager.popEvent(instance.workspace.Name, instance.stub.ExternalId, sessionId)
 				if err != nil {
-					time.Sleep(1 * time.Second)
+					time.Sleep(eventPollingInterval)
 					continue
 				}
 
