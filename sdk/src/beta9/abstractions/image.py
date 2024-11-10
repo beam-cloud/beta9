@@ -130,9 +130,12 @@ class Image(BaseAbstraction):
         return (
             self.python_version == other.python_version
             and self.python_packages == other.python_packages
-            and self.base_image == self.base_image
-            and self.base_image_creds == self.base_image_creds
+            and self.base_image == other.base_image
+            and self.base_image_creds == other.base_image_creds
         )
+
+    def __str__(self) -> str:
+        return f"Python Version: {self.python_version}, Python Packages: {self.python_packages}, Base Image: {self.base_image}, Base Image Credentials: {self.base_image_creds}"
 
     def _sanitize_python_packages(self, packages: List[str]) -> List[str]:
         # https://pip.pypa.io/en/stable/reference/requirements-file-format/

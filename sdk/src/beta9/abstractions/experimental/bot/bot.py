@@ -89,7 +89,7 @@ class BotTransition:
 
         self.bot_instance: Optional["Bot"] = bot_instance
 
-        if self.bot_instance.image != self.image:
+        if self.bot_instance.image != self.image or self.bot_instance.image_id == "":
             if env.is_remote():
                 return
 
@@ -102,7 +102,7 @@ class BotTransition:
         self,
     ) -> bool:
         if not self.image_available:
-            terminal.detail(f"Building image for transition: {self.config}")
+            terminal.detail(f"Building image for transition: {self.image}")
 
             image_build_result: ImageBuildResult = self.image.build()
             if image_build_result and image_build_result.success:
