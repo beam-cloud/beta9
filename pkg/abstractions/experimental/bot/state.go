@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -36,13 +35,13 @@ func (m *botStateManager) loadSession(workspaceName, stubId, sessionId string) (
 		if err == redis.Nil {
 			return nil, ErrBotSessionNotFound
 		}
-		return nil, fmt.Errorf("failed to retrieve session state: %v", err)
+		return nil, err
 	}
 
 	session := &BotSession{}
 	err = json.Unmarshal([]byte(jsonData), session)
 	if err != nil {
-		return nil, fmt.Errorf("failed to deserialize session state: %v", err)
+		return nil, err
 	}
 
 	return session, nil
@@ -80,7 +79,7 @@ func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string,
 
 	err = m.rdb.Set(ctx, stateKey, jsonData, 0).Err()
 	if err != nil {
-		return fmt.Errorf("failed to store session state: %v", err)
+		return err
 	}
 
 	return nil
