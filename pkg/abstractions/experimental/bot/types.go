@@ -111,11 +111,37 @@ type BotConfig struct {
 	Transitions map[string]BotTransitionConfig `json:"transitions" redis:"transitions"`
 }
 
+func (b *BotConfig) FormatLocations() string {
+	locations := []string{}
+	for _, location := range b.Locations {
+		if !location.Expose {
+			continue
+		}
+
+		locations = append(locations, location.FormatLocation())
+	}
+
+	if len(locations) == 0 {
+		return "There are no known locations."
+	}
+
+	return strings.Join(locations, "\n")
+}
+
 func (b *BotConfig) FormatTransitions() string {
 	transitions := []string{}
 	for _, transition := range b.Transitions {
+		if !transition.Expose {
+			continue
+		}
+
 		transitions = append(transitions, transition.FormatTransition())
 	}
+
+	if len(transitions) == 0 {
+		return "There are no known transitions that can be performed."
+	}
+
 	return strings.Join(transitions, "\n")
 }
 
@@ -123,6 +149,11 @@ func (b *BotConfig) FormatTransitions() string {
 type BotLocationConfig struct {
 	Name   string            `json:"name" redis:"name"`
 	Marker map[string]string `json:"marker" redis:"marker"`
+	Expose bool              `json:"expose" redis:"expose"`
+}
+
+func (l *BotLocationConfig) FormatLocation() string {
+	return fmt.Sprintf("Location: %s\nMarker: %v", l.Name, l.Marker)
 }
 
 // BotTransitionConfig holds the config for a transition
@@ -145,6 +176,7 @@ type BotTransitionConfig struct {
 	Inputs        map[string]int `json:"inputs" redis:"inputs"`
 	Outputs       map[string]int `json:"outputs" redis:"outputs"`
 	Description   string         `json:"description" redis:"description"`
+	Expose        bool           `json:"expose" redis:"expose"`
 }
 
 func (t *BotTransitionConfig) FormatTransition() string {

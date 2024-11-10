@@ -5,11 +5,12 @@ from pydantic import BaseModel
 
 
 class BotLocation:
-    def __init__(self, *, marker: Union[Type[BaseModel], Any]) -> None:
+    def __init__(self, *, marker: Union[Type[BaseModel], Any], expose: bool = True) -> None:
         if not issubclass(marker, BaseModel):
             raise TypeError("marker must be a subclass of pydantic BaseModel")
 
         self.marker: Type[BaseModel] = marker
+        self.expose: bool = expose
         self.name: str = marker.__name__
 
     def to_dict(self) -> dict:
@@ -20,7 +21,7 @@ class BotLocation:
             str(name): str(field.annotation) for name, field in self.marker.__fields__.items()
         }
 
-        return {"name": self.name, "marker": marker_spec}
+        return {"name": self.name, "marker": marker_spec, "expose": self.expose}
 
     def to_json(self) -> str:
         """

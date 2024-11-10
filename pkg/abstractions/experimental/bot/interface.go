@@ -70,7 +70,7 @@ func (bi *BotInterface) initSession(sessionId string) error {
 
 		networkStructurePrompt := BotChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
-			Content: fmt.Sprintf("Locations and marker types you can convert user data to: %v", bi.botConfig.Locations),
+			Content: fmt.Sprintf("Locations and marker types you can convert user data to: %v", bi.botConfig.FormatLocations()),
 		}
 
 		networkLayoutPrompt := BotChatCompletionMessage{

@@ -31,6 +31,7 @@ class BotEventType(str, Enum):
     TRANSITION_FIRED = "transition_fired"
     TASK_STARTED = "task_started"
     TASK_COMPLETED = "task_completed"
+    TASK_FAILED = "task_failed"
 
 
 class BotTransition:
@@ -52,6 +53,7 @@ class BotTransition:
         inputs: dict = {},
         outputs: dict = {},
         description: Optional[str] = None,
+        expose: bool = True,
         bot_instance: Optional["Bot"] = None,  # Reference to parent Bot instance
     ):
         self.handler: str = handler
@@ -82,6 +84,7 @@ class BotTransition:
                 for k, v in outputs.items()
             },
             "description": description or "",
+            "expose": expose,
         }
 
         self.bot_instance: Optional["Bot"] = bot_instance
@@ -257,12 +260,14 @@ class Bot(RunnerAbstraction, DeployableMixin):
                     BotEventType.MESSAGE,
                     BotEventType.TASK_STARTED,
                     BotEventType.TASK_COMPLETED,
+                    BotEventType.TASK_FAILED,
                     BotEventType.TRANSITION_FIRED,
                 ]:
                     header_map = {
                         BotEventType.MESSAGE: None,
                         BotEventType.TASK_STARTED: f"Task started: {event_value}",
                         BotEventType.TASK_COMPLETED: f"Task completed: {event_value}",
+                        BotEventType.TASK_FAILED: f"Task failed: {event_value}",
                         BotEventType.TRANSITION_FIRED: f"Transition fired: {event_value}",
                     }
 

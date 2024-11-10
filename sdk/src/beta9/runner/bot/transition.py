@@ -3,6 +3,7 @@ import os
 import time
 from typing import Any, Dict
 
+from ...abstractions.experimental.bot.bot import BotEventType
 from ...channel import Channel, handle_error, pass_channel
 from ...clients.bot import (
     BotServiceStub,
@@ -25,6 +26,12 @@ from ...exceptions import RunnerException, TaskEndError
 from ...logging import json_output_interceptor
 from ...runner.common import FunctionContext, FunctionHandler, config, end_task_and_send_callback
 from ...type import TaskStatus
+
+
+class BotTransitionResult:
+    def __init__(self, outputs: Dict[str, Any], exception: BaseException):
+        self.outputs = outputs
+        self.exception = exception
 
 
 class BotTransition:
@@ -104,10 +111,18 @@ class BotTransition:
 
         return formatted_outputs
 
-    def run(self, inputs: Dict[str, Any]):
+    def run(self, inputs: Dict[str, Any]) -> BotTransitionResult:
+        result = BotTransitionResult(outputs={}, exception=None)
         context = FunctionContext.new(config=config, task_id=config.task_id)
-        outputs = self.handler(context, self._format_inputs(inputs))
-        return self._format_outputs(outputs)
+
+        try:
+            outputs = self.handler(context, self._format_inputs(inputs))
+            outputs = self._format_outputs(outputs)
+            result.outputs = outputs
+        except BaseException as exc:
+            result.exception = exc
+
+        return result
 
 
 @json_output_interceptor(task_id=config.task_id)
@@ -126,7 +141,7 @@ def main(channel: Channel):
         PushBotEventRequest(
             stub_id=config.stub_id,
             session_id=session_id,
-            event_type="task_started",
+            event_type=BotEventType.TASK_STARTED,
             event_value=task_id,
         )
     )
@@ -148,25 +163,28 @@ def main(channel: Channel):
     if not start_task_response.ok:
         raise RunnerException("Failed to start task.")
 
+    task_status = TaskStatus.Complete
+
     # Run the transition
     inputs = task_args.markers
-    outputs = bt.run(inputs=inputs)
-
-    push_bot_markers_response: PushBotMarkersResponse = bot_stub.push_bot_markers(
-        PushBotMarkersRequest(stub_id=config.stub_id, session_id=session_id, markers=outputs)
-    )
-    if not push_bot_markers_response.ok:
-        raise RunnerException("Failed to push markers.")
-
-    task_status = TaskStatus.Complete
-    task_duration = time.time() - start_time
+    result = bt.run(inputs=inputs)
+    if result.exception:
+        task_status = TaskStatus.Error
+    else:
+        push_bot_markers_response: PushBotMarkersResponse = bot_stub.push_bot_markers(
+            PushBotMarkersRequest(
+                stub_id=config.stub_id, session_id=session_id, markers=result.outputs
+            )
+        )
+        if not push_bot_markers_response.ok:
+            raise RunnerException("Failed to push markers.")
 
     end_task_response = end_task_and_send_callback(
         gateway_stub=gateway_stub,
         payload={},
         end_task_request=EndTaskRequest(
             task_id=task_id,
-            task_duration=task_duration,
+            task_duration=time.time() - start_time,
             task_status=task_status,
             container_id=config.container_id,
             container_hostname=config.container_hostname,
@@ -181,7 +199,9 @@ def main(channel: Channel):
         PushBotEventRequest(
             stub_id=config.stub_id,
             session_id=session_id,
-            event_type="task_completed",  # TODO: convert to a enum of different event types
+            event_type=BotEventType.TASK_COMPLETED
+            if task_status == TaskStatus.Complete
+            else BotEventType.TASK_FAILED,
             event_value=task_id,
         )
     )
