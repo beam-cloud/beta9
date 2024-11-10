@@ -28,6 +28,7 @@ class PopBotTaskRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     session_id: str = betterproto.string_field(2)
     transition_name: str = betterproto.string_field(3)
+    task_id: str = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)

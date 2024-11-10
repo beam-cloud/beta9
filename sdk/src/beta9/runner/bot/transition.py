@@ -146,13 +146,14 @@ def main(channel: Channel):
         )
     )
 
-    # TODO: store tasks one by one instead of in a queue
     task_args: PopBotTaskResponse = bot_stub.pop_bot_task(
         PopBotTaskRequest(
-            stub_id=config.stub_id, session_id=session_id, transition_name=transition_name
+            stub_id=config.stub_id,
+            session_id=session_id,
+            transition_name=transition_name,
+            task_id=task_id,
         )
     )
-
     if not task_args.ok:
         raise RunnerException("Failed to retrieve task.")
 

@@ -14,6 +14,7 @@ message PopBotTaskRequest {
   string stub_id = 1;
   string session_id = 2;
   string transition_name = 3;
+  string task_id = 4;
 }
 
 message PopBotTaskResponse {

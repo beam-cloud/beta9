@@ -119,17 +119,35 @@ func (m *botStateManager) sessionKeepAlive(workspaceName, stubId, sessionId stri
 
 	return nil
 }
-
 func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string) error {
+	ctx := context.TODO()
 	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
 	indexKey := Keys.botSessionIndex(workspaceName, stubId)
+	taskIndexKey := Keys.botTaskIndex(workspaceName, stubId, sessionId)
 
-	err := m.rdb.Del(context.TODO(), stateKey).Err()
+	err := m.rdb.Del(ctx, stateKey).Err()
 	if err != nil {
 		return err
 	}
 
-	return m.rdb.SRem(context.TODO(), indexKey, sessionId).Err()
+	taskKeys, err := m.rdb.SMembers(ctx, taskIndexKey).Result()
+	if err != nil {
+		return err
+	}
+
+	for _, taskKey := range taskKeys {
+		err = m.rdb.Del(ctx, taskKey).Err()
+		if err != nil {
+			return err
+		}
+	}
+
+	err = m.rdb.Del(ctx, taskIndexKey).Err()
+	if err != nil {
+		return err
+	}
+
+	return m.rdb.SRem(ctx, indexKey, sessionId).Err()
 }
 
 func (m *botStateManager) getActiveSessions(workspaceName, stubId string) ([]*BotSession, error) {
@@ -181,18 +199,25 @@ func (m *botStateManager) countMarkers(workspaceName, stubId, sessionId, locatio
 	return m.rdb.LLen(context.TODO(), Keys.botMarkers(workspaceName, stubId, sessionId, locationName)).Result()
 }
 
-func (m *botStateManager) pushTask(workspaceName, stubId, sessionId, transitionName string, markers []Marker) error {
-	taskKey := Keys.botTransitionTasks(workspaceName, stubId, sessionId, transitionName)
+func (m *botStateManager) pushTask(workspaceName, stubId, sessionId, transitionName, taskId string, markers []Marker) error {
+	indexKey := Keys.botTaskIndex(workspaceName, stubId, sessionId)
+	taskKey := Keys.botTransitionTask(workspaceName, stubId, sessionId, transitionName, taskId)
+
 	jsonData, err := json.Marshal(markers)
 	if err != nil {
 		return err
 	}
 
-	return m.rdb.RPush(context.TODO(), taskKey, jsonData).Err()
+	err = m.rdb.Set(context.TODO(), taskKey, jsonData, 0).Err()
+	if err != nil {
+		return err
+	}
+
+	return m.rdb.SAdd(context.TODO(), indexKey, taskKey).Err()
 }
 
-func (m *botStateManager) popTask(workspaceName, stubId, sessionId, transitionName string) ([]Marker, error) {
-	bytes, err := m.rdb.LPop(context.TODO(), Keys.botTransitionTasks(workspaceName, stubId, sessionId, transitionName)).Bytes()
+func (m *botStateManager) popTask(workspaceName, stubId, sessionId, transitionName, taskId string) ([]Marker, error) {
+	bytes, err := m.rdb.Get(context.TODO(), Keys.botTransitionTask(workspaceName, stubId, sessionId, transitionName, taskId)).Bytes()
 	if err != nil {
 		return nil, err
 	}

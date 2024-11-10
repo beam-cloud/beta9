@@ -31,7 +31,7 @@ func (t *BotTask) Execute(ctx context.Context, options ...interface{}) error {
 	sessionId := t.msg.Kwargs["session_id"].(string)
 	markers := t.msg.Kwargs["markers"].([]Marker)
 
-	err = t.pbs.botStateManager.pushTask(instance.workspace.Name, instance.stub.ExternalId, sessionId, transitionName, markers)
+	err = t.pbs.botStateManager.pushTask(instance.workspace.Name, instance.stub.ExternalId, sessionId, transitionName, t.msg.TaskId, markers)
 	if err != nil {
 		return err
 	}
