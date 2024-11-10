@@ -8,7 +8,7 @@ from ....runner.common import FunctionContext
 from .bot import BotEventType
 
 
-class BotFunctionContext(FunctionContext):
+class BotContext(FunctionContext):
     session_id: str = ""
     transition_name: str = ""
     bot_stub: BotServiceStub = None
@@ -23,9 +23,9 @@ class BotFunctionContext(FunctionContext):
         session_id: str = "",
         transition_name: str = "",
         bot_stub: BotServiceStub = None,
-    ) -> "BotFunctionContext":
+    ) -> "BotContext":
         """
-        Create a new instance of BotFunctionContext, to be passed directly into a function handler
+        Create a new instance of BotContext, to be passed directly into a bot transition handler
         """
 
         instance = cls(

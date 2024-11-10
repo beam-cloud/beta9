@@ -4,7 +4,7 @@ import time
 from typing import Any, Dict
 
 from ...abstractions.experimental.bot.bot import BotEventType
-from ...abstractions.experimental.bot.types import BotFunctionContext
+from ...abstractions.experimental.bot.types import BotContext
 from ...channel import Channel, handle_error, pass_channel
 from ...clients.bot import (
     BotServiceStub,
@@ -120,7 +120,7 @@ class BotTransition:
 
     def run(self, inputs: Dict[str, Any]) -> BotTransitionResult:
         result = BotTransitionResult(outputs={}, exception=None)
-        context: BotFunctionContext = BotFunctionContext.new(
+        context: BotContext = BotContext.new(
             config=config,
             task_id=config.task_id,
             session_id=self.session_id,

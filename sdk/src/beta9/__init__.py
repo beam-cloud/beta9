@@ -5,7 +5,7 @@ from .abstractions.endpoint import ASGI as asgi
 from .abstractions.endpoint import Endpoint as endpoint
 from .abstractions.endpoint import RealtimeASGI as realtime
 from .abstractions.experimental.bot.bot import Bot, BotEventType, BotLocation
-from .abstractions.experimental.bot.types import BotFunctionContext
+from .abstractions.experimental.bot.types import BotContext
 from .abstractions.function import Function as function
 from .abstractions.function import Schedule as schedule
 from .abstractions.image import Image
@@ -41,5 +41,5 @@ __all__ = [
     "Bot",
     "BotLocation",
     "BotEventType",
-    "BotFunctionContext",
+    "BotContext",
 ]
