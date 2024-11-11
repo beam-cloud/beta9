@@ -145,7 +145,7 @@ func (i *botInstance) Start() error {
 
 			for _, session := range activeSessions {
 				if msg, err := i.botStateManager.popInputMessage(i.workspace.Name, i.stub.ExternalId, session.Id); err == nil {
-					if err := i.botInterface.SendPrompt(session.Id, PromptTypeUserMessage, msg); err != nil {
+					if err := i.botInterface.SendPrompt(session.Id, PromptTypeUser, msg); err != nil {
 						continue
 					}
 				}

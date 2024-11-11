@@ -175,10 +175,10 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 				}
 
 				if event.Type == BotEventTypeUserMessage {
-					instance.botInterface.SendPrompt(sessionId, PromptTypeUserMessage, event.Value)
+					instance.botInterface.SendPrompt(sessionId, PromptTypeUser, event.Value)
 					continue
-				} else if event.Type == BotEventTypeMemoryMessage {
-					instance.botInterface.SendPrompt(sessionId, PromptTypeMemoryMessage, event.Value)
+				} else if event.Type == BotEventTypeTransitionMessage {
+					instance.botInterface.SendPrompt(sessionId, PromptTypeTransition, event.Value)
 					continue
 				}
 

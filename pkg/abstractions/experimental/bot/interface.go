@@ -125,6 +125,10 @@ func (bi *BotInterface) addMessagesToSessionHistory(sessionId string, messages [
 	return nil
 }
 
+func wrapPrompt(tag, prompt string) string {
+	return fmt.Sprintf("<%s> %s </%s>", tag, prompt, tag)
+}
+
 func (bi *BotInterface) getSessionHistory(sessionId string) ([]openai.ChatCompletionMessage, error) {
 	state, err := bi.stateManager.loadSession(bi.workspace.Name, bi.stub.ExternalId, sessionId)
 	if err != nil {
@@ -146,14 +150,17 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error 
 	}
 
 	switch messageType {
-	case PromptTypeUserMessage:
+	case PromptTypeUser:
 		role = openai.ChatMessageRoleUser
-	case PromptTypeMemoryMessage:
-		role = openai.ChatMessageRoleSystem
+		prompt = wrapPrompt(PromptTypeUser, prompt)
+	case PromptTypeTransition:
+		role = openai.ChatMessageRoleUser
+		prompt = wrapPrompt(PromptTypeTransition, prompt)
 	default:
 		return fmt.Errorf("invalid message type: %s", messageType)
 	}
 
+	promptMessage.Content = prompt
 	promptMessage.Role = role
 	messages = append(messages, promptMessage)
 

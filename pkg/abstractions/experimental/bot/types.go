@@ -76,17 +76,18 @@ type UserRequest struct {
 type BotEventType string
 
 const (
-	BotEventTypeAgentMessage    BotEventType = "agent_message"
-	BotEventTypeUserMessage     BotEventType = "user_message"
-	BotEventTypeMemoryMessage   BotEventType = "memory_message"
-	BotEventTypeSessionCreated  BotEventType = "session_created"
-	BotEventTypeTransitionFired BotEventType = "transition_fired"
-	BotEventTypeTaskStarted     BotEventType = "task_started"
-	BotEventTypeTaskCompleted   BotEventType = "task_completed"
+	BotEventTypeAgentMessage      BotEventType = "agent_message"
+	BotEventTypeUserMessage       BotEventType = "user_message"
+	BotEventTypeTransitionMessage BotEventType = "transition_message"
+	BotEventTypeMemoryMessage     BotEventType = "memory_message"
+	BotEventTypeSessionCreated    BotEventType = "session_created"
+	BotEventTypeTransitionFired   BotEventType = "transition_fired"
+	BotEventTypeTaskStarted       BotEventType = "task_started"
+	BotEventTypeTaskCompleted     BotEventType = "task_completed"
 )
 
-const PromptTypeUserMessage = "user_message"
-const PromptTypeMemoryMessage = "memory_message"
+const PromptTypeUser = "user_message"
+const PromptTypeTransition = "transition_message"
 
 type BotEvent struct {
 	Type  BotEventType `json:"type" redis:"type"`
