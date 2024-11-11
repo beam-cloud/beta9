@@ -109,16 +109,13 @@ func (bi *BotInterface) initSession(sessionId string) error {
 	return nil
 }
 
-func (bi *BotInterface) addMessageToSessionHistory(sessionId string, message openai.ChatCompletionMessage) error {
+func (bi *BotInterface) addMessagesToSessionHistory(sessionId string, messages []BotChatCompletionMessage) error {
 	state, err := bi.stateManager.loadSession(bi.workspace.Name, bi.stub.ExternalId, sessionId)
 	if err != nil {
 		return err
 	}
 
-	state.Messages = append(state.Messages, BotChatCompletionMessage{
-		Role:    message.Role,
-		Content: message.Content,
-	})
+	state.Messages = append(state.Messages, messages...)
 
 	err = bi.stateManager.updateSession(bi.workspace.Name, bi.stub.ExternalId, sessionId, state)
 	if err != nil {
@@ -137,15 +134,28 @@ func (bi *BotInterface) getSessionHistory(sessionId string) ([]openai.ChatComple
 	return state.GetMessagesInOpenAIFormat(), nil
 }
 
-func (bi *BotInterface) SendPrompt(sessionId, prompt string) error {
+func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error {
 	messages, err := bi.getSessionHistory(sessionId)
 	if err != nil {
 		return err
 	}
-	messages = append(messages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
+
+	role := openai.ChatMessageRoleUser
+	promptMessage := openai.ChatCompletionMessage{
 		Content: prompt,
-	})
+	}
+
+	switch messageType {
+	case PromptTypeUserMessage:
+		role = openai.ChatMessageRoleUser
+	case PromptTypeMemoryMessage:
+		role = openai.ChatMessageRoleSystem
+	default:
+		return fmt.Errorf("invalid message type: %s", messageType)
+	}
+
+	promptMessage.Role = role
+	messages = append(messages, promptMessage)
 
 	resp, err := bi.client.CreateChatCompletion(
 		context.Background(),
@@ -167,7 +177,16 @@ func (bi *BotInterface) SendPrompt(sessionId, prompt string) error {
 	}
 
 	responseMessage := resp.Choices[0].Message
-	err = bi.addMessageToSessionHistory(sessionId, responseMessage)
+	err = bi.addMessagesToSessionHistory(sessionId, []BotChatCompletionMessage{
+		{
+			Role:    role,
+			Content: prompt,
+		},
+		{
+			Role:    responseMessage.Role,
+			Content: responseMessage.Content,
+		},
+	})
 	if err != nil {
 		return err
 	}
