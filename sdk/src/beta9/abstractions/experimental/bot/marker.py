@@ -7,7 +7,7 @@ from pydantic import BaseModel
 class BotLocation:
     def __init__(self, *, marker: Union[Type[BaseModel], Any], expose: bool = True) -> None:
         if not issubclass(marker, BaseModel):
-            raise TypeError("marker must be a subclass of pydantic BaseModel")
+            raise TypeError("marker must be a subclass of a pydantic BaseModel")
 
         self.marker: Type[BaseModel] = marker
         self.expose: bool = expose
