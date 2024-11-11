@@ -6,6 +6,8 @@ import threading
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Union
 
+from pydantic import BaseModel
+
 from .... import env, terminal
 from ....abstractions.base.runner import (
     BOT_DEPLOYMENT_STUB_TYPE,
@@ -46,7 +48,6 @@ class BotTransition:
         timeout: int = 180,
         keep_warm: int = 180,
         max_pending: int = 100,
-        volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
         callback_url: Optional[str] = None,
@@ -70,9 +71,9 @@ class BotTransition:
             raise ValueError("Inputs cannot be empty.")
 
         for key, value in inputs.items():
-            if not isinstance(key, BotLocation):
+            if not (isinstance(key, type) and issubclass(key, BaseModel)):
                 raise ValueError(
-                    f"Invalid key in inputs: {key}. All keys must be instances of BotLocation."
+                    f"Invalid key in inputs: {key}. All keys must be classes inherited from a Pydantic BaseModel."
                 )
 
             if not isinstance(value, int):
@@ -87,7 +88,6 @@ class BotTransition:
             "timeout": timeout,
             "keep_warm": keep_warm,
             "max_pending": max_pending,
-            "volumes": volumes or [],
             "secrets": secrets or [],
             "name": name or "",
             "callback_url": callback_url or "",
@@ -187,6 +187,8 @@ class Bot(RunnerAbstraction, DeployableMixin):
             A list of locations where the bot can store markers. Default is [].
         description (Optional[str]):
             A description of the bot. Default is None.
+        volumes (Optional[List[Volume]]):
+            A list of volumes to mount in bot transitions. Default is None.
     """
 
     deployment_stub_type = BOT_DEPLOYMENT_STUB_TYPE
@@ -208,8 +210,9 @@ class Bot(RunnerAbstraction, DeployableMixin):
         model: str = "gpt-4o",
         locations: List[BotLocation] = [],
         description: Optional[str] = None,
+        volumes: Optional[List[Volume]] = None,
     ) -> None:
-        super().__init__()
+        super().__init__(volumes=volumes)
 
         if model not in self.VALID_MODELS:
             raise ValueError(
