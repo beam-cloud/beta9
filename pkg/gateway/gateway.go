@@ -19,7 +19,9 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/container"
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
+	bot "github.com/beam-cloud/beta9/pkg/abstractions/experimental/bot"
 	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
+
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	dmap "github.com/beam-cloud/beta9/pkg/abstractions/map"
@@ -351,6 +353,26 @@ func (g *Gateway) registerServices() error {
 		return err
 	}
 	pb.RegisterSignalServiceServer(g.grpcServer, signalService)
+
+	// Register Bot service
+	botService, err := bot.NewPetriBotService(g.ctx,
+		bot.BotServiceOpts{
+			Config:         g.Config,
+			ContainerRepo:  g.ContainerRepo,
+			BackendRepo:    g.BackendRepo,
+			WorkspaceRepo:  g.WorkspaceRepo,
+			TaskRepo:       g.TaskRepo,
+			RedisClient:    g.RedisClient,
+			Scheduler:      g.Scheduler,
+			RouteGroup:     g.rootRouteGroup,
+			Tailscale:      g.Tailscale,
+			TaskDispatcher: g.TaskDispatcher,
+			EventRepo:      g.EventRepo,
+		})
+	if err != nil {
+		return err
+	}
+	pb.RegisterBotServiceServer(g.grpcServer, botService)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService(g.Scheduler)

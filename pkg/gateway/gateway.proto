@@ -256,6 +256,7 @@ message GetOrCreateStubRequest {
   Autoscaler autoscaler = 22;
   TaskPolicy task_policy = 23;
   uint32 concurrent_requests = 24;
+  string extra = 25;
 }
 
 message GetOrCreateStubResponse {
