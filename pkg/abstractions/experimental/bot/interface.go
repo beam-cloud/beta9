@@ -11,14 +11,15 @@ import (
 )
 
 type BotInterface struct {
-	client       *openai.Client
-	botConfig    BotConfig
-	model        string
-	systemPrompt string
-	stateManager *botStateManager
-	workspace    *types.Workspace
-	stub         *types.StubWithRelated
-	schema       *jsonschema.Definition
+	client           *openai.Client
+	botConfig        BotConfig
+	model            string
+	systemPrompt     string
+	stateManager     *botStateManager
+	workspace        *types.Workspace
+	stub             *types.StubWithRelated
+	userSchema       *jsonschema.Definition
+	transitionSchema *jsonschema.Definition
 }
 
 type botInterfaceOpts struct {
@@ -41,12 +42,19 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 	}
 
 	// Generate the schema for each response
-	var r BotResponse
-	schema, err := jsonschema.GenerateSchemaForType(r)
+	var userResponse BotUserResponse
+	schema, err := jsonschema.GenerateSchemaForType(userResponse)
 	if err != nil {
 		return nil, err
 	}
-	bi.schema = schema
+	bi.userSchema = schema
+
+	var transitionResponse BotTransitionResponse
+	schema, err = jsonschema.GenerateSchemaForType(transitionResponse)
+	if err != nil {
+		return nil, err
+	}
+	bi.transitionSchema = schema
 
 	return bi, nil
 }
@@ -125,6 +133,10 @@ func (bi *BotInterface) addMessagesToSessionHistory(sessionId string, messages [
 	return nil
 }
 
+func wrapPrompt(tag, prompt string) string {
+	return fmt.Sprintf("<%s> %s </%s>", tag, prompt, tag)
+}
+
 func (bi *BotInterface) getSessionHistory(sessionId string) ([]openai.ChatCompletionMessage, error) {
 	state, err := bi.stateManager.loadSession(bi.workspace.Name, bi.stub.ExternalId, sessionId)
 	if err != nil {
@@ -145,15 +157,21 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error 
 		Content: prompt,
 	}
 
+	var schema *jsonschema.Definition = bi.userSchema
+
 	switch messageType {
-	case PromptTypeUserMessage:
+	case PromptTypeUser:
 		role = openai.ChatMessageRoleUser
-	case PromptTypeMemoryMessage:
-		role = openai.ChatMessageRoleSystem
+		prompt = wrapPrompt(PromptTypeUser, prompt)
+	case PromptTypeTransition:
+		role = openai.ChatMessageRoleUser
+		prompt = wrapPrompt(PromptTypeTransition, prompt)
+		schema = bi.transitionSchema
 	default:
 		return fmt.Errorf("invalid message type: %s", messageType)
 	}
 
+	promptMessage.Content = prompt
 	promptMessage.Role = role
 	messages = append(messages, promptMessage)
 
@@ -166,7 +184,7 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error 
 				Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
 				JSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
 					Name:   botSchemaName,
-					Schema: bi.schema,
+					Schema: schema,
 					Strict: true,
 				},
 			},
@@ -191,23 +209,36 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error 
 		return err
 	}
 
-	formattedResponse := BotResponse{}
-	err = json.Unmarshal([]byte(responseMessage.Content), &formattedResponse)
-	if err != nil {
-		return err
-	}
-
-	// If we have a complete marker, push it to session state
-	if formattedResponse.CompleteMarker {
-		err = bi.stateManager.pushMarker(bi.workspace.Name, bi.stub.ExternalId, sessionId, formattedResponse.MarkerData.LocationName, formattedResponse.MarkerData)
+	msg := ""
+	if messageType == PromptTypeUser {
+		formattedResponse := BotUserResponse{}
+		err = json.Unmarshal([]byte(responseMessage.Content), &formattedResponse)
 		if err != nil {
 			return err
 		}
+
+		// If we have a complete marker, push it to session state
+		if formattedResponse.CompleteMarker {
+			err = bi.stateManager.pushMarker(bi.workspace.Name, bi.stub.ExternalId, sessionId, formattedResponse.MarkerData.LocationName, formattedResponse.MarkerData)
+			if err != nil {
+				return err
+			}
+		}
+
+		msg = formattedResponse.Msg
+	} else if messageType == PromptTypeTransition {
+		formattedResponse := BotTransitionResponse{}
+		err = json.Unmarshal([]byte(responseMessage.Content), &formattedResponse)
+		if err != nil {
+			return err
+		}
+
+		msg = formattedResponse.Msg
 	}
 
 	event := &BotEvent{
 		Type:  BotEventTypeAgentMessage,
-		Value: formattedResponse.Msg,
+		Value: msg,
 	}
 
 	return bi.stateManager.pushEvent(bi.workspace.Name, bi.stub.ExternalId, sessionId, event)

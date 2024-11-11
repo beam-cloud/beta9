@@ -76,27 +76,32 @@ type UserRequest struct {
 type BotEventType string
 
 const (
-	BotEventTypeAgentMessage    BotEventType = "agent_message"
-	BotEventTypeUserMessage     BotEventType = "user_message"
-	BotEventTypeMemoryMessage   BotEventType = "memory_message"
-	BotEventTypeSessionCreated  BotEventType = "session_created"
-	BotEventTypeTransitionFired BotEventType = "transition_fired"
-	BotEventTypeTaskStarted     BotEventType = "task_started"
-	BotEventTypeTaskCompleted   BotEventType = "task_completed"
+	BotEventTypeAgentMessage      BotEventType = "agent_message"
+	BotEventTypeUserMessage       BotEventType = "user_message"
+	BotEventTypeTransitionMessage BotEventType = "transition_message"
+	BotEventTypeMemoryMessage     BotEventType = "memory_message"
+	BotEventTypeSessionCreated    BotEventType = "session_created"
+	BotEventTypeTransitionFired   BotEventType = "transition_fired"
+	BotEventTypeTaskStarted       BotEventType = "task_started"
+	BotEventTypeTaskCompleted     BotEventType = "task_completed"
 )
 
-const PromptTypeUserMessage = "user_message"
-const PromptTypeMemoryMessage = "memory_message"
+const PromptTypeUser = "user_message"
+const PromptTypeTransition = "transition_message"
 
 type BotEvent struct {
 	Type  BotEventType `json:"type" redis:"type"`
 	Value string       `json:"value" redis:"value"`
 }
 
-type BotResponse struct {
+type BotUserResponse struct {
 	Msg            string `json:"msg" redis:"msg"`
 	MarkerData     Marker `json:"marker_data" redis:"marker_data"`
 	CompleteMarker bool   `json:"complete_marker" redis:"complete_marker"`
+}
+
+type BotTransitionResponse struct {
+	Msg string `json:"msg" redis:"msg"`
 }
 
 type Marker struct {

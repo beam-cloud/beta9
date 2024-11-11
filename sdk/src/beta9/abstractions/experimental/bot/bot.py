@@ -30,6 +30,7 @@ from .marker import BotLocation
 class BotEventType(str, Enum):
     AGENT_MESSAGE = "agent_message"
     USER_MESSAGE = "user_message"
+    TRANSITION_MESSAGE = "transition_message"
     MEMORY_MESSAGE = "memory_message"
     SESSION_CREATED = "session_created"
     TRANSITION_FIRED = "transition_fired"
