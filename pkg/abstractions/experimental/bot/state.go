@@ -147,6 +147,8 @@ func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string)
 		return err
 	}
 
+	// TODO: delete all existing markers
+
 	return m.rdb.SRem(ctx, indexKey, sessionId).Err()
 }
 

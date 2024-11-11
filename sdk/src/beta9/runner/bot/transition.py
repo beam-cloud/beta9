@@ -1,7 +1,8 @@
 import json
 import os
 import time
-from typing import Any, Dict
+import traceback
+from typing import Any, Dict, get_args, get_origin
 
 from ...abstractions.experimental.bot.bot import BotEventType
 from ...abstractions.experimental.bot.types import BotContext
@@ -101,9 +102,21 @@ class BotTransition:
 
                 for field_name, field_value in marker_dict.items():
                     field_type = marker_annotations.get(field_name, str)
+                    print(field_type)
 
-                    # Serialize the field_value based on its type
-                    if issubclass(field_type, (bool, int, float, list, dict)):
+                    # Decompose the field_type to handle complex types like Optional[int]
+                    origin_type = get_origin(field_type) or field_type
+                    args = get_args(field_type)
+
+                    # Determine if the field_type is a subclass of the desired types
+                    if isinstance(origin_type, type) and issubclass(
+                        origin_type, (bool, int, float, list, dict)
+                    ):
+                        converted_value = json.dumps(field_value)
+                    elif args and all(
+                        isinstance(arg, type) and issubclass(arg, (bool, int, float, list, dict))
+                        for arg in args
+                    ):
                         converted_value = json.dumps(field_value)
                     else:
                         converted_value = str(field_value)
@@ -135,7 +148,9 @@ class BotTransition:
             outputs = self._format_outputs(outputs)
             result.outputs = outputs
         except BaseException as exc:
-            error_message = f"Error occurred in transition<{context.transition_name}>: {exc}"
+            error_message = (
+                f"Error occurred in transition<{context.transition_name}>: {traceback.format_exc()}"
+            )
             print(error_message)
             context.push_event(event_type=BotEventType.AGENT_MESSAGE, event_value=error_message)
             result.exception = exc

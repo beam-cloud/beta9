@@ -134,6 +134,8 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 					log.Println("<bot> Failed to stop bot container", containerId, err)
 				}
 			}
+
+			// instance.botStateManager.deleteSession(instance.workspace.Name, instance.stub.ExternalId, sessionId)
 		}
 	}()
 
