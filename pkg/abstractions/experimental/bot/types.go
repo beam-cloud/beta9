@@ -76,7 +76,8 @@ type UserRequest struct {
 type BotEventType string
 
 const (
-	BotEventTypeMessage         BotEventType = "msg"
+	BotEventTypeAgentMessage    BotEventType = "agent_message"
+	BotEventTypeUserMessage     BotEventType = "user_message"
 	BotEventTypeSessionCreated  BotEventType = "session_created"
 	BotEventTypeTransitionFired BotEventType = "transition_fired"
 	BotEventTypeTaskStarted     BotEventType = "task_started"

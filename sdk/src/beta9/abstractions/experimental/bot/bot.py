@@ -26,7 +26,8 @@ from .marker import BotLocation
 
 
 class BotEventType(str, Enum):
-    MESSAGE = "msg"
+    AGENT_MESSAGE = "agent_message"
+    USER_MESSAGE = "user_message"
     SESSION_CREATED = "session_created"
     TRANSITION_FIRED = "transition_fired"
     TASK_STARTED = "task_started"
@@ -274,14 +275,14 @@ class Bot(RunnerAbstraction, DeployableMixin):
                     session_event.set()  # Signal that session_id is received
 
                 elif event_type in [
-                    BotEventType.MESSAGE,
+                    BotEventType.AGENT_MESSAGE,
                     BotEventType.TASK_STARTED,
                     BotEventType.TASK_COMPLETED,
                     BotEventType.TASK_FAILED,
                     BotEventType.TRANSITION_FIRED,
                 ]:
                     header_map = {
-                        BotEventType.MESSAGE: None,
+                        BotEventType.AGENT_MESSAGE: None,
                         BotEventType.TASK_STARTED: f"Task started: {event_value}",
                         BotEventType.TASK_COMPLETED: f"Task completed: {event_value}",
                         BotEventType.TASK_FAILED: f"Task failed: {event_value}",
@@ -290,7 +291,9 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
                     _print_bot_event(
                         header_text=header_map[event_type],
-                        detail_text=event_value if event_type == BotEventType.MESSAGE else None,
+                        detail_text=event_value
+                        if event_type == BotEventType.AGENT_MESSAGE
+                        else None,
                     )
                 else:
                     terminal.detail(f"{message}")

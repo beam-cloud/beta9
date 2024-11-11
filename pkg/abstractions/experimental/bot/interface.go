@@ -187,7 +187,7 @@ func (bi *BotInterface) SendPrompt(sessionId, prompt string) error {
 	}
 
 	event := &BotEvent{
-		Type:  BotEventTypeMessage,
+		Type:  BotEventTypeAgentMessage,
 		Value: formattedResponse.Msg,
 	}
 

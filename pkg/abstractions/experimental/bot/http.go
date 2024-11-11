@@ -172,6 +172,11 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 					continue
 				}
 
+				if event.Type == BotEventTypeUserMessage {
+					instance.botInterface.SendPrompt(sessionId, event.Value)
+					continue
+				}
+
 				serializedEvent, err := json.Marshal(event)
 				if err != nil {
 					continue

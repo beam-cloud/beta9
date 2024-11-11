@@ -43,7 +43,6 @@ class BotContext(FunctionContext):
         instance.session_id = session_id
         instance.transition_name = transition_name
         instance.bot_stub = bot_stub
-
         return instance
 
     def push_bot_event(cls, *, event_type: BotEventType, event_value: str):
