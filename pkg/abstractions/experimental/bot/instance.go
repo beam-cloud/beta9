@@ -191,6 +191,11 @@ func (i *botInstance) step(sessionId string) {
 			markersToPop := make(map[string]int64)
 			canFire := true
 
+			if len(transition.Inputs) == 0 {
+				canFire = false
+				continue
+			}
+
 			for locationName, requiredCount := range transition.Inputs {
 				count, err := i.botStateManager.countMarkers(i.workspace.Name, i.stub.ExternalId, sessionId, locationName)
 				if err != nil {

@@ -63,6 +63,23 @@ class BotTransition:
         self.image_available: bool = False
         self.image_id: str = ""
 
+        if not isinstance(inputs, dict):
+            raise ValueError("Inputs must be a dictionary.")
+
+        if not inputs:
+            raise ValueError("Inputs cannot be empty.")
+
+        for key, value in inputs.items():
+            if not isinstance(key, BotLocation):
+                raise ValueError(
+                    f"Invalid key in inputs: {key}. All keys must be instances of BotLocation."
+                )
+
+            if not isinstance(value, int):
+                raise ValueError(
+                    f"Invalid value in inputs for key {key}: {value}. All values must be integers."
+                )
+
         self.config = {
             "cpu": cpu,
             "memory": memory,
