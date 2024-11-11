@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -290,7 +291,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
 	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
-		installCmd := getPythonInstallCommand(opts.PythonVersion)
+		installCmd := getPythonStandaloneInstallCommand(opts.PythonVersion)
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
 
@@ -491,6 +492,65 @@ func getPythonInstallCommand(pythonVersion string) string {
 	postInstallCmd := fmt.Sprintf("rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/%s /usr/bin/python && ln -s /usr/bin/%s /usr/bin/python3 && %s", pythonVersion, pythonVersion, installPipCmd)
 
 	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
+}
+
+func getPythonStandaloneInstallCommand(pythonVersion string) string {
+	var osArch string
+	switch runtime.GOARCH {
+	case "amd64":
+		osArch = "x86_64"
+	case "arm64":
+		osArch = "aarch64"
+	default:
+		log.Println("Unsupported architecture")
+	}
+
+	var venderAndOs string
+	switch runtime.GOOS {
+	case "linux":
+		venderAndOs = "unknown-linux"
+	case "darwin":
+		venderAndOs = "apple-darwin"
+	default:
+		log.Println("Unsupported OS")
+	}
+
+	// TODO: Make this configurable?
+	var pySemVer string
+	switch pythonVersion[6:] {
+	case "3.9":
+		pySemVer = "3.9.20"
+	case "3.10":
+		pySemVer = "3.10.5"
+	case "3.11":
+		pySemVer = "3.11.10"
+	case "3.12":
+		pySemVer = "3.12.7"
+	default:
+		log.Println("Unsupported Python version")
+	}
+
+	// TODO: Make this configurable?
+	packageUrl := fmt.Sprintf("https://github.com/indygreg/python-build-standalone/releases/download/20241016/cpython-%s+20241016-%s-%s-gnu-install_only.tar.gz", pySemVer, osArch, venderAndOs)
+
+	// TODO: Replace software-properties-common with build-essential so we can keep common compilation tools?
+	installCmd := fmt.Sprintf(`
+		apt-get update -q && \
+		apt-get install -q -y build-essential curl git && \
+		curl -fsSL -o python.tgz '%s' && \
+		tar -xzf python.tgz -C /usr/local --strip-components 1 && \
+		rm -f python.tgz && \
+		rm -f /usr/bin/python && \
+		rm -f /usr/bin/python3 && \
+		ln -s /usr/local/bin/python3 /usr/bin/python && \
+		ln -s /usr/local/bin/python3 /usr/bin/python3 && \
+		ln -s /usr/local/bin/pip3 /usr/bin/pip && \
+		ln -s /usr/local/bin/pip3 /usr/bin/pip3
+		`,
+		packageUrl,
+	)
+
+	return installCmd
 }
 
 func generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
