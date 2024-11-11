@@ -94,10 +94,14 @@ type BotEvent struct {
 	Value string       `json:"value" redis:"value"`
 }
 
-type BotResponse struct {
+type BotUserResponse struct {
 	Msg            string `json:"msg" redis:"msg"`
 	MarkerData     Marker `json:"marker_data" redis:"marker_data"`
 	CompleteMarker bool   `json:"complete_marker" redis:"complete_marker"`
+}
+
+type BotTransitionResponse struct {
+	Msg string `json:"msg" redis:"msg"`
 }
 
 type Marker struct {
