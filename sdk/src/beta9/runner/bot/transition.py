@@ -128,14 +128,16 @@ class BotTransition:
             bot_stub=self.bot_stub,
         )
 
-        context.push_bot_event(event_type=BotEventType.TASK_STARTED, event_value=config.task_id)
+        context.push_event(event_type=BotEventType.TASK_STARTED, event_value=config.task_id)
 
         try:
             outputs = self.handler(context=context, inputs=self._format_inputs(inputs))
             outputs = self._format_outputs(outputs)
             result.outputs = outputs
         except BaseException as exc:
-            print(f"Error occurred in transition<{context.transition_name}>: {exc}")
+            error_message = f"Error occurred in transition<{context.transition_name}>: {exc}"
+            print(error_message)
+            context.push_event(event_type=BotEventType.AGENT_MESSAGE, event_value=error_message)
             result.exception = exc
 
         return result

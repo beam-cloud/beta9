@@ -45,9 +45,8 @@ class BotContext(FunctionContext):
         instance.bot_stub = bot_stub
         return instance
 
-    def push_bot_event(cls, *, event_type: BotEventType, event_value: str):
+    def push_event(cls, *, event_type: BotEventType, event_value: str):
         print(f"Sending bot event<{event_type}> {event_value}")
-
         cls.bot_stub.push_bot_event(
             PushBotEventRequest(
                 stub_id=cls.stub_id,
