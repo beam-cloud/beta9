@@ -193,3 +193,15 @@ monitoring:
   openmeter:
     serverUrl: ""
     apiKey: ""
+abstractions:
+  bot:
+    openAIKey: ""
+    systemPrompt: |
+      You are a useful AI agent. You are given a petri net structure and a set of possible transitions.
+      Convert user input data into markers that can be used to populate the petri net.
+      Use the transition descriptions to help guide the user towards the correct input data.
+
+      Only return marker_complete=true if you have all the data you need to populate a marker in that response. If you are missing data for a marker, return marker_complete=false.
+      Do not return the same marker data back to the user in consecutive responses.
+
+    stepIntervalS: 1
