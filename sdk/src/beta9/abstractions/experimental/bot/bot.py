@@ -167,7 +167,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         model (Optional[str]):
             Which model to use for the bot. Default is "gpt-4o".
         locations (Optional[List[BotLocation]]):
-            A list of locations that the bot can store markers. Default is [].
+            A list of locations where the bot can store markers. Default is [].
         description (Optional[str]):
             A description of the bot. Default is None.
     """
