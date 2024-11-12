@@ -80,6 +80,7 @@ const (
 	BotEventTypeUserMessage       BotEventType = "user_message"
 	BotEventTypeTransitionMessage BotEventType = "transition_message"
 	BotEventTypeMemoryMessage     BotEventType = "memory_message"
+	BotEventTypeMemoryUpdated     BotEventType = "memory_updated"
 	BotEventTypeSessionCreated    BotEventType = "session_created"
 	BotEventTypeTransitionFired   BotEventType = "transition_fired"
 	BotEventTypeTaskStarted       BotEventType = "task_started"
@@ -88,6 +89,7 @@ const (
 
 const PromptTypeUser = "user_message"
 const PromptTypeTransition = "transition_message"
+const PromptTypeMemory = "memory_message"
 
 type BotEvent struct {
 	Type  BotEventType `json:"type" redis:"type"`
@@ -102,6 +104,9 @@ type BotUserResponse struct {
 
 type BotTransitionResponse struct {
 	Msg string `json:"msg" redis:"msg"`
+}
+
+type BotMemoryResponse struct {
 }
 
 type Marker struct {

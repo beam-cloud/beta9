@@ -31,6 +31,7 @@ class BotEventType(str, Enum):
     USER_MESSAGE = "user_message"
     TRANSITION_MESSAGE = "transition_message"
     MEMORY_MESSAGE = "memory_message"
+    MEMORY_UPDATED = "memory_updated"
     SESSION_CREATED = "session_created"
     TRANSITION_FIRED = "transition_fired"
     TASK_STARTED = "task_started"

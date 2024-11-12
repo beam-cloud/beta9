@@ -20,6 +20,7 @@ type BotInterface struct {
 	stub             *types.StubWithRelated
 	userSchema       *jsonschema.Definition
 	transitionSchema *jsonschema.Definition
+	memorySchema     *jsonschema.Definition
 }
 
 type botInterfaceOpts struct {
@@ -55,6 +56,13 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 		return nil, err
 	}
 	bi.transitionSchema = schema
+
+	var memoryResponse BotMemoryResponse
+	schema, err = jsonschema.GenerateSchemaForType(memoryResponse)
+	if err != nil {
+		return nil, err
+	}
+	bi.memorySchema = schema
 
 	return bi, nil
 }
@@ -167,6 +175,10 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error 
 		role = openai.ChatMessageRoleUser
 		prompt = wrapPrompt(PromptTypeTransition, prompt)
 		schema = bi.transitionSchema
+	case PromptTypeMemory:
+		role = openai.ChatMessageRoleUser
+		prompt = wrapPrompt(PromptTypeMemory, prompt)
+		schema = bi.memorySchema
 	default:
 		return fmt.Errorf("invalid message type: %s", messageType)
 	}
@@ -234,6 +246,10 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error 
 		}
 
 		msg = formattedResponse.Msg
+	} else if messageType == PromptTypeMemory {
+		return bi.stateManager.pushEvent(bi.workspace.Name, bi.stub.ExternalId, sessionId, &BotEvent{
+			Type: BotEventTypeMemoryUpdated,
+		})
 	}
 
 	event := &BotEvent{

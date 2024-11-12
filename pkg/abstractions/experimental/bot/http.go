@@ -180,6 +180,9 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 				} else if event.Type == BotEventTypeTransitionMessage {
 					instance.botInterface.SendPrompt(sessionId, PromptTypeTransition, event.Value)
 					continue
+				} else if event.Type == BotEventTypeMemoryMessage {
+					instance.botInterface.SendPrompt(sessionId, PromptTypeMemory, event.Value)
+					continue
 				}
 
 				serializedEvent, err := json.Marshal(event)
