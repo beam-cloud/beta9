@@ -543,6 +543,102 @@
 				"nosuid",
 				"nodev"
 			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.9/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.9/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.10/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.10/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.11/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.11/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.12/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.12/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		}
 	],
 	"hooks": {
