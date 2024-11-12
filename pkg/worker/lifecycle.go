@@ -362,7 +362,7 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 }
 
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
-	// Most of these env vars are required to communiate with the gateway and vice versa
+	// Most of these env vars are required to communicate with the gateway and vice versa
 	env := []string{
 		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)),
