@@ -2,7 +2,9 @@ package image
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -11,6 +13,9 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/pkg/errors"
+
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
 type ImageService interface {
@@ -74,6 +79,11 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 
 	if in.ExistingImageUri != "" {
 		is.builder.handleCustomBaseImage(opts, nil)
+		baseImageEnv, err := getBaseImageEnv(in.ExistingImageUri)
+		if err != nil {
+			return nil, err
+		}
+		opts.EnvVars = mergeEnv(opts.EnvVars, baseImageEnv)
 	}
 
 	imageId, err := is.builder.GetImageId(opts)
@@ -90,6 +100,14 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 
 func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
 	log.Printf("incoming image build request: %+v", in)
+
+	if in.ExistingImageUri != "" {
+		baseImageEnv, err := getBaseImageEnv(in.ExistingImageUri)
+		if err != nil {
+			return err
+		}
+		in.EnvVars = mergeEnv(in.EnvVars, baseImageEnv)
+	}
 
 	buildOptions := &BuildOpts{
 		BaseImageTag:       is.config.ImageService.Runner.Tags[in.PythonVersion],
@@ -150,4 +168,42 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 		}
 	}
 	return steps
+}
+
+func getBaseImageEnv(imageRef string) ([]string, error) {
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return nil, fmt.Errorf("parsing reference: %v", err)
+	}
+
+	img, err := remote.Image(ref)
+	if err != nil {
+		return nil, fmt.Errorf("getting image: %v", err)
+	}
+
+	config, err := img.ConfigFile()
+	if err != nil {
+		return nil, fmt.Errorf("getting config: %v", err)
+	}
+
+	return config.Config.Env, nil
+}
+
+// Merges the environment variables from the base image with the build option environment variables giving
+// precedence to the build option environment variables.
+func mergeEnv(env []string, baseImageEnv []string) []string {
+	seenEnv := make(map[string]bool)
+	for _, e := range env {
+		parts := strings.SplitN(e, "=", 2)
+		seenEnv[strings.TrimSpace(parts[0])] = true
+	}
+
+	for _, e := range baseImageEnv {
+		parts := strings.SplitN(e, "=", 2)
+		if _, ok := seenEnv[strings.TrimSpace(parts[0])]; !ok {
+			env = append(env, e)
+		}
+	}
+
+	return env
 }
