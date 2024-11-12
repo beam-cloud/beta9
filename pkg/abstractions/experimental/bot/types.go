@@ -107,6 +107,7 @@ type BotTransitionResponse struct {
 }
 
 type BotMemoryResponse struct {
+	Msg string `json:"msg" redis:"msg"`
 }
 
 type Marker struct {
