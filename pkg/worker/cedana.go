@@ -111,7 +111,7 @@ func (c *CedanaClient) Close() {
 
 // Updates the runc container spec to make the shared library available
 // as well as the shared memory that is used for communication
-func (c *CedanaClient) prepareContainerSpec(spec *specs.Spec, gpuEnabled bool) error {
+func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, gpuEnabled bool) error {
 	if !gpuEnabled {
 		return nil // no need to do anything
 	}
