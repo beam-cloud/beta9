@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/beam-cloud/go-runc"
 	api "github.com/cedana/cedana/pkg/api/services/task"
 	types "github.com/cedana/cedana/pkg/types"
 
@@ -17,16 +20,17 @@ import (
 )
 
 const (
-	host                       = "0.0.0.0"
-	binPath                    = "/usr/bin/cedana"
+	cedanaHost                 = "0.0.0.0"
+	cedanaBinPath              = "/usr/bin/cedana"
 	cedanaSharedLibPath        = "/usr/local/lib/libcedana-gpu.so"
 	runcRoot                   = "/run/runc"
-	logLevel                   = "debug"
+	cedanaLogLevel             = "debug"
 	checkpointPathBase         = "/tmp/checkpoints"
 	defaultManageDeadline      = 10 * time.Second
 	defaultCheckpointDeadline  = 10 * time.Minute
 	defaultRestoreDeadline     = 5 * time.Minute
 	defaultHealthCheckDeadline = 5 * time.Second
+	cedanaUseRemoteDB          = true // Do not change, or migrations across workers will fail
 )
 
 type CedanaClient struct {
@@ -36,7 +40,11 @@ type CedanaClient struct {
 	config  types.Config
 }
 
-func NewCedanaClient(ctx context.Context, config types.Config, gpuEnabled bool) (*CedanaClient, error) {
+func NewCedanaClient(
+	ctx context.Context,
+	config types.Config,
+	gpuEnabled bool,
+) (*CedanaClient, error) {
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
@@ -45,7 +53,7 @@ func NewCedanaClient(ctx context.Context, config types.Config, gpuEnabled bool) 
 		return nil, err
 	}
 
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := fmt.Sprintf("%s:%d", cedanaHost, port)
 	taskConn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
 		return nil, err
@@ -54,7 +62,7 @@ func NewCedanaClient(ctx context.Context, config types.Config, gpuEnabled bool) 
 	taskClient := api.NewTaskServiceClient(taskConn)
 
 	// Launch the daemon
-	daemon := exec.CommandContext(ctx, binPath, "daemon", "start",
+	daemon := exec.CommandContext(ctx, cedanaBinPath, "daemon", "start",
 		fmt.Sprintf("--port=%d", port),
 		fmt.Sprintf("--gpu-enabled=%t", gpuEnabled))
 
@@ -62,11 +70,14 @@ func NewCedanaClient(ctx context.Context, config types.Config, gpuEnabled bool) 
 	daemon.Stderr = os.Stderr
 
 	// XXX: Set config using env until config JSON parsing is fixed
-	daemon.Env = append(os.Environ(), fmt.Sprintf("CEDANA_LOG_LEVEL=%s", logLevel))
-	daemon.Env = append(daemon.Env, fmt.Sprintf("CEDANA_CLIENT_LEAVE_RUNNING=%t", config.Client.LeaveRunning))
-	daemon.Env = append(daemon.Env, fmt.Sprintf("CEDANA_DUMP_STORAGE_DIR=%s", config.SharedStorage.DumpStorageDir))
-	daemon.Env = append(daemon.Env, fmt.Sprintf("CEDANA_URL=%s", config.Connection.CedanaUrl))
-	daemon.Env = append(daemon.Env, fmt.Sprintf("CEDANA_AUTH_TOKEN=%s", config.Connection.CedanaAuthToken))
+	daemon.Env = append(os.Environ(),
+		fmt.Sprintf("CEDANA_LOG_LEVEL=%s", cedanaLogLevel),
+		fmt.Sprintf("CEDANA_CLIENT_LEAVE_RUNNING=%t", config.Client.LeaveRunning),
+		fmt.Sprintf("CEDANA_DUMP_STORAGE_DIR=%s", config.SharedStorage.DumpStorageDir),
+		fmt.Sprintf("CEDANA_URL=%s", config.Connection.CedanaUrl),
+		fmt.Sprintf("CEDANA_AUTH_TOKEN=%s", config.Connection.CedanaAuthToken),
+		fmt.Sprintf("CEDANA_REMOTE=%t", cedanaUseRemoteDB),
+	)
 
 	err = daemon.Start()
 	if err != nil {
@@ -97,7 +108,10 @@ func NewCedanaClient(ctx context.Context, config types.Config, gpuEnabled bool) 
 		}
 
 		if len(details.UnhealthyReasons) > 0 {
-			return nil, fmt.Errorf("cedana health failed with reasons: %v", details.UnhealthyReasons)
+			return nil, fmt.Errorf(
+				"cedana health failed with reasons: %v",
+				details.UnhealthyReasons,
+			)
 		}
 	}
 
@@ -118,7 +132,10 @@ func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, gpuEnabled bool) e
 
 	// First check if shared library is on worker
 	if _, err := os.Stat(cedanaSharedLibPath); os.IsNotExist(err) {
-		return fmt.Errorf("%s not found on worker. Was the daemon started with GPU enabled?", cedanaSharedLibPath)
+		return fmt.Errorf(
+			"%s not found on worker. Was the daemon started with GPU enabled?",
+			cedanaSharedLibPath,
+		)
 	}
 
 	// Remove nvidia prestart hook as we don't need actual device mounts
@@ -190,53 +207,81 @@ func (c *CedanaClient) Manage(ctx context.Context, containerId string, gpuEnable
 	return nil
 }
 
-// Checkpoint a runc container
-func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) error {
+// Checkpoint a runc container, returns the path to the checkpoint
+func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCheckpointDeadline)
 	defer cancel()
 
 	external := []string{} // Add any external mounts that cause CRIU failures here
 
 	args := api.JobDumpArgs{
-		Type: api.CRType_LOCAL,
-		JID:  containerId,
+		JID: containerId,
 		CriuOpts: &api.CriuOpts{
-			TcpEstablished: true,
-			LeaveRunning:   true,
-			External:       external,
+			TcpClose:     true,
+			LeaveRunning: true,
+			External:     external,
 			// TODO: add skip in flight connections option
 		},
 		Dir: fmt.Sprintf("%s/%s", checkpointPathBase, containerId),
 	}
 	res, err := c.service.JobDump(ctx, &args)
 	if err != nil {
-		return err
+		return "", err
 	}
-	_ = res.DumpStats
-	return nil
+	return res.GetState().GetCheckpointPath(), nil
 }
 
-// Restore a runc container
-func (c *CedanaClient) Restore(ctx context.Context, containerId string) (*api.ProcessState, error) {
+// Restore a runc container. If a checkpoint path is provided, it will be used as the checkpoint.
+// If empty path is provided, the latest checkpoint path from DB will be used.
+func (c *CedanaClient) Restore(
+	ctx context.Context,
+	containerId string,
+	checkpointPath string,
+	opts *runc.CreateOpts,
+) (*api.ProcessState, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCheckpointDeadline)
 	defer cancel()
 
+	// NOTE: Cedana uses bundle path to find the config.json
+	bundle := strings.TrimRight(opts.ConfigPath, filepath.Base(opts.ConfigPath))
+
+	ttyPath := filepath.Join(os.TempDir(), fmt.Sprintf("cedana-tty-%s.sock", containerId))
+  tty := exec.CommandContext(ctx, cedanaBinPath, "debug", "recvtty", ttyPath)
+  tty.Stdout = opts.OutputWriter
+  tty.Stderr = opts.OutputWriter
+  err := tty.Start()
+  if err != nil {
+    return nil, err
+  }
+
 	args := &api.JobRestoreArgs{
-		Type:     api.CRType_LOCAL,
-		JID:      containerId,
-		CriuOpts: &api.CriuOpts{TcpEstablished: true},
+		JID: containerId,
+		RuncOpts: &api.RuncOpts{
+			Root:          runcRoot,
+			Bundle:        bundle,
+			Detach:        true,
+			ConsoleSocket: ttyPath,
+		},
+		CriuOpts:       &api.CriuOpts{TcpClose: true},
+		CheckpointPath: checkpointPath,
 	}
 	res, err := c.service.JobRestore(ctx, args)
 	if err != nil {
 		return nil, err
 	}
+	if opts.Started != nil {
+		opts.Started <- int(res.GetState().GetPID())
+	}
 
-	_ = res.RestoreStats
+  tty.Wait()
+
 	return res.State, nil
 }
 
 // Perform a detailed health check of cedana C/R capabilities
-func (c *CedanaClient) DetailedHealthCheckWait(ctx context.Context) (*api.DetailedHealthCheckResponse, error) {
+func (c *CedanaClient) DetailedHealthCheckWait(
+	ctx context.Context,
+) (*api.DetailedHealthCheckResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultHealthCheckDeadline)
 	defer cancel()
 

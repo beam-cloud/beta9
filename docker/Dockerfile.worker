@@ -97,9 +97,9 @@ RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev
 RUN <<EOT
 set -eux
 apt-get install -y python3-protobuf libnet1 libnftables1 libnl-3-200 libprotobuf-c1 iptables
-curl -L -o criu_3.19-4_amd64.deb https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_22.04/amd64/criu_3.19-4_amd64.deb
-dpkg -i criu_3.19-4_amd64.deb
-rm criu_3.19-4_amd64.deb
+curl -L -o criu.deb https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_22.04/amd64/criu_4.0-3_amd64.deb
+dpkg -i criu.deb
+rm criu.deb
 EOT
 
 ARG CEDANA_VERSION=0.9.229

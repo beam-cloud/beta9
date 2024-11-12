@@ -22,6 +22,7 @@ import (
 const (
 	baseConfigPath            string = "/tmp"
 	defaultContainerDirectory string = "/mnt/code"
+  containerInnerPort        int    = 8001 // XXX: Use fixed port in the container namespace for restores
 
 	exitCodeSigterm int = 143 // Means the container received a SIGTERM by the underlying operating system
 	exitCodeSigkill int = 137 // Means the container received a SIGKILL by the underlying operating system
@@ -367,7 +368,7 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
 	env := []string{
-		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
+    fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
@@ -467,7 +468,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Expose the bind port
-	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
+  err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, containerInnerPort)
 	if err != nil {
 		log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
 		return
@@ -495,6 +496,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pidChan)
 
 	// Handle checkpoint creation & restore	if applicable
+  restored := false
 	if request.CheckpointEnabled && s.checkpointingAvailable {
 		state, createCheckpoint := s.shouldCreateCheckpoint(request)
 
@@ -502,24 +504,30 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		if createCheckpoint {
 			go s.createCheckpoint(ctx, request)
 		} else if state.Status == types.CheckpointStatusAvailable {
-			processState, err := s.cedanaClient.Restore(ctx, state.ContainerId)
+      checkpointPath := filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, state.RemoteKey)
+			processState, err := s.cedanaClient.Restore(ctx, state.ContainerId, checkpointPath, &runc.CreateOpts{
+        OutputWriter: containerInstance.OutputWriter,
+        ConfigPath:   configPath,
+        Started:      pidChan,
+      })
 			if err != nil {
 				log.Printf("<%s> - failed to restore checkpoint: %v\n", request.ContainerId, err)
-			}
-
-			// TODO: if restore fails, update checkpoint state to restore_failed
-
-			// pidChan <- int(processState.PID)
-			log.Printf("<%s> - checkpoint found and restored, process state: %+v\n", request.ContainerId, processState)
+			  // TODO: if restore fails, update checkpoint state to restore_failed
+			} else {
+        restored = true
+			  log.Printf("<%s> - checkpoint found and restored, process state: %+v\n", request.ContainerId, processState)
+      }
 		}
 	}
 
-	// Invoke runc process (launch the container)
-	exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
-		OutputWriter: containerInstance.OutputWriter,
-		ConfigPath:   configPath,
-		Started:      pidChan,
-	})
+	// Invoke runc process (launch the container), if not restored from checkpoint
+  if !restored {
+    exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
+      OutputWriter: containerInstance.OutputWriter,
+      ConfigPath:   configPath,
+      Started:      pidChan,
+    })
+  }
 
 	// Send last log message since the container has exited
 	outputChan <- common.OutputMsg{
@@ -601,7 +609,7 @@ waitForReady:
 	}
 
 	// Proceed to create the checkpoint
-	err := s.cedanaClient.Checkpoint(ctx, request.ContainerId)
+	checkpointPath, err := s.cedanaClient.Checkpoint(ctx, request.ContainerId)
 	if err != nil {
 		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
 
@@ -614,9 +622,8 @@ waitForReady:
 	}
 
 	// Move compressed checkpoint file to long-term storage directory
-	archiveName := fmt.Sprintf("%s.tar", request.ContainerId)
-	remoteKey := fmt.Sprintf("%s/%s", request.Workspace.Name, archiveName)
-	err = copyFile(filepath.Join(checkpointPathBase, archiveName), filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, remoteKey))
+	remoteKey := filepath.Join(request.Workspace.Name, filepath.Base(checkpointPath))
+	err = copyFile(checkpointPath, filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, remoteKey))
 	if err != nil {
 		log.Printf("<%s> - failed to copy checkpoint to storage: %v\n", request.ContainerId, err)
 		return err
@@ -625,7 +632,7 @@ waitForReady:
 	// TODO: Delete checkpoint files from local disk in /tmp
 
 	log.Printf("<%s> - checkpoint created successfully\n", request.ContainerId)
-	return s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
+  return s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
 		Status:      types.CheckpointStatusAvailable,
 		ContainerId: request.ContainerId, // We store this as a reference to the container that we initially checkpointed
 		StubId:      request.StubId,

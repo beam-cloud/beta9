@@ -424,6 +424,7 @@ func (cr *ContainerRedisRepository) UpdateCheckpointState(workspaceName, checkpo
 		"stub_id", checkpointState.StubId,
 		"container_id", checkpointState.ContainerId,
 		"status", string(checkpointState.Status),
+    "remote_key", checkpointState.RemoteKey,
 	).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set checkpoint state <%v>: %w", stateKey, err)
