@@ -148,7 +148,7 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			default:
 				err := instance.botStateManager.sessionKeepAlive(instance.workspace.Name, instance.stub.ExternalId, sessionId)
 				if err != nil {
-					return
+					continue
 				}
 
 				time.Sleep(keepAliveInterval)
@@ -179,6 +179,9 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 					continue
 				} else if event.Type == BotEventTypeTransitionMessage {
 					instance.botInterface.SendPrompt(sessionId, PromptTypeTransition, event.Value)
+					continue
+				} else if event.Type == BotEventTypeMemoryMessage {
+					instance.botInterface.SendPrompt(sessionId, PromptTypeMemory, event.Value)
 					continue
 				}
 

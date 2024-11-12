@@ -1,3 +1,4 @@
+import json
 from typing import Any, Optional
 
 from ....clients.bot import (
@@ -53,5 +54,25 @@ class BotContext(FunctionContext):
                 session_id=cls.session_id,
                 event_type=event_type,
                 event_value=event_value,
+            )
+        )
+
+    def prompt(cls, msg: str):
+        cls.bot_stub.push_bot_event(
+            PushBotEventRequest(
+                stub_id=cls.stub_id,
+                session_id=cls.session_id,
+                event_type=BotEventType.TRANSITION_MESSAGE,
+                event_value=msg,
+            )
+        )
+
+    def remember(cls, obj: Any):
+        cls.bot_stub.push_bot_event(
+            PushBotEventRequest(
+                stub_id=cls.stub_id,
+                session_id=cls.session_id,
+                event_type=BotEventType.MEMORY_MESSAGE,
+                event_value=json.dumps(obj),
             )
         )

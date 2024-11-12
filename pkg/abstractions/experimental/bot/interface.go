@@ -20,6 +20,7 @@ type BotInterface struct {
 	stub             *types.StubWithRelated
 	userSchema       *jsonschema.Definition
 	transitionSchema *jsonschema.Definition
+	memorySchema     *jsonschema.Definition
 }
 
 type botInterfaceOpts struct {
@@ -55,6 +56,13 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 		return nil, err
 	}
 	bi.transitionSchema = schema
+
+	var memoryResponse BotMemoryResponse
+	schema, err = jsonschema.GenerateSchemaForType(memoryResponse)
+	if err != nil {
+		return nil, err
+	}
+	bi.memorySchema = schema
 
 	return bi, nil
 }
@@ -162,16 +170,19 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error 
 	switch messageType {
 	case PromptTypeUser:
 		role = openai.ChatMessageRoleUser
-		prompt = wrapPrompt(PromptTypeUser, prompt)
+		promptMessage.Content = wrapPrompt(PromptTypeUser, prompt)
 	case PromptTypeTransition:
 		role = openai.ChatMessageRoleUser
-		prompt = wrapPrompt(PromptTypeTransition, prompt)
+		promptMessage.Content = wrapPrompt(PromptTypeTransition, prompt)
 		schema = bi.transitionSchema
+	case PromptTypeMemory:
+		role = openai.ChatMessageRoleUser
+		promptMessage.Content = wrapPrompt(PromptTypeMemory, prompt)
+		schema = bi.memorySchema
 	default:
 		return fmt.Errorf("invalid message type: %s", messageType)
 	}
 
-	promptMessage.Content = prompt
 	promptMessage.Role = role
 	messages = append(messages, promptMessage)
 
@@ -234,6 +245,11 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error 
 		}
 
 		msg = formattedResponse.Msg
+	} else if messageType == PromptTypeMemory {
+		return bi.stateManager.pushEvent(bi.workspace.Name, bi.stub.ExternalId, sessionId, &BotEvent{
+			Type:  BotEventTypeMemoryUpdated,
+			Value: prompt,
+		})
 	}
 
 	event := &BotEvent{
