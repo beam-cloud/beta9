@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/redis/go-redis/v9"
@@ -82,8 +83,8 @@ func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string,
 	return nil
 }
 
-func (m *botStateManager) sessionKeepAlive(workspaceName, stubId, sessionId string) error {
-	return m.rdb.Set(context.TODO(), Keys.botSessionKeepAlive(workspaceName, stubId, sessionId), 1, keepAliveTimeout).Err()
+func (m *botStateManager) sessionKeepAlive(workspaceName, stubId, sessionId string, ttlS uint) error {
+	return m.rdb.Set(context.TODO(), Keys.botSessionKeepAlive(workspaceName, stubId, sessionId), 1, time.Duration(ttlS)*time.Second).Err()
 }
 
 func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string) error {

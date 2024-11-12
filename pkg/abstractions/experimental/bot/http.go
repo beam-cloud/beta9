@@ -46,7 +46,6 @@ func registerBotRoutes(g *echo.Group, pbs *PetriBotService) *botGroup {
 
 const keepAliveInterval = 1 * time.Second
 const eventPollingInterval = 1 * time.Second
-const keepAliveTimeout = 30 * time.Second
 
 func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
@@ -110,7 +109,17 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 		sessionId = uuid.New().String()[:6]
 		err = instance.botInterface.initSession(sessionId)
 		if err != nil {
-			return err
+			event := &BotEvent{
+				Type:  BotEventTypeError,
+				Value: err.Error(),
+			}
+			serializedEvent, err := json.Marshal(event)
+			if err != nil {
+				return err
+			}
+
+			ws.WriteMessage(websocket.TextMessage, serializedEvent)
+			return nil
 		}
 
 		err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, sessionId, &BotEvent{
@@ -146,7 +155,7 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			case <-ctxWithCancel.Done():
 				return
 			default:
-				err := instance.botStateManager.sessionKeepAlive(instance.workspace.Name, instance.stub.ExternalId, sessionId)
+				err := instance.botStateManager.sessionKeepAlive(instance.workspace.Name, instance.stub.ExternalId, sessionId, uint(instance.appConfig.Abstractions.Bot.SessionInactivityTimeoutS))
 				if err != nil {
 					continue
 				}

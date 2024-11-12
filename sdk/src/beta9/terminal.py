@@ -72,6 +72,7 @@ def error(text: str, exit: bool = True) -> None:
     _console.print(Text(text, style="bold red"))
 
     if exit:
+        reset_terminal()
         sys.exit(1)
 
 
@@ -161,3 +162,7 @@ def humanize_memory(m: float, base: Literal[2, 10] = 2) -> str:
 def pluralize(seq: Sequence, suffix: str = "s") -> Tuple[int, str]:
     n = len(seq)
     return n, "s" if n != 1 else ""
+
+
+def reset_terminal() -> None:
+    _console.show_cursor()

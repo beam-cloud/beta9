@@ -19,7 +19,6 @@ import (
 const (
 	botContainerPrefix         string = "bot"
 	botContainerTypeTransition string = "transition"
-	botInactivityTimeoutS      int64  = 30
 )
 
 type botInstance struct {
@@ -130,8 +129,7 @@ func (i *botInstance) Start() error {
 				case <-i.ctx.Done():
 					return nil
 				case <-time.After(stepInterval):
-
-					if time.Now().Unix()-lastActiveSessionAt > botInactivityTimeoutS {
+					if time.Now().Unix()-lastActiveSessionAt > int64(i.appConfig.Abstractions.Bot.SessionInactivityTimeoutS) {
 						log.Printf("<bot %s> No active sessions found, shutting down instance", i.stub.ExternalId)
 						i.cancelFunc()
 						return nil
@@ -142,7 +140,6 @@ func (i *botInstance) Start() error {
 			}
 
 			lastActiveSessionAt = time.Now().Unix()
-
 			for _, session := range activeSessions {
 				if msg, err := i.botStateManager.popInputMessage(i.workspace.Name, i.stub.ExternalId, session.Id); err == nil {
 					if err := i.botInterface.SendPrompt(session.Id, PromptTypeUser, msg); err != nil {
@@ -171,11 +168,6 @@ func (i *botInstance) step(sessionId string) {
 
 	func() {
 		defer i.botStateManager.releaseLock(i.workspace.Name, i.stub.ExternalId, sessionId)
-
-		// i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
-		// 	Type:  BotEventTypeState,
-		// 	Value: "state",
-		// })
 
 		for _, transition := range i.botConfig.Transitions {
 			currentMarkerCounts := make(map[string]int64)

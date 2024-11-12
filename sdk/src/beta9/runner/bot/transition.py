@@ -82,7 +82,7 @@ class BotTransition:
         return formatted_inputs
 
     def _format_outputs(self, outputs: Dict[str, Any]) -> Dict[str, Any]:
-        expected_outputs = self.handler.handler.config.get("outputs", {})
+        expected_outputs = self.handler.handler.config.get("outputs", [])
         formatted_outputs = {}
 
         if not isinstance(outputs, dict):
