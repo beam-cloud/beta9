@@ -39,6 +39,7 @@ func registerBotRoutes(g *echo.Group, pbs *PetriBotService) *botGroup {
 	g.GET("/:deploymentName", auth.WithAuth(group.BotOpenSession))
 	g.GET("/:deploymentName/latest", auth.WithAuth(group.BotOpenSession))
 	g.GET("/:deploymentName/v:version", auth.WithAuth(group.BotOpenSession))
+	g.DELETE("/:stubId/:sessionId", auth.WithAuth(group.BotDeleteSession))
 
 	return group
 }
@@ -108,7 +109,17 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 		sessionId = uuid.New().String()[:6]
 		err = instance.botInterface.initSession(sessionId)
 		if err != nil {
-			return err
+			event := &BotEvent{
+				Type:  BotEventTypeError,
+				Value: err.Error(),
+			}
+			serializedEvent, err := json.Marshal(event)
+			if err != nil {
+				return err
+			}
+
+			ws.WriteMessage(websocket.TextMessage, serializedEvent)
+			return nil
 		}
 
 		err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, sessionId, &BotEvent{
@@ -134,8 +145,6 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 					log.Println("<bot> Failed to stop bot container", containerId, err)
 				}
 			}
-
-			// instance.botStateManager.deleteSession(instance.workspace.Name, instance.stub.ExternalId, sessionId)
 		}
 	}()
 
@@ -146,7 +155,7 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			case <-ctxWithCancel.Done():
 				return
 			default:
-				err := instance.botStateManager.sessionKeepAlive(instance.workspace.Name, instance.stub.ExternalId, sessionId)
+				err := instance.botStateManager.sessionKeepAlive(instance.workspace.Name, instance.stub.ExternalId, sessionId, uint(instance.appConfig.Abstractions.Bot.SessionInactivityTimeoutS))
 				if err != nil {
 					continue
 				}
@@ -219,4 +228,18 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 
 	wg.Wait()
 	return nil
+}
+
+func (g *botGroup) BotDeleteSession(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	stubId := ctx.Param("stubId")
+	sessionId := ctx.Param("sessionId")
+
+	err := g.pbs.botStateManager.deleteSession(cc.AuthInfo.Workspace.Name, stubId, sessionId)
+	if err != nil {
+		return apiv1.HTTPBadRequest("Failed to delete session")
+	}
+
+	return ctx.NoContent(http.StatusNoContent)
 }

@@ -70,8 +70,6 @@ func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string,
 		}
 	}
 
-	state.LastUpdatedAt = time.Now().Unix()
-
 	jsonData, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -85,40 +83,10 @@ func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string,
 	return nil
 }
 
-func (m *botStateManager) sessionKeepAlive(workspaceName, stubId, sessionId string) error {
-	ctx := context.TODO()
-	err := m.lock.Acquire(ctx, Keys.botLock(workspaceName, stubId, sessionId), common.RedisLockOptions{TtlS: 10, Retries: 0})
-	if err != nil {
-		return err
-	}
-	defer m.lock.Release(Keys.botLock(workspaceName, stubId, sessionId))
-
-	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
-
-	data, err := m.rdb.Get(ctx, stateKey).Result()
-	if err != nil {
-		return err
-	}
-
-	state := &BotSession{}
-	err = json.Unmarshal([]byte(data), state)
-	if err != nil {
-		return err
-	}
-	state.LastUpdatedAt = time.Now().Unix()
-
-	jsonData, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-
-	err = m.rdb.Set(ctx, stateKey, jsonData, 0).Err()
-	if err != nil {
-		return err
-	}
-
-	return nil
+func (m *botStateManager) sessionKeepAlive(workspaceName, stubId, sessionId string, ttlS uint) error {
+	return m.rdb.Set(context.TODO(), Keys.botSessionKeepAlive(workspaceName, stubId, sessionId), 1, time.Duration(ttlS)*time.Second).Err()
 }
+
 func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string) error {
 	ctx := context.TODO()
 	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
@@ -148,19 +116,23 @@ func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string)
 	}
 
 	// TODO: delete all existing markers
-
 	return m.rdb.SRem(ctx, indexKey, sessionId).Err()
 }
 
 func (m *botStateManager) getActiveSessions(workspaceName, stubId string) ([]*BotSession, error) {
+	ctx := context.TODO()
 	sessions := []*BotSession{}
 
-	sessionIds, err := m.rdb.SMembers(context.TODO(), Keys.botSessionIndex(workspaceName, stubId)).Result()
+	sessionIds, err := m.rdb.SMembers(ctx, Keys.botSessionIndex(workspaceName, stubId)).Result()
 	if err != nil {
 		return nil, err
 	}
 
 	for _, sessionId := range sessionIds {
+		if m.rdb.Exists(ctx, Keys.botSessionKeepAlive(workspaceName, stubId, sessionId)).Val() == 0 {
+			continue
+		}
+
 		state, err := m.loadSession(workspaceName, stubId, sessionId)
 		if err != nil {
 			return nil, err

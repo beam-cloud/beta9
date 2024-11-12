@@ -195,7 +195,6 @@ monitoring:
     apiKey: ""
 abstractions:
   bot:
-    openAIKey: ""
     systemPrompt: |
       You are a useful AI agent. You are given a petri net structure and a set of possible transitions.
       Convert user input data into markers that can be used to populate the petri net.
@@ -205,3 +204,4 @@ abstractions:
       Do not return the same marker data back to the user in consecutive responses.
 
     stepIntervalS: 1
+    sessionInactivityTimeoutS: 10

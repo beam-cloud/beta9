@@ -19,7 +19,6 @@ import (
 const (
 	botContainerPrefix         string = "bot"
 	botContainerTypeTransition string = "transition"
-	botInactivityTimeoutS      int64  = 10
 )
 
 type botInstance struct {
@@ -130,8 +129,7 @@ func (i *botInstance) Start() error {
 				case <-i.ctx.Done():
 					return nil
 				case <-time.After(stepInterval):
-
-					if time.Now().Unix()-lastActiveSessionAt > botInactivityTimeoutS {
+					if time.Now().Unix()-lastActiveSessionAt > int64(i.appConfig.Abstractions.Bot.SessionInactivityTimeoutS) {
 						log.Printf("<bot %s> No active sessions found, shutting down instance", i.stub.ExternalId)
 						i.cancelFunc()
 						return nil
@@ -142,7 +140,6 @@ func (i *botInstance) Start() error {
 			}
 
 			lastActiveSessionAt = time.Now().Unix()
-
 			for _, session := range activeSessions {
 				if msg, err := i.botStateManager.popInputMessage(i.workspace.Name, i.stub.ExternalId, session.Id); err == nil {
 					if err := i.botInterface.SendPrompt(session.Id, PromptTypeUser, msg); err != nil {
@@ -152,19 +149,6 @@ func (i *botInstance) Start() error {
 
 				// Run any network transitions that can run
 				i.step(session.Id)
-
-				if time.Now().Unix()-session.LastUpdatedAt > botInactivityTimeoutS {
-					if len(containersBySessionId[session.Id]) > 0 {
-						i.botStateManager.sessionKeepAlive(i.workspace.Name, i.stub.ExternalId, session.Id)
-						continue
-					}
-
-					log.Printf("<bot %s> Session %s has not been updated in a while, marking as inactive", i.stub.ExternalId, session.Id)
-					err = i.botStateManager.deleteSession(i.workspace.Name, i.stub.ExternalId, session.Id)
-					if err != nil {
-						continue
-					}
-				}
 			}
 
 			select {
@@ -261,7 +245,6 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		fmt.Sprintf("HANDLER=%s", transitionConfig.Handler),
 		fmt.Sprintf("STUB_ID=%s", i.stub.ExternalId),
 		fmt.Sprintf("STUB_TYPE=%s", i.stub.Type),
-		fmt.Sprintf("KEEP_WARM_SECONDS=%d", transitionConfig.KeepWarm),
 		fmt.Sprintf("PYTHON_VERSION=%s", transitionConfig.PythonVersion),
 		fmt.Sprintf("CALLBACK_URL=%s", transitionConfig.CallbackUrl),
 		fmt.Sprintf("TRANSITION_NAME=%s", transitionName),

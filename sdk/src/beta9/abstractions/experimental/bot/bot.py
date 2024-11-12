@@ -40,25 +40,47 @@ class BotEventType(str, Enum):
 
 
 class BotTransition:
+    """
+    Parameters:
+        cpu (Union[int, float, str]):
+            The number of CPUs to allocate to the transition. Default is 1.0.
+        memory (Union[int, str]):
+            The amount of memory to allocate to the transition. Default is 128.
+        gpu (GpuTypeAlias):
+            The type of GPU to allocate to the transition. Default is GpuType.NoGPU.
+        image (Image):
+            The image to use for the transition. Default is an empty Image.
+        secrets (Optional[List[str]]):
+            A list of secrets to pass to the transition. Default is None.
+        callback_url (Optional[str]):
+            The URL to send callback events to. Default is None.
+        inputs (dict):
+            A dictionary of inputs to pass to the transition. Default is {}.
+        outputs (list):
+            A list of outputs the transition can return. Default is [].
+        description (Optional[str]):
+            A description of the transition. Default is None.
+        expose (bool):
+            Whether or not to give the model awareness of this transition. Default is True.
+        task_policy (Optional[str]):
+            The task policy to use for the transition. Default is None.
+    """
+
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
         image: Image = Image(),
-        timeout: int = 180,
-        keep_warm: int = 180,
-        max_pending: int = 100,
         secrets: Optional[List[str]] = None,
-        name: Optional[str] = None,
         callback_url: Optional[str] = None,
-        task_policy: Optional[str] = None,
-        handler: Optional[str] = None,
         inputs: dict = {},
-        outputs: dict = {},
+        outputs: list = [],
         description: Optional[str] = None,
         expose: bool = True,
         bot_instance: Optional["Bot"] = None,  # Reference to parent Bot instance
+        task_policy: Optional[str] = None,
+        handler: Optional[str] = None,
     ):
         self.handler: str = handler
         self.image: Image = image
@@ -81,16 +103,17 @@ class BotTransition:
                 raise ValueError(
                     f"Invalid value in inputs for key {key}: {value}. All values must be integers."
                 )
+        for v in outputs:
+            if not (isinstance(v, type) and issubclass(v, BaseModel)):
+                raise ValueError(
+                    f"Invalid value in outputs: {v}. All values must be classes inherited from a Pydantic BaseModel."
+                )
 
         self.config = {
             "cpu": cpu,
             "memory": memory,
             "gpu": gpu,
-            "timeout": timeout,
-            "keep_warm": keep_warm,
-            "max_pending": max_pending,
             "secrets": secrets or [],
-            "name": name or "",
             "callback_url": callback_url or "",
             "task_policy": task_policy or "",
             "handler": handler or "",
@@ -99,10 +122,9 @@ class BotTransition:
                 k.__name__ if isinstance(k, type) and env.is_local() else k: v
                 for k, v in inputs.items()
             },
-            "outputs": {
-                k.__name__ if isinstance(k, type) and env.is_local() else k: v
-                for k, v in outputs.items()
-            },
+            "outputs": [
+                k.__name__ if isinstance(k, type) and env.is_local() else k for k in outputs
+            ],
             "description": description or "",
             "expose": expose,
         }
@@ -184,6 +206,8 @@ class Bot(RunnerAbstraction, DeployableMixin):
     Parameters:
         model (Optional[str]):
             Which model to use for the bot. Default is "gpt-4o".
+        api_key (str):
+            OpenAI API key to use for the bot. In the future this will support other LLM providers.
         locations (Optional[List[BotLocation]]):
             A list of locations where the bot can store markers. Default is [].
         description (Optional[str]):
@@ -209,11 +233,15 @@ class Bot(RunnerAbstraction, DeployableMixin):
     def __init__(
         self,
         model: str = "gpt-4o",
+        api_key: str = "",
         locations: List[BotLocation] = [],
         description: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
     ) -> None:
         super().__init__(volumes=volumes)
+
+        if not api_key or api_key == "":
+            raise ValueError("API key is required")
 
         if model not in self.VALID_MODELS:
             raise ValueError(
@@ -230,6 +258,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         self.extra["model"] = model
         self.extra["locations"] = {}
         self.extra["description"] = description
+        self.extra["api_key"] = api_key
 
         for location in self.locations:
             location_config = location.to_dict()

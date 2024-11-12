@@ -12,9 +12,8 @@ import (
 var ErrBotSessionNotFound = fmt.Errorf("bot session not found")
 
 type BotSession struct {
-	Id            string                     `json:"id" redis:"id"`
-	Messages      []BotChatCompletionMessage `json:"messages" redis:"messages"`
-	LastUpdatedAt int64                      `redis:"last_updated_at" json:"last_updated_at"`
+	Id       string                     `json:"id" redis:"id"`
+	Messages []BotChatCompletionMessage `json:"messages" redis:"messages"`
 }
 
 type botContainer struct {
@@ -76,6 +75,7 @@ type UserRequest struct {
 type BotEventType string
 
 const (
+	BotEventTypeError             BotEventType = "error"
 	BotEventTypeAgentMessage      BotEventType = "agent_message"
 	BotEventTypeUserMessage       BotEventType = "user_message"
 	BotEventTypeTransitionMessage BotEventType = "transition_message"
@@ -85,6 +85,7 @@ const (
 	BotEventTypeTransitionFired   BotEventType = "transition_fired"
 	BotEventTypeTaskStarted       BotEventType = "task_started"
 	BotEventTypeTaskCompleted     BotEventType = "task_completed"
+	BotEventTypeState             BotEventType = "current_state"
 )
 
 const PromptTypeUser = "user_message"
@@ -125,6 +126,7 @@ type BotConfig struct {
 	Model       string                         `json:"model" redis:"model"`
 	Locations   map[string]BotLocationConfig   `json:"locations" redis:"locations"`
 	Transitions map[string]BotTransitionConfig `json:"transitions" redis:"transitions"`
+	ApiKey      string                         `json:"api_key" redis:"api_key"`
 }
 
 func (b *BotConfig) FormatLocations() string {
@@ -190,7 +192,7 @@ type BotTransitionConfig struct {
 	TaskPolicy    string         `json:"task_policy" redis:"task_policy"`
 	Name          string         `json:"name" redis:"name"`
 	Inputs        map[string]int `json:"inputs" redis:"inputs"`
-	Outputs       map[string]int `json:"outputs" redis:"outputs"`
+	Outputs       []string       `json:"outputs" redis:"outputs"`
 	Description   string         `json:"description" redis:"description"`
 	Expose        bool           `json:"expose" redis:"expose"`
 }
@@ -203,8 +205,8 @@ func (t *BotTransitionConfig) FormatTransition() string {
 	inputsSection := strings.Join(inputs, ", ")
 
 	outputs := []string{}
-	for marker, count := range t.Outputs {
-		outputs = append(outputs, fmt.Sprintf("produces %d %s outputs", count, marker))
+	for _, marker := range t.Outputs {
+		outputs = append(outputs, fmt.Sprintf("can produce outputs of type %s", marker))
 	}
 	outputsSection := strings.Join(outputs, ", ")
 

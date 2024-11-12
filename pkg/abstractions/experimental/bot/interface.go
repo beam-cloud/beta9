@@ -33,7 +33,7 @@ type botInterfaceOpts struct {
 
 func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 	bi := &BotInterface{
-		client:       openai.NewClient(opts.AppConfig.Abstractions.Bot.OpenAIKey),
+		client:       openai.NewClient(opts.BotConfig.ApiKey),
 		botConfig:    opts.BotConfig,
 		model:        opts.BotConfig.Model,
 		systemPrompt: opts.AppConfig.Abstractions.Bot.SystemPrompt,
