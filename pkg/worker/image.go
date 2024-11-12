@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -237,13 +238,13 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 		return err
 	}
 
-	if imageInfo["Architecture"] != "amd64" {
+	if imageInfo["Architecture"] != runtime.GOARCH {
 		return &types.ExitCodeError{
 			ExitCode: types.WorkerContainerExitCodeIncorrectImageArch,
 		}
 	}
 
-	if imageInfo["Os"] != "linux" {
+	if imageInfo["Os"] != runtime.GOOS {
 		return &types.ExitCodeError{
 			ExitCode: types.WorkerContainerExitCodeIncorrectImageOs,
 		}
