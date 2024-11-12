@@ -188,6 +188,9 @@ func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionSer
 		return err
 	}
 
+	ctx, cancel := common.MergeContexts(fs.ctx, ctx)
+	defer cancel()
+
 	return logStream.Stream(ctx, authInfo, containerId)
 }
 
