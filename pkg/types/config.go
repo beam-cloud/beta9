@@ -135,10 +135,10 @@ type RunnerConfig struct {
 	BaseImageName     string                 `key:"baseImageName" json:"base_image_name"`
 	BaseImageRegistry string                 `key:"baseImageRegistry" json:"base_image_registry"`
 	Tags              map[string]string      `key:"tags" json:"tags"`
-	StandalonePython  StandalonePythonConfig `key:"standalonePython" json:"standalone_python"`
+	PythonStandalone  PythonStandaloneConfig `key:"pythonStandalone" json:"python_standalone"`
 }
 
-type StandalonePythonConfig struct {
+type PythonStandaloneConfig struct {
 	Versions              map[string]string `key:"versions" json:"versions"`
 	InstallScriptTemplate string            `key:"installScriptTemplate" json:"install_script_template"`
 }

@@ -78,7 +78,7 @@ imageService:
       micromamba3.10: micromamba3.10-latest
       micromamba3.11: micromamba3.11-latest
       micromamba3.12: micromamba3.12-latest
-    standalonePython:
+    pythonStandalone:
       versions:
         python3.8: 3.8.20
         python3.9: 3.9.20

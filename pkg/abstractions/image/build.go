@@ -293,7 +293,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
 	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
-		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.StandalonePython, opts.PythonVersion)
+		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, opts.PythonVersion)
 		if err != nil {
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
 			return err
@@ -500,8 +500,8 @@ func getPythonInstallCommand(pythonVersion string) string {
 	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
 }
 
-// StandalonePythonTemplate is used to render the standalone python install script
-type StandalonePythonTemplate struct {
+// PythonStandaloneTemplate is used to render the standalone python install script
+type PythonStandaloneTemplate struct {
 	PythonVersion string
 
 	// Architecture, OS, and Vendor are determined at runtime
@@ -510,7 +510,7 @@ type StandalonePythonTemplate struct {
 	Vendor       string
 }
 
-func getPythonStandaloneInstallCommand(config types.StandalonePythonConfig, pythonVersion string) (string, error) {
+func getPythonStandaloneInstallCommand(config types.PythonStandaloneConfig, pythonVersion string) (string, error) {
 	var arch string
 	switch runtime.GOARCH {
 	case "amd64":
@@ -537,7 +537,7 @@ func getPythonStandaloneInstallCommand(config types.StandalonePythonConfig, pyth
 	}
 
 	var output bytes.Buffer
-	if err := tmpl.Execute(&output, StandalonePythonTemplate{
+	if err := tmpl.Execute(&output, PythonStandaloneTemplate{
 		PythonVersion: config.Versions[pythonVersion],
 		Architecture:  arch,
 		OS:            os,
