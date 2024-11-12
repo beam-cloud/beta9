@@ -1,7 +1,6 @@
 import inspect
 import json
 import os
-import sys
 import threading
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -270,58 +269,26 @@ class Bot(RunnerAbstraction, DeployableMixin):
     def _serve(self, *, url: str, timeout: int = 0):
         def _connect_to_session():
             session_event = threading.Event()
-            msg_event = threading.Event()
 
             import websocket
+            from prompt_toolkit import PromptSession
 
             def on_message(ws, message):
                 event = json.loads(message)
                 event_type = event.get("type")
                 event_value = event.get("value")
 
-                def _print_bot_event(header_text=None, detail_text=None):
-                    if header_text:
-                        sys.stdout.write("\r\033")
-                        terminal.header(header_text)
-                        sys.stdout.write("#: ")
-                        sys.stdout.flush()
-
-                    if detail_text:
-                        msg_event.set()
-                        terminal.detail(detail_text)
-
                 if event_type == BotEventType.SESSION_CREATED:
                     session_id = event_value
                     terminal.header(f"Session started: {session_id}")
                     terminal.header("💬 Chat with your bot below...")
-                    session_event.set()  # Signal that session_id is received
+                    session_event.set()  # Signal that session is ready
 
-                elif event_type in [
-                    BotEventType.AGENT_MESSAGE,
-                    BotEventType.TASK_STARTED,
-                    BotEventType.TASK_COMPLETED,
-                    BotEventType.TASK_FAILED,
-                    BotEventType.TRANSITION_FIRED,
-                ]:
-                    header_map = {
-                        BotEventType.AGENT_MESSAGE: None,
-                        BotEventType.TASK_STARTED: f"Task started: {event_value}",
-                        BotEventType.TASK_COMPLETED: f"Task completed: {event_value}",
-                        BotEventType.TASK_FAILED: f"Task failed: {event_value}",
-                        BotEventType.TRANSITION_FIRED: f"Transition fired: {event_value}",
-                    }
-
-                    _print_bot_event(
-                        header_text=header_map[event_type],
-                        detail_text=event_value
-                        if event_type == BotEventType.AGENT_MESSAGE
-                        else None,
-                    )
                 else:
-                    terminal.detail(f"{message}")
+                    terminal.print(f"\n{json.dumps(event, indent=2)}")
 
             def on_error(ws, error):
-                pass
+                terminal.error(f"Error: {error}")
 
             def on_close(ws, close_status_code, close_msg):
                 pass
@@ -329,17 +296,25 @@ class Bot(RunnerAbstraction, DeployableMixin):
             def on_open(ws):
                 def _send_user_input():
                     with terminal.progress("Waiting for session to start..."):
-                        session_event.wait()  # Wait until a session_id is received
+                        session_event.wait()  # Wait until session is ready
+
+                    session = PromptSession()
 
                     while True:
-                        msg = terminal.prompt(text="#")
-                        if msg:
-                            user_request = json.dumps({"msg": msg})
-                            ws.send(user_request)
-
-                            with terminal.progress(""):
-                                msg_event.wait()
-                                msg_event.clear()
+                        try:
+                            msg = session.prompt("# ")
+                            if msg:
+                                ws.send(json.dumps({"msg": msg}))
+                        except KeyboardInterrupt:
+                            confirm = session.prompt("# Exit chat session (y/n) ")
+                            if confirm.strip().lower() == "y":
+                                ws.close()
+                                break
+                            else:
+                                continue  # Return to the prompt
+                        except BaseException as e:
+                            terminal.error(f"An error occurred: {e}")
+                            continue
 
                 threading.Thread(target=_send_user_input, daemon=True).start()
 
@@ -353,10 +328,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
             )
             ws.run_forever()
 
-        try:
-            _connect_to_session()
-        except KeyboardInterrupt:
-            self._handle_serve_interrupt()
+        _connect_to_session()
 
         terminal.warn("Bot serve session exited. All containers have been stopped.")
 

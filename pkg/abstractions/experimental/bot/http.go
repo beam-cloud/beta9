@@ -148,7 +148,7 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			default:
 				err := instance.botStateManager.sessionKeepAlive(instance.workspace.Name, instance.stub.ExternalId, sessionId)
 				if err != nil {
-					return
+					continue
 				}
 
 				time.Sleep(keepAliveInterval)

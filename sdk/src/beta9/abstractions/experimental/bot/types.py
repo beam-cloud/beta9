@@ -55,3 +55,13 @@ class BotContext(FunctionContext):
                 event_value=event_value,
             )
         )
+
+    def prompt(cls, msg: str):
+        cls.bot_stub.push_bot_event(
+            PushBotEventRequest(
+                stub_id=cls.stub_id,
+                session_id=cls.session_id,
+                event_type=BotEventType.TRANSITION_MESSAGE,
+                event_value=msg,
+            )
+        )
