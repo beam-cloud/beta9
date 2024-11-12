@@ -132,9 +132,15 @@ type S3ImageRegistryConfig struct {
 }
 
 type RunnerConfig struct {
-	BaseImageName     string            `key:"baseImageName" json:"base_image_name"`
-	BaseImageRegistry string            `key:"baseImageRegistry" json:"base_image_registry"`
-	Tags              map[string]string `key:"tags" json:"tags"`
+	BaseImageName     string                 `key:"baseImageName" json:"base_image_name"`
+	BaseImageRegistry string                 `key:"baseImageRegistry" json:"base_image_registry"`
+	Tags              map[string]string      `key:"tags" json:"tags"`
+	StandalonePython  StandalonePythonConfig `key:"standalonePython" json:"standalone_python"`
+}
+
+type StandalonePythonConfig struct {
+	Versions              map[string]string `key:"versions" json:"versions"`
+	InstallScriptTemplate string            `key:"installScriptTemplate" json:"install_script_template"`
 }
 
 type StorageConfig struct {

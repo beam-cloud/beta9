@@ -1,6 +1,7 @@
 package image
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	_ "embed"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/google/uuid"
@@ -291,7 +293,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
 	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
-		installCmd := getPythonStandaloneInstallCommand(opts.PythonVersion)
+		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.StandalonePython, opts.PythonVersion)
+		if err != nil {
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+			return err
+		}
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
 
@@ -494,63 +500,53 @@ func getPythonInstallCommand(pythonVersion string) string {
 	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
 }
 
-func getPythonStandaloneInstallCommand(pythonVersion string) string {
-	var osArch string
+// StandalonePythonTemplate is used to render the standalone python install script
+type StandalonePythonTemplate struct {
+	PythonVersion string
+
+	// Architecture, OS, and Vendor are determined at runtime
+	Architecture string
+	OS           string
+	Vendor       string
+}
+
+func getPythonStandaloneInstallCommand(config types.StandalonePythonConfig, pythonVersion string) (string, error) {
+	var arch string
 	switch runtime.GOARCH {
 	case "amd64":
-		osArch = "x86_64"
+		arch = "x86_64"
 	case "arm64":
-		osArch = "aarch64"
+		arch = "aarch64"
 	default:
-		log.Println("Unsupported architecture")
+		return "", errors.New("unsupported architecture for python standalone install")
 	}
 
-	var venderAndOs string
+	var vendor, os string
 	switch runtime.GOOS {
 	case "linux":
-		venderAndOs = "unknown-linux"
+		vendor, os = "unknown", "linux"
 	case "darwin":
-		venderAndOs = "apple-darwin"
+		vendor, os = "apple", "darwin"
 	default:
-		log.Println("Unsupported OS")
+		return "", errors.New("unsupported OS for python standalone install")
 	}
 
-	// TODO: Make this configurable?
-	var pySemVer string
-	switch pythonVersion[6:] {
-	case "3.9":
-		pySemVer = "3.9.20"
-	case "3.10":
-		pySemVer = "3.10.5"
-	case "3.11":
-		pySemVer = "3.11.10"
-	case "3.12":
-		pySemVer = "3.12.7"
-	default:
-		log.Println("Unsupported Python version")
+	tmpl, err := template.New("standalonePython").Parse(config.InstallScriptTemplate)
+	if err != nil {
+		return "", err
 	}
 
-	// TODO: Make this configurable?
-	packageUrl := fmt.Sprintf("https://github.com/indygreg/python-build-standalone/releases/download/20241016/cpython-%s+20241016-%s-%s-gnu-install_only.tar.gz", pySemVer, osArch, venderAndOs)
+	var output bytes.Buffer
+	if err := tmpl.Execute(&output, StandalonePythonTemplate{
+		PythonVersion: config.Versions[pythonVersion],
+		Architecture:  arch,
+		OS:            os,
+		Vendor:        vendor,
+	}); err != nil {
+		return "", err
+	}
 
-	// TODO: Replace software-properties-common with build-essential so we can keep common compilation tools?
-	installCmd := fmt.Sprintf(`
-		apt-get update -q && \
-		apt-get install -q -y build-essential curl git && \
-		curl -fsSL -o python.tgz '%s' && \
-		tar -xzf python.tgz -C /usr/local --strip-components 1 && \
-		rm -f python.tgz && \
-		rm -f /usr/bin/python && \
-		rm -f /usr/bin/python3 && \
-		ln -s /usr/local/bin/python3 /usr/bin/python && \
-		ln -s /usr/local/bin/python3 /usr/bin/python3 && \
-		ln -s /usr/local/bin/pip3 /usr/bin/pip && \
-		ln -s /usr/local/bin/pip3 /usr/bin/pip3
-		`,
-		packageUrl,
-	)
-
-	return installCmd
+	return output.String(), nil
 }
 
 func generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
