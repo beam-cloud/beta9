@@ -172,6 +172,11 @@ func (i *botInstance) step(sessionId string) {
 	func() {
 		defer i.botStateManager.releaseLock(i.workspace.Name, i.stub.ExternalId, sessionId)
 
+		// i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
+		// 	Type:  BotEventTypeState,
+		// 	Value: "state",
+		// })
+
 		for _, transition := range i.botConfig.Transitions {
 			currentMarkerCounts := make(map[string]int64)
 

@@ -284,14 +284,15 @@ var Keys = &keys{}
 type keys struct{}
 
 var (
-	botLock           string = "bot:%s:%s:session_state_lock:%s"
-	botInputBuffer    string = "bot:%s:%s:input_buffer:%s"
-	botEventBuffer    string = "bot:%s:%s:event_buffer:%s"
-	botSessionIndex   string = "bot:%s:%s:session_index"
-	botSessionState   string = "bot:%s:%s:session_state:%s"
-	botMarkers        string = "bot:%s:%s:markers:%s:%s"
-	botTaskIndex      string = "bot:%s:%s:task_index:%s:%s"
-	botTransitionTask string = "bot:%s:%s:transition_task:%s:%s:%s"
+	botLock             string = "bot:%s:%s:session_state_lock:%s"
+	botInputBuffer      string = "bot:%s:%s:input_buffer:%s"
+	botEventBuffer      string = "bot:%s:%s:event_buffer:%s"
+	botSessionIndex     string = "bot:%s:%s:session_index"
+	botSessionState     string = "bot:%s:%s:session_state:%s"
+	botSessionKeepAlive string = "bot:%s:%s:session_keep_alive:%s"
+	botMarkers          string = "bot:%s:%s:markers:%s:%s"
+	botTaskIndex        string = "bot:%s:%s:task_index:%s:%s"
+	botTransitionTask   string = "bot:%s:%s:transition_task:%s:%s:%s"
 )
 
 func (k *keys) botLock(workspaceName, stubId, sessionId string) string {
@@ -312,6 +313,10 @@ func (k *keys) botEventBuffer(workspaceName, stubId, sessionId string) string {
 
 func (k *keys) botSessionState(workspaceName, stubId, sessionId string) string {
 	return fmt.Sprintf(botSessionState, workspaceName, stubId, sessionId)
+}
+
+func (k *keys) botSessionKeepAlive(workspaceName, stubId, sessionId string) string {
+	return fmt.Sprintf(botSessionKeepAlive, workspaceName, stubId, sessionId)
 }
 
 func (k *keys) botMarkers(workspaceName, stubId, sessionId, locationName string) string {

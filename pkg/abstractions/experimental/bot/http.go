@@ -46,6 +46,7 @@ func registerBotRoutes(g *echo.Group, pbs *PetriBotService) *botGroup {
 
 const keepAliveInterval = 1 * time.Second
 const eventPollingInterval = 1 * time.Second
+const keepAliveTimeout = 30 * time.Second
 
 func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
