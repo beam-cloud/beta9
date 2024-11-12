@@ -177,7 +177,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
-	// Read spec from bundle. If not found, then this is a container being built on a build worker.
+	// Read spec from bundle.
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
 
 	opts := &ContainerOptions{
