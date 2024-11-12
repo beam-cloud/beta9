@@ -126,8 +126,6 @@ func (c *CedanaClient) Close() {
 // Updates the runc container spec to make the shared library available
 // as well as the shared memory that is used for communication
 func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, gpuEnabled bool) error {
-  spec.Process.Terminal = true
-
 	if !gpuEnabled {
 		return nil // no need to do anything
 	}
@@ -248,13 +246,13 @@ func (c *CedanaClient) Restore(
 	bundle := strings.TrimRight(opts.ConfigPath, filepath.Base(opts.ConfigPath))
 
 	ttyPath := filepath.Join(os.TempDir(), fmt.Sprintf("cedana-tty-%s.sock", containerId))
-  tty := exec.CommandContext(ctx, cedanaBinPath, "debug", "recvtty", ttyPath)
-  tty.Stdout = opts.OutputWriter
-  tty.Stderr = opts.OutputWriter
-  err := tty.Start()
-  if err != nil {
-    return nil, err
-  }
+	tty := exec.CommandContext(ctx, cedanaBinPath, "debug", "recvtty", ttyPath)
+	tty.Stdout = opts.OutputWriter
+	tty.Stderr = opts.OutputWriter
+	err := tty.Start()
+	if err != nil {
+		return nil, err
+	}
 
 	args := &api.JobRestoreArgs{
 		JID: containerId,
@@ -275,7 +273,7 @@ func (c *CedanaClient) Restore(
 		opts.Started <- int(res.GetState().GetPID())
 	}
 
-  tty.Wait()
+	tty.Wait()
 
 	return res.State, nil
 }
