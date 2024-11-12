@@ -14,7 +14,7 @@ var ErrBotSessionNotFound = fmt.Errorf("bot session not found")
 type BotSession struct {
 	Id            string                     `json:"id" redis:"id"`
 	Messages      []BotChatCompletionMessage `json:"messages" redis:"messages"`
-	LastUpdatedAt int64                      `redis:"last_updated_at" json:"last_updated_at"`
+	LastKeepAlive int64                      `redis:"last_keep_alive" json:"last_keep_alive"`
 }
 
 type botContainer struct {

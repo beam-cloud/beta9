@@ -70,7 +70,7 @@ func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string,
 		}
 	}
 
-	state.LastUpdatedAt = time.Now().Unix()
+	state.LastKeepAlive = time.Now().Unix()
 
 	jsonData, err := json.Marshal(state)
 	if err != nil {
@@ -105,7 +105,7 @@ func (m *botStateManager) sessionKeepAlive(workspaceName, stubId, sessionId stri
 	if err != nil {
 		return err
 	}
-	state.LastUpdatedAt = time.Now().Unix()
+	state.LastKeepAlive = time.Now().Unix()
 
 	jsonData, err := json.Marshal(state)
 	if err != nil {
@@ -119,6 +119,7 @@ func (m *botStateManager) sessionKeepAlive(workspaceName, stubId, sessionId stri
 
 	return nil
 }
+
 func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string) error {
 	ctx := context.TODO()
 	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
@@ -148,7 +149,6 @@ func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string)
 	}
 
 	// TODO: delete all existing markers
-
 	return m.rdb.SRem(ctx, indexKey, sessionId).Err()
 }
 
@@ -164,6 +164,10 @@ func (m *botStateManager) getActiveSessions(workspaceName, stubId string) ([]*Bo
 		state, err := m.loadSession(workspaceName, stubId, sessionId)
 		if err != nil {
 			return nil, err
+		}
+
+		if time.Now().Unix()-state.LastKeepAlive > botInactivityTimeoutS {
+			continue
 		}
 
 		sessions = append(sessions, state)

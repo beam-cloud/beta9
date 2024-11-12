@@ -40,25 +40,47 @@ class BotEventType(str, Enum):
 
 
 class BotTransition:
+    """
+    Parameters:
+        cpu (Union[int, float, str]):
+            The number of CPUs to allocate to the transition. Default is 1.0.
+        memory (Union[int, str]):
+            The amount of memory to allocate to the transition. Default is 128.
+        gpu (GpuTypeAlias):
+            The type of GPU to allocate to the transition. Default is GpuType.NoGPU.
+        image (Image):
+            The image to use for the transition. Default is an empty Image.
+        secrets (Optional[List[str]]):
+            A list of secrets to pass to the transition. Default is None.
+        callback_url (Optional[str]):
+            The URL to send callback events to. Default is None.
+        inputs (dict):
+            A dictionary of inputs to pass to the transition. Default is {}.
+        outputs (dict):
+            A dictionary of outputs the transition will return. Default is {}.
+        description (Optional[str]):
+            A description of the transition. Default is None.
+        expose (bool):
+            Whether or not to give the model awareness of this transition. Default is True.
+        task_policy (Optional[str]):
+            The task policy to use for the transition. Default is None.
+    """
+
     def __init__(
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
         image: Image = Image(),
-        timeout: int = 180,
-        keep_warm: int = 180,
-        max_pending: int = 100,
         secrets: Optional[List[str]] = None,
-        name: Optional[str] = None,
         callback_url: Optional[str] = None,
-        task_policy: Optional[str] = None,
-        handler: Optional[str] = None,
         inputs: dict = {},
         outputs: dict = {},
         description: Optional[str] = None,
         expose: bool = True,
         bot_instance: Optional["Bot"] = None,  # Reference to parent Bot instance
+        task_policy: Optional[str] = None,
+        handler: Optional[str] = None,
     ):
         self.handler: str = handler
         self.image: Image = image
@@ -86,11 +108,7 @@ class BotTransition:
             "cpu": cpu,
             "memory": memory,
             "gpu": gpu,
-            "timeout": timeout,
-            "keep_warm": keep_warm,
-            "max_pending": max_pending,
             "secrets": secrets or [],
-            "name": name or "",
             "callback_url": callback_url or "",
             "task_policy": task_policy or "",
             "handler": handler or "",
