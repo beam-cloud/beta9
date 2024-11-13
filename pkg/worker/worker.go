@@ -342,7 +342,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 						return
 					}
 
-					slog.Info("container still running after stop event", "container_id", request.ContainerId, "grace_period", s.config.Worker.TerminationGracePeriod, "seconds")
+					slog.Info("container still running after stop event", "container_id", request.ContainerId, "grace_period_seconds", s.config.Worker.TerminationGracePeriod)
 					s.stopContainerChan <- stopContainerEvent{
 						ContainerId: request.ContainerId,
 						Kill:        true,
