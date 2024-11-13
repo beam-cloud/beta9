@@ -38,6 +38,9 @@ class BotEventType(str, Enum):
     TRANSITION_STARTED = "transition_started"
     TRANSITION_COMPLETED = "transition_completed"
     TRANSITION_FAILED = "transition_failed"
+    STATE = "state"
+    CONFIRM_REQUEST = "confirm_request"
+    CONFIRM_RESPONSE = "confirm_response"
 
 
 class BotTransition:
@@ -63,6 +66,8 @@ class BotTransition:
             A description of the transition. Default is None.
         expose (bool):
             Whether or not to give the model awareness of this transition. Default is True.
+        confirm (bool):
+            Whether or not to ask the user for confirmation before running the transition. Default is False.
         task_policy (Optional[str]):
             The task policy to use for the transition. Default is None.
     """
@@ -79,6 +84,7 @@ class BotTransition:
         outputs: list = [],
         description: Optional[str] = None,
         expose: bool = True,
+        confirm: bool = False,
         bot_instance: Optional["Bot"] = None,  # Reference to parent Bot instance
         task_policy: Optional[str] = None,
         handler: Optional[str] = None,
@@ -128,6 +134,7 @@ class BotTransition:
             ],
             "description": description or "",
             "expose": expose,
+            "confirm": confirm,
         }
 
         self.bot_instance: Optional["Bot"] = bot_instance

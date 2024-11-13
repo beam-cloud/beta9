@@ -2,12 +2,14 @@ package bot
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	openai "github.com/sashabaranov/go-openai"
 	"github.com/sashabaranov/go-openai/jsonschema"
+	"gopkg.in/yaml.v2"
 )
 
 type BotInterface struct {
@@ -31,12 +33,32 @@ type botInterfaceOpts struct {
 	Stub         *types.StubWithRelated
 }
 
+var (
+	//go:embed prompt.yaml
+	defaultBotSystemPrompt    string
+	defaultBotSystemPromptKey = "prompt"
+)
+
 func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
+	systemPrompt := opts.AppConfig.Abstractions.Bot.SystemPrompt
+	if systemPrompt == "" {
+		var promptData map[string]interface{}
+
+		err := yaml.Unmarshal([]byte(defaultBotSystemPrompt), &promptData)
+		if err != nil {
+			return nil, err
+		}
+
+		if prompt, ok := promptData[defaultBotSystemPromptKey].(string); ok {
+			systemPrompt = prompt
+		}
+	}
+
 	bi := &BotInterface{
 		client:       openai.NewClient(opts.BotConfig.ApiKey),
 		botConfig:    opts.BotConfig,
 		model:        opts.BotConfig.Model,
-		systemPrompt: opts.AppConfig.Abstractions.Bot.SystemPrompt,
+		systemPrompt: systemPrompt,
 		stateManager: opts.StateManager,
 		workspace:    opts.Workspace,
 		stub:         opts.Stub,

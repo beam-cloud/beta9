@@ -140,7 +140,9 @@ class BotTransition:
             bot_stub=self.bot_stub,
         )
 
-        context.push_event(event_type=BotEventType.TRANSITION_STARTED, event_value=config.task_id)
+        context.push_event(
+            event_type=BotEventType.TRANSITION_STARTED, event_value=self.transition_name
+        )
 
         try:
             outputs = self.handler(context=context, inputs=self._format_inputs(inputs))
@@ -231,7 +233,7 @@ def main(channel: Channel):
             event_type=BotEventType.TRANSITION_COMPLETED
             if task_status == TaskStatus.Complete
             else BotEventType.TRANSITION_FAILED,
-            event_value=task_id,
+            event_value=transition_name,
             metadata={
                 "task_id": task_id,
                 "session_id": session_id,

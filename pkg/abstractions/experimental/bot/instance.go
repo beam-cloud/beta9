@@ -197,6 +197,17 @@ func (i *botInstance) step(sessionId string) {
 
 			// If this transition can fire, we need to pop the required markers and dispatch a task
 			if canFire {
+				if transition.Confirm {
+					i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
+						Type:  BotEventTypeConfirmRequest,
+						Value: transition.Name,
+						Metadata: map[string]string{
+							"session_id":      sessionId,
+							"transition_name": transition.Name,
+						},
+					})
+				}
+
 				markers := []Marker{}
 
 				for locationName, requiredCount := range markersToPop {
@@ -228,7 +239,7 @@ func (i *botInstance) step(sessionId string) {
 					log.Printf("<bot %s> Error running transition %s: %s", i.stub.ExternalId, transition.Name, err)
 
 					i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
-						Type:  BotEventTypeTransitionError,
+						Type:  BotEventTypeTransitionFailed,
 						Value: err.Error(),
 						Metadata: map[string]string{
 							"session_id":      sessionId,

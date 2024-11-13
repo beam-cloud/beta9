@@ -84,10 +84,12 @@ const (
 	BotEventTypeMemoryUpdated       BotEventType = "memory_updated"
 	BotEventTypeSessionCreated      BotEventType = "session_created"
 	BotEventTypeTransitionFired     BotEventType = "transition_fired"
-	BotEventTypeTransitionError     BotEventType = "transition_error"
+	BotEventTypeTransitionFailed    BotEventType = "transition_failed"
 	BotEventTypeTransitionStarted   BotEventType = "transition_started"
 	BotEventTypeTransitionCompleted BotEventType = "transition_completed"
 	BotEventTypeState               BotEventType = "current_state"
+	BotEventTypeConfirmRequest      BotEventType = "confirm_request"
+	BotEventTypeConfirmResponse     BotEventType = "confirm_response"
 )
 
 const PromptTypeUser = "user_message"
@@ -199,6 +201,7 @@ type BotTransitionConfig struct {
 	Outputs       []string       `json:"outputs" redis:"outputs"`
 	Description   string         `json:"description" redis:"description"`
 	Expose        bool           `json:"expose" redis:"expose"`
+	Confirm       bool           `json:"confirm" redis:"confirm"`
 }
 
 func (t *BotTransitionConfig) FormatTransition() string {
