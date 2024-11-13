@@ -218,16 +218,7 @@ func (i *botInstance) step(sessionId string) {
 					},
 				}
 
-				i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
-					Type:  BotEventTypeTransitionFired,
-					Value: transition.Name,
-					Metadata: map[string]string{
-						"session_id":      sessionId,
-						"transition_name": transition.Name,
-					},
-				})
-
-				_, err = i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
+				t, err := i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
 					MaxRetries: 0,
 					Timeout:    3600,
 					TTL:        3600,
@@ -244,8 +235,17 @@ func (i *botInstance) step(sessionId string) {
 							"transition_name": transition.Name,
 						},
 					})
-
 				}
+
+				i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
+					Type:  BotEventTypeTransitionFired,
+					Value: transition.Name,
+					Metadata: map[string]string{
+						"session_id":      sessionId,
+						"transition_name": transition.Name,
+						"task_id":         t.Metadata().TaskId,
+					},
+				})
 			}
 		}
 	}()
