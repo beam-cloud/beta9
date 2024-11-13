@@ -63,6 +63,7 @@ class PushBotMarkersRequest(betterproto.Message):
     markers: Dict[str, "PushBotMarkersRequestMarkerList"] = betterproto.map_field(
         3, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
     )
+    source_task_id: str = betterproto.string_field(5)
 
 
 @dataclass(eq=False, repr=False)

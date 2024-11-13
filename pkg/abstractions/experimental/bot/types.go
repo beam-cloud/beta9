@@ -116,6 +116,7 @@ type BotMemoryResponse struct {
 type Marker struct {
 	LocationName string        `json:"location_name" redis:"location_name"`
 	Fields       []MarkerField `json:"marker_data" redis:"marker_data"`
+	SourceTaskId string        `json:"source_task_id" redis:"source_task_id"`
 }
 
 type MarkerField struct {
