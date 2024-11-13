@@ -1,10 +1,9 @@
 package gateway
 
 import (
-	"log/slog"
-
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/rs/zerolog/log"
 )
 
 func configureEchoLogger(e *echo.Echo, debug bool) {
@@ -16,9 +15,9 @@ func configureEchoLogger(e *echo.Echo, debug bool) {
 			LogError:     true,
 			LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
 				if v.Error != nil {
-					slog.Error("request error", "error", v.Error, "method", c.Request().Method, "uri", v.URIPath, "status", v.Status)
+					log.Error().Str("error", v.Error.Error()).Str("method", c.Request().Method).Str("uri", v.URIPath).Int("status", v.Status).Msg("request error")
 				} else {
-					slog.Info("request", "method", c.Request().Method, "uri", v.URIPath, "status", v.Status)
+					log.Info().Str("method", c.Request().Method).Str("uri", v.URIPath).Int("status", v.Status).Msg("request")
 				}
 				return nil
 			},

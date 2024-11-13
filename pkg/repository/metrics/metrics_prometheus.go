@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"sort"
@@ -16,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog/log"
 	maps "golang.org/x/exp/maps"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -63,7 +63,7 @@ func (r *PrometheusMetricsRepository) Init(source string) error {
 
 	go func() {
 		if err := r.listenAndServe(); err != nil {
-			slog.Error("failed to start metrics server", "error", err)
+			log.Error().Err(err).Msg("failed to start metrics server")
 			os.Exit(1)
 		}
 	}()

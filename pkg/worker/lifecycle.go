@@ -17,6 +17,7 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -42,12 +43,12 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 
 	stopArgs, err := types.ToStopContainerArgs(event.Args)
 	if err != nil {
-		slog.Error("failed to parse stop container args", "error", err)
+		log.Error().Err(err).Msg("failed to parse stop container args")
 		return false
 	}
 
 	if _, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
-		slog.Info("received stop container event", "container_id", stopArgs.ContainerId)
+		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
 		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
@@ -56,11 +57,11 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 
 // stopContainer stops a runc container. When force is true, a SIGKILL signal is sent to the container.
 func (s *Worker) stopContainer(containerId string, kill bool) error {
-	slog.Info("stopping container", "container_id", containerId)
+	log.Info().Str("container_id", containerId).Msg("stopping container")
 
 	_, exists := s.containerInstances.Get(containerId)
 	if !exists {
-		slog.Info("container not found", "container_id", containerId)
+		log.Info().Str("container_id", containerId).Msg("container not found")
 		return nil
 	}
 
@@ -71,7 +72,7 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 
 	err := s.runcHandle.Kill(context.Background(), containerId, signal, &runc.KillOpts{All: true})
 	if err != nil {
-		slog.Error("unable to stop container", "container_id", containerId, "error", err)
+		log.Error().Str("container_id", containerId).Err(err).Msg("unable to stop container")
 
 		if strings.Contains(err.Error(), "container does not exist") {
 			s.containerNetworkManager.TearDown(containerId)
@@ -81,7 +82,7 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 		return err
 	}
 
-	slog.Info("container stopped", "container_id", containerId)
+	log.Info().Str("container_id", containerId).Msg("container stopped")
 	return nil
 }
 
@@ -96,7 +97,7 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 
 	err := s.containerRepo.SetContainerExitCode(containerId, *exitCode)
 	if err != nil {
-		slog.Error("failed to set exit code", "container_id", containerId, "error", err)
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
 	}
 
 	s.clearContainer(containerId, request, *exitCode)
@@ -113,7 +114,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	// Tear down container network components
 	err := s.containerNetworkManager.TearDown(request.ContainerId)
 	if err != nil {
-		slog.Error("failed to clean up container network", "container_id", request.ContainerId, "error", err)
+		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to clean up container network")
 	}
 
 	s.completedRequests <- request
@@ -138,17 +139,17 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		container, err := s.runcHandle.State(context.TODO(), containerId)
 		if err == nil && container.Status == types.RuncContainerStatusRunning {
 			if err := s.stopContainer(containerId, false); err != nil {
-				slog.Error("failed to stop container", "container_id", containerId, "error", err)
+				log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop container")
 			}
 		}
 
 		s.containerInstances.Delete(containerId)
 		err = s.containerRepo.DeleteContainerState(containerId)
 		if err != nil {
-			slog.Error("failed to remove container state", "container_id", containerId, "error", err)
+			log.Error().Str("container_id", containerId).Err(err).Msg("failed to remove container state")
 		}
 
-		slog.Info("finalized container shutdown", "container_id", containerId)
+		log.Info().Str("container_id", containerId).Msg("finalized container shutdown")
 	}()
 }
 
@@ -158,10 +159,10 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Pull image
-	slog.Info("lazy-pulling image", "container_id", containerId, "image_id", request.ImageId)
+	log.Info().Str("container_id", containerId).Str("image_id", request.ImageId).Msg("lazy-pulling image")
 	err := s.imageClient.PullLazy(request)
 	if err != nil && request.SourceImage != nil {
-		slog.Info("lazy-pull failed, pulling source image", "container_id", containerId, "image_id", *request.SourceImage)
+		log.Info().Str("container_id", containerId).Str("image_id", *request.SourceImage).Msg("lazy-pull failed, pulling source image")
 		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
 		if err == nil {
 			err = s.imageClient.PullLazy(request)
@@ -175,7 +176,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	slog.Info("acquired port", "container_id", containerId, "port", bindPort)
+	log.Info().Str("container_id", containerId).Int("port", bindPort).Msg("acquired port")
 
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
@@ -196,7 +197,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	slog.Info("successfully created spec from request", "container_id", containerId)
+	log.Info().Str("container_id", containerId).Msg("successfully created spec from request")
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
@@ -205,7 +206,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	slog.Info("set container address", "container_id", containerId)
+	log.Info().Str("container_id", containerId).Msg("set container address")
 
 	logChan := make(chan common.LogRecord)
 	go s.containerWg.Add(1)
@@ -213,7 +214,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	// Start the container
 	go s.spawn(request, spec, logChan, opts)
 
-	slog.Info("spawned container", "container_id", containerId)
+	log.Info().Str("container_id", containerId).Msg("spawned container")
 	return nil
 }
 
@@ -296,7 +297,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
 				err := os.MkdirAll(m.LocalPath, 0755)
 				if err != nil {
-					slog.Error("failed to create mount directory", "container_id", request.ContainerId, "error", err)
+					log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to create mount directory")
 				}
 			}
 		}
@@ -309,7 +310,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		if m.LinkPath != "" {
 			err = forceSymlink(m.MountPath, m.LinkPath)
 			if err != nil {
-				slog.Error("unable to symlink volume", "container_id", request.ContainerId, "error", err)
+				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to symlink volume")
 			}
 		}
 
@@ -325,7 +326,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if s.fileCacheManager.CacheAvailable() && request.Workspace.VolumeCacheEnabled {
 		err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
 		if err != nil {
-			slog.Error("failed to setup volume caching", "container_id", request.ContainerId, "error", err)
+			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to setup volume caching")
 		}
 	}
 
@@ -442,7 +443,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, logCha
 
 		if _, err := s.containerRepo.GetContainerState(containerId); err != nil {
 			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-				slog.Info("container state not found, returning", "container_id", containerId)
+				log.Info().Str("container_id", containerId).Msg("container state not found, returning")
 				return
 			}
 		}
@@ -454,7 +455,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, logCha
 	// Setup container overlay filesystem
 	err := containerInstance.Overlay.Setup()
 	if err != nil {
-		slog.Error("failed to setup overlay", "container_id", containerId, "error", err)
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to setup overlay")
 		return
 	}
 	defer containerInstance.Overlay.Cleanup()
@@ -463,14 +464,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, logCha
 	// Setup container network namespace / devices
 	err = s.containerNetworkManager.Setup(containerId, spec)
 	if err != nil {
-		slog.Error("failed to setup container network", "container_id", containerId, "error", err)
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to setup container network")
 		return
 	}
 
 	// Expose the bind port
 	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
 	if err != nil {
-		slog.Error("failed to expose container bind port", "container_id", containerId, "error", err)
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to expose container bind port")
 		return
 	}
 
@@ -545,7 +546,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, outputL
 
 	ch, err := s.runcHandle.Events(ctx, containerId, time.Second)
 	if err != nil {
-		slog.Error("failed to open runc events channel", "container_id", containerId, "error", err)
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to open runc events channel")
 		return
 	}
 
@@ -559,7 +560,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, outputL
 		case event, ok := <-ch:
 			if !ok { // If the channel is closed, try to re-open it
 				if tries == maxTries-1 {
-					slog.Error("failed to watch for OOM events", "container_id", containerId)
+					log.Error().Str("container_id", containerId).Msg("failed to watch for OOM events")
 					return
 				}
 
@@ -570,7 +571,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, outputL
 				case <-time.After(time.Second):
 					ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
 					if err != nil {
-						slog.Error("failed to open runc events channel", "container_id", containerId, "error", err)
+						log.Error().Str("container_id", containerId).Err(err).Msg("failed to open runc events channel")
 					}
 				}
 				continue

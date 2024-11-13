@@ -1,12 +1,12 @@
 package apiv1
 
 import (
-	"log/slog"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -36,7 +36,7 @@ func (h *HealthGroup) HealthCheck(c echo.Context) error {
 	})
 
 	if err := g.Wait(); err != nil {
-		slog.Error("health check failed", "error", err)
+		log.Error().Err(err).Msg("health check failed")
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"status": "not ok",
 			"error":  err.Error(),

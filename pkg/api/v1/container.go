@@ -1,7 +1,6 @@
 package apiv1
 
 import (
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 )
 
 type ContainerGroup struct {
@@ -78,7 +78,7 @@ func (c *ContainerGroup) StopAllWorkspaceContainers(ctx echo.Context) error {
 	for _, state := range containerStates {
 		err := c.scheduler.Stop(&types.StopContainerArgs{ContainerId: state.ContainerId})
 		if err != nil {
-			slog.Error("failed to stop container", "container_id", state.ContainerId, "error", err)
+			log.Error().Str("container_id", state.ContainerId).Err(err).Msg("failed to stop container")
 		}
 	}
 

@@ -3,12 +3,12 @@ package volume
 import (
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -106,7 +106,7 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 				if err == io.EOF {
 					return nil
 				}
-				slog.Error("failed to upload file", "error", err)
+				log.Error().Err(err).Msg("failed to upload file")
 				return err
 			}
 		}

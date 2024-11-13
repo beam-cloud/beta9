@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +13,7 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
+	"github.com/rs/zerolog/log"
 )
 
 //go:embed config.default.yaml
@@ -67,7 +67,7 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 			sort.Strings(matches)
 			for _, path := range matches {
 				if err := cm.LoadConfig(ext, file.Provider(path)); err != nil {
-					slog.Error("failed to load config", "path", path, "error", err)
+					log.Error().Str("path", path).Err(err).Msg("failed to load config")
 				}
 			}
 		}
@@ -77,7 +77,7 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 	configJson := os.Getenv("CONFIG_JSON")
 	if configJson != "" {
 		if err := cm.LoadConfig(JSONConfigFormat, rawbytes.Provider([]byte(configJson))); err != nil {
-			slog.Error("failed to load config from CONFIG_JSON", "error", err)
+			log.Error().Err(err).Msg("failed to load config from CONFIG_JSON")
 		} else {
 			cm.tag = "json"
 		}
@@ -85,7 +85,7 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 
 	// If debug mode is enabled, print the current configuration.
 	if cm.kf.Bool("debugMode") {
-		slog.Info("debug mode enabled. current configuration", "config", cm.Print())
+		log.Info().Str("config", cm.Print()).Msg("debug mode enabled. current configuration")
 	}
 
 	return cm, nil
@@ -104,7 +104,7 @@ func (cm *ConfigManager[T]) GetConfig() T {
 
 	err := cm.kf.UnmarshalWithConf("", &c, koanf.UnmarshalConf{Tag: cm.tag, FlatPaths: false})
 	if err != nil {
-		slog.Error("failed to unmarshal config")
+		log.Error().Err(err).Msg("failed to unmarshal config")
 		os.Exit(1)
 	}
 

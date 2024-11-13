@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path"
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/sirupsen/logrus"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -43,7 +43,7 @@ func (r *ContainerLogger) Log(containerId, stubId string, format string, args ..
 		TimestampFormat: time.RFC3339Nano,
 	})
 
-	slog.Info(fmt.Sprintf(format, args...), "container_id", containerId)
+	log.Info().Str("container_id", containerId).Msg(fmt.Sprintf(format, args...))
 	f.WithFields(logrus.Fields{
 		"container_id": containerId,
 		"stub_id":      stubId,
@@ -109,9 +109,9 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 				}
 
 				if msg.TaskID != nil {
-					slog.Info(line, "container_id", containerId, "task_id", *msg.TaskID)
+					log.Info().Str("container_id", containerId).Str("task_id", *msg.TaskID).Msg(line)
 				} else {
-					slog.Info(line, "container_id", containerId)
+					log.Info().Str("container_id", containerId).Msg(line)
 				}
 			}
 		}
@@ -128,7 +128,7 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 					continue
 				}
 
-				slog.Info(line, "container_id", containerId)
+				log.Info().Str("container_id", containerId).Msg(line)
 			}
 
 			// Write logs to in-memory log buffer as well

@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"github.com/labstack/echo-contrib/pprof"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"golang.org/x/sync/errgroup"
@@ -164,7 +164,7 @@ func (g *Gateway) initLock(name string) (func(), error) {
 
 	return func() {
 		if err := lock.Release(lockKey); err != nil {
-			slog.Error("failed to release init lock", "error", err)
+			log.Error().Str("lock_key", lockKey).Err(err).Msg("failed to release init lock")
 		}
 	}, nil
 }
@@ -410,62 +410,54 @@ func (g *Gateway) Start() error {
 	if g.Config.Monitoring.Telemetry.Enabled {
 		_, err = common.SetupTelemetry(g.ctx, types.DefaultGatewayServiceName, g.Config)
 		if err != nil {
-			slog.Error("failed to setup telemetry", "error", err)
-			os.Exit(1)
+			log.Fatal().Err(err).Msg("failed to setup telemetry")
 		}
 	}
 
 	err = g.initGrpc()
 	if err != nil {
-		slog.Error("failed to initialize grpc server", "error", err)
-		os.Exit(1)
+		log.Fatal().Err(err).Msg("failed to initialize grpc server")
 	}
 
 	err = g.initHttp()
 	if err != nil {
-		slog.Error("failed to initialize http server", "error", err)
-		os.Exit(1)
+		log.Fatal().Err(err).Msg("failed to initialize http server")
 	}
 
 	err = g.registerServices()
 	if err != nil {
-		slog.Error("failed to register services", "error", err)
-		os.Exit(1)
+		log.Fatal().Err(err).Msg("failed to register services")
 	}
 
 	go func() {
 		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", g.Config.GatewayService.GRPC.Port))
 		if err != nil {
-			slog.Error("failed to listen", "error", err)
-			os.Exit(1)
+			log.Fatal().Err(err).Msg("failed to listen")
 		}
 
 		if err := g.grpcServer.Serve(lis); err != nil {
-			slog.Error("failed to start grpc server", "error", err)
-			os.Exit(1)
+			log.Fatal().Err(err).Msg("failed to start grpc server")
 		}
 	}()
 
 	go func() {
 		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", g.Config.GatewayService.HTTP.Port))
 		if err != nil {
-			slog.Error("failed to listen", "error", err)
-			os.Exit(1)
+			log.Fatal().Err(err).Msg("failed to listen")
 		}
 
 		if err := g.httpServer.Serve(lis); err != nil && err != http.ErrServerClosed {
-			slog.Error("failed to start http server", "error", err)
-			os.Exit(1)
+			log.Fatal().Err(err).Msg("failed to start http server")
 		}
 	}()
 
-	slog.Info("gateway http server running", "port", g.Config.GatewayService.HTTP.Port)
-	slog.Info("gateway grpc server running", "port", g.Config.GatewayService.GRPC.Port)
+	log.Info().Int("port", g.Config.GatewayService.HTTP.Port).Msg("gateway http server running")
+	log.Info().Int("port", g.Config.GatewayService.GRPC.Port).Msg("gateway grpc server running")
 
 	terminationSignal := make(chan os.Signal, 1)
 	signal.Notify(terminationSignal, os.Interrupt, syscall.SIGTERM)
 	<-terminationSignal
-	slog.Info("termination signal received. shutting down...")
+	log.Info().Msg("termination signal received. shutting down...")
 	g.shutdown()
 
 	return nil
@@ -502,7 +494,6 @@ func (g *Gateway) shutdown() {
 	g.cancelFunc()
 
 	if err := eg.Wait(); err != nil {
-		slog.Error("failed to shutdown gateway", "error", err)
-		os.Exit(1)
+		log.Fatal().Err(err).Msg("failed to shutdown gateway")
 	}
 }

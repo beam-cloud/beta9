@@ -2,8 +2,6 @@ package worker
 
 import (
 	"context"
-	"log/slog"
-
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +14,7 @@ import (
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/rs/zerolog/log"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -141,7 +140,7 @@ func NewWorker() (*Worker, error) {
 	if config.Worker.BlobCacheEnabled {
 		cacheClient, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
 		if err != nil {
-			slog.Warn("cache unavailable, performance may be degraded", "error", err)
+			log.Warn().Err(err).Msg("cache unavailable, performance may be degraded")
 		}
 	}
 
@@ -232,11 +231,11 @@ func (s *Worker) Run() error {
 
 			_, exists := s.containerInstances.Get(containerId)
 			if !exists {
-				slog.Info("running container", "container_id", containerId)
+				log.Info().Str("container_id", containerId).Msg("running container")
 
 				err := s.RunContainer(request)
 				if err != nil {
-					slog.Error("unable to run container", "container_id", containerId, "error", err)
+					log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
 
 					// Set a non-zero exit code for the container (both in memory, and in repo)
 					exitCode := 1
@@ -248,7 +247,7 @@ func (s *Worker) Run() error {
 
 					err := s.containerRepo.SetContainerExitCode(containerId, exitCode)
 					if err != nil {
-						slog.Error("failed to set exit code", "container_id", containerId, "error", err)
+						log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
 					}
 
 					s.containerLock.Unlock()
@@ -276,7 +275,7 @@ func (s *Worker) listenForShutdown() {
 	signal.Notify(terminate, syscall.SIGINT, syscall.SIGTERM)
 
 	<-terminate
-	slog.Info("shutdown signal received")
+	log.Info().Msg("shutdown signal received")
 
 	s.cancel()
 }
@@ -316,7 +315,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			state, err := s.containerRepo.GetContainerState(request.ContainerId)
 			if err != nil {
 				if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-					slog.Info("container state not found, stopping container", "container_id", request.ContainerId)
+					log.Info().Str("container_id", request.ContainerId).Msg("container state not found, stopping container")
 					s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
 					return nil
 				}
@@ -324,11 +323,11 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				continue
 			}
 
-			slog.Info("container still running", "container_id", request.ContainerId, "image_id", request.ImageId)
+			log.Info().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
 
 			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
 			if err != nil {
-				slog.Error("unable to update container state", "container_id", request.ContainerId, "error", err)
+				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
 			}
 
 			// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
@@ -342,7 +341,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 						return
 					}
 
-					slog.Info("container still running after stop event", "container_id", request.ContainerId, "grace_period_seconds", s.config.Worker.TerminationGracePeriod)
+					log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
 					s.stopContainerChan <- stopContainerEvent{
 						ContainerId: request.ContainerId,
 						Kill:        true,
@@ -377,7 +376,7 @@ func (s *Worker) manageWorkerCapacity() {
 				return
 			}
 
-			slog.Error("unable to process completed request", "error", err)
+			log.Error().Err(err).Msg("unable to process completed request")
 			s.completedRequests <- request
 			continue
 		}
@@ -408,7 +407,7 @@ func (s *Worker) keepalive() {
 }
 
 func (s *Worker) startup() error {
-	slog.Info("worker starting up")
+	log.Info().Msg("worker starting up")
 
 	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
 	if err != nil {
@@ -435,7 +434,7 @@ func (s *Worker) startup() error {
 }
 
 func (s *Worker) shutdown() error {
-	slog.Info("shutting down")
+	log.Info().Msg("shutting down")
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
 	// Stops goroutines

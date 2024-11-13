@@ -3,7 +3,6 @@ package repository
 import (
 	"bytes"
 	"encoding/json"
-	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/rs/zerolog/log"
 )
 
 type TCPEventClientRepo struct {
@@ -23,7 +23,7 @@ type TCPEventClientRepo struct {
 func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
 	endpointAvailable := eventEndpointAvailable(config.Endpoint, time.Duration(config.DialTimeout))
 	if !endpointAvailable {
-		slog.Warn("fluentbit host does not appear to be up, events will be dropped")
+		log.Warn().Msg("fluentbit host does not appear to be up, events will be dropped")
 	}
 
 	// Parse event mapping
@@ -74,13 +74,13 @@ func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, d
 
 	event, err := t.createEventObject(eventName, schemaVersion, data)
 	if err != nil {
-		slog.Error("failed to create event object", "error", err)
+		log.Error().Err(err).Msg("failed to create event object")
 		return
 	}
 
 	eventBytes, err := json.Marshal(event)
 	if err != nil {
-		slog.Error("failed to marshal event object", "error", err)
+		log.Error().Err(err).Msg("failed to marshal event object")
 		return
 	}
 
@@ -92,7 +92,7 @@ func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, d
 
 	resp, err := http.Post(t.config.Endpoint+"/"+tag, "application/json", bytes.NewBuffer(eventBytes))
 	if err != nil {
-		slog.Error("failed to send payload to event server", "error", err)
+		log.Error().Err(err).Msg("failed to send payload to event server")
 		return
 	}
 	defer resp.Body.Close()
@@ -101,7 +101,7 @@ func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, d
 		return
 	}
 
-	slog.Error("unexpected status code from event server", "status_code", resp.StatusCode)
+	log.Error().Int("status_code", resp.StatusCode).Msg("unexpected status code from event server")
 }
 
 func (t *TCPEventClientRepo) PushContainerRequestedEvent(request *types.ContainerRequest) {

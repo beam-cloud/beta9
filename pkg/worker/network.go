@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -19,6 +18,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/rs/zerolog/log"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
@@ -83,13 +83,13 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	ipt6Supported := true
 	ipt6, err = iptables.New(iptables.Path(ipv6Path), iptables.IPFamily(iptables.ProtocolIPv6))
 	if err != nil {
-		slog.Warn("IPv6 iptables initialization failed, falling back to IPv4 only", "error", err)
+		log.Warn().Err(err).Msg("IPv6 iptables initialization failed, falling back to IPv4 only")
 		ipt6Supported = false
 	} else {
 		// Check if the ip6tables NAT table can be accessed
 		_, err := ipt6.List("nat", "POSTROUTING")
 		if err != nil {
-			slog.Warn("IPv6 iptables NAT table not available, falling back to IPv4 only", "error", err)
+			log.Warn().Err(err).Msg("IPv6 iptables NAT table not available, falling back to IPv4 only")
 			ipt6Supported = false
 		}
 	}
@@ -446,7 +446,7 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 		case <-ticker.C:
 			containerIds, err := m.listContainerIdsFromIptables()
 			if err != nil {
-				slog.Error("error listing container ids", "error", err)
+				log.Error().Err(err).Msg("error listing container ids")
 				continue
 			}
 
@@ -465,10 +465,10 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 					var notFoundErr *types.ErrContainerStateNotFound
 					if _, err := m.containerRepo.GetContainerState(containerId); err != nil && errors.As(err, &notFoundErr) {
 						// Container state not found, so tear down the namespace and associated resources
-						slog.Info("orphaned namespace detected", "container_id", containerId)
+						log.Info().Str("container_id", containerId).Msg("orphaned namespace detected")
 
 						if err := m.TearDown(containerId); err != nil {
-							slog.Error("error tearing down namespace", "container_id", containerId, "error", err)
+							log.Error().Str("container_id", containerId).Err(err).Msg("error tearing down namespace")
 						}
 					}
 

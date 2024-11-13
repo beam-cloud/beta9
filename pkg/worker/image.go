@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/abstractions/image"
+	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
+	types "github.com/beam-cloud/beta9/pkg/types"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
@@ -24,11 +27,7 @@ import (
 	"github.com/opencontainers/umoci/oci/casext"
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
-
-	"github.com/beam-cloud/beta9/pkg/abstractions/image"
-	common "github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/repository"
-	types "github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -202,7 +201,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 
 func (c *ImageClient) Cleanup() error {
 	c.mountedFuseServers.Range(func(imageId string, server *fuse.Server) bool {
-		slog.Info("un-mounting image", "image_id", imageId)
+		log.Info().Str("image_id", imageId).Msg("un-mounting image")
 		server.Unmount()
 		return true // Continue iteration
 	})
@@ -427,19 +426,19 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}
 
 	if err != nil {
-		slog.Error("unable to create archive", "error", err)
+		log.Error().Err(err).Msg("unable to create archive")
 		return err
 	}
-	slog.Info("container archive took", "container_id", imageId, "duration", time.Since(startTime))
+	log.Info().Str("container_id", imageId).Dur("duration", time.Since(startTime)).Msg("container archive took")
 
 	// Push the archive to a registry
 	startTime = time.Now()
 	err = c.registry.Push(ctx, archivePath, imageId)
 	if err != nil {
-		slog.Error("failed to push image", "image_id", imageId, "error", err)
+		log.Error().Str("image_id", imageId).Err(err).Msg("failed to push image")
 		return err
 	}
 
-	slog.Info("image push took", "image_id", imageId, "duration", time.Since(startTime))
+	log.Info().Str("image_id", imageId).Dur("duration", time.Since(startTime)).Msg("image push took")
 	return nil
 }

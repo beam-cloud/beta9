@@ -6,14 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/rs/zerolog/log"
 
 	pb "github.com/beam-cloud/beta9/proto"
 
@@ -57,12 +59,12 @@ func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], image
 func (s *RunCServer) Start() error {
 	listener, err := net.Listen("tcp", ":0") // // Random free port
 	if err != nil {
-		slog.Error("failed to listen", "error", err)
+		log.Error().Err(err).Msg("failed to listen")
 		os.Exit(1)
 	}
 
 	s.port = listener.Addr().(*net.TCPAddr).Port
-	slog.Info("runc server started", "port", s.port)
+	log.Info().Int("port", s.port).Msg("runc server started")
 
 	grpcServer := grpc.NewServer()
 	pb.RegisterRunCServiceServer(grpcServer, s)
@@ -70,7 +72,7 @@ func (s *RunCServer) Start() error {
 	go func() {
 		err := grpcServer.Serve(listener)
 		if err != nil {
-			slog.Error("failed to start grpc server", "error", err)
+			log.Error().Err(err).Msg("failed to start grpc server")
 			os.Exit(1)
 		}
 	}()
@@ -235,7 +237,7 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 				if progress > lastProgress && progress != lastProgress {
 					lastProgress = progress
 
-					slog.Info("image upload progress", "progress", progress)
+					log.Info().Int("progress", progress).Msg("image upload progress")
 					err := stream.Send(&pb.RunCArchiveResponse{Done: false, Success: false, Progress: int32(progress), ErrorMsg: ""})
 					if err != nil {
 						return

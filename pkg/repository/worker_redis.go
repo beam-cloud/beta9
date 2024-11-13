@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 )
 
 type WorkerRedisRepository struct {
@@ -383,7 +383,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 		return fmt.Errorf("failed to push request: %w", err)
 	}
 
-	slog.Info("request for container added", "container_id", request.ContainerId, "worker_id", worker.Id)
+	log.Info().Str("container_id", request.ContainerId).Str("worker_id", worker.Id).Msg("request for container added")
 
 	return nil
 }
@@ -396,7 +396,7 @@ func (r *WorkerRedisRepository) AddContainerToWorker(workerId string, containerI
 		return fmt.Errorf("failed to add container to worker container index: %w", err)
 	}
 
-	slog.Info("container added to worker", "container_id", containerId, "worker_id", workerId)
+	log.Info().Str("container_id", containerId).Str("worker_id", workerId).Msg("container added to worker")
 	return nil
 }
 
@@ -408,7 +408,7 @@ func (r *WorkerRedisRepository) RemoveContainerFromWorker(workerId string, conta
 		return fmt.Errorf("failed to remove container from worker container index: %w", err)
 	}
 
-	slog.Info("container removed from worker", "container_id", containerId, "worker_id", workerId)
+	log.Info().Str("container_id", containerId).Str("worker_id", workerId).Msg("container removed from worker")
 	return nil
 }
 

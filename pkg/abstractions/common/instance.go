@@ -3,13 +3,13 @@ package abstractions
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 const IgnoreScalingEventInterval = 10 * time.Second
@@ -201,7 +201,7 @@ func (i *AutoscaledInstance) Monitor() error {
 			}
 
 			if initialContainerCount != len(i.Containers) {
-				slog.Info("scaled", "instance_name", i.Name, "initial_count", initialContainerCount, "current_count", len(i.Containers))
+				log.Info().Str("instance_name", i.Name).Int("initial_count", initialContainerCount).Int("current_count", len(i.Containers)).Msg("scaled")
 			}
 
 		case desiredContainers := <-i.ScaleEventChan:
@@ -213,7 +213,7 @@ func (i *AutoscaledInstance) Monitor() error {
 			if err := i.HandleScalingEvent(desiredContainers); err != nil {
 				if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 					if time.Now().After(ignoreScalingEventWindow) {
-						slog.Info("throttled by concurrency limit", "instance_name", i.Name)
+						log.Info().Str("instance_name", i.Name).Msg("throttled by concurrency limit")
 						ignoreScalingEventWindow = time.Now().Add(IgnoreScalingEventInterval)
 					}
 				}
@@ -237,7 +237,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	}
 
 	if state.FailedContainers >= i.FailedContainerThreshold {
-		slog.Info("reached failed container threshold, scaling to zero", "instance_name", i.Name)
+		log.Info().Str("instance_name", i.Name).Msg("reached failed container threshold, scaling to zero")
 		desiredContainers = 0
 	}
 

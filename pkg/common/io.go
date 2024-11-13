@@ -2,7 +2,6 @@ package common
 
 import (
 	"context"
-	"io"
 	"log/slog"
 )
 
@@ -80,54 +79,4 @@ func (h *ChannelHandler) WithGroup(name string) slog.Handler {
 
 func (h *ChannelHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return true
-}
-
-// OrderedJSONHandler ensures that the "msg" field is always last in the JSON output so that context
-// like "event_type" and "container_id" come first.
-type OrderedJSONHandler struct {
-	wrapped *slog.JSONHandler
-}
-
-func NewOrderedJSONHandler(w io.Writer, opts *slog.HandlerOptions) *OrderedJSONHandler {
-	return &OrderedJSONHandler{
-		wrapped: slog.NewJSONHandler(w, &slog.HandlerOptions{
-			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-				if a.Key == "msg" {
-					return slog.Attr{}
-				}
-				return a
-			},
-		}),
-	}
-}
-
-func (h *OrderedJSONHandler) Handle(ctx context.Context, r slog.Record) error {
-	var attrs []slog.Attr
-	r.Attrs(func(a slog.Attr) bool {
-		if a.Key != "msg" {
-			attrs = append(attrs, a)
-		}
-		return true
-	})
-
-	attrs = append(attrs, slog.String("message", r.Message))
-
-	newRecord := slog.NewRecord(r.Time, r.Level, "", r.PC)
-	for _, attr := range attrs {
-		newRecord.AddAttrs(attr)
-	}
-
-	return h.wrapped.Handle(ctx, newRecord)
-}
-
-func (h *OrderedJSONHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &OrderedJSONHandler{wrapped: h.wrapped.WithAttrs(attrs).(*slog.JSONHandler)}
-}
-
-func (h *OrderedJSONHandler) WithGroup(name string) slog.Handler {
-	return &OrderedJSONHandler{wrapped: h.wrapped.WithGroup(name).(*slog.JSONHandler)}
-}
-
-func (h *OrderedJSONHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.wrapped.Enabled(ctx, level)
 }

@@ -3,8 +3,9 @@ package common
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -83,7 +84,7 @@ func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix 
 				return
 
 			case err := <-errs:
-				slog.Error("error with key manager subscription", "error", err)
+				log.Error().Err(err).Msg("error with key manager subscription")
 				break retry
 			}
 		}

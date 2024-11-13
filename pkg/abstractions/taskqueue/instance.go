@@ -3,7 +3,6 @@ package taskqueue
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"math/rand"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 )
 
 func withAutoscaler(constructor func(i *taskQueueInstance) *abstractions.Autoscaler[*taskQueueInstance, *taskQueueAutoscalerSample]) func(*taskQueueInstance) {
@@ -89,7 +89,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 
 		err := i.Scheduler.Run(runRequest)
 		if err != nil {
-			slog.Error("unable to run container", "instance_name", i.Name, "error", err)
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to run container")
 			return err
 		}
 
@@ -114,7 +114,7 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 
 		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
 		if err != nil {
-			slog.Error("unable to stop container", "instance_name", i.Name, "error", err)
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to stop container")
 			return err
 		}
 
@@ -148,7 +148,7 @@ func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
 		// Skip containers with keep warm locks
 		keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.taskQueueKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
 		if err != nil && err != redis.Nil {
-			slog.Error("error getting keep warm lock for container", "instance_name", i.Name, "error", err)
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting keep warm lock for container")
 			continue
 		}
 
@@ -167,7 +167,7 @@ func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
 		// If any tasks are currently running, skip this container
 		tasksRunning, err := i.Rdb.Keys(context.TODO(), Keys.taskQueueTaskRunningLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId, "*"))
 		if err != nil && err != redis.Nil {
-			slog.Error("error getting task running locks for container", "instance_name", i.Name, "error", err)
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting task running locks for container")
 			continue
 		}
 

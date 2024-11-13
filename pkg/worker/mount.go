@@ -2,9 +2,10 @@ package worker
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"path"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/storage"
@@ -34,7 +35,7 @@ func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerReq
 			localUserSource := tempUserCodeDir(request.ContainerId)
 			err := copyDirectory(source, localUserSource)
 			if err != nil {
-				slog.Error("failed to eagerly copy remote user code to local /mnt/code", "container_id", request.ContainerId, "error", err)
+				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to eagerly copy remote user code to local /mnt/code")
 			} else {
 				request.Mounts[i].LocalPath = localUserSource
 			}
@@ -65,7 +66,7 @@ func (c *ContainerMountManager) RemoveContainerMounts(containerId string) {
 	mountPointS3, _ := storage.NewMountPointStorage(types.MountPointConfig{})
 	for _, m := range mountPointPaths {
 		if err := mountPointS3.Unmount(m); err != nil {
-			slog.Error("failed to unmount external s3 bucket", "container_id", containerId, "error", err)
+			log.Error().Str("container_id", containerId).Err(err).Msg("failed to unmount external s3 bucket")
 		}
 	}
 

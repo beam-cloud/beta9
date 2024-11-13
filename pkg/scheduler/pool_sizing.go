@@ -1,11 +1,11 @@
 package scheduler
 
 import (
-	"log/slog"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 const poolMonitoringInterval = 1 * time.Second
@@ -51,23 +51,23 @@ func (s *WorkerPoolSizer) Start() {
 		func() {
 			freeCapacity, err := s.controller.FreeCapacity()
 			if err != nil {
-				slog.Error("failed to get free capacity", "pool_name", s.controller.Name(), "error", err)
+				log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to get free capacity")
 				return
 			}
 
 			// Handle case where pool sizing says we want to keep a buffer
 			newWorker, err := s.addWorkerIfNeeded(freeCapacity)
 			if err != nil {
-				slog.Error("failed to add worker", "pool_name", s.controller.Name(), "error", err)
+				log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to add worker")
 			} else if newWorker != nil {
-				slog.Info("added new worker to maintain pool size", "pool_name", s.controller.Name(), "worker", newWorker)
+				log.Info().Str("pool_name", s.controller.Name()).Interface("worker", newWorker).Msg("added new worker to maintain pool size")
 			}
 
 			// Handle case where we want to make sure all available manually provisioned nodes have available workers
 			if s.workerPoolConfig.Mode == types.PoolModeExternal {
 				err := s.occupyAvailableMachines()
 				if err != nil {
-					slog.Error("failed to list machines in external pool", "pool_name", s.controller.Name(), "error", err)
+					log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to list machines in external pool")
 				}
 			}
 		}()
@@ -96,7 +96,7 @@ func (s *WorkerPoolSizer) occupyAvailableMachines() error {
 			continue
 		}
 
-		slog.Info("added new worker to occupy existing machine", "pool_name", s.controller.Name(), "worker", worker)
+		log.Info().Str("pool_name", s.controller.Name()).Interface("worker", worker).Msg("added new worker to occupy existing machine")
 	}
 
 	return nil
