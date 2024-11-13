@@ -53,7 +53,7 @@ func (r *ContainerLogger) Log(containerId, stubId string, format string, args ..
 	return nil
 }
 
-func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common.OutputMsg) error {
+func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.LogRecord) error {
 	logFile, err := openLogFile(containerId)
 	if err != nil {
 		return err
@@ -72,8 +72,8 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 		return errors.New("container not found")
 	}
 
-	for o := range outputChan {
-		dec := json.NewDecoder(strings.NewReader(o.Msg))
+	for o := range logChan {
+		dec := json.NewDecoder(strings.NewReader(o.Message))
 		msgDecoded := false
 
 		for {
@@ -117,13 +117,13 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 		}
 
 		// Fallback in case the message was not JSON
-		if !msgDecoded && o.Msg != "" {
+		if !msgDecoded && o.Message != "" {
 			f.WithFields(logrus.Fields{
 				"container_id": containerId,
 				"stub_id":      instance.StubId,
-			}).Info(o.Msg)
+			}).Info(o.Message)
 
-			for _, line := range strings.Split(o.Msg, "\n") {
+			for _, line := range strings.Split(o.Message, "\n") {
 				if line == "" {
 					continue
 				}
@@ -132,10 +132,10 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 			}
 
 			// Write logs to in-memory log buffer as well
-			instance.LogBuffer.Write([]byte(o.Msg))
+			instance.LogBuffer.Write([]byte(o.Message))
 		}
 
-		if o.Done {
+		if done, ok := o.Attrs["done"].(bool); ok && done {
 			break
 		}
 	}

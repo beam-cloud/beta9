@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,11 +208,11 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Printf("<%s> - set container address.\n", containerId)
 
-	outputChan := make(chan common.OutputMsg)
+	logChan := make(chan common.LogRecord)
 	go s.containerWg.Add(1)
 
 	// Start the container
-	go s.spawn(request, spec, outputChan, opts)
+	go s.spawn(request, spec, logChan, opts)
 
 	log.Printf("<%s> - spawned successfully.\n", containerId)
 	return nil
@@ -384,8 +385,9 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 }
 
 // spawn a container using runc binary
-func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputChan chan common.OutputMsg, opts *ContainerOptions) {
+func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, logChan chan common.LogRecord, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
+	outputLogger := slog.New(common.NewChannelHandler(logChan))
 
 	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
 	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
@@ -411,11 +413,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		Spec:       spec,
 		ExitCode:   -1,
 		OutputWriter: common.NewOutputWriter(func(s string) {
-			outputChan <- common.OutputMsg{
-				Msg:     string(s),
-				Done:    false,
-				Success: false,
-			}
+			outputLogger.Info(s, "done", false, "success", false)
 		}),
 		LogBuffer: common.NewLogBuffer(),
 		Request:   request,
@@ -430,7 +428,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	s.containerRepo.SetWorkerAddress(containerId, hostname)
 
 	// Handle stdout/stderr from spawned container
-	go s.containerLogger.CaptureLogs(containerId, outputChan)
+	go s.containerLogger.CaptureLogs(containerId, logChan)
 
 	go func() {
 		time.Sleep(time.Second)
@@ -505,7 +503,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
 
 		// Watch for OOM events
-		go s.watchOOMEvents(ctx, containerId, outputChan)
+		go s.watchOOMEvents(ctx, containerId, logChan)
 	}()
 
 	// Invoke runc process (launch the container)
@@ -516,11 +514,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	})
 
 	// Send last log message since the container has exited
-	outputChan <- common.OutputMsg{
-		Msg:     "",
-		Done:    true,
-		Success: err == nil,
-	}
+	outputLogger.Info("", "done", true, "success", err == nil)
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
@@ -544,7 +538,8 @@ func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 	return request.SourceImage != nil
 }
 
-func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output chan common.OutputMsg) {
+func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, logChan chan common.LogRecord) {
+	outputLogger := slog.New(common.NewChannelHandler(logChan))
 	seenEvents := make(map[string]struct{})
 
 	ticker := time.NewTicker(time.Second)
@@ -590,9 +585,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 			seenEvents[event.Type] = struct{}{}
 
 			if event.Type == "oom" {
-				output <- common.OutputMsg{
-					Msg: fmt.Sprintln("[ERROR] A process in the container was killed due to out-of-memory conditions."),
-				}
+				outputLogger.Error("A process in the container was killed due to out-of-memory conditions.")
 			}
 		}
 	}
