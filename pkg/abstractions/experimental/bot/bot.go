@@ -204,8 +204,9 @@ func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventR
 	}
 
 	err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, &BotEvent{
-		Type:  BotEventType(in.EventType),
-		Value: in.EventValue,
+		Type:     BotEventType(in.EventType),
+		Value:    in.EventValue,
+		Metadata: in.Metadata,
 	})
 	if err != nil {
 		return &pb.PushBotEventResponse{Ok: false}, nil
