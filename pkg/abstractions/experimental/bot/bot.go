@@ -233,7 +233,9 @@ func (s *PetriBotService) PushBotMarkers(ctx context.Context, in *pb.PushBotMark
 			marker := Marker{
 				LocationName: marker.LocationName,
 				Fields:       fields,
+				SourceTaskId: in.SourceTaskId,
 			}
+
 			err = s.botStateManager.pushMarker(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, locationName, marker)
 			if err != nil {
 				log.Printf("<bot %s> Failed to push marker: %s", instance.stub.ExternalId, err)

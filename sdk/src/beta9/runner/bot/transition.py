@@ -199,7 +199,10 @@ def main(channel: Channel):
     else:
         push_bot_markers_response: PushBotMarkersResponse = bot_stub.push_bot_markers(
             PushBotMarkersRequest(
-                stub_id=config.stub_id, session_id=session_id, markers=result.outputs
+                stub_id=config.stub_id,
+                session_id=session_id,
+                markers=result.outputs,
+                source_task_id=task_id,
             )
         )
         if not push_bot_markers_response.ok:
