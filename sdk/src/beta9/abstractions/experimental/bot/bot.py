@@ -34,9 +34,9 @@ class BotEventType(str, Enum):
     MEMORY_UPDATED = "memory_updated"
     SESSION_CREATED = "session_created"
     TRANSITION_FIRED = "transition_fired"
-    TASK_STARTED = "task_started"
-    TASK_COMPLETED = "task_completed"
-    TASK_FAILED = "task_failed"
+    TRANSITION_STARTED = "transition_started"
+    TRANSITION_COMPLETED = "transition_completed"
+    TRANSITION_FAILED = "transition_failed"
 
 
 class BotTransition:

@@ -221,14 +221,31 @@ func (i *botInstance) step(sessionId string) {
 				i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
 					Type:  BotEventTypeTransitionFired,
 					Value: transition.Name,
+					Metadata: map[string]string{
+						"session_id":      sessionId,
+						"transition_name": transition.Name,
+					},
 				})
 
-				i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
+				_, err = i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
 					MaxRetries: 0,
 					Timeout:    3600,
 					TTL:        3600,
 					Expires:    time.Now().Add(time.Duration(3600) * time.Second),
 				})
+				if err != nil {
+					log.Printf("<bot %s> Error running transition %s: %s", i.stub.ExternalId, transition.Name, err)
+
+					i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
+						Type:  BotEventTypeTransitionError,
+						Value: err.Error(),
+						Metadata: map[string]string{
+							"session_id":      sessionId,
+							"transition_name": transition.Name,
+						},
+					})
+
+				}
 			}
 		}
 	}()
@@ -290,7 +307,6 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		Stub:        *i.stub,
 	})
 	if err != nil {
-		log.Printf("<bot %s> Error running transition %s: %s", i.stub.ExternalId, transitionName, err)
 		return err
 	}
 

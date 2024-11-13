@@ -102,7 +102,6 @@ class BotTransition:
 
                 for field_name, field_value in marker_dict.items():
                     field_type = marker_annotations.get(field_name, str)
-                    print(field_type)
 
                     # Decompose the field_type to handle complex types like Optional[int]
                     origin_type = get_origin(field_type) or field_type
@@ -141,7 +140,7 @@ class BotTransition:
             bot_stub=self.bot_stub,
         )
 
-        context.push_event(event_type=BotEventType.TASK_STARTED, event_value=config.task_id)
+        context.push_event(event_type=BotEventType.TRANSITION_STARTED, event_value=config.task_id)
 
         try:
             outputs = self.handler(context=context, inputs=self._format_inputs(inputs))
@@ -226,9 +225,9 @@ def main(channel: Channel):
         PushBotEventRequest(
             stub_id=config.stub_id,
             session_id=session_id,
-            event_type=BotEventType.TASK_COMPLETED
+            event_type=BotEventType.TRANSITION_COMPLETED
             if task_status == TaskStatus.Complete
-            else BotEventType.TASK_FAILED,
+            else BotEventType.TRANSITION_FAILED,
             event_value=task_id,
         )
     )
