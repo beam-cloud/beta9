@@ -441,11 +441,15 @@ func (s *Worker) shutdown() error {
 	// Stops goroutines
 	s.cancel()
 
-	if worker, err := s.workerRepo.GetWorkerById(s.workerId); err == nil && worker != nil {
-		s.workerRepo.RemoveWorker(worker)
+	var errs error
+	if worker, err := s.workerRepo.GetWorkerById(s.workerId); err != nil {
+		errs = errors.Join(errs, err)
+	} else if worker != nil {
+		if err := s.workerRepo.RemoveWorker(worker); err != nil {
+			errs = errors.Join(errs, err)
+		}
 	}
 
-	var errs error
 	err := s.storage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to unmount storage: %v", err))
