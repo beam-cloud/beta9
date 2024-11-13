@@ -79,6 +79,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 	}
 
+	if in.Extra == "" {
+		in.Extra = "{}"
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:     in.Cpu,
