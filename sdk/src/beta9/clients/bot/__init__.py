@@ -54,6 +54,7 @@ class MarkerField(betterproto.Message):
 class Marker(betterproto.Message):
     location_name: str = betterproto.string_field(1)
     fields: List["MarkerField"] = betterproto.message_field(2)
+    source_task_id: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -82,6 +83,9 @@ class PushBotEventRequest(betterproto.Message):
     session_id: str = betterproto.string_field(2)
     event_type: str = betterproto.string_field(3)
     event_value: str = betterproto.string_field(4)
+    metadata: Dict[str, str] = betterproto.map_field(
+        5, betterproto.TYPE_STRING, betterproto.TYPE_STRING
+    )
 
 
 @dataclass(eq=False, repr=False)

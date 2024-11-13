@@ -54,6 +54,11 @@ class BotContext(FunctionContext):
                 session_id=cls.session_id,
                 event_type=event_type,
                 event_value=event_value,
+                metadata={
+                    "task_id": cls.task_id,
+                    "session_id": cls.session_id,
+                    "transition_name": cls.transition_name,
+                },
             )
         )
 
@@ -64,6 +69,11 @@ class BotContext(FunctionContext):
                 session_id=cls.session_id,
                 event_type=BotEventType.TRANSITION_MESSAGE,
                 event_value=msg,
+                metadata={
+                    "task_id": cls.task_id,
+                    "session_id": cls.session_id,
+                    "transition_name": cls.transition_name,
+                },
             )
         )
 
@@ -74,5 +84,10 @@ class BotContext(FunctionContext):
                 session_id=cls.session_id,
                 event_type=BotEventType.MEMORY_MESSAGE,
                 event_value=json.dumps(obj),
+                metadata={
+                    "task_id": cls.task_id,
+                    "session_id": cls.session_id,
+                    "transition_name": cls.transition_name,
+                },
             )
         )

@@ -232,6 +232,11 @@ def main(channel: Channel):
             if task_status == TaskStatus.Complete
             else BotEventType.TRANSITION_FAILED,
             event_value=task_id,
+            metadata={
+                "task_id": task_id,
+                "session_id": session_id,
+                "transition_name": transition_name,
+            },
         )
     )
 

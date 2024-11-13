@@ -49,6 +49,7 @@ message PushBotEventRequest {
   string session_id = 2;
   string event_type = 3;
   string event_value = 4;
+  map<string, string> metadata = 5;
 }
 
 message PushBotEventResponse { bool ok = 1; }
