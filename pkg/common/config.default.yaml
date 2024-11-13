@@ -82,13 +82,13 @@ imageService:
       versions:
         python3.8: 3.8.20
         python3.9: 3.9.20
-        python3.10: 3.10.5
+        python3.10: 3.10.15
         python3.11: 3.11.10
         python3.12: 3.12.7
       installScriptTemplate: |
         apt-get update -q && \
         apt-get install -q -y build-essential curl git && \
-        curl -fsSL -o python.tgz 'https://github.com/indygreg/python-build-standalone/releases/download/20241016/cpython-{{.PythonVersion}}+20241016-{{.Architecture}}-{{.Vendor}}-{{.OS}}-gnu-install_only.tar.gz' && \
+        curl -fsSL -o python.tgz 'https://github.com/indygreg/python-build-standalone/releases/download/20241002/cpython-{{.PythonVersion}}+20241002-{{.Architecture}}-{{.Vendor}}-{{.OS}}-gnu-install_only.tar.gz' && \
         tar -xzf python.tgz -C /usr/local --strip-components 1 && \
         rm -f python.tgz && \
         rm -f /usr/bin/python && \
