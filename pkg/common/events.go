@@ -146,7 +146,7 @@ func (eb *EventBus) ReceiveEvents(ctx context.Context) {
 func (eb *EventBus) receive(ctx context.Context, wg *sync.WaitGroup, eventType string) {
 	defer wg.Done()
 
-	slog.Info("receiving events for type", "event_type", eventType)
+	slog.Info("receiving events", "event_type", eventType)
 
 	eventChannelKey := fmt.Sprintf("%s/%s", eventChannelPrefix, eventType)
 	messages, errs := eb.rdb.Subscribe(ctx, eventChannelKey)
