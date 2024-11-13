@@ -7,7 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -1005,7 +1005,7 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 	)
 
 	if err != nil {
-		log.Println(err)
+		slog.Error("error paginating deployments", "error", err)
 		return common.CursorPaginationInfo[types.DeploymentWithRelated]{}, err
 	}
 
@@ -1563,7 +1563,7 @@ func (r *PostgresBackendRepository) ListenToChannel(ctx context.Context, channel
 
 	listener := pq.NewListener(dsn, listenToChannelMinReconnectInterval, listenToChannelMaxReconnectInterval, func(ev pq.ListenerEventType, err error) {
 		if err != nil {
-			log.Println("failed to create new listener:", err)
+			slog.Error("failed to create new listener", "error", err)
 		}
 	})
 

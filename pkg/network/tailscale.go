@@ -3,7 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
 	"net"
 	"strings"
@@ -56,7 +56,7 @@ type Tailscale struct {
 
 func (t *Tailscale) logF(format string, v ...interface{}) {
 	if t.debug {
-		log.Printf(format, v...)
+		slog.Info(fmt.Sprintf(format, v...))
 	}
 }
 
@@ -84,7 +84,7 @@ func newTailscale(cfg TailscaleConfig, tailscaleRepo repository.TailscaleReposit
 
 // Serve connects to a tailnet and serves a local service
 func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (net.Listener, error) {
-	log.Println("Connecting to tailnet @", t.server.ControlURL)
+	slog.Info("connecting to tailnet", "url", t.server.ControlURL)
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -100,7 +100,7 @@ func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (n
 		return nil, err
 	}
 
-	log.Printf("Connected to tailnet - listening on %s\n", addr)
+	slog.Info("connected to tailnet", "addr", addr)
 	return listener, nil
 }
 

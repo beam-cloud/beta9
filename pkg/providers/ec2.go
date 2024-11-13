@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -114,7 +114,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
-	log.Printf("<provider %s>: Selected instance type <%s> for compute request: %+v\n", p.Name, instance.Type, compute)
+	slog.Info("selected instance type", "provider", p.Name, "instance_type", instance.Type, "compute_request", compute)
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String(p.providerConfig.AMI),
 		InstanceType: awsTypes.InstanceType(instance.Type),
@@ -194,11 +194,11 @@ func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, instanceId
 
 	err = p.ProviderRepo.RemoveMachine(p.Name, poolName, machineId)
 	if err != nil {
-		log.Printf("<provider %s>: Unable to remove machine state <machineId: %s>: %+v\n", p.Name, machineId, err)
+		slog.Error("unable to remove machine state", "provider", p.Name, "machine_id", machineId, "error", err)
 		return err
 	}
 
-	log.Printf("<provider %s>: Terminated machine <machineId: %s> due to inactivity\n", p.Name, machineId)
+	slog.Info("terminated machine", "provider", p.Name, "machine_id", machineId)
 	return nil
 }
 

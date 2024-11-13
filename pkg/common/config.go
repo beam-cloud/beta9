@@ -4,7 +4,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -67,7 +67,7 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 			sort.Strings(matches)
 			for _, path := range matches {
 				if err := cm.LoadConfig(ext, file.Provider(path)); err != nil {
-					log.Printf("Failed to load config %s: %v\n", path, err)
+					slog.Error("failed to load config", "path", path, "error", err)
 				}
 			}
 		}
@@ -77,7 +77,7 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 	configJson := os.Getenv("CONFIG_JSON")
 	if configJson != "" {
 		if err := cm.LoadConfig(JSONConfigFormat, rawbytes.Provider([]byte(configJson))); err != nil {
-			log.Printf("Error loading configuration from CONFIG_JSON: %v\n", err)
+			slog.Error("failed to load config from CONFIG_JSON", "error", err)
 		} else {
 			cm.tag = "json"
 		}
@@ -85,8 +85,7 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 
 	// If debug mode is enabled, print the current configuration.
 	if cm.kf.Bool("debugMode") {
-		log.Println("Debug mode enabled. Current configuration:")
-		log.Println(cm.Print())
+		slog.Info("debug mode enabled. current configuration", "config", cm.Print())
 	}
 
 	return cm, nil
@@ -105,7 +104,8 @@ func (cm *ConfigManager[T]) GetConfig() T {
 
 	err := cm.kf.UnmarshalWithConf("", &c, koanf.UnmarshalConf{Tag: cm.tag, FlatPaths: false})
 	if err != nil {
-		log.Fatal("failed to unmarshal config")
+		slog.Error("failed to unmarshal config")
+		os.Exit(1)
 	}
 
 	return c

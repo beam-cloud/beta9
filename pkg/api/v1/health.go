@@ -1,7 +1,7 @@
 package apiv1
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -36,7 +36,7 @@ func (h *HealthGroup) HealthCheck(c echo.Context) error {
 	})
 
 	if err := g.Wait(); err != nil {
-		log.Println("Health check failed: ", err)
+		slog.Error("health check failed", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"status": "not ok",
 			"error":  err.Error(),

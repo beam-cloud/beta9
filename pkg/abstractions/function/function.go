@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -275,7 +275,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 	} else if leftoverTimeoutSeconds <= 0 {
 		err := timeoutCallback()
 		if err != nil {
-			log.Printf("error timing out task: %v", err)
+			slog.Error("error timing out task", "error", err)
 			return err
 		}
 
@@ -295,7 +295,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 				case <-timeoutChan:
 					err := timeoutCallback()
 					if err != nil {
-						log.Printf("task timeout err: %v", err)
+						slog.Error("task timeout err", "error", err)
 					}
 					timeoutFlag <- true
 					return
@@ -314,7 +314,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 
 				case err := <-errs:
 					if err != nil {
-						log.Printf("monitor task subscription err: %v", err)
+						slog.Error("monitor task subscription err", "error", err)
 						break retry
 					}
 				}
@@ -416,7 +416,7 @@ func (fs *RunCFunctionService) FunctionSchedule(ctx context.Context, req *pb.Fun
 }
 
 func (fs *RunCFunctionService) listenForScheduledJobs() {
-	log.Printf("Listening for scheduled jobs on channel: <%v>\n", repository.ScheduledJobsChannel)
+	slog.Info("listening for scheduled jobs", "channel", repository.ScheduledJobsChannel)
 	for {
 		select {
 		case <-fs.ctx.Done():
@@ -424,7 +424,7 @@ func (fs *RunCFunctionService) listenForScheduledJobs() {
 		default:
 			messages, err := fs.backendRepo.ListenToChannel(fs.ctx, repository.ScheduledJobsChannel)
 			if err != nil {
-				log.Println("Failed to listen to scheduled job channel:", err)
+				slog.Error("failed to listen to scheduled job channel", "error", err)
 				time.Sleep(1 * time.Second)
 				continue
 			}
@@ -433,7 +433,7 @@ func (fs *RunCFunctionService) listenForScheduledJobs() {
 			for message := range messages {
 				var payload types.ScheduledJobPayload
 				if err := json.Unmarshal([]byte(message), &payload); err != nil {
-					log.Println("Failed to unmarshal scheduled job payload:", err)
+					slog.Error("failed to unmarshal scheduled job payload", "error", err)
 					continue
 				}
 
@@ -443,7 +443,7 @@ func (fs *RunCFunctionService) listenForScheduledJobs() {
 
 				authInfo := &auth.AuthInfo{Workspace: &types.Workspace{Name: payload.WorkspaceName}}
 				if _, err = fs.invoke(fs.ctx, authInfo, payload.StubId, &payload.TaskPayload); err != nil {
-					log.Println("Failed to invoke scheduled job:", err)
+					slog.Error("failed to invoke scheduled job", "error", err)
 				}
 
 				lock.Release(Keys.FunctionScheduledJobLock(payload.StubId))

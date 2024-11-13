@@ -2,7 +2,7 @@ package bot
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"sync"
@@ -142,7 +142,7 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			for _, containerId := range containersBySessionId[sessionId] {
 				err := instance.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
 				if err != nil {
-					log.Println("<bot> Failed to stop bot container", containerId, err)
+					slog.Error("failed to stop bot container", "container_id", containerId, "error", err)
 				}
 			}
 		}

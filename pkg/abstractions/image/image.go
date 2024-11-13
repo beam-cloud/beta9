@@ -2,7 +2,7 @@ package image
 
 import (
 	"context"
-	"log"
+	"log/slog"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -89,7 +89,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 }
 
 func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
-	log.Printf("incoming image build request: %+v", in)
+	slog.Info("incoming image build request", "request", in)
 
 	buildOptions := &BuildOpts{
 		BaseImageTag:       is.config.ImageService.Runner.Tags[in.PythonVersion],
@@ -118,7 +118,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		}
 
 		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId}); err != nil {
-			log.Println("failed to complete build: ", err)
+			slog.Error("failed to complete build", "error", err)
 			lastMessage = o
 			break
 		}
@@ -137,7 +137,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		return errors.New("build failed")
 	}
 
-	log.Println("build completed successfully")
+	slog.Info("build completed successfully")
 	return nil
 }
 

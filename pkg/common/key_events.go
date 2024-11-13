@@ -3,7 +3,7 @@ package common
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 )
 
@@ -83,7 +83,7 @@ func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix 
 				return
 
 			case err := <-errs:
-				log.Printf("error with key manager subscription: %v", err)
+				slog.Error("error with key manager subscription", "error", err)
 				break retry
 			}
 		}

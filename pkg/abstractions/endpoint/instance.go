@@ -3,7 +3,7 @@ package endpoint
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
 	"time"
 
@@ -102,7 +102,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 
 		err := i.Scheduler.Run(runRequest)
 		if err != nil {
-			log.Printf("<%s> unable to run container: %v", i.Name, err)
+			slog.Error("unable to run container", "instance_name", i.Name, "error", err)
 			return err
 		}
 
@@ -127,7 +127,7 @@ func (i *endpointInstance) stopContainers(containersToStop int) error {
 
 		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
 		if err != nil {
-			log.Printf("<%s> unable to stop container: %v", i.Name, err)
+			slog.Error("unable to stop container", "instance_name", i.Name, "error", err)
 			return err
 		}
 
@@ -161,7 +161,7 @@ func (i *endpointInstance) stoppableContainers() ([]string, error) {
 		// Skip containers with keep warm locks
 		keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.endpointKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
 		if err != nil && err != redis.Nil {
-			log.Printf("<%s> error getting keep warm lock for container: %v\n", i.Name, err)
+			slog.Error("error getting keep warm lock for container", "instance_name", i.Name, "error", err)
 			continue
 		}
 

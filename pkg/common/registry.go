@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -109,7 +109,7 @@ func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 		Body:   f,
 	})
 	if err != nil {
-		log.Printf("error uploading image to registry: %v", err)
+		slog.Error("error uploading image to registry", "error", err)
 		return err
 	}
 
@@ -121,7 +121,7 @@ func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 
 	f, err := os.Create(tmpLocalPath)
 	if err != nil {
-		log.Println(err)
+		slog.Error("error creating temp file for image download", "error", err)
 		return err
 	}
 

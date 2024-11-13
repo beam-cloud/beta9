@@ -7,7 +7,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"fmt"
-	"log"
+	"log/slog"
 	"regexp"
 	"runtime"
 	"strings"
@@ -281,7 +281,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
 	}
 
-	log.Printf("container <%v> building with options: %s\n", containerId, opts)
+	slog.Info("container building", "container_id", containerId, "options", opts)
 	startTime := time.Now()
 
 	micromambaEnv := strings.Contains(opts.PythonVersion, "micromamba")
@@ -310,7 +310,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 
 		if r, err := client.Exec(containerId, cmd); err != nil || !r.Ok {
-			log.Printf("failed to execute command for container <%v>: \"%v\" - %v\n", containerId, cmd, err)
+			slog.Error("failed to execute command for container", "container_id", containerId, "command", cmd, "error", err)
 
 			errMsg := ""
 			if err != nil {
@@ -322,7 +322,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			return err
 		}
 	}
-	log.Printf("container <%v> build took %v\n", containerId, time.Since(startTime))
+	slog.Info("container build took", "container_id", containerId, "duration", time.Since(startTime))
 
 	err = client.Archive(ctx, containerId, imageId, outputChan)
 	if err != nil {

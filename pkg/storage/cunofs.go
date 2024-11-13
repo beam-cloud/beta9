@@ -3,7 +3,7 @@ package storage
 import (
 	"bytes"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"text/template"
@@ -27,7 +27,7 @@ func NewCunoFsStorage(config types.CunoFSConfig) (Storage, error) {
 }
 
 func (s *CunoFsStorage) Mount(localPath string) error {
-	log.Printf("CunoFS filesystem mounting to: '%s'\n", localPath)
+	slog.Info("cunofs filesystem mounting", "local_path", localPath)
 	s.mountCmd = exec.Command(
 		"cuno",
 		"mount",
@@ -41,7 +41,7 @@ func (s *CunoFsStorage) Mount(localPath string) error {
 	go func() {
 		output, err := s.mountCmd.CombinedOutput()
 		if err != nil {
-			log.Fatalf("error executing cunofs mount: %v, output: %s", err, string(output))
+			slog.Error("error executing cunofs mount", "error", err, "output", string(output))
 		}
 	}()
 
@@ -69,7 +69,7 @@ func (s *CunoFsStorage) Mount(localPath string) error {
 		return fmt.Errorf("failed to mount CunoFS filesystem to: '%s'", localPath)
 	}
 
-	log.Printf("CunoFS filesystem mounted to: '%s'", localPath)
+	slog.Info("cunofs filesystem mounted", "local_path", localPath)
 	return nil
 }
 
@@ -123,11 +123,11 @@ func (s *CunoFsStorage) Unmount(localPath string) error {
 
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			log.Printf("error executing cuno umount: %v, output: %s", err, string(output))
+			slog.Error("error executing cuno umount", "error", err, "output", string(output))
 			return err
 		}
 
-		log.Printf("CunoFS filesystem unmounted from: '%s'\n", localPath)
+		slog.Info("cunofs filesystem unmounted", "local_path", localPath)
 		return nil
 	}
 

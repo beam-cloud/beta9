@@ -2,7 +2,7 @@ package common
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -132,10 +132,10 @@ func (co *ContainerOverlay) Cleanup() error {
 		i := len(co.layers) - 1
 		layer := co.layers[i]
 
-		log.Printf("Unmounting layer: %s\n", layer.merged)
+		slog.Info("unmounting layer", "layer_path", layer.merged)
 		err := exec.Command("umount", "-f", layer.merged).Run()
 		if err != nil {
-			log.Printf("Unable to unmount layer: %v\n", err)
+			slog.Error("unable to unmount layer", "error", err)
 			return err
 		}
 
@@ -173,6 +173,6 @@ func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 		return err
 	}
 
-	log.Printf("<%s> - mounted layer-%d in %s.\n", co.containerId, layer.index, time.Since(startTime))
+	slog.Info("mounted layer", "container_id", co.containerId, "layer_index", layer.index, "duration", time.Since(startTime))
 	return nil
 }

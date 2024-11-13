@@ -2,10 +2,10 @@ package worker
 
 import (
 	"context"
+	"log/slog"
 
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strconv"
@@ -141,7 +141,7 @@ func NewWorker() (*Worker, error) {
 	if config.Worker.BlobCacheEnabled {
 		cacheClient, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
 		if err != nil {
-			log.Printf("[WARNING] Cache unavailable, performance may be degraded: %+v\n", err)
+			slog.Warn("cache unavailable, performance may be degraded", "error", err)
 		}
 	}
 
@@ -232,11 +232,11 @@ func (s *Worker) Run() error {
 
 			_, exists := s.containerInstances.Get(containerId)
 			if !exists {
-				log.Printf("<%s> - running container.\n", containerId)
+				slog.Info("running container", "container_id", containerId)
 
 				err := s.RunContainer(request)
 				if err != nil {
-					log.Printf("Unable to run container <%s>: %v\n", containerId, err)
+					slog.Error("unable to run container", "container_id", containerId, "error", err)
 
 					// Set a non-zero exit code for the container (both in memory, and in repo)
 					exitCode := 1
@@ -248,7 +248,7 @@ func (s *Worker) Run() error {
 
 					err := s.containerRepo.SetContainerExitCode(containerId, exitCode)
 					if err != nil {
-						log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
+						slog.Error("failed to set exit code", "container_id", containerId, "error", err)
 					}
 
 					s.containerLock.Unlock()
@@ -276,7 +276,7 @@ func (s *Worker) listenForShutdown() {
 	signal.Notify(terminate, syscall.SIGINT, syscall.SIGTERM)
 
 	<-terminate
-	log.Println("Shutdown signal received.")
+	slog.Info("shutdown signal received")
 
 	s.cancel()
 }
@@ -316,7 +316,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			state, err := s.containerRepo.GetContainerState(request.ContainerId)
 			if err != nil {
 				if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-					log.Printf("<%s> - container state not found, stopping container\n", request.ContainerId)
+					slog.Info("container state not found, stopping container", "container_id", request.ContainerId)
 					s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
 					return nil
 				}
@@ -324,11 +324,11 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				continue
 			}
 
-			log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
+			slog.Info("container still running", "container_id", request.ContainerId, "image_id", request.ImageId)
 
 			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
 			if err != nil {
-				log.Printf("<%s> - unable to update container state: %v\n", request.ContainerId, err)
+				slog.Error("unable to update container state", "container_id", request.ContainerId, "error", err)
 			}
 
 			// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
@@ -342,7 +342,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 						return
 					}
 
-					log.Printf("<%s> - container still running after stop event %ds ago - force killing\n", request.ContainerId, s.config.Worker.TerminationGracePeriod)
+					slog.Info("container still running after stop event", "container_id", request.ContainerId, "grace_period", s.config.Worker.TerminationGracePeriod, "seconds")
 					s.stopContainerChan <- stopContainerEvent{
 						ContainerId: request.ContainerId,
 						Kill:        true,
@@ -377,7 +377,7 @@ func (s *Worker) manageWorkerCapacity() {
 				return
 			}
 
-			log.Printf("Unable to process completed request: %v\n", err)
+			slog.Error("unable to process completed request", "error", err)
 			s.completedRequests <- request
 			continue
 		}
@@ -408,7 +408,7 @@ func (s *Worker) keepalive() {
 }
 
 func (s *Worker) startup() error {
-	log.Println("Worker starting up.")
+	slog.Info("worker starting up")
 
 	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
 	if err != nil {
@@ -435,7 +435,7 @@ func (s *Worker) startup() error {
 }
 
 func (s *Worker) shutdown() error {
-	log.Println("Shutting down...")
+	slog.Info("shutting down")
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
 	// Stops goroutines

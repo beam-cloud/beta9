@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path"
 	"strings"
@@ -43,7 +43,7 @@ func (r *ContainerLogger) Log(containerId, stubId string, format string, args ..
 		TimestampFormat: time.RFC3339Nano,
 	})
 
-	log.Print(fmt.Sprintf("<%s> - ", containerId) + fmt.Sprintf(format, args...))
+	slog.Info(fmt.Sprintf(format, args...), "container_id", containerId)
 	f.WithFields(logrus.Fields{
 		"container_id": containerId,
 		"stub_id":      stubId,
@@ -109,9 +109,9 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 				}
 
 				if msg.TaskID != nil {
-					log.Printf("<%s>:<%s> - %s\n", containerId, *msg.TaskID, line)
+					slog.Info(line, "container_id", containerId, "task_id", *msg.TaskID)
 				} else {
-					log.Printf("<%s> - %s\n", containerId, line)
+					slog.Info(line, "container_id", containerId)
 				}
 			}
 		}
@@ -128,7 +128,7 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 					continue
 				}
 
-				log.Printf("<%s> - %s\n", containerId, line)
+				slog.Info(line, "container_id", containerId)
 			}
 
 			// Write logs to in-memory log buffer as well

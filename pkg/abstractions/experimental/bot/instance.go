@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -130,7 +130,7 @@ func (i *botInstance) Start() error {
 					return nil
 				case <-time.After(stepInterval):
 					if time.Now().Unix()-lastActiveSessionAt > int64(i.appConfig.Abstractions.Bot.SessionInactivityTimeoutS) {
-						log.Printf("<bot %s> No active sessions found, shutting down instance", i.stub.ExternalId)
+						slog.Info("no active sessions found, shutting down instance", "stub_id", i.stub.ExternalId)
 						i.cancelFunc()
 						return nil
 					}
@@ -272,7 +272,7 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		gpuCount = 1
 	}
 
-	log.Printf("<bot %s> Running transition %s", i.stub.ExternalId, transitionName)
+	slog.Info("running transition", "stub_id", i.stub.ExternalId, "transition_name", transitionName)
 	err = i.scheduler.Run(&types.ContainerRequest{
 		ContainerId: i.genContainerId(botContainerTypeTransition, sessionId),
 		Env:         env,
@@ -290,7 +290,7 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		Stub:        *i.stub,
 	})
 	if err != nil {
-		log.Printf("<bot %s> Error running transition %s: %s", i.stub.ExternalId, transitionName, err)
+		slog.Error("error running transition", "stub_id", i.stub.ExternalId, "transition_name", transitionName, "error", err)
 		return err
 	}
 

@@ -2,8 +2,9 @@ package metrics
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"sort"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -62,7 +63,8 @@ func (r *PrometheusMetricsRepository) Init(source string) error {
 
 	go func() {
 		if err := r.listenAndServe(); err != nil {
-			log.Fatalf("Failed to start metrics server: %v", err)
+			slog.Error("failed to start metrics server", "error", err)
+			os.Exit(1)
 		}
 	}()
 

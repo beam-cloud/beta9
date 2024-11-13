@@ -1,7 +1,7 @@
 package apiv1
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -78,7 +78,7 @@ func (c *ContainerGroup) StopAllWorkspaceContainers(ctx echo.Context) error {
 	for _, state := range containerStates {
 		err := c.scheduler.Stop(&types.StopContainerArgs{ContainerId: state.ContainerId})
 		if err != nil {
-			log.Println("failed to stop container", state.ContainerId, err)
+			slog.Error("failed to stop container", "container_id", state.ContainerId, "error", err)
 		}
 	}
 

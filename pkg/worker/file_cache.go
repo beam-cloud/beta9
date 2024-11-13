@@ -3,7 +3,7 @@ package worker
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -39,7 +39,7 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 		if !info.IsDir() {
 			_, err := cm.client.StoreContentFromSource(path, 0)
 			if err != nil {
-				log.Printf("Failed to cache file<%s>: %v\n", path, err)
+				slog.Error("failed to cache file", "path", path, "error", err)
 			}
 		}
 

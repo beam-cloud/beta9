@@ -2,7 +2,7 @@ package providers
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -66,7 +66,7 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 				if _, ok := err.(*types.ProviderNotImplemented); ok {
 					return
 				} else {
-					log.Printf("<provider %s>: unable to list machines - %v\n", p.Name, err)
+					slog.Error("unable to list machines", "provider", p.Name, "error", err)
 					continue
 				}
 			}
@@ -81,14 +81,14 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 
 					machine, err := p.ProviderRepo.GetMachine(p.Name, poolName, machineId)
 					if err != nil {
-						log.Printf("<provider %s>: unable to retrieve machine <machineId: %s> - %v\n", p.Name, machineId, err)
+						slog.Error("unable to retrieve machine", "provider", p.Name, "machine_id", machineId, "error", err)
 						p.TerminateMachineFunc(ctx, poolName, instanceId, machineId)
 						return
 					}
 
 					workers, err := p.WorkerRepo.GetAllWorkersOnMachine(machineId)
 					if err != nil {
-						log.Printf("<provider %s>: unable to retrieve workers for machine <machineId: %s> - %v\n", p.Name, machineId, err)
+						slog.Error("unable to retrieve workers", "provider", p.Name, "machine_id", machineId, "error", err)
 						return
 					}
 

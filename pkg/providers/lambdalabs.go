@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -121,10 +121,10 @@ func (p *LambdaLabsProvider) TerminateMachine(ctx context.Context, poolName, ins
 
 	err = p.ProviderRepo.RemoveMachine(p.Name, poolName, machineId)
 	if err != nil {
-		log.Printf("<provider %s>: Unable to remove machine state <machineId: %s>: %+v\n", p.Name, machineId, err)
+		slog.Error("unable to remove machine state", "provider", p.Name, "machine_id", machineId, "error", err)
 		return err
 	}
 
-	log.Printf("<provider %s>: Terminated machine <machineId: %s> due to inactivity\n", p.Name, machineId)
+	slog.Info("terminated machine", "provider", p.Name, "machine_id", machineId)
 	return nil
 }

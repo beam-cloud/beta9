@@ -3,7 +3,7 @@ package volume
 import (
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -106,7 +106,7 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 				if err == io.EOF {
 					return nil
 				}
-				log.Printf("Failed to upload file: %v\n", err)
+				slog.Error("failed to upload file", "error", err)
 				return err
 			}
 		}
