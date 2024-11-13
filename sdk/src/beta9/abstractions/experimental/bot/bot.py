@@ -2,6 +2,7 @@ import inspect
 import json
 import os
 import threading
+import uuid
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -334,7 +335,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
                         try:
                             msg = session.prompt("# ")
                             if msg:
-                                ws.send(json.dumps({"msg": msg}))
+                                ws.send(json.dumps({"msg": msg, "request_id": str(uuid.uuid4())}))
                         except KeyboardInterrupt:
                             confirm = session.prompt("# Exit chat session (y/n) ")
                             if confirm.strip().lower() == "y":

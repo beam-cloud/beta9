@@ -184,13 +184,13 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 				}
 
 				if event.Type == BotEventTypeUserMessage {
-					instance.botInterface.SendPrompt(sessionId, PromptTypeUser, event.Value)
+					instance.botInterface.SendPrompt(sessionId, PromptTypeUser, &PromptRequest{Msg: event.Value})
 					continue
 				} else if event.Type == BotEventTypeTransitionMessage {
-					instance.botInterface.SendPrompt(sessionId, PromptTypeTransition, event.Value)
+					instance.botInterface.SendPrompt(sessionId, PromptTypeTransition, &PromptRequest{Msg: event.Value})
 					continue
 				} else if event.Type == BotEventTypeMemoryMessage {
-					instance.botInterface.SendPrompt(sessionId, PromptTypeMemory, event.Value)
+					instance.botInterface.SendPrompt(sessionId, PromptTypeMemory, &PromptRequest{Msg: event.Value})
 					continue
 				}
 
@@ -216,12 +216,12 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			break
 		}
 
-		var userRequest UserRequest
-		if err := json.Unmarshal(message, &userRequest); err != nil {
+		var promptRequest PromptRequest
+		if err := json.Unmarshal(message, &promptRequest); err != nil {
 			continue
 		}
 
-		if err := instance.botStateManager.pushInputMessage(instance.workspace.Name, instance.stub.ExternalId, sessionId, userRequest.Msg); err != nil {
+		if err := instance.botStateManager.pushInputMessage(instance.workspace.Name, instance.stub.ExternalId, sessionId, promptRequest); err != nil {
 			continue
 		}
 	}

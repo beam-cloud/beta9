@@ -141,8 +141,8 @@ func (i *botInstance) Start() error {
 
 			lastActiveSessionAt = time.Now().Unix()
 			for _, session := range activeSessions {
-				if msg, err := i.botStateManager.popInputMessage(i.workspace.Name, i.stub.ExternalId, session.Id); err == nil {
-					if err := i.botInterface.SendPrompt(session.Id, PromptTypeUser, msg); err != nil {
+				if req, err := i.botStateManager.popInputMessage(i.workspace.Name, i.stub.ExternalId, session.Id); err == nil {
+					if err := i.botInterface.SendPrompt(session.Id, PromptTypeUser, req); err != nil {
 						continue
 					}
 				}
