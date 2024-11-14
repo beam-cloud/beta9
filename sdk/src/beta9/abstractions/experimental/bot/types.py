@@ -47,6 +47,8 @@ class BotContext(FunctionContext):
         return instance
 
     def push_event(cls, *, event_type: BotEventType, event_value: str):
+        """Send an event to the bot (supports all event types)"""
+
         print(f"Sending bot event<{event_type}> {event_value}")
         cls.bot_stub.push_bot_event(
             PushBotEventRequest(
@@ -63,6 +65,8 @@ class BotContext(FunctionContext):
         )
 
     def prompt(cls, msg: str):
+        """Send a prompt to the user from the bot"""
+
         cls.bot_stub.push_bot_event(
             PushBotEventRequest(
                 stub_id=cls.stub_id,
@@ -78,6 +82,8 @@ class BotContext(FunctionContext):
         )
 
     def say(cls, msg: str):
+        """Send a message to the user from the bot"""
+
         cls.bot_stub.push_bot_event(
             PushBotEventRequest(
                 stub_id=cls.stub_id,
@@ -93,6 +99,8 @@ class BotContext(FunctionContext):
         )
 
     def remember(cls, obj: Any):
+        """Store an arbitrary object in the bot's memory (must be JSON serializable)"""
+
         cls.bot_stub.push_bot_event(
             PushBotEventRequest(
                 stub_id=cls.stub_id,
