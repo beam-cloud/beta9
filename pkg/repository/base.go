@@ -35,6 +35,8 @@ type WorkerRepository interface {
 	GetContainerIps(networkPrefix string) ([]string, error)
 	SetNetworkLock(networkPrefix string, ttl, retries int) error
 	RemoveNetworkLock(networkPrefix string) error
+	SetWorkerPoolSizerLock(controllerName string) error
+	RemoveWorkerPoolSizerLock(controllerName string) error
 }
 
 type ContainerRepository interface {
