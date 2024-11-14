@@ -225,12 +225,7 @@ func (i *botInstance) step(sessionId string) {
 
 				// If this transition requires confirmation, we need to send a confirmation request before creating and invoking the task
 				if transition.Confirm {
-					t, err := i.taskDispatcher.Send(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
-						MaxRetries: 0,
-						Timeout:    3600,
-						TTL:        3600,
-						Expires:    time.Now().Add(time.Duration(3600) * time.Second),
-					})
+					t, err := i.taskDispatcher.Send(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, getDefaultTaskPolicy())
 					if err != nil {
 						i.handleTransitionFailed(sessionId, transition.Name, err)
 						continue
@@ -249,12 +244,7 @@ func (i *botInstance) step(sessionId string) {
 					continue
 				}
 
-				t, err := i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
-					MaxRetries: 0,
-					Timeout:    3600,
-					TTL:        3600,
-					Expires:    time.Now().Add(time.Duration(3600) * time.Second),
-				})
+				t, err := i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, getDefaultTaskPolicy())
 				if err != nil {
 					i.handleTransitionFailed(sessionId, transition.Name, err)
 					continue
@@ -284,6 +274,15 @@ func (i *botInstance) handleTransitionFailed(sessionId, transitionName string, e
 			string(MetadataErrorMsg):       err.Error(),
 		},
 	})
+}
+
+func getDefaultTaskPolicy() types.TaskPolicy {
+	return types.TaskPolicy{
+		MaxRetries: 0,
+		Timeout:    3600,
+		TTL:        3600,
+		Expires:    time.Now().Add(time.Duration(3600) * time.Second),
+	}
 }
 
 func (i *botInstance) monitorEvents() error {

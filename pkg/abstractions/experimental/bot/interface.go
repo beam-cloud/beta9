@@ -64,7 +64,7 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 		stub:         opts.Stub,
 	}
 
-	// Generate the schema for each response
+	// Generate the schemas for each response type
 	var userResponse BotUserResponse
 	schema, err := jsonschema.GenerateSchemaForType(userResponse)
 	if err != nil {
