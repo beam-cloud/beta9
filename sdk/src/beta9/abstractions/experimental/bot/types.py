@@ -77,6 +77,21 @@ class BotContext(FunctionContext):
             )
         )
 
+    def say(cls, msg: str):
+        cls.bot_stub.push_bot_event(
+            PushBotEventRequest(
+                stub_id=cls.stub_id,
+                session_id=cls.session_id,
+                event_type=BotEventType.AGENT_MESSAGE,
+                event_value=msg,
+                metadata={
+                    "task_id": cls.task_id,
+                    "session_id": cls.session_id,
+                    "transition_name": cls.transition_name,
+                },
+            )
+        )
+
     def remember(cls, obj: Any):
         cls.bot_stub.push_bot_event(
             PushBotEventRequest(
