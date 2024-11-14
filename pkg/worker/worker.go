@@ -445,8 +445,7 @@ func (s *Worker) shutdown() error {
 	if worker, err := s.workerRepo.GetWorkerById(s.workerId); err != nil {
 		errs = errors.Join(errs, err)
 	} else if worker != nil {
-		err = s.workerRepo.RemoveWorker(worker)
-		if err != nil {
+		if err := s.workerRepo.RemoveWorker(worker); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
