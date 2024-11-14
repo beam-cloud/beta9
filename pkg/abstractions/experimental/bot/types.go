@@ -105,6 +105,7 @@ type BotEvent struct {
 type MetadataKey string
 
 const (
+	MetadataRequestId      MetadataKey = "request_id"
 	MetadataSessionId      MetadataKey = "session_id"
 	MetadataTransitionName MetadataKey = "transition_name"
 	MetadataTaskId         MetadataKey = "task_id"

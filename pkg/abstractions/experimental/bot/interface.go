@@ -272,7 +272,7 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType string, req *PromptReq
 			Type:  BotEventTypeMemoryUpdated,
 			Value: req.Msg,
 			Metadata: map[string]string{
-				"session_id": sessionId,
+				string(MetadataSessionId): sessionId,
 			},
 		})
 	}
@@ -281,8 +281,8 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType string, req *PromptReq
 		Type:  BotEventTypeAgentMessage,
 		Value: msg,
 		Metadata: map[string]string{
-			"request_id": req.RequestId,
-			"session_id": sessionId,
+			string(MetadataRequestId): req.RequestId,
+			string(MetadataSessionId): sessionId,
 		},
 	}
 
