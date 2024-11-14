@@ -1,12 +1,13 @@
 package scheduler
 
 import (
+	"errors"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/bsm/redislock"
 )
 
 const poolMonitoringInterval = 1 * time.Second
@@ -67,7 +68,7 @@ func (s *WorkerPoolSizer) Start() {
 			// Handle case where we want to make sure all available manually provisioned nodes have available workers
 			if s.workerPoolConfig.Mode == types.PoolModeExternal {
 				err := s.occupyAvailableMachines()
-				if err != nil && !strings.Contains(err.Error(), "redislock: not obtained") {
+				if err != nil && !errors.Is(err, redislock.ErrNotObtained) {
 					log.Printf("<pool %s> Failed to list machines in external pool: %+v\n", s.controller.Name(), err)
 				}
 			}
