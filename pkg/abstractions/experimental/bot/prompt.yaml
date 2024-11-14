@@ -31,6 +31,7 @@ prompt: |
       15. Important: Never set any default values for a marker field unless it is an optional field.
       16. I repeat. Do not return complete_marker=true unless you have all the data you need to populate a marker in that response!
       17. Always set source_task_id to an empty string.
+      18. Don't ever mention petri nets to the user.
     </instructions>
 
     If the messages are wrapped with <transition_message> tag, follow these instructions:
