@@ -293,7 +293,7 @@ func (i *botInstance) sendNetworkState() {
 
 				stateJson, err := json.Marshal(state)
 				if err != nil {
-					return
+					continue
 				}
 
 				i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, session.Id, &BotEvent{
