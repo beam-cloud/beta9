@@ -75,7 +75,14 @@ func (s *WorkerPoolSizer) Start() {
 }
 
 // occupyAvailableMachines ensures that all manually provisioned machines always have workers occupying them
+// This only adds one worker per machine, so if a machine has more capacity, it will not be fully utilized unless
+// this is called multiple times.
 func (s *WorkerPoolSizer) occupyAvailableMachines() error {
+	if err := s.workerRepo.SetWorkerPoolSizerLock(s.controller.Name()); err != nil {
+		return err
+	}
+	defer s.workerRepo.RemoveWorkerPoolSizerLock(s.controller.Name())
+
 	machines, err := s.providerRepo.ListAllMachines(string(*s.workerPoolConfig.Provider), s.controller.Name(), true)
 	if err != nil {
 		return err
