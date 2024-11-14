@@ -271,6 +271,9 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType string, req *PromptReq
 		return bi.stateManager.pushEvent(bi.workspace.Name, bi.stub.ExternalId, sessionId, &BotEvent{
 			Type:  BotEventTypeMemoryUpdated,
 			Value: req.Msg,
+			Metadata: map[string]string{
+				"session_id": sessionId,
+			},
 		})
 	}
 
