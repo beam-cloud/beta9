@@ -183,17 +183,8 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 					continue
 				}
 
-				if event.Type == BotEventTypeUserMessage {
-					instance.botInterface.SendPrompt(sessionId, PromptTypeUser, &PromptRequest{Msg: event.Value})
-					continue
-				} else if event.Type == BotEventTypeTransitionMessage {
-					instance.botInterface.SendPrompt(sessionId, PromptTypeTransition, &PromptRequest{Msg: event.Value})
-					continue
-				} else if event.Type == BotEventTypeMemoryMessage {
-					instance.botInterface.SendPrompt(sessionId, PromptTypeMemory, &PromptRequest{Msg: event.Value})
-					continue
-				}
-
+				// Handle event and echo it back to the client
+				instance.eventChan <- event
 				serializedEvent, err := json.Marshal(event)
 				if err != nil {
 					continue

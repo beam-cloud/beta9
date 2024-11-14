@@ -36,6 +36,7 @@ type botInstance struct {
 	taskDispatcher  *task.Dispatcher
 	authInfo        *auth.AuthInfo
 	containerRepo   repository.ContainerRepository
+	eventChan       chan *BotEvent
 }
 
 type botInstanceOpts struct {
@@ -65,7 +66,7 @@ func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, er
 		return nil, err
 	}
 
-	return &botInstance{
+	instance := &botInstance{
 		ctx:             ctx,
 		appConfig:       opts.AppConfig,
 		token:           opts.Token,
@@ -83,7 +84,11 @@ func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, er
 			Token:     opts.Token,
 		},
 		containerRepo: opts.ContainerRepo,
-	}, nil
+		eventChan:     make(chan *BotEvent),
+	}
+
+	go instance.monitorEvents()
+	return instance, nil
 }
 
 func (i *botInstance) containersBySessionId() (map[string][]string, error) {
@@ -227,7 +232,7 @@ func (i *botInstance) step(sessionId string) {
 						Expires:    time.Now().Add(time.Duration(3600) * time.Second),
 					})
 					if err != nil {
-						log.Printf("<bot %s> Error staging transition %s: %s", i.stub.ExternalId, transition.Name, err)
+						i.handleTransitionFailed(sessionId, transition.Name, err)
 						continue
 					}
 
@@ -241,9 +246,6 @@ func (i *botInstance) step(sessionId string) {
 						},
 					})
 
-					// Stage the transition
-					// i.botStateManager.stageTransition(i.workspace.Name, i.stub.ExternalId, sessionId, transition.Name, payload)
-
 					continue
 				}
 
@@ -254,16 +256,8 @@ func (i *botInstance) step(sessionId string) {
 					Expires:    time.Now().Add(time.Duration(3600) * time.Second),
 				})
 				if err != nil {
-					log.Printf("<bot %s> Error running transition %s: %s", i.stub.ExternalId, transition.Name, err)
-
-					i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
-						Type:  BotEventTypeTransitionFailed,
-						Value: err.Error(),
-						Metadata: map[string]string{
-							"session_id":      sessionId,
-							"transition_name": transition.Name,
-						},
-					})
+					i.handleTransitionFailed(sessionId, transition.Name, err)
+					continue
 				}
 
 				i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
@@ -280,20 +274,56 @@ func (i *botInstance) step(sessionId string) {
 	}()
 }
 
-func (i *botInstance) handleStagedTransitions(sessionId string) error {
+func (i *botInstance) handleTransitionFailed(sessionId, transitionName string, err error) {
+	i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
+		Type:  BotEventTypeTransitionFailed,
+		Value: transitionName,
+		Metadata: map[string]string{
+			"session_id":      sessionId,
+			"transition_name": transitionName,
+			"error_msg":       err.Error(),
+		},
+	})
+}
+
+func (i *botInstance) monitorEvents() error {
 	for {
 		select {
 		case <-i.ctx.Done():
 			return nil
-		default:
-			// task, err := i.taskDispatcher.Retrieve(i.ctx, i.workspace.Name, i.stub.ExternalId, taskId)
-			// if err != nil {
-			// 	continue
-			// }
+		case event := <-i.eventChan:
+			sessionId := event.Metadata["session_id"]
 
-			// task.Execute(i.ctx)
+			if event.Type == BotEventTypeUserMessage {
+				i.botInterface.SendPrompt(sessionId, PromptTypeUser, &PromptRequest{Msg: event.Value})
+				continue
+			} else if event.Type == BotEventTypeTransitionMessage {
+				i.botInterface.SendPrompt(sessionId, PromptTypeTransition, &PromptRequest{Msg: event.Value})
+				continue
+			} else if event.Type == BotEventTypeMemoryMessage {
+				i.botInterface.SendPrompt(sessionId, PromptTypeMemory, &PromptRequest{Msg: event.Value})
+				continue
+			} else if event.Type == BotEventTypeConfirmResponse {
+				taskId := event.Metadata["task_id"]
+				accepts := event.Metadata["accept"] == "true"
 
-			time.Sleep(1 * time.Second)
+				task, err := i.taskDispatcher.Retrieve(i.ctx, i.workspace.Name, i.stub.ExternalId, taskId)
+				if err != nil {
+					continue
+				}
+
+				if accepts {
+					err = task.Execute(i.ctx)
+					if err != nil {
+						i.handleTransitionFailed(sessionId, event.Metadata["transition_name"], err)
+					}
+				} else {
+					task.Cancel(i.ctx, types.TaskRequestCancelled)
+				}
+
+				continue
+			}
+
 		}
 	}
 }
