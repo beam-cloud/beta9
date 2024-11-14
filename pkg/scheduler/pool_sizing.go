@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"log"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -66,7 +67,7 @@ func (s *WorkerPoolSizer) Start() {
 			// Handle case where we want to make sure all available manually provisioned nodes have available workers
 			if s.workerPoolConfig.Mode == types.PoolModeExternal {
 				err := s.occupyAvailableMachines()
-				if err != nil {
+				if err != nil && !strings.Contains(err.Error(), "redislock: not obtained") {
 					log.Printf("<pool %s> Failed to list machines in external pool: %+v\n", s.controller.Name(), err)
 				}
 			}
