@@ -197,17 +197,6 @@ func (i *botInstance) step(sessionId string) {
 
 			// If this transition can fire, we need to pop the required markers and dispatch a task
 			if canFire {
-				if transition.Confirm {
-					i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
-						Type:  BotEventTypeConfirmRequest,
-						Value: transition.Name,
-						Metadata: map[string]string{
-							"session_id":      sessionId,
-							"transition_name": transition.Name,
-						},
-					})
-				}
-
 				markers := []Marker{}
 
 				for locationName, requiredCount := range markersToPop {
@@ -227,6 +216,35 @@ func (i *botInstance) step(sessionId string) {
 						"session_id":      sessionId,
 						"transition_name": transition.Name,
 					},
+				}
+
+				// If this transition requires confirmation, we need to send a confirmation request before creating and invoking the task
+				if transition.Confirm {
+					t, err := i.taskDispatcher.Send(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
+						MaxRetries: 0,
+						Timeout:    3600,
+						TTL:        3600,
+						Expires:    time.Now().Add(time.Duration(3600) * time.Second),
+					})
+					if err != nil {
+						log.Printf("<bot %s> Error staging transition %s: %s", i.stub.ExternalId, transition.Name, err)
+						continue
+					}
+
+					i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
+						Type:  BotEventTypeConfirmRequest,
+						Value: transition.Name,
+						Metadata: map[string]string{
+							"session_id":      sessionId,
+							"transition_name": transition.Name,
+							"task_id":         t.Metadata().TaskId,
+						},
+					})
+
+					// Stage the transition
+					// i.botStateManager.stageTransition(i.workspace.Name, i.stub.ExternalId, sessionId, transition.Name, payload)
+
+					continue
 				}
 
 				t, err := i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
@@ -260,6 +278,24 @@ func (i *botInstance) step(sessionId string) {
 			}
 		}
 	}()
+}
+
+func (i *botInstance) handleStagedTransitions(sessionId string) error {
+	for {
+		select {
+		case <-i.ctx.Done():
+			return nil
+		default:
+			// task, err := i.taskDispatcher.Retrieve(i.ctx, i.workspace.Name, i.stub.ExternalId, taskId)
+			// if err != nil {
+			// 	continue
+			// }
+
+			// task.Execute(i.ctx)
+
+			time.Sleep(1 * time.Second)
+		}
+	}
 }
 
 func (i *botInstance) run(transitionName, sessionId, taskId string) error {
