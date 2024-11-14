@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -88,6 +89,7 @@ func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, er
 	}
 
 	go instance.monitorEvents()
+	go instance.sendNetworkState()
 	return instance, nil
 }
 
@@ -259,7 +261,51 @@ func (i *botInstance) step(sessionId string) {
 				})
 			}
 		}
+
 	}()
+}
+
+func (i *botInstance) sendNetworkState() {
+	for {
+		select {
+		case <-i.ctx.Done():
+			return
+		case <-time.After(time.Second):
+			activeSessions, err := i.botStateManager.getActiveSessions(i.workspace.Name, i.stub.ExternalId)
+			if err != nil || len(activeSessions) == 0 {
+				continue
+			}
+
+			for _, session := range activeSessions {
+				state := &BotNetworkSnapshot{
+					SessionId:            session.Id,
+					LocationMarkerCounts: make(map[string]int64),
+					Config:               i.botConfig,
+				}
+
+				for locationName := range i.botConfig.Locations {
+					count, err := i.botStateManager.countMarkers(i.workspace.Name, i.stub.ExternalId, session.Id, locationName)
+					if err != nil {
+						continue
+					}
+					state.LocationMarkerCounts[locationName] = count
+				}
+
+				stateJson, err := json.Marshal(state)
+				if err != nil {
+					return
+				}
+
+				i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, session.Id, &BotEvent{
+					Type:  BotEventTypeNetworkState,
+					Value: string(stateJson),
+					Metadata: map[string]string{
+						string(MetadataSessionId): session.Id,
+					},
+				})
+			}
+		}
+	}
 }
 
 func (i *botInstance) handleTransitionFailed(sessionId, transitionName string, err error) {

@@ -87,7 +87,7 @@ const (
 	BotEventTypeTransitionFailed    BotEventType = "transition_failed"
 	BotEventTypeTransitionStarted   BotEventType = "transition_started"
 	BotEventTypeTransitionCompleted BotEventType = "transition_completed"
-	BotEventTypeState               BotEventType = "current_state"
+	BotEventTypeNetworkState        BotEventType = "network_state"
 	BotEventTypeConfirmRequest      BotEventType = "confirm_request"
 	BotEventTypeConfirmResponse     BotEventType = "confirm_response"
 )
@@ -238,10 +238,7 @@ func (t *BotTransitionConfig) FormatTransition() string {
 }
 
 type BotNetworkSnapshot struct {
-	SessionId string                         `json:"session_id" redis:"session_id"`
-	Locations map[string]BotLocationSnapshot `json:"locations" redis:"locations"`
-}
-
-type BotLocationSnapshot struct {
-	Markers []Marker `json:"markers" redis:"markers"`
+	SessionId            string           `json:"session_id" redis:"session_id"`
+	LocationMarkerCounts map[string]int64 `json:"location_marker_counts" redis:"location_marker_counts"`
+	Config               BotConfig        `json:"config" redis:"config"`
 }

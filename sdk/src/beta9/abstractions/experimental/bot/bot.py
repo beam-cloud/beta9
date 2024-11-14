@@ -38,7 +38,7 @@ class BotEventType(str, Enum):
     TRANSITION_STARTED = "transition_started"
     TRANSITION_COMPLETED = "transition_completed"
     TRANSITION_FAILED = "transition_failed"
-    STATE = "state"
+    NETWORK_STATE = "network_state"
     CONFIRM_REQUEST = "confirm_request"
     CONFIRM_RESPONSE = "confirm_response"
 
@@ -327,6 +327,8 @@ class Bot(RunnerAbstraction, DeployableMixin):
                     terminal.header(f"Session started: {session_id}")
                     terminal.header("💬 Chat with your bot below...")
                     session_event.set()  # Signal that session is ready
+                elif event_type == BotEventType.NETWORK_STATE:
+                    pass
                 else:
                     terminal.print(f"\n{json.dumps(event.model_dump(), indent=2)}")
 
