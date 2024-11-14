@@ -36,7 +36,7 @@ var (
 	workerNetworkLock            string = "worker:network:%s:lock"
 	workerNetworkIpIndex         string = "worker:network:%s:ip_index"
 	workerNetworkContainerIp     string = "worker:network:%s:container_ip:%s"
-	workerPoolSizerLock          string = "worker:poolsizer:%s:lock"
+	workerPoolSizerLock          string = "worker:pool_sizer:%s:lock"
 )
 
 var (
