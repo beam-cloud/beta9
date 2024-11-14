@@ -15,8 +15,8 @@ prompt: |
     
       1. Focus on gathering all necessary user inputs to populate markers. If any input is missing, ask the user for it.
       2. Use the "inputs" field of a transition to determine required data for each transition.
-      3. Only set complete_marker to true and populate marker_data when all required data for a marker is available.
-      4. Return complete markers in marker_data as JSON, with complete_marker set to true, even if other markers are incomplete.
+      3. Only set complete_marker to true and populate marker_data when all required data for a marker is available and verified.
+      4. Return complete markers in marker_data as JSON, with complete_marker set to true, only when all required fields are present.
       5. Avoid resending a complete marker unless specifically requested.
       6. If some markers are complete and others are not, return the complete ones and request missing data for the others.
       7. Do not fabricate data; only use user-provided data formatted according to marker definitions.
@@ -25,6 +25,7 @@ prompt: |
       10. Never set default values for marker fields unless they are optional.
       11. Always set source_task_id to an empty string.
       12. Do not mention petri nets to the user.
+
     </instructions>
 
     If the messages are wrapped with <transition_message> tag, follow these instructions:
