@@ -2,12 +2,14 @@ package bot
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	openai "github.com/sashabaranov/go-openai"
 	"github.com/sashabaranov/go-openai/jsonschema"
+	"gopkg.in/yaml.v2"
 )
 
 type BotInterface struct {
@@ -31,18 +33,38 @@ type botInterfaceOpts struct {
 	Stub         *types.StubWithRelated
 }
 
+var (
+	//go:embed prompt.yaml
+	defaultBotSystemPrompt    string
+	defaultBotSystemPromptKey = "prompt"
+)
+
 func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
+	systemPrompt := opts.AppConfig.Abstractions.Bot.SystemPrompt
+	if systemPrompt == "" {
+		var promptData map[string]interface{}
+
+		err := yaml.Unmarshal([]byte(defaultBotSystemPrompt), &promptData)
+		if err != nil {
+			return nil, err
+		}
+
+		if prompt, ok := promptData[defaultBotSystemPromptKey].(string); ok {
+			systemPrompt = prompt
+		}
+	}
+
 	bi := &BotInterface{
 		client:       openai.NewClient(opts.BotConfig.ApiKey),
 		botConfig:    opts.BotConfig,
 		model:        opts.BotConfig.Model,
-		systemPrompt: opts.AppConfig.Abstractions.Bot.SystemPrompt,
+		systemPrompt: systemPrompt,
 		stateManager: opts.StateManager,
 		workspace:    opts.Workspace,
 		stub:         opts.Stub,
 	}
 
-	// Generate the schema for each response
+	// Generate the schemas for each response type
 	var userResponse BotUserResponse
 	schema, err := jsonschema.GenerateSchemaForType(userResponse)
 	if err != nil {
@@ -154,7 +176,7 @@ func (bi *BotInterface) getSessionHistory(sessionId string) ([]openai.ChatComple
 	return state.GetMessagesInOpenAIFormat(), nil
 }
 
-func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error {
+func (bi *BotInterface) SendPrompt(sessionId, messageType string, req *PromptRequest) error {
 	messages, err := bi.getSessionHistory(sessionId)
 	if err != nil {
 		return err
@@ -162,7 +184,7 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error 
 
 	role := openai.ChatMessageRoleUser
 	promptMessage := openai.ChatCompletionMessage{
-		Content: prompt,
+		Content: req.Msg,
 	}
 
 	var schema *jsonschema.Definition = bi.userSchema
@@ -170,14 +192,14 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error 
 	switch messageType {
 	case PromptTypeUser:
 		role = openai.ChatMessageRoleUser
-		promptMessage.Content = wrapPrompt(PromptTypeUser, prompt)
+		promptMessage.Content = wrapPrompt(PromptTypeUser, req.Msg)
 	case PromptTypeTransition:
 		role = openai.ChatMessageRoleUser
-		promptMessage.Content = wrapPrompt(PromptTypeTransition, prompt)
+		promptMessage.Content = wrapPrompt(PromptTypeTransition, req.Msg)
 		schema = bi.transitionSchema
 	case PromptTypeMemory:
 		role = openai.ChatMessageRoleUser
-		promptMessage.Content = wrapPrompt(PromptTypeMemory, prompt)
+		promptMessage.Content = wrapPrompt(PromptTypeMemory, req.Msg)
 		schema = bi.memorySchema
 	default:
 		return fmt.Errorf("invalid message type: %s", messageType)
@@ -206,10 +228,11 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error 
 	}
 
 	responseMessage := resp.Choices[0].Message
+
 	err = bi.addMessagesToSessionHistory(sessionId, []BotChatCompletionMessage{
 		{
 			Role:    role,
-			Content: prompt,
+			Content: req.Msg,
 		},
 		{
 			Role:    responseMessage.Role,
@@ -248,13 +271,20 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType, prompt string) error 
 	} else if messageType == PromptTypeMemory {
 		return bi.stateManager.pushEvent(bi.workspace.Name, bi.stub.ExternalId, sessionId, &BotEvent{
 			Type:  BotEventTypeMemoryUpdated,
-			Value: prompt,
+			Value: req.Msg,
+			Metadata: map[string]string{
+				string(MetadataSessionId): sessionId,
+			},
 		})
 	}
 
 	event := &BotEvent{
 		Type:  BotEventTypeAgentMessage,
 		Value: msg,
+		Metadata: map[string]string{
+			string(MetadataRequestId): req.RequestId,
+			string(MetadataSessionId): sessionId,
+		},
 	}
 
 	return bi.stateManager.pushEvent(bi.workspace.Name, bi.stub.ExternalId, sessionId, event)

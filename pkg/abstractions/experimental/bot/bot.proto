@@ -31,6 +31,7 @@ message MarkerField {
 message Marker {
   string location_name = 1;
   repeated MarkerField fields = 2;
+  string source_task_id = 3;
 }
 
 message PushBotMarkersRequest {
@@ -38,6 +39,7 @@ message PushBotMarkersRequest {
   string session_id = 2;
   map<string, MarkerList> markers = 3;
   message MarkerList { repeated Marker markers = 4; }
+  string source_task_id = 5;
 }
 
 message PushBotMarkersResponse { bool ok = 1; }
@@ -47,6 +49,7 @@ message PushBotEventRequest {
   string session_id = 2;
   string event_type = 3;
   string event_value = 4;
+  map<string, string> metadata = 5;
 }
 
 message PushBotEventResponse { bool ok = 1; }

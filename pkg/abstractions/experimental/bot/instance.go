@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -36,6 +37,7 @@ type botInstance struct {
 	taskDispatcher  *task.Dispatcher
 	authInfo        *auth.AuthInfo
 	containerRepo   repository.ContainerRepository
+	eventChan       chan *BotEvent
 }
 
 type botInstanceOpts struct {
@@ -65,7 +67,7 @@ func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, er
 		return nil, err
 	}
 
-	return &botInstance{
+	instance := &botInstance{
 		ctx:             ctx,
 		appConfig:       opts.AppConfig,
 		token:           opts.Token,
@@ -83,7 +85,12 @@ func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, er
 			Token:     opts.Token,
 		},
 		containerRepo: opts.ContainerRepo,
-	}, nil
+		eventChan:     make(chan *BotEvent),
+	}
+
+	go instance.monitorEvents()
+	go instance.sendNetworkState()
+	return instance, nil
 }
 
 func (i *botInstance) containersBySessionId() (map[string][]string, error) {
@@ -141,10 +148,8 @@ func (i *botInstance) Start() error {
 
 			lastActiveSessionAt = time.Now().Unix()
 			for _, session := range activeSessions {
-				if msg, err := i.botStateManager.popInputMessage(i.workspace.Name, i.stub.ExternalId, session.Id); err == nil {
-					if err := i.botInterface.SendPrompt(session.Id, PromptTypeUser, msg); err != nil {
-						continue
-					}
+				if event, err := i.botStateManager.popUserEvent(i.workspace.Name, i.stub.ExternalId, session.Id); err == nil {
+					i.eventChan <- event
 				}
 
 				// Run any network transitions that can run
@@ -218,20 +223,148 @@ func (i *botInstance) step(sessionId string) {
 					},
 				}
 
+				// If this transition requires explicit confirmation, we need to send a confirmation request before executing the task
+				if transition.Confirm {
+					t, err := i.taskDispatcher.Send(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, getDefaultTaskPolicy())
+					if err != nil {
+						i.handleTransitionFailed(sessionId, transition.Name, err)
+						continue
+					}
+
+					i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
+						Type:  BotEventTypeConfirmRequest,
+						Value: transition.Name,
+						Metadata: map[string]string{
+							string(MetadataSessionId):      sessionId,
+							string(MetadataTransitionName): transition.Name,
+							string(MetadataTaskId):         t.Metadata().TaskId,
+						},
+					})
+
+					continue
+				}
+
+				t, err := i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, getDefaultTaskPolicy())
+				if err != nil {
+					i.handleTransitionFailed(sessionId, transition.Name, err)
+					continue
+				}
+
 				i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
 					Type:  BotEventTypeTransitionFired,
 					Value: transition.Name,
-				})
-
-				i.taskDispatcher.SendAndExecute(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, types.TaskPolicy{
-					MaxRetries: 0,
-					Timeout:    3600,
-					TTL:        3600,
-					Expires:    time.Now().Add(time.Duration(3600) * time.Second),
+					Metadata: map[string]string{
+						string(MetadataSessionId):      sessionId,
+						string(MetadataTransitionName): transition.Name,
+						string(MetadataTaskId):         t.Metadata().TaskId,
+					},
 				})
 			}
 		}
+
 	}()
+}
+
+func (i *botInstance) sendNetworkState() {
+	for {
+		select {
+		case <-i.ctx.Done():
+			return
+		case <-time.After(time.Second):
+			activeSessions, err := i.botStateManager.getActiveSessions(i.workspace.Name, i.stub.ExternalId)
+			if err != nil || len(activeSessions) == 0 {
+				continue
+			}
+
+			for _, session := range activeSessions {
+				state := &BotNetworkSnapshot{
+					SessionId:            session.Id,
+					LocationMarkerCounts: make(map[string]int64),
+					Config:               i.botConfig,
+				}
+
+				for locationName := range i.botConfig.Locations {
+					count, err := i.botStateManager.countMarkers(i.workspace.Name, i.stub.ExternalId, session.Id, locationName)
+					if err != nil {
+						continue
+					}
+					state.LocationMarkerCounts[locationName] = count
+				}
+
+				stateJson, err := json.Marshal(state)
+				if err != nil {
+					continue
+				}
+
+				i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, session.Id, &BotEvent{
+					Type:  BotEventTypeNetworkState,
+					Value: string(stateJson),
+					Metadata: map[string]string{
+						string(MetadataSessionId): session.Id,
+					},
+				})
+			}
+		}
+	}
+}
+
+func (i *botInstance) handleTransitionFailed(sessionId, transitionName string, err error) {
+	i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
+		Type:  BotEventTypeTransitionFailed,
+		Value: transitionName,
+		Metadata: map[string]string{
+			string(MetadataSessionId):      sessionId,
+			string(MetadataTransitionName): transitionName,
+			string(MetadataErrorMsg):       err.Error(),
+		},
+	})
+}
+
+func getDefaultTaskPolicy() types.TaskPolicy {
+	return types.TaskPolicy{
+		MaxRetries: 0,
+		Timeout:    3600,
+		TTL:        3600,
+		Expires:    time.Now().Add(time.Duration(3600) * time.Second),
+	}
+}
+
+func (i *botInstance) monitorEvents() error {
+	for {
+		select {
+		case <-i.ctx.Done():
+			return nil
+		case event := <-i.eventChan:
+			sessionId := event.Metadata[string(MetadataSessionId)]
+
+			switch event.Type {
+			case BotEventTypeUserMessage:
+				i.botInterface.SendPrompt(sessionId, PromptTypeUser, &PromptRequest{Msg: event.Value, RequestId: event.Metadata[string(MetadataRequestId)]})
+			case BotEventTypeTransitionMessage:
+				i.botInterface.SendPrompt(sessionId, PromptTypeTransition, &PromptRequest{Msg: event.Value})
+			case BotEventTypeMemoryMessage:
+				i.botInterface.SendPrompt(sessionId, PromptTypeMemory, &PromptRequest{Msg: event.Value})
+			case BotEventTypeConfirmResponse:
+				taskId := event.Metadata[string(MetadataTaskId)]
+				accepts := event.Metadata[string(MetadataAccept)] == "true"
+				transitionName := event.Metadata[string(MetadataTransitionName)]
+
+				task, err := i.taskDispatcher.Retrieve(i.ctx, i.workspace.Name, i.stub.ExternalId, taskId)
+				if err != nil {
+					continue
+				}
+
+				if accepts {
+					err = task.Execute(i.ctx)
+					if err != nil {
+						i.handleTransitionFailed(sessionId, transitionName, err)
+					}
+				} else {
+					task.Cancel(i.ctx, types.TaskRequestCancelled)
+				}
+			}
+		}
+	}
 }
 
 func (i *botInstance) run(transitionName, sessionId, taskId string) error {
@@ -290,7 +423,6 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		Stub:        *i.stub,
 	})
 	if err != nil {
-		log.Printf("<bot %s> Error running transition %s: %s", i.stub.ExternalId, transitionName, err)
 		return err
 	}
 

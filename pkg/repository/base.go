@@ -132,6 +132,7 @@ type BackendRepository interface {
 }
 
 type TaskRepository interface {
+	GetTaskState(ctx context.Context, workspaceName, stubId, taskId string) (*types.TaskMessage, error)
 	SetTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error
 	DeleteTaskState(ctx context.Context, workspaceName, stubId, taskId string) error
 	GetTasksInFlight(ctx context.Context) ([]*types.TaskMessage, error)
