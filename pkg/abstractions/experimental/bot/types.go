@@ -102,6 +102,16 @@ type BotEvent struct {
 	Metadata map[string]string `json:"metadata" redis:"metadata"`
 }
 
+type MetadataKey string
+
+const (
+	MetadataSessionId      MetadataKey = "session_id"
+	MetadataTransitionName MetadataKey = "transition_name"
+	MetadataTaskId         MetadataKey = "task_id"
+	MetadataErrorMsg       MetadataKey = "error_msg"
+	MetadataAccept         MetadataKey = "accept"
+)
+
 type BotUserResponse struct {
 	Msg            string `json:"msg" redis:"msg"`
 	MarkerData     Marker `json:"marker_data" redis:"marker_data"`

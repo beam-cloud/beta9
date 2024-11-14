@@ -240,9 +240,9 @@ func (i *botInstance) step(sessionId string) {
 						Type:  BotEventTypeConfirmRequest,
 						Value: transition.Name,
 						Metadata: map[string]string{
-							"session_id":      sessionId,
-							"transition_name": transition.Name,
-							"task_id":         t.Metadata().TaskId,
+							string(MetadataSessionId):      sessionId,
+							string(MetadataTransitionName): transition.Name,
+							string(MetadataTaskId):         t.Metadata().TaskId,
 						},
 					})
 
@@ -264,9 +264,9 @@ func (i *botInstance) step(sessionId string) {
 					Type:  BotEventTypeTransitionFired,
 					Value: transition.Name,
 					Metadata: map[string]string{
-						"session_id":      sessionId,
-						"transition_name": transition.Name,
-						"task_id":         t.Metadata().TaskId,
+						string(MetadataSessionId):      sessionId,
+						string(MetadataTransitionName): transition.Name,
+						string(MetadataTaskId):         t.Metadata().TaskId,
 					},
 				})
 			}
@@ -279,9 +279,9 @@ func (i *botInstance) handleTransitionFailed(sessionId, transitionName string, e
 		Type:  BotEventTypeTransitionFailed,
 		Value: transitionName,
 		Metadata: map[string]string{
-			"session_id":      sessionId,
-			"transition_name": transitionName,
-			"error_msg":       err.Error(),
+			string(MetadataSessionId):      sessionId,
+			string(MetadataTransitionName): transitionName,
+			string(MetadataErrorMsg):       err.Error(),
 		},
 	})
 }
@@ -292,20 +292,18 @@ func (i *botInstance) monitorEvents() error {
 		case <-i.ctx.Done():
 			return nil
 		case event := <-i.eventChan:
-			sessionId := event.Metadata["session_id"]
+			sessionId := event.Metadata[string(MetadataSessionId)]
 
-			if event.Type == BotEventTypeUserMessage {
+			switch event.Type {
+			case BotEventTypeUserMessage:
 				i.botInterface.SendPrompt(sessionId, PromptTypeUser, &PromptRequest{Msg: event.Value})
-				continue
-			} else if event.Type == BotEventTypeTransitionMessage {
+			case BotEventTypeTransitionMessage:
 				i.botInterface.SendPrompt(sessionId, PromptTypeTransition, &PromptRequest{Msg: event.Value})
-				continue
-			} else if event.Type == BotEventTypeMemoryMessage {
+			case BotEventTypeMemoryMessage:
 				i.botInterface.SendPrompt(sessionId, PromptTypeMemory, &PromptRequest{Msg: event.Value})
-				continue
-			} else if event.Type == BotEventTypeConfirmResponse {
-				taskId := event.Metadata["task_id"]
-				accepts := event.Metadata["accept"] == "true"
+			case BotEventTypeConfirmResponse:
+				taskId := event.Metadata[string(MetadataTaskId)]
+				accepts := event.Metadata[string(MetadataAccept)] == "true"
 
 				task, err := i.taskDispatcher.Retrieve(i.ctx, i.workspace.Name, i.stub.ExternalId, taskId)
 				if err != nil {
@@ -320,10 +318,7 @@ func (i *botInstance) monitorEvents() error {
 				} else {
 					task.Cancel(i.ctx, types.TaskRequestCancelled)
 				}
-
-				continue
 			}
-
 		}
 	}
 }
