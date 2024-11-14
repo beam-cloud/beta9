@@ -146,10 +146,8 @@ func (i *botInstance) Start() error {
 
 			lastActiveSessionAt = time.Now().Unix()
 			for _, session := range activeSessions {
-				if req, err := i.botStateManager.popInputMessage(i.workspace.Name, i.stub.ExternalId, session.Id); err == nil {
-					if err := i.botInterface.SendPrompt(session.Id, PromptTypeUser, req); err != nil {
-						continue
-					}
+				if event, err := i.botStateManager.popUserEvent(i.workspace.Name, i.stub.ExternalId, session.Id); err == nil {
+					i.eventChan <- event
 				}
 
 				// Run any network transitions that can run
@@ -223,7 +221,7 @@ func (i *botInstance) step(sessionId string) {
 					},
 				}
 
-				// If this transition requires confirmation, we need to send a confirmation request before creating and invoking the task
+				// If this transition requires explicit confirmation, we need to send a confirmation request before executing the task
 				if transition.Confirm {
 					t, err := i.taskDispatcher.Send(i.ctx, string(types.ExecutorBot), i.authInfo, i.stub.ExternalId, taskPayload, getDefaultTaskPolicy())
 					if err != nil {
@@ -295,7 +293,7 @@ func (i *botInstance) monitorEvents() error {
 
 			switch event.Type {
 			case BotEventTypeUserMessage:
-				i.botInterface.SendPrompt(sessionId, PromptTypeUser, &PromptRequest{Msg: event.Value})
+				i.botInterface.SendPrompt(sessionId, PromptTypeUser, &PromptRequest{Msg: event.Value, RequestId: event.Metadata[string(MetadataRequestId)]})
 			case BotEventTypeTransitionMessage:
 				i.botInterface.SendPrompt(sessionId, PromptTypeTransition, &PromptRequest{Msg: event.Value})
 			case BotEventTypeMemoryMessage:
@@ -303,6 +301,7 @@ func (i *botInstance) monitorEvents() error {
 			case BotEventTypeConfirmResponse:
 				taskId := event.Metadata[string(MetadataTaskId)]
 				accepts := event.Metadata[string(MetadataAccept)] == "true"
+				transitionName := event.Metadata[string(MetadataTransitionName)]
 
 				task, err := i.taskDispatcher.Retrieve(i.ctx, i.workspace.Name, i.stub.ExternalId, taskId)
 				if err != nil {
@@ -312,7 +311,7 @@ func (i *botInstance) monitorEvents() error {
 				if accepts {
 					err = task.Execute(i.ctx)
 					if err != nil {
-						i.handleTransitionFailed(sessionId, event.Metadata["transition_name"], err)
+						i.handleTransitionFailed(sessionId, transitionName, err)
 					}
 				} else {
 					task.Cancel(i.ctx, types.TaskRequestCancelled)

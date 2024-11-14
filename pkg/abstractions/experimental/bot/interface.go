@@ -228,6 +228,7 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType string, req *PromptReq
 	}
 
 	responseMessage := resp.Choices[0].Message
+
 	err = bi.addMessagesToSessionHistory(sessionId, []BotChatCompletionMessage{
 		{
 			Role:    role,

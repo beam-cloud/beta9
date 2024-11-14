@@ -43,6 +43,12 @@ class BotEventType(str, Enum):
     CONFIRM_RESPONSE = "confirm_response"
 
 
+class BotEvent(BaseModel):
+    type: BotEventType
+    value: str
+    metadata: dict = {}
+
+
 class BotTransition:
     """
     Parameters:
@@ -312,18 +318,17 @@ class Bot(RunnerAbstraction, DeployableMixin):
             from prompt_toolkit import PromptSession
 
             def on_message(ws, message):
-                event = json.loads(message)
-                event_type = event.get("type")
-                event_value = event.get("value")
+                event = BotEvent(**json.loads(message))
+                event_type = event.type
+                event_value = event.value
 
                 if event_type == BotEventType.SESSION_CREATED:
                     session_id = event_value
                     terminal.header(f"Session started: {session_id}")
                     terminal.header("💬 Chat with your bot below...")
                     session_event.set()  # Signal that session is ready
-
                 else:
-                    terminal.print(f"\n{json.dumps(event, indent=2)}")
+                    terminal.print(f"\n{json.dumps(event.model_dump(), indent=2)}")
 
             def on_error(ws, error):
                 terminal.error(f"Error: {error}")
@@ -342,7 +347,13 @@ class Bot(RunnerAbstraction, DeployableMixin):
                         try:
                             msg = session.prompt("# ")
                             if msg:
-                                ws.send(json.dumps({"msg": msg, "request_id": str(uuid.uuid4())}))
+                                ws.send(
+                                    BotEvent(
+                                        type=BotEventType.USER_MESSAGE,
+                                        value=msg,
+                                        metadata={"request_id": str(uuid.uuid4())},
+                                    ).model_dump_json()
+                                )
                         except KeyboardInterrupt:
                             confirm = session.prompt("# Exit chat session (y/n) ")
                             if confirm.strip().lower() == "y":

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/mitchellh/mapstructure"
 )
 
 type BotTask struct {
@@ -29,7 +30,27 @@ func (t *BotTask) Execute(ctx context.Context, options ...interface{}) error {
 
 	transitionName := t.msg.Kwargs["transition_name"].(string)
 	sessionId := t.msg.Kwargs["session_id"].(string)
-	markers := t.msg.Kwargs["markers"].([]Marker)
+
+	// Try to cast the markers to a slice of Marker
+	var markers []Marker
+	rawMarkers, ok := t.msg.Kwargs["markers"].([]Marker)
+	if !ok {
+		// If that fails, manually decode using mapstructure
+		rawMarkersInterface, ok := t.msg.Kwargs["markers"].([]interface{})
+		if !ok {
+			return errors.New("invalid markers format")
+		}
+
+		markers = make([]Marker, len(rawMarkersInterface))
+		for i, rawMarker := range rawMarkersInterface {
+			err := mapstructure.Decode(rawMarker, &markers[i])
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		markers = rawMarkers
+	}
 
 	err = t.pbs.botStateManager.pushTask(instance.workspace.Name, instance.stub.ExternalId, sessionId, transitionName, t.msg.TaskId, markers)
 	if err != nil {
