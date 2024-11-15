@@ -68,11 +68,6 @@ type BotChatCompletionMessage struct {
 
 const botSchemaName = "beam_bot"
 
-type PromptRequest struct {
-	Msg       string `json:"msg" redis:"msg"`
-	RequestId string `json:"request_id" redis:"request_id"`
-}
-
 type BotEventType string
 
 const (
