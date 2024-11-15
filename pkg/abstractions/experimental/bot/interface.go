@@ -176,7 +176,7 @@ func (bi *BotInterface) getSessionHistory(sessionId string) ([]openai.ChatComple
 	return state.GetMessagesInOpenAIFormat(), nil
 }
 
-func (bi *BotInterface) SendPrompt(sessionId, messageType string, req *PromptRequest) error {
+func (bi *BotInterface) SendPrompt(sessionId, messageType string, event *BotEvent) error {
 	messages, err := bi.getSessionHistory(sessionId)
 	if err != nil {
 		return err
@@ -184,7 +184,7 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType string, req *PromptReq
 
 	role := openai.ChatMessageRoleUser
 	promptMessage := openai.ChatCompletionMessage{
-		Content: req.Msg,
+		Content: event.Value,
 	}
 
 	var schema *jsonschema.Definition = bi.userSchema
@@ -192,14 +192,14 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType string, req *PromptReq
 	switch messageType {
 	case PromptTypeUser:
 		role = openai.ChatMessageRoleUser
-		promptMessage.Content = wrapPrompt(PromptTypeUser, req.Msg)
+		promptMessage.Content = wrapPrompt(PromptTypeUser, event.Value)
 	case PromptTypeTransition:
 		role = openai.ChatMessageRoleUser
-		promptMessage.Content = wrapPrompt(PromptTypeTransition, req.Msg)
+		promptMessage.Content = wrapPrompt(PromptTypeTransition, event.Value)
 		schema = bi.transitionSchema
 	case PromptTypeMemory:
 		role = openai.ChatMessageRoleUser
-		promptMessage.Content = wrapPrompt(PromptTypeMemory, req.Msg)
+		promptMessage.Content = wrapPrompt(PromptTypeMemory, event.Value)
 		schema = bi.memorySchema
 	default:
 		return fmt.Errorf("invalid message type: %s", messageType)
@@ -232,7 +232,7 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType string, req *PromptReq
 	err = bi.addMessagesToSessionHistory(sessionId, []BotChatCompletionMessage{
 		{
 			Role:    role,
-			Content: req.Msg,
+			Content: event.Value,
 		},
 		{
 			Role:    responseMessage.Role,
@@ -271,22 +271,26 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType string, req *PromptReq
 	} else if messageType == PromptTypeMemory {
 		return bi.stateManager.pushEvent(bi.workspace.Name, bi.stub.ExternalId, sessionId, &BotEvent{
 			Type:  BotEventTypeMemoryUpdated,
-			Value: req.Msg,
+			Value: event.Value,
 			Metadata: map[string]string{
 				string(MetadataSessionId): sessionId,
 			},
 		})
 	}
 
-	event := &BotEvent{
-		PairId: req.RequestId,
+	requestId := ""
+	id, ok := event.Metadata[string(MetadataRequestId)]
+	if ok {
+		requestId = id
+	}
+
+	return bi.stateManager.pushEvent(bi.workspace.Name, bi.stub.ExternalId, sessionId, &BotEvent{
+		PairId: event.PairId,
 		Type:   BotEventTypeAgentMessage,
 		Value:  msg,
 		Metadata: map[string]string{
-			string(MetadataRequestId): req.RequestId,
+			string(MetadataRequestId): requestId,
 			string(MetadataSessionId): sessionId,
 		},
-	}
-
-	return bi.stateManager.pushEvent(bi.workspace.Name, bi.stub.ExternalId, sessionId, event)
+	})
 }
