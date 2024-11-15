@@ -107,7 +107,6 @@ const (
 	MetadataTransitionName MetadataKey = "transition_name"
 	MetadataTaskId         MetadataKey = "task_id"
 	MetadataErrorMsg       MetadataKey = "error_msg"
-	MetadataAccept         MetadataKey = "accept"
 )
 
 type BotUserResponse struct {
