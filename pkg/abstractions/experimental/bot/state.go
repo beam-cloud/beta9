@@ -23,12 +23,6 @@ func newBotStateManager(rdb *common.RedisClient) *botStateManager {
 }
 
 func (m *botStateManager) loadSession(workspaceName, stubId, sessionId string) (*BotSession, error) {
-	err := m.lock.Acquire(context.TODO(), Keys.botLock(workspaceName, stubId, sessionId), common.RedisLockOptions{TtlS: 10, Retries: 0})
-	if err != nil {
-		return nil, err
-	}
-	defer m.lock.Release(Keys.botLock(workspaceName, stubId, sessionId))
-
 	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
 	jsonData, err := m.rdb.Get(context.TODO(), stateKey).Result()
 	if err != nil {
@@ -205,13 +199,29 @@ func (m *botStateManager) popTask(workspaceName, stubId, sessionId, transitionNa
 	return markers, nil
 }
 
-func (m *botStateManager) pushInputMessage(workspaceName, stubId, sessionId, msg string) error {
+func (m *botStateManager) pushUserEvent(workspaceName, stubId, sessionId string, event *BotEvent) error {
+	jsonData, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+
 	messageKey := Keys.botInputBuffer(workspaceName, stubId, sessionId)
-	return m.rdb.RPush(context.TODO(), messageKey, msg).Err()
+	return m.rdb.RPush(context.TODO(), messageKey, jsonData).Err()
 }
 
-func (m *botStateManager) popInputMessage(workspaceName, stubId, sessionId string) (string, error) {
-	return m.rdb.LPop(context.TODO(), Keys.botInputBuffer(workspaceName, stubId, sessionId)).Result()
+func (m *botStateManager) popUserEvent(workspaceName, stubId, sessionId string) (*BotEvent, error) {
+	val, err := m.rdb.LPop(context.TODO(), Keys.botInputBuffer(workspaceName, stubId, sessionId)).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	event := &BotEvent{}
+	err = json.Unmarshal([]byte(val), event)
+	if err != nil {
+		return nil, err
+	}
+
+	return event, nil
 }
 
 func (m *botStateManager) pushEvent(workspaceName, stubId, sessionId string, event *BotEvent) error {

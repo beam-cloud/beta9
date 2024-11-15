@@ -68,24 +68,28 @@ type BotChatCompletionMessage struct {
 
 const botSchemaName = "beam_bot"
 
-type UserRequest struct {
-	Msg string `json:"msg" redis:"msg"`
+type PromptRequest struct {
+	Msg       string `json:"msg" redis:"msg"`
+	RequestId string `json:"request_id" redis:"request_id"`
 }
 
 type BotEventType string
 
 const (
-	BotEventTypeError             BotEventType = "error"
-	BotEventTypeAgentMessage      BotEventType = "agent_message"
-	BotEventTypeUserMessage       BotEventType = "user_message"
-	BotEventTypeTransitionMessage BotEventType = "transition_message"
-	BotEventTypeMemoryMessage     BotEventType = "memory_message"
-	BotEventTypeMemoryUpdated     BotEventType = "memory_updated"
-	BotEventTypeSessionCreated    BotEventType = "session_created"
-	BotEventTypeTransitionFired   BotEventType = "transition_fired"
-	BotEventTypeTaskStarted       BotEventType = "task_started"
-	BotEventTypeTaskCompleted     BotEventType = "task_completed"
-	BotEventTypeState             BotEventType = "current_state"
+	BotEventTypeError               BotEventType = "error"
+	BotEventTypeAgentMessage        BotEventType = "agent_message"
+	BotEventTypeUserMessage         BotEventType = "user_message"
+	BotEventTypeTransitionMessage   BotEventType = "transition_message"
+	BotEventTypeMemoryMessage       BotEventType = "memory_message"
+	BotEventTypeMemoryUpdated       BotEventType = "memory_updated"
+	BotEventTypeSessionCreated      BotEventType = "session_created"
+	BotEventTypeTransitionFired     BotEventType = "transition_fired"
+	BotEventTypeTransitionFailed    BotEventType = "transition_failed"
+	BotEventTypeTransitionStarted   BotEventType = "transition_started"
+	BotEventTypeTransitionCompleted BotEventType = "transition_completed"
+	BotEventTypeNetworkState        BotEventType = "network_state"
+	BotEventTypeConfirmRequest      BotEventType = "confirm_request"
+	BotEventTypeConfirmResponse     BotEventType = "confirm_response"
 )
 
 const PromptTypeUser = "user_message"
@@ -93,9 +97,21 @@ const PromptTypeTransition = "transition_message"
 const PromptTypeMemory = "memory_message"
 
 type BotEvent struct {
-	Type  BotEventType `json:"type" redis:"type"`
-	Value string       `json:"value" redis:"value"`
+	Type     BotEventType      `json:"type" redis:"type"`
+	Value    string            `json:"value" redis:"value"`
+	Metadata map[string]string `json:"metadata" redis:"metadata"`
 }
+
+type MetadataKey string
+
+const (
+	MetadataRequestId      MetadataKey = "request_id"
+	MetadataSessionId      MetadataKey = "session_id"
+	MetadataTransitionName MetadataKey = "transition_name"
+	MetadataTaskId         MetadataKey = "task_id"
+	MetadataErrorMsg       MetadataKey = "error_msg"
+	MetadataAccept         MetadataKey = "accept"
+)
 
 type BotUserResponse struct {
 	Msg            string `json:"msg" redis:"msg"`
@@ -112,13 +128,14 @@ type BotMemoryResponse struct {
 }
 
 type Marker struct {
-	LocationName string        `json:"location_name" redis:"location_name"`
-	Fields       []MarkerField `json:"marker_data" redis:"marker_data"`
+	LocationName string        `json:"location_name" mapstructure:"location_name"`
+	Fields       []MarkerField `json:"marker_data" mapstructure:"marker_data"`
+	SourceTaskId string        `json:"source_task_id" mapstructure:"source_task_id"`
 }
 
 type MarkerField struct {
-	FieldName  string `json:"field_name" redis:"field_name"`
-	FieldValue string `json:"field_value" redis:"field_value"`
+	FieldName  string `json:"field_name" mapstructure:"field_name"`
+	FieldValue string `json:"field_value" mapstructure:"field_value"`
 }
 
 // BotConfig holds the overall config for the bot
@@ -195,6 +212,7 @@ type BotTransitionConfig struct {
 	Outputs       []string       `json:"outputs" redis:"outputs"`
 	Description   string         `json:"description" redis:"description"`
 	Expose        bool           `json:"expose" redis:"expose"`
+	Confirm       bool           `json:"confirm" redis:"confirm"`
 }
 
 func (t *BotTransitionConfig) FormatTransition() string {
@@ -217,4 +235,10 @@ func (t *BotTransitionConfig) FormatTransition() string {
 		outputsSection,
 		t.Description,
 	)
+}
+
+type BotNetworkSnapshot struct {
+	SessionId            string           `json:"session_id" redis:"session_id"`
+	LocationMarkerCounts map[string]int64 `json:"location_marker_counts" redis:"location_marker_counts"`
+	Config               BotConfig        `json:"config" redis:"config"`
 }

@@ -2,6 +2,7 @@ import inspect
 import json
 import os
 import threading
+import uuid
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -34,9 +35,18 @@ class BotEventType(str, Enum):
     MEMORY_UPDATED = "memory_updated"
     SESSION_CREATED = "session_created"
     TRANSITION_FIRED = "transition_fired"
-    TASK_STARTED = "task_started"
-    TASK_COMPLETED = "task_completed"
-    TASK_FAILED = "task_failed"
+    TRANSITION_STARTED = "transition_started"
+    TRANSITION_COMPLETED = "transition_completed"
+    TRANSITION_FAILED = "transition_failed"
+    NETWORK_STATE = "network_state"
+    CONFIRM_REQUEST = "confirm_request"
+    CONFIRM_RESPONSE = "confirm_response"
+
+
+class BotEvent(BaseModel):
+    type: BotEventType
+    value: str
+    metadata: dict = {}
 
 
 class BotTransition:
@@ -62,6 +72,8 @@ class BotTransition:
             A description of the transition. Default is None.
         expose (bool):
             Whether or not to give the model awareness of this transition. Default is True.
+        confirm (bool):
+            Whether or not to ask the user for confirmation before running the transition. Default is False.
         task_policy (Optional[str]):
             The task policy to use for the transition. Default is None.
     """
@@ -78,6 +90,7 @@ class BotTransition:
         outputs: list = [],
         description: Optional[str] = None,
         expose: bool = True,
+        confirm: bool = False,
         bot_instance: Optional["Bot"] = None,  # Reference to parent Bot instance
         task_policy: Optional[str] = None,
         handler: Optional[str] = None,
@@ -127,6 +140,7 @@ class BotTransition:
             ],
             "description": description or "",
             "expose": expose,
+            "confirm": confirm,
         }
 
         self.bot_instance: Optional["Bot"] = bot_instance
@@ -304,18 +318,19 @@ class Bot(RunnerAbstraction, DeployableMixin):
             from prompt_toolkit import PromptSession
 
             def on_message(ws, message):
-                event = json.loads(message)
-                event_type = event.get("type")
-                event_value = event.get("value")
+                event = BotEvent(**json.loads(message))
+                event_type = event.type
+                event_value = event.value
 
                 if event_type == BotEventType.SESSION_CREATED:
                     session_id = event_value
                     terminal.header(f"Session started: {session_id}")
                     terminal.header("💬 Chat with your bot below...")
                     session_event.set()  # Signal that session is ready
-
+                elif event_type == BotEventType.NETWORK_STATE:
+                    pass
                 else:
-                    terminal.print(f"\n{json.dumps(event, indent=2)}")
+                    terminal.print(f"\n{json.dumps(event.model_dump(), indent=2)}")
 
             def on_error(ws, error):
                 terminal.error(f"Error: {error}")
@@ -334,7 +349,13 @@ class Bot(RunnerAbstraction, DeployableMixin):
                         try:
                             msg = session.prompt("# ")
                             if msg:
-                                ws.send(json.dumps({"msg": msg}))
+                                ws.send(
+                                    BotEvent(
+                                        type=BotEventType.USER_MESSAGE,
+                                        value=msg,
+                                        metadata={"request_id": str(uuid.uuid4())},
+                                    ).model_dump_json()
+                                )
                         except KeyboardInterrupt:
                             confirm = session.prompt("# Exit chat session (y/n) ")
                             if confirm.strip().lower() == "y":

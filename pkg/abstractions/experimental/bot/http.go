@@ -45,7 +45,7 @@ func registerBotRoutes(g *echo.Group, pbs *PetriBotService) *botGroup {
 }
 
 const keepAliveInterval = 1 * time.Second
-const eventPollingInterval = 1 * time.Second
+const eventPollingInterval = 500 * time.Millisecond
 
 func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
@@ -125,6 +125,9 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 		err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, sessionId, &BotEvent{
 			Type:  BotEventTypeSessionCreated,
 			Value: sessionId,
+			Metadata: map[string]string{
+				string(MetadataSessionId): sessionId,
+			},
 		})
 		if err != nil {
 			return err
@@ -183,17 +186,8 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 					continue
 				}
 
-				if event.Type == BotEventTypeUserMessage {
-					instance.botInterface.SendPrompt(sessionId, PromptTypeUser, event.Value)
-					continue
-				} else if event.Type == BotEventTypeTransitionMessage {
-					instance.botInterface.SendPrompt(sessionId, PromptTypeTransition, event.Value)
-					continue
-				} else if event.Type == BotEventTypeMemoryMessage {
-					instance.botInterface.SendPrompt(sessionId, PromptTypeMemory, event.Value)
-					continue
-				}
-
+				// Handle event and echo it back to the client
+				instance.eventChan <- event
 				serializedEvent, err := json.Marshal(event)
 				if err != nil {
 					continue
@@ -216,12 +210,13 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			break
 		}
 
-		var userRequest UserRequest
-		if err := json.Unmarshal(message, &userRequest); err != nil {
+		var event BotEvent
+		if err := json.Unmarshal(message, &event); err != nil {
 			continue
 		}
 
-		if err := instance.botStateManager.pushInputMessage(instance.workspace.Name, instance.stub.ExternalId, sessionId, userRequest.Msg); err != nil {
+		event.Metadata[string(MetadataSessionId)] = sessionId
+		if err := instance.botStateManager.pushUserEvent(instance.workspace.Name, instance.stub.ExternalId, sessionId, &event); err != nil {
 			continue
 		}
 	}

@@ -102,7 +102,6 @@ type GatewayServiceConfig struct {
 
 type ImageServiceConfig struct {
 	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
-	BlobCacheEnabled               bool                  `key:"blobCacheEnabled" json:"blob_cache_enabled"` // TODO: remove this once all workers cycle with the new config
 	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
 	RegistryCredentialProviderName string                `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
 	Registries                     ImageRegistriesConfig `key:"registries" json:"registries"`

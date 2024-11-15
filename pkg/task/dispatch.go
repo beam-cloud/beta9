@@ -108,6 +108,25 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, authInfo *auth.A
 	return task, nil
 }
 
+func (d *Dispatcher) Retrieve(ctx context.Context, workspaceName, stubId, taskId string) (types.TaskInterface, error) {
+	taskMessage, err := d.taskRepo.GetTaskState(ctx, workspaceName, stubId, taskId)
+	if err != nil {
+		return nil, err
+	}
+
+	taskFactory, exists := d.executors.Get(taskMessage.Executor)
+	if !exists {
+		return nil, fmt.Errorf("invalid task executor: %v", taskMessage.Executor)
+	}
+
+	task, err := taskFactory(ctx, *taskMessage)
+	if err != nil {
+		return nil, err
+	}
+
+	return task, nil
+}
+
 func (d *Dispatcher) Complete(ctx context.Context, workspaceName, stubId, taskId string) error {
 	return d.taskRepo.DeleteTaskState(ctx, workspaceName, stubId, taskId)
 }

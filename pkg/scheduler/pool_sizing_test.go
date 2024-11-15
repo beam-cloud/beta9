@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -9,6 +10,7 @@ import (
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestAddWorkerIfNeeded(t *testing.T) {
@@ -330,4 +332,103 @@ func TestOccupyAvailableMachines(t *testing.T) {
 	workers, err := workerRepo.GetAllWorkersInPool(lambdaPoolName)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(workers))
+}
+
+func TestOccupyAvailableMachinesConcurrency(t *testing.T) {
+	s, err := miniredis.Run()
+	assert.NotNil(t, s)
+	assert.Nil(t, err)
+
+	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
+	assert.NotNil(t, redisClient)
+	assert.Nil(t, err)
+
+	providerRepo := repo.NewProviderRedisRepositoryForTest(redisClient)
+	workerRepo := repo.NewWorkerRedisRepositoryForTest(redisClient)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	poolName := "pool1"
+	controller := &ExternalWorkerPoolControllerForTest{
+		ctx:          ctx,
+		name:         poolName,
+		workerRepo:   workerRepo,
+		providerRepo: providerRepo,
+		poolName:     poolName,
+		providerName: string(types.ProviderGeneric),
+	}
+
+	sizer1 := &WorkerPoolSizer{
+		providerRepo: providerRepo,
+		workerRepo:   workerRepo,
+		controller:   controller,
+		workerPoolConfig: &types.WorkerPoolConfig{
+			Provider: &types.ProviderGeneric,
+			GPUType:  "A10G",
+			Mode:     types.PoolModeExternal,
+		},
+		workerPoolSizingConfig: &types.WorkerPoolSizingConfig{
+			DefaultWorkerCpu:      1000,
+			DefaultWorkerMemory:   1000,
+			DefaultWorkerGpuType:  "A10G",
+			DefaultWorkerGpuCount: 1,
+		},
+	}
+
+	sizer2 := &WorkerPoolSizer{
+		providerRepo: providerRepo,
+		workerRepo:   workerRepo,
+		controller:   controller,
+		workerPoolConfig: &types.WorkerPoolConfig{
+			Provider: &types.ProviderGeneric,
+			GPUType:  "A10G",
+			Mode:     types.PoolModeExternal,
+		},
+		workerPoolSizingConfig: &types.WorkerPoolSizingConfig{
+			DefaultWorkerCpu:      1000,
+			DefaultWorkerMemory:   1000,
+			DefaultWorkerGpuType:  "A10G",
+			DefaultWorkerGpuCount: 1,
+		},
+	}
+
+	maxMachinesAndWorkers := 100
+	for i := 0; i < maxMachinesAndWorkers; i++ {
+		machineName := fmt.Sprintf("machine-%d", i)
+		machineState := &types.ProviderMachineState{
+			Gpu:             "A10G",
+			GpuCount:        2,
+			AutoConsolidate: false,
+			Cpu:             10000,
+			Memory:          10000,
+			Status:          types.MachineStatusRegistered,
+		}
+		err = providerRepo.AddMachine(string(types.ProviderGeneric), poolName, machineName, machineState)
+		assert.NoError(t, err)
+
+		err = providerRepo.RegisterMachine(string(types.ProviderGeneric), poolName, machineName, machineState)
+		assert.NoError(t, err)
+	}
+
+	var g errgroup.Group
+
+	g.Go(func() error {
+		return sizer1.occupyAvailableMachines()
+	})
+	g.Go(func() error {
+		return sizer2.occupyAvailableMachines()
+	})
+
+	// One of the sizers should fail to occupy the machines because of a lock
+	err = g.Wait()
+	assert.Error(t, err)
+
+	// Check that only 100 workers were added, not 102, 105, etc.
+	// This is because occupyAvailableMachines adds just one worker per machine (if there's capacity and no lock)
+	// each itme it is called.
+	workers, err := workerRepo.GetAllWorkers()
+	assert.NoError(t, err)
+	assert.Equal(t, maxMachinesAndWorkers, len(workers))
+
+	cancel()
 }

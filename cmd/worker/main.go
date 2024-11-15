@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/beta9/pkg/worker"
 	"github.com/rs/zerolog/log"
 )
@@ -8,11 +9,19 @@ import (
 func main() {
 	s, err := worker.NewWorker()
 	if err != nil {
-		log.Fatal().Err(err).Msg("error creating worker")
+		if _, ok := err.(*types.ErrWorkerNotFound); ok {
+			log.Info().Msg("Worker not found. Shutting down.")
+			return
+		}
+		log.Fatal().Err(err).Msg("Worker initialization failed")
 	}
 
 	err = s.Run()
 	if err != nil {
-		log.Fatal().Err(err).Msg("worker exited with error")
+		if _, ok := err.(*types.ErrWorkerNotFound); ok {
+			log.Info().Msg("Worker not found. Shutting down.")
+			return
+		}
+		log.Fatal().Err(err).Msg("Starting worker failed")
 	}
 }
