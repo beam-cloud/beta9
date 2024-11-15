@@ -19,9 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BotService_PopBotTask_FullMethodName     = "/bot.BotService/PopBotTask"
-	BotService_PushBotMarkers_FullMethodName = "/bot.BotService/PushBotMarkers"
-	BotService_PushBotEvent_FullMethodName   = "/bot.BotService/PushBotEvent"
+	BotService_PopBotTask_FullMethodName           = "/bot.BotService/PopBotTask"
+	BotService_PushBotMarkers_FullMethodName       = "/bot.BotService/PushBotMarkers"
+	BotService_PushBotEvent_FullMethodName         = "/bot.BotService/PushBotEvent"
+	BotService_PushBotEventBlocking_FullMethodName = "/bot.BotService/PushBotEventBlocking"
 )
 
 // BotServiceClient is the client API for BotService service.
@@ -31,6 +32,7 @@ type BotServiceClient interface {
 	PopBotTask(ctx context.Context, in *PopBotTaskRequest, opts ...grpc.CallOption) (*PopBotTaskResponse, error)
 	PushBotMarkers(ctx context.Context, in *PushBotMarkersRequest, opts ...grpc.CallOption) (*PushBotMarkersResponse, error)
 	PushBotEvent(ctx context.Context, in *PushBotEventRequest, opts ...grpc.CallOption) (*PushBotEventResponse, error)
+	PushBotEventBlocking(ctx context.Context, in *PushBotEventBlockingRequest, opts ...grpc.CallOption) (*PushBotEventBlockingResponse, error)
 }
 
 type botServiceClient struct {
@@ -68,6 +70,15 @@ func (c *botServiceClient) PushBotEvent(ctx context.Context, in *PushBotEventReq
 	return out, nil
 }
 
+func (c *botServiceClient) PushBotEventBlocking(ctx context.Context, in *PushBotEventBlockingRequest, opts ...grpc.CallOption) (*PushBotEventBlockingResponse, error) {
+	out := new(PushBotEventBlockingResponse)
+	err := c.cc.Invoke(ctx, BotService_PushBotEventBlocking_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BotServiceServer is the server API for BotService service.
 // All implementations must embed UnimplementedBotServiceServer
 // for forward compatibility
@@ -75,6 +86,7 @@ type BotServiceServer interface {
 	PopBotTask(context.Context, *PopBotTaskRequest) (*PopBotTaskResponse, error)
 	PushBotMarkers(context.Context, *PushBotMarkersRequest) (*PushBotMarkersResponse, error)
 	PushBotEvent(context.Context, *PushBotEventRequest) (*PushBotEventResponse, error)
+	PushBotEventBlocking(context.Context, *PushBotEventBlockingRequest) (*PushBotEventBlockingResponse, error)
 	mustEmbedUnimplementedBotServiceServer()
 }
 
@@ -90,6 +102,9 @@ func (UnimplementedBotServiceServer) PushBotMarkers(context.Context, *PushBotMar
 }
 func (UnimplementedBotServiceServer) PushBotEvent(context.Context, *PushBotEventRequest) (*PushBotEventResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PushBotEvent not implemented")
+}
+func (UnimplementedBotServiceServer) PushBotEventBlocking(context.Context, *PushBotEventBlockingRequest) (*PushBotEventBlockingResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PushBotEventBlocking not implemented")
 }
 func (UnimplementedBotServiceServer) mustEmbedUnimplementedBotServiceServer() {}
 
@@ -158,6 +173,24 @@ func _BotService_PushBotEvent_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BotService_PushBotEventBlocking_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PushBotEventBlockingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BotServiceServer).PushBotEventBlocking(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BotService_PushBotEventBlocking_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BotServiceServer).PushBotEventBlocking(ctx, req.(*PushBotEventBlockingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BotService_ServiceDesc is the grpc.ServiceDesc for BotService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -176,6 +209,10 @@ var BotService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PushBotEvent",
 			Handler:    _BotService_PushBotEvent_Handler,
+		},
+		{
+			MethodName: "PushBotEventBlocking",
+			Handler:    _BotService_PushBotEventBlocking_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

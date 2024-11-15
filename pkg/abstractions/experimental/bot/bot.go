@@ -8,6 +8,7 @@ import (
 
 	"context"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -42,6 +43,7 @@ type BotServiceOpts struct {
 type BotService interface {
 	pb.BotServiceServer
 	PushBotEvent(ctx context.Context, in *pb.PushBotEventRequest) (*pb.PushBotEventResponse, error)
+	PushBotEventBlocking(ctx context.Context, in *pb.PushBotEventBlockingRequest) (*pb.PushBotEventBlockingResponse, error)
 	PopBotTask(ctx context.Context, in *pb.PopBotTaskRequest) (*pb.PopBotTaskResponse, error)
 	PushBotMarkers(ctx context.Context, in *pb.PushBotMarkersRequest) (*pb.PushBotMarkersResponse, error)
 }
@@ -203,7 +205,9 @@ func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventR
 		return &pb.PushBotEventResponse{Ok: false}, nil
 	}
 
+	pairId := uuid.New().String()
 	err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, &BotEvent{
+		PairId:   pairId,
 		Type:     BotEventType(in.EventType),
 		Value:    in.EventValue,
 		Metadata: in.Metadata,
@@ -212,7 +216,27 @@ func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventR
 		return &pb.PushBotEventResponse{Ok: false}, nil
 	}
 
-	return &pb.PushBotEventResponse{Ok: true}, nil
+	return &pb.PushBotEventResponse{Ok: true, PairId: pairId}, nil
+}
+
+func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushBotEventBlockingRequest) (*pb.PushBotEventBlockingResponse, error) {
+	instance, err := s.getOrCreateBotInstance(in.StubId)
+	if err != nil {
+		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
+	}
+
+	pairId := uuid.New().String()
+	err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, &BotEvent{
+		PairId:   pairId,
+		Type:     BotEventType(in.EventType),
+		Value:    in.EventValue,
+		Metadata: in.Metadata,
+	})
+	if err != nil {
+		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
+	}
+
+	return &pb.PushBotEventBlockingResponse{Ok: true, PairId: pairId}, nil
 }
 
 func (s *PetriBotService) PushBotMarkers(ctx context.Context, in *pb.PushBotMarkersRequest) (*pb.PushBotMarkersResponse, error) {

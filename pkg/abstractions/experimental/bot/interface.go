@@ -279,8 +279,9 @@ func (bi *BotInterface) SendPrompt(sessionId, messageType string, req *PromptReq
 	}
 
 	event := &BotEvent{
-		Type:  BotEventTypeAgentMessage,
-		Value: msg,
+		PairId: req.RequestId,
+		Type:   BotEventTypeAgentMessage,
+		Value:  msg,
 		Metadata: map[string]string{
 			string(MetadataRequestId): req.RequestId,
 			string(MetadataSessionId): sessionId,

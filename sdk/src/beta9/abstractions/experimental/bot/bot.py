@@ -328,6 +328,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
                     terminal.header("💬 Chat with your bot below...")
                     session_event.set()  # Signal that session is ready
                 elif event_type == BotEventType.NETWORK_STATE:
+                    # terminal.print(f"\n{json.dumps(event.model_dump(), indent=2)}")
                     pass
                 else:
                     terminal.print(f"\n{json.dumps(event.model_dump(), indent=2)}")
@@ -343,6 +344,13 @@ class Bot(RunnerAbstraction, DeployableMixin):
                     with terminal.progress("Waiting for session to start..."):
                         session_event.wait()  # Wait until session is ready
 
+                    # ws.send(
+                    #     BotEvent(
+                    #         type=BotEventType.USER_MESSAGE,
+                    #         value="Introduce yourself and your capabilities.",
+                    #         metadata={"request_id": str(uuid.uuid4())},
+                    #     ).model_dump_json()
+                    # )
                     session = PromptSession()
 
                     while True:

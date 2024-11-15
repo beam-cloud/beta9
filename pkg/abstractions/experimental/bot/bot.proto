@@ -8,6 +8,8 @@ service BotService {
   rpc PopBotTask(PopBotTaskRequest) returns (PopBotTaskResponse) {}
   rpc PushBotMarkers(PushBotMarkersRequest) returns (PushBotMarkersResponse) {}
   rpc PushBotEvent(PushBotEventRequest) returns (PushBotEventResponse) {}
+  rpc PushBotEventBlocking(PushBotEventBlockingRequest)
+      returns (PushBotEventBlockingResponse) {}
 }
 
 message PopBotTaskRequest {
@@ -52,4 +54,20 @@ message PushBotEventRequest {
   map<string, string> metadata = 5;
 }
 
-message PushBotEventResponse { bool ok = 1; }
+message PushBotEventResponse {
+  bool ok = 1;
+  string pair_id = 2;
+}
+
+message PushBotEventBlockingRequest {
+  string stub_id = 1;
+  string session_id = 2;
+  string event_type = 3;
+  string event_value = 4;
+  map<string, string> metadata = 5;
+}
+
+message PushBotEventBlockingResponse {
+  bool ok = 1;
+  string pair_id = 2;
+}

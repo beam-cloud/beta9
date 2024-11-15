@@ -64,7 +64,7 @@ class BotContext(FunctionContext):
             )
         )
 
-    def prompt(cls, msg: str):
+    def prompt_blocking(cls, msg: str):
         """Send a prompt to the user from the bot"""
 
         cls.bot_stub.push_bot_event(
