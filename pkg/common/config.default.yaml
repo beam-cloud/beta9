@@ -1,5 +1,6 @@
 clusterName: beta9
-debugMode: false
+debugMode: False
+prettyLogs: true
 database:
   postgres:
     host: postgresql
