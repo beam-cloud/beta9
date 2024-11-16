@@ -19,7 +19,6 @@ func main() {
 	if config.PrettyLogs {
 		log.Logger = log.Logger.Level(zerolog.DebugLevel)
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
-		log.Debug().Msg("debug mode enabled")
 	}
 
 	s, err := worker.NewWorker()
