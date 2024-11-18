@@ -185,6 +185,10 @@ type StubConfigV1 struct {
 	Extra              json.RawMessage `json:"extra"`
 }
 
+func (c *StubConfigV1) RequiresGPU() bool {
+	return len(c.Runtime.Gpus) > 0
+}
+
 type AutoscalerType string
 
 const (
