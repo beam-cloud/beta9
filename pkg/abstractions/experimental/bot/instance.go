@@ -232,7 +232,7 @@ func (i *botInstance) step(sessionId string) {
 					}
 
 					i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
-						Type:  BotEventTypeConfirmRequest,
+						Type:  BotEventTypeConfirmTransition,
 						Value: transition.Name,
 						Metadata: map[string]string{
 							string(MetadataSessionId):      sessionId,
@@ -339,14 +339,13 @@ func (i *botInstance) monitorEvents() error {
 
 			switch event.Type {
 			case BotEventTypeUserMessage:
-				i.botInterface.SendPrompt(sessionId, PromptTypeUser, &PromptRequest{Msg: event.Value, RequestId: event.Metadata[string(MetadataRequestId)]})
+				i.botInterface.SendPrompt(sessionId, PromptTypeUser, event)
 			case BotEventTypeTransitionMessage:
-				i.botInterface.SendPrompt(sessionId, PromptTypeTransition, &PromptRequest{Msg: event.Value})
+				i.botInterface.SendPrompt(sessionId, PromptTypeTransition, event)
 			case BotEventTypeMemoryMessage:
-				i.botInterface.SendPrompt(sessionId, PromptTypeMemory, &PromptRequest{Msg: event.Value})
-			case BotEventTypeConfirmResponse:
+				i.botInterface.SendPrompt(sessionId, PromptTypeMemory, event)
+			case BotEventTypeAcceptTransition, BotEventTypeRejectTransition:
 				taskId := event.Metadata[string(MetadataTaskId)]
-				accepts := event.Metadata[string(MetadataAccept)] == "true"
 				transitionName := event.Metadata[string(MetadataTransitionName)]
 
 				task, err := i.taskDispatcher.Retrieve(i.ctx, i.workspace.Name, i.stub.ExternalId, taskId)
@@ -354,12 +353,12 @@ func (i *botInstance) monitorEvents() error {
 					continue
 				}
 
-				if accepts {
+				if event.Type == BotEventTypeAcceptTransition {
 					err = task.Execute(i.ctx)
 					if err != nil {
 						i.handleTransitionFailed(sessionId, transitionName, err)
 					}
-				} else {
+				} else if event.Type == BotEventTypeRejectTransition {
 					task.Cancel(i.ctx, types.TaskRequestCancelled)
 				}
 			}

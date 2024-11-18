@@ -91,6 +91,34 @@ class PushBotEventRequest(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class PushBotEventResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
+    event_id: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PushBotEventBlockingRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    session_id: str = betterproto.string_field(2)
+    event_type: str = betterproto.string_field(3)
+    event_value: str = betterproto.string_field(4)
+    metadata: Dict[str, str] = betterproto.map_field(
+        5, betterproto.TYPE_STRING, betterproto.TYPE_STRING
+    )
+    timeout_seconds: int = betterproto.int32_field(6)
+
+
+@dataclass(eq=False, repr=False)
+class PushBotEventBlockingResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    event: "BotEvent" = betterproto.message_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class BotEvent(betterproto.Message):
+    type: str = betterproto.string_field(1)
+    value: str = betterproto.string_field(2)
+    metadata: Dict[str, str] = betterproto.map_field(
+        3, betterproto.TYPE_STRING, betterproto.TYPE_STRING
+    )
 
 
 class BotServiceStub(SyncServiceStub):
@@ -120,3 +148,12 @@ class BotServiceStub(SyncServiceStub):
             PushBotEventRequest,
             PushBotEventResponse,
         )(push_bot_event_request)
+
+    def push_bot_event_blocking(
+        self, push_bot_event_blocking_request: "PushBotEventBlockingRequest"
+    ) -> "PushBotEventBlockingResponse":
+        return self._unary_unary(
+            "/bot.BotService/PushBotEventBlocking",
+            PushBotEventBlockingRequest,
+            PushBotEventBlockingResponse,
+        )(push_bot_event_blocking_request)

@@ -68,11 +68,6 @@ type BotChatCompletionMessage struct {
 
 const botSchemaName = "beam_bot"
 
-type PromptRequest struct {
-	Msg       string `json:"msg" redis:"msg"`
-	RequestId string `json:"request_id" redis:"request_id"`
-}
-
 type BotEventType string
 
 const (
@@ -88,8 +83,9 @@ const (
 	BotEventTypeTransitionStarted   BotEventType = "transition_started"
 	BotEventTypeTransitionCompleted BotEventType = "transition_completed"
 	BotEventTypeNetworkState        BotEventType = "network_state"
-	BotEventTypeConfirmRequest      BotEventType = "confirm_request"
-	BotEventTypeConfirmResponse     BotEventType = "confirm_response"
+	BotEventTypeConfirmTransition   BotEventType = "confirm_transition"
+	BotEventTypeAcceptTransition    BotEventType = "accept_transition"
+	BotEventTypeRejectTransition    BotEventType = "reject_transition"
 )
 
 const PromptTypeUser = "user_message"
@@ -100,6 +96,12 @@ type BotEvent struct {
 	Type     BotEventType      `json:"type" redis:"type"`
 	Value    string            `json:"value" redis:"value"`
 	Metadata map[string]string `json:"metadata" redis:"metadata"`
+	PairId   string            `json:"pair_id" redis:"pair_id"`
+}
+
+type BotEventPair struct {
+	Request  *BotEvent `json:"request" redis:"request"`
+	Response *BotEvent `json:"response" redis:"response"`
 }
 
 type MetadataKey string
@@ -110,7 +112,6 @@ const (
 	MetadataTransitionName MetadataKey = "transition_name"
 	MetadataTaskId         MetadataKey = "task_id"
 	MetadataErrorMsg       MetadataKey = "error_msg"
-	MetadataAccept         MetadataKey = "accept"
 )
 
 type BotUserResponse struct {

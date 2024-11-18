@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"context"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -42,6 +44,7 @@ type BotServiceOpts struct {
 type BotService interface {
 	pb.BotServiceServer
 	PushBotEvent(ctx context.Context, in *pb.PushBotEventRequest) (*pb.PushBotEventResponse, error)
+	PushBotEventBlocking(ctx context.Context, in *pb.PushBotEventBlockingRequest) (*pb.PushBotEventBlockingResponse, error)
 	PopBotTask(ctx context.Context, in *pb.PopBotTaskRequest) (*pb.PopBotTaskResponse, error)
 	PushBotMarkers(ctx context.Context, in *pb.PushBotMarkersRequest) (*pb.PushBotMarkersResponse, error)
 }
@@ -215,6 +218,42 @@ func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventR
 	return &pb.PushBotEventResponse{Ok: true}, nil
 }
 
+const defaultWaitTimeoutS = 30
+
+func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushBotEventBlockingRequest) (*pb.PushBotEventBlockingResponse, error) {
+	instance, err := s.getOrCreateBotInstance(in.StubId)
+	if err != nil {
+		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
+	}
+
+	pairId := uuid.New().String()
+	err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, &BotEvent{
+		PairId:   pairId,
+		Type:     BotEventType(in.EventType),
+		Value:    in.EventValue,
+		Metadata: in.Metadata,
+	})
+	if err != nil {
+		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
+	}
+
+	timeoutS := defaultWaitTimeoutS
+	if in.TimeoutSeconds > 0 {
+		timeoutS = int(in.TimeoutSeconds)
+	}
+
+	eventPair, err := s.botStateManager.waitForEventPair(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, pairId, time.Duration(timeoutS)*time.Second)
+	if err != nil {
+		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
+	}
+
+	return &pb.PushBotEventBlockingResponse{Ok: true, Event: &pb.BotEvent{
+		Type:     string(eventPair.Response.Type),
+		Value:    eventPair.Response.Value,
+		Metadata: eventPair.Response.Metadata,
+	}}, nil
+}
+
 func (s *PetriBotService) PushBotMarkers(ctx context.Context, in *pb.PushBotMarkersRequest) (*pb.PushBotMarkersResponse, error) {
 	instance, err := s.getOrCreateBotInstance(in.StubId)
 	if err != nil {
@@ -289,6 +328,7 @@ type keys struct{}
 var (
 	botLock             string = "bot:%s:%s:session_state_lock:%s"
 	botInputBuffer      string = "bot:%s:%s:input_buffer:%s"
+	botEventPair        string = "bot:%s:%s:event_pair:%s:%s"
 	botEventBuffer      string = "bot:%s:%s:event_buffer:%s"
 	botSessionIndex     string = "bot:%s:%s:session_index"
 	botSessionState     string = "bot:%s:%s:session_state:%s"
@@ -308,6 +348,10 @@ func (k *keys) botSessionIndex(workspaceName, stubId string) string {
 
 func (k *keys) botInputBuffer(workspaceName, stubId, sessionId string) string {
 	return fmt.Sprintf(botInputBuffer, workspaceName, stubId, sessionId)
+}
+
+func (k *keys) botEventPair(workspaceName, stubId, sessionId, pairId string) string {
+	return fmt.Sprintf(botEventPair, workspaceName, stubId, sessionId, pairId)
 }
 
 func (k *keys) botEventBuffer(workspaceName, stubId, sessionId string) string {

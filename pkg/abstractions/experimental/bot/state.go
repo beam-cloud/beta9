@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -111,6 +112,27 @@ func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string)
 
 	// TODO: delete all existing markers
 	return m.rdb.SRem(ctx, indexKey, sessionId).Err()
+}
+
+func (m *botStateManager) listSessions(workspaceName, stubId string) ([]*BotSession, error) {
+	ctx := context.TODO()
+	sessions := []*BotSession{}
+
+	sessionIds, err := m.rdb.SMembers(ctx, Keys.botSessionIndex(workspaceName, stubId)).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, sessionId := range sessionIds {
+		session, err := m.loadSession(workspaceName, stubId, sessionId)
+		if err != nil {
+			return nil, err
+		}
+
+		sessions = append(sessions, session)
+	}
+
+	return sessions, nil
 }
 
 func (m *botStateManager) getActiveSessions(workspaceName, stubId string) ([]*BotSession, error) {
@@ -232,6 +254,46 @@ func (m *botStateManager) pushEvent(workspaceName, stubId, sessionId string, eve
 
 	messageKey := Keys.botEventBuffer(workspaceName, stubId, sessionId)
 	return m.rdb.RPush(context.TODO(), messageKey, jsonData).Err()
+}
+
+const eventPairTtlS = 120 * time.Second
+
+func (m *botStateManager) pushEventPair(workspaceName, stubId, sessionId, pairId string, request *BotEvent, response *BotEvent) error {
+	eventPairKey := Keys.botEventPair(workspaceName, stubId, sessionId, pairId)
+	eventPair := &BotEventPair{
+		Request:  request,
+		Response: response,
+	}
+
+	jsonData, err := json.Marshal(eventPair)
+	if err != nil {
+		return err
+	}
+
+	return m.rdb.Set(context.TODO(), eventPairKey, jsonData, eventPairTtlS).Err()
+}
+
+func (m *botStateManager) waitForEventPair(workspaceName, stubId, sessionId, pairId string, timeout time.Duration) (*BotEventPair, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout reached while waiting for event pair")
+		case <-time.After(100 * time.Millisecond):
+			jsonData, err := m.rdb.Get(context.TODO(), Keys.botEventPair(workspaceName, stubId, sessionId, pairId)).Result()
+			if err == nil {
+				eventPair := &BotEventPair{}
+				err = json.Unmarshal([]byte(jsonData), eventPair)
+				if err != nil {
+					return nil, err
+				}
+
+				return eventPair, nil
+			}
+		}
+	}
 }
 
 func (m *botStateManager) popEvent(workspaceName, stubId, sessionId string) (*BotEvent, error) {
