@@ -66,8 +66,26 @@ class BotContext(FunctionContext):
             )
         )
 
-    def prompt_blocking(cls, msg: str, timeout_seconds: int = 10) -> Union[BotEvent, None]:
-        """Send a raw prompt to your model, and wait for a response"""
+    def prompt(
+        cls, msg: str, timeout_seconds: int = 10, wait_for_response=True
+    ) -> Union[BotEvent, None]:
+        """Send a raw prompt to your model. By default, this will wait for a response for up to timeout_seconds."""
+
+        if not wait_for_response:
+            cls.bot_stub.push_bot_event(
+                PushBotEventRequest(
+                    stub_id=cls.stub_id,
+                    session_id=cls.session_id,
+                    event_type=BotEventType.TRANSITION_MESSAGE,
+                    event_value=msg,
+                    metadata={
+                        "task_id": cls.task_id,
+                        "session_id": cls.session_id,
+                        "transition_name": cls.transition_name,
+                    },
+                )
+            )
+            return None
 
         r: PushBotEventBlockingResponse = cls.bot_stub.push_bot_event_blocking(
             PushBotEventBlockingRequest(
@@ -80,6 +98,7 @@ class BotContext(FunctionContext):
                     "session_id": cls.session_id,
                     "transition_name": cls.transition_name,
                 },
+                timeout_seconds=timeout_seconds,
             )
         )
 
