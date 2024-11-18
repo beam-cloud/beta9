@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -31,10 +32,12 @@ const (
 )
 
 type WorkerPoolController interface {
-	AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error)
+	AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error)
 	AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error)
 	Name() string
 	FreeCapacity() (*WorkerPoolCapacity, error)
+	Context() context.Context
+	IsPreemptable() bool
 }
 
 type WorkerPoolConfig struct {
@@ -78,6 +81,11 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolCont
 	}
 
 	for _, worker := range workers {
+		// Exclude disabled workers from the capacity calculation
+		if worker.Status == types.WorkerStatusDisabled {
+			continue
+		}
+
 		capacity.FreeCpu += worker.FreeCpu
 		capacity.FreeMemory += worker.FreeMemory
 

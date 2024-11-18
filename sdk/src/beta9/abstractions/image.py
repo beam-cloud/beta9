@@ -7,11 +7,12 @@ from ..abstractions.base import BaseAbstraction
 from ..clients.image import (
     BuildImageRequest,
     BuildImageResponse,
+    BuildStep,
     ImageServiceStub,
     VerifyImageBuildRequest,
     VerifyImageBuildResponse,
 )
-from ..type import PythonVersion
+from ..type import PythonVersion, PythonVersionAlias
 
 try:
     from typing import TypeAlias
@@ -50,17 +51,22 @@ class Image(BaseAbstraction):
 
     def __init__(
         self,
-        python_version: Union[PythonVersion, str] = PythonVersion.Python310,
+        python_version: PythonVersionAlias = PythonVersion.Python310,
         python_packages: Union[List[str], str] = [],
         commands: List[str] = [],
         base_image: Optional[str] = None,
         base_image_creds: Optional[ImageCredentials] = None,
+        env_vars: Optional[Union[str, List[str], Dict[str, str]]] = None,
     ):
         """
         Creates an Image instance.
 
         An Image object encapsulates the configuration of a custom container image
         that will be used as the runtime environment for executing tasks.
+
+        If the `python_packages` variable is set, it will always run before `commands`.
+        To control the order of execution, use the `add_commands` and `add_python_packages`
+        methods. These will be executed in the order they are added.
 
         Parameters:
             python_version (Union[PythonVersion, str]):
@@ -86,11 +92,16 @@ class Image(BaseAbstraction):
                 for you. Currently only AWS ECR is supported and can be configured by setting the
                 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and `AWS_REGION` keys.
                 Default is None.
+            env_vars (Optional[Union[str, List[str], Dict[str, str]]):
+                Adds environment variables to an image. These will be available when building the image
+                and when the container is running. This can be a string, a list of strings, or a
+                dictionary of strings. The string must be in the format of "KEY=VALUE". If a list of
+                strings is provided, each element should be in the same format. Deafult is None.
 
         Example:
 
-            Using a custom private image from AWS ECR. By defining a sequence of AWS environment variable
-            keys, the Image object will lookup the values automatically.
+            To use a custom private image from AWS ECR, define a sequence of AWS environment variables.
+            The Image object will lookup the values automatically.
 
             ```python
             image = Image(
@@ -110,15 +121,30 @@ class Image(BaseAbstraction):
         self.python_version = python_version
         self.python_packages = self._sanitize_python_packages(python_packages)
         self.commands = commands
+        self.build_steps = []
         self.base_image = base_image or ""
         self.base_image_creds = base_image_creds or {}
+        self.env_vars = []
         self._stub: Optional[ImageServiceStub] = None
+
+        self.with_envs(env_vars or [])
 
     @property
     def stub(self) -> ImageServiceStub:
         if not self._stub:
             self._stub = ImageServiceStub(self.channel)
         return self._stub
+
+    def __eq__(self: "Image", other: "Image"):
+        return (
+            self.python_version == other.python_version
+            and self.python_packages == other.python_packages
+            and self.base_image == other.base_image
+            and self.base_image_creds == other.base_image_creds
+        )
+
+    def __str__(self) -> str:
+        return f"Python Version: {self.python_version}, Python Packages: {self.python_packages}, Base Image: {self.base_image}, Base Image Credentials: {self.base_image_creds}"
 
     def _sanitize_python_packages(self, packages: List[str]) -> List[str]:
         # https://pip.pypa.io/en/stable/reference/requirements-file-format/
@@ -151,8 +177,10 @@ class Image(BaseAbstraction):
                 python_packages=self.python_packages,
                 python_version=self.python_version,
                 commands=self.commands,
+                build_steps=self.build_steps,
                 force_rebuild=False,
                 existing_image_uri=self.base_image,
+                env_vars=self.env_vars,
             )
         )
 
@@ -173,8 +201,10 @@ class Image(BaseAbstraction):
                     python_packages=self.python_packages,
                     python_version=self.python_version,
                     commands=self.commands,
+                    build_steps=self.build_steps,
                     existing_image_uri=self.base_image,
                     existing_image_creds=self.get_credentials_from_env(),
+                    env_vars=self.env_vars,
                 )
             ):
                 if r.msg != "":
@@ -208,3 +238,128 @@ class Image(BaseAbstraction):
             else:
                 raise ImageCredentialValueNotFound(key)
         return creds
+
+    def micromamba(self) -> "Image":
+        """
+        Use micromamba to manage python packages.
+        """
+        self.python_version = self.python_version.replace("python", "micromamba")
+        return self
+
+    def add_micromamba_packages(
+        self, packages: Union[Sequence[str], str], channels: Optional[Sequence[str]] = []
+    ) -> "Image":
+        """
+        Add micromamba packages that will be installed when building the image.
+
+        These will be executed at the end of the image build and in the
+        order they are added. If a single string is provided, it will be
+        interpreted as a path to a requirements.txt file.
+
+        Parameters:
+            packages: The micromamba packages to add or the path to a requirements.txt file.
+            channels: The micromamba channels to use.
+        """
+        # Error if micromamba is not enabled
+        if not self.python_version.startswith("micromamba"):
+            raise ValueError("Micromamba must be enabled to use this method.")
+
+        # Check if we were given a .txt requirement file
+        if isinstance(packages, str):
+            packages = self._sanitize_python_packages(self._load_requirements_file(packages))
+
+        for package in packages:
+            self.build_steps.append(BuildStep(command=package, type="micromamba"))
+
+        for channel in channels:
+            self.build_steps.append(BuildStep(command=f"-c {channel}", type="micromamba"))
+
+        return self
+
+    def add_commands(self, commands: Sequence[str]) -> "Image":
+        """
+        Add shell commands that will be executed when building the image.
+
+        These will be executed at the end of the image build and in the
+        order they are added.
+
+        Parameters:
+            commands: The shell commands to execute.
+
+        Returns:
+            Image: The Image object.
+        """
+        for command in commands:
+            self.build_steps.append(BuildStep(command=command, type="shell"))
+        return self
+
+    def add_python_packages(self, packages: Union[Sequence[str], str]) -> "Image":
+        """
+        Add python packages that will be installed when building the image.
+
+        These will be executed at the end of the image build and in the
+        order they are added.
+
+        Parameters:
+            packages: The Python packages to add or the path to a requirements.txt file. Valid package names are: numpy, pandas==2.2.2, etc.
+
+        Returns:
+            Image: The Image object.
+        """
+
+        if isinstance(packages, str):
+            try:
+                packages = self._sanitize_python_packages(self._load_requirements_file(packages))
+            except FileNotFoundError:
+                raise ValueError(
+                    f"Could not find valid requirements.txt file at {packages}. Libraries must be specified as a list of valid package names or a path to a requirements.txt file."
+                )
+
+        for package in packages:
+            self.build_steps.append(BuildStep(command=package, type="pip"))
+        return self
+
+    def with_envs(
+        self, env_vars: Union[str, List[str], Dict[str, str]], clear: bool = False
+    ) -> "Image":
+        """
+        Add environment variables to the image.
+
+        These will be available when building the image and when the container is running.
+
+        Parameters:
+            env_vars: Environment variables. This can be a string, a list of strings, or a
+                dictionary of strings. The string must be in the format of "KEY=VALUE". If a list of
+                strings is provided, each element should be in the same format. Deafult is None.
+            clear: Clear existing environment variables before adding the new ones.
+
+        Returns:
+            Image: The Image object.
+        """
+        if isinstance(env_vars, dict):
+            env_vars = [f"{key}={value}" for key, value in env_vars.items()]
+        elif isinstance(env_vars, str):
+            env_vars = [env_vars]
+
+        self.validate_env_vars(env_vars)
+
+        if clear:
+            self.env_vars.clear()
+
+        self.env_vars.extend(env_vars)
+
+        return self
+
+    def validate_env_vars(self, env_vars: List[str]) -> None:
+        for env_var in env_vars:
+            key, sep, value = env_var.partition("=")
+            if not sep:
+                raise ValueError(f"Environment variable must contain '=': {env_var}")
+            if not key:
+                raise ValueError(f"Environment variable key cannot be empty: {env_var}")
+            if not value:
+                raise ValueError(f"Environment variable value cannot be empty: {env_var}")
+            if "=" in value:
+                raise ValueError(
+                    f"Environment variable cannot contain multiple '=' characters: {env_var}"
+                )

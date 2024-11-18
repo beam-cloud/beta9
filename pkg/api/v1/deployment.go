@@ -2,14 +2,16 @@ package apiv1
 
 import (
 	"net/http"
+	"path"
+
+	"github.com/labstack/echo/v4"
+	"k8s.io/utils/ptr"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/labstack/echo/v4"
-	"k8s.io/utils/ptr"
 )
 
 type DeploymentGroup struct {
@@ -40,6 +42,7 @@ func NewDeploymentGroup(
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListDeployments))
 	g.GET("/:workspaceId/latest", auth.WithWorkspaceAuth(group.ListLatestDeployments))
 	g.GET("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.RetrieveDeployment))
+	g.GET("/:workspaceId/download/:stubId", auth.WithWorkspaceAuth(group.DownloadDeploymentPackage))
 	g.POST("/:workspaceId/stop/:deploymentId/", auth.WithWorkspaceAuth(group.StopDeployment))
 	g.POST("/:workspaceId/stop-all-active-deployments", auth.WithClusterAdminAuth(group.StopAllActiveDeployments))
 	g.DELETE("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.DeleteDeployment))
@@ -71,6 +74,7 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 		if deployments, err := g.backendRepo.ListDeploymentsWithRelated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list deployments")
 		} else {
+			sanitizeDeployments(deployments)
 			return ctx.JSON(http.StatusOK, deployments)
 		}
 
@@ -90,6 +94,7 @@ func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 	} else if deployment == nil {
 		return HTTPNotFound()
 	} else {
+		deployment.Stub.SanitizeConfig()
 		return ctx.JSON(http.StatusOK, deployment)
 	}
 }
@@ -175,17 +180,43 @@ func (g *DeploymentGroup) ListLatestDeployments(ctx echo.Context) error {
 	if deployments, err := g.backendRepo.ListLatestDeploymentsWithRelatedPaginated(ctx.Request().Context(), filters); err != nil {
 		return HTTPInternalServerError("Failed to list deployments")
 	} else {
+		sanitizeDeployments(deployments.Data)
 		return ctx.JSON(http.StatusOK, deployments)
 	}
 }
 
+func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
+	stubId := ctx.Param("stubId")
+
+	extWorkspaceId := ctx.Param("workspaceId")
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), extWorkspaceId)
+	if err != nil {
+		return HTTPBadRequest("Invalid workspace ID")
+	}
+
+	object, err := g.backendRepo.GetObjectByExternalStubId(ctx.Request().Context(), stubId, workspace.Id)
+	if err != nil {
+		return HTTPInternalServerError("Failed to get object")
+	}
+	path := getPackagePath(workspace.Name, object.ExternalId)
+
+	return ctx.File(path)
+}
+
 func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRelated, ctx echo.Context) error {
 	for _, deployment := range deployments {
+		// Stop scheduled job
+		if deployment.StubType == types.StubTypeScheduledJobDeployment {
+			if scheduledJob, err := g.backendRepo.GetScheduledJob(ctx.Request().Context(), deployment.Id); err == nil {
+				g.backendRepo.DeleteScheduledJob(ctx.Request().Context(), scheduledJob)
+			}
+		}
+
 		// Stop active containers
 		containers, err := g.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
 		if err == nil {
 			for _, container := range containers {
-				g.scheduler.Stop(container.ContainerId)
+				g.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId})
 			}
 		}
 
@@ -205,4 +236,14 @@ func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRela
 	}
 
 	return ctx.NoContent(http.StatusOK)
+}
+
+func getPackagePath(workspaceName, objectId string) string {
+	return path.Join("/data/objects/", workspaceName, objectId)
+}
+
+func sanitizeDeployments(deployments []types.DeploymentWithRelated) {
+	for i := range deployments {
+		deployments[i].Stub.SanitizeConfig()
+	}
 }

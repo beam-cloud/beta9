@@ -50,8 +50,8 @@ func endpointDeploymentScaleFunc(i *endpointInstance, s *endpointAutoscalerSampl
 			desiredContainers += 1
 		}
 
-		// Limit max replicas to either what was set in autoscaler config, or our default of MaxReplicas (whichever is lower)
-		maxReplicas := math.Min(float64(i.StubConfig.Autoscaler.MaxContainers), float64(abstractions.MaxReplicas))
+		// Limit max replicas to either what was set in autoscaler config, or the limit specified on the gateway config (whichever is lower)
+		maxReplicas := math.Min(float64(i.StubConfig.Autoscaler.MaxContainers), float64(i.AppConfig.GatewayService.StubLimits.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
 
@@ -72,7 +72,7 @@ func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSampl
 		}
 	}
 
-	if sample.TotalRequests == 0 && exists == 0 {
+	if exists == 0 {
 		desiredContainers = 0
 	}
 

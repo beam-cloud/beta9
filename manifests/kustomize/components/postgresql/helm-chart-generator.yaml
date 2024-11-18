@@ -31,21 +31,23 @@ valuesInline:
       max_connections=400
       shared_buffers='400MB'
       cron.database_name='main'
+      cron.use_background_workers=on
+      max_worker_processes=20
     initdb:
       scripts:
         create_extension.sh: |
           #!/bin/sh
-          export PGPASSWORD=password
+          export PGPASSWORD=$POSTGRESQL_PASSWORD
           cat /opt/bitnami/postgresql/conf/postgresql.conf | grep shared_preload_libraries
 
           # Set up pg_cron in main database
-          psql -Upostgres main << EOF
+          psql -Upostgres -d main --echo-all <<EOF
           SHOW shared_preload_libraries;
           CREATE EXTENSION IF NOT EXISTS pg_cron;
           EOF
 
           # Grant usage on the cron schema to both root and postgres users
-          psql -Upostgres -d main <<EOF
+          psql -Upostgres -d main --echo-all <<EOF
           GRANT USAGE ON SCHEMA cron TO postgres;
           GRANT USAGE ON SCHEMA cron TO root;
           EOF

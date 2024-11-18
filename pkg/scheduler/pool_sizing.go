@@ -1,11 +1,13 @@
 package scheduler
 
 import (
+	"errors"
 	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/bsm/redislock"
 )
 
 const poolMonitoringInterval = 1 * time.Second
@@ -37,10 +39,17 @@ func NewWorkerPoolSizer(controller WorkerPoolController,
 }
 
 func (s *WorkerPoolSizer) Start() {
+	ctx := s.controller.Context()
 	ticker := time.NewTicker(poolMonitoringInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
+		select {
+		case <-ctx.Done():
+			return // Context has been cancelled
+		default: // Continue processing requests
+		}
+
 		func() {
 			freeCapacity, err := s.controller.FreeCapacity()
 			if err != nil {
@@ -59,7 +68,7 @@ func (s *WorkerPoolSizer) Start() {
 			// Handle case where we want to make sure all available manually provisioned nodes have available workers
 			if s.workerPoolConfig.Mode == types.PoolModeExternal {
 				err := s.occupyAvailableMachines()
-				if err != nil {
+				if err != nil && !errors.Is(err, redislock.ErrNotObtained) {
 					log.Printf("<pool %s> Failed to list machines in external pool: %+v\n", s.controller.Name(), err)
 				}
 			}
@@ -68,7 +77,14 @@ func (s *WorkerPoolSizer) Start() {
 }
 
 // occupyAvailableMachines ensures that all manually provisioned machines always have workers occupying them
+// This only adds one worker per machine, so if a machine has more capacity, it will not be fully utilized unless
+// this is called multiple times.
 func (s *WorkerPoolSizer) occupyAvailableMachines() error {
+	if err := s.workerRepo.SetWorkerPoolSizerLock(s.controller.Name()); err != nil {
+		return err
+	}
+	defer s.workerRepo.RemoveWorkerPoolSizerLock(s.controller.Name())
+
 	machines, err := s.providerRepo.ListAllMachines(string(*s.workerPoolConfig.Provider), s.controller.Name(), true)
 	if err != nil {
 		return err
@@ -104,7 +120,6 @@ func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*
 		newWorker, err = s.controller.AddWorker(
 			s.workerPoolSizingConfig.DefaultWorkerCpu,
 			s.workerPoolSizingConfig.DefaultWorkerMemory,
-			s.workerPoolSizingConfig.DefaultWorkerGpuType,
 			s.workerPoolSizingConfig.DefaultWorkerGpuCount,
 		)
 		if err != nil {

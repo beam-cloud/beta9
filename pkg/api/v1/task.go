@@ -74,20 +74,23 @@ func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
 }
 
 func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-
 	filters, err := g.preprocessFilters(ctx)
 	if err != nil {
 		return err
+	}
+
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), ctx.Param("workspaceId"))
+	if err != nil {
+		return HTTPBadRequest("Invalid workspace ID")
 	}
 
 	if tasks, err := g.backendRepo.ListTasksWithRelatedPaginated(ctx.Request().Context(), *filters); err != nil {
 		return HTTPInternalServerError("Failed to list tasks")
 	} else {
 		for i := range tasks.Data {
-			tasks.Data[i].SanitizeStubConfig()
-			g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, &tasks.Data[i])
-			g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, &tasks.Data[i])
+			tasks.Data[i].Stub.SanitizeConfig()
+			g.addOutputsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
+			g.addStatsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
 		}
 		return ctx.JSON(http.StatusOK, tasks)
 	}
@@ -109,8 +112,7 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 		if task == nil {
 			return HTTPNotFound()
 		}
-
-		task.SanitizeStubConfig()
+		task.Stub.SanitizeConfig()
 		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
 		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
 

@@ -1,5 +1,9 @@
 import inspect
+import json
 import os
+import sys
+import tempfile
+import threading
 import time
 from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
@@ -15,29 +19,58 @@ from ...clients.gateway import (
     GatewayServiceStub,
     GetOrCreateStubRequest,
     GetOrCreateStubResponse,
+    GetUrlRequest,
+    GetUrlResponse,
     ReplaceObjectContentOperation,
     ReplaceObjectContentRequest,
     ReplaceObjectContentResponse,
     SecretVar,
 )
+from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import
 from ...sync import FileSyncer, SyncEventHandler
-from ...type import _AUTOSCALER_TYPES, Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from ...type import (
+    _AUTOSCALER_TYPES,
+    Autoscaler,
+    GpuType,
+    GpuTypeAlias,
+    QueueDepthAutoscaler,
+    TaskPolicy,
+)
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
 TASKQUEUE_STUB_TYPE = "taskqueue"
 ENDPOINT_STUB_TYPE = "endpoint"
 ASGI_STUB_TYPE = "asgi"
+SCHEDULE_STUB_TYPE = "schedule"
+BOT_STUB_TYPE = "bot"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
 ASGI_DEPLOYMENT_STUB_TYPE = "asgi/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
+SCHEDULE_DEPLOYMENT_STUB_TYPE = "schedule/deployment"
+BOT_DEPLOYMENT_STUB_TYPE = "bot/deployment"
 TASKQUEUE_SERVE_STUB_TYPE = "taskqueue/serve"
 ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
 ASGI_SERVE_STUB_TYPE = "asgi/serve"
 FUNCTION_SERVE_STUB_TYPE = "function/serve"
+BOT_SERVE_STUB_TYPE = "bot/serve"
+
+_stub_creation_lock = threading.Lock()
+_stub_created_for_workspace = False
+
+
+def _is_stub_created_for_workspace() -> bool:
+    global _stub_created_for_workspace
+    _stub_created_for_workspace = False
+    return _stub_created_for_workspace
+
+
+def _set_stub_created_for_workspace(value: bool) -> None:
+    global _stub_created_for_workspace
+    _stub_created_for_workspace = value
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -45,10 +78,11 @@ class RunnerAbstraction(BaseAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
-        gpu: GpuTypeAlias = GpuType.NoGPU,
+        gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(),
         workers: int = 1,
+        concurrent_requests: int = 1,
         keep_warm_seconds: float = 10.0,
         max_pending_tasks: int = 100,
         retries: int = 3,
@@ -60,6 +94,7 @@ class RunnerAbstraction(BaseAbstraction):
         authorized: bool = True,
         name: Optional[str] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
+        task_policy: TaskPolicy = TaskPolicy(),
     ) -> None:
         super().__init__()
 
@@ -86,11 +121,16 @@ class RunnerAbstraction(BaseAbstraction):
         self.volumes = volumes or []
         self.secrets = [SecretVar(name=s) for s in (secrets or [])]
         self.workers = workers
+        self.concurrent_requests = concurrent_requests
         self.keep_warm_seconds = keep_warm_seconds
         self.max_pending_tasks = max_pending_tasks
-        self.retries = retries
-        self.timeout = timeout
         self.autoscaler = autoscaler
+        self.task_policy = TaskPolicy(
+            max_retries=task_policy.max_retries or retries,
+            timeout=task_policy.timeout or timeout,
+            ttl=task_policy.ttl,
+        )
+        self.extra: dict = {}
 
         if self.gpu != "" and self.gpu_count == 0:
             self.gpu_count = 1
@@ -102,13 +142,25 @@ class RunnerAbstraction(BaseAbstraction):
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.settings: SDKSettings = get_settings()
         self.config_context: ConfigContext = get_config_context()
+        self.tmp_files: List[tempfile.NamedTemporaryFile] = []
+        self.is_websocket: bool = False
 
-    def print_invocation_snippet(self, invocation_url: str) -> None:
+    def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
         """Print curl request to call deployed container URL"""
+
+        res = self.gateway_stub.get_url(
+            GetUrlRequest(
+                stub_id=self.stub_id,
+                deployment_id=getattr(self, "deployment_id", ""),
+                url_type=url_type,
+            )
+        )
+        if not res.ok:
+            return terminal.error("Failed to get invocation URL", exit=False)
 
         terminal.header("Invocation details")
         commands = [
-            f"curl -X POST '{invocation_url}' \\",
+            f"curl -X POST '{res.url}' \\",
             "-H 'Connection: keep-alive' \\",
             "-H 'Content-Type: application/json' \\",
             *(
@@ -118,7 +170,20 @@ class RunnerAbstraction(BaseAbstraction):
             ),
             "-d '{}'",
         ]
+
+        if self.is_websocket:
+            res.url = res.url.replace("http://", "ws://").replace("https://", "wss://")
+            commands = [
+                f"websocat '{res.url}' \\",
+                *(
+                    [f"-H 'Authorization: Bearer {self.config_context.token}'"]
+                    if self.authorized
+                    else []
+                ),
+            ]
+
         terminal.print("\n".join(commands), crop=False, overflow="ignore")
+        return res
 
     def _parse_memory(self, memory_str: str) -> int:
         """Parse memory str (with units) to megabytes."""
@@ -188,14 +253,22 @@ class RunnerAbstraction(BaseAbstraction):
             return
 
         module = inspect.getmodule(func)  # Determine module / function name
-        if module:
+        if hasattr(module, "__file__"):
             module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
+        elif in_ipython_env():
+            tmp_file = create_tmp_jupyter_file(module._ih)
+            module_name = tmp_file.name.split("/")[-1].removesuffix(".py")
+            self.tmp_files.append(tmp_file)
         else:
             module_name = "__main__"
 
         function_name = func.__name__
         setattr(self, attr, f"{module_name}:{function_name}")
+
+    def _remove_tmp_files(self) -> None:
+        for tmp_file in self.tmp_files:
+            tmp_file.close()
 
     def _sync_content(
         self,
@@ -238,6 +311,15 @@ class RunnerAbstraction(BaseAbstraction):
             time.sleep(0.1)
         except Exception as e:
             terminal.warn(str(e))
+
+    def _parse_gpu(self, gpu: Union[GpuTypeAlias, List[GpuTypeAlias]]) -> str:
+        if not isinstance(gpu, str) and not isinstance(gpu, list):
+            raise ValueError("Invalid GPU type")
+
+        if isinstance(gpu, list):
+            return ",".join([GpuType(g).value for g in gpu])
+        else:
+            return GpuType(gpu).value
 
     def sync_dir_to_workspace(
         self, *, dir: str, object_id: str, on_event: Optional[Callable] = None
@@ -287,6 +369,7 @@ class RunnerAbstraction(BaseAbstraction):
 
         if not self.files_synced:
             sync_result = self.syncer.sync()
+            self._remove_tmp_files()
 
             if sync_result.success:
                 self.files_synced = True
@@ -301,7 +384,7 @@ class RunnerAbstraction(BaseAbstraction):
                 return False
 
         try:
-            self.gpu = GpuType(self.gpu).value
+            self.gpu = self._parse_gpu(self.gpu)
         except ValueError:
             terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
             return False
@@ -315,40 +398,55 @@ class RunnerAbstraction(BaseAbstraction):
             return False
 
         if not self.stub_created:
-            stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
-                GetOrCreateStubRequest(
-                    object_id=self.object_id,
-                    image_id=self.image_id,
-                    stub_type=stub_type,
-                    name=stub_name,
-                    python_version=self.image.python_version,
-                    cpu=self.cpu,
-                    memory=self.memory,
-                    gpu=self.gpu,
-                    gpu_count=self.gpu_count,
-                    handler=self.handler,
-                    on_start=self.on_start,
-                    callback_url=self.callback_url,
-                    retries=self.retries,
-                    timeout=self.timeout,
-                    keep_warm_seconds=self.keep_warm_seconds,
-                    workers=self.workers,
-                    max_pending_tasks=self.max_pending_tasks,
-                    volumes=[v.export() for v in self.volumes],
-                    secrets=self.secrets,
-                    force_create=force_create_stub,
-                    authorized=self.authorized,
-                    autoscaler=AutoscalerProto(
-                        type=autoscaler_type,
-                        max_containers=self.autoscaler.max_containers,
-                        tasks_per_container=self.autoscaler.tasks_per_container,
-                    ),
-                )
+            stub_request = GetOrCreateStubRequest(
+                object_id=self.object_id,
+                image_id=self.image_id,
+                stub_type=stub_type,
+                name=stub_name,
+                python_version=self.image.python_version,
+                cpu=self.cpu,
+                memory=self.memory,
+                gpu=self.gpu,
+                gpu_count=self.gpu_count,
+                handler=self.handler,
+                on_start=self.on_start,
+                callback_url=self.callback_url,
+                keep_warm_seconds=self.keep_warm_seconds,
+                workers=self.workers,
+                max_pending_tasks=self.max_pending_tasks,
+                volumes=[v.export() for v in self.volumes],
+                secrets=self.secrets,
+                force_create=force_create_stub,
+                authorized=self.authorized,
+                autoscaler=AutoscalerProto(
+                    type=autoscaler_type,
+                    max_containers=self.autoscaler.max_containers,
+                    tasks_per_container=self.autoscaler.tasks_per_container,
+                ),
+                task_policy=TaskPolicyProto(
+                    max_retries=self.task_policy.max_retries,
+                    timeout=self.task_policy.timeout,
+                    ttl=self.task_policy.ttl,
+                ),
+                concurrent_requests=self.concurrent_requests,
+                extra=json.dumps(self.extra),
             )
+            if _is_stub_created_for_workspace():
+                stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
+                    stub_request
+                )
+            else:
+                with _stub_creation_lock:
+                    stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
+                        stub_request
+                    )
+                    _set_stub_created_for_workspace(True)
 
             if stub_response.ok:
                 self.stub_created = True
                 self.stub_id = stub_response.stub_id
+                if stub_response.warn_msg:
+                    terminal.warn(stub_response.warn_msg)
             else:
                 if err := stub_response.err_msg:
                     terminal.error(err, exit=False)
@@ -358,3 +456,34 @@ class RunnerAbstraction(BaseAbstraction):
 
         self.runtime_ready = True
         return True
+
+
+def in_ipython_env() -> bool:
+    if "google.colab" in sys.modules:
+        return True
+
+    try:
+        from IPython import get_ipython
+
+        shell = get_ipython().__class__.__name__
+        return shell == "ZMQInteractiveShell"
+    except (NameError, ImportError):
+        return False
+
+
+def create_tmp_jupyter_file(input_history: List[str]) -> tempfile.NamedTemporaryFile:
+    tmp_file = tempfile.NamedTemporaryFile(mode="w+", dir=".", suffix=".py")
+    for code in input_history:
+        if isinstance(code, list):
+            code = "".join(code)
+
+        # Skip command lines
+        for line in code.split("\n"):
+            if line.startswith("get_ipython"):
+                continue
+
+            tmp_file.write(line + "\n")
+
+    tmp_file.flush()
+
+    return tmp_file

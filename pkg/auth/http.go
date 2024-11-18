@@ -14,20 +14,37 @@ type HttpAuthContext struct {
 	AuthInfo *AuthInfo
 }
 
-func AuthMiddleware(backendRepo repository.BackendRepository) echo.MiddlewareFunc {
+func AuthMiddleware(backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			var tokenKey string
 			req := c.Request()
 			authHeader := req.Header.Get("Authorization")
-			tokenKey := strings.TrimPrefix(authHeader, "Bearer ")
+			tokenKey = strings.TrimPrefix(authHeader, "Bearer ")
 
 			if authHeader == "" || tokenKey == "" {
-				return next(c)
+				// Check query param for token
+				tokenKey = req.URL.Query().Get("auth_token")
+				if tokenKey == "" {
+					return next(c)
+				}
 			}
 
-			token, workspace, err := backendRepo.AuthorizeToken(c.Request().Context(), tokenKey)
+			var token *types.Token
+			var workspace *types.Workspace
+			var err error
+
+			token, workspace, err = workspaceRepo.AuthorizeToken(tokenKey)
 			if err != nil {
-				return echo.NewHTTPError(http.StatusUnauthorized)
+				token, workspace, err = backendRepo.AuthorizeToken(c.Request().Context(), tokenKey)
+				if err != nil {
+					return echo.NewHTTPError(http.StatusUnauthorized)
+				}
+
+				err = workspaceRepo.SetAuthorizationToken(token, workspace)
+				if err != nil {
+					return echo.NewHTTPError(http.StatusInternalServerError)
+				}
 			}
 
 			if !token.Active || token.DisabledByClusterAdmin {

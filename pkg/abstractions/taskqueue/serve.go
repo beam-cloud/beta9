@@ -40,6 +40,7 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		1,
 		timeoutDuration,
 	)
+	defer instance.Rdb.Del(context.Background(), Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId))
 
 	container, err := instance.WaitForContainer(ctx, taskQueueServeContainerTimeout)
 	if err != nil {
@@ -60,6 +61,9 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		}
 		return nil
 	}
+
+	ctx, cancel := common.MergeContexts(tq.ctx, ctx)
+	defer cancel()
 
 	// Keep serve container active for as long as user has their terminal open
 	// We can handle timeouts on the client side

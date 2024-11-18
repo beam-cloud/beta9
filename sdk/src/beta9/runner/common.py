@@ -6,39 +6,46 @@ import os
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Union
+from functools import wraps
+from typing import Any, Callable, Dict, Optional, Union
 
 import requests
 from starlette.responses import Response
 
 from ..clients.gateway import (
     EndTaskRequest,
+    EndTaskResponse,
     GatewayServiceStub,
     SignPayloadRequest,
     SignPayloadResponse,
 )
+from ..env import is_remote
 from ..exceptions import RunnerException
 
-USER_CODE_VOLUME = "/mnt/code"
+USER_CODE_DIR = "/mnt/code"
+USER_VOLUMES_DIR = "/volumes"
+USER_CACHE_DIR = "/cache"
 
 
 @dataclass
 class Config:
-    container_id: Optional[str]
-    container_hostname: Optional[str]
-    stub_id: Optional[str]
-    stub_type: Optional[str]
-    workers: Optional[int]
-    keep_warm_seconds: Optional[int]
-    timeout: Optional[int]
+    container_id: str
+    container_hostname: str
+    stub_id: str
+    stub_type: str
+    workers: int
+    keep_warm_seconds: int
+    timeout: int
     python_version: str
     handler: str
-    on_start: Optional[str]
-    callback_url: Optional[str]
-    task_id: Optional[str]
+    on_start: str
+    callback_url: str
+    task_id: str
     bind_port: int
+    volume_cache_map: Dict
 
     @classmethod
     def load_from_env(cls) -> "Config":
@@ -55,6 +62,7 @@ class Config:
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
+        volume_cache_map = json.loads(os.getenv("VOLUME_CACHE_MAP", "{}"))
 
         if workers <= 0:
             workers = 1
@@ -76,10 +84,13 @@ class Config:
             task_id=task_id,
             bind_port=bind_port,
             timeout=timeout,
+            volume_cache_map=volume_cache_map,
         )
 
 
-config: Config = Config.load_from_env()
+config: Union[Config, None] = None
+if is_remote():
+    config: Config = Config.load_from_env()
 
 
 @dataclass
@@ -127,8 +138,9 @@ class FunctionHandler:
     Helper class for loading user entry point functions
     """
 
-    def __init__(self) -> None:
+    def __init__(self, handler_path: Optional[str] = None) -> None:
         self.pass_context: bool = False
+        self.handler_path: Optional[str] = handler_path
         self.handler: Optional[Callable] = None
         self.is_async: bool = False
         self._load()
@@ -140,21 +152,27 @@ class FunctionHandler:
         del os.environ["BETA9_IMPORTING_USER_CODE"]
 
     def _load(self):
-        if sys.path[0] != USER_CODE_VOLUME:
-            sys.path.insert(0, USER_CODE_VOLUME)
+        if sys.path[0] != USER_CODE_DIR:
+            sys.path.insert(0, USER_CODE_DIR)
 
         try:
-            module, func = config.handler.split(":")
+            module = None
+            func = None
+
+            if self.handler_path is not None:
+                module, func = self.handler_path.split(":")
+            else:
+                module, func = config.handler.split(":")
 
             with self.importing_user_code():
                 target_module = importlib.import_module(module)
 
             self.handler = getattr(target_module, func)
-            sig = inspect.signature(self.handler.func)
-            self.pass_context = "context" in sig.parameters
+            self.signature = inspect.signature(self.handler.func)
+            self.pass_context = "context" in self.signature.parameters
             self.is_async = asyncio.iscoroutinefunction(self.handler.func)
         except BaseException:
-            raise RunnerException()
+            raise RunnerException(f"Error loading handler: {traceback.format_exc()}")
 
     def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
         if self.handler is None:
@@ -164,15 +182,14 @@ class FunctionHandler:
             kwargs["context"] = context
 
         os.environ["TASK_ID"] = context.task_id or ""
-
         return self.handler(*args, **kwargs)
 
 
 def execute_lifecycle_method(name: str) -> Union[Any, None]:
     """Executes a container lifecycle method defined by the user and return it's value"""
 
-    if sys.path[0] != USER_CODE_VOLUME:
-        sys.path.insert(0, USER_CODE_VOLUME)
+    if sys.path[0] != USER_CODE_DIR:
+        sys.path.insert(0, USER_CODE_DIR)
 
     func: str = getattr(config, name)
     if func == "" or func is None:
@@ -193,13 +210,39 @@ def execute_lifecycle_method(name: str) -> Union[Any, None]:
         raise RunnerException()
 
 
+# TODO: add retry behavior directly in dynamically generated GRPC stubs
+def retry_grpc_call(
+    *, exception_to_check: Exception, tries: int = 4, delay: int = 5, backoff: int = 2
+) -> Any:
+    def _retry_decorator(f):
+        @wraps(f)
+        def f_to_retry(*args, **kwargs):
+            mtries, mdelay = tries, delay
+
+            while mtries > 1:
+                try:
+                    return f(*args, **kwargs)
+                except exception_to_check:
+                    print(f"Unexpected GRPC error, retrying in {mdelay} seconds...")
+                    time.sleep(mdelay)
+                    mtries -= 1
+                    mdelay *= backoff
+
+            return f(*args, **kwargs)
+
+        return f_to_retry
+
+    return _retry_decorator
+
+
+@retry_grpc_call(exception_to_check=BaseException, tries=4, delay=5, backoff=2)
 def end_task_and_send_callback(
     *,
     gateway_stub: GatewayServiceStub,
     payload: Any,
     end_task_request: EndTaskRequest,
     override_callback_url: Optional[str] = None,
-):
+) -> EndTaskResponse:
     resp = gateway_stub.end_task(end_task_request)
 
     send_callback(
@@ -292,3 +335,12 @@ def is_asgi3(app: Any) -> bool:
         return False
     else:
         return inspect.iscoroutinefunction(call) and has_asgi3_signature(call)
+
+
+class ThreadPoolExecutorOverride(ThreadPoolExecutor):
+    def __exit__(self, *_, **__):
+        try:
+            # cancel_futures added in 3.9
+            self.shutdown(cancel_futures=True)
+        except Exception:
+            pass

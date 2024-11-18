@@ -33,6 +33,7 @@ const (
 	GatewayService_ListTasks_FullMethodName            = "/gateway.GatewayService/ListTasks"
 	GatewayService_GetOrCreateStub_FullMethodName      = "/gateway.GatewayService/GetOrCreateStub"
 	GatewayService_DeployStub_FullMethodName           = "/gateway.GatewayService/DeployStub"
+	GatewayService_GetURL_FullMethodName               = "/gateway.GatewayService/GetURL"
 	GatewayService_ListDeployments_FullMethodName      = "/gateway.GatewayService/ListDeployments"
 	GatewayService_StopDeployment_FullMethodName       = "/gateway.GatewayService/StopDeployment"
 	GatewayService_DeleteDeployment_FullMethodName     = "/gateway.GatewayService/DeleteDeployment"
@@ -40,6 +41,14 @@ const (
 	GatewayService_ListMachines_FullMethodName         = "/gateway.GatewayService/ListMachines"
 	GatewayService_CreateMachine_FullMethodName        = "/gateway.GatewayService/CreateMachine"
 	GatewayService_DeleteMachine_FullMethodName        = "/gateway.GatewayService/DeleteMachine"
+	GatewayService_ListTokens_FullMethodName           = "/gateway.GatewayService/ListTokens"
+	GatewayService_CreateToken_FullMethodName          = "/gateway.GatewayService/CreateToken"
+	GatewayService_ToggleToken_FullMethodName          = "/gateway.GatewayService/ToggleToken"
+	GatewayService_DeleteToken_FullMethodName          = "/gateway.GatewayService/DeleteToken"
+	GatewayService_ListWorkers_FullMethodName          = "/gateway.GatewayService/ListWorkers"
+	GatewayService_CordonWorker_FullMethodName         = "/gateway.GatewayService/CordonWorker"
+	GatewayService_UncordonWorker_FullMethodName       = "/gateway.GatewayService/UncordonWorker"
+	GatewayService_DrainWorker_FullMethodName          = "/gateway.GatewayService/DrainWorker"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -65,6 +74,7 @@ type GatewayServiceClient interface {
 	// Stubs
 	GetOrCreateStub(ctx context.Context, in *GetOrCreateStubRequest, opts ...grpc.CallOption) (*GetOrCreateStubResponse, error)
 	DeployStub(ctx context.Context, in *DeployStubRequest, opts ...grpc.CallOption) (*DeployStubResponse, error)
+	GetURL(ctx context.Context, in *GetURLRequest, opts ...grpc.CallOption) (*GetURLResponse, error)
 	// Deployments
 	ListDeployments(ctx context.Context, in *ListDeploymentsRequest, opts ...grpc.CallOption) (*ListDeploymentsResponse, error)
 	StopDeployment(ctx context.Context, in *StopDeploymentRequest, opts ...grpc.CallOption) (*StopDeploymentResponse, error)
@@ -75,6 +85,16 @@ type GatewayServiceClient interface {
 	ListMachines(ctx context.Context, in *ListMachinesRequest, opts ...grpc.CallOption) (*ListMachinesResponse, error)
 	CreateMachine(ctx context.Context, in *CreateMachineRequest, opts ...grpc.CallOption) (*CreateMachineResponse, error)
 	DeleteMachine(ctx context.Context, in *DeleteMachineRequest, opts ...grpc.CallOption) (*DeleteMachineResponse, error)
+	// Tokens
+	ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error)
+	CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error)
+	ToggleToken(ctx context.Context, in *ToggleTokenRequest, opts ...grpc.CallOption) (*ToggleTokenResponse, error)
+	DeleteToken(ctx context.Context, in *DeleteTokenRequest, opts ...grpc.CallOption) (*DeleteTokenResponse, error)
+	// Workers
+	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
+	CordonWorker(ctx context.Context, in *CordonWorkerRequest, opts ...grpc.CallOption) (*CordonWorkerResponse, error)
+	UncordonWorker(ctx context.Context, in *UncordonWorkerRequest, opts ...grpc.CallOption) (*UncordonWorkerResponse, error)
+	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -236,6 +256,15 @@ func (c *gatewayServiceClient) DeployStub(ctx context.Context, in *DeployStubReq
 	return out, nil
 }
 
+func (c *gatewayServiceClient) GetURL(ctx context.Context, in *GetURLRequest, opts ...grpc.CallOption) (*GetURLResponse, error) {
+	out := new(GetURLResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetURL_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) ListDeployments(ctx context.Context, in *ListDeploymentsRequest, opts ...grpc.CallOption) (*ListDeploymentsResponse, error) {
 	out := new(ListDeploymentsResponse)
 	err := c.cc.Invoke(ctx, GatewayService_ListDeployments_FullMethodName, in, out, opts...)
@@ -299,6 +328,78 @@ func (c *gatewayServiceClient) DeleteMachine(ctx context.Context, in *DeleteMach
 	return out, nil
 }
 
+func (c *gatewayServiceClient) ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error) {
+	out := new(ListTokensResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListTokens_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error) {
+	out := new(CreateTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreateToken_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ToggleToken(ctx context.Context, in *ToggleTokenRequest, opts ...grpc.CallOption) (*ToggleTokenResponse, error) {
+	out := new(ToggleTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ToggleToken_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) DeleteToken(ctx context.Context, in *DeleteTokenRequest, opts ...grpc.CallOption) (*DeleteTokenResponse, error) {
+	out := new(DeleteTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_DeleteToken_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error) {
+	out := new(ListWorkersResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListWorkers_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) CordonWorker(ctx context.Context, in *CordonWorkerRequest, opts ...grpc.CallOption) (*CordonWorkerResponse, error) {
+	out := new(CordonWorkerResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CordonWorker_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) UncordonWorker(ctx context.Context, in *UncordonWorkerRequest, opts ...grpc.CallOption) (*UncordonWorkerResponse, error) {
+	out := new(UncordonWorkerResponse)
+	err := c.cc.Invoke(ctx, GatewayService_UncordonWorker_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error) {
+	out := new(DrainWorkerResponse)
+	err := c.cc.Invoke(ctx, GatewayService_DrainWorker_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
@@ -322,6 +423,7 @@ type GatewayServiceServer interface {
 	// Stubs
 	GetOrCreateStub(context.Context, *GetOrCreateStubRequest) (*GetOrCreateStubResponse, error)
 	DeployStub(context.Context, *DeployStubRequest) (*DeployStubResponse, error)
+	GetURL(context.Context, *GetURLRequest) (*GetURLResponse, error)
 	// Deployments
 	ListDeployments(context.Context, *ListDeploymentsRequest) (*ListDeploymentsResponse, error)
 	StopDeployment(context.Context, *StopDeploymentRequest) (*StopDeploymentResponse, error)
@@ -332,6 +434,16 @@ type GatewayServiceServer interface {
 	ListMachines(context.Context, *ListMachinesRequest) (*ListMachinesResponse, error)
 	CreateMachine(context.Context, *CreateMachineRequest) (*CreateMachineResponse, error)
 	DeleteMachine(context.Context, *DeleteMachineRequest) (*DeleteMachineResponse, error)
+	// Tokens
+	ListTokens(context.Context, *ListTokensRequest) (*ListTokensResponse, error)
+	CreateToken(context.Context, *CreateTokenRequest) (*CreateTokenResponse, error)
+	ToggleToken(context.Context, *ToggleTokenRequest) (*ToggleTokenResponse, error)
+	DeleteToken(context.Context, *DeleteTokenRequest) (*DeleteTokenResponse, error)
+	// Workers
+	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
+	CordonWorker(context.Context, *CordonWorkerRequest) (*CordonWorkerResponse, error)
+	UncordonWorker(context.Context, *UncordonWorkerRequest) (*UncordonWorkerResponse, error)
+	DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -381,6 +493,9 @@ func (UnimplementedGatewayServiceServer) GetOrCreateStub(context.Context, *GetOr
 func (UnimplementedGatewayServiceServer) DeployStub(context.Context, *DeployStubRequest) (*DeployStubResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeployStub not implemented")
 }
+func (UnimplementedGatewayServiceServer) GetURL(context.Context, *GetURLRequest) (*GetURLResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetURL not implemented")
+}
 func (UnimplementedGatewayServiceServer) ListDeployments(context.Context, *ListDeploymentsRequest) (*ListDeploymentsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListDeployments not implemented")
 }
@@ -401,6 +516,30 @@ func (UnimplementedGatewayServiceServer) CreateMachine(context.Context, *CreateM
 }
 func (UnimplementedGatewayServiceServer) DeleteMachine(context.Context, *DeleteMachineRequest) (*DeleteMachineResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteMachine not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListTokens(context.Context, *ListTokensRequest) (*ListTokensResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTokens not implemented")
+}
+func (UnimplementedGatewayServiceServer) CreateToken(context.Context, *CreateTokenRequest) (*CreateTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateToken not implemented")
+}
+func (UnimplementedGatewayServiceServer) ToggleToken(context.Context, *ToggleTokenRequest) (*ToggleTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ToggleToken not implemented")
+}
+func (UnimplementedGatewayServiceServer) DeleteToken(context.Context, *DeleteTokenRequest) (*DeleteTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteToken not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListWorkers not implemented")
+}
+func (UnimplementedGatewayServiceServer) CordonWorker(context.Context, *CordonWorkerRequest) (*CordonWorkerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CordonWorker not implemented")
+}
+func (UnimplementedGatewayServiceServer) UncordonWorker(context.Context, *UncordonWorkerRequest) (*UncordonWorkerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UncordonWorker not implemented")
+}
+func (UnimplementedGatewayServiceServer) DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DrainWorker not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -675,6 +814,24 @@ func _GatewayService_DeployStub_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_GetURL_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetURLRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetURL(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetURL_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetURL(ctx, req.(*GetURLRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GatewayService_ListDeployments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListDeploymentsRequest)
 	if err := dec(in); err != nil {
@@ -801,6 +958,150 @@ func _GatewayService_DeleteMachine_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_ListTokens_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTokensRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListTokens(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListTokens_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListTokens(ctx, req.(*ListTokensRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_CreateToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CreateToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CreateToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CreateToken(ctx, req.(*CreateTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ToggleToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ToggleTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ToggleToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ToggleToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ToggleToken(ctx, req.(*ToggleTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_DeleteToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).DeleteToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_DeleteToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).DeleteToken(ctx, req.(*DeleteTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ListWorkers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListWorkersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListWorkers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListWorkers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListWorkers(ctx, req.(*ListWorkersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_CordonWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CordonWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CordonWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CordonWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CordonWorker(ctx, req.(*CordonWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_UncordonWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UncordonWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).UncordonWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_UncordonWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).UncordonWorker(ctx, req.(*UncordonWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_DrainWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DrainWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).DrainWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_DrainWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).DrainWorker(ctx, req.(*DrainWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -861,6 +1162,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GatewayService_DeployStub_Handler,
 		},
 		{
+			MethodName: "GetURL",
+			Handler:    _GatewayService_GetURL_Handler,
+		},
+		{
 			MethodName: "ListDeployments",
 			Handler:    _GatewayService_ListDeployments_Handler,
 		},
@@ -887,6 +1192,38 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteMachine",
 			Handler:    _GatewayService_DeleteMachine_Handler,
+		},
+		{
+			MethodName: "ListTokens",
+			Handler:    _GatewayService_ListTokens_Handler,
+		},
+		{
+			MethodName: "CreateToken",
+			Handler:    _GatewayService_CreateToken_Handler,
+		},
+		{
+			MethodName: "ToggleToken",
+			Handler:    _GatewayService_ToggleToken_Handler,
+		},
+		{
+			MethodName: "DeleteToken",
+			Handler:    _GatewayService_DeleteToken_Handler,
+		},
+		{
+			MethodName: "ListWorkers",
+			Handler:    _GatewayService_ListWorkers_Handler,
+		},
+		{
+			MethodName: "CordonWorker",
+			Handler:    _GatewayService_CordonWorker_Handler,
+		},
+		{
+			MethodName: "UncordonWorker",
+			Handler:    _GatewayService_UncordonWorker_Handler,
+		},
+		{
+			MethodName: "DrainWorker",
+			Handler:    _GatewayService_DrainWorker_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

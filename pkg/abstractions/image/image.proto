@@ -10,12 +10,19 @@ service ImageService {
   rpc BuildImage(BuildImageRequest) returns (stream BuildImageResponse) {}
 }
 
+message BuildStep {
+  string type = 1;
+  string command = 2;
+}
+
 message VerifyImageBuildRequest {
   string python_version = 1;
   repeated string python_packages = 2;
   repeated string commands = 3;
   bool force_rebuild = 4;
   string existing_image_uri = 5;
+  repeated BuildStep build_steps = 6;
+  repeated string env_vars = 7;
 }
 
 message VerifyImageBuildResponse {
@@ -35,6 +42,8 @@ message BuildImageRequest {
   // "docker://image-repo-name:tag"
 
   map<string, string> existing_image_creds = 5;
+  repeated BuildStep build_steps = 6;
+  repeated string env_vars = 7;
 }
 
 message BuildImageResponse {

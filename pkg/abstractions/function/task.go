@@ -24,7 +24,7 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 	}
 
 	taskId := t.msg.TaskId
-	containerId := t.fs.genContainerId(taskId)
+	containerId := t.fs.genContainerId(taskId, stub.Type.Kind())
 
 	t.containerId = containerId
 
@@ -54,7 +54,7 @@ func (t *FunctionTask) Retry(ctx context.Context) error {
 		return err
 	}
 
-	containerId := t.fs.genContainerId(taskId)
+	containerId := t.fs.genContainerId(taskId, stub.Type.Kind())
 	t.containerId = containerId
 
 	task.Status = types.TaskStatusRetry
@@ -107,12 +107,15 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
-	mounts := abstractions.ConfigureContainerRequestMounts(
+	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
-		stub.Workspace.Name,
+		&stub.Workspace,
 		stubConfig,
 		stub.ExternalId,
 	)
+	if err != nil {
+		return err
+	}
 
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(
 		&stub.Workspace,
@@ -127,11 +130,6 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		return err
 	}
 
-	gpuCount := stubConfig.Runtime.GpuCount
-	if stubConfig.Runtime.Gpu != "" && gpuCount == 0 {
-		gpuCount = 1
-	}
-
 	env := []string{
 		fmt.Sprintf("TASK_ID=%s", t.msg.TaskId),
 		fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
@@ -142,18 +140,30 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 
 	env = append(secrets, env...)
 
+	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
+	if stubConfig.Runtime.Gpu != "" {
+		gpuRequest = append(gpuRequest, stubConfig.Runtime.Gpu.String())
+	}
+
+	gpuCount := 0
+	if len(gpuRequest) > 0 {
+		gpuCount = 1
+	}
+
 	err = t.fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: t.containerId,
 		Env:         env,
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
-		Gpu:         string(stubConfig.Runtime.Gpu),
+		GpuRequest:  gpuRequest,
 		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,
 		WorkspaceId: stub.Workspace.ExternalId,
+		Workspace:   stub.Workspace,
 		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
 		Mounts:      mounts,
+		Stub:        *stub,
 	})
 	if err != nil {
 		return err
@@ -170,7 +180,7 @@ func (t *FunctionTask) Cancel(ctx context.Context, reason types.TaskCancellation
 
 	switch reason {
 	case types.TaskExpired:
-		task.Status = types.TaskStatusTimeout
+		task.Status = types.TaskStatusExpired
 	case types.TaskExceededRetryLimit:
 		task.Status = types.TaskStatusError
 	default:

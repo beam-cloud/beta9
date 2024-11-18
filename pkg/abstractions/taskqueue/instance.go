@@ -36,6 +36,16 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		return err
 	}
 
+	mounts, err := abstractions.ConfigureContainerRequestMounts(
+		i.Stub.Object.ExternalId,
+		i.Workspace,
+		*i.StubConfig,
+		i.Stub.ExternalId,
+	)
+	if err != nil {
+		return err
+	}
+
 	env := []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
 		fmt.Sprintf("HANDLER=%s", i.StubConfig.Handler),
@@ -50,8 +60,13 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 
 	env = append(secrets, env...)
 
-	gpuCount := i.StubConfig.Runtime.GpuCount
-	if i.StubConfig.Runtime.Gpu != "" && gpuCount == 0 {
+	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)
+	if i.StubConfig.Runtime.Gpu != "" {
+		gpuRequest = append(gpuRequest, i.StubConfig.Runtime.Gpu.String())
+	}
+
+	gpuCount := 0
+	if len(gpuRequest) > 0 {
 		gpuCount = 1
 	}
 
@@ -61,18 +76,15 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			Env:         env,
 			Cpu:         i.StubConfig.Runtime.Cpu,
 			Memory:      i.StubConfig.Runtime.Memory,
-			Gpu:         string(i.StubConfig.Runtime.Gpu),
+			GpuRequest:  gpuRequest,
 			GpuCount:    uint32(gpuCount),
 			ImageId:     i.StubConfig.Runtime.ImageId,
 			StubId:      i.Stub.ExternalId,
 			WorkspaceId: i.Workspace.ExternalId,
+			Workspace:   *i.Workspace,
 			EntryPoint:  i.EntryPoint,
-			Mounts: abstractions.ConfigureContainerRequestMounts(
-				i.Stub.Object.ExternalId,
-				i.Workspace.Name,
-				*i.StubConfig,
-				i.Stub.ExternalId,
-			),
+			Mounts:      mounts,
+			Stub:        *i.Stub,
 		}
 
 		err := i.Scheduler.Run(runRequest)
@@ -100,7 +112,7 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 		idx := rnd.Intn(len(containerIds))
 		containerId := containerIds[idx]
 
-		err := i.Scheduler.Stop(containerId)
+		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
 		if err != nil {
 			log.Printf("<%s> unable to stop container: %v", i.Name, err)
 			return err

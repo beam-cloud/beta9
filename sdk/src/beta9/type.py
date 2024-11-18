@@ -54,6 +54,17 @@ class PythonVersion(str, Enum):
     Python312 = "python3.12"
 
 
+PythonVersionLiteral = Literal[
+    "python3.8",
+    "python3.9",
+    "python3.10",
+    "python3.11",
+    "python3.12",
+]
+
+PythonVersionAlias = Union[PythonVersion, PythonVersionLiteral]
+
+
 class GpuType(str, Enum):
     """
     An enum that defines types of GPUs.
@@ -117,6 +128,27 @@ class Autoscaler:
 @dataclass
 class QueueDepthAutoscaler(Autoscaler):
     pass
+
+
+@dataclass
+class TaskPolicy:
+    """
+    Task policy for a function. This helps manages lifecycle of an individual task.
+
+    Parameters:
+        max_retries (int):
+            The maximum number of times a task will be retried if the container crashes. Default is 3.
+        timeout (int):
+            The maximum number of seconds a task can run before it times out.
+            Default depends on the abstraction that you are using.
+            Set it to -1 to disable the timeout (this does not disable timeout for endpoints).
+        ttl (int):
+            The expiration time for a task in seconds. Must be greater than 0 and less than 24 hours (86400 seconds).
+    """
+
+    max_retries: int = 0
+    timeout: int = 0
+    ttl: int = 0
 
 
 _AUTOSCALER_TYPES: Dict[Type[Autoscaler], str] = {

@@ -27,6 +27,7 @@ type TaskCancellationReason string
 const (
 	TaskExpired            TaskCancellationReason = "expired"
 	TaskExceededRetryLimit TaskCancellationReason = "exceeded_retry_limit"
+	TaskRequestCancelled   TaskCancellationReason = "request_cancelled"
 )
 
 type TaskInterface interface {
@@ -44,6 +45,7 @@ var (
 	ExecutorEndpoint  TaskExecutor = "endpoint"
 	ExecutorFunction  TaskExecutor = "function"
 	ExecutorContainer TaskExecutor = "container"
+	ExecutorBot       TaskExecutor = "bot"
 )
 
 // TaskMessage represents a JSON serializable message
@@ -108,10 +110,14 @@ var DefaultTaskPolicy = TaskPolicy{
 	Timeout:    3600,
 }
 
+var MaxTaskTTL = 24 * 60 * 60
+var MaxTaskRetries = 5
+
 type TaskPolicy struct {
 	MaxRetries uint      `json:"max_retries" redis:"max_retries"`
 	Timeout    int       `json:"timeout" redis:"timeout"`
 	Expires    time.Time `json:"expires" redis:"expires"`
+	TTL        uint32    `json:"ttl" redis:"ttl"`
 }
 
 type ErrExceededTaskLimit struct {

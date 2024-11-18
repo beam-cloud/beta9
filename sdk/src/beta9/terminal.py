@@ -1,5 +1,6 @@
 import datetime
 import sys
+import threading
 from contextlib import contextmanager
 from typing import Any, Generator, Literal, Optional, Sequence, Tuple
 
@@ -28,10 +29,13 @@ if env.is_local():
     rich.traceback.install()
 
 _console = Console()
+_current_status = None
+_status_lock = threading.Lock()
+_status_count = 0
 
 
 def header(text: str, subtext: str = "") -> None:
-    header_text = f"[bold white]=> {text}[/bold white]"
+    header_text = f"[bold #4CCACC]=> {text}[/bold #4CCACC]"
     _console.print(header_text, subtext)
 
 
@@ -68,6 +72,7 @@ def error(text: str, exit: bool = True) -> None:
     _console.print(Text(text, style="bold red"))
 
     if exit:
+        reset_terminal()
         sys.exit(1)
 
 
@@ -77,8 +82,22 @@ def url(text: str) -> None:
 
 @contextmanager
 def progress(task_name: str) -> Generator[rich.status.Status, None, None]:
-    with _console.status(task_name, spinner="dots", spinner_style="white") as s:
-        yield s
+    global _current_status, _status_count
+
+    with _status_lock:
+        if _current_status is None:
+            _current_status = _console.status(task_name, spinner="dots", spinner_style="white")
+            _current_status.start()
+        _status_count += 1
+
+    try:
+        yield _current_status
+    finally:
+        with _status_lock:
+            _status_count -= 1
+            if _status_count == 0:
+                _current_status.stop()
+                _current_status = None
 
 
 def progress_open(file, mode, **kwargs):
@@ -143,3 +162,7 @@ def humanize_memory(m: float, base: Literal[2, 10] = 2) -> str:
 def pluralize(seq: Sequence, suffix: str = "s") -> Tuple[int, str]:
     n = len(seq)
     return n, "s" if n != 1 else ""
+
+
+def reset_terminal() -> None:
+    _console.show_cursor()

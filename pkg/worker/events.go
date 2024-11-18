@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -11,12 +12,7 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 )
 
-func (w *Worker) collectAndSendContainerMetrics(request *types.ContainerRequest, spec *specs.Spec, pidChan <-chan int, done chan bool) {
-	containerPid := <-pidChan
-	if containerPid == 0 {
-		return
-	}
-
+func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, containerPid int) {
 	ticker := time.NewTicker(w.config.Monitoring.ContainerMetricsInterval)
 	defer ticker.Stop()
 
@@ -24,7 +20,7 @@ func (w *Worker) collectAndSendContainerMetrics(request *types.ContainerRequest,
 
 	for {
 		select {
-		case <-done:
+		case <-ctx.Done():
 			return
 
 		case <-ticker.C:
@@ -44,8 +40,8 @@ func (w *Worker) collectAndSendContainerMetrics(request *types.ContainerRequest,
 					MemoryVMS:          stats.Memory.VMS,
 					MemorySwap:         stats.Memory.Swap,
 					MemoryTotal:        uint64(request.Memory * 1024 * 1024),
-					DiskReadBytes:      stats.IO.ReadBytes,
-					DiskWriteBytes:     stats.IO.WriteBytes,
+					DiskReadBytes:      stats.IO.DiskReadBytes,
+					DiskWriteBytes:     stats.IO.DiskWriteBytes,
 					NetworkBytesRecv:   stats.NetIO.BytesRecv,
 					NetworkBytesSent:   stats.NetIO.BytesSent,
 					NetworkPacketsRecv: stats.NetIO.PacketsRecv,

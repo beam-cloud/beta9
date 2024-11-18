@@ -33,6 +33,10 @@ var (
 	workerPrefix                 string = "worker"
 	workerImageLock              string = "worker:%s:image:%s:lock"
 	workerContainerResourceUsage string = "worker:%s:container:%s:resource_usage"
+	workerNetworkLock            string = "worker:network:%s:lock"
+	workerNetworkIpIndex         string = "worker:network:%s:ip_index"
+	workerNetworkContainerIp     string = "worker:network:%s:container_ip:%s"
+	workerPoolSizerLock          string = "worker:pool_sizer:%s:lock"
 )
 
 var (
@@ -47,16 +51,12 @@ var (
 )
 
 var (
-	workerPoolLock  string = "workerpool:lock:%s"
-	workerPoolState string = "workerpool:state:%s"
-)
-
-var (
 	workspacePrefix string = "workspace"
 
 	workspaceVolumePathDownloadToken string = "workspace:volume_path_download_token:%s"
 	workspaceConcurrencyLimit        string = "workspace:concurrency_limit:%s"
 	workspaceConcurrencyLimitLock    string = "workspace:concurrency_limit:lock:%s"
+	workspaceAuthorizedToken         string = "workspace:authorization:token:%s"
 )
 
 var (
@@ -171,6 +171,18 @@ func (rk *redisKeys) WorkerImageLock(workerId string, imageId string) string {
 	return fmt.Sprintf(workerImageLock, workerId, imageId)
 }
 
+func (rk *redisKeys) WorkerNetworkLock(networkPrefix string) string {
+	return fmt.Sprintf(workerNetworkLock, networkPrefix)
+}
+
+func (rk *redisKeys) WorkerNetworkIpIndex(networkPrefix string) string {
+	return fmt.Sprintf(workerNetworkIpIndex, networkPrefix)
+}
+
+func (rk *redisKeys) WorkerNetworkContainerIp(networkPrefix, containerId string) string {
+	return fmt.Sprintf(workerNetworkContainerIp, networkPrefix, containerId)
+}
+
 // Task keys
 func (rk *redisKeys) TaskPrefix() string {
 	return taskPrefix
@@ -221,13 +233,13 @@ func (rk *redisKeys) WorkspaceVolumePathDownloadToken(token string) string {
 	return fmt.Sprintf(workspaceVolumePathDownloadToken, token)
 }
 
-// WorkerPool keys
-func (rk *redisKeys) WorkerPoolLock(poolName string) string {
-	return fmt.Sprintf(workerPoolLock, poolName)
+func (rl *redisKeys) WorkspaceAuthorizedToken(token string) string {
+	return fmt.Sprintf(workspaceAuthorizedToken, token)
 }
 
-func (rk *redisKeys) WorkerPoolState(poolName string) string {
-	return fmt.Sprintf(workerPoolState, poolName)
+// WorkerPool keys
+func (rk *redisKeys) WorkerPoolSizerLock(poolName string) string {
+	return fmt.Sprintf(workerPoolSizerLock, poolName)
 }
 
 // Tailscale keys

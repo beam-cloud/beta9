@@ -153,11 +153,18 @@ func (gws *GatewayService) DeleteDeployment(ctx context.Context, in *pb.DeleteDe
 
 func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRelated, ctx context.Context) error {
 	for _, deployment := range deployments {
+		// Stop scheduled job
+		if deployment.StubType == types.StubTypeScheduledJobDeployment {
+			if scheduledJob, err := gws.backendRepo.GetScheduledJob(ctx, deployment.Id); err == nil {
+				gws.backendRepo.DeleteScheduledJob(ctx, scheduledJob)
+			}
+		}
+
 		// Stop active containers
 		containers, err := gws.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
 		if err == nil {
 			for _, container := range containers {
-				gws.scheduler.Stop(container.ContainerId)
+				gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId})
 			}
 		}
 

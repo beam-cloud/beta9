@@ -202,6 +202,7 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string, options *ContainerO
 		"NV_CUDA_CUDART_VERSION",
 		"CUDA_VERSION",
 		"GPU_TYPE",
+		"CUDA_HOME",
 	}
 
 	initialEnvVars := make(map[string]string)

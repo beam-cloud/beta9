@@ -16,12 +16,12 @@ type EndpointTask struct {
 func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) error {
 	var err error = nil
 	echoCtx := options[0].(echo.Context)
-	instance, err := t.es.getOrCreateEndpointInstance(t.msg.StubId)
+	instance, err := t.es.getOrCreateEndpointInstance(ctx, t.msg.StubId)
 	if err != nil {
 		return err
 	}
 
-	_, err = t.es.backendRepo.CreateTask(echoCtx.Request().Context(), &types.TaskParams{
+	_, err = t.es.backendRepo.CreateTask(context.Background(), &types.TaskParams{
 		TaskId:      t.msg.TaskId,
 		StubId:      instance.Stub.Id,
 		WorkspaceId: instance.Stub.WorkspaceId,
@@ -30,10 +30,7 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 		return err
 	}
 
-	return instance.buffer.ForwardRequest(echoCtx, &types.TaskPayload{
-		Args:   t.msg.Args,
-		Kwargs: t.msg.Kwargs,
-	}, t.msg)
+	return instance.buffer.ForwardRequest(echoCtx, t)
 }
 
 func (t *EndpointTask) Retry(ctx context.Context) error {
@@ -59,9 +56,11 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 
 	switch reason {
 	case types.TaskExpired:
-		task.Status = types.TaskStatusTimeout
+		task.Status = types.TaskStatusExpired
 	case types.TaskExceededRetryLimit:
 		task.Status = types.TaskStatusError
+	case types.TaskRequestCancelled:
+		task.Status = types.TaskStatusCancelled
 	default:
 		task.Status = types.TaskStatusError
 	}
@@ -71,7 +70,7 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		return err
 	}
 
-	return nil
+	return t.es.taskDispatcher.Complete(ctx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
 }
 
 func (t *EndpointTask) HeartBeat(ctx context.Context) (bool, error) {

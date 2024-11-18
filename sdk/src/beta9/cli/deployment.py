@@ -57,10 +57,14 @@ def common(**_):
     nargs=1,
     required=True,
 )
-@extraclick.pass_service_client
+@click.option(
+    "--url-type",
+    help="The type of URL to get back. [default is determined by the server] ",
+    type=click.Choice(["host", "path"]),
+)
 @click.pass_context
-def deploy(ctx: click.Context, service: ServiceClient, name: str, entrypoint: str):
-    ctx.invoke(create_deployment, name=name, entrypoint=entrypoint)
+def deploy(ctx: click.Context, name: str, entrypoint: str, url_type: str):
+    ctx.invoke(create_deployment, name=name, entrypoint=entrypoint, url_type=url_type)
 
 
 @click.group(
@@ -94,32 +98,40 @@ def management():
     help='The name the entrypoint e.g. "file:function".',
     required=True,
 )
+@click.option(
+    "--url-type",
+    help="The type of URL to get back. [default is determined by the server] ",
+    type=click.Choice(["host", "path"]),
+)
 @extraclick.pass_service_client
-def create_deployment(service: ServiceClient, name: str, entrypoint: str):
+def create_deployment(service: ServiceClient, name: str, entrypoint: str, url_type: str):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
 
-    module_path, func_name, *_ = entrypoint.split(":") if ":" in entrypoint else (entrypoint, "")
+    module_path, obj_name, *_ = entrypoint.split(":") if ":" in entrypoint else (entrypoint, "")
     module_name = module_path.replace(".py", "").replace(os.path.sep, ".")
 
     if not Path(module_path).exists():
         terminal.error(f"Unable to find file: '{module_path}'")
 
-    if not func_name:
+    if not obj_name:
         terminal.error(
             "Invalid handler function specified. Expected format: beam deploy [file.py]:[function]"
         )
 
     module = importlib.import_module(module_name)
 
-    user_func: Optional[DeployableMixin] = getattr(module, func_name, None)
-    if user_func is None:
+    user_obj: Optional[DeployableMixin] = getattr(module, obj_name, None)
+    if user_obj is None:
         terminal.error(
-            f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{func_name}'"
+            f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{obj_name}'"
         )
 
-    if not user_func.deploy(name=name, context=service._config):  # type: ignore
+    if hasattr(user_obj, "set_handler"):
+        user_obj.set_handler(f"{module_name}:{obj_name}")
+
+    if not user_obj.deploy(name=name, context=service._config, url_type=url_type):  # type: ignore
         terminal.error("Deployment failed ☠️")
 
 

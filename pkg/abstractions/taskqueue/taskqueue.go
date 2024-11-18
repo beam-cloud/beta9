@@ -36,6 +36,7 @@ type TaskQueueServiceOpts struct {
 	Config         types.AppConfig
 	RedisClient    *common.RedisClient
 	BackendRepo    repository.BackendRepository
+	WorkspaceRepo  repository.WorkspaceRepository
 	TaskRepo       repository.TaskRepository
 	ContainerRepo  repository.ContainerRepository
 	Scheduler      *scheduler.Scheduler
@@ -46,9 +47,10 @@ type TaskQueueServiceOpts struct {
 }
 
 const (
+	DefaultTaskQueueTaskTTL uint32 = 3600 * 2 // 2 hours
+
 	taskQueueContainerPrefix                 string        = "taskqueue"
 	taskQueueRoutePrefix                     string        = "/taskqueue"
-	taskQueueDefaultTaskExpiration           int           = 3600 * 2 // 2 hours
 	taskQueueServeContainerKeepaliveInterval time.Duration = 30 * time.Second
 	taskQueueServeContainerTimeout           time.Duration = 10 * time.Minute
 )
@@ -61,6 +63,7 @@ type RedisTaskQueue struct {
 	taskDispatcher  *task.Dispatcher
 	taskRepo        repository.TaskRepository
 	containerRepo   repository.ContainerRepository
+	workspaceRepo   repository.WorkspaceRepository
 	backendRepo     repository.BackendRepository
 	scheduler       *scheduler.Scheduler
 	pb.UnimplementedTaskQueueServiceServer
@@ -87,6 +90,7 @@ func NewRedisTaskQueueService(
 		scheduler:       opts.Scheduler,
 		stubConfigCache: common.NewSafeMap[*types.StubConfigV1](),
 		keyEventManager: keyEventManager,
+		workspaceRepo:   opts.WorkspaceRepo,
 		taskDispatcher:  opts.TaskDispatcher,
 		taskRepo:        opts.TaskRepo,
 		containerRepo:   opts.ContainerRepo,
@@ -132,10 +136,23 @@ func NewRedisTaskQueueService(
 	tq.taskDispatcher.Register(string(types.ExecutorTaskQueue), tq.taskQueueTaskFactory)
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(opts.BackendRepo)
+	authMiddleware := auth.AuthMiddleware(opts.BackendRepo, opts.WorkspaceRepo)
 	registerTaskQueueRoutes(opts.RouteGroup.Group(taskQueueRoutePrefix, authMiddleware), tq)
 
 	return tq, nil
+}
+
+func (tq *RedisTaskQueue) isPublic(stubId string) (*types.Workspace, error) {
+	instance, err := tq.getOrCreateQueueInstance(stubId)
+	if err != nil {
+		return nil, err
+	}
+
+	if instance.StubConfig.Authorized {
+		return nil, errors.New("unauthorized")
+	}
+
+	return instance.Workspace, nil
 }
 
 func (tq *RedisTaskQueue) taskQueueTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
@@ -183,7 +200,11 @@ func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stub
 	}
 
 	policy := stubConfig.TaskPolicy
-	policy.Expires = time.Now().Add(time.Duration(taskQueueDefaultTaskExpiration) * time.Second)
+	if policy.TTL == 0 {
+		// Required for backwards compatibility
+		policy.TTL = DefaultTaskQueueTaskTTL
+	}
+	policy.Expires = time.Now().Add(time.Duration(policy.TTL) * time.Second)
 
 	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), authInfo, stubId, payload, policy)
 	if err != nil {
@@ -262,7 +283,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 
 	err = tq.taskDispatcher.Claim(ctx, authInfo.Workspace.Name, task.Stub.ExternalId, task.ExternalId, in.ContainerId)
 	if err != nil {
-		return nil, err
+		return &pb.TaskQueuePopResponse{Ok: false}, nil
 	}
 
 	task.ContainerId = in.ContainerId
@@ -298,11 +319,13 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}, nil
 	}
 
-	err = tq.rdb.SetEx(ctx, Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
-	if err != nil {
-		return &pb.TaskQueueCompleteResponse{
-			Ok: false,
-		}, nil
+	if in.KeepWarmSeconds > 0 {
+		err = tq.rdb.SetEx(ctx, Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
+		if err != nil {
+			return &pb.TaskQueueCompleteResponse{
+				Ok: false,
+			}, nil
+		}
 	}
 
 	err = tq.rdb.Del(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId)).Err()
@@ -383,7 +406,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 	} else if leftoverTimeoutSeconds <= 0 {
 		err := timeoutCallback()
 		if err != nil {
-			log.Printf("error timing out task: %v", err)
+			log.Printf("Error timing out task: %v\n", err)
 			return err
 		}
 
@@ -403,7 +426,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				case <-timeoutChan:
 					err := timeoutCallback()
 					if err != nil {
-						log.Printf("task timeout err: %v", err)
+						log.Printf("Task timeout err: %v\n", err)
 					}
 					timeoutFlag <- true
 					return
@@ -419,7 +442,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 
 				case err := <-errs:
 					if err != nil {
-						log.Printf("monitor task subscription err: %v", err)
+						log.Printf("Monitor task subscription err: %v\n", err)
 						break retry
 					}
 				}
@@ -529,6 +552,7 @@ func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...fun
 	// Create base autoscaled instance
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(tq.ctx, &abstractions.AutoscaledInstanceConfig{
 		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
+		AppConfig:           tq.config,
 		Rdb:                 tq.rdb,
 		Stub:                stub,
 		StubConfig:          stubConfig,

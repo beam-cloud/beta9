@@ -35,6 +35,7 @@ type HttpEndpointService struct {
 	keyEventManager   *common.KeyEventManager
 	scheduler         *scheduler.Scheduler
 	backendRepo       repository.BackendRepository
+	workspaceRepo     repository.WorkspaceRepository
 	containerRepo     repository.ContainerRepository
 	eventRepo         repository.EventRepository
 	taskRepo          repository.TaskRepository
@@ -44,10 +45,12 @@ type HttpEndpointService struct {
 }
 
 var (
+	DefaultEndpointRequestTimeoutS int    = 600 // 10 minutes
+	DefaultEndpointRequestTTL      uint32 = 600 // 10 minutes
+	ASGIRoutePrefix                string = "/asgi"
+
 	endpointContainerPrefix                 string        = "endpoint"
 	endpointRoutePrefix                     string        = "/endpoint"
-	ASGIRoutePrefix                         string        = "/asgi"
-	endpointRequestTimeoutS                 int           = 300
 	endpointServeContainerTimeout           time.Duration = 10 * time.Minute
 	endpointServeContainerKeepaliveInterval time.Duration = 30 * time.Second
 	endpointRequestHeartbeatInterval        time.Duration = 30 * time.Second
@@ -58,6 +61,7 @@ type EndpointServiceOpts struct {
 	Config         types.AppConfig
 	RedisClient    *common.RedisClient
 	BackendRepo    repository.BackendRepository
+	WorkspaceRepo  repository.WorkspaceRepository
 	TaskRepo       repository.TaskRepository
 	ContainerRepo  repository.ContainerRepository
 	Scheduler      *scheduler.Scheduler
@@ -83,6 +87,7 @@ func NewHTTPEndpointService(
 		keyEventManager:   keyEventManager,
 		scheduler:         opts.Scheduler,
 		backendRepo:       opts.BackendRepo,
+		workspaceRepo:     opts.WorkspaceRepo,
 		containerRepo:     opts.ContainerRepo,
 		taskRepo:          opts.TaskRepo,
 		endpointInstances: common.NewSafeMap[*endpointInstance](),
@@ -110,7 +115,7 @@ func NewHTTPEndpointService(
 				return true
 			}
 
-			instance, err := es.getOrCreateEndpointInstance(stubId)
+			instance, err := es.getOrCreateEndpointInstance(es.ctx, stubId)
 			if err != nil {
 				return false
 			}
@@ -126,7 +131,7 @@ func NewHTTPEndpointService(
 	es.taskDispatcher.Register(string(types.ExecutorEndpoint), es.endpointTaskFactory)
 
 	// Register HTTP routes
-	authMiddleware := auth.AuthMiddleware(es.backendRepo)
+	authMiddleware := auth.AuthMiddleware(es.backendRepo, es.workspaceRepo)
 	registerEndpointRoutes(opts.RouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
 	registerASGIRoutes(opts.RouteGroup.Group(ASGIRoutePrefix, authMiddleware), es)
 
@@ -141,7 +146,7 @@ func (es *HttpEndpointService) endpointTaskFactory(ctx context.Context, msg type
 }
 
 func (es *HttpEndpointService) isPublic(stubId string) (*types.Workspace, error) {
-	instance, err := es.getOrCreateEndpointInstance(stubId)
+	instance, err := es.getOrCreateEndpointInstance(es.ctx, stubId)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +164,7 @@ func (es *HttpEndpointService) forwardRequest(
 	authInfo *auth.AuthInfo,
 	stubId string,
 ) error {
-	instance, err := es.getOrCreateEndpointInstance(stubId)
+	instance, err := es.getOrCreateEndpointInstance(ctx.Request().Context(), stubId)
 	if err != nil {
 		return err
 	}
@@ -188,10 +193,16 @@ func (es *HttpEndpointService) forwardRequest(
 		}
 	}
 
+	// Needed for backwards compatibility
+	ttl := instance.StubConfig.TaskPolicy.TTL
+	if ttl == 0 {
+		ttl = DefaultEndpointRequestTTL
+	}
+
 	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), authInfo, stubId, payload, types.TaskPolicy{
 		MaxRetries: 0,
 		Timeout:    instance.StubConfig.TaskPolicy.Timeout,
-		Expires:    time.Now().Add(time.Duration(endpointRequestTimeoutS) * time.Second),
+		Expires:    time.Now().Add(time.Duration(ttl) * time.Second),
 	})
 	if err != nil {
 		return err
@@ -201,10 +212,10 @@ func (es *HttpEndpointService) forwardRequest(
 }
 
 func (es *HttpEndpointService) InstanceFactory(stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
-	return es.getOrCreateEndpointInstance(stubId)
+	return es.getOrCreateEndpointInstance(es.ctx, stubId)
 }
 
-func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {
+func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {
 	instance, exists := es.endpointInstances.Get(stubId)
 	if exists {
 		return instance, nil
@@ -226,7 +237,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 		return nil, err
 	}
 
-	requestBufferSize := int(stubConfig.MaxPendingTasks)
+	requestBufferSize := int(stubConfig.MaxPendingTasks) + 1
 	if requestBufferSize < endpointMinRequestBufferSize {
 		requestBufferSize = endpointMinRequestBufferSize
 	}
@@ -237,6 +248,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 	// Create base autoscaled instance
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(es.ctx, &abstractions.AutoscaledInstanceConfig{
 		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
+		AppConfig:           es.config,
 		Rdb:                 es.rdb,
 		Stub:                stub,
 		StubConfig:          stubConfig,
@@ -300,7 +312,7 @@ type keys struct{}
 var (
 	endpointKeepWarmLock     string = "endpoint:%s:%s:keep_warm_lock:%s"
 	endpointInstanceLock     string = "endpoint:%s:%s:instance_lock"
-	endpointRequestsInFlight string = "endpoint:%s:%s:requests_in_flight:%s"
+	endpointRequestTokens    string = "endpoint:%s:%s:request_tokens:%s"
 	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s"
 	endpointServeLock        string = "endpoint:%s:%s:serve_lock"
 )
@@ -313,8 +325,8 @@ func (k *keys) endpointInstanceLock(workspaceName, stubId string) string {
 	return fmt.Sprintf(endpointInstanceLock, workspaceName, stubId)
 }
 
-func (k *keys) endpointRequestsInFlight(workspaceName, stubId, containerId string) string {
-	return fmt.Sprintf(endpointRequestsInFlight, workspaceName, stubId, containerId)
+func (k *keys) endpointRequestTokens(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(endpointRequestTokens, workspaceName, stubId, containerId)
 }
 
 func (k *keys) endpointRequestHeartbeat(workspaceName, stubId, taskId string) string {

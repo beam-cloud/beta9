@@ -1,6 +1,6 @@
 import glob
 from pathlib import Path
-from typing import Iterable, Union
+from typing import Iterable, List, Union
 
 import click
 from rich.table import Column, Table, box
@@ -142,7 +142,7 @@ def ls(service: ServiceClient, remote_path: str):
 @extraclick.pass_service_client
 def cp(service: ServiceClient, local_path: str, remote_path: str):
     local_path = str(Path(local_path).resolve())
-    files_to_upload = []
+    files_to_upload: List[Path] = []
 
     for match in glob.glob(local_path, recursive=True):
         mpath = Path(match)
@@ -159,10 +159,10 @@ def cp(service: ServiceClient, local_path: str, remote_path: str):
 
     desc_width = max((len(f.name) for f in files_to_upload))
     for file in files_to_upload:
-        dst = str(remote_path / file.relative_to(Path.cwd()))
+        dst = (remote_path / file.relative_to(Path.cwd())).as_posix()
         req = (
             CopyPathRequest(path=dst, content=chunk)
-            for chunk in read_with_progress(file, desc_width=desc_width)
+            for chunk in read_with_progress(file, max_desc_width=desc_width)
         )
         res: CopyPathResponse = service.volume.copy_path_stream(req)
 
@@ -173,10 +173,15 @@ def cp(service: ServiceClient, local_path: str, remote_path: str):
 def read_with_progress(
     path: Union[Path, str],
     chunk_size: int = 1024 * 256,
-    desc_width: int = 20,
+    max_desc_width: int = 30,
 ) -> Iterable[bytes]:
     path = Path(path)
-    desc = path.name[: min(len(path.name), desc_width)].ljust(desc_width)
+    name = "/".join(path.relative_to(Path.cwd()).parts[-(len(path.parts)) :])
+
+    if len(name) > max_desc_width:
+        desc = f"...{name[-(max_desc_width - 3):]}"
+    else:
+        desc = name.ljust(max_desc_width)
 
     with terminal.progress_open(path, "rb", description=desc) as file:
         while chunk := file.read(chunk_size):

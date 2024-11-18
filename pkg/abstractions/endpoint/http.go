@@ -35,27 +35,16 @@ func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGro
 func registerASGIRoutes(g *echo.Group, es *HttpEndpointService) *endpointGroup {
 	group := &endpointGroup{routeGroup: g, es: es}
 
-	g.POST("/id/:stubId", auth.WithAuth(group.ASGIRequest))
-	g.POST("/id/:stubId/:subPath", auth.WithAuth(group.ASGIRequest))
-	g.POST("/:deploymentName", auth.WithAuth(group.ASGIRequest))
-	g.POST("/:deploymentName/:subPath", auth.WithAuth(group.ASGIRequest))
-	g.POST("/:deploymentName/latest", auth.WithAuth(group.ASGIRequest))
-	g.POST("/:deploymentName/latest/:subPath", auth.WithAuth(group.ASGIRequest))
-	g.POST("/:deploymentName/v:version", auth.WithAuth(group.ASGIRequest))
-	g.POST("/:deploymentName/v:version/:subPath", auth.WithAuth(group.ASGIRequest))
-	g.POST("/public/:stubId", auth.WithAssumedStubAuth(group.ASGIRequest, group.es.isPublic))
-	g.POST("/public/:stubId/:subPath", auth.WithAssumedStubAuth(group.ASGIRequest, group.es.isPublic))
-
-	g.GET("/id/:stubId", auth.WithAuth(group.ASGIRequest))
-	g.GET("/id/:stubId/:subPath", auth.WithAuth(group.ASGIRequest))
-	g.GET("/:deploymentName", auth.WithAuth(group.ASGIRequest))
-	g.GET("/:deploymentName/:subPath", auth.WithAuth(group.ASGIRequest))
-	g.GET("/:deploymentName/latest", auth.WithAuth(group.ASGIRequest))
-	g.GET("/:deploymentName/latest/:subPath", auth.WithAuth(group.ASGIRequest))
-	g.GET("/:deploymentName/v:version", auth.WithAuth(group.ASGIRequest))
-	g.GET("/:deploymentName/v:version/:subPath", auth.WithAuth(group.ASGIRequest))
-	g.GET("/public/:stubId", auth.WithAssumedStubAuth(group.ASGIRequest, group.es.isPublic))
-	g.GET("/public/:stubId/:subPath", auth.WithAssumedStubAuth(group.ASGIRequest, group.es.isPublic))
+	g.Any("/id/:stubId", auth.WithAuth(group.ASGIRequest))
+	g.Any("/id/:stubId/:subPath", auth.WithAuth(group.ASGIRequest))
+	g.Any("/:deploymentName", auth.WithAuth(group.ASGIRequest))
+	g.Any("/:deploymentName/:subPath", auth.WithAuth(group.ASGIRequest))
+	g.Any("/:deploymentName/latest", auth.WithAuth(group.ASGIRequest))
+	g.Any("/:deploymentName/latest/:subPath", auth.WithAuth(group.ASGIRequest))
+	g.Any("/:deploymentName/v:version", auth.WithAuth(group.ASGIRequest))
+	g.Any("/:deploymentName/v:version/:subPath", auth.WithAuth(group.ASGIRequest))
+	g.Any("/public/:stubId", auth.WithAssumedStubAuth(group.ASGIRequest, group.es.isPublic))
+	g.Any("/public/:stubId/:subPath", auth.WithAssumedStubAuth(group.ASGIRequest, group.es.isPublic))
 
 	return group
 }

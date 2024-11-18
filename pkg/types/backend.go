@@ -2,7 +2,9 @@ package types
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ type Workspace struct {
 	CreatedAt          time.Time         `db:"created_at" json:"created_at,omitempty"`
 	UpdatedAt          time.Time         `db:"updated_at" json:"updated_at,omitempty"`
 	SigningKey         *string           `db:"signing_key" json:"signing_key"`
+	VolumeCacheEnabled bool              `db:"volume_cache_enabled" json:"volume_cache_enabled"`
 	ConcurrencyLimitId *uint             `db:"concurrency_limit_id" json:"concurrency_limit_id,omitempty"`
 	ConcurrencyLimit   *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit"`
 }
@@ -62,6 +65,7 @@ type Deployment struct {
 	ExternalId  string       `db:"external_id" json:"external_id"`
 	Name        string       `db:"name" json:"name"`
 	Active      bool         `db:"active" json:"active"`
+	Subdomain   string       `db:"subdomain" json:"subdomain"`
 	WorkspaceId uint         `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
 	StubId      uint         `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
 	StubType    string       `db:"stub_type" json:"stub_type"`
@@ -90,7 +94,7 @@ type TaskStatus string
 
 func (ts TaskStatus) IsCompleted() bool {
 	switch ts {
-	case TaskStatusComplete, TaskStatusCancelled, TaskStatusError, TaskStatusTimeout:
+	case TaskStatusComplete, TaskStatusCancelled, TaskStatusError, TaskStatusTimeout, TaskStatusExpired:
 		return true
 	default:
 		return false
@@ -103,6 +107,7 @@ const (
 	TaskStatusComplete  TaskStatus = "COMPLETE"
 	TaskStatusError     TaskStatus = "ERROR"
 	TaskStatusCancelled TaskStatus = "CANCELLED"
+	TaskStatusExpired   TaskStatus = "EXPIRED"
 	TaskStatusTimeout   TaskStatus = "TIMEOUT"
 	TaskStatusRetry     TaskStatus = "RETRY"
 )
@@ -129,27 +134,15 @@ type Task struct {
 
 type TaskWithRelated struct {
 	Task
+	Deployment struct {
+		ExternalId *string `db:"external_id" json:"external_id"`
+		Name       *string `db:"name" json:"name"`
+		Version    *uint   `db:"version" json:"version"`
+	} `db:"deployment" json:"deployment"`
 	Outputs   []TaskOutput `json:"outputs"`
 	Stats     TaskStats    `json:"stats"`
 	Workspace Workspace    `db:"workspace" json:"workspace"`
 	Stub      Stub         `db:"stub" json:"stub"`
-}
-
-func (t *TaskWithRelated) SanitizeStubConfig() error {
-	var stubConfig StubConfigV1
-	err := json.Unmarshal([]byte(t.Stub.Config), &stubConfig)
-	if err != nil {
-		return err
-	}
-
-	stubConfig.Secrets = []Secret{}
-
-	stubConfigBytes, err := json.Marshal(stubConfig)
-	if err != nil {
-		return err
-	}
-	t.Stub.Config = string(stubConfigBytes)
-	return nil
 }
 
 type TaskCountPerDeployment struct {
@@ -175,19 +168,21 @@ type TaskStats struct {
 }
 
 type StubConfigV1 struct {
-	Runtime         Runtime      `json:"runtime"`
-	Handler         string       `json:"handler"`
-	OnStart         string       `json:"on_start"`
-	PythonVersion   string       `json:"python_version"`
-	KeepWarmSeconds uint         `json:"keep_warm_seconds"`
-	MaxPendingTasks uint         `json:"max_pending_tasks"`
-	CallbackUrl     string       `json:"callback_url"`
-	TaskPolicy      TaskPolicy   `json:"task_policy"`
-	Workers         uint         `json:"workers"`
-	Authorized      bool         `json:"authorized"`
-	Volumes         []*pb.Volume `json:"volumes"`
-	Secrets         []Secret     `json:"secrets,omitempty"`
-	Autoscaler      *Autoscaler  `json:"autoscaler"`
+	Runtime            Runtime         `json:"runtime"`
+	Handler            string          `json:"handler"`
+	OnStart            string          `json:"on_start"`
+	PythonVersion      string          `json:"python_version"`
+	KeepWarmSeconds    uint            `json:"keep_warm_seconds"`
+	MaxPendingTasks    uint            `json:"max_pending_tasks"`
+	CallbackUrl        string          `json:"callback_url"`
+	TaskPolicy         TaskPolicy      `json:"task_policy"`
+	Workers            uint            `json:"workers"`
+	ConcurrentRequests uint            `json:"concurrent_requests"`
+	Authorized         bool            `json:"authorized"`
+	Volumes            []*pb.Volume    `json:"volumes"`
+	Secrets            []Secret        `json:"secrets,omitempty"`
+	Autoscaler         *Autoscaler     `json:"autoscaler"`
+	Extra              json.RawMessage `json:"extra"`
 }
 
 type AutoscalerType string
@@ -203,19 +198,24 @@ type Autoscaler struct {
 }
 
 const (
-	StubTypeFunction            string = "function"
-	StubTypeFunctionDeployment  string = "function/deployment"
-	StubTypeFunctionServe       string = "function/serve"
-	StubTypeContainer           string = "container"
-	StubTypeTaskQueue           string = "taskqueue"
-	StubTypeTaskQueueDeployment string = "taskqueue/deployment"
-	StubTypeTaskQueueServe      string = "taskqueue/serve"
-	StubTypeEndpoint            string = "endpoint"
-	StubTypeEndpointDeployment  string = "endpoint/deployment"
-	StubTypeEndpointServe       string = "endpoint/serve"
-	StubTypeASGI                string = "asgi"
-	StubTypeASGIDeployment      string = "asgi/deployment"
-	StubTypeASGIServe           string = "asgi/serve"
+	StubTypeFunction               string = "function"
+	StubTypeFunctionDeployment     string = "function/deployment"
+	StubTypeFunctionServe          string = "function/serve"
+	StubTypeContainer              string = "container"
+	StubTypeTaskQueue              string = "taskqueue"
+	StubTypeTaskQueueDeployment    string = "taskqueue/deployment"
+	StubTypeTaskQueueServe         string = "taskqueue/serve"
+	StubTypeEndpoint               string = "endpoint"
+	StubTypeEndpointDeployment     string = "endpoint/deployment"
+	StubTypeEndpointServe          string = "endpoint/serve"
+	StubTypeASGI                   string = "asgi"
+	StubTypeASGIDeployment         string = "asgi/deployment"
+	StubTypeASGIServe              string = "asgi/serve"
+	StubTypeScheduledJob           string = "schedule"
+	StubTypeScheduledJobDeployment string = "schedule/deployment"
+	StubTypeBot                    string = "bot"
+	StubTypeBotDeployment          string = "bot/deployment"
+	StubTypeBotServe               string = "bot/serve"
 )
 
 type StubType string
@@ -254,6 +254,27 @@ func (s *Stub) UnmarshalConfig() (*StubConfigV1, error) {
 	return config, nil
 }
 
+func (s *Stub) SanitizeConfig() error {
+	var config StubConfigV1
+	err := json.Unmarshal([]byte(s.Config), &config)
+	if err != nil {
+		return err
+	}
+
+	// Remove secret values from config
+	for i := range config.Secrets {
+		config.Secrets[i].Value = ""
+	}
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Config = string(data)
+	return nil
+}
+
 type StubWithRelated struct {
 	Stub
 	Workspace Workspace `db:"workspace" json:"workspace"`
@@ -269,11 +290,12 @@ type Image struct {
 }
 
 type Runtime struct {
-	Cpu      int64   `json:"cpu"`
-	Gpu      GpuType `json:"gpu"`
-	GpuCount uint32  `json:"gpu_count"`
-	Memory   int64   `json:"memory"`
-	ImageId  string  `json:"image_id"`
+	Cpu      int64     `json:"cpu"`
+	Gpu      GpuType   `json:"gpu"`
+	GpuCount uint32    `json:"gpu_count"`
+	Memory   int64     `json:"memory"`
+	ImageId  string    `json:"image_id"`
+	Gpus     []GpuType `json:"gpus"`
 }
 
 type GpuType string
@@ -301,6 +323,38 @@ func (g *GpuType) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (g *GpuType) MarshalJSON() ([]byte, error) {
+	if *g == "" {
+		return []byte("0"), nil
+	}
+
+	return json.Marshal(string(*g))
+}
+
+func (g *GpuType) String() string {
+	return string(*g)
+}
+
+func GPUTypesFromString(gpu string) []GpuType {
+	gpus := []GpuType{}
+	gpuString := strings.Trim(gpu, " ")
+	if len(gpuString) > 0 {
+		for _, g := range strings.Split(gpuString, ",") {
+			gpus = append(gpus, GpuType(g))
+		}
+	}
+
+	return gpus
+}
+
+func GpuTypesToStrings(gpus []GpuType) []string {
+	var gpuStrings []string
+	for _, gpu := range gpus {
+		gpuStrings = append(gpuStrings, string(gpu))
+	}
+	return gpuStrings
+}
+
 // FilterFieldMapping represents a mapping between a client-provided field and
 // its corresponding database field, along with the values for filtering on the database field.
 type FilterFieldMapping struct {
@@ -325,6 +379,41 @@ type Secret struct {
 	UpdatedAt     time.Time `db:"updated_at" json:"updated_at,omitempty"`
 	Name          string    `db:"name" json:"name"`
 	Value         string    `db:"value" json:"value,omitempty"`
-	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id"`
-	LastUpdatedBy *uint     `db:"last_updated_by" json:"last_updated_by"`
+	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id,omitempty"`
+	LastUpdatedBy *uint     `db:"last_updated_by" json:"last_updated_by,omitempty"`
+}
+
+type ScheduledJob struct {
+	Id         uint64 `db:"id"`
+	ExternalId string `db:"external_id"`
+
+	JobId    uint64              `db:"job_id"`
+	JobName  string              `db:"job_name"`
+	Schedule string              `db:"job_schedule"`
+	Payload  ScheduledJobPayload `db:"job_payload"`
+
+	StubId       uint         `db:"stub_id"`
+	DeploymentId uint         `db:"deployment_id"`
+	CreatedAt    time.Time    `db:"created_at"`
+	UpdatedAt    time.Time    `db:"updated_at"`
+	DeletedAt    sql.NullTime `db:"deleted_at"`
+}
+
+type ScheduledJobPayload struct {
+	StubId        string      `json:"stub_id"`
+	WorkspaceName string      `json:"workspace_name"`
+	TaskPayload   TaskPayload `json:"task_payload"`
+}
+
+func (p *ScheduledJobPayload) Scan(value interface{}) error {
+	bytes, ok := value.([]byte)
+	if !ok {
+		return fmt.Errorf("type assertion to []byte failed")
+	}
+
+	return json.Unmarshal(bytes, p)
+}
+
+func (p ScheduledJobPayload) Value() (driver.Value, error) {
+	return json.Marshal(p)
 }

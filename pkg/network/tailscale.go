@@ -63,20 +63,22 @@ func (t *Tailscale) logF(format string, v ...interface{}) {
 // NewTailscale creates a new Tailscale instance using tsnet
 func newTailscale(cfg TailscaleConfig, tailscaleRepo repository.TailscaleRepository) *Tailscale {
 	ts := &Tailscale{
-		server: &tsnet.Server{
-			Dir:        cfg.Dir,
-			Hostname:   cfg.Hostname,
-			AuthKey:    cfg.AuthKey,
-			ControlURL: cfg.ControlURL,
-			Ephemeral:  cfg.Ephemeral,
-		},
 		debug:         cfg.Debug,
 		initialized:   false,
 		mu:            sync.Mutex{},
 		tailscaleRepo: tailscaleRepo,
 	}
 
-	ts.server.Logf = ts.logF
+	ts.server = &tsnet.Server{
+		Dir:        cfg.Dir,
+		Hostname:   cfg.Hostname,
+		AuthKey:    cfg.AuthKey,
+		ControlURL: cfg.ControlURL,
+		Ephemeral:  cfg.Ephemeral,
+		UserLogf:   ts.logF,
+		Logf:       ts.logF,
+	}
+
 	return ts
 }
 

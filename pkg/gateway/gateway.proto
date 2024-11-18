@@ -30,6 +30,7 @@ service GatewayService {
   // Stubs
   rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse);
   rpc DeployStub(DeployStubRequest) returns (DeployStubResponse);
+  rpc GetURL(GetURLRequest) returns (GetURLResponse);
 
   // Deployments
   rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
@@ -44,6 +45,18 @@ service GatewayService {
   rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse);
   rpc CreateMachine(CreateMachineRequest) returns (CreateMachineResponse);
   rpc DeleteMachine(DeleteMachineRequest) returns (DeleteMachineResponse);
+
+  // Tokens
+  rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
+  rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
+  rpc ToggleToken(ToggleTokenRequest) returns (ToggleTokenResponse);
+  rpc DeleteToken(DeleteTokenRequest) returns (DeleteTokenResponse);
+
+  // Workers
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+  rpc CordonWorker(CordonWorkerRequest) returns (CordonWorkerResponse);
+  rpc UncordonWorker(UncordonWorkerRequest) returns (UncordonWorkerResponse);
+  rpc DrainWorker(DrainWorkerRequest) returns (DrainWorkerResponse);
 }
 
 message AuthorizeRequest {}
@@ -117,6 +130,8 @@ message Container {
   string status = 3;
   google.protobuf.Timestamp scheduled_at = 4;
   string workspace_id = 5;
+  string worker_id = 6;
+  string machine_id = 7;
 }
 
 message ListContainersRequest {}
@@ -191,6 +206,16 @@ message StopTasksResponse {
 message Volume {
   string id = 1;
   string mount_path = 2;
+  optional MountPointConfig config = 3;
+}
+
+message MountPointConfig {
+  string bucket_name = 1;
+  string access_key = 2;
+  string secret_key = 3;
+  string endpoint_url = 4;
+  string region = 5;
+  bool read_only = 6;
 }
 
 message SecretVar { string name = 1; }
@@ -199,6 +224,12 @@ message Autoscaler {
   string type = 1;
   uint32 max_containers = 2;
   uint32 tasks_per_container = 3;
+}
+
+message TaskPolicy {
+  int64 timeout = 1;
+  uint32 max_retries = 2;
+  uint32 ttl = 3;
 }
 
 message GetOrCreateStubRequest {
@@ -223,13 +254,17 @@ message GetOrCreateStubRequest {
   bool authorized = 20;
   repeated SecretVar secrets = 21;
   Autoscaler autoscaler = 22;
-  uint32 gpu_count = 23;
+  TaskPolicy task_policy = 23;
+  uint32 concurrent_requests = 24;
+  string extra = 25;
+  uint32 gpu_count = 26;
 }
 
 message GetOrCreateStubResponse {
   bool ok = 1;
   string stub_id = 2;
   string err_msg = 3;
+  string warn_msg = 4;
 }
 
 message DeployStubRequest {
@@ -364,6 +399,112 @@ message DeleteMachineRequest {
 }
 
 message DeleteMachineResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message Token {
+  string token_id = 1;
+  string key = 2;
+  bool active = 3;
+  bool reusable = 4;
+  optional uint32 workspace_id = 5;
+  string token_type = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message ListTokensRequest {}
+
+message ListTokensResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Token tokens = 3;
+}
+
+message CreateTokenRequest {}
+
+message CreateTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  Token token = 3;
+}
+
+message ToggleTokenRequest { string token_id = 1; }
+
+message ToggleTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  Token token = 3;
+}
+
+message DeleteTokenRequest { string token_id = 1; }
+
+message DeleteTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message GetURLRequest {
+  string stub_id = 1;
+  string deployment_id = 2;
+  string url_type = 3;
+}
+
+message GetURLResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string url = 3;
+}
+
+message Worker {
+  string id = 1;
+  string status = 2;
+  string gpu = 3;
+  string pool_name = 4;
+  string machine_id = 5;
+  int32 priority = 6;
+  int64 total_cpu = 7;
+  int64 total_memory = 8;
+  uint32 total_gpu_count = 9;
+  int64 free_cpu = 10;
+  int64 free_memory = 11;
+  uint32 free_gpu_count = 12;
+  repeated Container active_containers = 13;
+  string build_version = 14;
+}
+
+message ListWorkersRequest {}
+
+message ListWorkersResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Worker workers = 3;
+}
+
+message CordonWorkerRequest {
+  string worker_id = 1;
+}
+
+message CordonWorkerResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message UncordonWorkerRequest {
+  string worker_id = 1;
+}
+
+message UncordonWorkerResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message DrainWorkerRequest {
+  string worker_id = 1;
+}
+
+message DrainWorkerResponse {
   bool ok = 1;
   string err_msg = 2;
 }

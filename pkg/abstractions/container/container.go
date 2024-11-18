@@ -125,12 +125,15 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		stubConfig.Runtime.Memory = defaultContainerMemory
 	}
 
-	mounts := abstractions.ConfigureContainerRequestMounts(
+	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		stub.Object.ExternalId,
-		authInfo.Workspace.Name,
+		authInfo.Workspace,
 		stubConfig,
 		stub.ExternalId,
 	)
+	if err != nil {
+		return err
+	}
 
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(
 		authInfo.Workspace,
@@ -150,8 +153,13 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 
 	env = append(secrets, env...)
 
-	gpuCount := stubConfig.Runtime.GpuCount
-	if stubConfig.Runtime.Gpu != "" && gpuCount == 0 {
+	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
+	if stubConfig.Runtime.Gpu != "" {
+		gpuRequest = append(gpuRequest, stubConfig.Runtime.Gpu.String())
+	}
+
+	gpuCount := 0
+	if len(gpuRequest) > 0 {
 		gpuCount = 1
 	}
 
@@ -160,19 +168,21 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		Env:         env,
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
-		Gpu:         string(stubConfig.Runtime.Gpu),
+		GpuRequest:  gpuRequest,
 		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,
 		WorkspaceId: authInfo.Workspace.ExternalId,
+		Workspace:   *authInfo.Workspace,
 		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.container", base64.StdEncoding.EncodeToString(in.Command)},
 		Mounts:      mounts,
+		Stub:        *stub,
 	})
 	if err != nil {
 		return err
 	}
 
-	hostname, err := cs.containerRepo.GetWorkerAddress(task.ContainerId)
+	hostname, err := cs.containerRepo.GetWorkerAddress(ctx, task.ContainerId)
 	if err != nil {
 		return err
 	}
