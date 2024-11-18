@@ -329,7 +329,6 @@ class Bot(RunnerAbstraction, DeployableMixin):
                     terminal.header("💬 Chat with your bot below...")
                     session_event.set()  # Signal that session is ready
                 elif event_type == BotEventType.NETWORK_STATE:
-                    # terminal.print(f"\n{json.dumps(event.model_dump(), indent=2)}")
                     pass
                 else:
                     terminal.print(f"\n{json.dumps(event.model_dump(), indent=2)}")
