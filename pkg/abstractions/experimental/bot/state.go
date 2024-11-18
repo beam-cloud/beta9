@@ -114,6 +114,27 @@ func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string)
 	return m.rdb.SRem(ctx, indexKey, sessionId).Err()
 }
 
+func (m *botStateManager) listSessions(workspaceName, stubId string) ([]*BotSession, error) {
+	ctx := context.TODO()
+	sessions := []*BotSession{}
+
+	sessionIds, err := m.rdb.SMembers(ctx, Keys.botSessionIndex(workspaceName, stubId)).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, sessionId := range sessionIds {
+		session, err := m.loadSession(workspaceName, stubId, sessionId)
+		if err != nil {
+			return nil, err
+		}
+
+		sessions = append(sessions, session)
+	}
+
+	return sessions, nil
+}
+
 func (m *botStateManager) getActiveSessions(workspaceName, stubId string) ([]*BotSession, error) {
 	ctx := context.TODO()
 	sessions := []*BotSession{}
