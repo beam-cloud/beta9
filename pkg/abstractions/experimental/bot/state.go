@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -224,8 +225,6 @@ func (m *botStateManager) popUserEvent(workspaceName, stubId, sessionId string) 
 	return event, nil
 }
 
-const eventTtlS = 60 * time.Second
-
 func (m *botStateManager) pushEvent(workspaceName, stubId, sessionId string, event *BotEvent) error {
 	jsonData, err := json.Marshal(event)
 	if err != nil {
@@ -233,14 +232,47 @@ func (m *botStateManager) pushEvent(workspaceName, stubId, sessionId string, eve
 	}
 
 	messageKey := Keys.botEventBuffer(workspaceName, stubId, sessionId)
-	eventKey := Keys.botEvent(workspaceName, stubId, sessionId, "pair_id")
+	return m.rdb.RPush(context.TODO(), messageKey, jsonData).Err()
+}
 
-	err = m.rdb.Set(context.TODO(), eventKey, jsonData, eventTtlS).Err()
+const eventPairTtlS = 120 * time.Second
+
+func (m *botStateManager) pushEventPair(workspaceName, stubId, sessionId, pairId string, request *BotEvent, response *BotEvent) error {
+	eventPairKey := Keys.botEventPair(workspaceName, stubId, sessionId, pairId)
+	eventPair := &BotEventPair{
+		Request:  request,
+		Response: response,
+	}
+
+	jsonData, err := json.Marshal(eventPair)
 	if err != nil {
 		return err
 	}
 
-	return m.rdb.RPush(context.TODO(), messageKey, jsonData).Err()
+	return m.rdb.Set(context.TODO(), eventPairKey, jsonData, eventPairTtlS).Err()
+}
+
+func (m *botStateManager) waitForEventPair(workspaceName, stubId, sessionId, pairId string, timeout time.Duration) (*BotEventPair, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout reached while waiting for event pair")
+		case <-time.After(100 * time.Millisecond):
+			jsonData, err := m.rdb.Get(context.TODO(), Keys.botEventPair(workspaceName, stubId, sessionId, pairId)).Result()
+			if err == nil {
+				eventPair := &BotEventPair{}
+				err = json.Unmarshal([]byte(jsonData), eventPair)
+				if err != nil {
+					return nil, err
+				}
+
+				return eventPair, nil
+			}
+		}
+	}
 }
 
 func (m *botStateManager) popEvent(workspaceName, stubId, sessionId string) (*BotEvent, error) {

@@ -1,12 +1,14 @@
 import json
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from ....clients.bot import (
     BotServiceStub,
+    PushBotEventBlockingRequest,
+    PushBotEventBlockingResponse,
     PushBotEventRequest,
 )
 from ....runner.common import FunctionContext
-from .bot import BotEventType
+from .bot import BotEvent, BotEventType
 
 
 class BotContext(FunctionContext):
@@ -64,11 +66,11 @@ class BotContext(FunctionContext):
             )
         )
 
-    def prompt_blocking(cls, msg: str):
-        """Send a prompt to the user from the bot"""
+    def prompt_blocking(cls, msg: str, timeout_seconds: int = 10) -> Union[BotEvent, None]:
+        """Send a raw prompt to your model, and wait for a response"""
 
-        cls.bot_stub.push_bot_event(
-            PushBotEventRequest(
+        r: PushBotEventBlockingResponse = cls.bot_stub.push_bot_event_blocking(
+            PushBotEventBlockingRequest(
                 stub_id=cls.stub_id,
                 session_id=cls.session_id,
                 event_type=BotEventType.TRANSITION_MESSAGE,
@@ -79,6 +81,15 @@ class BotContext(FunctionContext):
                     "transition_name": cls.transition_name,
                 },
             )
+        )
+
+        if not r.ok:
+            return None
+
+        return BotEvent(
+            type=r.event.type,
+            value=r.event.value,
+            metadata=r.event.metadata,
         )
 
     def say(cls, msg: str):

@@ -66,5 +66,13 @@ message PushBotEventBlockingRequest {
   string event_value = 4;
   map<string, string> metadata = 5;
 }
+message PushBotEventBlockingResponse {
+  bool ok = 1;
+  BotEvent event = 2;
+}
 
-message PushBotEventBlockingResponse { bool ok = 1; }
+message BotEvent {
+  string type = 1;
+  string value = 2;
+  map<string, string> metadata = 3;
+}
