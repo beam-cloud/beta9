@@ -186,7 +186,7 @@ type StubConfigV1 struct {
 }
 
 func (c *StubConfigV1) RequiresGPU() bool {
-	return len(c.Runtime.Gpus) > 0
+	return len(c.Runtime.Gpus) > 0 || c.Runtime.Gpu != ""
 }
 
 type AutoscalerType string
