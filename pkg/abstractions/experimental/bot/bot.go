@@ -206,7 +206,6 @@ func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventR
 		return &pb.PushBotEventResponse{Ok: false}, nil
 	}
 
-	// pairId := uuid.New().String()
 	err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, &BotEvent{
 		Type:     BotEventType(in.EventType),
 		Value:    in.EventValue,
@@ -236,7 +235,12 @@ func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushB
 		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
 	}
 
-	eventPair, err := s.botStateManager.waitForEventPair(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, pairId, 30*time.Second)
+	timeoutS := 30
+	if in.TimeoutSeconds > 0 {
+		timeoutS = int(in.TimeoutSeconds)
+	}
+
+	eventPair, err := s.botStateManager.waitForEventPair(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, pairId, time.Duration(timeoutS)*time.Second)
 	if err != nil {
 		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
 	}

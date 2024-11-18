@@ -65,7 +65,9 @@ message PushBotEventBlockingRequest {
   string event_type = 3;
   string event_value = 4;
   map<string, string> metadata = 5;
+  int32 timeout_seconds = 6;
 }
+
 message PushBotEventBlockingResponse {
   bool ok = 1;
   BotEvent event = 2;
