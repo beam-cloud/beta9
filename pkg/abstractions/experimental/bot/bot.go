@@ -218,6 +218,8 @@ func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventR
 	return &pb.PushBotEventResponse{Ok: true}, nil
 }
 
+const defaultWaitTimeoutS = 30
+
 func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushBotEventBlockingRequest) (*pb.PushBotEventBlockingResponse, error) {
 	instance, err := s.getOrCreateBotInstance(in.StubId)
 	if err != nil {
@@ -235,7 +237,7 @@ func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushB
 		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
 	}
 
-	timeoutS := 30
+	timeoutS := defaultWaitTimeoutS
 	if in.TimeoutSeconds > 0 {
 		timeoutS = int(in.TimeoutSeconds)
 	}
