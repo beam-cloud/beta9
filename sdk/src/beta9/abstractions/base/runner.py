@@ -132,8 +132,11 @@ class RunnerAbstraction(BaseAbstraction):
         )
         self.extra: dict = {}
 
-        if self.gpu != "" and self.gpu_count == 0:
+        if (self.gpu != "" or len(self.gpu) > 0) and self.gpu_count == 0:
             self.gpu_count = 1
+
+        if self.gpu_count > 2:
+            raise ValueError("GPU count cannot be greater than 2")
 
         if on_start is not None:
             self._map_callable_to_attr(attr="on_start", func=on_start)
