@@ -44,6 +44,9 @@ class TaskQueue(RunnerAbstraction):
             applicable or no GPU required, leave it empty.
             You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
             the scheduler prioritizes their selection based on their order in the list.
+        gpu_count (int):
+            The number of GPUs to allocate to the container. Default is 0. If a GPU is
+            specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         timeout (Optional[int]):
