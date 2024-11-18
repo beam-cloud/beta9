@@ -47,7 +47,7 @@ class Endpoint(RunnerAbstraction):
             You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
             the scheduler prioritizes their selection based on their order in the list.
         gpu_count (int):
-            The number of GPUs to allocate to the container. Default is 0. If a GPU is
+            The number of GPUs allocated to the container. Default is 0. If a GPU is
             specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
@@ -176,7 +176,7 @@ class ASGI(Endpoint):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
         gpu_count (int):
-            The number of GPUs to allocate to the container. Default is 0. If a GPU is
+            The number of GPUs allocated to the container. Default is 0. If a GPU is
             specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
@@ -312,7 +312,7 @@ class RealtimeASGI(ASGI):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
         gpu_count (int):
-            The number of GPUs to allocate to the container. Default is 0. If a GPU is
+            The number of GPUs allocated to the container. Default is 0. If a GPU is
             specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
