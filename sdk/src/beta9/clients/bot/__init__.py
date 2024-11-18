@@ -91,7 +91,6 @@ class PushBotEventRequest(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class PushBotEventResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
-    pair_id: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -108,7 +107,6 @@ class PushBotEventBlockingRequest(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class PushBotEventBlockingResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
-    pair_id: str = betterproto.string_field(2)
 
 
 class BotServiceStub(SyncServiceStub):

@@ -96,7 +96,6 @@ type BotEvent struct {
 	Type     BotEventType      `json:"type" redis:"type"`
 	Value    string            `json:"value" redis:"value"`
 	Metadata map[string]string `json:"metadata" redis:"metadata"`
-	PairId   string            `json:"pair_id" redis:"pair_id"`
 }
 
 type MetadataKey string

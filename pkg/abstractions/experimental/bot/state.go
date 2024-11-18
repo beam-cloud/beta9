@@ -224,6 +224,8 @@ func (m *botStateManager) popUserEvent(workspaceName, stubId, sessionId string) 
 	return event, nil
 }
 
+const eventTtlS = 60 * time.Second
+
 func (m *botStateManager) pushEvent(workspaceName, stubId, sessionId string, event *BotEvent) error {
 	jsonData, err := json.Marshal(event)
 	if err != nil {
@@ -231,6 +233,13 @@ func (m *botStateManager) pushEvent(workspaceName, stubId, sessionId string, eve
 	}
 
 	messageKey := Keys.botEventBuffer(workspaceName, stubId, sessionId)
+	eventKey := Keys.botEvent(workspaceName, stubId, sessionId, "pair_id")
+
+	err = m.rdb.Set(context.TODO(), eventKey, jsonData, eventTtlS).Err()
+	if err != nil {
+		return err
+	}
+
 	return m.rdb.RPush(context.TODO(), messageKey, jsonData).Err()
 }
 

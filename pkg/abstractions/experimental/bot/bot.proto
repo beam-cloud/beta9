@@ -56,7 +56,7 @@ message PushBotEventRequest {
 
 message PushBotEventResponse {
   bool ok = 1;
-  string pair_id = 2;
+  string event_id = 2;
 }
 
 message PushBotEventBlockingRequest {
@@ -67,7 +67,4 @@ message PushBotEventBlockingRequest {
   map<string, string> metadata = 5;
 }
 
-message PushBotEventBlockingResponse {
-  bool ok = 1;
-  string pair_id = 2;
-}
+message PushBotEventBlockingResponse { bool ok = 1; }

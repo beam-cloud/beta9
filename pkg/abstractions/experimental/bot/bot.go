@@ -8,7 +8,6 @@ import (
 
 	"context"
 
-	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -205,9 +204,8 @@ func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventR
 		return &pb.PushBotEventResponse{Ok: false}, nil
 	}
 
-	pairId := uuid.New().String()
+	// pairId := uuid.New().String()
 	err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, &BotEvent{
-		PairId:   pairId,
 		Type:     BotEventType(in.EventType),
 		Value:    in.EventValue,
 		Metadata: in.Metadata,
@@ -216,7 +214,7 @@ func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventR
 		return &pb.PushBotEventResponse{Ok: false}, nil
 	}
 
-	return &pb.PushBotEventResponse{Ok: true, PairId: pairId}, nil
+	return &pb.PushBotEventResponse{Ok: true}, nil
 }
 
 func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushBotEventBlockingRequest) (*pb.PushBotEventBlockingResponse, error) {
@@ -225,9 +223,8 @@ func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushB
 		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
 	}
 
-	pairId := uuid.New().String()
+	// pairId := uuid.New().String()
 	err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, &BotEvent{
-		PairId:   pairId,
 		Type:     BotEventType(in.EventType),
 		Value:    in.EventValue,
 		Metadata: in.Metadata,
@@ -236,7 +233,9 @@ func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushB
 		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
 	}
 
-	return &pb.PushBotEventBlockingResponse{Ok: true, PairId: pairId}, nil
+	// TODO: wait until another event with this pairId is pushed to the buffer
+
+	return &pb.PushBotEventBlockingResponse{Ok: true}, nil
 }
 
 func (s *PetriBotService) PushBotMarkers(ctx context.Context, in *pb.PushBotMarkersRequest) (*pb.PushBotMarkersResponse, error) {
@@ -313,6 +312,7 @@ type keys struct{}
 var (
 	botLock             string = "bot:%s:%s:session_state_lock:%s"
 	botInputBuffer      string = "bot:%s:%s:input_buffer:%s"
+	botEvent            string = "bot:%s:%s:event:%s:%s"
 	botEventBuffer      string = "bot:%s:%s:event_buffer:%s"
 	botSessionIndex     string = "bot:%s:%s:session_index"
 	botSessionState     string = "bot:%s:%s:session_state:%s"
@@ -332,6 +332,10 @@ func (k *keys) botSessionIndex(workspaceName, stubId string) string {
 
 func (k *keys) botInputBuffer(workspaceName, stubId, sessionId string) string {
 	return fmt.Sprintf(botInputBuffer, workspaceName, stubId, sessionId)
+}
+
+func (k *keys) botEvent(workspaceName, stubId, sessionId, pairId string) string {
+	return fmt.Sprintf(botEvent, workspaceName, stubId, sessionId, pairId)
 }
 
 func (k *keys) botEventBuffer(workspaceName, stubId, sessionId string) string {
