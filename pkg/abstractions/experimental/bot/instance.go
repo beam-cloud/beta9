@@ -232,7 +232,7 @@ func (i *botInstance) step(sessionId string) {
 					}
 
 					i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, &BotEvent{
-						Type:  BotEventTypeConfirmTransitionRequest,
+						Type:  BotEventTypeConfirmTransition,
 						Value: transition.Name,
 						Metadata: map[string]string{
 							string(MetadataSessionId):      sessionId,
@@ -344,7 +344,7 @@ func (i *botInstance) monitorEvents() error {
 				i.botInterface.SendPrompt(sessionId, PromptTypeTransition, event)
 			case BotEventTypeMemoryMessage:
 				i.botInterface.SendPrompt(sessionId, PromptTypeMemory, event)
-			case BotEventTypeConfirmTransitionAccept, BotEventTypeConfirmTransitionReject:
+			case BotEventTypeAcceptTransition, BotEventTypeRejectTransition:
 				taskId := event.Metadata[string(MetadataTaskId)]
 				transitionName := event.Metadata[string(MetadataTransitionName)]
 
@@ -353,12 +353,12 @@ func (i *botInstance) monitorEvents() error {
 					continue
 				}
 
-				if event.Type == BotEventTypeConfirmTransitionAccept {
+				if event.Type == BotEventTypeAcceptTransition {
 					err = task.Execute(i.ctx)
 					if err != nil {
 						i.handleTransitionFailed(sessionId, transitionName, err)
 					}
-				} else if event.Type == BotEventTypeConfirmTransitionReject {
+				} else if event.Type == BotEventTypeRejectTransition {
 					task.Cancel(i.ctx, types.TaskRequestCancelled)
 				}
 			}

@@ -39,8 +39,9 @@ class BotEventType(str, Enum):
     TRANSITION_COMPLETED = "transition_completed"
     TRANSITION_FAILED = "transition_failed"
     NETWORK_STATE = "network_state"
-    CONFIRM_REQUEST = "confirm_request"
-    CONFIRM_RESPONSE = "confirm_response"
+    CONFIRM_TRANSITION = "confirm_transition"
+    ACCEPT_TRANSITION = "accept_transition"
+    REJECT_TRANSITION = "reject_transition"
 
 
 class BotEvent(BaseModel):
