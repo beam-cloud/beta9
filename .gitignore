@@ -31,3 +31,4 @@ okteto.yaml
 .vscode/launch.json
 pyrightconfig.json
 manifests/fly/gateway/config.json
+manifests/fly/state/
