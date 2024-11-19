@@ -100,3 +100,55 @@ func TestGetDockerHubToken(t *testing.T) {
 		})
 	}
 }
+
+func TestGetGARToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    *BuildOpts
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "with access token",
+			opts: &BuildOpts{
+				ExistingImageUri: "us-east4-docker.pkg.dev/project-abcd/test-repo/test-image:0.1.0",
+				ExistingImageCreds: map[string]string{
+					"GCP_ACCESS_TOKEN": "token123",
+				},
+			},
+			want: "oauth2accesstoken:token123",
+		},
+		{
+			name: "with empty access token",
+			opts: &BuildOpts{
+				ExistingImageUri: "us-east4-docker.pkg.dev/project-abcd/test-repo/test-image:0.1.0",
+				ExistingImageCreds: map[string]string{
+					"GCP_ACCESS_TOKEN": "",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "with no access token",
+			opts: &BuildOpts{
+				ExistingImageUri:   "us-east4-docker.pkg.dev/project-abcd/test-repo/test-image:0.1.0",
+				ExistingImageCreds: map[string]string{},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, err := GetGARToken(tt.opts)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, token)
+		})
+	}
+}
