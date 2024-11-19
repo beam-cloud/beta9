@@ -12,8 +12,9 @@ import (
 var ErrBotSessionNotFound = fmt.Errorf("bot session not found")
 
 type BotSession struct {
-	Id       string                     `json:"id" redis:"id"`
-	Messages []BotChatCompletionMessage `json:"messages" redis:"messages"`
+	Id        string                     `json:"id" redis:"id"`
+	Messages  []BotChatCompletionMessage `json:"messages" redis:"messages"`
+	CreatedAt int64                      `json:"created_at" redis:"created_at"`
 }
 
 type botContainer struct {
@@ -86,6 +87,7 @@ const (
 	BotEventTypeConfirmTransition   BotEventType = "confirm_transition"
 	BotEventTypeAcceptTransition    BotEventType = "accept_transition"
 	BotEventTypeRejectTransition    BotEventType = "reject_transition"
+	BotEventTypeOutputFile          BotEventType = "output_file"
 )
 
 const PromptTypeUser = "user_message"

@@ -1,4 +1,5 @@
 import json
+import mimetypes
 from typing import Any, Optional, Union
 
 from ....clients.bot import (
@@ -137,6 +138,35 @@ class BotContext(FunctionContext):
                 session_id=cls.session_id,
                 event_type=BotEventType.MEMORY_MESSAGE,
                 event_value=json.dumps(obj),
+                metadata={
+                    "task_id": cls.task_id,
+                    "session_id": cls.session_id,
+                    "transition_name": cls.transition_name,
+                },
+            )
+        )
+
+    def send_file(cls, *, path: str, description: str):
+        """Capture a file and send it to the user"""
+
+        from beta9 import Output
+
+        o = Output(path=path)
+        o.save()
+
+        filetype, _ = mimetypes.guess_type(path)
+        file_msg = {
+            "url": o.public_url(),
+            "description": description,
+            "filetype": filetype,
+        }
+
+        cls.bot_stub.push_bot_event(
+            PushBotEventRequest(
+                stub_id=cls.stub_id,
+                session_id=cls.session_id,
+                event_type=BotEventType.OUTPUT_FILE,
+                event_value=json.dumps(file_msg),
                 metadata={
                     "task_id": cls.task_id,
                     "session_id": cls.session_id,

@@ -58,6 +58,8 @@ func (m *botStateManager) updateSession(workspaceName, stubId, sessionId string,
 
 	// State not found, add to index
 	if exists == 0 {
+		state.CreatedAt = time.Now().Unix()
+
 		indexKey := Keys.botSessionIndex(workspaceName, stubId)
 		err = m.rdb.SAdd(ctx, indexKey, sessionId).Err()
 		if err != nil {

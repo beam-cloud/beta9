@@ -42,6 +42,7 @@ class BotEventType(str, Enum):
     CONFIRM_TRANSITION = "confirm_transition"
     ACCEPT_TRANSITION = "accept_transition"
     REJECT_TRANSITION = "reject_transition"
+    OUTPUT_FILE = "output_file"
 
 
 class BotEvent(BaseModel):
