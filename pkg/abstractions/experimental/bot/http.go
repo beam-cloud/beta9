@@ -40,6 +40,7 @@ func registerBotRoutes(g *echo.Group, pbs *PetriBotService) *botGroup {
 	g.GET("/:deploymentName/latest", auth.WithAuth(group.BotOpenSession))
 	g.GET("/:deploymentName/v:version", auth.WithAuth(group.BotOpenSession))
 	g.DELETE("/:stubId/:sessionId", auth.WithAuth(group.BotDeleteSession))
+	g.GET("/:stubId/:sessionId", auth.WithAuth(group.BotGetSession))
 	g.GET("/:stubId/sessions", auth.WithAuth(group.BotListSessions))
 
 	return group
@@ -250,4 +251,17 @@ func (g *botGroup) BotListSessions(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, sessions)
+}
+
+func (g *botGroup) BotGetSession(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	stubId := ctx.Param("stubId")
+	sessionId := ctx.Param("sessionId")
+
+	session, err := g.pbs.botStateManager.getSession(cc.AuthInfo.Workspace.Name, stubId, sessionId)
+	if err != nil {
+		return apiv1.HTTPBadRequest("Failed to get session")
+	}
+
+	return ctx.JSON(http.StatusOK, session)
 }
