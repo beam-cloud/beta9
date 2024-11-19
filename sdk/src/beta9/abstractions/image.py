@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
+from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
 
 from .. import env, terminal
 from ..abstractions.base import BaseAbstraction
@@ -17,7 +17,7 @@ from ..type import PythonVersion, PythonVersionAlias
 try:
     from typing import TypeAlias
 except ImportError:
-    from typing_extensions import TypeAlias
+    pass
 
 
 class ImageBuildResult(NamedTuple):
@@ -41,7 +41,21 @@ class AWSCredentials(TypedDict, total=False):
     AWS_REGION: str
 
 
-ImageCredentials: TypeAlias = Union[AWSCredentials, Sequence[str]]
+class DockerHubCredentials(TypedDict, total=False):
+    DOCKERHUB_USERNAME: str
+    DOCKERHUB_PASSWORD: str
+
+
+ImageCredentialKeys = Literal[
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_REGION",
+    "DOCKERHUB_USERNAME",
+    "DOCKERHUB_PASSWORD",
+]
+
+ImageCredentials = Union[AWSCredentials, DockerHubCredentials, ImageCredentialKeys]
 
 
 class Image(BaseAbstraction):

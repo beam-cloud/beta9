@@ -23,8 +23,12 @@ func GetRegistryToken(opts *BuildOpts) (string, error) {
 		}
 	}
 
-	// Add additional registry checks here as needed.
-	return "", fmt.Errorf("unsupported registry or missing implementation")
+	// Default to Docker Hub
+	if token, err := GetDockerHubToken(opts); err == nil {
+		return token, nil
+	} else {
+		return "", err
+	}
 }
 
 // Retrieve an authorization token from Amazon ECR
@@ -84,6 +88,29 @@ func GetECRToken(opts *BuildOpts) (string, error) {
 	// Return the username and password
 	username := parts[0]
 	password := parts[1]
+
+	token := fmt.Sprintf("%s:%s", username, password)
+	return token, nil
+}
+
+func GetDockerHubToken(opts *BuildOpts) (string, error) {
+	creds := opts.ExistingImageCreds
+
+	username, hasUsername := creds["DOCKERHUB_USERNAME"]
+	password, hasPassword := creds["DOCKERHUB_PASSWORD"]
+
+	// Check if username and password are set
+	if hasUsername && username == "" {
+		return "", fmt.Errorf("DOCKERHUB_USERNAME set but is empty")
+	}
+	if hasPassword && password == "" {
+		return "", fmt.Errorf("DOCKERHUB_PASSWORD set but is empty")
+	}
+
+	// If either username or password is missing, assume no credentials are needed
+	if !hasUsername || !hasPassword {
+		return "", nil
+	}
 
 	token := fmt.Sprintf("%s:%s", username, password)
 	return token, nil
