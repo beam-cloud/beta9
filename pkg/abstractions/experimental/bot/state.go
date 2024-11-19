@@ -135,7 +135,7 @@ func (m *botStateManager) listSessions(workspaceName, stubId string) ([]*BotSess
 	return sessions, nil
 }
 
-func (m *botStateManager) getSession(ctx context.Context, workspaceName, stubId, sessionId string) (*BotSession, error) {
+func (m *botStateManager) getSession(workspaceName, stubId, sessionId string) (*BotSession, error) {
 	var session *BotSession
 
 	session, err := m.loadSession(workspaceName, stubId, sessionId)
