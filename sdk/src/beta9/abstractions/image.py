@@ -14,11 +14,6 @@ from ..clients.image import (
 )
 from ..type import PythonVersion, PythonVersionAlias
 
-try:
-    from typing import TypeAlias
-except ImportError:
-    pass
-
 
 class ImageBuildResult(NamedTuple):
     success: bool = False
