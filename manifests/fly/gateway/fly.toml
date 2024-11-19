@@ -1,0 +1,44 @@
+# fly.toml app configuration file generated for control-plane-gateway on 2024-11-06T15:50:01-05:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'control-plane-gateway'
+primary_region = 'ewr'
+
+[build]
+  [build.args]
+    ARCH = "amd64"
+
+[processes]
+  gateway = '/usr/local/bin/gateway'
+
+[[services]]
+    internal_port = 1994
+    protocol = 'tcp'
+    processes = ["gateway"]
+
+    [[services.ports]]
+        handlers = ['http', 'tls']
+        tls_options = { "alpn" = ["http/1.1"] }
+        port = 1994
+
+[[services]]
+    internal_port = 1993
+    protocol = 'tcp'
+    processes = ["gateway"]
+    
+    [[services.ports]]
+        handlers = ['tls']
+        tls_options = { "alpn" = ["h2"] }
+
+        port = 443
+
+    [services.ports.http_options]
+        h2_backend = true
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  

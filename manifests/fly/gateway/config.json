@@ -1,0 +1,255 @@
+{
+  "cluster_name": "beta9",
+  "debug_mode": false,
+  "database": {
+    "postgres": {
+      "host": "control-plane-postgres.fly.dev",
+      "port": 5432,
+      "username": "postgres",
+      "password": "password",
+      "name": "main",
+      "timezone": "UTC"
+    },
+    "redis": {
+      "mode": "single",
+      "addrs": [
+        "redis-control-plane.fly.dev:6379"
+      ],
+      "password": "password",
+      "enable_tls": false,
+      "insecure_skip_verify": false,
+      "dial_timeout": "30s",
+      "max_retries": 3
+    }
+  },
+  "storage": {
+    "mode": "juicefs",
+    "filesystem_name": "beta9-fs",
+    "filesystem_path": "/data",
+    "object_path": "/data/objects",
+    "juicefs": {
+      "redis_uri": "redis://:password@redis-juicefs.fly.dev:6379",
+      "aws_s3_bucket": "https://fly.storage.tigris.dev/None",
+      "aws_access_key": null,
+      "aws_secret_key": null,
+      "block_size": 4096,
+      "cache_size": 0,
+      "prefetch": 1,
+      "buffer_size": 300
+    }
+  },
+  "gateway_service": {
+    "host": "beta9-gateway",
+    "external_url": "http://localhost:1994",
+    "external_host": "gateway.fly.dev",
+    "invoke_url_type": "path",
+    "grpc": {
+      "port": 1993,
+      "external_port": 443,
+      "max_recv_msg_size": 1024,
+      "max_send_msg_size": 1024
+    },
+    "http": {
+      "port": 1994,
+      "external_port": 1994,
+      "enable_pretty_logs": true,
+      "cors": {
+        "allow_origins": "*",
+        "allow_headers": "*",
+        "allow_methods": "*"
+      }
+    },
+    "shutdown_timeout": "180s",
+    "stub_limits": {
+      "memory": 32768,
+      "max_replicas": 10
+    }
+  },
+  "image_service": {
+    "local_cache_enabled": false,
+    "registry_store": "s3",
+    "registry_credential_provider": "s3",
+    "build_container_pool_selector": "build",
+    "registries": {
+      "docker": {
+        "username": "beamcloud",
+        "password": null
+      },
+      "s3": {
+        "bucket_name": null,
+        "region": "auto",
+        "access_key": null,
+        "secret_key": null,
+        "endpoint": "https://fly.storage.tigris.dev"
+      }
+    },
+    "runner": {
+      "base_image_name": "beta9-runner",
+      "base_image_registry": "public.ecr.aws/n4e0e1y0",
+      "tags": {
+        "python3.8": "py38-latest",
+        "python3.9": "py39-latest",
+        "python3.10": "py310-latest",
+        "python3.11": "py311-latest",
+        "python3.12": "py312-latest",
+        "micromamba3.8": "micromamba3.8-latest",
+        "micromamba3.9": "micromamba3.9-latest",
+        "micromamba3.10": "micromamba3.10-latest",
+        "micromamba3.11": "micromamba3.11-latest",
+        "micromamba3.12": "micromamba3.12-latest"
+      }
+    }
+  },
+  "worker": {
+    "pools": {
+      "build": {
+        "mode": "external",
+        "requires_pool_selector": true,
+        "provider": "generic",
+        "pool_sizing": {
+          "default_worker_cpu": "8000m",
+          "default_worker_gpu_type": "",
+          "default_worker_memory": "32Gi",
+          "min_free_cpu": "0m",
+          "min_free_gpu": 0,
+          "min_free_memory": "0"
+        }
+      },
+      "a10g": {
+        "gpu_type": "A10G",
+        "mode": "external",
+        "provider": "generic",
+        "runtime": "nvidia",
+        "pool_sizing": {
+          "default_worker_cpu": "8000m",
+          "default_worker_gpu_type": "A10G",
+          "default_worker_memory": "32Gi",
+          "min_free_cpu": "0m",
+          "min_free_gpu": 0,
+          "min_free_memory": "0"
+        }
+      }
+    },
+    "use_host_resolv_conf": false,
+    "host_network": true,
+    "use_gateway_service_hostname": false,
+    "image_tag": "latest",
+    "image_name": "beta9-worker",
+    "image_registry": "public.ecr.aws/n4e0e1y0",
+    "image_pull_secrets": [],
+    "namespace": "beta9",
+    "service_account_name": "default",
+    "image_pvc_name": "beta9-images",
+    "job_resources_enforced": true,
+    "runc_resources_enforced": false,
+    "default_worker_cpu_request": 2000,
+    "default_worker_memory_request": 1024,
+    "termination_grace_period": 30,
+    "add_worker_timeout": "10m",
+    "blob_cache_enabled": true
+  },
+  "providers": {
+    "generic": {
+      "agent": {}
+    }
+  },
+  "tailscale": {
+    "control_url": "",
+    "user": "",
+    "auth_key": "tailscale-auth-token",
+    "enabled": true,
+    "debug": false,
+    "host_name": "gateway"
+  },
+  "proxy": {},
+  "blobcache": {
+    "debug_mode": true,
+    "port": 2049,
+    "tls_enabled": false,
+    "rtt_threshold_milliseconds": 1,
+    "max_cache_pct": 60,
+    "page_size_bytes": 2000000,
+    "grpc_dial_timeout_s": 1,
+    "grpc_message_size_bytes": 10000000000,
+    "discovery_interval_s": 5,
+    "tailscale": {
+      "control_url": "",
+      "user": "",
+      "auth_key": "tailscale-auth-token",
+      "enabled": true,
+      "debug": false,
+      "host_name": "gateway",
+      "ephemeral": true,
+      "state_dir": "/tmp",
+      "dial_timeout_s": 1
+    },
+    "metadata": {
+      "redis_addr": "redis-blobcache.fly.dev:6379",
+      "redis_passwd": "password",
+      "redis_tls_enabled": false
+    },
+    "blobfs": {
+      "max_background_tasks": 12,
+      "enabled": false,
+      "mount_point": "/cache",
+      "sources": [
+        {
+          "mode": "juicefs",
+          "fs_name": "beta9-fs",
+          "fs_path": "/data",
+          "juicefs": {
+            "redis_uri": "redis://:password@redis-juicefs.fly.dev:6379",
+            "bucket": "https://fly.storage.tigris.dev/None",
+            "access_key": null,
+            "secret_key": null,
+            "cache_size": 0,
+            "block_size": 16384,
+            "prefetch": 128,
+            "buffer_size": 300
+          }
+        },
+        {
+          "mode": "mountpoint",
+          "fs_name": "beta9-images",
+          "fs_path": "/images",
+          "mountpoint": {
+            "bucket_name": null,
+            "access_key": null,
+            "secret_key": null,
+            "region": "auto",
+            "endpoint_url": "https://fly.storage.tigris.dev"
+          }
+        }
+      ]
+    }
+  },
+  "monitoring": {
+    "container_metrics_interval": "3s",
+    "metrics_collector": "openmeter",
+    "prometheus": {
+      "scrape_workers": true,
+      "port": 9090
+    },
+    "telemetry": {
+      "enabled": false,
+      "endpoint": "http://tempo.monitoring:4318",
+      "meter_interval": "3s",
+      "trace_interval": "3s",
+      "trace_sample_ratio": 1
+    },
+    "fluentbit": {
+      "events": {
+        "endpoint": "http://fluent-bit.monitoring:9880",
+        "max_conns": 0,
+        "max_idle_conns": 30,
+        "idle_conn_timeout": "10s",
+        "dial_timeout": "2s",
+        "keep_alive": "30s"
+      }
+    },
+    "openmeter": {
+      "server_url": "http://some-metering-server:8080",
+      "api_key": "http://some-metering-server:8080"
+    }
+  }
+}

@@ -1,0 +1,41 @@
+# fly.toml app configuration file generated for control-plane-postgres on 2024-11-18T16:41:56-07:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'control-plane-postgres'
+primary_region = 'lax'
+
+[build]
+  image = 'public.ecr.aws/n4e0e1y0/postgres:16.1'
+
+[env]
+  PRIMARY_REGION = 'lax'
+
+[[mounts]]
+  source = 'pg_data'
+  destination = '/bitnami/postgresql'
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 5432
+  auto_start_machines = false
+
+  [[services.ports]]
+    port = 5432
+    handlers = ['pg_tls']
+
+  [services.concurrency]
+    type = 'connections'
+    hard_limit = 1000
+    soft_limit = 1000
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[[metrics]]
+  port = 9187
+  path = '/metrics'
+  https = false
