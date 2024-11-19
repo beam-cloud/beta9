@@ -23,6 +23,14 @@ func GetRegistryToken(opts *BuildOpts) (string, error) {
 		}
 	}
 
+	if strings.Contains(opts.ExistingImageUri, "pkg.dev") || strings.Contains(opts.ExistingImageUri, "gcr.io") {
+		if token, err := GetGARToken(opts); err == nil {
+			return token, nil
+		} else {
+			return "", err
+		}
+	}
+
 	// Default to Docker Hub
 	if token, err := GetDockerHubToken(opts); err == nil {
 		return token, nil
@@ -31,26 +39,26 @@ func GetRegistryToken(opts *BuildOpts) (string, error) {
 	}
 }
 
-// Retrieve an authorization token from Amazon ECR
+// Amazon Elastic Container Registry
+// Gets the ECR Authorization Token on behalf of the user.
 func GetECRToken(opts *BuildOpts) (string, error) {
 	creds := opts.ExistingImageCreds
 
 	accessKey, ok := creds["AWS_ACCESS_KEY_ID"]
 	if !ok {
-		return "", fmt.Errorf("AWS_ACCESS_KEY_ID missing or not a string")
+		return "", fmt.Errorf("AWS_ACCESS_KEY_ID not found")
 	}
 	secretKey, ok := creds["AWS_SECRET_ACCESS_KEY"]
 	if !ok {
-		return "", fmt.Errorf("AWS_SECRET_ACCESS_KEY missing or not a string")
+		return "", fmt.Errorf("AWS_SECRET_ACCESS_KEY not found")
 	}
 	sessionToken, ok := creds["AWS_SESSION_TOKEN"]
 	if !ok {
 		sessionToken = ""
-		// return "", fmt.Errorf("AWS_SESSION_TOKEN missing or not a string")
 	}
 	region, ok := creds["AWS_REGION"]
 	if !ok {
-		return "", fmt.Errorf("AWS_REGION missing or not a string")
+		return "", fmt.Errorf("AWS_REGION not found")
 	}
 
 	credentials := credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)
@@ -93,6 +101,24 @@ func GetECRToken(opts *BuildOpts) (string, error) {
 	return token, nil
 }
 
+// Google Artifact Registry
+func GetGARToken(opts *BuildOpts) (string, error) {
+	creds := opts.ExistingImageCreds
+
+	password, ok := creds["GCP_ACCESS_TOKEN"]
+	if !ok {
+		return "", fmt.Errorf("GCP_ACCESS_TOKEN not found")
+	}
+	if password == "" {
+		return "", fmt.Errorf("GCP_ACCESS_TOKEN is empty")
+	}
+
+	username := "oauth2accesstoken"
+
+	return fmt.Sprintf("%s:%s", username, password), nil
+}
+
+// Docker Hub
 func GetDockerHubToken(opts *BuildOpts) (string, error) {
 	creds := opts.ExistingImageCreds
 
