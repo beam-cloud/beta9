@@ -1,8 +1,10 @@
 import json
 import os
-import random
+import secrets
+import shutil
 import subprocess
 from dataclasses import dataclass
+from uuid import uuid4
 
 
 @dataclass
@@ -34,13 +36,19 @@ class TailscaleConfig:
     auth_token: str
 
 
+def generate_name(prefix):
+    return f"{prefix}-{uuid4()}"
+
+
+def generate_password():
+    return secrets.token_urlsafe(24)
+
+
 def setup_postgres() -> PostgresConfig:
-    app_name = "control-plane-postgres"
-    postgres_password = "password"
+    app_name = generate_name("control-plane-postgres")
+    postgres_password = generate_password()
     postgres_user = "postgres"
     postgres_db = "main"
-
-    return PostgresConfig(app_name, postgres_password, postgres_user, postgres_db)
 
     subprocess.run(
         [
@@ -48,9 +56,11 @@ def setup_postgres() -> PostgresConfig:
             "launch",
             "--no-deploy",
             "--copy-config",
+            "--name",
+            app_name,
             "-y",
         ],
-        cwd="postgres",
+        cwd="state/postgres",
         env=os.environ,
     )
     subprocess.run(
@@ -61,23 +71,26 @@ def setup_postgres() -> PostgresConfig:
             f"POSTGRES_PASSWORD={postgres_password}",
             f"POSTGRES_USER={postgres_user}",
             f"POSTGRES_DB={postgres_db}",
+            f"SU_PASSWORD={postgres_password}",
+            f"OPERATOR_PASSWORD={postgres_password}",
+            f"REPL_PASSWORD={postgres_password}",
         ],
-        cwd="postgres",
+        cwd="state/postgres",
         env=os.environ,
     )
     subprocess.run(
         ["fly", "ip", "allocate-v4", "--shared"],
-        cwd="postgres",
+        cwd="state/postgres",
         env=os.environ,
     )
     subprocess.run(
         ["fly", "ip", "allocate-v6"],
-        cwd="postgres",
+        cwd="state/postgres",
         env=os.environ,
     )
     subprocess.run(
         ["fly", "deploy", "-y"],
-        cwd="postgres",
+        cwd="state/postgres",
         env=os.environ,
     )
 
@@ -85,10 +98,8 @@ def setup_postgres() -> PostgresConfig:
 
 
 def setup_redis(name) -> RedisConfig:
-    app_name = f"redis-{name}"
-    redis_password = "password"
-
-    return RedisConfig(app_name, redis_password)
+    app_name = generate_name(f"redis-{name}")
+    redis_password = generate_password()
 
     subprocess.run(
         [
@@ -96,9 +107,11 @@ def setup_redis(name) -> RedisConfig:
             "launch",
             "--no-deploy",
             "--copy-config",
+            "--name",
+            app_name,
             "-y",
         ],
-        cwd=app_name,
+        cwd="state/redis-" + name,
         env=os.environ,
     )
     subprocess.run(
@@ -108,22 +121,22 @@ def setup_redis(name) -> RedisConfig:
             "set",
             f"REDIS_PASSWORD={redis_password}",
         ],
-        cwd=app_name,
+        cwd="state/redis-" + name,
         env=os.environ,
     )
     subprocess.run(
         ["fly", "ip", "allocate-v4", "--shared"],
-        cwd=app_name,
+        cwd="state/redis-" + name,
         env=os.environ,
     )
     subprocess.run(
         ["fly", "ip", "allocate-v6"],
-        cwd=app_name,
+        cwd="state/redis-" + name,
         env=os.environ,
     )
     subprocess.run(
         ["fly", "deploy", "-y"],
-        cwd=app_name,
+        cwd="state/redis-" + name,
         env=os.environ,
     )
 
@@ -131,10 +144,8 @@ def setup_redis(name) -> RedisConfig:
 
 
 def setup_storage(name) -> StorageConfig:
+    storage_name = generate_name(f"storage-{name}")
     access_key = secret_key = endpoint = bucket = None
-    storage_name = f"storage-{name}-{random.randint(0, 1000)}"  # randomize the storage name
-
-    return StorageConfig(storage_name, access_key, secret_key, endpoint, bucket)
 
     res = subprocess.run(
         ["fly", "storage", "create", "-n", storage_name, "-y", "-o", "personal"],
@@ -169,7 +180,7 @@ def generate_config_file(
     control_plane_storage_config: StorageConfig,
     images_storage_config: StorageConfig,
 ):
-    with open("./gateway/config.tpl.json", "r") as f:
+    with open("./state/gateway/config.tpl.json", "r") as f:
         config = json.load(f)
         postgres = config["database"]["postgres"]
         postgres["host"] = f"{postgres_config.app_name}.fly.dev"
@@ -183,7 +194,7 @@ def generate_config_file(
 
         cp_storage = config["storage"]["juicefs"]
         cp_storage["redis_uri"] = (
-            f"redis://:{juicefs_redis_cfg.password}@{juicefs_redis_cfg.app_name}.fly.dev:6379"
+            f"redis://:{juicefs_redis_config.password}@{juicefs_redis_config.app_name}.fly.dev:6379"
         )
         cp_storage["aws_s3_bucket"] = (
             f"https://fly.storage.tigris.dev/{control_plane_storage_config.bucket}"
@@ -251,11 +262,11 @@ def setup_gateway(
     images_storage_config: StorageConfig,
 ):
     tailscale_config = TailscaleConfig(
-        host="gateway",
-        auth_token="tailscale-auth-token",
+        host="",
+        auth_token="",
     )
 
-    gateway_app_name = "gateway"
+    gateway_app_name = generate_name("control-plane-gateway")
 
     cfg = generate_config_file(
         gateway_app_name,
@@ -268,11 +279,57 @@ def setup_gateway(
         images_storage_config,
     )
 
-    with open("./gateway/config.json", "w") as f:
+    with open("./state/gateway/config.json", "w") as f:
         json.dump(cfg, f, indent=2)
+
+    subprocess.run(
+        [
+            "fly",
+            "launch",
+            "--no-deploy",
+            "--copy-config",
+            "--name",
+            gateway_app_name,
+            "-y",
+        ],
+        cwd="state/gateway",
+        env=os.environ,
+    )
+
+    subprocess.run(
+        [
+            "fly",
+            "secrets",
+            "set",
+            f"CONFIG_JSON={json.dumps(cfg)}",
+        ],
+        cwd="state/gateway",
+        env=os.environ,
+    )
+
+    subprocess.run(
+        ["fly", "ip", "allocate-v4", "--shared"],
+        cwd="state/gateway",
+        env=os.environ,
+    )
+
+    subprocess.run(
+        ["fly", "ip", "allocate-v6"],
+        cwd="state/gateway",
+        env=os.environ,
+    )
+
+    subprocess.run(
+        ["fly", "deploy", "-y"],
+        cwd="state/gateway",
+        env=os.environ,
+    )
 
 
 if __name__ == "__main__":
+    shutil.rmtree("state/", ignore_errors=True)
+    shutil.copytree("template/", "state/", dirs_exist_ok=True)
+
     pg_cfg = setup_postgres()
     cp_redis_cfg = setup_redis(name="control-plane")
     bc_redis_cfg = setup_redis(name="blobcache")

@@ -1,14 +1,8 @@
-# fly.toml app configuration file generated for control-plane-gateway on 2024-11-06T15:50:01-05:00
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
-
 app = 'control-plane-gateway'
-primary_region = 'ewr'
+primary_region = 'lax'
 
 [build]
-  [build.args]
-    ARCH = "amd64"
+  image = 'public.ecr.aws/n4e0e1y0/beta9-gateway:0.1.277'
 
 [processes]
   gateway = '/usr/local/bin/gateway'

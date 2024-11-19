@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for control-plane-postgres on 2024-11-18T16:41:56-07:00
+# fly.toml app configuration file generated for control-plane-postgres on 2024-11-19T13:50:01-07:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -7,7 +7,7 @@ app = 'control-plane-postgres'
 primary_region = 'lax'
 
 [build]
-  image = 'public.ecr.aws/n4e0e1y0/postgres:16.1'
+  image = 'postgres'
 
 [env]
   PRIMARY_REGION = 'lax'
@@ -29,6 +29,14 @@ primary_region = 'lax'
     type = 'connections'
     hard_limit = 1000
     soft_limit = 1000
+
+[[files]]
+  guest_path = '/opt/bitnami/postgresql/conf/pg_hba.conf'
+  local_path = './pg_hba.conf'
+
+[[files]]
+  guest_path = '/opt/bitnami/postgresql/conf/postgresql.conf'
+  local_path = './postgresql.conf'
 
 [[vm]]
   memory = '1gb'
