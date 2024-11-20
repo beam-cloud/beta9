@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -245,11 +246,34 @@ func (c *CedanaClient) Restore(
 	// NOTE: Cedana uses bundle path to find the config.json
 	bundle := strings.TrimRight(opts.ConfigPath, filepath.Base(opts.ConfigPath))
 
+	// TODO: hack to set terminal to true for logging to work properly
+	configBytes, err := os.ReadFile(opts.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var config specs.Spec
+	err = json.Unmarshal(configBytes, &config)
+	if err != nil {
+		return nil, err
+	}
+	config.Process.Terminal = true
+
+	updatedConfigBytes, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+
+	err = os.WriteFile(opts.ConfigPath, updatedConfigBytes, 0644)
+	if err != nil {
+		return nil, err
+	}
+
 	ttyPath := filepath.Join(os.TempDir(), fmt.Sprintf("cedana-tty-%s.sock", containerId))
 	tty := exec.CommandContext(ctx, cedanaBinPath, "debug", "recvtty", ttyPath)
 	tty.Stdout = opts.OutputWriter
 	tty.Stderr = opts.OutputWriter
-	err := tty.Start()
+	err = tty.Start()
 	if err != nil {
 		return nil, err
 	}
