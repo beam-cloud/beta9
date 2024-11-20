@@ -31,6 +31,14 @@ func GetRegistryToken(opts *BuildOpts) (string, error) {
 		}
 	}
 
+	if strings.Contains(opts.ExistingImageUri, "nvcr.io") {
+		if token, err := GetNGCToken(opts); err == nil {
+			return token, nil
+		} else {
+			return "", err
+		}
+	}
+
 	// Default to Docker Hub
 	if token, err := GetDockerHubToken(opts); err == nil {
 		return token, nil
@@ -116,6 +124,23 @@ func GetGARToken(opts *BuildOpts) (string, error) {
 	username := "oauth2accesstoken"
 
 	return fmt.Sprintf("%s:%s", username, password), nil
+}
+
+func GetNGCToken(opts *BuildOpts) (string, error) {
+	creds := opts.ExistingImageCreds
+
+	password, ok := creds["NGC_API_KEY"]
+	if !ok {
+		return "", fmt.Errorf("NGC_API_KEY not found")
+	}
+	if password == "" {
+		return "", fmt.Errorf("NGC_API_KEY is empty")
+	}
+
+	username := "$oauthtoken"
+
+	token := fmt.Sprintf("%s:%s", username, password)
+	return token, nil
 }
 
 // Docker Hub

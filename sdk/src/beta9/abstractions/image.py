@@ -30,6 +30,8 @@ class ImageCredentialValueNotFound(Exception):
 
 
 class AWSCredentials(TypedDict, total=False):
+    """Amazon Web Services credentials"""
+
     AWS_ACCESS_KEY_ID: str
     AWS_SECRET_ACCESS_KEY: str
     AWS_SESSION_TOKEN: str
@@ -37,12 +39,22 @@ class AWSCredentials(TypedDict, total=False):
 
 
 class GCPCredentials(TypedDict, total=False):
+    """Google Cloud Platform credentials"""
+
     GCP_ACCESS_TOKEN: str
 
 
 class DockerHubCredentials(TypedDict, total=False):
+    """Docker Hub credentials"""
+
     DOCKERHUB_USERNAME: str
     DOCKERHUB_PASSWORD: str
+
+
+class NGCCredentials(TypedDict, total=False):
+    """NVIDIA GPU Cloud credentials"""
+
+    NGC_API_KEY: str
 
 
 ImageCredentialKeys = Literal[
@@ -53,9 +65,12 @@ ImageCredentialKeys = Literal[
     "DOCKERHUB_USERNAME",
     "DOCKERHUB_PASSWORD",
     "GCP_ACCESS_TOKEN",
+    "NGC_API_KEY",
 ]
 
-ImageCredentials = Union[AWSCredentials, DockerHubCredentials, GCPCredentials, ImageCredentialKeys]
+ImageCredentials = Union[
+    AWSCredentials, DockerHubCredentials, GCPCredentials, NGCCredentials, ImageCredentialKeys
+]
 
 
 class Image(BaseAbstraction):
