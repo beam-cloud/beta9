@@ -220,6 +220,7 @@ type WorkerPoolConfig struct {
 	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
 	Priority             int32                             `key:"priority" json:"priority"`
 	Preemptable          bool                              `key:"preemptable" json:"preemptable"`
+	UserData             string                            `key:"userData" json:"user_data"`
 }
 
 type WorkerPoolJobSpecConfig struct {
