@@ -30,7 +30,65 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	gpus := types.GPUTypesFromString(in.Gpu)
 
-	if len(gpus) > 0 {
+	autoscaler := &types.Autoscaler{}
+	if in.Autoscaler.Type == "" {
+		autoscaler.Type = types.QueueDepthAutoscaler
+		autoscaler.MaxContainers = 1
+		autoscaler.TasksPerContainer = 1
+	} else {
+		autoscaler.Type = types.AutoscalerType(in.Autoscaler.Type)
+		autoscaler.MaxContainers = uint(in.Autoscaler.MaxContainers)
+		autoscaler.TasksPerContainer = uint(in.Autoscaler.TasksPerContainer)
+	}
+
+	if in.TaskPolicy == nil {
+		in.TaskPolicy = &pb.TaskPolicy{
+			MaxRetries: in.Retries,
+			Timeout:    in.Timeout,
+		}
+	}
+
+	if in.Extra == "" {
+		in.Extra = "{}"
+	}
+
+	if in.GpuCount > gws.appConfig.GatewayService.StubLimits.MaxGpuCount {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("GPU count must be %d or less.", gws.appConfig.GatewayService.StubLimits.MaxGpuCount),
+		}, nil
+	}
+
+	stubConfig := types.StubConfigV1{
+		Runtime: types.Runtime{
+			Cpu:      in.Cpu,
+			Gpus:     gpus,
+			GpuCount: in.GpuCount,
+			Memory:   in.Memory,
+			ImageId:  in.ImageId,
+		},
+		Handler:            in.Handler,
+		OnStart:            in.OnStart,
+		CallbackUrl:        in.CallbackUrl,
+		PythonVersion:      in.PythonVersion,
+		TaskPolicy:         gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),
+		KeepWarmSeconds:    uint(in.KeepWarmSeconds),
+		Workers:            uint(in.Workers),
+		ConcurrentRequests: uint(in.ConcurrentRequests),
+		MaxPendingTasks:    uint(in.MaxPendingTasks),
+		Volumes:            in.Volumes,
+		Secrets:            []types.Secret{},
+		Authorized:         in.Authorized,
+		Autoscaler:         autoscaler,
+		Extra:              json.RawMessage(in.Extra),
+	}
+
+	// Ensure GPU count is at least 1 if a GPU is required
+	if stubConfig.RequiresGPU() && in.GpuCount == 0 {
+		stubConfig.Runtime.GpuCount = 1
+	}
+
+	if stubConfig.RequiresGPU() {
 		concurrencyLimit, err := gws.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, authInfo.Workspace.ExternalId)
 		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
 			return &pb.GetOrCreateStubResponse{
@@ -59,51 +117,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		if len(lowGpus) > 0 {
 			warning = fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowGpus, ", "))
 		}
-	}
-
-	autoscaler := &types.Autoscaler{}
-	if in.Autoscaler.Type == "" {
-		autoscaler.Type = types.QueueDepthAutoscaler
-		autoscaler.MaxContainers = 1
-		autoscaler.TasksPerContainer = 1
-	} else {
-		autoscaler.Type = types.AutoscalerType(in.Autoscaler.Type)
-		autoscaler.MaxContainers = uint(in.Autoscaler.MaxContainers)
-		autoscaler.TasksPerContainer = uint(in.Autoscaler.TasksPerContainer)
-	}
-
-	if in.TaskPolicy == nil {
-		in.TaskPolicy = &pb.TaskPolicy{
-			MaxRetries: in.Retries,
-			Timeout:    in.Timeout,
-		}
-	}
-
-	if in.Extra == "" {
-		in.Extra = "{}"
-	}
-
-	stubConfig := types.StubConfigV1{
-		Runtime: types.Runtime{
-			Cpu:     in.Cpu,
-			Gpus:    gpus,
-			Memory:  in.Memory,
-			ImageId: in.ImageId,
-		},
-		Handler:            in.Handler,
-		OnStart:            in.OnStart,
-		CallbackUrl:        in.CallbackUrl,
-		PythonVersion:      in.PythonVersion,
-		TaskPolicy:         gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),
-		KeepWarmSeconds:    uint(in.KeepWarmSeconds),
-		Workers:            uint(in.Workers),
-		ConcurrentRequests: uint(in.ConcurrentRequests),
-		MaxPendingTasks:    uint(in.MaxPendingTasks),
-		Volumes:            in.Volumes,
-		Secrets:            []types.Secret{},
-		Authorized:         in.Authorized,
-		Autoscaler:         autoscaler,
-		Extra:              json.RawMessage(in.Extra),
 	}
 
 	// Get secrets

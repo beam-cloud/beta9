@@ -79,6 +79,7 @@ class RunnerAbstraction(BaseAbstraction):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
+        gpu_count: int = 0,
         image: Image = Image(),
         workers: int = 1,
         concurrent_requests: int = 1,
@@ -116,6 +117,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.cpu = cpu
         self.memory = self._parse_memory(memory) if isinstance(memory, str) else memory
         self.gpu = gpu
+        self.gpu_count = gpu_count
         self.volumes = volumes or []
         self.secrets = [SecretVar(name=s) for s in (secrets or [])]
         self.workers = workers
@@ -129,6 +131,9 @@ class RunnerAbstraction(BaseAbstraction):
             ttl=task_policy.ttl,
         )
         self.extra: dict = {}
+
+        if (self.gpu != "" or len(self.gpu) > 0) and self.gpu_count == 0:
+            self.gpu_count = 1
 
         if on_start is not None:
             self._map_callable_to_attr(attr="on_start", func=on_start)
@@ -402,6 +407,7 @@ class RunnerAbstraction(BaseAbstraction):
                 cpu=self.cpu,
                 memory=self.memory,
                 gpu=self.gpu,
+                gpu_count=self.gpu_count,
                 handler=self.handler,
                 on_start=self.on_start,
                 callback_url=self.callback_url,
