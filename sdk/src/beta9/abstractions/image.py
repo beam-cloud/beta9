@@ -69,7 +69,11 @@ ImageCredentialKeys = Literal[
 ]
 
 ImageCredentials = Union[
-    AWSCredentials, DockerHubCredentials, GCPCredentials, NGCCredentials, ImageCredentialKeys
+    AWSCredentials,
+    DockerHubCredentials,
+    GCPCredentials,
+    NGCCredentials,
+    ImageCredentialKeys,
 ]
 
 
