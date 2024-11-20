@@ -52,6 +52,13 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		in.Extra = "{}"
 	}
 
+	if in.GpuCount > gws.appConfig.GatewayService.StubLimits.MaxGpuCount {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("GPU count must be %d or less.", gws.appConfig.GatewayService.StubLimits.MaxGpuCount),
+		}, nil
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:      in.Cpu,
