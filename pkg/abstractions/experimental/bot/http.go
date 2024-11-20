@@ -40,6 +40,8 @@ func registerBotRoutes(g *echo.Group, pbs *PetriBotService) *botGroup {
 	g.GET("/:deploymentName/latest", auth.WithAuth(group.BotOpenSession))
 	g.GET("/:deploymentName/v:version", auth.WithAuth(group.BotOpenSession))
 	g.DELETE("/:stubId/:sessionId", auth.WithAuth(group.BotDeleteSession))
+	g.GET("/:stubId/:sessionId", auth.WithAuth(group.BotGetSession))
+	g.GET("/:stubId/sessions", auth.WithAuth(group.BotListSessions))
 
 	return group
 }
@@ -53,7 +55,7 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 	stubId := ctx.Param("stubId")
 	deploymentName := ctx.Param("deploymentName")
 	version := ctx.Param("version")
-	sessionId := ctx.Param("sessionId")
+	sessionId := ctx.QueryParam("session_id")
 
 	stubType := types.StubType(types.StubTypeBotDeployment)
 
@@ -237,4 +239,29 @@ func (g *botGroup) BotDeleteSession(ctx echo.Context) error {
 	}
 
 	return ctx.NoContent(http.StatusNoContent)
+}
+
+func (g *botGroup) BotListSessions(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	stubId := ctx.Param("stubId")
+
+	sessions, err := g.pbs.botStateManager.listSessions(cc.AuthInfo.Workspace.Name, stubId)
+	if err != nil {
+		return apiv1.HTTPBadRequest("Failed to list sessions")
+	}
+
+	return ctx.JSON(http.StatusOK, sessions)
+}
+
+func (g *botGroup) BotGetSession(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	stubId := ctx.Param("stubId")
+	sessionId := ctx.Param("sessionId")
+
+	session, err := g.pbs.botStateManager.getSession(cc.AuthInfo.Workspace.Name, stubId, sessionId)
+	if err != nil {
+		return apiv1.HTTPBadRequest("Failed to get session")
+	}
+
+	return ctx.JSON(http.StatusOK, session)
 }

@@ -23,30 +23,42 @@ func GetRegistryToken(opts *BuildOpts) (string, error) {
 		}
 	}
 
-	// Add additional registry checks here as needed.
-	return "", fmt.Errorf("unsupported registry or missing implementation")
+	if strings.Contains(opts.ExistingImageUri, "pkg.dev") || strings.Contains(opts.ExistingImageUri, "gcr.io") {
+		if token, err := GetGARToken(opts); err == nil {
+			return token, nil
+		} else {
+			return "", err
+		}
+	}
+
+	// Default to Docker Hub
+	if token, err := GetDockerHubToken(opts); err == nil {
+		return token, nil
+	} else {
+		return "", err
+	}
 }
 
-// Retrieve an authorization token from Amazon ECR
+// Amazon Elastic Container Registry
+// Gets the ECR Authorization Token on behalf of the user.
 func GetECRToken(opts *BuildOpts) (string, error) {
 	creds := opts.ExistingImageCreds
 
 	accessKey, ok := creds["AWS_ACCESS_KEY_ID"]
 	if !ok {
-		return "", fmt.Errorf("AWS_ACCESS_KEY_ID missing or not a string")
+		return "", fmt.Errorf("AWS_ACCESS_KEY_ID not found")
 	}
 	secretKey, ok := creds["AWS_SECRET_ACCESS_KEY"]
 	if !ok {
-		return "", fmt.Errorf("AWS_SECRET_ACCESS_KEY missing or not a string")
+		return "", fmt.Errorf("AWS_SECRET_ACCESS_KEY not found")
 	}
 	sessionToken, ok := creds["AWS_SESSION_TOKEN"]
 	if !ok {
 		sessionToken = ""
-		// return "", fmt.Errorf("AWS_SESSION_TOKEN missing or not a string")
 	}
 	region, ok := creds["AWS_REGION"]
 	if !ok {
-		return "", fmt.Errorf("AWS_REGION missing or not a string")
+		return "", fmt.Errorf("AWS_REGION not found")
 	}
 
 	credentials := credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)
@@ -84,6 +96,47 @@ func GetECRToken(opts *BuildOpts) (string, error) {
 	// Return the username and password
 	username := parts[0]
 	password := parts[1]
+
+	token := fmt.Sprintf("%s:%s", username, password)
+	return token, nil
+}
+
+// Google Artifact Registry
+func GetGARToken(opts *BuildOpts) (string, error) {
+	creds := opts.ExistingImageCreds
+
+	password, ok := creds["GCP_ACCESS_TOKEN"]
+	if !ok {
+		return "", fmt.Errorf("GCP_ACCESS_TOKEN not found")
+	}
+	if password == "" {
+		return "", fmt.Errorf("GCP_ACCESS_TOKEN is empty")
+	}
+
+	username := "oauth2accesstoken"
+
+	return fmt.Sprintf("%s:%s", username, password), nil
+}
+
+// Docker Hub
+func GetDockerHubToken(opts *BuildOpts) (string, error) {
+	creds := opts.ExistingImageCreds
+
+	username, hasUsername := creds["DOCKERHUB_USERNAME"]
+	password, hasPassword := creds["DOCKERHUB_PASSWORD"]
+
+	// Check if username and password are set
+	if hasUsername && username == "" {
+		return "", fmt.Errorf("DOCKERHUB_USERNAME set but is empty")
+	}
+	if hasPassword && password == "" {
+		return "", fmt.Errorf("DOCKERHUB_PASSWORD set but is empty")
+	}
+
+	// If either username or password is missing, assume no credentials are needed
+	if !hasUsername || !hasPassword {
+		return "", nil
+	}
 
 	token := fmt.Sprintf("%s:%s", username, password)
 	return token, nil

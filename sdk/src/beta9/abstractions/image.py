@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
+from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
 
 from .. import env, terminal
 from ..abstractions.base import BaseAbstraction
@@ -13,11 +13,6 @@ from ..clients.image import (
     VerifyImageBuildResponse,
 )
 from ..type import PythonVersion, PythonVersionAlias
-
-try:
-    from typing import TypeAlias
-except ImportError:
-    from typing_extensions import TypeAlias
 
 
 class ImageBuildResult(NamedTuple):
@@ -41,7 +36,26 @@ class AWSCredentials(TypedDict, total=False):
     AWS_REGION: str
 
 
-ImageCredentials: TypeAlias = Union[AWSCredentials, Sequence[str]]
+class GCPCredentials(TypedDict, total=False):
+    GCP_ACCESS_TOKEN: str
+
+
+class DockerHubCredentials(TypedDict, total=False):
+    DOCKERHUB_USERNAME: str
+    DOCKERHUB_PASSWORD: str
+
+
+ImageCredentialKeys = Literal[
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_REGION",
+    "DOCKERHUB_USERNAME",
+    "DOCKERHUB_PASSWORD",
+    "GCP_ACCESS_TOKEN",
+]
+
+ImageCredentials = Union[AWSCredentials, DockerHubCredentials, GCPCredentials, ImageCredentialKeys]
 
 
 class Image(BaseAbstraction):
@@ -81,10 +95,10 @@ class Image(BaseAbstraction):
                 Default is [].
             base_image (Optional[str]):
                 A custom base image to replace the default ubuntu20.04 image used in your container.
-                For example: docker.io/library/ubuntu:20.04
-                This image must contain a valid python executable that matches the version specified
-                in python_version (i.e. python3.8, python3.9, etc)
-                Default is None.
+                This can be a public or private image from Docker Hub, Amazon ECR, or Google Artifact
+                Registry. The formats for these registries are respectively `docker.io/my-org/my-image:0.1.0`,
+                `111111111111.dkr.ecr.us-east-1.amazonaws.com/my-image:latest`, and
+                `us-east4-docker.pkg.dev/my-project/my-repo/my-image:0.1.0`. Default is None.
             base_image_creds (Optional[ImageCredentials]):
                 A key/value pair or key sequence of environment variables that contain credentials to
                 a private registry. When provided as a dict, you must supply the correct keys and values.
@@ -100,17 +114,66 @@ class Image(BaseAbstraction):
 
         Example:
 
-            To use a custom private image from AWS ECR, define a sequence of AWS environment variables.
-            The Image object will lookup the values automatically.
+            Docker Hub
+
+            To use a private image from Docker Hub, export your Docker Hub credentials.
+
+            ```sh
+            export DOCKERHUB_USERNAME=user123
+            export DOCKERHUB_PASSWORD=pass123
+            ```
+
+            Then configure the Image object with those environment variables.
 
             ```python
             image = Image(
-                base_image="111111111111.dkr.ecr.us-east-1.amazonaws.com/myapp:latest,
-                base_image_creds=("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"),
+                python_version="python3.12",
+                base_image="docker.io/my-org/my-image:0.1.0",
+                base_image_creds=["DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD"],
             )
+
             @endpoint(image=image)
-            def squared(i: int = 0) -> int:
-                return i**2
+            def handler():
+                pass
+            ```
+
+            Amazon Elastic Container Registry (ECR)
+
+            To use a private image from Amazon ECR, export your AWS environment variables.
+            Then configure the Image object with those environment variables.
+
+            ```python
+            image = Image(
+                python_version="python3.12",
+                base_image="111111111111.dkr.ecr.us-east-1.amazonaws.com/my-image:latest,
+                base_image_creds=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"],
+            )
+
+            @endpoint(image=image)
+            def handler():
+                pass
+            ```
+
+            Google Artifact Registry (GAR)
+
+            To use a private image from Google Artifact Registry, export your access token.
+
+            ```sh
+            export GCP_ACCESS_TOKEN=$(gcloud auth print-access-token --project=my-project)
+            ```
+
+            Then configure the Image object to use the environment variable.
+
+            ```python
+            image = Image(
+                python_version="python3.12",
+                base_image="us-east4-docker.pkg.dev/my-project/my-repo/my-image:0.1.0",
+                base_image_creds=["GCP_ACCESS_TOKEN"],
+            )
+
+            @endpoint(image=image)
+            def handler():
+                pass
             ```
         """
         super().__init__()

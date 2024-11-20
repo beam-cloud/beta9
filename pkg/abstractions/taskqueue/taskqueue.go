@@ -283,7 +283,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 
 	err = tq.taskDispatcher.Claim(ctx, authInfo.Workspace.Name, task.Stub.ExternalId, task.ExternalId, in.ContainerId)
 	if err != nil {
-		return nil, err
+		return &pb.TaskQueuePopResponse{Ok: false}, nil
 	}
 
 	task.ContainerId = in.ContainerId

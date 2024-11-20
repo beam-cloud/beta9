@@ -1,12 +1,15 @@
 import json
-from typing import Any, Optional
+import mimetypes
+from typing import Any, Optional, Union
 
 from ....clients.bot import (
     BotServiceStub,
+    PushBotEventBlockingRequest,
+    PushBotEventBlockingResponse,
     PushBotEventRequest,
 )
 from ....runner.common import FunctionContext
-from .bot import BotEventType
+from .bot import BotEvent, BotEventType
 
 
 class BotContext(FunctionContext):
@@ -64,11 +67,29 @@ class BotContext(FunctionContext):
             )
         )
 
-    def prompt(cls, msg: str):
-        """Send a prompt to the user from the bot"""
+    def prompt(
+        cls, msg: str, timeout_seconds: int = 10, wait_for_response=True
+    ) -> Union[BotEvent, None]:
+        """Send a raw prompt to your model. By default, this will wait for a response for up to timeout_seconds."""
 
-        cls.bot_stub.push_bot_event(
-            PushBotEventRequest(
+        if not wait_for_response:
+            cls.bot_stub.push_bot_event(
+                PushBotEventRequest(
+                    stub_id=cls.stub_id,
+                    session_id=cls.session_id,
+                    event_type=BotEventType.TRANSITION_MESSAGE,
+                    event_value=msg,
+                    metadata={
+                        "task_id": cls.task_id,
+                        "session_id": cls.session_id,
+                        "transition_name": cls.transition_name,
+                    },
+                )
+            )
+            return None
+
+        r: PushBotEventBlockingResponse = cls.bot_stub.push_bot_event_blocking(
+            PushBotEventBlockingRequest(
                 stub_id=cls.stub_id,
                 session_id=cls.session_id,
                 event_type=BotEventType.TRANSITION_MESSAGE,
@@ -78,7 +99,17 @@ class BotContext(FunctionContext):
                     "session_id": cls.session_id,
                     "transition_name": cls.transition_name,
                 },
+                timeout_seconds=timeout_seconds,
             )
+        )
+
+        if not r.ok:
+            return None
+
+        return BotEvent(
+            type=r.event.type,
+            value=r.event.value,
+            metadata=r.event.metadata,
         )
 
     def say(cls, msg: str):
@@ -107,6 +138,35 @@ class BotContext(FunctionContext):
                 session_id=cls.session_id,
                 event_type=BotEventType.MEMORY_MESSAGE,
                 event_value=json.dumps(obj),
+                metadata={
+                    "task_id": cls.task_id,
+                    "session_id": cls.session_id,
+                    "transition_name": cls.transition_name,
+                },
+            )
+        )
+
+    def send_file(cls, *, path: str, description: str):
+        """Capture a file and send it to the user"""
+
+        from beta9 import Output
+
+        o = Output(path=path)
+        o.save()
+
+        filetype, _ = mimetypes.guess_type(path)
+        file_msg = {
+            "url": o.public_url(),
+            "description": description,
+            "filetype": filetype,
+        }
+
+        cls.bot_stub.push_bot_event(
+            PushBotEventRequest(
+                stub_id=cls.stub_id,
+                session_id=cls.session_id,
+                event_type=BotEventType.OUTPUT_FILE,
+                event_value=json.dumps(file_msg),
                 metadata={
                     "task_id": cls.task_id,
                     "session_id": cls.session_id,
