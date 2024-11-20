@@ -29,7 +29,7 @@ const (
 	defaultManageDeadline      = 10 * time.Second
 	defaultCheckpointDeadline  = 10 * time.Minute
 	defaultRestoreDeadline     = 5 * time.Minute
-	defaultHealthCheckDeadline = 5 * time.Second
+	defaultHealthCheckDeadline = 30 * time.Second
 	cedanaUseRemoteDB          = true // Do not change, or migrations across workers will fail
 )
 
