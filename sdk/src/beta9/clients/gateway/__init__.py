@@ -403,6 +403,7 @@ class Machine(betterproto.Message):
     created: str = betterproto.string_field(13)
     agent_version: str = betterproto.string_field(14)
     machine_metrics: "MachineMetrics" = betterproto.message_field(15)
+    user_data: str = betterproto.string_field(16)
 
 
 @dataclass(eq=False, repr=False)
