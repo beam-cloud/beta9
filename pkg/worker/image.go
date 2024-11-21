@@ -207,6 +207,7 @@ func (c *ImageClient) Cleanup() error {
 		return true // Continue iteration
 	})
 
+	log.Println("Cleaning up blobfs image cache:", c.imageCachePath)
 	if c.config.BlobCache.BlobFs.Enabled && c.cacheClient != nil {
 		err := c.cacheClient.Cleanup()
 		if err != nil {

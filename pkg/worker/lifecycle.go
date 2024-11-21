@@ -71,14 +71,9 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 
 	err := s.runcHandle.Kill(context.Background(), containerId, signal, &runc.KillOpts{All: true})
 	if err != nil {
-		log.Printf("<%s> - unable to stop container: %v\n", containerId, err)
-
-		if strings.Contains(err.Error(), "container does not exist") {
-			s.containerNetworkManager.TearDown(containerId)
-			return nil
-		}
-
-		return err
+		log.Printf("<%s> - error stopping container: %v\n", containerId, err)
+		s.containerNetworkManager.TearDown(containerId)
+		return nil
 	}
 
 	log.Printf("<%s> - container stopped.\n", containerId)
@@ -137,7 +132,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		// If the container is still running, stop it. This happens when a sigterm is detected.
 		container, err := s.runcHandle.State(context.TODO(), containerId)
 		if err == nil && container.Status == types.RuncContainerStatusRunning {
-			if err := s.stopContainer(containerId, false); err != nil {
+			if err := s.stopContainer(containerId, true); err != nil {
 				log.Printf("<%s> - failed to stop container: %v\n", containerId, err)
 			}
 		}
