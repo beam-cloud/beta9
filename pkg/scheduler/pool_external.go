@@ -411,6 +411,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 			Value: strconv.Itoa(grpcPort),
 		},
 		{
+			Name:  "BETA9_GATEWAY_TLS",
+			Value: "true",
+		},
+		{
 			Name:  "POD_HOSTNAME",
 			Value: podHostname,
 		},

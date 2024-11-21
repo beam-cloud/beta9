@@ -144,8 +144,8 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
 
     gateway_host = os.getenv("BETA9_GATEWAY_HOST", None)
     gateway_port = os.getenv("BETA9_GATEWAY_PORT", None)
+    tls = os.getenv("BETA9_GATEWAY_TLS", None)
     token = os.getenv("BETA9_TOKEN", None)
-    tls = os.getenv("BETA9_TLS", None)
 
     if gateway_host and gateway_port and token:
         return ConfigContext(
