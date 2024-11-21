@@ -67,6 +67,7 @@ type PostgresConfig struct {
 
 type GRPCConfig struct {
 	Port           int `key:"port" json:"port"`
+	ExternalPort   int `key:"externalPort" json:"external_port"`
 	MaxRecvMsgSize int `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
 	MaxSendMsgSize int `key:"maxSendMsgSize" json:"max_send_msg_size"`
 }

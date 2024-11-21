@@ -79,7 +79,7 @@ def setup_postgres() -> PostgresConfig:
         env=os.environ,
     )
     subprocess.run(
-        ["fly", "ip", "allocate-v4", "--shared"],
+        ["fly", "ip", "allocate-v4", "-y"],
         cwd="state/postgres",
         env=os.environ,
     )
@@ -125,7 +125,7 @@ def setup_redis(name) -> RedisConfig:
         env=os.environ,
     )
     subprocess.run(
-        ["fly", "ip", "allocate-v4", "--shared"],
+        ["fly", "ip", "allocate-v4", "-y"],
         cwd="state/redis-" + name,
         env=os.environ,
     )
@@ -262,8 +262,8 @@ def setup_gateway(
     images_storage_config: StorageConfig,
 ):
     tailscale_config = TailscaleConfig(
-        host="",
-        auth_token="",
+        host=os.environ.get("TAILSCALE_HOST", ""),
+        auth_token=os.environ.get("TAILSCALE_AUTH_TOKEN", ""),
     )
 
     gateway_app_name = generate_name("control-plane-gateway")
@@ -308,7 +308,7 @@ def setup_gateway(
     )
 
     subprocess.run(
-        ["fly", "ip", "allocate-v4", "--shared"],
+        ["fly", "ip", "allocate-v4", "-y"],
         cwd="state/gateway",
         env=os.environ,
     )

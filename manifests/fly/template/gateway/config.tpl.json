@@ -43,13 +43,12 @@
     "invoke_url_type": "path",
     "grpc": {
       "port": 1993,
-      "external_port": 443,
+      "external_port": 1993,
       "max_recv_msg_size": 1024,
       "max_send_msg_size": 1024
     },
     "http": {
       "port": 1994,
-      "external_port": 1994,
       "enable_pretty_logs": true,
       "cors": {
         "allow_origins": "*",

@@ -2,6 +2,7 @@ package apiv1
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -58,6 +59,7 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 
 	remoteConfig, err := providers.GetRemoteConfig(g.config, g.tailscale)
 	if err != nil {
+		log.Println("Error getting remote config", err)
 		return HTTPInternalServerError("Unable to create remote config")
 	}
 

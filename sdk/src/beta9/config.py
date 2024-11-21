@@ -55,6 +55,7 @@ class ConfigContext:
     token: Optional[str] = None
     gateway_host: Optional[str] = None
     gateway_port: Optional[int] = None
+    tls: bool = False
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ConfigContext":
@@ -144,12 +145,14 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
     gateway_host = os.getenv("BETA9_GATEWAY_HOST", None)
     gateway_port = os.getenv("BETA9_GATEWAY_PORT", None)
     token = os.getenv("BETA9_TOKEN", None)
+    tls = os.getenv("BETA9_TLS", None)
 
     if gateway_host and gateway_port and token:
         return ConfigContext(
             token=token,
             gateway_host=gateway_host,
             gateway_port=gateway_port,
+            tls=tls,
         )
 
     terminal.header(f"Context '{name}' does not exist. Let's try setting it up.")
@@ -176,6 +179,7 @@ def prompt_for_config_context(
     prompt_gateway_port = functools.partial(
         terminal.prompt, text="Gateway Port", default=gateway_port or settings.gateway_port
     )
+    prompt_tls = functools.partial(terminal.prompt, text="TLS", default=False)
 
     try:
         while not name and not (name := prompt_name()):
@@ -193,6 +197,11 @@ def prompt_for_config_context(
             while not (gateway_port := prompt_gateway_port()) or not validate_port(gateway_port):
                 terminal.warn("Gateway port is invalid.")
 
+        if gateway_port not in [443, "443"]:
+            tls = prompt_tls(text="TLS", default=False)
+        else:
+            tls = True
+
         if require_token:
             while not (token := terminal.prompt(text="Token", default=None)) or len(token) < 64:
                 terminal.warn("Token is invalid.")
@@ -206,6 +215,7 @@ def prompt_for_config_context(
         token=token,
         gateway_host=gateway_host,
         gateway_port=gateway_port,
+        tls=tls,
     )
 
 

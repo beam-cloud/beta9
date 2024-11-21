@@ -15,7 +15,7 @@ primary_region = 'lax'
     [[services.ports]]
         handlers = ['http', 'tls']
         tls_options = { "alpn" = ["http/1.1"] }
-        port = 1994
+        port = 443
 
 [[services]]
     internal_port = 1993
@@ -25,8 +25,7 @@ primary_region = 'lax'
     [[services.ports]]
         handlers = ['tls']
         tls_options = { "alpn" = ["h2"] }
-
-        port = 443
+        port = 1993
 
     [services.ports.http_options]
         h2_backend = true
