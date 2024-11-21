@@ -137,7 +137,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		// If the container is still running, stop it. This happens when a sigterm is detected.
 		container, err := s.runcHandle.State(context.TODO(), containerId)
 		if err == nil && container.Status == types.RuncContainerStatusRunning {
-			if err := s.stopContainer(containerId, false); err != nil {
+			if err := s.stopContainer(containerId, true); err != nil {
 				log.Printf("<%s> - failed to stop container: %v\n", containerId, err)
 			}
 		}
