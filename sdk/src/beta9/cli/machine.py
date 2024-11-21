@@ -1,3 +1,4 @@
+import textwrap
 from datetime import datetime, timezone
 
 import click
@@ -168,23 +169,25 @@ def create_machine(service: ServiceClient, pool: str):
     terminal.header(
         f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
     )
-    terminal.detail(
+
+    text = textwrap.dedent(
         f"""\
-# -- User data
-{res.machine.user_data}
-# -- Agent setup
-sudo curl -L -o agent https://release.beam.cloud/agent/agent && \\
-sudo chmod +x agent && \\
-sudo ./agent --token "{res.machine.registration_token}" \\
-    --machine-id "{res.machine.id}" \\
-    --tailscale-url "{res.machine.tailscale_url}" \\
-    --tailscale-auth "{res.machine.tailscale_auth}" \\
-    --pool-name "{res.machine.pool_name}" \\
-    --provider-name "{res.machine.provider_name}"
-""",
-        crop=False,
-        overflow="ignore",
+        # -- Agent setup
+        sudo curl -L -o agent https://release.beam.cloud/agent/agent && \\
+        sudo chmod +x agent && \\
+        sudo ./agent --token "{res.machine.registration_token}" \\
+            --machine-id "{res.machine.id}" \\
+            --tailscale-url "{res.machine.tailscale_url}" \\
+            --tailscale-auth "{res.machine.tailscale_auth}" \\
+            --pool-name "{res.machine.pool_name}" \\
+            --provider-name "{res.machine.provider_name}"
+        """
     )
+
+    if res.machine.user_data:
+        text = f"""# -- User data\n{res.machine.user_data}\n{text}"""
+
+    terminal.detail(text, crop=False, overflow="ignore")
 
 
 @management.command(
