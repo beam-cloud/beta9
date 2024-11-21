@@ -1,6 +1,7 @@
 import json
 import mimetypes
 from typing import Any, Optional, Union
+from uuid import uuid4
 
 from ....clients.bot import (
     BotServiceStub,
@@ -174,3 +175,30 @@ class BotContext(FunctionContext):
                 },
             )
         )
+
+    def get_file(cls, *, description: str, timeout_seconds: int = 120) -> Union[str, None]:
+        """Capture a file from the user and associate it with the current session"""
+
+        r: PushBotEventBlockingResponse = cls.bot_stub.push_bot_event_blocking(
+            PushBotEventBlockingRequest(
+                stub_id=cls.stub_id,
+                session_id=cls.session_id,
+                event_type=BotEventType.INPUT_FILE,
+                event_value=json.dumps(
+                    {
+                        "description": description,
+                        "file_id": uuid4().hex,
+                    }
+                ),
+                metadata={
+                    "task_id": cls.task_id,
+                    "session_id": cls.session_id,
+                    "transition_name": cls.transition_name,
+                },
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        if not r.ok:
+            return None
+
+        return r.event.value

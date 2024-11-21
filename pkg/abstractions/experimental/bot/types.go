@@ -9,6 +9,11 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+const (
+	botVolumeName      = "beta9-bot-inputs"
+	botVolumeMountPath = "./bot-input-files"
+)
+
 var ErrBotSessionNotFound = fmt.Errorf("bot session not found")
 
 type BotSession struct {
@@ -87,6 +92,7 @@ const (
 	BotEventTypeConfirmTransition   BotEventType = "confirm_transition"
 	BotEventTypeAcceptTransition    BotEventType = "accept_transition"
 	BotEventTypeRejectTransition    BotEventType = "reject_transition"
+	BotEventTypeInputFile           BotEventType = "input_file"
 	BotEventTypeOutputFile          BotEventType = "output_file"
 )
 

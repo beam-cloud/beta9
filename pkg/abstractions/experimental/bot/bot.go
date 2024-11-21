@@ -182,6 +182,7 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 		StateManager:   pbs.botStateManager,
 		TaskDispatcher: pbs.taskDispatcher,
 		ContainerRepo:  pbs.containerRepo,
+		BackendRepo:    pbs.backendRepo,
 	})
 	if err != nil {
 		return nil, err
