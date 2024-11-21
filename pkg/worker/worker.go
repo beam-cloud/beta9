@@ -361,8 +361,6 @@ func (s *Worker) processStopContainerEvents() {
 		default:
 			err := s.stopContainer(event.ContainerId, event.Kill)
 			if err != nil {
-				// TODO: stopContainer never returns an error, should we stop re-inserting the event?
-				s.stopContainerChan <- event
 				time.Sleep(time.Second)
 			}
 		}
