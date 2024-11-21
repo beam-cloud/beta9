@@ -282,6 +282,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     task_policy: "TaskPolicy" = betterproto.message_field(23)
     concurrent_requests: int = betterproto.uint32_field(24)
     extra: str = betterproto.string_field(25)
+    retry_for: List[str] = betterproto.string_field(26)
 
 
 @dataclass(eq=False, repr=False)

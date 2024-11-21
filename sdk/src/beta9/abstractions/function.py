@@ -63,6 +63,8 @@ class Function(RunnerAbstraction):
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
+        retry_for (Optional[List[BaseException]]):
+            A list of exceptions that will trigger a retry.
     Example:
         ```python
         from beta9 import function, Image
@@ -95,6 +97,7 @@ class Function(RunnerAbstraction):
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
         task_policy: TaskPolicy = TaskPolicy(),
+        retry_for: Optional[List[Exception]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -108,6 +111,7 @@ class Function(RunnerAbstraction):
             secrets=secrets,
             name=name,
             task_policy=task_policy,
+            retry_for=[e.__name__ for e in retry_for] if retry_for else [],
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None
@@ -141,6 +145,16 @@ class _CallableWrapper(DeployableMixin):
             return
 
         if not is_local():
+            if self.parent.retry_for:
+                retries = 0
+                while retries < self.parent.task_policy.max_retries:
+                    try:
+                        return self.local(*args, **kwargs)
+                    except Exception as e:
+                        if e.__class__.__name__ in self.parent.retry_for:
+                            print(f"Function failed <{self.parent.stub_id}>, retrying...")
+                            retries += 1
+                            continue
             return self.local(*args, **kwargs)
 
         if not self.parent.prepare_runtime(

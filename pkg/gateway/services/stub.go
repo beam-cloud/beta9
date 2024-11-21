@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 )
 
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
+	log.Printf("Getting or creating stub: %v", in)
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	var warning string
 
