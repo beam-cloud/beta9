@@ -30,6 +30,8 @@ class ImageCredentialValueNotFound(Exception):
 
 
 class AWSCredentials(TypedDict, total=False):
+    """Amazon Web Services credentials"""
+
     AWS_ACCESS_KEY_ID: str
     AWS_SECRET_ACCESS_KEY: str
     AWS_SESSION_TOKEN: str
@@ -37,12 +39,22 @@ class AWSCredentials(TypedDict, total=False):
 
 
 class GCPCredentials(TypedDict, total=False):
+    """Google Cloud Platform credentials"""
+
     GCP_ACCESS_TOKEN: str
 
 
 class DockerHubCredentials(TypedDict, total=False):
+    """Docker Hub credentials"""
+
     DOCKERHUB_USERNAME: str
     DOCKERHUB_PASSWORD: str
+
+
+class NGCCredentials(TypedDict, total=False):
+    """NVIDIA GPU Cloud credentials"""
+
+    NGC_API_KEY: str
 
 
 ImageCredentialKeys = Literal[
@@ -53,9 +65,16 @@ ImageCredentialKeys = Literal[
     "DOCKERHUB_USERNAME",
     "DOCKERHUB_PASSWORD",
     "GCP_ACCESS_TOKEN",
+    "NGC_API_KEY",
 ]
 
-ImageCredentials = Union[AWSCredentials, DockerHubCredentials, GCPCredentials, ImageCredentialKeys]
+ImageCredentials = Union[
+    AWSCredentials,
+    DockerHubCredentials,
+    GCPCredentials,
+    NGCCredentials,
+    ImageCredentialKeys,
+]
 
 
 class Image(BaseAbstraction):
@@ -95,17 +114,16 @@ class Image(BaseAbstraction):
                 Default is [].
             base_image (Optional[str]):
                 A custom base image to replace the default ubuntu20.04 image used in your container.
-                This can be a public or private image from Docker Hub, Amazon ECR, or Google Artifact
-                Registry. The formats for these registries are respectively `docker.io/my-org/my-image:0.1.0`,
-                `111111111111.dkr.ecr.us-east-1.amazonaws.com/my-image:latest`, and
-                `us-east4-docker.pkg.dev/my-project/my-repo/my-image:0.1.0`. Default is None.
-            base_image_creds (Optional[ImageCredentials]):
-                A key/value pair or key sequence of environment variables that contain credentials to
-                a private registry. When provided as a dict, you must supply the correct keys and values.
-                When provided as a sequence, the keys are used to lookup the environment variable value
-                for you. Currently only AWS ECR is supported and can be configured by setting the
-                `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and `AWS_REGION` keys.
+                This can be a public or private image from Docker Hub, Amazon ECR, Google Cloud Artifact Registry, or
+                NVIDIA GPU Cloud Registry. The formats for these registries are respectively `docker.io/my-org/my-image:0.1.0`,
+                `111111111111.dkr.ecr.us-east-1.amazonaws.com/my-image:latest`,
+                `us-east4-docker.pkg.dev/my-project/my-repo/my-image:0.1.0`, and `nvcr.io/my-org/my-repo:0.1.0`.
                 Default is None.
+            base_image_creds (Optional[ImageCredentials]):
+                A key/value pair or key list of environment variables that contain credentials to
+                a private registry. When provided as a dict, you must supply the correct keys and values.
+                When provided as a list, the keys are used to lookup the environment variable value
+                for you. Default is None.
             env_vars (Optional[Union[str, List[str], Dict[str, str]]):
                 Adds environment variables to an image. These will be available when building the image
                 and when the container is running. This can be a string, a list of strings, or a
@@ -169,6 +187,27 @@ class Image(BaseAbstraction):
                 python_version="python3.12",
                 base_image="us-east4-docker.pkg.dev/my-project/my-repo/my-image:0.1.0",
                 base_image_creds=["GCP_ACCESS_TOKEN"],
+            )
+
+            @endpoint(image=image)
+            def handler():
+                pass
+
+            NVIDIA GPU Cloud (NGC)
+
+            To use a private image from NVIDIA GPU Cloud, export your API key.
+
+            ```sh
+            export NGC_API_KEY=abc123
+            ```
+
+            Then configure the Image object to use the environment variable.
+
+            ```python
+            image = Image(
+                python_version="python3.12",
+                base_image="nvcr.io/nvidia/tensorrt:24.10-py3",
+                base_image_creds=["NGC_API_KEY"],
             )
 
             @endpoint(image=image)
