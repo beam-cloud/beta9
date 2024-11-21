@@ -71,14 +71,9 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 
 	err := s.runcHandle.Kill(context.Background(), containerId, signal, &runc.KillOpts{All: true})
 	if err != nil {
-		log.Printf("<%s> - unable to stop container: %v\n", containerId, err)
-
-		if strings.Contains(err.Error(), "container does not exist") {
-			s.containerNetworkManager.TearDown(containerId)
-			return nil
-		}
-
-		return err
+		log.Printf("<%s> - error stopping container: %v\n", containerId, err)
+		s.containerNetworkManager.TearDown(containerId)
+		return nil
 	}
 
 	log.Printf("<%s> - container stopped.\n", containerId)
