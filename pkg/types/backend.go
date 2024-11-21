@@ -185,10 +185,6 @@ type StubConfigV1 struct {
 	Extra              json.RawMessage `json:"extra"`
 }
 
-func (c *StubConfigV1) RequiresGPU() bool {
-	return len(c.Runtime.Gpus) > 0 || c.Runtime.Gpu != ""
-}
-
 type AutoscalerType string
 
 const (
@@ -294,12 +290,11 @@ type Image struct {
 }
 
 type Runtime struct {
-	Cpu      int64     `json:"cpu"`
-	Gpu      GpuType   `json:"gpu"`
-	GpuCount uint32    `json:"gpu_count"`
-	Memory   int64     `json:"memory"`
-	ImageId  string    `json:"image_id"`
-	Gpus     []GpuType `json:"gpus"`
+	Cpu     int64     `json:"cpu"`
+	Gpu     GpuType   `json:"gpu"`
+	Memory  int64     `json:"memory"`
+	ImageId string    `json:"image_id"`
+	Gpus    []GpuType `json:"gpus"`
 }
 
 type GpuType string

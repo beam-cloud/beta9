@@ -87,7 +87,6 @@ type CORSConfig struct {
 type StubLimits struct {
 	Memory      uint64 `key:"memory" json:"memory"`
 	MaxReplicas uint64 `key:"maxReplicas" json:"max_replicas"`
-	MaxGpuCount uint32 `key:"maxGpuCount" json:"max_gpu_count"`
 }
 
 type GatewayServiceConfig struct {

@@ -49,7 +49,6 @@ gateway:
   stubLimits:
     memory: 32768
     maxReplicas: 10
-    maxGpuCount: 2
 imageService:
   localCacheEnabled: true
   registryStore: local
