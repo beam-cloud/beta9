@@ -6,6 +6,82 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestGetRegistryToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    *BuildOpts
+		want    string
+		wantErr bool
+	}{
+		// TODO: Mock ECR test so we can test for a valid test token
+		{
+			name: "amazon ecr registry",
+			opts: &BuildOpts{
+				ExistingImageUri: "123456789012.dkr.ecr.us-west-2.amazonaws.com/my-repo:latest",
+				ExistingImageCreds: map[string]string{
+					"AWS_ACCESS_KEY_ID":     "accessKey123",
+					"AWS_SECRET_ACCESS_KEY": "secretKey123",
+					"AWS_REGION":            "us-west-2",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "google cloud artifact registry",
+			opts: &BuildOpts{
+				ExistingImageUri: "us-east4-docker.pkg.dev/project-abcd/test-repo/test-image:0.1.0",
+				ExistingImageCreds: map[string]string{
+					"GCP_ACCESS_TOKEN": "token123",
+				},
+			},
+			want: "oauth2accesstoken:token123",
+		},
+		{
+			name: "nvidia gpu cloud registry",
+			opts: &BuildOpts{
+				ExistingImageUri: "nvcr.io/nvidia/cuda:11.0-base",
+				ExistingImageCreds: map[string]string{
+					"NGC_API_KEY": "key123",
+				},
+			},
+			want: "$oauthtoken:key123",
+		},
+		{
+			name: "dockerhub registry",
+			opts: &BuildOpts{
+				ExistingImageUri: "docker.io/debian:bullseye",
+				ExistingImageCreds: map[string]string{
+					"DOCKERHUB_USERNAME": "user123",
+					"DOCKERHUB_PASSWORD": "pass123",
+				},
+			},
+			want: "user123:pass123",
+		},
+		{
+			name: "unknown registry",
+			opts: &BuildOpts{
+				ExistingImageUri:   "unknown.registry.com/image:latest",
+				ExistingImageCreds: map[string]string{},
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, err := GetRegistryToken(tt.opts)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, token)
+		})
+	}
+}
+
 func TestGetDockerHubToken(t *testing.T) {
 	tests := []struct {
 		name    string
