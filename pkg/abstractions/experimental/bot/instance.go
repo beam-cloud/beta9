@@ -428,34 +428,35 @@ func (i *botInstance) waitForInputFile(sessionId string, event *BotEvent) {
 			log.Printf("<bot %s> Input file upload timeout for session %s: %s", i.stub.ExternalId, sessionId, fileId)
 			return
 		case <-time.After(time.Second):
-			if _, err := os.Stat(filePath); err == nil {
-				log.Printf("<bot %s> Input file <%s> received", i.stub.ExternalId, filePath)
+			if _, err := os.Stat(filePath); err != nil {
+				continue
+			}
 
-				containerFilePath := filepath.Join(botVolumeMountPath, sessionId, fileId)
-				response := &BotEvent{
-					Type:  BotEventTypeInputFileResponse,
-					Value: containerFilePath,
-					Metadata: map[string]string{
-						string(MetadataSessionId):      sessionId,
-						string(MetadataTransitionName): event.Metadata[string(MetadataTransitionName)],
-						string(MetadataTaskId):         event.Metadata[string(MetadataTaskId)],
-					},
-				}
+			log.Printf("<bot %s> Input file <%s> received", i.stub.ExternalId, filePath)
+			containerFilePath := filepath.Join(botVolumeMountPath, sessionId, fileId)
+			response := &BotEvent{
+				Type:  BotEventTypeInputFileResponse,
+				Value: containerFilePath,
+				Metadata: map[string]string{
+					string(MetadataSessionId):      sessionId,
+					string(MetadataTransitionName): event.Metadata[string(MetadataTransitionName)],
+					string(MetadataTaskId):         event.Metadata[string(MetadataTaskId)],
+				},
+			}
 
-				err = i.botStateManager.pushEventPair(i.workspace.Name, i.stub.ExternalId, sessionId, event.PairId, event, response)
-				if err != nil {
-					log.Printf("<bot %s> Error pushing input file event pair: %s", i.stub.ExternalId, err)
-					return
-				}
-
-				err = i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, response)
-				if err != nil {
-					log.Printf("<bot %s> Error pushing input file event: %s", i.stub.ExternalId, err)
-					return
-				}
-
+			err = i.botStateManager.pushEventPair(i.workspace.Name, i.stub.ExternalId, sessionId, event.PairId, event, response)
+			if err != nil {
+				log.Printf("<bot %s> Error pushing input file event pair: %s", i.stub.ExternalId, err)
 				return
 			}
+
+			err = i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, response)
+			if err != nil {
+				log.Printf("<bot %s> Error pushing input file event: %s", i.stub.ExternalId, err)
+				return
+			}
+
+			return
 		}
 	}
 
