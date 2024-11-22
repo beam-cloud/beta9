@@ -435,8 +435,9 @@ func (i *botInstance) waitForInputFile(sessionId string, event *BotEvent) {
 			log.Printf("<bot %s> Input file <%s> received", i.stub.ExternalId, filePath)
 			containerFilePath := filepath.Join(botVolumeMountPath, sessionId, fileId)
 			response := &BotEvent{
-				Type:  BotEventTypeInputFileResponse,
-				Value: containerFilePath,
+				PairId: event.PairId,
+				Type:   BotEventTypeInputFileResponse,
+				Value:  containerFilePath,
 				Metadata: map[string]string{
 					string(MetadataSessionId):      sessionId,
 					string(MetadataTransitionName): event.Metadata[string(MetadataTransitionName)],
