@@ -186,7 +186,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 				}
 
 				if !heartbeat {
-					d.retryTask(ctx, task, taskMessage)
+					d.RetryTask(ctx, task)
 					continue
 				}
 			}
@@ -194,7 +194,9 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 	}
 }
 
-func (d *Dispatcher) retryTask(ctx context.Context, task types.TaskInterface, taskMessage *types.TaskMessage) error {
+func (d *Dispatcher) RetryTask(ctx context.Context, task types.TaskInterface) error {
+	taskMessage := task.Message()
+
 	err := d.taskRepo.SetTaskRetryLock(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 	if err != nil {
 		return err

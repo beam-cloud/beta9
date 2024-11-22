@@ -90,3 +90,7 @@ func (t *EndpointTask) Metadata() types.TaskMetadata {
 		TaskId:        t.msg.TaskId,
 	}
 }
+
+func (t *EndpointTask) Message() *types.TaskMessage {
+	return t.msg
+}

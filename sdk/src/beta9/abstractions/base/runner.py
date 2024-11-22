@@ -94,7 +94,6 @@ class RunnerAbstraction(BaseAbstraction):
         name: Optional[str] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
-        retry_for: Optional[List[str]] = None,
     ) -> None:
         super().__init__()
 
@@ -129,7 +128,6 @@ class RunnerAbstraction(BaseAbstraction):
             timeout=task_policy.timeout or timeout,
             ttl=task_policy.ttl,
         )
-        self.retry_for = retry_for
         self.extra: dict = {}
 
         if on_start is not None:
@@ -426,7 +424,6 @@ class RunnerAbstraction(BaseAbstraction):
                 ),
                 concurrent_requests=self.concurrent_requests,
                 extra=json.dumps(self.extra),
-                retry_for=self.retry_for,
             )
             if _is_stub_created_for_workspace():
                 stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(

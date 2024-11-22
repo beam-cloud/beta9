@@ -73,6 +73,7 @@ class TaskQueueCompleteRequest(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class TaskQueueCompleteResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
+    message: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
