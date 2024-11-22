@@ -17,4 +17,5 @@ def get_app_dirs():
 def write_test_config():
     os.environ["BETA9_GATEWAY_HOST"] = "0.0.0.0"
     os.environ["BETA9_GATEWAY_PORT"] = "443"
+    os.environ["BETA9_GATEWAY_TLS"] = "true"
     os.environ["BETA9_TOKEN"] = "test-token"

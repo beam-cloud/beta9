@@ -250,6 +250,11 @@ def generate_config_file(
             },
         ]
 
+        agent = config["agent"]
+        agent["control_plane_redis"]["hostname"] = f"{cp_redis_config.app_name}.fly.dev"
+        agent["juicefs_redis"]["hostname"] = f"{juicefs_redis_config.app_name}.fly.dev"
+        agent["blobcache_redis"]["hostname"] = f"{bc_redis_config.app_name}.fly.dev"
+
         return config
 
 
@@ -262,8 +267,8 @@ def setup_gateway(
     images_storage_config: StorageConfig,
 ):
     tailscale_config = TailscaleConfig(
-        host=os.environ.get("TAILSCALE_HOST", ""),
-        auth_token=os.environ.get("TAILSCALE_AUTH_TOKEN", ""),
+        host=os.getenv("TAILSCALE_HOST", ""),
+        auth_token=os.getenv("TAILSCALE_AUTH_TOKEN", ""),
     )
 
     gateway_app_name = generate_name("control-plane-gateway")

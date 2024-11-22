@@ -195,8 +195,8 @@ monitoring:
     apiKey: ""
 agent:
   controlPlaneRedis:
-    hostname:
+    hostname: ""
   juicefsRedis:
-    hostname: 
+    hostname: ""
   blobcacheRedis:
-    hostname:
+    hostname: ""

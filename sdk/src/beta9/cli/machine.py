@@ -177,7 +177,8 @@ def create_machine(service: ServiceClient, pool: str):
               --tailscale-url "{res.machine.tailscale_url}" \\
               --tailscale-auth "{res.machine.tailscale_auth}" \\
               --pool-name "{res.machine.pool_name}" \\
-              --provider-name "{res.machine.provider_name}"
+              --provider-name "{res.machine.provider_name}" \\
+              --gateway-url "https://{service._config.gateway_host}"
             """),
             crop=False,
             overflow="ignore",

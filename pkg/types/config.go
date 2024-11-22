@@ -20,6 +20,7 @@ type AppConfig struct {
 	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
 	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
+	Agent          RootAgentConfig           `key:"agent" json:"agent"`
 }
 
 type DatabaseConfig struct {
@@ -281,6 +282,16 @@ type EC2ProviderConfig struct {
 	AMI          string              `key:"ami" json:"ami"`
 	SubnetId     *string             `key:"subnetId" json:"subnet_id"`
 	Agent        ProviderAgentConfig `key:"agent" json:"agent"`
+}
+
+type AgentRedisConfig struct {
+	Hostname string `key:"hostname" json:"hostname"`
+}
+
+type RootAgentConfig struct {
+	ControlPlaneRedis AgentRedisConfig `key:"controlPlaneRedis" json:"control_plane_redis"`
+	JuicefsRedis      AgentRedisConfig `key:"juicefsRedis" json:"juicefs_redis"`
+	BlobcacheRedis    AgentRedisConfig `key:"blobcacheRedis" json:"blobcache_redis"`
 }
 
 type OCIProviderConfig struct {

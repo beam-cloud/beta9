@@ -248,5 +248,16 @@
       "server_url": "http://some-metering-server:8080",
       "api_key": "http://some-metering-server:8080"
     }
+  },
+  "agent": {
+    "control_plane_redis": {
+      "hostname": ""
+    },
+    "blobcache_redis": {
+      "hostname": ""
+    },
+    "juicefs_redis": {
+      "redisURI": ""
+    }
   }
 }
