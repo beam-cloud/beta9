@@ -83,7 +83,6 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 	stream := ctx.Request().Body
 	defer stream.Close()
 
-	// TODO: wait for the file to be completely uploaded before moving to it's actual location
 	ch := make(chan CopyPathContent)
 	decodedVolumePath, err := url.QueryUnescape(volumePath)
 	if err != nil {
