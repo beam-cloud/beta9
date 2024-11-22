@@ -362,7 +362,15 @@ func (i *botInstance) monitorEvents() error {
 			case BotEventTypeInputFileRequest:
 				go i.waitForInputFile(sessionId, event)
 			case BotEventTypeConfirmResponse:
-				// TODO: Handle confirm response
+				i.botStateManager.pushEventPair(i.workspace.Name, i.stub.ExternalId, sessionId, event.PairId, &BotEvent{
+					Type:  BotEventTypeConfirmRequest,
+					Value: event.Value,
+					Metadata: map[string]string{
+						string(MetadataSessionId):      sessionId,
+						string(MetadataTransitionName): event.Metadata[string(MetadataTransitionName)],
+						string(MetadataTaskId):         event.Metadata[string(MetadataTaskId)],
+					},
+				}, event)
 			case BotEventTypeAcceptTransition, BotEventTypeRejectTransition:
 				taskId := event.Metadata[string(MetadataTaskId)]
 				transitionName := event.Metadata[string(MetadataTransitionName)]

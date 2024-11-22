@@ -95,7 +95,7 @@ const (
 	BotEventTypeInputFileRequest    BotEventType = "input_file_request"
 	BotEventTypeInputFileResponse   BotEventType = "input_file_response"
 	BotEventTypeOutputFile          BotEventType = "output_file"
-	BotEventTypeConfirmPrompt       BotEventType = "confirm_prompt"
+	BotEventTypeConfirmRequest      BotEventType = "confirm_request"
 	BotEventTypeConfirmResponse     BotEventType = "confirm_response"
 )
 
