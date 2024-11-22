@@ -360,7 +360,7 @@ func (i *botInstance) monitorEvents() error {
 			case BotEventTypeMemoryMessage:
 				i.botInterface.SendPrompt(sessionId, PromptTypeMemory, event)
 			case BotEventTypeInputFileRequest:
-				go i.handleInputFile(sessionId, event)
+				go i.waitForInputFile(sessionId, event)
 			case BotEventTypeConfirmResponse:
 				// TODO: Handle confirm response
 			case BotEventTypeAcceptTransition, BotEventTypeRejectTransition:
@@ -385,7 +385,7 @@ func (i *botInstance) monitorEvents() error {
 	}
 }
 
-func (i *botInstance) handleInputFile(sessionId string, event *BotEvent) {
+func (i *botInstance) waitForInputFile(sessionId string, event *BotEvent) {
 	eventValue := map[string]string{}
 	err := json.Unmarshal([]byte(event.Value), &eventValue)
 	if err != nil {
