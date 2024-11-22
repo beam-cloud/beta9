@@ -13,6 +13,7 @@ import (
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/task"
@@ -417,16 +418,7 @@ func (i *botInstance) waitForInputFile(sessionId string, event *BotEvent) {
 	filePath := filepath.Join(types.DefaultVolumesPath, i.authInfo.Workspace.Name, i.botInputsVolume.ExternalId, sessionId, fileId)
 	log.Printf("<bot %s> Waiting on input file for session %s: %s", i.stub.ExternalId, sessionId, filePath)
 
-	var ctx context.Context
-	var cancel context.CancelFunc
-
-	if timeout < 0 {
-		ctx = i.ctx
-		cancel = func() {}
-	} else {
-		ctx, cancel = context.WithTimeout(i.ctx, time.Duration(timeout)*time.Second)
-	}
-
+	ctx, cancel := common.GetTimeoutContext(i.ctx, timeout)
 	defer cancel()
 
 	// Check for the existence of the file
