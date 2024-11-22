@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"time"
 
 	"context"
 
@@ -219,8 +218,6 @@ func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventR
 	return &pb.PushBotEventResponse{Ok: true}, nil
 }
 
-const defaultWaitTimeoutS = 30
-
 func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushBotEventBlockingRequest) (*pb.PushBotEventBlockingResponse, error) {
 	instance, err := s.getOrCreateBotInstance(in.StubId)
 	if err != nil {
@@ -238,19 +235,7 @@ func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushB
 		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
 	}
 
-	var ctxWithTimeout context.Context
-	var cancel context.CancelFunc
-
-	if in.TimeoutSeconds == -1 {
-		ctxWithTimeout = instance.ctx
-		cancel = func() {}
-	} else {
-		timeoutS := defaultWaitTimeoutS
-		if in.TimeoutSeconds > 0 {
-			timeoutS = int(in.TimeoutSeconds)
-		}
-		ctxWithTimeout, cancel = context.WithTimeout(instance.ctx, time.Duration(timeoutS)*time.Second)
-	}
+	ctxWithTimeout, cancel := common.GetTimeoutContext(ctx, int(in.TimeoutSeconds))
 	defer cancel()
 
 	eventPair, err := s.botStateManager.waitForEventPair(ctxWithTimeout, instance.workspace.Name, instance.stub.ExternalId, in.SessionId, pairId)
