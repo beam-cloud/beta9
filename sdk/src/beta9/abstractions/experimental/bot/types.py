@@ -12,6 +12,8 @@ from ....clients.bot import (
 from ....runner.common import FunctionContext
 from .bot import BotEvent, BotEventType
 
+BOT_VOLUME_NAME = "beta9-bot-inputs"
+
 
 class BotContext(FunctionContext):
     session_id: str = ""
@@ -213,6 +215,7 @@ class BotContext(FunctionContext):
             str or None: Path to the file in the container.
         """
 
+        file_id = uuid4().hex
         r: PushBotEventBlockingResponse = cls.bot_stub.push_bot_event_blocking(
             PushBotEventBlockingRequest(
                 stub_id=cls.stub_id,
@@ -221,8 +224,9 @@ class BotContext(FunctionContext):
                 event_value=json.dumps(
                     {
                         "description": description,
-                        "file_id": uuid4().hex,
+                        "file_id": file_id,
                         "timeout_seconds": str(timeout_seconds),
+                        "volume_path": f"{BOT_VOLUME_NAME}/{cls.session_id}/{file_id}",
                     }
                 ),
                 metadata={
