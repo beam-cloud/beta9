@@ -111,11 +111,11 @@ class Function(RunnerAbstraction):
             secrets=secrets,
             name=name,
             task_policy=task_policy,
-            retry_for=[e.__name__ for e in retry_for] if retry_for else [],
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
+        self.retry_for = retry_for
 
     def __call__(self, func):
         return _CallableWrapper(func, self)
@@ -145,16 +145,6 @@ class _CallableWrapper(DeployableMixin):
             return
 
         if not is_local():
-            if self.parent.retry_for:
-                retries = 0
-                while retries < self.parent.task_policy.max_retries:
-                    try:
-                        return self.local(*args, **kwargs)
-                    except Exception as e:
-                        if e.__class__.__name__ in self.parent.retry_for:
-                            print(f"Function failed <{self.parent.stub_id}>, retrying...")
-                            retries += 1
-                            continue
             return self.local(*args, **kwargs)
 
         if not self.parent.prepare_runtime(
