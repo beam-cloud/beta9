@@ -135,7 +135,7 @@ class BotContext(FunctionContext):
             PushBotEventBlockingRequest(
                 stub_id=cls.stub_id,
                 session_id=cls.session_id,
-                event_type=BotEventType.CONFIRM_PROMPT,
+                event_type=BotEventType.CONFIRM_REQUEST,
                 event_value=json.dumps(
                     {
                         "description": description,

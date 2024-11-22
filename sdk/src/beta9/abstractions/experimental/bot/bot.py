@@ -45,7 +45,7 @@ class BotEventType(str, Enum):
     OUTPUT_FILE = "output_file"
     INPUT_FILE_REQUEST = "input_file_request"
     INPUT_FILE_RESPONSE = "input_file_response"
-    CONFIRM_PROMPT = "confirm_prompt"
+    CONFIRM_REQUEST = "confirm_request"
     CONFIRM_RESPONSE = "confirm_response"
 
 
