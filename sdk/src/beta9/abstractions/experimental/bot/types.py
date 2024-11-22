@@ -139,6 +139,7 @@ class BotContext(FunctionContext):
                 event_value=json.dumps(
                     {
                         "description": description,
+                        "timeout_seconds": str(timeout_seconds),
                     }
                 ),
                 metadata={
