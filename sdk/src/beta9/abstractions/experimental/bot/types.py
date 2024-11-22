@@ -130,6 +130,30 @@ class BotContext(FunctionContext):
             )
         )
 
+    def confirm(cls, *, description: str, timeout_seconds: int = 120) -> bool:
+        r: PushBotEventBlockingResponse = cls.bot_stub.push_bot_event_blocking(
+            PushBotEventBlockingRequest(
+                stub_id=cls.stub_id,
+                session_id=cls.session_id,
+                event_type=BotEventType.CONFIRM_PROMPT,
+                event_value=json.dumps(
+                    {
+                        "description": description,
+                    }
+                ),
+                metadata={
+                    "task_id": cls.task_id,
+                    "session_id": cls.session_id,
+                    "transition_name": cls.transition_name,
+                },
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        if not r.ok:
+            return False
+
+        return r.event.value == "true"
+
     def remember(cls, obj: Any):
         """Store an arbitrary object in the bot's memory (must be JSON serializable)"""
 
@@ -176,14 +200,19 @@ class BotContext(FunctionContext):
             )
         )
 
-    def get_file(cls, *, description: str, timeout_seconds: int = 120) -> Union[str, None]:
-        """Capture a file from the user and associate it with the current session"""
+    def get_file(cls, *, description: str, timeout_seconds: int = 600) -> Union[str, None]:
+        """
+        Capture a file from the user and associate it with the current session.
+
+        Returns:
+            str or None: The path to the file in the container.
+        """
 
         r: PushBotEventBlockingResponse = cls.bot_stub.push_bot_event_blocking(
             PushBotEventBlockingRequest(
                 stub_id=cls.stub_id,
                 session_id=cls.session_id,
-                event_type=BotEventType.INPUT_FILE,
+                event_type=BotEventType.INPUT_FILE_REQUEST,
                 event_value=json.dumps(
                     {
                         "description": description,

@@ -92,8 +92,11 @@ const (
 	BotEventTypeConfirmTransition   BotEventType = "confirm_transition"
 	BotEventTypeAcceptTransition    BotEventType = "accept_transition"
 	BotEventTypeRejectTransition    BotEventType = "reject_transition"
-	BotEventTypeInputFile           BotEventType = "input_file"
+	BotEventTypeInputFileRequest    BotEventType = "input_file_request"
+	BotEventTypeInputFileResponse   BotEventType = "input_file_response"
 	BotEventTypeOutputFile          BotEventType = "output_file"
+	BotEventTypeConfirmPrompt       BotEventType = "confirm_prompt"
+	BotEventTypeConfirmResponse     BotEventType = "confirm_response"
 )
 
 const PromptTypeUser = "user_message"

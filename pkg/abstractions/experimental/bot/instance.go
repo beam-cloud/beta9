@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -357,8 +358,10 @@ func (i *botInstance) monitorEvents() error {
 				i.botInterface.SendPrompt(sessionId, PromptTypeTransition, event)
 			case BotEventTypeMemoryMessage:
 				i.botInterface.SendPrompt(sessionId, PromptTypeMemory, event)
-			case BotEventTypeInputFile:
+			case BotEventTypeInputFileRequest:
 				go i.handleInputFile(sessionId, event)
+			case BotEventTypeConfirmResponse:
+				// TODO: Handle confirm response
 			case BotEventTypeAcceptTransition, BotEventTypeRejectTransition:
 				taskId := event.Metadata[string(MetadataTaskId)]
 				transitionName := event.Metadata[string(MetadataTransitionName)]
@@ -393,17 +396,41 @@ func (i *botInstance) handleInputFile(sessionId string, event *BotEvent) {
 		return
 	}
 
-	log.Printf("<bot %s> Received input file event for session %s: %s", i.stub.ExternalId, sessionId, fileId)
+	filePath := filepath.Join(types.DefaultVolumesPath, i.authInfo.Workspace.Name, i.botInputsVolume.ExternalId, sessionId, fileId)
+	log.Printf("<bot %s> Waiting on input file for session %s: %s", i.stub.ExternalId, sessionId, filePath)
 
 	// Check for the existence of the file
-	filePath := fmt.Sprintf("%s/%s/%s/%s", types.DefaultVolumesPath, i.authInfo.Workspace.Name, i.botInputsVolume.ExternalId, fileId)
 	for {
 		select {
 		case <-i.ctx.Done():
 			return
 		case <-time.After(time.Second):
 			if _, err := os.Stat(filePath); err == nil {
-				log.Printf("<bot %s> File %s has been uploaded", i.stub.ExternalId, fileId)
+				log.Printf("<bot %s> Input file %s has been uploaded", i.stub.ExternalId, fileId)
+
+				containerFilePath := filepath.Join(botVolumeMountPath, sessionId, fileId)
+				response := &BotEvent{
+					Type:  BotEventTypeInputFileResponse,
+					Value: containerFilePath,
+					Metadata: map[string]string{
+						string(MetadataSessionId):      sessionId,
+						string(MetadataTransitionName): event.Metadata[string(MetadataTransitionName)],
+						string(MetadataTaskId):         event.Metadata[string(MetadataTaskId)],
+					},
+				}
+
+				err = i.botStateManager.pushEventPair(i.workspace.Name, i.stub.ExternalId, sessionId, event.PairId, event, response)
+				if err != nil {
+					log.Printf("<bot %s> Error pushing input file event pair: %s", i.stub.ExternalId, err)
+					return
+				}
+
+				err = i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, response)
+				if err != nil {
+					log.Printf("<bot %s> Error pushing input file event: %s", i.stub.ExternalId, err)
+					return
+				}
+
 				return
 			}
 		}

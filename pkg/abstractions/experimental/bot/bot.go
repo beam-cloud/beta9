@@ -238,12 +238,22 @@ func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushB
 		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
 	}
 
-	timeoutS := defaultWaitTimeoutS
-	if in.TimeoutSeconds > 0 {
-		timeoutS = int(in.TimeoutSeconds)
-	}
+	var ctxWithTimeout context.Context
+	var cancel context.CancelFunc
 
-	eventPair, err := s.botStateManager.waitForEventPair(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, pairId, time.Duration(timeoutS)*time.Second)
+	if in.TimeoutSeconds == -1 {
+		ctxWithTimeout = instance.ctx
+		cancel = func() {}
+	} else {
+		timeoutS := defaultWaitTimeoutS
+		if in.TimeoutSeconds > 0 {
+			timeoutS = int(in.TimeoutSeconds)
+		}
+		ctxWithTimeout, cancel = context.WithTimeout(instance.ctx, time.Duration(timeoutS)*time.Second)
+	}
+	defer cancel()
+
+	eventPair, err := s.botStateManager.waitForEventPair(ctxWithTimeout, instance.workspace.Name, instance.stub.ExternalId, in.SessionId, pairId)
 	if err != nil {
 		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
 	}
