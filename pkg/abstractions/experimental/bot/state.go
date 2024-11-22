@@ -286,10 +286,7 @@ func (m *botStateManager) pushEventPair(workspaceName, stubId, sessionId, pairId
 	return m.rdb.Set(context.TODO(), eventPairKey, jsonData, eventPairTtlS).Err()
 }
 
-func (m *botStateManager) waitForEventPair(workspaceName, stubId, sessionId, pairId string, timeout time.Duration) (*BotEventPair, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
+func (m *botStateManager) waitForEventPair(ctx context.Context, workspaceName, stubId, sessionId, pairId string) (*BotEventPair, error) {
 	for {
 		select {
 		case <-ctx.Done():

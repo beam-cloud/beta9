@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 func MergeContexts(ctxs ...context.Context) (context.Context, context.CancelFunc) {
@@ -27,4 +28,12 @@ func MergeContexts(ctxs ...context.Context) (context.Context, context.CancelFunc
 	}()
 
 	return ctx, cancel
+}
+
+func GetTimeoutContext(baseCtx context.Context, timeoutSeconds int) (context.Context, context.CancelFunc) {
+	if timeoutSeconds < 0 {
+		return baseCtx, func() {}
+	}
+
+	return context.WithTimeout(baseCtx, time.Duration(timeoutSeconds)*time.Second)
 }

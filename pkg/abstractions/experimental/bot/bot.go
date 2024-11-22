@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"time"
 
 	"context"
 
@@ -182,6 +181,7 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 		StateManager:   pbs.botStateManager,
 		TaskDispatcher: pbs.taskDispatcher,
 		ContainerRepo:  pbs.containerRepo,
+		BackendRepo:    pbs.backendRepo,
 	})
 	if err != nil {
 		return nil, err
@@ -218,8 +218,6 @@ func (s *PetriBotService) PushBotEvent(ctx context.Context, in *pb.PushBotEventR
 	return &pb.PushBotEventResponse{Ok: true}, nil
 }
 
-const defaultWaitTimeoutS = 30
-
 func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushBotEventBlockingRequest) (*pb.PushBotEventBlockingResponse, error) {
 	instance, err := s.getOrCreateBotInstance(in.StubId)
 	if err != nil {
@@ -237,12 +235,10 @@ func (s *PetriBotService) PushBotEventBlocking(ctx context.Context, in *pb.PushB
 		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
 	}
 
-	timeoutS := defaultWaitTimeoutS
-	if in.TimeoutSeconds > 0 {
-		timeoutS = int(in.TimeoutSeconds)
-	}
+	ctxWithTimeout, cancel := common.GetTimeoutContext(ctx, int(in.TimeoutSeconds))
+	defer cancel()
 
-	eventPair, err := s.botStateManager.waitForEventPair(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, pairId, time.Duration(timeoutS)*time.Second)
+	eventPair, err := s.botStateManager.waitForEventPair(ctxWithTimeout, instance.workspace.Name, instance.stub.ExternalId, in.SessionId, pairId)
 	if err != nil {
 		return &pb.PushBotEventBlockingResponse{Ok: false}, nil
 	}

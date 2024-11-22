@@ -1,6 +1,7 @@
 import json
 import mimetypes
 from typing import Any, Optional, Union
+from uuid import uuid4
 
 from ....clients.bot import (
     BotServiceStub,
@@ -129,6 +130,31 @@ class BotContext(FunctionContext):
             )
         )
 
+    def confirm(cls, *, description: str, timeout_seconds: int = 120) -> bool:
+        r: PushBotEventBlockingResponse = cls.bot_stub.push_bot_event_blocking(
+            PushBotEventBlockingRequest(
+                stub_id=cls.stub_id,
+                session_id=cls.session_id,
+                event_type=BotEventType.CONFIRM_REQUEST,
+                event_value=json.dumps(
+                    {
+                        "description": description,
+                        "timeout_seconds": str(timeout_seconds),
+                    }
+                ),
+                metadata={
+                    "task_id": cls.task_id,
+                    "session_id": cls.session_id,
+                    "transition_name": cls.transition_name,
+                },
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        if not r.ok:
+            return False
+
+        return r.event.value == "true"
+
     def remember(cls, obj: Any):
         """Store an arbitrary object in the bot's memory (must be JSON serializable)"""
 
@@ -174,3 +200,40 @@ class BotContext(FunctionContext):
                 },
             )
         )
+
+    def get_file(cls, *, description: str, timeout_seconds: Optional[int] = -1) -> Union[str, None]:
+        """
+        Request a file from the user.
+
+        Args:
+            description (str): Description of the requested file to be displayed to the user.
+            timeout_seconds (int): Time to wait for the file in seconds. -1 for no timeout.
+
+        Returns:
+            str or None: Path to the file in the container.
+        """
+
+        r: PushBotEventBlockingResponse = cls.bot_stub.push_bot_event_blocking(
+            PushBotEventBlockingRequest(
+                stub_id=cls.stub_id,
+                session_id=cls.session_id,
+                event_type=BotEventType.INPUT_FILE_REQUEST,
+                event_value=json.dumps(
+                    {
+                        "description": description,
+                        "file_id": uuid4().hex,
+                        "timeout_seconds": str(timeout_seconds),
+                    }
+                ),
+                metadata={
+                    "task_id": cls.task_id,
+                    "session_id": cls.session_id,
+                    "transition_name": cls.transition_name,
+                },
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        if not r.ok:
+            return None
+
+        return r.event.value
