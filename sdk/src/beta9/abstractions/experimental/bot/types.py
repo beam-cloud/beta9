@@ -200,12 +200,16 @@ class BotContext(FunctionContext):
             )
         )
 
-    def get_file(cls, *, description: str, timeout_seconds: int = -1) -> Union[str, None]:
+    def get_file(cls, *, description: str, timeout_seconds: Optional[int] = -1) -> Union[str, None]:
         """
-        Capture a file from the user and associate it with the current session.
+        Request a file from the user.
+
+        Args:
+            description (str): Description of the requested file to be displayed to the user.
+            timeout_seconds (int): Time to wait for the file in seconds. -1 for no timeout.
 
         Returns:
-            str or None: The path to the file in the container.
+            str or None: Path to the file in the container.
         """
 
         r: PushBotEventBlockingResponse = cls.bot_stub.push_bot_event_blocking(
