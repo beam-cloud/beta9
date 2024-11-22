@@ -39,6 +39,7 @@ class VerifyImageBuildRequest(betterproto.Message):
     force_rebuild: bool = betterproto.bool_field(4)
     existing_image_uri: str = betterproto.string_field(5)
     build_steps: List["BuildStep"] = betterproto.message_field(6)
+    env_vars: List[str] = betterproto.string_field(7)
 
 
 @dataclass(eq=False, repr=False)
@@ -62,6 +63,7 @@ class BuildImageRequest(betterproto.Message):
         5, betterproto.TYPE_STRING, betterproto.TYPE_STRING
     )
     build_steps: List["BuildStep"] = betterproto.message_field(6)
+    env_vars: List[str] = betterproto.string_field(7)
 
 
 @dataclass(eq=False, repr=False)

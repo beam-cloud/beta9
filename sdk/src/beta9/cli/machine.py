@@ -163,29 +163,32 @@ def list_machines(
 def create_machine(service: ServiceClient, pool: str):
     res: CreateMachineResponse
     res = service.gateway.create_machine(CreateMachineRequest(pool_name=pool))
-    if res.ok:
-        terminal.header(
-            f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
-        )
-        terminal.detail(
-            textwrap.dedent(f"""
-            #!/bin/bash
-            sudo curl -L -o agent https://release.beam.cloud/agent/agent && \\
-            sudo chmod +x agent && \\
-            sudo ./agent --token "{res.machine.registration_token}" \\
-              --machine-id "{res.machine.id}" \\
-              --tailscale-url "{res.machine.tailscale_url}" \\
-              --tailscale-auth "{res.machine.tailscale_auth}" \\
-              --pool-name "{res.machine.pool_name}" \\
-              --provider-name "{res.machine.provider_name}" \\
-              --gateway-url "https://{service._config.gateway_host}"
-            """),
-            crop=False,
-            overflow="ignore",
-        )
+    if not res.ok:
+        return terminal.error(f"Error: {res.err_msg}")
 
-    else:
-        terminal.error(f"Error: {res.err_msg}")
+    terminal.header(
+        f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
+    )
+
+    text = textwrap.dedent(
+        f"""\
+        # -- Agent setup
+        sudo curl -L -o agent https://release.beam.cloud/agent/agent && \\
+        sudo chmod +x agent && \\
+        sudo ./agent --token "{res.machine.registration_token}" \\
+            --machine-id "{res.machine.id}" \\
+            --tailscale-url "{res.machine.tailscale_url}" \\
+            --tailscale-auth "{res.machine.tailscale_auth}" \\
+            --pool-name "{res.machine.pool_name}" \\
+            --provider-name "{res.machine.provider_name}" \\
+            --gateway-url "https://{service._config.gateway_host}"
+        """
+    )
+
+    if res.machine.user_data:
+        text = f"""# -- User data\n{res.machine.user_data}\n{text}"""
+
+    terminal.detail(text, crop=False, overflow="ignore")
 
 
 @management.command(

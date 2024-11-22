@@ -5,11 +5,14 @@
 
 ---
 
-### Cross-Cloud Serverless Engine
+### The Cloud Platform for Generative AI
 
-Run serverless workloads with fast cold starts on bare-metal servers, anywhere in the world
+Run serverless GPU workloads with fast cold starts on bare-metal servers, anywhere in the world
 
 <p align="center">
+  <a href="https://github.com/beam-cloud/beta9/stargazers">
+    <img alt="⭐ Star the Repo" src="https://img.shields.io/github/stars/beam-cloud/beta9">
+  </a>
   <a href="https://docs.beam.cloud">
     <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-purple">
   </a>
@@ -43,7 +46,7 @@ Run serverless workloads with fast cold starts on bare-metal servers, anywhere i
 
 ## How Does It Work?
 
-### Run Serverless Workloads in Pure Python
+### Run Serverless AI Workloads
 
 Add an `endpoint` decorator to your code, and you'll get a load-balanced HTTP endpoint (with auth!) to invoke your code.
 

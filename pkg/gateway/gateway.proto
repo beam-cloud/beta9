@@ -256,6 +256,7 @@ message GetOrCreateStubRequest {
   Autoscaler autoscaler = 22;
   TaskPolicy task_policy = 23;
   uint32 concurrent_requests = 24;
+  string extra = 25;
 }
 
 message GetOrCreateStubResponse {
@@ -355,6 +356,7 @@ message Machine {
   string created = 13;
   string agent_version = 14;
   MachineMetrics machine_metrics = 15;
+  string user_data = 16;
 }
 
 message MachineMetrics {

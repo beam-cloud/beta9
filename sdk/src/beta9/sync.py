@@ -69,6 +69,7 @@ drive/MyDrive
 **/__pycache__/
 **/.pytest_cache/
 **/node_modules/
+**/.venv/
 *.pyc
 .next/
 .circleci

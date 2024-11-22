@@ -59,3 +59,12 @@ var WorkerContainerExitCodes = map[int]string{
 	WorkerContainerExitCodeInvalidCustomImage: "InvalidCustomImage: Could not find custom image",
 	WorkerContainerExitCodeIncorrectImageOs:   "InvalidOs: Image is not built for linux",
 }
+
+const (
+	// Used specifically for runc states.
+	// Not the same as the scheduler container states.
+	RuncContainerStatusCreated string = "created"
+	RuncContainerStatusRunning string = "running"
+	RuncContainerStatusPaused  string = "paused"
+	RuncContainerStatusStopped string = "stopped"
+)

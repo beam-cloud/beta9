@@ -1,6 +1,7 @@
 package image
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	_ "embed"
@@ -8,7 +9,9 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"runtime"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,6 +62,7 @@ type BuildOpts struct {
 	ExistingImageUri   string
 	ExistingImageCreds map[string]string
 	ForceRebuild       bool
+	EnvVars            []string
 }
 
 func (o *BuildOpts) String() string {
@@ -112,6 +116,11 @@ func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 			fmt.Fprintf(h, "%s-%s", step.Type, step.Command)
 		}
 	}
+	if len(opts.EnvVars) > 0 {
+		for _, envVar := range opts.EnvVars {
+			fmt.Fprint(h, envVar)
+		}
+	}
 	commandListHash := hex.EncodeToString(h.Sum(nil))
 
 	bodyToHash := &ImageIdHash{
@@ -162,6 +171,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		BaseImageName:     opts.BaseImageName,
 		BaseImageTag:      opts.BaseImageTag,
 		ExistingImageUri:  opts.ExistingImageUri,
+		EnvVars:           opts.EnvVars,
 	})
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
@@ -185,7 +195,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	err = b.scheduler.Run(&types.ContainerRequest{
 		ContainerId:      containerId,
-		Env:              []string{},
+		Env:              opts.EnvVars,
 		Cpu:              cpu,
 		Memory:           memory,
 		ImageId:          baseImageId,
@@ -283,7 +293,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
 	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
-		installCmd := getPythonInstallCommand(opts.PythonVersion)
+		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, opts.PythonVersion)
+		if err != nil {
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+			return err
+		}
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
 
@@ -484,6 +498,55 @@ func getPythonInstallCommand(pythonVersion string) string {
 	postInstallCmd := fmt.Sprintf("rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/%s /usr/bin/python && ln -s /usr/bin/%s /usr/bin/python3 && %s", pythonVersion, pythonVersion, installPipCmd)
 
 	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
+}
+
+// PythonStandaloneTemplate is used to render the standalone python install script
+type PythonStandaloneTemplate struct {
+	PythonVersion string
+
+	// Architecture, OS, and Vendor are determined at runtime
+	Architecture string
+	OS           string
+	Vendor       string
+}
+
+func getPythonStandaloneInstallCommand(config types.PythonStandaloneConfig, pythonVersion string) (string, error) {
+	var arch string
+	switch runtime.GOARCH {
+	case "amd64":
+		arch = "x86_64"
+	case "arm64":
+		arch = "aarch64"
+	default:
+		return "", errors.New("unsupported architecture for python standalone install")
+	}
+
+	var vendor, os string
+	switch runtime.GOOS {
+	case "linux":
+		vendor, os = "unknown", "linux"
+	case "darwin":
+		vendor, os = "apple", "darwin"
+	default:
+		return "", errors.New("unsupported OS for python standalone install")
+	}
+
+	tmpl, err := template.New("standalonePython").Parse(config.InstallScriptTemplate)
+	if err != nil {
+		return "", err
+	}
+
+	var output bytes.Buffer
+	if err := tmpl.Execute(&output, PythonStandaloneTemplate{
+		PythonVersion: config.Versions[pythonVersion],
+		Architecture:  arch,
+		OS:            os,
+		Vendor:        vendor,
+	}); err != nil {
+		return "", err
+	}
+
+	return output.String(), nil
 }
 
 func generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {

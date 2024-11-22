@@ -405,7 +405,6 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	// Select the worker with the highest score
 	sort.Slice(scoredWorkers, func(i, j int) bool {
 		// TODO: Figure out a short way to randomize order of workers with the same score
-
 		return scoredWorkers[i].score > scoredWorkers[j].score
 	})
 

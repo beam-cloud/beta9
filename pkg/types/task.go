@@ -45,6 +45,7 @@ var (
 	ExecutorEndpoint  TaskExecutor = "endpoint"
 	ExecutorFunction  TaskExecutor = "function"
 	ExecutorContainer TaskExecutor = "container"
+	ExecutorBot       TaskExecutor = "bot"
 )
 
 // TaskMessage represents a JSON serializable message

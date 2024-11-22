@@ -22,6 +22,7 @@ from ..clients.gateway import (
     SignPayloadRequest,
     SignPayloadResponse,
 )
+from ..env import is_remote
 from ..exceptions import RunnerException
 
 USER_CODE_DIR = "/mnt/code"
@@ -87,7 +88,9 @@ class Config:
         )
 
 
-config: Config = Config.load_from_env()
+config: Union[Config, None] = None
+if is_remote():
+    config: Config = Config.load_from_env()
 
 
 @dataclass
@@ -135,8 +138,9 @@ class FunctionHandler:
     Helper class for loading user entry point functions
     """
 
-    def __init__(self) -> None:
+    def __init__(self, handler_path: Optional[str] = None) -> None:
         self.pass_context: bool = False
+        self.handler_path: Optional[str] = handler_path
         self.handler: Optional[Callable] = None
         self.is_async: bool = False
         self._load()
@@ -152,14 +156,20 @@ class FunctionHandler:
             sys.path.insert(0, USER_CODE_DIR)
 
         try:
-            module, func = config.handler.split(":")
+            module = None
+            func = None
+
+            if self.handler_path is not None:
+                module, func = self.handler_path.split(":")
+            else:
+                module, func = config.handler.split(":")
 
             with self.importing_user_code():
                 target_module = importlib.import_module(module)
 
             self.handler = getattr(target_module, func)
-            sig = inspect.signature(self.handler.func)
-            self.pass_context = "context" in sig.parameters
+            self.signature = inspect.signature(self.handler.func)
+            self.pass_context = "context" in self.signature.parameters
             self.is_async = asyncio.iscoroutinefunction(self.handler.func)
         except BaseException:
             raise RunnerException(f"Error loading handler: {traceback.format_exc()}")
@@ -172,7 +182,6 @@ class FunctionHandler:
             kwargs["context"] = context
 
         os.environ["TASK_ID"] = context.task_id or ""
-
         return self.handler(*args, **kwargs)
 
 
@@ -330,5 +339,8 @@ def is_asgi3(app: Any) -> bool:
 
 class ThreadPoolExecutorOverride(ThreadPoolExecutor):
     def __exit__(self, *_, **__):
-        # cancel_futures added in 3.9
-        self.shutdown(cancel_futures=True)
+        try:
+            # cancel_futures added in 3.9
+            self.shutdown(cancel_futures=True)
+        except Exception:
+            pass

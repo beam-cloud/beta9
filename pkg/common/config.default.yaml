@@ -78,6 +78,27 @@ imageService:
       micromamba3.10: micromamba3.10-latest
       micromamba3.11: micromamba3.11-latest
       micromamba3.12: micromamba3.12-latest
+    pythonStandalone:
+      versions:
+        python3.8: 3.8.20
+        python3.9: 3.9.20
+        python3.10: 3.10.15
+        python3.11: 3.11.10
+        python3.12: 3.12.7
+      installScriptTemplate: |
+        apt-get update -q && \
+        apt-get install -q -y build-essential curl git && \
+        curl -fsSL -o python.tgz 'https://github.com/indygreg/python-build-standalone/releases/download/20241002/cpython-{{.PythonVersion}}+20241002-{{.Architecture}}-{{.Vendor}}-{{.OS}}-gnu-install_only.tar.gz' && \
+        tar -xzf python.tgz -C /usr/local --strip-components 1 && \
+        rm -f python.tgz && \
+        rm -f /usr/bin/python && \
+        rm -f /usr/bin/python3 && \
+        ln -s /usr/local/bin/python3 /usr/bin/python && \
+        ln -s /usr/local/bin/python3 /usr/bin/python3 && \
+        rm -f /usr/bin/pip && \
+        rm -f /usr/bin/pip3 && \
+        ln -s /usr/local/bin/pip3 /usr/bin/pip && \
+        ln -s /usr/local/bin/pip3 /usr/bin/pip3
 worker:
   pools:
     default:
@@ -200,3 +221,8 @@ agent:
     hostname: ""
   blobcacheRedis:
     hostname: ""
+abstractions:
+  bot:
+    systemPrompt: ""
+    stepIntervalS: 1
+    sessionInactivityTimeoutS: 10

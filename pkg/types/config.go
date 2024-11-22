@@ -21,6 +21,7 @@ type AppConfig struct {
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
 	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
 	Agent          RootAgentConfig           `key:"agent" json:"agent"`
+	Abstractions   AbstractionConfig         `key:"abstractions" json:"abstractions"`
 }
 
 type DatabaseConfig struct {
@@ -103,7 +104,6 @@ type GatewayServiceConfig struct {
 
 type ImageServiceConfig struct {
 	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
-	BlobCacheEnabled               bool                  `key:"blobCacheEnabled" json:"blob_cache_enabled"` // TODO: remove this once all workers cycle with the new config
 	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
 	RegistryCredentialProviderName string                `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
 	Registries                     ImageRegistriesConfig `key:"registries" json:"registries"`
@@ -133,9 +133,15 @@ type S3ImageRegistryConfig struct {
 }
 
 type RunnerConfig struct {
-	BaseImageName     string            `key:"baseImageName" json:"base_image_name"`
-	BaseImageRegistry string            `key:"baseImageRegistry" json:"base_image_registry"`
-	Tags              map[string]string `key:"tags" json:"tags"`
+	BaseImageName     string                 `key:"baseImageName" json:"base_image_name"`
+	BaseImageRegistry string                 `key:"baseImageRegistry" json:"base_image_registry"`
+	Tags              map[string]string      `key:"tags" json:"tags"`
+	PythonStandalone  PythonStandaloneConfig `key:"pythonStandalone" json:"python_standalone"`
+}
+
+type PythonStandaloneConfig struct {
+	Versions              map[string]string `key:"versions" json:"versions"`
+	InstallScriptTemplate string            `key:"installScriptTemplate" json:"install_script_template"`
 }
 
 type StorageConfig struct {
@@ -216,6 +222,7 @@ type WorkerPoolConfig struct {
 	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
 	Priority             int32                             `key:"priority" json:"priority"`
 	Preemptable          bool                              `key:"preemptable" json:"preemptable"`
+	UserData             string                            `key:"userData" json:"user_data"`
 }
 
 type WorkerPoolJobSpecConfig struct {
@@ -398,4 +405,14 @@ type FluentBitEventConfig struct {
 	DialTimeout     time.Duration           `key:"dialTimeout" json:"dial_timeout"`
 	KeepAlive       time.Duration           `key:"keepAlive" json:"keep_alive"`
 	Mapping         []FluentBitEventMapping `key:"mapping" json:"mapping"`
+}
+
+type AbstractionConfig struct {
+	Bot BotConfig `key:"bot" json:"bot"`
+}
+
+type BotConfig struct {
+	SystemPrompt              string `key:"systemPrompt" json:"system_prompt"`
+	StepIntervalS             uint   `key:"stepIntervalS" json:"step_interval_s"`
+	SessionInactivityTimeoutS uint   `key:"sessionInactivityTimeoutS" json:"session_inactivity_timeout_s"`
 }
