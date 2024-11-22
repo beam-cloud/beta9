@@ -95,6 +95,8 @@ imageService:
         rm -f /usr/bin/python3 && \
         ln -s /usr/local/bin/python3 /usr/bin/python && \
         ln -s /usr/local/bin/python3 /usr/bin/python3 && \
+        rm -f /usr/bin/pip && \
+        rm -f /usr/bin/pip3 && \
         ln -s /usr/local/bin/pip3 /usr/bin/pip && \
         ln -s /usr/local/bin/pip3 /usr/bin/pip3
 worker:
