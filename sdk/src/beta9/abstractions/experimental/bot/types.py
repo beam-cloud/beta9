@@ -217,6 +217,7 @@ class BotContext(FunctionContext):
                     {
                         "description": description,
                         "file_id": uuid4().hex,
+                        "timeout_seconds": timeout_seconds,
                     }
                 ),
                 metadata={

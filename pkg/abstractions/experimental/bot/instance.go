@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -396,13 +397,22 @@ func (i *botInstance) handleInputFile(sessionId string, event *BotEvent) {
 		return
 	}
 
+	timeout, err := strconv.Atoi(eventValue["timeout_seconds"])
+	if err != nil {
+		timeout = -1
+	}
+
 	filePath := filepath.Join(types.DefaultVolumesPath, i.authInfo.Workspace.Name, i.botInputsVolume.ExternalId, sessionId, fileId)
 	log.Printf("<bot %s> Waiting on input file for session %s: %s", i.stub.ExternalId, sessionId, filePath)
+
+	ctx, cancel := context.WithTimeout(i.ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
 
 	// Check for the existence of the file
 	for {
 		select {
-		case <-i.ctx.Done():
+		case <-ctx.Done():
+			log.Printf("<bot %s> Input file upload timeout for session %s: %s", i.stub.ExternalId, sessionId, fileId)
 			return
 		case <-time.After(time.Second):
 			if _, err := os.Stat(filePath); err == nil {
