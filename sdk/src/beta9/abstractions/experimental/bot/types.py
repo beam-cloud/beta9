@@ -200,7 +200,7 @@ class BotContext(FunctionContext):
             )
         )
 
-    def get_file(cls, *, description: str, timeout_seconds: int = 600) -> Union[str, None]:
+    def get_file(cls, *, description: str, timeout_seconds: int = -1) -> Union[str, None]:
         """
         Capture a file from the user and associate it with the current session.
 
