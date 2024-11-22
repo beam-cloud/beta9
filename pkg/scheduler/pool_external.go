@@ -218,7 +218,6 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 
 		worker, err := wpc.createWorkerOnMachine(workerId, machine.State.MachineId, machine.State, cpu, memory, gpuType, gpuCount)
 		if err != nil {
-			log.Printf("Unable to create worker: %+v\n", err)
 			return nil, err
 		}
 
@@ -229,7 +228,6 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 }
 
 func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
-	log.Println("Attempting to add worker to machine", machineId)
 	client, err := wpc.getProxiedClient(machineState.HostName, machineState.Token)
 	if err != nil {
 		return nil, err
