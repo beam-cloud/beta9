@@ -362,6 +362,10 @@ func (i *botInstance) monitorEvents() error {
 			case BotEventTypeInputFileRequest:
 				go i.waitForInputFile(sessionId, event)
 			case BotEventTypeConfirmResponse:
+				if event.PairId == "" {
+					continue
+				}
+
 				i.botStateManager.pushEventPair(i.workspace.Name, i.stub.ExternalId, sessionId, event.PairId, &BotEvent{
 					Type:  BotEventTypeConfirmRequest,
 					Value: event.Value,
