@@ -405,7 +405,16 @@ func (i *botInstance) handleInputFile(sessionId string, event *BotEvent) {
 	filePath := filepath.Join(types.DefaultVolumesPath, i.authInfo.Workspace.Name, i.botInputsVolume.ExternalId, sessionId, fileId)
 	log.Printf("<bot %s> Waiting on input file for session %s: %s", i.stub.ExternalId, sessionId, filePath)
 
-	ctx, cancel := context.WithTimeout(i.ctx, time.Duration(timeout)*time.Second)
+	var ctx context.Context
+	var cancel context.CancelFunc
+
+	if timeout < 0 {
+		ctx = i.ctx
+		cancel = func() {}
+	} else {
+		ctx, cancel = context.WithTimeout(i.ctx, time.Duration(timeout)*time.Second)
+	}
+
 	defer cancel()
 
 	// Check for the existence of the file
@@ -416,7 +425,7 @@ func (i *botInstance) handleInputFile(sessionId string, event *BotEvent) {
 			return
 		case <-time.After(time.Second):
 			if _, err := os.Stat(filePath); err == nil {
-				log.Printf("<bot %s> Input file %s has been uploaded", i.stub.ExternalId, fileId)
+				log.Printf("<bot %s> Input file <%s> received", i.stub.ExternalId, filePath)
 
 				containerFilePath := filepath.Join(botVolumeMountPath, sessionId, fileId)
 				response := &BotEvent{
