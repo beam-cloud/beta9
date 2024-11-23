@@ -156,6 +156,7 @@ type BotConfig struct {
 	Locations   map[string]BotLocationConfig   `json:"locations" redis:"locations"`
 	Transitions map[string]BotTransitionConfig `json:"transitions" redis:"transitions"`
 	ApiKey      string                         `json:"api_key" redis:"api_key"`
+	Authorized  bool                           `json:"authorized" redis:"authorized"`
 }
 
 func (b *BotConfig) FormatLocations() string {
