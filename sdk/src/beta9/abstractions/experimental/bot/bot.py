@@ -234,7 +234,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
             A description of the bot. Default is None.
         volumes (Optional[List[Volume]]):
             A list of volumes to mount in bot transitions. Default is None.
-        authorized (Optional[bool]):
+        authorized (bool):
             If false, allows the bot to be invoked without an auth token.
             Default is True.
     """
