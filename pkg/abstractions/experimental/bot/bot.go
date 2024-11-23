@@ -114,6 +114,19 @@ func (pbs *PetriBotService) botTaskFactory(ctx context.Context, msg types.TaskMe
 	}, nil
 }
 
+func (pbs *PetriBotService) isPublic(stubId string) (*types.Workspace, error) {
+	instance, err := pbs.getOrCreateBotInstance(stubId)
+	if err != nil {
+		return nil, err
+	}
+
+	if instance.botConfig.Authorized {
+		return nil, errors.New("unauthorized")
+	}
+
+	return instance.workspace, nil
+}
+
 func (pbs *PetriBotService) handleBotContainerEvents(ctx context.Context) {
 	for {
 		select {

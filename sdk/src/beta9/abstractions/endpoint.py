@@ -74,7 +74,7 @@ class Endpoint(RunnerAbstraction):
         name (Optional[str]):
             An optional name for this endpoint, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
-        authorized (Optional[str]):
+        authorized (Optional[bool]):
             If false, allows the endpoint to be invoked without an auth token.
             Default is True.
         autoscaler (Optional[Autoscaler]):
