@@ -54,7 +54,7 @@ func NewContainerTunnelService(
 func (ts *ContainerTunnelService) CreateTunnel(ctx context.Context, in *pb.CreateTunnelRequest) (*pb.CreateTunnelResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	hostname, err := ts.containerRepo.GetWorkerAddress(in.ContainerId)
+	hostname, err := ts.containerRepo.GetWorkerAddress(ctx, in.ContainerId)
 	if err != nil {
 		return &pb.CreateTunnelResponse{
 			Ok: false,
