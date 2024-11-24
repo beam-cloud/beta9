@@ -35,6 +35,8 @@ type WorkerRepository interface {
 	GetContainerIps(networkPrefix string) ([]string, error)
 	SetNetworkLock(networkPrefix string, ttl, retries int) error
 	RemoveNetworkLock(networkPrefix string) error
+	SetWorkerPoolSizerLock(controllerName string) error
+	RemoveWorkerPoolSizerLock(controllerName string) error
 }
 
 type ContainerRepository interface {
@@ -45,10 +47,11 @@ type ContainerRepository interface {
 	SetContainerAddress(containerId string, addr string) error
 	GetContainerAddress(containerId string) (string, error)
 	UpdateContainerStatus(string, types.ContainerStatus, time.Duration) error
-	DeleteContainerState(*types.ContainerRequest) error
+	UpdateAssignedContainerGPU(string, string) error
+	DeleteContainerState(containerId string) error
 	SetWorkerAddress(containerId string, addr string) error
 	SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
-	GetWorkerAddress(containerId string) (string, error)
+	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
@@ -129,6 +132,7 @@ type BackendRepository interface {
 }
 
 type TaskRepository interface {
+	GetTaskState(ctx context.Context, workspaceName, stubId, taskId string) (*types.TaskMessage, error)
 	SetTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error
 	DeleteTaskState(ctx context.Context, workspaceName, stubId, taskId string) error
 	GetTasksInFlight(ctx context.Context) ([]*types.TaskMessage, error)

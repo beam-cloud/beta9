@@ -93,12 +93,20 @@ func NewExternalWorkerPoolController(
 	}
 
 	// Reconcile nodes with state
-	go provider.Reconcile(context.Background(), wpc.name)
+	go provider.Reconcile(ctx, wpc.name)
 
 	return wpc, nil
 }
 
-func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+func (wpc *ExternalWorkerPoolController) Context() context.Context {
+	return wpc.ctx
+}
+
+func (wpc *ExternalWorkerPoolController) IsPreemptable() bool {
+	return wpc.workerPool.Preemptable
+}
+
+func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
 	machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name, true)
@@ -108,7 +116,7 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 
 	// Attempt to schedule the worker on an existing machine first
 	for _, machine := range machines {
-		worker, err := wpc.attemptToAssignWorkerToMachine(workerId, cpu, memory, gpuType, gpuCount, machine)
+		worker, err := wpc.attemptToAssignWorkerToMachine(workerId, cpu, memory, wpc.workerPool.GPUType, gpuCount, machine)
 		if err != nil {
 			continue
 		}
@@ -126,7 +134,7 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	machineId, err := wpc.provider.ProvisionMachine(wpc.ctx, wpc.name, token.Key, types.ProviderComputeRequest{
 		Cpu:      cpu,
 		Memory:   memory,
-		Gpu:      gpuType,
+		Gpu:      wpc.workerPool.GPUType,
 		GpuCount: gpuCount,
 	})
 	if err != nil {
@@ -146,7 +154,7 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuT
 	}
 
 	log.Printf("Machine registered <machineId: %s>, hostname: %s\n", machineId, machineState.HostName)
-	worker, err := wpc.createWorkerOnMachine(workerId, machineId, machineState, cpu, memory, gpuType, gpuCount)
+	worker, err := wpc.createWorkerOnMachine(workerId, machineId, machineState, cpu, memory, wpc.workerPool.GPUType, gpuCount)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +268,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 
 	workerCpu := cpu
 	workerMemory := memory
-	workerGpuType := gpuType
+	workerGpuType := wpc.workerPool.GPUType
 	workerGpuCount := gpuCount
 
 	workerImage := fmt.Sprintf("%s/%s:%s",
@@ -350,6 +358,8 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
 		Priority:      wpc.workerPool.Priority,
+		BuildVersion:  wpc.config.Worker.ImageTag,
+		Preemptable:   wpc.workerPool.Preemptable,
 	}, nil
 }
 
@@ -404,6 +414,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		{
 			Name:  "NETWORK_PREFIX",
 			Value: machineId,
+		},
+		{
+			Name:  "PREEMPTABLE",
+			Value: strconv.FormatBool(wpc.workerPool.Preemptable),
 		},
 	}
 

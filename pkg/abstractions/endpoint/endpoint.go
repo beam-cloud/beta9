@@ -115,7 +115,7 @@ func NewHTTPEndpointService(
 				return true
 			}
 
-			instance, err := es.getOrCreateEndpointInstance(stubId)
+			instance, err := es.getOrCreateEndpointInstance(es.ctx, stubId)
 			if err != nil {
 				return false
 			}
@@ -146,7 +146,7 @@ func (es *HttpEndpointService) endpointTaskFactory(ctx context.Context, msg type
 }
 
 func (es *HttpEndpointService) isPublic(stubId string) (*types.Workspace, error) {
-	instance, err := es.getOrCreateEndpointInstance(stubId)
+	instance, err := es.getOrCreateEndpointInstance(es.ctx, stubId)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +164,7 @@ func (es *HttpEndpointService) forwardRequest(
 	authInfo *auth.AuthInfo,
 	stubId string,
 ) error {
-	instance, err := es.getOrCreateEndpointInstance(stubId)
+	instance, err := es.getOrCreateEndpointInstance(ctx.Request().Context(), stubId)
 	if err != nil {
 		return err
 	}
@@ -212,10 +212,10 @@ func (es *HttpEndpointService) forwardRequest(
 }
 
 func (es *HttpEndpointService) InstanceFactory(stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
-	return es.getOrCreateEndpointInstance(stubId)
+	return es.getOrCreateEndpointInstance(es.ctx, stubId)
 }
 
-func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {
+func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {
 	instance, exists := es.endpointInstances.Get(stubId)
 	if exists {
 		return instance, nil
@@ -248,6 +248,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(stubId string, option
 	// Create base autoscaled instance
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(es.ctx, &abstractions.AutoscaledInstanceConfig{
 		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
+		AppConfig:           es.config,
 		Rdb:                 es.rdb,
 		Stub:                stub,
 		StubConfig:          stubConfig,

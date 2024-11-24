@@ -168,19 +168,21 @@ type TaskStats struct {
 }
 
 type StubConfigV1 struct {
-	Runtime         Runtime      `json:"runtime"`
-	Handler         string       `json:"handler"`
-	OnStart         string       `json:"on_start"`
-	PythonVersion   string       `json:"python_version"`
-	KeepWarmSeconds uint         `json:"keep_warm_seconds"`
-	MaxPendingTasks uint         `json:"max_pending_tasks"`
-	CallbackUrl     string       `json:"callback_url"`
-	TaskPolicy      TaskPolicy   `json:"task_policy"`
-	Workers         uint         `json:"workers"`
-	Authorized      bool         `json:"authorized"`
-	Volumes         []*pb.Volume `json:"volumes"`
-	Secrets         []Secret     `json:"secrets,omitempty"`
-	Autoscaler      *Autoscaler  `json:"autoscaler"`
+	Runtime            Runtime         `json:"runtime"`
+	Handler            string          `json:"handler"`
+	OnStart            string          `json:"on_start"`
+	PythonVersion      string          `json:"python_version"`
+	KeepWarmSeconds    uint            `json:"keep_warm_seconds"`
+	MaxPendingTasks    uint            `json:"max_pending_tasks"`
+	CallbackUrl        string          `json:"callback_url"`
+	TaskPolicy         TaskPolicy      `json:"task_policy"`
+	Workers            uint            `json:"workers"`
+	ConcurrentRequests uint            `json:"concurrent_requests"`
+	Authorized         bool            `json:"authorized"`
+	Volumes            []*pb.Volume    `json:"volumes"`
+	Secrets            []Secret        `json:"secrets,omitempty"`
+	Autoscaler         *Autoscaler     `json:"autoscaler"`
+	Extra              json.RawMessage `json:"extra"`
 }
 
 type AutoscalerType string
@@ -214,6 +216,9 @@ const (
 	StubTypeApp                    string = "app"
 	StubTypeAppDeployment          string = "app/deployment"
 	StubTypeAppServe               string = "app/serve"
+	StubTypeBot                    string = "bot"
+	StubTypeBotDeployment          string = "bot/deployment"
+	StubTypeBotServe               string = "bot/serve"
 )
 
 type StubType string
@@ -288,10 +293,11 @@ type Image struct {
 }
 
 type Runtime struct {
-	Cpu     int64   `json:"cpu"`
-	Gpu     GpuType `json:"gpu"`
-	Memory  int64   `json:"memory"`
-	ImageId string  `json:"image_id"`
+	Cpu     int64     `json:"cpu"`
+	Gpu     GpuType   `json:"gpu"`
+	Memory  int64     `json:"memory"`
+	ImageId string    `json:"image_id"`
+	Gpus    []GpuType `json:"gpus"`
 }
 
 type GpuType string
@@ -317,6 +323,38 @@ func (g *GpuType) UnmarshalJSON(data []byte) error {
 	}
 
 	return nil
+}
+
+func (g *GpuType) MarshalJSON() ([]byte, error) {
+	if *g == "" {
+		return []byte("0"), nil
+	}
+
+	return json.Marshal(string(*g))
+}
+
+func (g *GpuType) String() string {
+	return string(*g)
+}
+
+func GPUTypesFromString(gpu string) []GpuType {
+	gpus := []GpuType{}
+	gpuString := strings.Trim(gpu, " ")
+	if len(gpuString) > 0 {
+		for _, g := range strings.Split(gpuString, ",") {
+			gpus = append(gpus, GpuType(g))
+		}
+	}
+
+	return gpus
+}
+
+func GpuTypesToStrings(gpus []GpuType) []string {
+	var gpuStrings []string
+	for _, gpu := range gpus {
+		gpuStrings = append(gpuStrings, string(gpu))
+	}
+	return gpuStrings
 }
 
 // FilterFieldMapping represents a mapping between a client-provided field and

@@ -1,6 +1,7 @@
 package image
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	_ "embed"
@@ -8,7 +9,9 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"runtime"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,12 +27,14 @@ import (
 )
 
 const (
-	defaultBuildContainerCpu      int64         = 1000
-	defaultBuildContainerMemory   int64         = 1024
-	defaultContainerSpinupTimeout time.Duration = 180 * time.Second
+	defaultImageBuildGracefulShutdownS               = 5 * time.Second
+	defaultBuildContainerCpu           int64         = 1000
+	defaultBuildContainerMemory        int64         = 1024
+	defaultContainerSpinupTimeout      time.Duration = 180 * time.Second
 
-	pipCommandType   string = "pip"
-	shellCommandType string = "shell"
+	pipCommandType        string = "pip"
+	shellCommandType      string = "shell"
+	micromambaCommandType string = "micromamba"
 )
 
 type Builder struct {
@@ -57,6 +62,7 @@ type BuildOpts struct {
 	ExistingImageUri   string
 	ExistingImageCreds map[string]string
 	ForceRebuild       bool
+	EnvVars            []string
 }
 
 func (o *BuildOpts) String() string {
@@ -110,6 +116,11 @@ func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 			fmt.Fprintf(h, "%s-%s", step.Type, step.Command)
 		}
 	}
+	if len(opts.EnvVars) > 0 {
+		for _, envVar := range opts.EnvVars {
+			fmt.Fprint(h, envVar)
+		}
+	}
 	commandListHash := hex.EncodeToString(h.Sum(nil))
 
 	bodyToHash := &ImageIdHash{
@@ -160,6 +171,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		BaseImageName:     opts.BaseImageName,
 		BaseImageTag:      opts.BaseImageTag,
 		ExistingImageUri:  opts.ExistingImageUri,
+		EnvVars:           opts.EnvVars,
 	})
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
@@ -183,7 +195,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	err = b.scheduler.Run(&types.ContainerRequest{
 		ContainerId:      containerId,
-		Env:              []string{},
+		Env:              opts.EnvVars,
 		Cpu:              cpu,
 		Memory:           memory,
 		ImageId:          baseImageId,
@@ -199,7 +211,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	hostname, err := b.containerRepo.GetWorkerAddress(containerId)
+	mctx, mcancel := context.WithCancel(ctx)
+	go b.monitorContainerForPreloadErrors(mctx, containerId, outputChan)
+
+	hostname, err := b.containerRepo.GetWorkerAddress(ctx, containerId)
+	mcancel()
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
@@ -261,30 +277,32 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	// Generate the pip install command and prepend it to the commands list
 	if len(opts.PythonPackages) > 0 {
-		pipInstallCmd := b.generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
+		pipInstallCmd := generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
 	}
 
 	log.Printf("container <%v> building with options: %s\n", containerId, opts)
 	startTime := time.Now()
 
+	micromambaEnv := strings.Contains(opts.PythonVersion, "micromamba")
+	if micromambaEnv {
+		client.Exec(containerId, "micromamba config set use_lockfiles False")
+	}
+
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	if resp, err := client.Exec(containerId, checkPythonVersionCmd); err != nil || !resp.Ok {
+	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
-		installCmd := b.getPythonInstallCommand(opts.PythonVersion)
+		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, opts.PythonVersion)
+		if err != nil {
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+			return err
+		}
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
 	}
 
 	// Generate the commands to run in the container
-	for _, step := range opts.BuildSteps {
-		switch step.Type {
-		case shellCommandType:
-			opts.Commands = append(opts.Commands, step.Command)
-		case pipCommandType:
-			opts.Commands = append(opts.Commands, b.generatePipInstallCommand([]string{step.Command}, opts.PythonVersion))
-		}
-	}
+	opts.Commands = append(opts.Commands, parseBuildSteps(opts.BuildSteps, opts.PythonVersion)...)
 
 	for _, cmd := range opts.Commands {
 		if cmd == "" {
@@ -299,22 +317,42 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 				errMsg = err.Error() + "\n"
 			}
 
-			time.Sleep(1 * time.Second) // Wait for logs to be passed through
+			time.Sleep(defaultImageBuildGracefulShutdownS) // Wait for logs to be passed through
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: errMsg}
 			return err
 		}
 	}
 	log.Printf("container <%v> build took %v\n", containerId, time.Since(startTime))
 
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "\nSaving image, this may take a few minutes...\n"}
 	err = client.Archive(ctx, containerId, imageId, outputChan)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+		outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: false, Msg: err.Error() + "\n"}
 		return err
 	}
 
-	outputChan <- common.OutputMsg{Done: true, Success: true, ImageId: imageId}
+	outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: true, ImageId: imageId}
 	return nil
+}
+
+func (b *Builder) monitorContainerForPreloadErrors(ctx context.Context, containerId string, outputChan chan common.OutputMsg) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(1 * time.Second):
+			if exitCode, err := b.containerRepo.GetContainerExitCode(containerId); err == nil {
+				if exitCode != 0 {
+					msg, ok := types.WorkerContainerExitCodes[exitCode]
+					if !ok {
+						msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+					}
+
+					outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
+				}
+				return
+			}
+		}
+	}
 }
 
 func (b *Builder) genContainerId() string {
@@ -338,6 +376,7 @@ func (b *Builder) extractPackageName(pkg string) string {
 	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
 }
 
+// handleCustomBaseImage validates the custom base image and parses its details into build options
 func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.OutputMsg) error {
 	if outputChan != nil {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Using custom base image: %s\n", opts.ExistingImageUri)}
@@ -396,57 +435,20 @@ func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
 }
 
-func (b *Builder) getPythonInstallCommand(pythonVersion string) string {
-	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common gcc curl git"
-	components := []string{
-		"python3-future",
-		pythonVersion,
-		fmt.Sprintf("%s-distutils", pythonVersion),
-		fmt.Sprintf("%s-dev", pythonVersion),
-	}
-
-	installCmd := strings.Join(components, " ")
-	installPipCmd := fmt.Sprintf("curl -sS https://bootstrap.pypa.io/get-pip.py | %s", pythonVersion)
-	postInstallCmd := fmt.Sprintf("rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/%s /usr/bin/python && ln -s /usr/bin/%s /usr/bin/python3 && %s", pythonVersion, pythonVersion, installPipCmd)
-
-	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
-}
-
-func (b *Builder) generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
-	var flagLines []string
-	var packages []string
-	var flags = []string{"--", "-"}
-
-	for _, pkg := range pythonPackages {
-		if hasAnyPrefix(pkg, flags) {
-			flagLines = append(flagLines, pkg)
-		} else {
-			packages = append(packages, fmt.Sprintf("%q", pkg))
-		}
-	}
-
-	command := fmt.Sprintf("%s -m pip install --root-user-action=ignore", pythonVersion)
-	if len(flagLines) > 0 {
-		command += " " + strings.Join(flagLines, " ")
-	}
-	if len(packages) > 0 {
-		command += " " + strings.Join(packages, " ")
-	}
-
-	return command
-}
-
 var imageNamePattern = regexp.MustCompile(
 	`^` + // Assert position at the start of the string
 		`(?:(?P<Registry>(?:(?:localhost|[\w.-]+(?:\.[\w.-]+)+)(?::\d+)?)|[\w]+:\d+)\/)?` + // Optional registry, which can be localhost, a domain with optional port, or a simple registry with port
-		`(?P<Namespace>(?:[a-z0-9]+(?:(?:[._]|__|[-]*)[a-z0-9]+)*)\/)*` + // Optional namespace, which can contain multiple segments separated by slashes
-		`(?P<Repo>[a-z0-9][-a-z0-9._]+)` + // Required repository name, must start with alphanumeric and can contain alphanumerics, hyphens, dots, and underscores
+		`(?P<Repo>(?:[\w][\w.-]*(?:/[\w][\w.-]*)*))?` + // Full repository path including namespace
 		`(?::(?P<Tag>[\w][\w.-]{0,127}))?` + // Optional tag, which starts with a word character and can contain word characters, dots, and hyphens
 		`(?:@(?P<Digest>[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9A-Fa-f]{32,}))?` + // Optional digest, which is a hash algorithm followed by a colon and a hexadecimal hash
 		`$`, // Assert position at the end of the string
 )
 
 func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
+	if imageRef == "" {
+		return BaseImage{}, errors.New("invalid image URI format")
+	}
+
 	matches := imageNamePattern.FindStringSubmatch(imageRef)
 	if matches == nil {
 		return BaseImage{}, errors.New("invalid image URI format")
@@ -464,7 +466,11 @@ func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
 		registry = "docker.io"
 	}
 
-	repo := result["Namespace"] + result["Repo"]
+	repo := result["Repo"]
+	if repo == "" {
+		return BaseImage{}, errors.New("invalid image URI format")
+	}
+
 	tag, digest := result["Tag"], result["Digest"]
 	if tag == "" && digest == "" {
 		tag = "latest"
@@ -478,6 +484,99 @@ func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
 	}, nil
 }
 
+func getPythonInstallCommand(pythonVersion string) string {
+	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common gcc curl git"
+	components := []string{
+		"python3-future",
+		pythonVersion,
+		fmt.Sprintf("%s-distutils", pythonVersion),
+		fmt.Sprintf("%s-dev", pythonVersion),
+	}
+
+	installCmd := strings.Join(components, " ")
+	installPipCmd := fmt.Sprintf("curl -sS https://bootstrap.pypa.io/get-pip.py | %s", pythonVersion)
+	postInstallCmd := fmt.Sprintf("rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/%s /usr/bin/python && ln -s /usr/bin/%s /usr/bin/python3 && %s", pythonVersion, pythonVersion, installPipCmd)
+
+	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
+}
+
+// PythonStandaloneTemplate is used to render the standalone python install script
+type PythonStandaloneTemplate struct {
+	PythonVersion string
+
+	// Architecture, OS, and Vendor are determined at runtime
+	Architecture string
+	OS           string
+	Vendor       string
+}
+
+func getPythonStandaloneInstallCommand(config types.PythonStandaloneConfig, pythonVersion string) (string, error) {
+	var arch string
+	switch runtime.GOARCH {
+	case "amd64":
+		arch = "x86_64"
+	case "arm64":
+		arch = "aarch64"
+	default:
+		return "", errors.New("unsupported architecture for python standalone install")
+	}
+
+	var vendor, os string
+	switch runtime.GOOS {
+	case "linux":
+		vendor, os = "unknown", "linux"
+	case "darwin":
+		vendor, os = "apple", "darwin"
+	default:
+		return "", errors.New("unsupported OS for python standalone install")
+	}
+
+	tmpl, err := template.New("standalonePython").Parse(config.InstallScriptTemplate)
+	if err != nil {
+		return "", err
+	}
+
+	var output bytes.Buffer
+	if err := tmpl.Execute(&output, PythonStandaloneTemplate{
+		PythonVersion: config.Versions[pythonVersion],
+		Architecture:  arch,
+		OS:            os,
+		Vendor:        vendor,
+	}); err != nil {
+		return "", err
+	}
+
+	return output.String(), nil
+}
+
+func generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
+	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
+
+	command := fmt.Sprintf("%s -m pip install --root-user-action=ignore", pythonVersion)
+	if len(flagLines) > 0 {
+		command += " " + strings.Join(flagLines, " ")
+	}
+	if len(packages) > 0 {
+		command += " " + strings.Join(packages, " ")
+	}
+
+	return command
+}
+
+func generateMicromambaInstallCommand(pythonPackages []string) string {
+	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
+
+	command := fmt.Sprintf("%s install -y -n beta9", micromambaCommandType)
+	if len(flagLines) > 0 {
+		command += " " + strings.Join(flagLines, " ")
+	}
+	if len(packages) > 0 {
+		command += " " + strings.Join(packages, " ")
+	}
+
+	return command
+}
+
 func hasAnyPrefix(s string, prefixes []string) bool {
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(s, prefix) {
@@ -485,4 +584,76 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+func parseFlagLinesAndPackages(pythonPackages []string) ([]string, []string) {
+	var flagLines []string
+	var packages []string
+	var flags = []string{"--", "-"}
+
+	for _, pkg := range pythonPackages {
+		if hasAnyPrefix(pkg, flags) {
+			flagLines = append(flagLines, pkg)
+		} else {
+			packages = append(packages, fmt.Sprintf("%q", pkg))
+		}
+	}
+	return flagLines, packages
+}
+
+// Generate the commands to run in the container. This function will coalesce pip and mamba commands
+// into a single command if they are adjacent to each other.
+func parseBuildSteps(buildSteps []BuildStep, pythonVersion string) []string {
+	commands := []string{}
+	var (
+		mambaStart int = -1
+		mambaGroup []string
+		pipStart   int = -1
+		pipGroup   []string
+	)
+
+	for _, step := range buildSteps {
+		if step.Type == shellCommandType {
+			commands = append(commands, step.Command)
+		}
+
+		if step.Type == pipCommandType {
+			if pipStart == -1 {
+				pipStart = len(commands)
+				commands = append(commands, "")
+			}
+			pipGroup = append(pipGroup, step.Command)
+		}
+
+		if step.Type == micromambaCommandType {
+			if mambaStart == -1 {
+				mambaStart = len(commands)
+				commands = append(commands, "")
+			}
+			mambaGroup = append(mambaGroup, step.Command)
+		}
+
+		// Flush any pending pip or mamba groups
+		if pipStart != -1 && step.Type != pipCommandType {
+			commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion)
+			pipStart = -1
+			pipGroup = nil
+		}
+
+		if mambaStart != -1 && step.Type != micromambaCommandType {
+			commands[mambaStart] = generateMicromambaInstallCommand(mambaGroup)
+			mambaStart = -1
+			mambaGroup = nil
+		}
+	}
+
+	if mambaStart != -1 {
+		commands[mambaStart] = generateMicromambaInstallCommand(mambaGroup)
+	}
+
+	if pipStart != -1 {
+		commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion)
+	}
+
+	return commands
 }

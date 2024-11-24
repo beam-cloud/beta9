@@ -80,8 +80,14 @@ func TestExtractImageNameAndTag(t *testing.T) {
 		{
 			ref:          "nvcr.io/nim/meta/llama-3.1-8b-instruct:1.1.0",
 			wantTag:      "1.1.0",
-			wantRepo:     "meta/llama-3.1-8b-instruct",
+			wantRepo:     "nim/meta/llama-3.1-8b-instruct",
 			wantRegistry: "nvcr.io",
+		},
+		{
+			ref:          "ghcr.io/gis-ops/docker-valhalla/valhalla:latest",
+			wantTag:      "latest",
+			wantRepo:     "gis-ops/docker-valhalla/valhalla",
+			wantRegistry: "ghcr.io",
 		},
 	}
 
@@ -145,8 +151,76 @@ func TestGeneratePipInstallCommand(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		b := &Builder{}
-		cmd := b.generatePipInstallCommand(tc.opts.PythonPackages, tc.opts.PythonVersion)
+		cmd := generatePipInstallCommand(tc.opts.PythonPackages, tc.opts.PythonVersion)
 		assert.Equal(t, tc.want, cmd)
+	}
+}
+
+func TestParseBuildSteps(t *testing.T) {
+	testCases := []struct {
+		steps []BuildStep
+		want  []string
+	}{
+		{
+			steps: []BuildStep{},
+			want:  []string{},
+		},
+		{
+			steps: []BuildStep{
+				{Type: shellCommandType, Command: "echo 'hello'"},
+				{Type: shellCommandType, Command: "echo 'world'"},
+			},
+			want: []string{"echo 'hello'", "echo 'world'"},
+		},
+		{
+			steps: []BuildStep{
+				{Type: pipCommandType, Command: "numpy"},
+				{Type: pipCommandType, Command: "pandas"},
+			},
+			want: []string{"micromamba3.10 -m pip install --root-user-action=ignore \"numpy\" \"pandas\""},
+		},
+		{
+			steps: []BuildStep{
+				{Type: micromambaCommandType, Command: "torch"},
+				{Type: micromambaCommandType, Command: "vllm"},
+			},
+			want: []string{"micromamba install -y -n beta9 \"torch\" \"vllm\""},
+		},
+		{
+			steps: []BuildStep{
+				{Type: shellCommandType, Command: "echo 'start'"},
+				{Type: pipCommandType, Command: "numpy"},
+				{Type: micromambaCommandType, Command: "torch"},
+				{Type: shellCommandType, Command: "echo 'end'"},
+			},
+			want: []string{"echo 'start'", "micromamba3.10 -m pip install --root-user-action=ignore \"numpy\"", "micromamba install -y -n beta9 \"torch\"", "echo 'end'"},
+		},
+		{
+			steps: []BuildStep{
+				{Type: shellCommandType, Command: "echo 'hello'"},
+				{Type: pipCommandType, Command: "numpy"},
+				{Type: pipCommandType, Command: "pandas"},
+				{Type: micromambaCommandType, Command: "torch"},
+				{Type: micromambaCommandType, Command: "vllm"},
+			},
+			want: []string{"echo 'hello'", "micromamba3.10 -m pip install --root-user-action=ignore \"numpy\" \"pandas\"", "micromamba install -y -n beta9 \"torch\" \"vllm\""},
+		},
+		{
+			steps: []BuildStep{
+				{Type: shellCommandType, Command: "echo 'hello'"},
+				{Type: pipCommandType, Command: "numpy"},
+				{Type: pipCommandType, Command: "pandas"},
+				{Type: micromambaCommandType, Command: "torch"},
+				{Type: micromambaCommandType, Command: "vllm"},
+				{Type: shellCommandType, Command: "apt install -y ffmpeg"},
+				{Type: micromambaCommandType, Command: "ffmpeg"},
+			},
+			want: []string{"echo 'hello'", "micromamba3.10 -m pip install --root-user-action=ignore \"numpy\" \"pandas\"", "micromamba install -y -n beta9 \"torch\" \"vllm\"", "apt install -y ffmpeg", "micromamba install -y -n beta9 \"ffmpeg\""},
+		},
+	}
+
+	for _, tc := range testCases {
+		got := parseBuildSteps(tc.steps, "micromamba3.10")
+		assert.Equal(t, tc.want, got)
 	}
 }

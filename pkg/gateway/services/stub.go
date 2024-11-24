@@ -3,8 +3,10 @@ package gatewayservices
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
@@ -26,7 +28,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	if in.Gpu != "" {
+	gpus := types.GPUTypesFromString(in.Gpu)
+
+	if len(gpus) > 0 {
 		concurrencyLimit, err := gws.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, authInfo.Workspace.ExternalId)
 		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
 			return &pb.GetOrCreateStubResponse{
@@ -44,8 +48,16 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 
 		// T4s are currently in a different pool than other GPUs and won't show up in gpu counts
-		if gpuCounts[in.Gpu] <= 1 && in.Gpu != types.GPU_T4.String() {
-			warning = fmt.Sprintf("GPU capacity for %s is currently low.", in.Gpu)
+		lowGpus := []string{}
+
+		for _, gpu := range gpus {
+			if gpuCounts[gpu.String()] <= 1 && gpu.String() != types.GPU_T4.String() {
+				lowGpus = append(lowGpus, gpu.String())
+			}
+		}
+
+		if len(lowGpus) > 0 {
+			warning = fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowGpus, ", "))
 		}
 	}
 
@@ -67,25 +79,31 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 	}
 
+	if in.Extra == "" {
+		in.Extra = "{}"
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:     in.Cpu,
-			Gpu:     types.GpuType(in.Gpu),
+			Gpus:    gpus,
 			Memory:  in.Memory,
 			ImageId: in.ImageId,
 		},
-		Handler:         in.Handler,
-		OnStart:         in.OnStart,
-		CallbackUrl:     in.CallbackUrl,
-		PythonVersion:   in.PythonVersion,
-		TaskPolicy:      gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),
-		KeepWarmSeconds: uint(in.KeepWarmSeconds),
-		Workers:         uint(in.Workers),
-		MaxPendingTasks: uint(in.MaxPendingTasks),
-		Volumes:         in.Volumes,
-		Secrets:         []types.Secret{},
-		Authorized:      in.Authorized,
-		Autoscaler:      autoscaler,
+		Handler:            in.Handler,
+		OnStart:            in.OnStart,
+		CallbackUrl:        in.CallbackUrl,
+		PythonVersion:      in.PythonVersion,
+		TaskPolicy:         gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),
+		KeepWarmSeconds:    uint(in.KeepWarmSeconds),
+		Workers:            uint(in.Workers),
+		ConcurrentRequests: uint(in.ConcurrentRequests),
+		MaxPendingTasks:    uint(in.MaxPendingTasks),
+		Volumes:            in.Volumes,
+		Secrets:            []types.Secret{},
+		Authorized:         in.Authorized,
+		Autoscaler:         autoscaler,
+		Extra:              json.RawMessage(in.Extra),
 	}
 
 	// Get secrets

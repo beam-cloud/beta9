@@ -64,6 +64,14 @@ func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.Ap
 	return wpc, nil
 }
 
+func (wpc *LocalKubernetesWorkerPoolController) Context() context.Context {
+	return wpc.ctx
+}
+
+func (wpc *LocalKubernetesWorkerPoolController) IsPreemptable() bool {
+	return wpc.workerPool.Preemptable
+}
+
 func (wpc *LocalKubernetesWorkerPoolController) Name() string {
 	return wpc.name
 }
@@ -72,9 +80,9 @@ func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapac
 	return freePoolCapacity(wpc.workerRepo, wpc)
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
-	return wpc.addWorkerWithId(workerId, cpu, memory, gpuType, gpuCount)
+	return wpc.addWorkerWithId(workerId, cpu, memory, wpc.workerPool.GPUType, gpuCount)
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
@@ -230,6 +238,8 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
 		Priority:      wpc.workerPool.Priority,
+		BuildVersion:  wpc.config.Worker.ImageTag,
+		Preemptable:   wpc.workerPool.Preemptable,
 	}
 }
 
@@ -374,6 +384,10 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 				},
 			},
 		},
+		{
+			Name:  "PREEMPTABLE",
+			Value: strconv.FormatBool(wpc.workerPool.Preemptable),
+		},
 	}
 
 	if wpc.config.Worker.UseGatewayServiceHostname {
@@ -419,7 +433,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 // deleteStalePendingWorkerJobs ensures that jobs are deleted if they don't
 // start a pod after a certain amount of time.
 func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
-	ctx := context.Background()
+	ctx := wpc.ctx
 	maxAge := wpc.config.Worker.AddWorkerTimeout
 	namespace := wpc.config.Worker.Namespace
 
@@ -427,6 +441,12 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		select {
+		case <-ctx.Done():
+			return // Context has been cancelled
+		default: // Continue processing requests
+		}
+
 		jobSelector := strings.Join([]string{
 			fmt.Sprintf("%s=%s", Beta9WorkerLabelKey, Beta9WorkerLabelValue),
 			fmt.Sprintf("%s=%s", Beta9WorkerLabelPoolNameKey, wpc.name),

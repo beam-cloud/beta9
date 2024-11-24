@@ -46,6 +46,7 @@ func (gws *GatewayService) ListWorkers(ctx context.Context, in *pb.ListWorkersRe
 			FreeCpu:       w.FreeCpu,
 			FreeMemory:    w.FreeMemory,
 			FreeGpuCount:  w.FreeGpuCount,
+			BuildVersion:  w.BuildVersion,
 		}
 
 		containers, err := gws.containerRepo.GetActiveContainersByWorkerId(w.Id)
@@ -82,6 +83,12 @@ func sortWorkers(w []*types.Worker) {
 			return -1
 		}
 		if i.Status > j.Status {
+			return 1
+		}
+		if i.MachineId < j.MachineId {
+			return -1
+		}
+		if i.MachineId > j.MachineId {
 			return 1
 		}
 		if i.Id < j.Id {
@@ -178,7 +185,7 @@ func (gws *GatewayService) DrainWorker(ctx context.Context, in *pb.DrainWorkerRe
 	var group errgroup.Group
 	for _, container := range containers {
 		group.Go(func() error {
-			return gws.scheduler.Stop(container.ContainerId)
+			return gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId})
 		})
 	}
 	if err := group.Wait(); err != nil {

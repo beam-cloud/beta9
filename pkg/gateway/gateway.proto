@@ -130,6 +130,8 @@ message Container {
   string status = 3;
   google.protobuf.Timestamp scheduled_at = 4;
   string workspace_id = 5;
+  string worker_id = 6;
+  string machine_id = 7;
 }
 
 message ListContainersRequest {}
@@ -253,6 +255,8 @@ message GetOrCreateStubRequest {
   repeated SecretVar secrets = 21;
   Autoscaler autoscaler = 22;
   TaskPolicy task_policy = 23;
+  uint32 concurrent_requests = 24;
+  string extra = 25;
 }
 
 message GetOrCreateStubResponse {
@@ -352,6 +356,7 @@ message Machine {
   string created = 13;
   string agent_version = 14;
   MachineMetrics machine_metrics = 15;
+  string user_data = 16;
 }
 
 message MachineMetrics {
@@ -466,6 +471,7 @@ message Worker {
   int64 free_memory = 11;
   uint32 free_gpu_count = 12;
   repeated Container active_containers = 13;
+  string build_version = 14;
 }
 
 message ListWorkersRequest {}

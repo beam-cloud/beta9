@@ -1,8 +1,13 @@
 package types
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
+)
+
+const (
+	DefaultCPUWorkerPoolName = "default"
 )
 
 type WorkerStatus string
@@ -29,6 +34,8 @@ type Worker struct {
 	ResourceVersion      int64        `json:"resource_version" redis:"resource_version"`
 	RequiresPoolSelector bool         `json:"requires_pool_selector" redis:"requires_pool_selector"`
 	Priority             int32        `json:"priority" redis:"priority"`
+	Preemptable          bool         `json:"preemptable" redis:"preemptable"`
+	BuildVersion         string       `json:"build_version" redis:"build_version"`
 }
 
 type CapacityUpdateType int
@@ -73,6 +80,7 @@ type ContainerRequest struct {
 	Cpu              int64           `json:"cpu"`
 	Memory           int64           `json:"memory"`
 	Gpu              string          `json:"gpu"`
+	GpuRequest       []string        `json:"gpu_request"`
 	GpuCount         uint32          `json:"gpu_count"`
 	SourceImage      *string         `json:"source_image"`
 	SourceImageCreds string          `json:"source_image_creds"`
@@ -85,6 +93,11 @@ type ContainerRequest struct {
 	Mounts           []Mount         `json:"mounts"`
 	RetryCount       int             `json:"retry_count"`
 	PoolSelector     string          `json:"pool_selector"`
+	Preemptable      bool            `json:"preemptable"`
+}
+
+func (c *ContainerRequest) RequiresGPU() bool {
+	return len(c.GpuRequest) > 0
 }
 
 const ContainerExitCodeTtlS int = 300
@@ -94,7 +107,7 @@ const (
 	ContainerResourceUsageEmissionInterval time.Duration = 3 * time.Second
 )
 const ContainerStateTtlSWhilePending int = 600
-const ContainerStateTtlS int = 60
+const ContainerStateTtlS int = 120
 const WorkspaceQuotaTtlS int = 600
 
 type ErrContainerStateNotFound struct {
@@ -161,4 +174,37 @@ type QuotaDoesNotExistError struct{}
 
 func (e *QuotaDoesNotExistError) Error() string {
 	return "quota_does_not_exist"
+}
+
+type StopContainerArgs struct {
+	ContainerId string `json:"container_id"`
+	Force       bool   `json:"force"`
+}
+
+func (a StopContainerArgs) ToMap() (map[string]any, error) {
+	data, err := json.Marshal(a)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func ToStopContainerArgs(m map[string]any) (*StopContainerArgs, error) {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+
+	var result StopContainerArgs
+	if err = json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
 }

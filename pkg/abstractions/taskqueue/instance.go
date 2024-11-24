@@ -60,8 +60,13 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 
 	env = append(secrets, env...)
 
-	gpuCount := 0
+	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)
 	if i.StubConfig.Runtime.Gpu != "" {
+		gpuRequest = append(gpuRequest, i.StubConfig.Runtime.Gpu.String())
+	}
+
+	gpuCount := 0
+	if len(gpuRequest) > 0 {
 		gpuCount = 1
 	}
 
@@ -71,7 +76,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			Env:         env,
 			Cpu:         i.StubConfig.Runtime.Cpu,
 			Memory:      i.StubConfig.Runtime.Memory,
-			Gpu:         string(i.StubConfig.Runtime.Gpu),
+			GpuRequest:  gpuRequest,
 			GpuCount:    uint32(gpuCount),
 			ImageId:     i.StubConfig.Runtime.ImageId,
 			StubId:      i.Stub.ExternalId,
@@ -107,7 +112,7 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 		idx := rnd.Intn(len(containerIds))
 		containerId := containerIds[idx]
 
-		err := i.Scheduler.Stop(containerId)
+		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
 		if err != nil {
 			log.Printf("<%s> unable to stop container: %v", i.Name, err)
 			return err

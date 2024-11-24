@@ -4,6 +4,9 @@ from .abstractions.container import App as app
 from .abstractions.container import AppConfig
 from .abstractions.endpoint import ASGI as asgi
 from .abstractions.endpoint import Endpoint as endpoint
+from .abstractions.endpoint import RealtimeASGI as realtime
+from .abstractions.experimental.bot.bot import Bot, BotEventType, BotLocation
+from .abstractions.experimental.bot.types import BotContext
 from .abstractions.function import Function as function
 from .abstractions.function import Schedule as schedule
 from .abstractions.image import Image
@@ -25,15 +28,25 @@ __all__ = [
     "function",
     "endpoint",
     "asgi",
+<<<<<<< HEAD
     "app",
     "AppConfig",
     "container",
+=======
+    "realtime",
+    "Container",
+>>>>>>> main
     "env",
     "GpuType",
     "PythonVersion",
     "Output",
     "QueueDepthAutoscaler",
     "experimental",
+    "integrations",
     "schedule",
     "TaskPolicy",
+    "Bot",
+    "BotLocation",
+    "BotEventType",
+    "BotContext",
 ]

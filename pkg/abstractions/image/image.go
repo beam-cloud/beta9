@@ -69,6 +69,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		Commands:          in.Commands,
 		BuildSteps:        convertBuildSteps(in.BuildSteps),
 		ExistingImageUri:  in.ExistingImageUri,
+		EnvVars:           in.EnvVars,
 	}
 
 	if in.ExistingImageUri != "" {
@@ -100,6 +101,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		BuildSteps:         convertBuildSteps(in.BuildSteps),
 		ExistingImageUri:   in.ExistingImageUri,
 		ExistingImageCreds: in.ExistingImageCreds,
+		EnvVars:            in.EnvVars,
 	}
 
 	ctx := stream.Context()
@@ -107,12 +109,22 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 	go is.builder.Build(ctx, buildOptions, outputChan)
 
+	// This is a switch to stop sending build log messages once the archiving stage is reached
+	archivingStage := false
 	var lastMessage common.OutputMsg
 	for o := range outputChan {
+		if archivingStage && !o.Archiving {
+			continue
+		}
+
 		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId}); err != nil {
 			log.Println("failed to complete build: ", err)
 			lastMessage = o
 			break
+		}
+
+		if o.Archiving {
+			archivingStage = true
 		}
 
 		if o.Done {
@@ -122,7 +134,6 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	}
 
 	if !lastMessage.Success {
-		log.Println("build failed")
 		return errors.New("build failed")
 	}
 

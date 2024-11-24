@@ -3,7 +3,7 @@
 echo "Deleting worker jobs..."
 kubectl delete job -l run.beam.cloud/role=worker
 
-echo "Deleting scheduler keys..."
+echo "Deleting redis keys..."
 if kubectl get sts redis-master &> /dev/null; then
   replicas=$(kubectl get sts redis-master -o jsonpath='{.spec.replicas}')
   for i in $(seq 0 $((replicas-1))); do

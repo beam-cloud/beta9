@@ -283,7 +283,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 
 	err = tq.taskDispatcher.Claim(ctx, authInfo.Workspace.Name, task.Stub.ExternalId, task.ExternalId, in.ContainerId)
 	if err != nil {
-		return nil, err
+		return &pb.TaskQueuePopResponse{Ok: false}, nil
 	}
 
 	task.ContainerId = in.ContainerId
@@ -406,7 +406,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 	} else if leftoverTimeoutSeconds <= 0 {
 		err := timeoutCallback()
 		if err != nil {
-			log.Printf("error timing out task: %v", err)
+			log.Printf("Error timing out task: %v\n", err)
 			return err
 		}
 
@@ -426,7 +426,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				case <-timeoutChan:
 					err := timeoutCallback()
 					if err != nil {
-						log.Printf("task timeout err: %v", err)
+						log.Printf("Task timeout err: %v\n", err)
 					}
 					timeoutFlag <- true
 					return
@@ -442,7 +442,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 
 				case err := <-errs:
 					if err != nil {
-						log.Printf("monitor task subscription err: %v", err)
+						log.Printf("Monitor task subscription err: %v\n", err)
 						break retry
 					}
 				}
@@ -552,6 +552,7 @@ func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...fun
 	// Create base autoscaled instance
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(tq.ctx, &abstractions.AutoscaledInstanceConfig{
 		Name:                fmt.Sprintf("%s-%s", stub.Name, stub.ExternalId),
+		AppConfig:           tq.config,
 		Rdb:                 tq.rdb,
 		Stub:                stub,
 		StubConfig:          stubConfig,

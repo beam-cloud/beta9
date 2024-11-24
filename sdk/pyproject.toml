@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "beta9"
-version = "0.1.87"
+version = "0.1.125"
 description = ""
 authors = ["beam.cloud <support@beam.cloud>"]
 packages = [
@@ -24,6 +24,9 @@ uvicorn = "^0.29.0"
 watchdog = "^4.0.0"
 betterproto-beta9 = {version = "2.0.0b7", extras = ["compiler"]}
 croniter = "^3.0.3"
+websocket-client = "^1.8.0"
+prompt-toolkit = "^3.0.48"
+requests = "^2.32.3"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
@@ -32,7 +35,7 @@ attrs = "^23.2.0"
 docstring-parser = "^0.16"
 ruff = "*"
 gunicorn = "^22.0.0"
-requests = "^2.31.0"
+requests = "^2.32.3"
 pytest-cov = "^5.0.0"
 
 [tool.poetry.scripts]

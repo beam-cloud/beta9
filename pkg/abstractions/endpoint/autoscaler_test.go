@@ -1,6 +1,7 @@
 package endpoint
 
 import (
+	"context"
 	"testing"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -9,7 +10,20 @@ import (
 )
 
 func TestDeploymentScaleFuncWithDefaults(t *testing.T) {
-	autoscaledInstance := &abstractions.AutoscaledInstance{}
+	autoscaledInstance := &abstractions.AutoscaledInstance{
+		Ctx: context.Background(),
+		Stub: &types.StubWithRelated{
+			Stub: types.Stub{
+				ExternalId: "test",
+			},
+		},
+		AppConfig: types.AppConfig{},
+	}
+	autoscaledInstance.AppConfig.GatewayService = types.GatewayServiceConfig{
+		StubLimits: types.StubLimits{
+			MaxReplicas: 10,
+		},
+	}
 	autoscaledInstance.StubConfig = &types.StubConfigV1{}
 	autoscaledInstance.StubConfig.Autoscaler = &types.Autoscaler{
 		Type:              "queue_depth",
@@ -49,7 +63,21 @@ func TestDeploymentScaleFuncWithDefaults(t *testing.T) {
 }
 
 func TestDeploymentScaleFuncWithMaxTasksPerContainer(t *testing.T) {
-	autoscaledInstance := &abstractions.AutoscaledInstance{}
+	autoscaledInstance := &abstractions.AutoscaledInstance{
+		Ctx: context.Background(),
+		Stub: &types.StubWithRelated{
+			Stub: types.Stub{
+				ExternalId: "test",
+			},
+		},
+		AppConfig: types.AppConfig{},
+	}
+
+	autoscaledInstance.AppConfig.GatewayService = types.GatewayServiceConfig{
+		StubLimits: types.StubLimits{
+			MaxReplicas: 10,
+		},
+	}
 	autoscaledInstance.StubConfig = &types.StubConfigV1{}
 	autoscaledInstance.StubConfig.Autoscaler = &types.Autoscaler{
 		Type:              "queue_depth",

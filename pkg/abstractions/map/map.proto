@@ -16,9 +16,13 @@ message MapSetRequest {
   string name = 1;
   string key = 2;
   bytes value = 3;
+  int64 ttl = 4;
 }
 
-message MapSetResponse { bool ok = 1; }
+message MapSetResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
 
 message MapGetRequest {
   string name = 1;

@@ -130,11 +130,6 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		return err
 	}
 
-	gpuCount := 0
-	if stubConfig.Runtime.Gpu != "" {
-		gpuCount = 1
-	}
-
 	env := []string{
 		fmt.Sprintf("TASK_ID=%s", t.msg.TaskId),
 		fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
@@ -145,12 +140,22 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 
 	env = append(secrets, env...)
 
+	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
+	if stubConfig.Runtime.Gpu != "" {
+		gpuRequest = append(gpuRequest, stubConfig.Runtime.Gpu.String())
+	}
+
+	gpuCount := 0
+	if len(gpuRequest) > 0 {
+		gpuCount = 1
+	}
+
 	err = t.fs.scheduler.Run(&types.ContainerRequest{
 		ContainerId: t.containerId,
 		Env:         env,
 		Cpu:         stubConfig.Runtime.Cpu,
 		Memory:      stubConfig.Runtime.Memory,
-		Gpu:         string(stubConfig.Runtime.Gpu),
+		GpuRequest:  gpuRequest,
 		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,

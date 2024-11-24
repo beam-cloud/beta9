@@ -96,6 +96,17 @@ func (r *TaskRedisRepository) SetTaskState(ctx context.Context, workspaceName, s
 	return nil
 }
 
+func (r *TaskRedisRepository) GetTaskState(ctx context.Context, workspaceName, stubId, taskId string) (*types.TaskMessage, error) {
+	msg, err := r.rdb.Get(ctx, common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)).Bytes()
+	if err != nil {
+		return nil, err
+	}
+
+	taskMessage := &types.TaskMessage{}
+	taskMessage.Decode(msg)
+	return taskMessage, nil
+}
+
 func (r *TaskRedisRepository) TasksInFlight(ctx context.Context, workspaceName, stubId string) (int, error) {
 	tasks, err := r.rdb.SMembers(ctx, common.RedisKeys.TaskIndexByStub(workspaceName, stubId)).Result()
 	if err != nil {

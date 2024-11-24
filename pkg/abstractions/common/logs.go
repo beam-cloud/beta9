@@ -42,7 +42,7 @@ type LogStream struct {
 }
 
 func (l *LogStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
-	hostname, err := l.containerRepo.GetWorkerAddress(containerId)
+	hostname, err := l.containerRepo.GetWorkerAddress(ctx, containerId)
 	if err != nil {
 		return err
 	}
@@ -102,6 +102,11 @@ _stream:
 			}
 
 		case <-ctx.Done():
+			// This ensures when the sdk exits, the message printed is
+			// that the container timed out.
+			if err := l.exitCallback(0); err != nil {
+				break _stream
+			}
 			return nil
 		}
 	}
