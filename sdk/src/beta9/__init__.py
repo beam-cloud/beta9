@@ -28,14 +28,11 @@ __all__ = [
     "function",
     "endpoint",
     "asgi",
-<<<<<<< HEAD
     "app",
     "AppConfig",
     "container",
-=======
     "realtime",
     "Container",
->>>>>>> main
     "env",
     "GpuType",
     "PythonVersion",
