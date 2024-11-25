@@ -237,6 +237,8 @@ class Bot(RunnerAbstraction, DeployableMixin):
         authorized (bool):
             If false, allows the bot to be invoked without an auth token.
             Default is True.
+        welcome_message (Optional[str]):
+            The welcome message to display to the user when a new session with the bot is started. Default is None.
     """
 
     deployment_stub_type = BOT_DEPLOYMENT_STUB_TYPE
@@ -261,6 +263,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         description: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
         authorized: bool = True,
+        welcome_message: Optional[str] = None,
     ) -> None:
         super().__init__(volumes=volumes)
 
@@ -284,6 +287,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         self.extra["description"] = description
         self.extra["api_key"] = api_key
         self.extra["authorized"] = authorized
+        self.extra["welcome_message"] = welcome_message
 
         for location in self.locations:
             location_config = location.to_dict()
