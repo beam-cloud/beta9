@@ -65,8 +65,8 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		gpuRequest = append(gpuRequest, i.StubConfig.Runtime.Gpu.String())
 	}
 
-	gpuCount := i.StubConfig.Runtime.GpuCount
-	if i.StubConfig.RequiresGPU() && gpuCount == 0 {
+	gpuCount := 0
+	if len(gpuRequest) > 0 {
 		gpuCount = 1
 	}
 

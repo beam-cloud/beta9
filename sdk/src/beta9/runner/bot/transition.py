@@ -95,6 +95,10 @@ class BotTransition:
             location_name = output.__name__
             marker_list = []
 
+            if not isinstance(markers, list):
+                if hasattr(markers, "model_dump"):
+                    markers = [markers]
+
             for marker in markers:
                 fields = []
                 marker_dict = marker.model_dump()

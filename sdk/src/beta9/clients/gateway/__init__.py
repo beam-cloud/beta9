@@ -282,7 +282,6 @@ class GetOrCreateStubRequest(betterproto.Message):
     task_policy: "TaskPolicy" = betterproto.message_field(23)
     concurrent_requests: int = betterproto.uint32_field(24)
     extra: str = betterproto.string_field(25)
-    gpu_count: int = betterproto.uint32_field(26)
 
 
 @dataclass(eq=False, repr=False)
@@ -404,6 +403,7 @@ class Machine(betterproto.Message):
     created: str = betterproto.string_field(13)
     agent_version: str = betterproto.string_field(14)
     machine_metrics: "MachineMetrics" = betterproto.message_field(15)
+    user_data: str = betterproto.string_field(16)
 
 
 @dataclass(eq=False, repr=False)

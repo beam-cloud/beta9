@@ -13,30 +13,37 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 )
 
+var (
+	awsRegistryDomains = []string{"amazonaws.com"}
+	gcpRegistryDomains = []string{"pkg.dev", "gcr.io"}
+	ngcRegistryDomains = []string{"nvcr.io"}
+)
+
 // Check which registry is passed in
 func GetRegistryToken(opts *BuildOpts) (string, error) {
-	if strings.Contains(opts.ExistingImageUri, "amazonaws.com") {
-		if token, err := GetECRToken(opts); err == nil {
-			return token, nil
-		} else {
-			return "", err
-		}
+	var fn func(*BuildOpts) (string, error)
+
+	switch {
+	case containsAny(opts.ExistingImageUri, awsRegistryDomains...):
+		fn = GetECRToken
+	case containsAny(opts.ExistingImageUri, gcpRegistryDomains...):
+		fn = GetGARToken
+	case containsAny(opts.ExistingImageUri, ngcRegistryDomains...):
+		fn = GetNGCToken
+	default:
+		fn = GetDockerHubToken
 	}
 
-	if strings.Contains(opts.ExistingImageUri, "pkg.dev") || strings.Contains(opts.ExistingImageUri, "gcr.io") {
-		if token, err := GetGARToken(opts); err == nil {
-			return token, nil
-		} else {
-			return "", err
+	return fn(opts)
+}
+
+func containsAny(s string, substrs ...string) bool {
+	for _, substr := range substrs {
+		if strings.Contains(s, substr) {
+			return true
 		}
 	}
-
-	// Default to Docker Hub
-	if token, err := GetDockerHubToken(opts); err == nil {
-		return token, nil
-	} else {
-		return "", err
-	}
+	return false
 }
 
 // Amazon Elastic Container Registry
@@ -116,6 +123,23 @@ func GetGARToken(opts *BuildOpts) (string, error) {
 	username := "oauth2accesstoken"
 
 	return fmt.Sprintf("%s:%s", username, password), nil
+}
+
+func GetNGCToken(opts *BuildOpts) (string, error) {
+	creds := opts.ExistingImageCreds
+
+	password, ok := creds["NGC_API_KEY"]
+	if !ok {
+		return "", fmt.Errorf("NGC_API_KEY not found")
+	}
+	if password == "" {
+		return "", fmt.Errorf("NGC_API_KEY is empty")
+	}
+
+	username := "$oauthtoken"
+
+	token := fmt.Sprintf("%s:%s", username, password)
+	return token, nil
 }
 
 // Docker Hub

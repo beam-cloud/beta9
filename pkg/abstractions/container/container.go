@@ -158,8 +158,8 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 		gpuRequest = append(gpuRequest, stubConfig.Runtime.Gpu.String())
 	}
 
-	gpuCount := stubConfig.Runtime.GpuCount
-	if stubConfig.RequiresGPU() && gpuCount == 0 {
+	gpuCount := 0
+	if len(gpuRequest) > 0 {
 		gpuCount = 1
 	}
 

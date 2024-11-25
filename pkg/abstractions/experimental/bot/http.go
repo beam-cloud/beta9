@@ -39,6 +39,7 @@ func registerBotRoutes(g *echo.Group, pbs *PetriBotService) *botGroup {
 	g.GET("/:deploymentName", auth.WithAuth(group.BotOpenSession))
 	g.GET("/:deploymentName/latest", auth.WithAuth(group.BotOpenSession))
 	g.GET("/:deploymentName/v:version", auth.WithAuth(group.BotOpenSession))
+	g.GET("/public/:stubId", auth.WithAssumedStubAuth(group.BotOpenSession, group.pbs.isPublic))
 	g.DELETE("/:stubId/:sessionId", auth.WithAuth(group.BotDeleteSession))
 	g.GET("/:stubId/:sessionId", auth.WithAuth(group.BotGetSession))
 	g.GET("/:stubId/sessions", auth.WithAuth(group.BotListSessions))

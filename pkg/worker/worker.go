@@ -360,7 +360,6 @@ func (s *Worker) processStopContainerEvents() {
 		default:
 			err := s.stopContainer(event.ContainerId, event.Kill)
 			if err != nil {
-				s.stopContainerChan <- event
 				time.Sleep(time.Second)
 			}
 		}

@@ -9,6 +9,11 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+const (
+	botVolumeName      = "beta9-bot-inputs"
+	botVolumeMountPath = "./bot-input-files"
+)
+
 var ErrBotSessionNotFound = fmt.Errorf("bot session not found")
 
 type BotSession struct {
@@ -87,7 +92,11 @@ const (
 	BotEventTypeConfirmTransition   BotEventType = "confirm_transition"
 	BotEventTypeAcceptTransition    BotEventType = "accept_transition"
 	BotEventTypeRejectTransition    BotEventType = "reject_transition"
+	BotEventTypeInputFileRequest    BotEventType = "input_file_request"
+	BotEventTypeInputFileResponse   BotEventType = "input_file_response"
 	BotEventTypeOutputFile          BotEventType = "output_file"
+	BotEventTypeConfirmRequest      BotEventType = "confirm_request"
+	BotEventTypeConfirmResponse     BotEventType = "confirm_response"
 )
 
 const PromptTypeUser = "user_message"
@@ -147,6 +156,7 @@ type BotConfig struct {
 	Locations   map[string]BotLocationConfig   `json:"locations" redis:"locations"`
 	Transitions map[string]BotTransitionConfig `json:"transitions" redis:"transitions"`
 	ApiKey      string                         `json:"api_key" redis:"api_key"`
+	Authorized  bool                           `json:"authorized" redis:"authorized"`
 }
 
 func (b *BotConfig) FormatLocations() string {

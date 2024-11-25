@@ -46,9 +46,6 @@ class Endpoint(RunnerAbstraction):
             applicable or no GPU required, leave it empty.
             You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
             the scheduler prioritizes their selection based on their order in the list.
-        gpu_count (int):
-            The number of GPUs allocated to the container. Default is 0. If a GPU is
-            specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Volume]]):
@@ -77,7 +74,7 @@ class Endpoint(RunnerAbstraction):
         name (Optional[str]):
             An optional name for this endpoint, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
-        authorized (Optional[str]):
+        authorized (bool):
             If false, allows the endpoint to be invoked without an auth token.
             Default is True.
         autoscaler (Optional[Autoscaler]):
@@ -113,7 +110,6 @@ class Endpoint(RunnerAbstraction):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
-        gpu_count: int = 0,
         image: Image = Image(),
         timeout: int = 180,
         workers: int = 1,
@@ -132,7 +128,6 @@ class Endpoint(RunnerAbstraction):
             cpu=cpu,
             memory=memory,
             gpu=gpu,
-            gpu_count=gpu_count,
             image=image,
             workers=workers,
             timeout=timeout,
@@ -175,9 +170,6 @@ class ASGI(Endpoint):
         gpu (Union[GpuType, str]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
-        gpu_count (int):
-            The number of GPUs allocated to the container. Default is 0. If a GPU is
-            specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Volume]]):
@@ -213,7 +205,7 @@ class ASGI(Endpoint):
         name (Optional[str]):
             An optional name for this ASGI application, used during deployment. If not specified, you must
             specify the name at deploy time with the --name argument
-        authorized (Optional[str]):
+        authorized (bool):
             If false, allows the ASGI application to be invoked without an auth token.
             Default is True.
         autoscaler (Optional[Autoscaler]):
@@ -255,7 +247,6 @@ class ASGI(Endpoint):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
-        gpu_count: int = 0,
         image: Image = Image(),
         timeout: int = 180,
         workers: int = 1,
@@ -275,7 +266,6 @@ class ASGI(Endpoint):
             cpu=cpu,
             memory=memory,
             gpu=gpu,
-            gpu_count=gpu_count,
             image=image,
             timeout=timeout,
             workers=workers,
@@ -311,9 +301,6 @@ class RealtimeASGI(ASGI):
         gpu (Union[GpuType, str]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
-        gpu_count (int):
-            The number of GPUs allocated to the container. Default is 0. If a GPU is
-            specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Volume]]):
@@ -347,7 +334,7 @@ class RealtimeASGI(ASGI):
         name (Optional[str]):
             An optional name for this ASGI application, used during deployment. If not specified, you must
             specify the name at deploy time with the --name argument
-        authorized (Optional[str]):
+        authorized (bool):
             If false, allows the ASGI application to be invoked without an auth token.
             Default is True.
         autoscaler (Optional[Autoscaler]):
@@ -377,7 +364,6 @@ class RealtimeASGI(ASGI):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
-        gpu_count: int = 0,
         image: Image = Image(),
         timeout: int = 180,
         workers: int = 1,
@@ -396,7 +382,6 @@ class RealtimeASGI(ASGI):
             cpu=cpu,
             memory=memory,
             gpu=gpu,
-            gpu_count=gpu_count,
             image=image,
             timeout=timeout,
             workers=workers,

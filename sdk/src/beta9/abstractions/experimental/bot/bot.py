@@ -43,6 +43,10 @@ class BotEventType(str, Enum):
     ACCEPT_TRANSITION = "accept_transition"
     REJECT_TRANSITION = "reject_transition"
     OUTPUT_FILE = "output_file"
+    INPUT_FILE_REQUEST = "input_file_request"
+    INPUT_FILE_RESPONSE = "input_file_response"
+    CONFIRM_REQUEST = "confirm_request"
+    CONFIRM_RESPONSE = "confirm_response"
 
 
 class BotEvent(BaseModel):
@@ -230,6 +234,9 @@ class Bot(RunnerAbstraction, DeployableMixin):
             A description of the bot. Default is None.
         volumes (Optional[List[Volume]]):
             A list of volumes to mount in bot transitions. Default is None.
+        authorized (bool):
+            If false, allows the bot to be invoked without an auth token.
+            Default is True.
     """
 
     deployment_stub_type = BOT_DEPLOYMENT_STUB_TYPE
@@ -253,6 +260,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         locations: List[BotLocation] = [],
         description: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
+        authorized: bool = True,
     ) -> None:
         super().__init__(volumes=volumes)
 
@@ -275,6 +283,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         self.extra["locations"] = {}
         self.extra["description"] = description
         self.extra["api_key"] = api_key
+        self.extra["authorized"] = authorized
 
         for location in self.locations:
             location_config = location.to_dict()
