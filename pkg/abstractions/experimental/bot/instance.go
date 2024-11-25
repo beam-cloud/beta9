@@ -416,7 +416,7 @@ func (i *botInstance) waitForInputFile(sessionId string, event *BotEvent) {
 	}
 
 	filePath := filepath.Join(types.DefaultVolumesPath, i.authInfo.Workspace.Name, i.botInputsVolume.ExternalId, sessionId, fileId)
-	log.Printf("<bot %s> Waiting on input file for session %s: %s", i.stub.ExternalId, sessionId, filePath)
+	log.Info().Str("stub_id", i.stub.ExternalId).Str("session_id", sessionId).Str("file_path", filePath).Msg("waiting on input file")
 
 	ctx, cancel := common.GetTimeoutContext(i.ctx, timeout)
 	defer cancel()
@@ -425,14 +425,14 @@ func (i *botInstance) waitForInputFile(sessionId string, event *BotEvent) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("<bot %s> Input file upload timeout for session %s: %s", i.stub.ExternalId, sessionId, fileId)
+			log.Info().Str("stub_id", i.stub.ExternalId).Str("session_id", sessionId).Str("file_path", filePath).Msg("input file upload timeout")
 			return
 		case <-time.After(time.Second):
 			if _, err := os.Stat(filePath); err != nil {
 				continue
 			}
 
-			log.Printf("<bot %s> Input file <%s> received", i.stub.ExternalId, filePath)
+			log.Info().Str("stub_id", i.stub.ExternalId).Str("session_id", sessionId).Str("file_path", filePath).Msg("input file received")
 			containerFilePath := filepath.Join(botVolumeMountPath, sessionId, fileId)
 			response := &BotEvent{
 				PairId: event.PairId,
@@ -447,13 +447,13 @@ func (i *botInstance) waitForInputFile(sessionId string, event *BotEvent) {
 
 			err = i.botStateManager.pushEventPair(i.workspace.Name, i.stub.ExternalId, sessionId, event.PairId, event, response)
 			if err != nil {
-				log.Printf("<bot %s> Error pushing input file event pair: %s", i.stub.ExternalId, err)
+				log.Error().Str("stub_id", i.stub.ExternalId).Str("session_id", sessionId).Msg("error pushing input file event pair")
 				return
 			}
 
 			err = i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, response)
 			if err != nil {
-				log.Printf("<bot %s> Error pushing input file event: %s", i.stub.ExternalId, err)
+				log.Error().Str("stub_id", i.stub.ExternalId).Str("session_id", sessionId).Msg("error pushing input file event")
 				return
 			}
 
