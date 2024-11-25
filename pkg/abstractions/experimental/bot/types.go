@@ -153,11 +153,12 @@ type MarkerField struct {
 
 // BotConfig holds the overall config for the bot
 type BotConfig struct {
-	Model       string                         `json:"model" redis:"model"`
-	Locations   map[string]BotLocationConfig   `json:"locations" redis:"locations"`
-	Transitions map[string]BotTransitionConfig `json:"transitions" redis:"transitions"`
-	ApiKey      string                         `json:"api_key" redis:"api_key"`
-	Authorized  bool                           `json:"authorized" redis:"authorized"`
+	Model          string                         `json:"model" redis:"model"`
+	Locations      map[string]BotLocationConfig   `json:"locations" redis:"locations"`
+	Transitions    map[string]BotTransitionConfig `json:"transitions" redis:"transitions"`
+	ApiKey         string                         `json:"api_key" redis:"api_key"`
+	Authorized     bool                           `json:"authorized" redis:"authorized"`
+	WelcomeMessage string                         `json:"welcome_message" redis:"welcome_message"`
 }
 
 func (b *BotConfig) FormatLocations() string {
