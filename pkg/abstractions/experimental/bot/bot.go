@@ -339,6 +339,7 @@ var (
 	botInputBuffer      string = "bot:%s:%s:input_buffer:%s"
 	botEventPair        string = "bot:%s:%s:event_pair:%s:%s"
 	botEventBuffer      string = "bot:%s:%s:event_buffer:%s"
+	botEventHistory     string = "bot:%s:%s:event_history:%s"
 	botSessionIndex     string = "bot:%s:%s:session_index"
 	botSessionState     string = "bot:%s:%s:session_state:%s"
 	botSessionKeepAlive string = "bot:%s:%s:session_keep_alive:%s"
@@ -365,6 +366,10 @@ func (k *keys) botEventPair(workspaceName, stubId, sessionId, pairId string) str
 
 func (k *keys) botEventBuffer(workspaceName, stubId, sessionId string) string {
 	return fmt.Sprintf(botEventBuffer, workspaceName, stubId, sessionId)
+}
+
+func (k *keys) botEventHistory(workspaceName, stubId, sessionId string) string {
+	return fmt.Sprintf(botEventHistory, workspaceName, stubId, sessionId)
 }
 
 func (k *keys) botSessionState(workspaceName, stubId, sessionId string) string {

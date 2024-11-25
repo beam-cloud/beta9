@@ -375,6 +375,7 @@ func (i *botInstance) monitorEvents() error {
 						string(MetadataTransitionName): event.Metadata[string(MetadataTransitionName)],
 						string(MetadataTaskId):         event.Metadata[string(MetadataTaskId)],
 					},
+					PairId: event.PairId,
 				}, event)
 			case BotEventTypeAcceptTransition, BotEventTypeRejectTransition:
 				taskId := event.Metadata[string(MetadataTaskId)]
