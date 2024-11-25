@@ -24,18 +24,18 @@ func main() {
 	s, err := worker.NewWorker()
 	if err != nil {
 		if _, ok := err.(*types.ErrWorkerNotFound); ok {
-			log.Info().Msg("Worker not found. Shutting down.")
+			log.Info().Msg("worker not found. Shutting down.")
 			return
 		}
-		log.Fatal().Err(err).Msg("Worker initialization failed")
+		log.Fatal().Err(err).Msg("worker initialization failed")
 	}
 
 	err = s.Run()
 	if err != nil {
 		if _, ok := err.(*types.ErrWorkerNotFound); ok {
-			log.Info().Msg("Worker not found. Shutting down.")
+			log.Info().Msg("worker not found. Shutting down.")
 			return
 		}
-		log.Fatal().Err(err).Msg("Starting worker failed")
+		log.Fatal().Err(err).Msg("starting worker failed")
 	}
 }
