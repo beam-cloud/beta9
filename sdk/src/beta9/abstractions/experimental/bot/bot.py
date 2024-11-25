@@ -238,7 +238,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
             If false, allows the bot to be invoked without an auth token.
             Default is True.
         welcome_message (Optional[str]):
-            The welcome message to display to the user when a new session with the bot is started. Default is None.
+            A welcome message to display to a user when a new session with the bot is started. Default is None.
     """
 
     deployment_stub_type = BOT_DEPLOYMENT_STUB_TYPE
