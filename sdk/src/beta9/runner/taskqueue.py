@@ -261,6 +261,13 @@ class TaskQueueWorker:
                 print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
                 os._exit(0)
 
+    def _serialize_result(self, result: Any) -> str:
+        try:
+            return json.dumps(result)
+        except BaseException:
+            print(f"Unable to serialize result: {traceback.format_exc()}")
+            return ""
+
     @with_runner_context
     def process_tasks(self, channel: Channel) -> None:
         self.worker_startup_event.set()
@@ -270,6 +277,7 @@ class TaskQueueWorker:
         # Load handler and execute on_start method
         handler = FunctionHandler()
         on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
+        save_result = handler.handler.parent.save_result
 
         print(f"Worker[{self.worker_index}] ready")
         with ThreadPoolExecutorOverride() as thread_pool:
@@ -327,6 +335,9 @@ class TaskQueueWorker:
                                         container_id=config.container_id,
                                         container_hostname=config.container_hostname,
                                         keep_warm_seconds=config.keep_warm_seconds,
+                                        result=self._serialize_result(result)
+                                        if save_result
+                                        else "",
                                     )
                                 )
                             )

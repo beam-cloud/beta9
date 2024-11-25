@@ -140,6 +140,7 @@ type TaskWithRelated struct {
 		Version    *uint   `db:"version" json:"version"`
 	} `db:"deployment" json:"deployment"`
 	Outputs   []TaskOutput `json:"outputs"`
+	Result    string       `json:"result"`
 	Stats     TaskStats    `json:"stats"`
 	Workspace Workspace    `db:"workspace" json:"workspace"`
 	Stub      Stub         `db:"stub" json:"stub"`

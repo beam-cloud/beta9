@@ -15,7 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
-	"github.com/beam-cloud/beta9/pkg/task"
+	_task "github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
@@ -42,7 +42,7 @@ type TaskQueueServiceOpts struct {
 	Scheduler      *scheduler.Scheduler
 	Tailscale      *network.Tailscale
 	RouteGroup     *echo.Group
-	TaskDispatcher *task.Dispatcher
+	TaskDispatcher *_task.Dispatcher
 	EventRepo      repository.EventRepository
 }
 
@@ -60,7 +60,7 @@ type RedisTaskQueue struct {
 	config          types.AppConfig
 	rdb             *common.RedisClient
 	stubConfigCache *common.SafeMap[*types.StubConfigV1]
-	taskDispatcher  *task.Dispatcher
+	taskDispatcher  *_task.Dispatcher
 	taskRepo        repository.TaskRepository
 	containerRepo   repository.ContainerRepository
 	workspaceRepo   repository.WorkspaceRepository
@@ -345,7 +345,11 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatus(in.TaskStatus)
 
-	err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
+	if in.Result != "" {
+		err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId, _task.WithStoreTaskResult(in.Result))
+	} else {
+		err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
+	}
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
 			Ok: false,

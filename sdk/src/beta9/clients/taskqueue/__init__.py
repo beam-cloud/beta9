@@ -68,6 +68,7 @@ class TaskQueueCompleteRequest(betterproto.Message):
     container_id: str = betterproto.string_field(5)
     container_hostname: str = betterproto.string_field(6)
     keep_warm_seconds: float = betterproto.float_field(7)
+    result: str = betterproto.string_field(8)
 
 
 @dataclass(eq=False, repr=False)

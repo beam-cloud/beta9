@@ -91,6 +91,7 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 			tasks.Data[i].Stub.SanitizeConfig()
 			g.addOutputsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
 			g.addStatsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
+			g.addResultToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
 		}
 		return ctx.JSON(http.StatusOK, tasks)
 	}
@@ -112,9 +113,12 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 		if task == nil {
 			return HTTPNotFound()
 		}
+
 		task.Stub.SanitizeConfig()
+
 		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
 		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
+		g.addResultToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
 
 		return ctx.JSON(http.StatusOK, task)
 	}
@@ -148,6 +152,15 @@ func (g *TaskGroup) addStatsToTask(ctx context.Context, workspaceName string, ta
 	}
 	task.Stats.ActiveContainers = uint32(len(activeContainers))
 
+	return nil
+}
+
+func (g *TaskGroup) addResultToTask(ctx context.Context, workspaceName string, task *types.TaskWithRelated) error {
+	result, err := g.taskRepo.GetTaskResult(ctx, workspaceName, task.Stub.ExternalId, task.ExternalId)
+	if err != nil {
+		return err
+	}
+	task.Result = result
 	return nil
 }
 
