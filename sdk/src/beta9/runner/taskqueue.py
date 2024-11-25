@@ -304,7 +304,7 @@ class TaskQueueWorker:
                     result = None
                     duration = None
 
-                    encountered_exception = ""
+                    caught_exception = ""
 
                     try:
                         args = task.args or []
@@ -313,7 +313,7 @@ class TaskQueueWorker:
                         result = handler(context, *args, **kwargs)
                     except BaseException as e:
                         if type(e) in handler.handler.parent.retry_for:
-                            encountered_exception = e.__class__.__name__
+                            caught_exception = e.__class__.__name__
                             task_status = TaskStatus.Retry
                         else:
                             print(traceback.format_exc())
@@ -355,7 +355,7 @@ class TaskQueueWorker:
                                 print(complete_task_response.message)
                             else:
                                 print(
-                                    f"Retrying task <{task.id}> after {encountered_exception} exception"
+                                    f"Retrying task <{task.id}> after {caught_exception} exception"
                                 )
 
                         except BaseException:
