@@ -86,6 +86,10 @@ class TaskQueue(RunnerAbstraction):
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
+        save_result (bool):
+            If true, the value returned from a task will be saved temporarily (for up to 1d) and can
+            be retrieved using the task API. The object must be serializable to JSON or it will be ignored.
+            Default is False.
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -119,6 +123,7 @@ class TaskQueue(RunnerAbstraction):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
+        save_result: bool = False,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -140,6 +145,7 @@ class TaskQueue(RunnerAbstraction):
             task_policy=task_policy,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
+        self.save_result: bool = save_result
 
     @property
     def taskqueue_stub(self) -> TaskQueueServiceStub:

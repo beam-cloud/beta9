@@ -127,7 +127,34 @@ func (d *Dispatcher) Retrieve(ctx context.Context, workspaceName, stubId, taskId
 	return task, nil
 }
 
-func (d *Dispatcher) Complete(ctx context.Context, workspaceName, stubId, taskId string) error {
+type TaskCompletionOpts func(*completionOptions)
+
+type completionOptions struct {
+	result string
+}
+
+func WithStoreTaskResult(result string) TaskCompletionOpts {
+	return func(opts *completionOptions) {
+		opts.result = result
+	}
+}
+
+func (d *Dispatcher) Complete(ctx context.Context, workspaceName, stubId, taskId string, opts ...TaskCompletionOpts) error {
+	options := &completionOptions{
+		result: "",
+	}
+
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	if options.result != "" {
+		err := d.taskRepo.SetTaskResult(ctx, workspaceName, stubId, taskId, options.result)
+		if err != nil {
+			log.Printf("<dispatcher> unable to set task result: %s, %v\n", taskId, err)
+		}
+	}
+
 	return d.taskRepo.DeleteTaskState(ctx, workspaceName, stubId, taskId)
 }
 

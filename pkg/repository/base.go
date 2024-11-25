@@ -143,6 +143,8 @@ type TaskRepository interface {
 	TasksInFlight(ctx context.Context, workspaceName, stubId string) (int, error)
 	SetTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error
 	RemoveTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error
+	SetTaskResult(ctx context.Context, workspaceName, stubId, taskId, result string) error
+	GetTaskResult(ctx context.Context, workspaceName, stubId, taskId string) (string, error)
 }
 
 type ProviderRepository interface {

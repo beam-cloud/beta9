@@ -72,6 +72,16 @@ func (r *TaskRedisRepository) IsClaimed(ctx context.Context, workspaceName, stub
 	return exists > 0, nil
 }
 
+const taskResultExpiration = 3600 * 24 // 1 day
+
+func (r *TaskRedisRepository) SetTaskResult(ctx context.Context, workspaceName, stubId, taskId, result string) error {
+	return r.rdb.Set(ctx, common.RedisKeys.TaskResult(workspaceName, stubId, taskId), result, taskResultExpiration).Err()
+}
+
+func (r *TaskRedisRepository) GetTaskResult(ctx context.Context, workspaceName, stubId, taskId string) (string, error) {
+	return r.rdb.Get(ctx, common.RedisKeys.TaskResult(workspaceName, stubId, taskId)).Result()
+}
+
 func (r *TaskRedisRepository) SetTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error {
 	indexKey := common.RedisKeys.TaskIndex()
 	stubIndexKey := common.RedisKeys.TaskIndexByStub(workspaceName, stubId)
