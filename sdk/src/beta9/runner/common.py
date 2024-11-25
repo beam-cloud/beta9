@@ -93,6 +93,30 @@ if is_remote():
     config: Config = Config.load_from_env()
 
 
+class ConfigProxy:
+    """
+    Class to allow handlers to access parent class variables through attribute or dictionary access
+    """
+
+    def __init__(self, parent):
+        self._parent = parent
+
+    def __getitem__(self, key):
+        return getattr(self._parent, key)
+
+    def __setitem__(self, key, value):
+        setattr(self._parent, key, value)
+
+    def __getattr__(self, key):
+        return getattr(self._parent, key)
+
+    def __setattr__(self, key, value):
+        if key == "_parent":
+            super().__setattr__(key, value)
+        else:
+            setattr(self._parent, key, value)
+
+
 @dataclass
 class FunctionContext:
     """
@@ -183,6 +207,12 @@ class FunctionHandler:
 
         os.environ["TASK_ID"] = context.task_id or ""
         return self.handler(*args, **kwargs)
+
+    @property
+    def config(self) -> ConfigProxy:
+        if not hasattr(self, "_config"):
+            self._config = ConfigProxy(self.handler.parent)
+        return self._config
 
 
 def execute_lifecycle_method(name: str) -> Union[Any, None]:

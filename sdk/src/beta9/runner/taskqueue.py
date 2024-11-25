@@ -312,7 +312,7 @@ class TaskQueueWorker:
 
                         result = handler(context, *args, **kwargs)
                     except BaseException as e:
-                        if type(e) in handler.handler.parent.retry_for:
+                        if type(e) in handler.config.retry_for:
                             caught_exception = e.__class__.__name__
                             task_status = TaskStatus.Retry
                         else:
