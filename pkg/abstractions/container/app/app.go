@@ -15,7 +15,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
-	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -36,10 +35,8 @@ type TCPContainerAppService struct {
 	backendRepo     repository.BackendRepository
 	containerRepo   repository.ContainerRepository
 	eventRepo       repository.EventRepository
-	taskRepo        repository.TaskRepository
 	appInstances    *common.SafeMap[*appInstance]
 	tailscale       *network.Tailscale
-	taskDispatcher  *task.Dispatcher
 }
 
 var (
@@ -115,6 +112,7 @@ func NewTCPContainerAppService(
 			return true
 		}},
 	)
+
 	go eventBus.ReceiveEvents(ctx)
 
 	// Register HTTP routes
