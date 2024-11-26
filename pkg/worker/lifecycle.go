@@ -567,8 +567,11 @@ func (s *Worker) wait(containerId string) error {
 	}
 
 	// wait until closure
-	for range events {
-		// can do something with events
+	for event := range events {
+		// handle the runc exit event
+		if event.Type == "exit" {
+			break
+		}
 	}
 
 	err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
