@@ -140,7 +140,7 @@ func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, containerId string
 	}
 
 	// Remove nvidia prestart hook as we don't need actual device mounts
-	// spec.Hooks.Prestart = nil
+	spec.Hooks.Prestart = nil
 
 	// TODO: will this causes issues on multi-gpu nodes...?
 
