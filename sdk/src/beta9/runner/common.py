@@ -93,7 +93,7 @@ if is_remote():
     config: Config = Config.load_from_env()
 
 
-class ConfigProxy:
+class ParentAbstractionProxy:
     """
     Class to allow handlers to access parent class variables through attribute or dictionary access
     """
@@ -209,9 +209,9 @@ class FunctionHandler:
         return self.handler(*args, **kwargs)
 
     @property
-    def config(self) -> ConfigProxy:
+    def config(self) -> ParentAbstractionProxy:
         if not hasattr(self, "_config"):
-            self._config = ConfigProxy(self.handler.parent)
+            self._config = ParentAbstractionProxy(self.handler.parent)
         return self._config
 
 
