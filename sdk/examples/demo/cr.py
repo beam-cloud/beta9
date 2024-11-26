@@ -11,7 +11,9 @@ def load():
 
 
 @endpoint(
-    cpu=1.0,
+    # gpu='any',
+    # memory='12Gi',
+    cpu=1,
     on_start=load,
     workers=1,
     image=(Image(python_packages=['transformers', 'torch'])),

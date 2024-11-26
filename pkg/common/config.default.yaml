@@ -100,20 +100,20 @@ worker:
         minFreeMemory: 32Gi
         sharedMemoryLimitPct: 100%
     # example gpu worker pool
-    # nvidia:
-    #   mode: local
-    #   gpuType: any
-    #   runtime: nvidia
-    #   jobSpec:
-    #     nodeSelector: {}
-    #   poolSizing:
-    #     defaultWorkerCpu: 8000m
-    #     defaultWorkerGpuType: ""
-    #     defaultWorkerMemory: 12Gi
-    #     minFreeCpu:
-    #     minFreeGpu:
-    #     minFreeMemory:
-    #     sharedMemoryLimitPct: 100%
+    nvidia:
+      mode: local
+      gpuType: any
+      runtime: nvidia
+      jobSpec:
+        nodeSelector: {}
+      poolSizing:
+        defaultWorkerCpu:
+        defaultWorkerGpuType: ""
+        defaultWorkerMemory:
+        minFreeCpu:
+        minFreeGpu:
+        minFreeMemory:
+        sharedMemoryLimitPct: 100%
   # global pool attributes
   useHostResolvConf: true
   hostNetwork: false
@@ -149,8 +149,8 @@ worker:
       sharedStorage:
         dumpStorageDir: /tmp/dump
       connection:
-        cedanaUrl: url
-        cedanaAuthToken: token
+        cedanaUrl:
+        cedanaAuthToken: 
 
 providers:
   ec2:

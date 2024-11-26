@@ -263,7 +263,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	// We need to modify the spec to support Cedana C/R if checkpointing is enabled
 	if s.checkpointingAvailable && request.CheckpointEnabled {
-		s.cedanaClient.PrepareContainerSpec(spec, request.Gpu != "")
+		s.cedanaClient.PrepareContainerSpec(spec, request.ContainerId, request.Gpu != "")
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
@@ -525,6 +525,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			} else {
 				restored = true
 				log.Printf("<%s> - checkpoint found and restored, process state: %+v\n", request.ContainerId, processState)
+				err = s.wait(state.ContainerId)
+				if err != nil {
+					log.Printf("<%s> - failed to wait for container exit: %v\n", containerId, err)
+				}
 			}
 		}
 	}
@@ -539,12 +543,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		})
 		if err != nil {
 			log.Printf("<%s> - failed to run container: %v\n", containerId, err)
+		} else {
+			err = s.wait(containerId)
+			if err != nil {
+				log.Printf("<%s> - failed to wait for container exit: %v\n", containerId, err)
+			}
 		}
-	}
-
-	err = s.wait(containerId)
-	if err != nil {
-		log.Printf("<%s> - failed to wait for container exit: %v\n", containerId, err)
 	}
 
 	// Send last log message since the container has exited
@@ -565,6 +569,12 @@ func (s *Worker) wait(containerId string) error {
 	// wait until closure
 	for range events {
 		// can do something with events
+	}
+
+	err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
+	if err != nil {
+		log.Printf("<%s> - failed to delete container: %v\n", containerId, err)
+		return err
 	}
 
 	return nil

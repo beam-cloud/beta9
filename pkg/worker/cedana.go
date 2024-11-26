@@ -126,7 +126,7 @@ func (c *CedanaClient) Close() {
 
 // Updates the runc container spec to make the shared library available
 // as well as the shared memory that is used for communication
-func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, gpuEnabled bool) error {
+func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, containerId string, gpuEnabled bool) error {
 	if !gpuEnabled {
 		return nil // no need to do anything
 	}
@@ -140,7 +140,7 @@ func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, gpuEnabled bool) e
 	}
 
 	// Remove nvidia prestart hook as we don't need actual device mounts
-	spec.Hooks.Prestart = nil
+	// spec.Hooks.Prestart = nil
 
 	// TODO: will this causes issues on multi-gpu nodes...?
 
@@ -175,6 +175,7 @@ func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, gpuEnabled bool) e
 			"rprivate",
 			"nosuid",
 			"nodev",
+			"mode=1777",
 			"rw",
 		},
 	})
@@ -187,7 +188,7 @@ func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, gpuEnabled bool) e
 		}
 	}
 
-	spec.Process.Env = append(spec.Process.Env, "LD_PRELOAD="+cedanaSharedLibPath)
+	spec.Process.Env = append(spec.Process.Env, "CEDANA_JID="+containerId, "LD_PRELOAD="+cedanaSharedLibPath)
 	return nil
 }
 
@@ -213,15 +214,12 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) (stri
 	ctx, cancel := context.WithTimeout(ctx, defaultCheckpointDeadline)
 	defer cancel()
 
-	external := []string{} // Add any external mounts that cause CRIU failures here
-
 	args := cedanaproto.JobDumpArgs{
 		JID: containerId,
 		CriuOpts: &cedanaproto.CriuOpts{
 			TcpClose:        true,
 			TcpEstablished:  true,
 			LeaveRunning:    true,
-			External:        external,
 			TcpSkipInFlight: true,
 			// TODO: add skip in flight connections option
 		},
