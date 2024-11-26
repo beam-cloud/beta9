@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
+	cedanagrpc "buf.build/gen/go/cedana/task/grpc/go/_gogrpc"
+	cedanaproto "buf.build/gen/go/cedana/task/protocolbuffers/go"
 	"github.com/beam-cloud/go-runc"
-	api "github.com/cedana/cedana/pkg/api/services/task"
 	types "github.com/cedana/cedana/pkg/types"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -35,7 +36,7 @@ const (
 
 type CedanaClient struct {
 	conn    *grpc.ClientConn
-	service api.TaskServiceClient
+	service cedanagrpc.TaskServiceClient
 	daemon  *exec.Cmd
 	config  types.Config
 }
@@ -59,7 +60,7 @@ func NewCedanaClient(
 		return nil, err
 	}
 
-	taskClient := api.NewTaskServiceClient(taskConn)
+	taskClient := cedanagrpc.NewTaskServiceClient(taskConn)
 
 	// Launch the daemon
 	daemon := exec.CommandContext(ctx, cedanaBinPath, "daemon", "start",
@@ -195,7 +196,7 @@ func (c *CedanaClient) Manage(ctx context.Context, containerId string, gpuEnable
 	ctx, cancel := context.WithTimeout(ctx, defaultManageDeadline)
 	defer cancel()
 
-	args := &api.RuncManageArgs{
+	args := &cedanaproto.RuncManageArgs{
 		ContainerID: containerId,
 		GPU:         gpuEnabled,
 		Root:        runcRoot,
@@ -214,13 +215,14 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) (stri
 
 	external := []string{} // Add any external mounts that cause CRIU failures here
 
-	args := api.JobDumpArgs{
+	args := cedanaproto.JobDumpArgs{
 		JID: containerId,
-		CriuOpts: &api.CriuOpts{
-			TcpClose:     true,
-      TcpEstablished: true,
-			LeaveRunning: true,
-			External:     external,
+		CriuOpts: &cedanaproto.CriuOpts{
+			TcpClose:        true,
+			TcpEstablished:  true,
+			LeaveRunning:    true,
+			External:        external,
+			TcpSkipInFlight: true,
 			// TODO: add skip in flight connections option
 		},
 		Dir: fmt.Sprintf("%s/%s", checkpointPathBase, containerId),
@@ -239,22 +241,22 @@ func (c *CedanaClient) Restore(
 	containerId string,
 	checkpointPath string,
 	opts *runc.CreateOpts,
-) (*api.ProcessState, error) {
+) (*cedanaproto.ProcessState, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCheckpointDeadline)
 	defer cancel()
 
 	// NOTE: Cedana uses bundle path to find the config.json
 	bundle := strings.TrimRight(opts.ConfigPath, filepath.Base(opts.ConfigPath))
 
-	args := &api.JobRestoreArgs{
+	args := &cedanaproto.JobRestoreArgs{
 		JID: containerId,
-		RuncOpts: &api.RuncOpts{
+		RuncOpts: &cedanaproto.RuncOpts{
 			Root:          runcRoot,
 			Bundle:        bundle,
 			Detach:        true,
 			ConsoleSocket: opts.ConsoleSocket.Path(),
 		},
-		CriuOpts:       &api.CriuOpts{TcpClose: true, TcpEstablished: true},
+		CriuOpts:       &cedanaproto.CriuOpts{TcpClose: true, TcpEstablished: true},
 		CheckpointPath: checkpointPath,
 	}
 	res, err := c.service.JobRestore(ctx, args)
@@ -271,14 +273,14 @@ func (c *CedanaClient) Restore(
 // Perform a detailed health check of cedana C/R capabilities
 func (c *CedanaClient) DetailedHealthCheckWait(
 	ctx context.Context,
-) (*api.DetailedHealthCheckResponse, error) {
+) (*cedanaproto.DetailedHealthCheckResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultHealthCheckDeadline)
 	defer cancel()
 
 	opts := []grpc.CallOption{}
 	opts = append(opts, grpc.WaitForReady(true))
 
-	res, err := c.service.DetailedHealthCheck(ctx, &api.DetailedHealthCheckRequest{}, opts...)
+	res, err := c.service.DetailedHealthCheck(ctx, &cedanaproto.DetailedHealthCheckRequest{}, opts...)
 	if err != nil {
 		return nil, err
 	}
