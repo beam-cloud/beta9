@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -219,6 +218,7 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) (stri
 		JID: containerId,
 		CriuOpts: &api.CriuOpts{
 			TcpClose:     true,
+      TcpEstablished: true,
 			LeaveRunning: true,
 			External:     external,
 			// TODO: add skip in flight connections option
@@ -246,47 +246,15 @@ func (c *CedanaClient) Restore(
 	// NOTE: Cedana uses bundle path to find the config.json
 	bundle := strings.TrimRight(opts.ConfigPath, filepath.Base(opts.ConfigPath))
 
-	// TODO: hack to set terminal to true for logging to work properly
-	configBytes, err := os.ReadFile(opts.ConfigPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var config specs.Spec
-	err = json.Unmarshal(configBytes, &config)
-	if err != nil {
-		return nil, err
-	}
-	config.Process.Terminal = true
-
-	updatedConfigBytes, err := json.Marshal(config)
-	if err != nil {
-		return nil, err
-	}
-
-	err = os.WriteFile(opts.ConfigPath, updatedConfigBytes, 0644)
-	if err != nil {
-		return nil, err
-	}
-
-	ttyPath := filepath.Join(os.TempDir(), fmt.Sprintf("cedana-tty-%s.sock", containerId))
-	tty := exec.CommandContext(ctx, cedanaBinPath, "debug", "recvtty", ttyPath)
-	tty.Stdout = opts.OutputWriter
-	tty.Stderr = opts.OutputWriter
-	err = tty.Start()
-	if err != nil {
-		return nil, err
-	}
-
 	args := &api.JobRestoreArgs{
 		JID: containerId,
 		RuncOpts: &api.RuncOpts{
 			Root:          runcRoot,
 			Bundle:        bundle,
 			Detach:        true,
-			ConsoleSocket: ttyPath,
+			ConsoleSocket: opts.ConsoleSocket.Path(),
 		},
-		CriuOpts:       &api.CriuOpts{TcpClose: true},
+		CriuOpts:       &api.CriuOpts{TcpClose: true, TcpEstablished: true},
 		CheckpointPath: checkpointPath,
 	}
 	res, err := c.service.JobRestore(ctx, args)
@@ -296,8 +264,6 @@ func (c *CedanaClient) Restore(
 	if opts.Started != nil {
 		opts.Started <- int(res.GetState().GetPID())
 	}
-
-	tty.Wait()
 
 	return res.State, nil
 }

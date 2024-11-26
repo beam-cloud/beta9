@@ -20,17 +20,16 @@ import (
 )
 
 const (
-	baseConfigPath            string = "/tmp"
-	defaultContainerDirectory string = "/mnt/code"
-	containerInnerPort        int    = 8001 // XXX: Use fixed port in the container namespace for restores
-	exitCodeSigterm           int    = 143  // Means the container received a SIGTERM by the underlying operating system
-	exitCodeSigkill           int    = 137  // Means the container received a SIGKILL by the underlying operating system
+	baseConfigPath            string        = "/tmp"
+	defaultContainerDirectory string        = "/mnt/code"
+	containerInnerPort        int           = 8001 // XXX: Use fixed port in the container namespace for restores
+	exitCodeSigterm           int           = 143  // Means the container received a SIGTERM by the underlying operating system
+	exitCodeSigkill           int           = 137  // Means the container received a SIGKILL by the underlying operating system
+	runcEventsInterval        time.Duration = 5 * time.Second
 )
 
-var (
-	//go:embed base_runc_config.json
-	baseRuncConfigRaw string
-)
+//go:embed base_runc_config.json
+var baseRuncConfigRaw string
 
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
@@ -231,6 +230,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
+	spec.Process.Terminal = true // NOTE: This is since we are using a console writer for logging
 
 	if s.config.Worker.RunCResourcesEnforced {
 		spec.Linux.Resources.CPU = getLinuxCPU(request)
@@ -328,7 +328,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				"rbind",
 				"rprivate",
 				"nosuid",
-				"nodev"},
+				"nodev",
+			},
 		}
 		spec.Mounts = append(spec.Mounts, checkpointMount)
 	}
@@ -338,12 +339,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		Type:        "none",
 		Source:      "/workspace/resolv.conf",
 		Destination: "/etc/resolv.conf",
-		Options: []string{"ro",
+		Options: []string{
+			"ro",
 			"rbind",
 			"rprivate",
 			"nosuid",
 			"noexec",
-			"nodev"},
+			"nodev",
+		},
 	}
 
 	if s.config.Worker.UseHostResolvConf {
@@ -485,6 +488,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
+	consoleWriter, err := NewConsoleWriter(containerInstance.OutputWriter)
+	if err != nil {
+		log.Printf("<%s> - failed to create console writer: %v\n", containerId, err)
+		return
+	}
+
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(ctx, request)
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
@@ -505,9 +514,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		} else if state.Status == types.CheckpointStatusAvailable {
 			checkpointPath := filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, state.RemoteKey)
 			processState, err := s.cedanaClient.Restore(ctx, state.ContainerId, checkpointPath, &runc.CreateOpts{
-				OutputWriter: containerInstance.OutputWriter,
-				ConfigPath:   configPath,
-				Started:      pidChan,
+				Detach:        true,
+				ConsoleSocket: consoleWriter,
+				ConfigPath:    configPath,
+				Started:       pidChan,
 			})
 			if err != nil {
 				log.Printf("<%s> - failed to restore checkpoint: %v\n", request.ContainerId, err)
@@ -522,10 +532,19 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Invoke runc process (launch the container), if not restored from checkpoint
 	if !restored {
 		exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
-			OutputWriter: containerInstance.OutputWriter,
-			ConfigPath:   configPath,
-			Started:      pidChan,
+			Detach:        true,
+			ConsoleSocket: consoleWriter,
+			ConfigPath:    configPath,
+			Started:       pidChan,
 		})
+		if err != nil {
+			log.Printf("<%s> - failed to run container: %v\n", containerId, err)
+		}
+	}
+
+	err = s.wait(containerId)
+	if err != nil {
+		log.Printf("<%s> - failed to wait for container exit: %v\n", containerId, err)
 	}
 
 	// Send last log message since the container has exited
@@ -534,6 +553,21 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		Done:    true,
 		Success: err == nil,
 	}
+}
+
+// Wait for container to exit
+func (s *Worker) wait(containerId string) error {
+	events, err := s.runcHandle.Events(s.ctx, containerId, runcEventsInterval)
+	if err != nil {
+		return err
+	}
+
+	// wait until closure
+	for range events {
+		// can do something with events
+	}
+
+	return nil
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {

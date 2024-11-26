@@ -143,11 +143,11 @@ worker:
         accessKey: test
         secretKey: test
         endpointURL: http://localstack:4566
-    cedana:
+    cedana: # defaults
       client:
         leaveRunning: true
       sharedStorage:
-        dumpStorageDir: /data
+        dumpStorageDir: /tmp/dump
       connection:
         cedanaUrl: url
         cedanaAuthToken: token
