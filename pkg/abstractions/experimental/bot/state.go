@@ -264,6 +264,12 @@ func (m *botStateManager) pushUserEvent(workspaceName, stubId, sessionId string,
 		return err
 	}
 
+	historyKey := Keys.botEventHistory(workspaceName, stubId, sessionId)
+	err = m.rdb.RPush(context.TODO(), historyKey, jsonData).Err()
+	if err != nil {
+		return err
+	}
+
 	messageKey := Keys.botInputBuffer(workspaceName, stubId, sessionId)
 	return m.rdb.RPush(context.TODO(), messageKey, jsonData).Err()
 }
@@ -292,12 +298,14 @@ func (m *botStateManager) pushEvent(workspaceName, stubId, sessionId string, eve
 	messageKey := Keys.botEventBuffer(workspaceName, stubId, sessionId)
 	historyKey := Keys.botEventHistory(workspaceName, stubId, sessionId)
 
-	err = m.rdb.RPush(context.TODO(), messageKey, jsonData).Err()
-	if err != nil {
-		return err
+	if event.Type != BotEventTypeNetworkState {
+		err = m.rdb.RPush(context.TODO(), historyKey, jsonData).Err()
+		if err != nil {
+			return err
+		}
 	}
 
-	return m.rdb.RPush(context.TODO(), historyKey, jsonData).Err()
+	return m.rdb.RPush(context.TODO(), messageKey, jsonData).Err()
 }
 
 const eventPairTtlS = 120 * time.Second
