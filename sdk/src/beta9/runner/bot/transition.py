@@ -67,12 +67,15 @@ class BotTransition:
                         if field_name in marker_class.model_fields:
                             field_type = marker_class.model_fields[field_name].annotation
                         else:
-                            field_type = str  # default to string if field not defined
+                            field_type = str  # default to string if field is not defined
 
                         # Try to convert field_value to field_type
                         try:
-                            converted_value = field_type(field_value)
-                        except (ValueError, TypeError):
+                            if get_origin(field_type) is dict and isinstance(field_value, str):
+                                converted_value = json.loads(field_value)
+                            else:
+                                converted_value = field_type(field_value)
+                        except (ValueError, TypeError, json.JSONDecodeError):
                             converted_value = field_value
 
                         fields_dict[field_name] = converted_value
