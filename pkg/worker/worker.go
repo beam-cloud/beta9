@@ -326,6 +326,12 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 
 			log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
 
+			// TODO: remove this hotfix
+			if state.Status == types.ContainerStatusPending {
+				log.Printf("<%s> - forcing container status to running\n", request.ContainerId)
+				state.Status = types.ContainerStatusRunning
+			}
+
 			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
 			if err != nil {
 				log.Printf("<%s> - unable to update container state: %v\n", request.ContainerId, err)

@@ -445,8 +445,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			}
 		}
 
+		log.Printf("<%s> - updating container status to running\n", containerId)
 		// Update container status to running
-		s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
+		err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
+		if err != nil {
+			log.Printf("<%s> failed to update container status to running: %v", containerId, err)
+		}
 	}()
 
 	// Setup container overlay filesystem
