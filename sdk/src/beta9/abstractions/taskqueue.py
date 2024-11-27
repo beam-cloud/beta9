@@ -29,85 +29,85 @@ from .mixins import DeployableMixin
 
 class TaskQueue(RunnerAbstraction):
     """
-    Decorator which allows you to create a task queue out of the decorated function. The tasks are executed
-    asynchronously, in remote containers. You can interact with the task queue either through an API (when deployed), or directly
-    in python through the .put() method.
+        Decorator which allows you to create a task queue out of the decorated function. The tasks are executed
+        asynchronously, in remote containers. You can interact with the task queue either through an API (when deployed), or directly
+        in python through the .put() method.
 
-    Parameters:
-        cpu (Union[int, float, str]):
-            The number of CPU cores allocated to the container. Default is 1.0.
-        memory (Union[int, str]):
-            The amount of memory allocated to the container. It should be specified in
-            MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
-        gpu (Union[GpuTypeAlias, List[GpuTypeAlias]]):
-            The type or name of the GPU device to be used for GPU-accelerated tasks. If not
-            applicable or no GPU required, leave it empty.
-            You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
-            the scheduler prioritizes their selection based on their order in the list.
-        image (Union[Image, dict]):
-            The container image used for the task execution. Default is [Image](#image).
-        timeout (Optional[int]):
-            The maximum number of seconds a task can run before it times out.
-            Default is 3600. Set it to -1 to disable the timeout.
-        retries (Optional[int]):
-            The maximum number of times a task will be retried if the container crashes. Default is 3.
-        workers (Optional[int]):
-            The number of processes handling tasks per container.
-            Modifying this parameter can improve throughput for certain workloads.
-            Workers will share the CPU, Memory, and GPU defined.
-            You may need to increase these values to increase concurrency.
-            Default is 1.
-        keep_warm_seconds (int):
-            The duration in seconds to keep the task queue warm even if there are no pending
-            tasks. Keeping the queue warm helps to reduce the latency when new tasks arrive.
-            Default is 10s.
-        max_pending_tasks (int):
-            The maximum number of tasks that can be pending in the queue. If the number of
-            pending tasks exceeds this value, the task queue will stop accepting new tasks.
-            Default is 100.
-        on_start (Optional[Callable]):
-            An optional function to run once (per process) when the container starts. Can be used for downloading data,
-            loading models, or anything else computationally expensive.
-        callback_url (Optional[str]):
-            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
-        volumes (Optional[List[Volume]]):
-            A list of storage volumes to be associated with the taskqueue. Default is [].
-        secrets (Optional[List[str]):
-            A list of secrets that are injected into the container as environment variables. Default is [].
-        name (Optional[str]):
-            An optional name for this task_queue, used during deployment. If not specified, you must specify the name
-            at deploy time with the --name argument
-        authorized (bool):
-            If false, allows the endpoint to be invoked without an auth token.
-            Default is True.
-        autoscaler (Autoscaler):
-            Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
-            various autoscaling strategies. Default is QueueDepthAutoscaler().
-        task_policy (TaskPolicy):
-            The task policy for the function. This helps manage the lifecycle of an individual task.
-            Setting values here will override timeout and retries.
-<<<<<<< HEAD
-        checkpoint_enabled (bool):
-            (experimental) Whether to enable checkpointing for the task queue. Default is False.
-            If enabled, the app will be checkpointed after the on_start function has completed.
-            On next invocation, each container will restore from a checkpoint and resume execution instead of
-            booting up from cold.
-=======
-        retry_for (Optional[List[BaseException]]):
-            A list of exceptions that will trigger a retry if raised by your handler.
->>>>>>> main
-    Example:
-        ```python
-        from beta9 import task_queue, Image
+        Parameters:
+            cpu (Union[int, float, str]):
+                The number of CPU cores allocated to the container. Default is 1.0.
+            memory (Union[int, str]):
+                The amount of memory allocated to the container. It should be specified in
+                MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
+            gpu (Union[GpuTypeAlias, List[GpuTypeAlias]]):
+                The type or name of the GPU device to be used for GPU-accelerated tasks. If not
+                applicable or no GPU required, leave it empty.
+                You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
+                the scheduler prioritizes their selection based on their order in the list.
+            image (Union[Image, dict]):
+                The container image used for the task execution. Default is [Image](#image).
+            timeout (Optional[int]):
+                The maximum number of seconds a task can run before it times out.
+                Default is 3600. Set it to -1 to disable the timeout.
+            retries (Optional[int]):
+                The maximum number of times a task will be retried if the container crashes. Default is 3.
+            workers (Optional[int]):
+                The number of processes handling tasks per container.
+                Modifying this parameter can improve throughput for certain workloads.
+                Workers will share the CPU, Memory, and GPU defined.
+                You may need to increase these values to increase concurrency.
+                Default is 1.
+            keep_warm_seconds (int):
+                The duration in seconds to keep the task queue warm even if there are no pending
+                tasks. Keeping the queue warm helps to reduce the latency when new tasks arrive.
+                Default is 10s.
+            max_pending_tasks (int):
+                The maximum number of tasks that can be pending in the queue. If the number of
+                pending tasks exceeds this value, the task queue will stop accepting new tasks.
+                Default is 100.
+            on_start (Optional[Callable]):
+                An optional function to run once (per process) when the container starts. Can be used for downloading data,
+                loading models, or anything else computationally expensive.
+            callback_url (Optional[str]):
+                An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+            volumes (Optional[List[Volume]]):
+                A list of storage volumes to be associated with the taskqueue. Default is [].
+            secrets (Optional[List[str]):
+                A list of secrets that are injected into the container as environment variables. Default is [].
+            name (Optional[str]):
+                An optional name for this task_queue, used during deployment. If not specified, you must specify the name
+                at deploy time with the --name argument
+            authorized (bool):
+                If false, allows the endpoint to be invoked without an auth token.
+                Default is True.
+            autoscaler (Autoscaler):
+                Configure a deployment autoscaler - if specified, you can use scale your function horizontally using
+                various autoscaling strategies. Default is QueueDepthAutoscaler().
+            task_policy (TaskPolicy):
+                The task policy for the function. This helps manage the lifecycle of an individual task.
+                Setting values here will override timeout and retries.
+    <<<<<<< HEAD
+            checkpoint_enabled (bool):
+                (experimental) Whether to enable checkpointing for the task queue. Default is False.
+                If enabled, the app will be checkpointed after the on_start function has completed.
+                On next invocation, each container will restore from a checkpoint and resume execution instead of
+                booting up from cold.
+    =======
+            retry_for (Optional[List[BaseException]]):
+                A list of exceptions that will trigger a retry if raised by your handler.
+    >>>>>>> main
+        Example:
+            ```python
+            from beta9 import task_queue, Image
 
-        @task_queue(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
-        def transcribe(filename: str):
-            print(filename)
-            return
+            @task_queue(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
+            def transcribe(filename: str):
+                print(filename)
+                return
 
-        transcribe.put("some_file.mp4")
+            transcribe.put("some_file.mp4")
 
-        ```
+            ```
     """
 
     def __init__(
@@ -129,11 +129,8 @@ class TaskQueue(RunnerAbstraction):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
-<<<<<<< HEAD
         checkpoint_enabled: bool = False,
-=======
         retry_for: Optional[List[BaseException]] = None,
->>>>>>> main
     ) -> None:
         super().__init__(
             cpu=cpu,

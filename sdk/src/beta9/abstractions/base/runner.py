@@ -129,12 +129,9 @@ class RunnerAbstraction(BaseAbstraction):
             timeout=task_policy.timeout or timeout,
             ttl=task_policy.ttl,
         )
-<<<<<<< HEAD
         self.checkpoint_enabled = checkpoint_enabled
-=======
         self.extra: dict = {}
 
->>>>>>> main
         if on_start is not None:
             self._map_callable_to_attr(attr="on_start", func=on_start)
 
@@ -428,11 +425,8 @@ class RunnerAbstraction(BaseAbstraction):
                     ttl=self.task_policy.ttl,
                 ),
                 concurrent_requests=self.concurrent_requests,
-<<<<<<< HEAD
                 checkpoint_enabled=self.checkpoint_enabled,
-=======
                 extra=json.dumps(self.extra),
->>>>>>> main
             )
             if _is_stub_created_for_workspace():
                 stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
