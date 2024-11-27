@@ -381,6 +381,10 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 		totalCpu := 0
 		totalMemory := int64(0)
 		for _, container := range containers {
+			if container.Status == types.ContainerStatusStopping {
+				continue
+			}
+
 			totalGpuCount += int(container.GpuCount)
 			totalCpu += int(container.Cpu)
 			totalMemory += container.Memory

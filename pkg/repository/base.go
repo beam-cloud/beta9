@@ -35,6 +35,8 @@ type WorkerRepository interface {
 	GetContainerIps(networkPrefix string) ([]string, error)
 	SetNetworkLock(networkPrefix string, ttl, retries int) error
 	RemoveNetworkLock(networkPrefix string) error
+	SetWorkerPoolSizerLock(controllerName string) error
+	RemoveWorkerPoolSizerLock(controllerName string) error
 }
 
 type ContainerRepository interface {
@@ -132,6 +134,7 @@ type BackendRepository interface {
 }
 
 type TaskRepository interface {
+	GetTaskState(ctx context.Context, workspaceName, stubId, taskId string) (*types.TaskMessage, error)
 	SetTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error
 	DeleteTaskState(ctx context.Context, workspaceName, stubId, taskId string) error
 	GetTasksInFlight(ctx context.Context) ([]*types.TaskMessage, error)

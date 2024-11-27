@@ -190,6 +190,7 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 			ProviderName:      string(*pool.Provider),
 			TailscaleUrl:      gws.appConfig.Tailscale.ControlURL,
 			TailscaleAuth:     gws.appConfig.Tailscale.AuthKey,
+			UserData:          pool.UserData,
 		},
 	}, nil
 }

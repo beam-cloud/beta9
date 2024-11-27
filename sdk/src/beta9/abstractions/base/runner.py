@@ -1,4 +1,5 @@
 import inspect
+import json
 import os
 import sys
 import tempfile
@@ -19,6 +20,7 @@ from ...clients.gateway import (
     GetOrCreateStubRequest,
     GetOrCreateStubResponse,
     GetUrlRequest,
+    GetUrlResponse,
     ReplaceObjectContentOperation,
     ReplaceObjectContentRequest,
     ReplaceObjectContentResponse,
@@ -43,15 +45,18 @@ TASKQUEUE_STUB_TYPE = "taskqueue"
 ENDPOINT_STUB_TYPE = "endpoint"
 ASGI_STUB_TYPE = "asgi"
 SCHEDULE_STUB_TYPE = "schedule"
+BOT_STUB_TYPE = "bot"
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
 ASGI_DEPLOYMENT_STUB_TYPE = "asgi/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
 SCHEDULE_DEPLOYMENT_STUB_TYPE = "schedule/deployment"
+BOT_DEPLOYMENT_STUB_TYPE = "bot/deployment"
 TASKQUEUE_SERVE_STUB_TYPE = "taskqueue/serve"
 ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
 ASGI_SERVE_STUB_TYPE = "asgi/serve"
 FUNCTION_SERVE_STUB_TYPE = "function/serve"
+BOT_SERVE_STUB_TYPE = "bot/serve"
 
 _stub_creation_lock = threading.Lock()
 _stub_created_for_workspace = False
@@ -124,7 +129,12 @@ class RunnerAbstraction(BaseAbstraction):
             timeout=task_policy.timeout or timeout,
             ttl=task_policy.ttl,
         )
+<<<<<<< HEAD
         self.checkpoint_enabled = checkpoint_enabled
+=======
+        self.extra: dict = {}
+
+>>>>>>> main
         if on_start is not None:
             self._map_callable_to_attr(attr="on_start", func=on_start)
 
@@ -133,8 +143,9 @@ class RunnerAbstraction(BaseAbstraction):
         self.settings: SDKSettings = get_settings()
         self.config_context: ConfigContext = get_config_context()
         self.tmp_files: List[tempfile.NamedTemporaryFile] = []
+        self.is_websocket: bool = False
 
-    def print_invocation_snippet(self, url_type: str = "") -> None:
+    def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
         """Print curl request to call deployed container URL"""
 
         res = self.gateway_stub.get_url(
@@ -159,7 +170,20 @@ class RunnerAbstraction(BaseAbstraction):
             ),
             "-d '{}'",
         ]
+
+        if self.is_websocket:
+            res.url = res.url.replace("http://", "ws://").replace("https://", "wss://")
+            commands = [
+                f"websocat '{res.url}' \\",
+                *(
+                    [f"-H 'Authorization: Bearer {self.config_context.token}'"]
+                    if self.authorized
+                    else []
+                ),
+            ]
+
         terminal.print("\n".join(commands), crop=False, overflow="ignore")
+        return res
 
     def _parse_memory(self, memory_str: str) -> int:
         """Parse memory str (with units) to megabytes."""
@@ -404,7 +428,11 @@ class RunnerAbstraction(BaseAbstraction):
                     ttl=self.task_policy.ttl,
                 ),
                 concurrent_requests=self.concurrent_requests,
+<<<<<<< HEAD
                 checkpoint_enabled=self.checkpoint_enabled,
+=======
+                extra=json.dumps(self.extra),
+>>>>>>> main
             )
             if _is_stub_created_for_workspace():
                 stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(

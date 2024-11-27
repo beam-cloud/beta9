@@ -364,6 +364,19 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 	return nil
 }
 
+func (r *WorkerRedisRepository) SetWorkerPoolSizerLock(poolName string) error {
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerPoolSizerLock(poolName), common.RedisLockOptions{TtlS: 3, Retries: 0})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *WorkerRedisRepository) RemoveWorkerPoolSizerLock(poolName string) error {
+	return r.lock.Release(common.RedisKeys.WorkerPoolSizerLock(poolName))
+}
+
 func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error {
 	// Serialize the ContainerRequest -> JSON
 	requestJSON, err := json.Marshal(request)

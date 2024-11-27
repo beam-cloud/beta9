@@ -44,8 +44,8 @@ class Endpoint(RunnerAbstraction):
         gpu (Union[GpuTypeAlias, List[GpuTypeAlias]]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty.
-            You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify multiple
-            GPUs, the container will load balance across them with equal priority.
+            You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
+            the scheduler prioritizes their selection based on their order in the list.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Volume]]):
@@ -74,7 +74,7 @@ class Endpoint(RunnerAbstraction):
         name (Optional[str]):
             An optional name for this endpoint, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
-        authorized (Optional[str]):
+        authorized (bool):
             If false, allows the endpoint to be invoked without an auth token.
             Default is True.
         autoscaler (Optional[Autoscaler]):
@@ -212,7 +212,7 @@ class ASGI(Endpoint):
         name (Optional[str]):
             An optional name for this ASGI application, used during deployment. If not specified, you must
             specify the name at deploy time with the --name argument
-        authorized (Optional[str]):
+        authorized (bool):
             If false, allows the ASGI application to be invoked without an auth token.
             Default is True.
         autoscaler (Optional[Autoscaler]):
@@ -249,6 +249,8 @@ class ASGI(Endpoint):
             @app.post("/warmup")
             async def warmup():
                 return {"status": "warm"}
+
+            return app
         ```
     """
 
@@ -346,7 +348,7 @@ class RealtimeASGI(ASGI):
         name (Optional[str]):
             An optional name for this ASGI application, used during deployment. If not specified, you must
             specify the name at deploy time with the --name argument
-        authorized (Optional[str]):
+        authorized (bool):
             If false, allows the ASGI application to be invoked without an auth token.
             Default is True.
         autoscaler (Optional[Autoscaler]):
@@ -415,6 +417,7 @@ class RealtimeASGI(ASGI):
             concurrent_requests=concurrent_requests,
             checkpoint_enabled=checkpoint_enabled,
         )
+        self.is_websocket = True
 
     def __call__(self, func):
         import asyncio
@@ -460,7 +463,7 @@ class RealtimeASGI(ASGI):
                         while not internal_asgi_app.input_queue.empty():
                             output = internal_asgi_app.handler(
                                 context=internal_asgi_app.context,
-                                input=internal_asgi_app.input_queue.get(),
+                                event=internal_asgi_app.input_queue.get(),
                             )
 
                             if isinstance(output, str):

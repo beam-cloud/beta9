@@ -168,21 +168,22 @@ type TaskStats struct {
 }
 
 type StubConfigV1 struct {
-	Runtime            Runtime      `json:"runtime"`
-	Handler            string       `json:"handler"`
-	OnStart            string       `json:"on_start"`
-	PythonVersion      string       `json:"python_version"`
-	KeepWarmSeconds    uint         `json:"keep_warm_seconds"`
-	MaxPendingTasks    uint         `json:"max_pending_tasks"`
-	CallbackUrl        string       `json:"callback_url"`
-	TaskPolicy         TaskPolicy   `json:"task_policy"`
-	Workers            uint         `json:"workers"`
-	ConcurrentRequests uint         `json:"concurrent_requests"`
-	Authorized         bool         `json:"authorized"`
-	Volumes            []*pb.Volume `json:"volumes"`
-	Secrets            []Secret     `json:"secrets,omitempty"`
-	Autoscaler         *Autoscaler  `json:"autoscaler"`
-	CheckpointEnabled  bool         `json:"checkpoint_enabled"`
+	Runtime            Runtime         `json:"runtime"`
+	Handler            string          `json:"handler"`
+	OnStart            string          `json:"on_start"`
+	PythonVersion      string          `json:"python_version"`
+	KeepWarmSeconds    uint            `json:"keep_warm_seconds"`
+	MaxPendingTasks    uint            `json:"max_pending_tasks"`
+	CallbackUrl        string          `json:"callback_url"`
+	TaskPolicy         TaskPolicy      `json:"task_policy"`
+	Workers            uint            `json:"workers"`
+	ConcurrentRequests uint            `json:"concurrent_requests"`
+	Authorized         bool            `json:"authorized"`
+	Volumes            []*pb.Volume    `json:"volumes"`
+	Secrets            []Secret        `json:"secrets,omitempty"`
+	Autoscaler         *Autoscaler     `json:"autoscaler"`
+	Extra              json.RawMessage `json:"extra"`
+	CheckpointEnabled  bool            `json:"checkpoint_enabled"`
 }
 
 type AutoscalerType string
@@ -213,6 +214,9 @@ const (
 	StubTypeASGIServe              string = "asgi/serve"
 	StubTypeScheduledJob           string = "schedule"
 	StubTypeScheduledJobDeployment string = "schedule/deployment"
+	StubTypeBot                    string = "bot"
+	StubTypeBotDeployment          string = "bot/deployment"
+	StubTypeBotServe               string = "bot/serve"
 )
 
 type StubType string

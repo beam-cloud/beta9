@@ -551,20 +551,30 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
 	}
 
-	if filters.StubType != "" {
-		stubTypes := strings.Split(filters.StubType, ",")
-		if len(stubTypes) > 0 {
-			qb = qb.Where(squirrel.Eq{"s.type": stubTypes})
-		}
+	if len(filters.StubNames) > 0 {
+		qb = qb.Where(squirrel.Eq{"s.name": filters.StubNames})
 	}
 
-	if filters.TaskId != "" {
-		if err := uuid.Validate(filters.TaskId); err != nil {
-			// Postgres will throw an error if the uuid is invalid, which results in a 500 to the client
-			// So instead, we will make the query valid and make it return no results
-			qb = qb.Where(squirrel.Eq{"t.external_id": nil})
-		} else {
-			qb = qb.Where(squirrel.Eq{"t.external_id": filters.TaskId})
+	if len(filters.StubTypes) > 0 {
+		qb = qb.Where(squirrel.Eq{"s.type": filters.StubTypes})
+	}
+
+	if len(filters.ContainerIds) > 0 {
+		qb = qb.Where(squirrel.Eq{"t.container_id": filters.ContainerIds})
+	}
+
+	if len(filters.TaskIds) > 0 {
+		validTaskIds := []string{}
+
+		for _, taskId := range filters.TaskIds {
+			// Filter out invalid UUIDs
+			if _, err := uuid.Parse(taskId); err == nil {
+				validTaskIds = append(validTaskIds, taskId)
+			}
+		}
+
+		if len(validTaskIds) > 0 {
+			qb = qb.Where(squirrel.Eq{"t.external_id": validTaskIds})
 		}
 	}
 
@@ -1054,6 +1064,10 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 		qb = qb.Where(squirrel.Eq{"d.stub_type": filters.StubType})
 	}
 
+	if filters.Subdomain != "" {
+		qb = qb.Where(squirrel.Eq{"d.subdomain": filters.Subdomain})
+	}
+
 	if filters.SearchQuery != "" {
 		if err := uuid.Validate(filters.SearchQuery); err == nil {
 			qb = qb.Where(squirrel.Eq{"d.external_id": filters.SearchQuery})
@@ -1063,7 +1077,7 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 	}
 
 	if filters.Name != "" {
-		qb = qb.Where(squirrel.Like{"d.name": filters.Name})
+		qb = qb.Where(squirrel.Like{"d.name": fmt.Sprintf("%%%s%%", filters.Name)})
 	}
 
 	if filters.Active != nil {

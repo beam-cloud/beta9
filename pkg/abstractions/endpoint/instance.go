@@ -63,14 +63,14 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 
 	env = append(secrets, env...)
 
-	gpuCount := 0
-	if len(i.StubConfig.Runtime.Gpus) > 0 {
-		gpuCount = 1
-	}
-
 	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)
 	if i.StubConfig.Runtime.Gpu != "" {
 		gpuRequest = append(gpuRequest, i.StubConfig.Runtime.Gpu.String())
+	}
+
+	gpuCount := 0
+	if len(gpuRequest) > 0 {
+		gpuCount = 1
 	}
 
 	for c := 0; c < containersToRun; c++ {
@@ -126,7 +126,7 @@ func (i *endpointInstance) stopContainers(containersToStop int) error {
 		idx := rnd.Intn(len(containerIds))
 		containerId := containerIds[idx]
 
-		err := i.Scheduler.Stop(containerId)
+		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
 		if err != nil {
 			log.Printf("<%s> unable to stop container: %v", i.Name, err)
 			return err

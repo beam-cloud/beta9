@@ -79,6 +79,7 @@ type ContainerInstance struct {
 	Port         int
 	OutputWriter *common.OutputWriter
 	LogBuffer    *common.LogBuffer
+	Request      *types.ContainerRequest
 }
 
 type ContainerOptions struct {
@@ -214,7 +215,7 @@ func NewWorker() (*Worker, error) {
 		memoryLimit:             memoryLimit,
 		gpuType:                 gpuType,
 		gpuCount:                uint32(gpuCount),
-		runcHandle:              runc.Runc{},
+		runcHandle:              runc.Runc{Debug: config.DebugMode},
 		runcServer:              runcServer,
 		fileCacheManager:        fileCacheManager,
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
@@ -286,7 +287,7 @@ func (s *Worker) Run() error {
 					}
 
 					s.containerLock.Unlock()
-					s.clearContainer(containerId, request, time.Duration(0), exitCode)
+					s.clearContainer(containerId, request, exitCode)
 					continue
 				}
 			}
@@ -346,8 +347,6 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				return nil
 			}
 
-			log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
-
 			// Stop container if it is "orphaned" - meaning it's running but has no associated state
 			state, err := s.containerRepo.GetContainerState(request.ContainerId)
 			if err != nil {
@@ -359,6 +358,8 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 
 				continue
 			}
+
+			log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
 
 			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
 			if err != nil {
@@ -395,7 +396,6 @@ func (s *Worker) processStopContainerEvents() {
 		default:
 			err := s.stopContainer(event.ContainerId, event.Kill)
 			if err != nil {
-				s.stopContainerChan <- event
 				time.Sleep(time.Second)
 			}
 		}
@@ -475,20 +475,11 @@ func (s *Worker) shutdown() error {
 	// Stops goroutines
 	s.cancel()
 
-	// Stop all running containers forcefully
-	s.containerInstances.Range(func(containerId string, _ *ContainerInstance) bool {
-		if err := s.stopContainer(containerId, true); err != nil {
-			log.Printf("Failed to stop container: %v\n", err)
-		}
-		return true // continue iterating
-	})
-
 	var errs error
 	if worker, err := s.workerRepo.GetWorkerById(s.workerId); err != nil {
 		errs = errors.Join(errs, err)
 	} else if worker != nil {
-		err = s.workerRepo.RemoveWorker(worker)
-		if err != nil {
+		if err := s.workerRepo.RemoveWorker(worker); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}

@@ -287,6 +287,7 @@ type CopyPathContent struct {
 func (vs *GlobalVolumeService) copyPathStream(ctx context.Context, stream <-chan CopyPathContent, workspace *types.Workspace) error {
 	var file *os.File
 	var fullVolumePath string
+	var tmpFileSuffix string = ".tmp"
 
 	for chunk := range stream {
 		if file == nil {
@@ -305,14 +306,13 @@ func (vs *GlobalVolumeService) copyPathStream(ctx context.Context, stream <-chan
 			}
 
 			// Get paths and prevent access above parent directory
-			_, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
+			_, fullVolumePath, err = GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
 			if err != nil {
 				return err
 			}
 
 			os.MkdirAll(path.Dir(fullVolumePath), os.FileMode(0755))
-
-			file, err = os.Create(fullVolumePath)
+			file, err = os.Create(fullVolumePath + tmpFileSuffix)
 			if err != nil {
 				return errors.New("unable to create file on volume")
 			}
@@ -320,12 +320,17 @@ func (vs *GlobalVolumeService) copyPathStream(ctx context.Context, stream <-chan
 		}
 
 		if _, err := file.Write(chunk.Content); err != nil {
-			os.RemoveAll(fullVolumePath)
+			os.RemoveAll(fullVolumePath + tmpFileSuffix)
 			return errors.New("unable to write file content to volume")
 		}
 	}
 
-	return file.Sync()
+	err := file.Sync()
+	if err != nil {
+		return err
+	}
+
+	return os.Rename(fullVolumePath+tmpFileSuffix, fullVolumePath)
 }
 
 func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string, workspace *types.Workspace) ([]string, error) {
@@ -514,6 +519,11 @@ func JoinVolumePath(workspaceName, volumeExternalId string, subPaths ...string) 
 
 func CalculateDirSize(path string) (uint64, error) {
 	var size uint64
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return 0, nil
+	}
+
 	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 		if !info.IsDir() {
 			size += uint64(info.Size())

@@ -62,6 +62,9 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		return nil
 	}
 
+	ctx, cancel := common.MergeContexts(tq.ctx, ctx)
+	defer cancel()
+
 	// Keep serve container active for as long as user has their terminal open
 	// We can handle timeouts on the client side
 	// If timeout is set to negative, we want to keep the container alive indefinitely while the user is connected

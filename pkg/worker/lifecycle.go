@@ -22,10 +22,12 @@ import (
 const (
 	baseConfigPath            string        = "/tmp"
 	defaultContainerDirectory string        = "/mnt/code"
+	specBaseName              string        = "config.json"
+	initialSpecBaseName       string        = "initial_config.json"
+	runcEventsInterval        time.Duration = 5 * time.Second
 	containerInnerPort        int           = 8001 // XXX: Use fixed port in the container namespace for restores
 	exitCodeSigterm           int           = 143  // Means the container received a SIGTERM by the underlying operating system
 	exitCodeSigkill           int           = 137  // Means the container received a SIGKILL by the underlying operating system
-	runcEventsInterval        time.Duration = 5 * time.Second
 )
 
 //go:embed base_runc_config.json
@@ -37,23 +39,26 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 	s.containerLock.Lock()
 	defer s.containerLock.Unlock()
 
-	containerId := event.Args["container_id"].(string)
+	stopArgs, err := types.ToStopContainerArgs(event.Args)
+	if err != nil {
+		log.Printf("failed to parse stop container args: %v\n", err)
+		return false
+	}
 
-	if _, exists := s.containerInstances.Get(containerId); exists {
-		log.Printf("<%s> - received stop container event.\n", containerId)
-		s.stopContainerChan <- stopContainerEvent{ContainerId: containerId, Kill: false}
+	if _, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
+		log.Printf("<%s> - received stop container event.\n", stopArgs.ContainerId)
+		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
 	return true
 }
 
-// stopContainer stops a runc container.
-// It will remove the container state if the contaienr is forcefully killed.
-// Otherwise, the container state will be removed after the termination grace period in clearContainer().
+// stopContainer stops a runc container. When force is true, a SIGKILL signal is sent to the container.
 func (s *Worker) stopContainer(containerId string, kill bool) error {
 	log.Printf("<%s> - stopping container.\n", containerId)
 
-	if _, exists := s.containerInstances.Get(containerId); !exists {
+	_, exists := s.containerInstances.Get(containerId)
+	if !exists {
 		log.Printf("<%s> - container not found.\n", containerId)
 		return nil
 	}
@@ -61,19 +66,13 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 	signal := int(syscall.SIGTERM)
 	if kill {
 		signal = int(syscall.SIGKILL)
-		s.containerRepo.DeleteContainerState(containerId)
 	}
 
 	err := s.runcHandle.Kill(context.Background(), containerId, signal, &runc.KillOpts{All: true})
 	if err != nil {
-		log.Printf("<%s> - unable to stop container: %v\n", containerId, err)
-
-		if strings.Contains(err.Error(), "container does not exist") {
-			s.containerNetworkManager.TearDown(containerId)
-			return nil
-		}
-
-		return err
+		log.Printf("<%s> - error stopping container: %v\n", containerId, err)
+		s.containerNetworkManager.TearDown(containerId)
+		return nil
 	}
 
 	log.Printf("<%s> - container stopped.\n", containerId)
@@ -94,10 +93,10 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 		log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
 	}
 
-	s.clearContainer(containerId, request, time.Duration(s.config.Worker.TerminationGracePeriod)*time.Second, *exitCode)
+	s.clearContainer(containerId, request, *exitCode)
 }
 
-func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, delay time.Duration, exitCode int) {
+func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int) {
 	s.containerLock.Lock()
 
 	// De-allocate GPU devices so they are available for new containers
@@ -124,13 +123,26 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	go func() {
 		// Allow for some time to pass before clearing the container. This way we can handle some last
 		// minute logs or events or if the user wants to inspect the container before it's cleared.
-		time.Sleep(delay)
+		select {
+		case <-time.After(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second):
+		case <-s.ctx.Done():
+		}
+
+		// If the container is still running, stop it. This happens when a sigterm is detected.
+		container, err := s.runcHandle.State(context.TODO(), containerId)
+		if err == nil && container.Status == types.RuncContainerStatusRunning {
+			if err := s.stopContainer(containerId, true); err != nil {
+				log.Printf("<%s> - failed to stop container: %v\n", containerId, err)
+			}
+		}
 
 		s.containerInstances.Delete(containerId)
-		err := s.containerRepo.DeleteContainerState(containerId)
+		err = s.containerRepo.DeleteContainerState(containerId)
 		if err != nil {
 			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
 		}
+
+		log.Printf("<%s> - finalized container shutdown.\n", containerId)
 	}()
 }
 
@@ -200,7 +212,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 }
 
 func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
-	imageConfigPath := filepath.Join(s.imageMountPath, imageId, "initial_config.json")
+	imageConfigPath := filepath.Join(s.imageMountPath, imageId, initialSpecBaseName)
 
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
@@ -221,7 +233,7 @@ func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
 // Generate a runc spec from a given request
 func (s *Worker) specFromRequest(request *types.ContainerRequest, options *ContainerOptions) (*specs.Spec, error) {
 	os.MkdirAll(filepath.Join(baseConfigPath, request.ContainerId), os.ModePerm)
-	configPath := filepath.Join(baseConfigPath, request.ContainerId, "config.json")
+	configPath := filepath.Join(baseConfigPath, request.ContainerId, specBaseName)
 
 	spec, err := s.newSpecTemplate()
 	if err != nil {
@@ -369,6 +381,7 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 }
 
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
+	// Most of these env vars are required to communicate with the gateway and vice versa
 	env := []string{
 		fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)),
@@ -379,7 +392,14 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		"PYTHONUNBUFFERED=1",
 	}
 
-	env = append(env, request.Env...)
+	// Add env vars from request
+	env = append(request.Env, env...)
+
+	// Add env vars from initial spec. This would be the case for regular workers, not build workers.
+	if options.InitialSpec != nil {
+		env = append(options.InitialSpec.Process.Env, env...)
+	}
+
 	return env
 }
 
@@ -418,6 +438,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			}
 		}),
 		LogBuffer: common.NewLogBuffer(),
+		Request:   request,
 	}
 	s.containerInstances.Set(containerId, containerInstance)
 
@@ -482,7 +503,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
-	configPath := filepath.Join(baseConfigPath, containerId, "config.json")
+	configPath := filepath.Join(baseConfigPath, containerId, specBaseName)
 	err = os.WriteFile(configPath, configContents, 0644)
 	if err != nil {
 		return
@@ -499,9 +520,19 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
 
-	// Capture resource usage (cpu/mem/gpu)
+	pid := 0
 	pidChan := make(chan int, 1)
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pidChan)
+
+	go func() {
+		// Wait for runc to start the container
+		pid = <-pidChan
+
+		// Capture resource usage (cpu/mem/gpu)
+		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
+
+		// Watch for OOM events
+		go s.watchOOMEvents(ctx, containerId, outputChan)
+	}()
 
 	// Handle checkpoint creation & restore	if applicable
 	restored := false
@@ -599,6 +630,60 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 // isBuildRequest checks if the sourceImage field is not-nil, which means the container request is for a build container
 func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 	return request.SourceImage != nil
+}
+
+func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output chan common.OutputMsg) {
+	seenEvents := make(map[string]struct{})
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	ch, err := s.runcHandle.Events(ctx, containerId, time.Second)
+	if err != nil {
+		log.Printf("<%s> failed to open runc events channel: %v", containerId, err)
+		return
+	}
+
+	maxTries, tries := 5, 0 // Used for re-opening the channel if it's closed
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			seenEvents = make(map[string]struct{})
+		case event, ok := <-ch:
+			if !ok { // If the channel is closed, try to re-open it
+				if tries == maxTries-1 {
+					log.Printf("<%s> failed to watch for OOM events.", containerId)
+					return
+				}
+
+				tries++
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Second):
+					ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
+					if err != nil {
+						log.Printf("<%s> failed to open runc events channel: %v", containerId, err)
+					}
+				}
+				continue
+			}
+
+			if _, ok := seenEvents[event.Type]; ok {
+				continue
+			}
+
+			seenEvents[event.Type] = struct{}{}
+
+			if event.Type == "oom" {
+				output <- common.OutputMsg{
+					Msg: fmt.Sprintln("[ERROR] A process in the container was killed due to out-of-memory conditions."),
+				}
+			}
+		}
+	}
 }
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.

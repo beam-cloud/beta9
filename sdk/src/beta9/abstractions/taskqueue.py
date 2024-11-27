@@ -42,8 +42,8 @@ class TaskQueue(RunnerAbstraction):
         gpu (Union[GpuTypeAlias, List[GpuTypeAlias]]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty.
-            You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify multiple
-            GPUs, the container will load balance across them with equal priority.
+            You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
+            the scheduler prioritizes their selection based on their order in the list.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         timeout (Optional[int]):
@@ -77,7 +77,7 @@ class TaskQueue(RunnerAbstraction):
         name (Optional[str]):
             An optional name for this task_queue, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
-        authorized (Optional[str]):
+        authorized (bool):
             If false, allows the endpoint to be invoked without an auth token.
             Default is True.
         autoscaler (Autoscaler):
@@ -86,11 +86,16 @@ class TaskQueue(RunnerAbstraction):
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
+<<<<<<< HEAD
         checkpoint_enabled (bool):
             (experimental) Whether to enable checkpointing for the task queue. Default is False.
             If enabled, the app will be checkpointed after the on_start function has completed.
             On next invocation, each container will restore from a checkpoint and resume execution instead of
             booting up from cold.
+=======
+        retry_for (Optional[List[BaseException]]):
+            A list of exceptions that will trigger a retry if raised by your handler.
+>>>>>>> main
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -124,7 +129,11 @@ class TaskQueue(RunnerAbstraction):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
+<<<<<<< HEAD
         checkpoint_enabled: bool = False,
+=======
+        retry_for: Optional[List[BaseException]] = None,
+>>>>>>> main
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -147,6 +156,7 @@ class TaskQueue(RunnerAbstraction):
             checkpoint_enabled=checkpoint_enabled,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
+        self.retry_for = retry_for
 
     @property
     def taskqueue_stub(self) -> TaskQueueServiceStub:

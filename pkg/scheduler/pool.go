@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -35,6 +36,8 @@ type WorkerPoolController interface {
 	AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error)
 	Name() string
 	FreeCapacity() (*WorkerPoolCapacity, error)
+	Context() context.Context
+	IsPreemptable() bool
 }
 
 type WorkerPoolConfig struct {

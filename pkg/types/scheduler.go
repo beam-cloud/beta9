@@ -1,8 +1,13 @@
 package types
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
+)
+
+const (
+	DefaultCPUWorkerPoolName = "default"
 )
 
 type WorkerStatus string
@@ -29,6 +34,7 @@ type Worker struct {
 	ResourceVersion      int64        `json:"resource_version" redis:"resource_version"`
 	RequiresPoolSelector bool         `json:"requires_pool_selector" redis:"requires_pool_selector"`
 	Priority             int32        `json:"priority" redis:"priority"`
+	Preemptable          bool         `json:"preemptable" redis:"preemptable"`
 	BuildVersion         string       `json:"build_version" redis:"build_version"`
 }
 
@@ -87,7 +93,12 @@ type ContainerRequest struct {
 	Mounts            []Mount         `json:"mounts"`
 	RetryCount        int             `json:"retry_count"`
 	PoolSelector      string          `json:"pool_selector"`
+	Preemptable       bool            `json:"preemptable"`
 	CheckpointEnabled bool            `json:"checkpoint_enabled"`
+}
+
+func (c *ContainerRequest) RequiresGPU() bool {
+	return len(c.GpuRequest) > 0
 }
 
 const ContainerExitCodeTtlS int = 300
@@ -188,4 +199,37 @@ type ErrCheckpointNotFound struct {
 
 func (e *ErrCheckpointNotFound) Error() string {
 	return fmt.Sprintf("checkpoint state not found: %s", e.CheckpointId)
+}
+
+type StopContainerArgs struct {
+	ContainerId string `json:"container_id"`
+	Force       bool   `json:"force"`
+}
+
+func (a StopContainerArgs) ToMap() (map[string]any, error) {
+	data, err := json.Marshal(a)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func ToStopContainerArgs(m map[string]any) (*StopContainerArgs, error) {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+
+	var result StopContainerArgs
+	if err = json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
 }

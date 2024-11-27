@@ -162,7 +162,7 @@ def cp(service: ServiceClient, local_path: str, remote_path: str):
         dst = (remote_path / file.relative_to(Path.cwd())).as_posix()
         req = (
             CopyPathRequest(path=dst, content=chunk)
-            for chunk in read_with_progress(file, desc_width=desc_width)
+            for chunk in read_with_progress(file, max_desc_width=desc_width)
         )
         res: CopyPathResponse = service.volume.copy_path_stream(req)
 
@@ -173,10 +173,15 @@ def cp(service: ServiceClient, local_path: str, remote_path: str):
 def read_with_progress(
     path: Union[Path, str],
     chunk_size: int = 1024 * 256,
-    desc_width: int = 20,
+    max_desc_width: int = 30,
 ) -> Iterable[bytes]:
     path = Path(path)
-    desc = path.name[: min(len(path.name), desc_width)].ljust(desc_width)
+    name = "/".join(path.relative_to(Path.cwd()).parts[-(len(path.parts)) :])
+
+    if len(name) > max_desc_width:
+        desc = f"...{name[-(max_desc_width - 3):]}"
+    else:
+        desc = name.ljust(max_desc_width)
 
     with terminal.progress_open(path, "rb", description=desc) as file:
         while chunk := file.read(chunk_size):
