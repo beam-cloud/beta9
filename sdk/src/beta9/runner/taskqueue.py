@@ -340,11 +340,7 @@ class TaskQueueWorker:
                                 print("hello")
                                 raise RunnerException("Unable to end task")
 
-                            if task_status == TaskStatus.Retry:
-                                print(
-                                    f"Retrying task <{task.id}> after {caught_exception} exception"
-                                )
-                            else:
+                            if task_status != TaskStatus.Retry:
                                 print(f"Task completed <{task.id}>, took {duration}s")
                                 send_callback(
                                     gateway_stub=gateway_stub,
@@ -353,6 +349,10 @@ class TaskQueueWorker:
                                     task_status=task_status,
                                     override_callback_url=kwargs.get("callback_url"),
                                 )  # Send callback to callback_url, if defined
+                            else:
+                                print(
+                                    f"Retrying task <{task.id}> after {caught_exception} exception"
+                                )
 
                         except BaseException:
                             print(traceback.format_exc())
