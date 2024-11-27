@@ -98,3 +98,7 @@ func (t *BotTask) Metadata() types.TaskMetadata {
 		WorkspaceName: t.msg.WorkspaceName,
 	}
 }
+
+func (t *BotTask) Message() *types.TaskMessage {
+	return t.msg
+}

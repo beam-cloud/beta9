@@ -212,3 +212,7 @@ func (t *FunctionTask) Metadata() types.TaskMetadata {
 		ContainerId:   t.containerId,
 	}
 }
+
+func (t *FunctionTask) Message() *types.TaskMessage {
+	return t.msg
+}

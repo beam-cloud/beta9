@@ -94,3 +94,7 @@ func (t *TaskQueueTask) Metadata() types.TaskMetadata {
 		WorkspaceName: t.msg.WorkspaceName,
 	}
 }
+
+func (t *TaskQueueTask) Message() *types.TaskMessage {
+	return t.msg
+}

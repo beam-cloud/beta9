@@ -86,6 +86,8 @@ class TaskQueue(RunnerAbstraction):
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
+        retry_for (Optional[List[BaseException]]):
+            A list of exceptions that will trigger a retry if raised by your handler.
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -119,6 +121,7 @@ class TaskQueue(RunnerAbstraction):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
+        retry_for: Optional[List[BaseException]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -140,6 +143,7 @@ class TaskQueue(RunnerAbstraction):
             task_policy=task_policy,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
+        self.retry_for = retry_for
 
     @property
     def taskqueue_stub(self) -> TaskQueueServiceStub:

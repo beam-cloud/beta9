@@ -36,6 +36,7 @@ type TaskInterface interface {
 	Retry(ctx context.Context) error
 	HeartBeat(ctx context.Context) (bool, error)
 	Metadata() TaskMetadata
+	Message() *TaskMessage
 }
 
 type TaskExecutor string
