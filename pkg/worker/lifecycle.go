@@ -480,7 +480,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		log.Printf("<%s> failed to setup overlay: %v", containerId, err)
 		return
 	}
-	defer containerInstance.Overlay.Cleanup()
+	// defer containerInstance.Overlay.Cleanup()
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
 	// Setup container network namespace / devices
