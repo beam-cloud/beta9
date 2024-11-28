@@ -480,7 +480,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		log.Printf("<%s> failed to setup overlay: %v", containerId, err)
 		return
 	}
-	// defer containerInstance.Overlay.Cleanup()
+	defer containerInstance.Overlay.Cleanup()
+
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
 	// Setup container network namespace / devices
@@ -505,12 +506,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	configPath := filepath.Join(baseConfigPath, containerId, specBaseName)
 	err = os.WriteFile(configPath, configContents, 0644)
-	if err != nil {
-		return
-	}
-
-	// TMP: Write last config to disk
-	err = os.WriteFile("/tmp/last_config.json", configContents, 0644)
 	if err != nil {
 		return
 	}
