@@ -598,9 +598,21 @@ func (s *Worker) wait(containerId string) error {
 		return err
 	}
 
-	// wait until closure
-	for range events {
-		// can do something with events
+eventLoop:
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				break eventLoop
+			}
+
+			log.Printf("<%s> - event: %+v\n", containerId, event)
+
+			if event.Type == "exit" {
+				log.Printf("<%s> - container exited with status: %v\n", containerId, event.Err)
+				break eventLoop
+			}
+		}
 	}
 
 	err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
