@@ -337,15 +337,13 @@ class TaskQueueWorker:
                                 )
                             )
                             if not complete_task_response.ok:
-                                print("hello")
                                 raise RunnerException("Unable to end task")
 
                             if task_status == TaskStatus.Retry:
-                                message = (
+                                print(
                                     complete_task_response.message
                                     or f"Retrying task <{task.id}> after {caught_exception} exception"
                                 )
-                                print(message)
                                 continue
 
                             print(f"Task completed <{task.id}>, took {duration}s")
