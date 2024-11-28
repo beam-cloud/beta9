@@ -175,7 +175,7 @@ func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, containerId string
 			"rprivate",
 			"nosuid",
 			"nodev",
-			"mode=1777",
+			// "mode=1777",
 			"rw",
 		},
 	})
