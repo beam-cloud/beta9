@@ -509,6 +509,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
+	// TMP: Write last config to disk
+	err = os.WriteFile("/tmp/last_config.json", configContents, 0644)
+	if err != nil {
+		return
+	}
+
 	consoleWriter, err := NewConsoleWriter(containerInstance.OutputWriter)
 	if err != nil {
 		log.Printf("<%s> - failed to create console writer: %v\n", containerId, err)
