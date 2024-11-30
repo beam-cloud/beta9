@@ -92,8 +92,8 @@ github.com/aws/aws-sdk-go-v2/service/sts v1.26.7/go.mod h1:6h2YuIoxaMSCFf5fi1EgZ
 github.com/aws/smithy-go v1.20.0 h1:6+kZsCXZwKxZS9RfISnPc4EXlHoyAkm2hPuM8X2BrrQ=
 github.com/aws/smithy-go v1.20.0/go.mod h1:uo5RKksAl4PzhqaAbjd4rLgFoq5koTsQKYuGe7dklGc=
 github.com/aybabtme/rgbterm v0.0.0-20170906152045-cc83f3b3ce59/go.mod h1:q/89r3U2H7sSsE2t6Kca0lfwTK8JdoNGS/yzM/4iH5I=
-github.com/beam-cloud/blobcache-v2 v0.0.0-20241016162020-2ed2e4b47b02 h1:In8RV/6BTTwhIo87SRh6PQgVXV12sOjl3MRsOEzqfj0=
-github.com/beam-cloud/blobcache-v2 v0.0.0-20241016162020-2ed2e4b47b02/go.mod h1:eK80pNykYLVTKmfjfTVqvrJqX4HKXqeCl1OQt6/F8ZM=
+github.com/beam-cloud/blobcache-v2 v0.0.0-20241130031721-a8b98f6da3eb h1:UHKz0uthIJ8zJWkoG3Ks837Q6MU8Kv8/8hmrpwZg+iU=
+github.com/beam-cloud/blobcache-v2 v0.0.0-20241130031721-a8b98f6da3eb/go.mod h1:eK80pNykYLVTKmfjfTVqvrJqX4HKXqeCl1OQt6/F8ZM=
 github.com/beam-cloud/clip v0.0.0-20240826223025-899feb184e88 h1:SAzRxbcUKx0fFfqBRfrm39fyh0ixtuPM8/1HNJpnh9U=
 github.com/beam-cloud/clip v0.0.0-20240826223025-899feb184e88/go.mod h1:FO7taXHUAqgx33PjeB6LbSLpKob3Ceyo9Po64nq5TR0=
 github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170 h1:KYVz18kobBGU8URM9Srn++2tcL9e0PcwYyH0Z4GYicM=
@@ -558,8 +558,6 @@ github.com/russross/blackfriday/v2 v2.1.0 h1:JIOH55/0cWyOuilr9/qlrm0BSXldqnqwMsf
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
 github.com/safchain/ethtool v0.4.0 h1:vq1i2HCjshJNywOXFZ1BpwIjyeFR/kvNdHiRzqSElDI=
 github.com/safchain/ethtool v0.4.0/go.mod h1:XLLnZmy4OCRTkksP/UiMjij96YmIsBfmBQcs7H6tA48=
-github.com/sashabaranov/go-openai v1.29.1 h1:AlB+vwpg1tibwr83OKXLsI4V1rnafVyTlw0BjR+6WUM=
-github.com/sashabaranov/go-openai v1.29.1/go.mod h1:lj5b/K+zjTSFxVLijLSTDZuP7adOgerWeFyZLUhAKRg=
 github.com/sashabaranov/go-openai v1.32.3 h1:6xZ393PbZFoJrgwveBXVZggmyH7zdp4joUdnCy7FFD8=
 github.com/sashabaranov/go-openai v1.32.3/go.mod h1:lj5b/K+zjTSFxVLijLSTDZuP7adOgerWeFyZLUhAKRg=
 github.com/segmentio/asm v1.2.0 h1:9BQrFxC+YOHJlTlHGkTrFWf59nbL3XnCoFLTwDCI7ys=
