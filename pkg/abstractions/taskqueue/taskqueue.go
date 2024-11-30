@@ -485,16 +485,19 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 
 			err := tq.rdb.SetEx(ctx, Keys.taskQueueTaskHeartbeat(authInfo.Workspace.Name, req.StubId, task.ExternalId), 1, time.Duration(60)*time.Second).Err()
 			if err != nil {
+				log.Printf("Error setting task heartbeat: %v\n", err)
 				return err
 			}
 
 			err = tq.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(1)*time.Second).Err()
 			if err != nil {
+				log.Printf("Error setting task running lock: %v\n", err)
 				return err
 			}
 
 			claimed, err := tq.taskRepo.IsClaimed(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
 			if err != nil {
+				log.Printf("Error checking if task is claimed: %v\n", err)
 				return err
 			}
 
