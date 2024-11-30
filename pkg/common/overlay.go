@@ -2,11 +2,12 @@ package common
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 type ContainerOverlay struct {
@@ -132,10 +133,10 @@ func (co *ContainerOverlay) Cleanup() error {
 		i := len(co.layers) - 1
 		layer := co.layers[i]
 
-		log.Printf("Unmounting layer: %s\n", layer.merged)
+		log.Info().Str("layer_path", layer.merged).Msg("unmounting layer")
 		err := exec.Command("umount", "-f", layer.merged).Run()
 		if err != nil {
-			log.Printf("Unable to unmount layer: %v\n", err)
+			log.Error().Str("layer_path", layer.merged).Err(err).Msg("unable to unmount layer")
 			return err
 		}
 
@@ -173,6 +174,6 @@ func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 		return err
 	}
 
-	log.Printf("<%s> - mounted layer-%d in %s.\n", co.containerId, layer.index, time.Since(startTime))
+	log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted layer")
 	return nil
 }

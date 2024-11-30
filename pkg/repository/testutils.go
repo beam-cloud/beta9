@@ -1,7 +1,7 @@
 package repository
 
 import (
-	"log"
+	"os"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -9,6 +9,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/jmoiron/sqlx"
+	"github.com/rs/zerolog/log"
 )
 
 func NewRedisClientForTest() (*common.RedisClient, error) {
@@ -51,7 +52,8 @@ func NewProviderRedisRepositoryForTest(rdb *common.RedisClient) ProviderReposito
 func NewBackendPostgresRepositoryForTest() (BackendRepository, sqlmock.Sqlmock) {
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
-		log.Fatalf("error creating mock db: %v", err)
+		log.Error().Err(err).Msg("error creating mock db")
+		os.Exit(1)
 	}
 	sqlxDB := sqlx.NewDb(mockDB, "sqlmock")
 

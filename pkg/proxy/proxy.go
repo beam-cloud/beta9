@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 type Proxy struct {
@@ -113,7 +113,7 @@ func (p *Proxy) Start() error {
 	go p.startHttpServer()
 
 	<-terminationSignal
-	log.Println("Termination signal received. Shutting down...")
+	log.Info().Msg("termination signal received. shutting down...")
 
 	p.shutdown()
 
@@ -121,7 +121,7 @@ func (p *Proxy) Start() error {
 }
 
 func (p *Proxy) startServiceProxy(service types.InternalService, listener net.Listener, serviceId string) {
-	log.Printf("Svc<%s> listening on port: %d", service.Name, service.LocalPort)
+	log.Info().Str("name", service.Name).Int("port", service.LocalPort).Msg("svc listening")
 
 	if p.config.Tailscale.Enabled {
 		go func() {
@@ -135,7 +135,7 @@ func (p *Proxy) startServiceProxy(service types.InternalService, listener net.Li
 
 				err := p.tailscaleRepo.SetHostname(service.Name, serviceId, hostName)
 				if err != nil {
-					log.Printf("Unable to set tailscale hostname: %+v\n", err)
+					log.Error().Err(err).Msg("unable to set tailscale hostname")
 				}
 
 				time.Sleep(time.Second * 15)
@@ -147,7 +147,7 @@ func (p *Proxy) startServiceProxy(service types.InternalService, listener net.Li
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
-				log.Printf("Failed to accept connection for svc<%s>: %v", service.Name, err)
+				log.Error().Str("name", service.Name).Err(err).Msg("failed to accept connection")
 				continue
 			}
 
@@ -159,7 +159,7 @@ func (p *Proxy) startServiceProxy(service types.InternalService, listener net.Li
 func (p *Proxy) handleConnection(src net.Conn, destination string) {
 	dst, err := net.Dial("tcp", destination)
 	if err != nil {
-		log.Printf("Failed to dial destination %s: %v", destination, err)
+		log.Error().Str("destination", destination).Err(err).Msg("failed to dial destination")
 		src.Close()
 		return
 	}
@@ -190,16 +190,16 @@ func (p *Proxy) handleConnection(src net.Conn, destination string) {
 func (p *Proxy) startHttpServer() {
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", p.config.Proxy.HTTPPort))
 	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
+		log.Error().Err(err).Msg("failed to listen")
 	}
 
 	if err := p.httpServer.Serve(lis); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("Failed to start http server: %v", err)
+		log.Error().Err(err).Msg("failed to start http server")
 	}
 }
 
 func (p *Proxy) shutdown() {
 	p.httpServer.Shutdown(context.Background())
-	log.Println("Waiting on active connections to finish ...")
+	log.Info().Msg("waiting on active connections to finish ...")
 	p.activeConns.Wait()
 }

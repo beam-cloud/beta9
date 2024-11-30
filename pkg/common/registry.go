@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -109,7 +109,7 @@ func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 		Body:   f,
 	})
 	if err != nil {
-		log.Printf("error uploading image to registry: %v", err)
+		log.Error().Str("key", key).Err(err).Msg("error uploading image to registry")
 		return err
 	}
 
@@ -121,7 +121,7 @@ func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 
 	f, err := os.Create(tmpLocalPath)
 	if err != nil {
-		log.Println(err)
+		log.Error().Str("key", key).Err(err).Msg("error creating temp file for image download")
 		return err
 	}
 
