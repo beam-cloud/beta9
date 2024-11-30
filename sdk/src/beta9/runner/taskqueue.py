@@ -319,11 +319,12 @@ class TaskQueueWorker:
 
                         result = handler(context, *args, **kwargs)
                     except BaseException as e:
+                        print(traceback.format_exc())
+
                         if type(e) in handler.parent_abstraction.retry_for:
                             caught_exception = e.__class__.__name__
                             task_status = TaskStatus.Retry
                         else:
-                            print(traceback.format_exc())
                             task_status = TaskStatus.Error
                     finally:
                         duration = time.time() - start_time
@@ -348,9 +349,10 @@ class TaskQueueWorker:
 
                             if task_status == TaskStatus.Retry:
                                 print(
-                                    f"Retrying task <{task.id}> after {caught_exception} exception"
+                                    complete_task_response.message
+                                    or f"Retrying task <{task.id}> after {caught_exception} exception"
                                 )
-                                return
+                                continue
 
                             print(f"Task completed <{task.id}>, took {duration}s")
                             send_callback(
@@ -359,7 +361,7 @@ class TaskQueueWorker:
                                 payload=result or {},
                                 task_status=task_status,
                                 override_callback_url=kwargs.get("callback_url"),
-                            )  # Send callback to callback_url, if defined
+                            )
 
                         except BaseException:
                             print(traceback.format_exc())

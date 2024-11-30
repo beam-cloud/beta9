@@ -27,8 +27,9 @@ const (
 	requestProcessingInterval     time.Duration = 100 * time.Millisecond
 	containerStatusUpdateInterval time.Duration = 30 * time.Second
 
-	containerLogsPath          string  = "/var/log/worker"
-	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
+	containerLogsPath          string        = "/var/log/worker"
+	defaultWorkerSpindownTimeS float64       = 300 // 5 minutes
+	defaultCacheWaitTime       time.Duration = 30 * time.Second
 )
 
 type Worker struct {
@@ -143,6 +144,10 @@ func NewWorker() (*Worker, error) {
 	var cacheClient *blobcache.BlobCacheClient = nil
 	if config.Worker.BlobCacheEnabled {
 		cacheClient, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
+		if err == nil {
+			err = cacheClient.WaitForHosts(defaultCacheWaitTime)
+		}
+
 		if err != nil {
 			log.Printf("[WARNING] Cache unavailable, performance may be degraded: %+v\n", err)
 		}
@@ -360,6 +365,12 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			}
 
 			log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
+
+			// TODO: remove this hotfix
+			if state.Status == types.ContainerStatusPending {
+				log.Printf("<%s> - forcing container status to running\n", request.ContainerId)
+				state.Status = types.ContainerStatusRunning
+			}
 
 			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
 			if err != nil {
