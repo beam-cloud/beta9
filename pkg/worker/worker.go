@@ -27,8 +27,9 @@ const (
 	requestProcessingInterval     time.Duration = 100 * time.Millisecond
 	containerStatusUpdateInterval time.Duration = 30 * time.Second
 
-	containerLogsPath          string  = "/var/log/worker"
-	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
+	containerLogsPath          string        = "/var/log/worker"
+	defaultWorkerSpindownTimeS float64       = 300 // 5 minutes
+	defaultCacheWaitTime       time.Duration = 30 * time.Second
 )
 
 type Worker struct {
@@ -140,6 +141,10 @@ func NewWorker() (*Worker, error) {
 	var cacheClient *blobcache.BlobCacheClient = nil
 	if config.Worker.BlobCacheEnabled {
 		cacheClient, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
+		if err == nil {
+			err = cacheClient.WaitForHosts(defaultCacheWaitTime)
+		}
+
 		if err != nil {
 			log.Printf("[WARNING] Cache unavailable, performance may be degraded: %+v\n", err)
 		}

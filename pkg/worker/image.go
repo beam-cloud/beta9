@@ -144,6 +144,8 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 			if err == nil {
 				localCachePath = baseBlobFsContentPath
 			}
+
+			c.logger.Log(request.ContainerId, request.StubId, "unable to cache image nearby <%s>: %v\n", imageId, err)
 		}
 	}
 
