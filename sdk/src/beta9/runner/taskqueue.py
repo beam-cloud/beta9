@@ -312,11 +312,12 @@ class TaskQueueWorker:
 
                         result = handler(context, *args, **kwargs)
                     except BaseException as e:
+                        print(traceback.format_exc())
+
                         if type(e) in handler.parent_abstraction.retry_for:
                             caught_exception = e.__class__.__name__
                             task_status = TaskStatus.Retry
                         else:
-                            print(traceback.format_exc())
                             task_status = TaskStatus.Error
                     finally:
                         duration = time.time() - start_time
