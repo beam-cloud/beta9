@@ -566,37 +566,44 @@ func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int,
 	pid := <-pidChan
 	log.Printf("<%s> - container pid: %d\n", containerId, pid)
 
-	// Capture resource usage (cpu/mem/gpu)
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
-
-	// Watch for OOM events
-	go s.watchOOMEvents(ctx, containerId, outputChan)
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
+	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
 
 	log.Printf("<%s> - waiting for container to exit\n", containerId)
 	defer log.Printf("<%s> - container exited\n", containerId)
 
-	// Block until the process exits
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		log.Printf("<%s> - failed to find process: %v\n", containerId, err)
-		return err
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	var exitCode int = 0 // TODO: figure out how to get exit code
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			// Check the container state
+			state, err := s.runcHandle.State(ctx, containerId)
+			if err != nil {
+				log.Printf("<%s> - error getting container state: %v\n", containerId, err)
+				return err
+			}
+
+			if state.Status != "running" {
+				log.Printf("<%s> - container has exited with status: %s\n", containerId, state.Status)
+				goto cleanup
+			}
+		}
 	}
 
-	// Wait for the process to exit
-	state, err := process.Wait()
-	if err != nil {
-		log.Printf("<%s> - error waiting for process: %v\n", containerId, err)
-		return err
-	}
-
-	log.Printf("<%s> - process exited with state: %v\n", containerId, state)
-
-	err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
+cleanup:
+	err := s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
 	if err != nil {
 		log.Printf("<%s> - failed to delete container: %v\n", containerId, err)
 		return err
 	}
 
+	log.Printf("<%s> - container exited with code: %d\n", containerId, exitCode)
 	return nil
 }
 
