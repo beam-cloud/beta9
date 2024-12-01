@@ -564,7 +564,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 // Wait for container to exit
 func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int, outputChan chan common.OutputMsg, request *types.ContainerRequest, spec *specs.Spec) error {
 	pid := <-pidChan
-	log.Printf("<%s> - container pid: %d\n", containerId, pid)
 
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
 	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
@@ -582,7 +581,6 @@ func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int,
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			// Check the container state
 			state, err := s.runcHandle.State(ctx, containerId)
 			if err != nil {
 				log.Printf("<%s> - error getting container state: %v\n", containerId, err)

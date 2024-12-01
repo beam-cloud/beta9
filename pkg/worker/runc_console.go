@@ -3,7 +3,6 @@ package worker
 import (
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,16 +12,13 @@ import (
 	"github.com/opencontainers/runc/libcontainer/utils"
 )
 
-//// Implmentation of runc ConsoleSocket for writing only ////
-
 type ConsoleWriter struct {
 	path string
 }
 
+// Implementation of runc ConsoleSocket, for writing only
 func NewConsoleWriter(writer io.Writer) (*ConsoleWriter, error) {
 	socketPath := filepath.Join(os.TempDir(), fmt.Sprintf("tty-%d.sock", time.Now().UnixNano()))
-
-	log := log.New(os.Stderr, "console writer: ", log.LstdFlags)
 
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -35,7 +31,6 @@ func NewConsoleWriter(writer io.Writer) (*ConsoleWriter, error) {
 		conn, err := ln.Accept()
 		defer ln.Close()
 		if err != nil {
-			log.Printf("error accepting connection: %v", err)
 			return
 		}
 		defer conn.Close()
@@ -51,7 +46,6 @@ func NewConsoleWriter(writer io.Writer) (*ConsoleWriter, error) {
 
 		socket, err := unixconn.File()
 		if err != nil {
-			log.Printf("error getting file from connection: %v", err)
 			return
 		}
 		defer socket.Close()
@@ -59,25 +53,24 @@ func NewConsoleWriter(writer io.Writer) (*ConsoleWriter, error) {
 		// Get the master file descriptor from runC.
 		master, err := utils.RecvFd(socket)
 		if err != nil {
-			log.Printf("error receiving fd: %v", err)
 			return
 		}
+
 		c, err := console.ConsoleFromFile(master)
 		if err != nil {
-			log.Printf("error creating console from file: %v", err)
 			return
 		}
+		defer c.Close()
+
 		if err := console.ClearONLCR(c.Fd()); err != nil {
-			log.Printf("error clearing ONLCR: %v", err)
 			return
 		}
 
 		// Copy from our stdio to the master fd.
-		_, err = io.Copy(writer, c) // will return on container exit
+		_, err = io.Copy(writer, c) // Will return on container exit
 		if err != nil {
-			log.Printf("error copying from console to writer: %v", err)
+			return
 		}
-		c.Close()
 	}()
 
 	return &ConsoleWriter{path: socketPath}, nil
