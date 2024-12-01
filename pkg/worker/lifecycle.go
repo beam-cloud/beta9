@@ -580,13 +580,10 @@ func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int,
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
 	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
 
-	log.Printf("<%s> - waiting for container to exit\n", containerId)
-	defer log.Printf("<%s> - container exited\n", containerId)
-
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	var exitCode int = 0 // TODO: figure out how to get exit code
+	var exitCode int = 0 // TODO: figure out how to get the actual exit code
 
 	for {
 		select {

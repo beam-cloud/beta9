@@ -221,7 +221,6 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) (stri
 			TcpEstablished:  true,
 			LeaveRunning:    true,
 			TcpSkipInFlight: true,
-			// TODO: add skip in flight connections option
 		},
 		Dir: fmt.Sprintf("%s/%s", checkpointPathBase, containerId),
 	}
