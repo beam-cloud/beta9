@@ -577,6 +577,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 // Wait for container to exit
 func (s *Worker) wait(containerId string) error {
+	log.Printf("<%s> - waiting for container to exit\n", containerId)
+	defer log.Printf("<%s> - container exited\n", containerId)
+
 	events, err := s.runcHandle.Events(s.ctx, containerId, runcEventsInterval)
 	if err != nil {
 		return err
