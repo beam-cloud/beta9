@@ -21,7 +21,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		go s.createCheckpoint(ctx, request)
 	} else if state.Status == types.CheckpointStatusAvailable {
 		checkpointPath := filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, state.RemoteKey)
-		processState, err := s.cedanaClient.Restore(ctx, state.ContainerId, checkpointPath, &runc.CreateOpts{
+		processState, err := s.cedanaClient.Restore(ctx, state.ContainerId, request.ContainerId, checkpointPath, &runc.CreateOpts{
 			Detach:        true,
 			ConsoleSocket: consoleWriter,
 			ConfigPath:    configPath,

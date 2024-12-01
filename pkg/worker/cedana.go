@@ -236,6 +236,7 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) (stri
 // If empty path is provided, the latest checkpoint path from DB will be used.
 func (c *CedanaClient) Restore(
 	ctx context.Context,
+	jobId string,
 	containerId string,
 	checkpointPath string,
 	opts *runc.CreateOpts,
@@ -247,12 +248,13 @@ func (c *CedanaClient) Restore(
 	bundle := strings.TrimRight(opts.ConfigPath, filepath.Base(opts.ConfigPath))
 
 	args := &cedanaproto.JobRestoreArgs{
-		JID: containerId,
+		JID: jobId,
 		RuncOpts: &cedanaproto.RuncOpts{
 			Root:          runcRoot,
 			Bundle:        bundle,
 			Detach:        true,
 			ConsoleSocket: opts.ConsoleSocket.Path(),
+			ContainerID:   containerId,
 		},
 		CriuOpts:       &cedanaproto.CriuOpts{TcpClose: true, TcpEstablished: true},
 		CheckpointPath: checkpointPath,
