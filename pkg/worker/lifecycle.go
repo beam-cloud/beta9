@@ -539,7 +539,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		// XXX: If we restored from a checkpoint, we need to use the container ID of the restored container
 		// instead of the original container ID
 		if restored {
-			containerId = restoredContainerId
+			containerInstance, exists := s.containerInstances.Get(request.ContainerId)
+			if exists {
+				s.containerInstances.Delete(request.ContainerId)
+
+				containerId = restoredContainerId
+				containerInstance.Id = restoredContainerId
+				s.containerInstances.Set(containerId, containerInstance)
+			}
 		}
 	}
 
