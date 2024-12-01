@@ -43,7 +43,7 @@ type Worker struct {
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
 	cedanaClient            *CedanaClient
-	checkpointingAvailable  bool
+	crAvailable             bool
 	fileCacheManager        *FileCacheManager
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
@@ -230,7 +230,7 @@ func NewWorker() (*Worker, error) {
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
 		cedanaClient:            cedanaClient,
-		checkpointingAvailable:  cedanaClient != nil,
+		crAvailable:             cedanaClient != nil,
 		podHostName:             podHostName,
 		eventBus:                nil,
 		workerId:                workerId,

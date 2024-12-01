@@ -274,7 +274,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	// We need to modify the spec to support Cedana C/R if checkpointing is enabled
-	if s.checkpointingAvailable && request.CheckpointEnabled {
+	if s.crAvailable && request.CheckpointEnabled {
 		s.cedanaClient.PrepareContainerSpec(spec, request.ContainerId, request.Gpu != "")
 	}
 
@@ -329,7 +329,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		}
 	}
 
-	if s.checkpointingAvailable && request.CheckpointEnabled {
+	if s.crAvailable && request.CheckpointEnabled {
 		os.MkdirAll(checkpointDir(request.ContainerId), os.ModePerm)
 
 		checkpointMount := specs.Mount{
@@ -388,7 +388,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
-		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.checkpointingAvailable),
+		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.crAvailable),
 		"PYTHONUNBUFFERED=1",
 	}
 
@@ -530,7 +530,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Handle checkpoint creation & restore if applicable
 	var restored bool = false
 	var restoredContainerId string = ""
-	if s.checkpointingAvailable && request.CheckpointEnabled {
+	if s.crAvailable && request.CheckpointEnabled {
 		restored, restoredContainerId, err = s.attemptCheckpointOrRestore(ctx, request, consoleWriter, pidChan, configPath)
 		if err != nil {
 			log.Printf("<%s> - C/R failed: %v\n", containerId, err)

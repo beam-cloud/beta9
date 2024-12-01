@@ -138,7 +138,7 @@ waitForReady:
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container
 // NOTE: this currently only works for deployments since functions can run multiple containers
 func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.CheckpointState, bool) {
-	if !s.checkpointingAvailable || !request.CheckpointEnabled {
+	if !s.crAvailable || !request.CheckpointEnabled {
 		return types.CheckpointState{}, false
 	}
 
