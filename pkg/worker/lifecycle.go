@@ -525,21 +525,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
 
-	pid := 0
 	pidChan := make(chan int, 1)
-
-	go func() {
-		// Wait for runc to start the container
-		pid = <-pidChan
-
-		log.Printf("<%s> - container pid: %d\n", containerId, pid)
-
-		// Capture resource usage (cpu/mem/gpu)
-		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
-
-		// Watch for OOM events
-		go s.watchOOMEvents(ctx, containerId, outputChan)
-	}()
 
 	// Handle checkpoint creation & restore if applicable
 	var restored bool = false
@@ -564,7 +550,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
-	if err := s.wait(containerId); err != nil {
+	if err := s.wait(ctx, containerId, pidChan, outputChan, request, spec); err != nil {
 		log.Printf("<%s> - failed to wait for container exit: %v\n", containerId, err)
 	}
 
@@ -576,31 +562,34 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 }
 
 // Wait for container to exit
-func (s *Worker) wait(containerId string) error {
+func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int, outputChan chan common.OutputMsg, request *types.ContainerRequest, spec *specs.Spec) error {
+	pid := <-pidChan
+	log.Printf("<%s> - container pid: %d\n", containerId, pid)
+
+	// Capture resource usage (cpu/mem/gpu)
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
+
+	// Watch for OOM events
+	go s.watchOOMEvents(ctx, containerId, outputChan)
+
 	log.Printf("<%s> - waiting for container to exit\n", containerId)
 	defer log.Printf("<%s> - container exited\n", containerId)
 
-	events, err := s.runcHandle.Events(s.ctx, containerId, runcEventsInterval)
+	// Block until the process exits
+	process, err := os.FindProcess(pid)
 	if err != nil {
+		log.Printf("<%s> - failed to find process: %v\n", containerId, err)
 		return err
 	}
 
-eventLoop:
-	for {
-		select {
-		case event, ok := <-events:
-			if !ok {
-				break eventLoop
-			}
-
-			log.Printf("<%s> - event: %+v\n", containerId, event)
-
-			if event.Type == "exit" {
-				log.Printf("<%s> - container exited with status: %v\n", containerId, event.Err)
-				break eventLoop
-			}
-		}
+	// Wait for the process to exit
+	state, err := process.Wait()
+	if err != nil {
+		log.Printf("<%s> - error waiting for process: %v\n", containerId, err)
+		return err
 	}
+
+	log.Printf("<%s> - process exited with state: %v\n", containerId, state)
 
 	err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
 	if err != nil {
