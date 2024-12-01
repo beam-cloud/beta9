@@ -57,7 +57,7 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 func (s *Worker) stopContainer(containerId string, kill bool) error {
 	log.Printf("<%s> - stopping container.\n", containerId)
 
-	_, exists := s.containerInstances.Get(containerId)
+	instance, exists := s.containerInstances.Get(containerId)
 	if !exists {
 		log.Printf("<%s> - container not found.\n", containerId)
 		return nil
@@ -68,7 +68,7 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 		signal = int(syscall.SIGKILL)
 	}
 
-	err := s.runcHandle.Kill(context.Background(), containerId, signal, &runc.KillOpts{All: true})
+	err := s.runcHandle.Kill(context.Background(), instance.Id, signal, &runc.KillOpts{All: true})
 	if err != nil {
 		log.Printf("<%s> - error stopping container: %v\n", containerId, err)
 		s.containerNetworkManager.TearDown(containerId)
@@ -541,9 +541,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		if restored {
 			containerInstance, exists := s.containerInstances.Get(request.ContainerId)
 			if exists {
-				s.containerInstances.Delete(request.ContainerId)
-
-				containerId = restoredContainerId
 				containerInstance.Id = restoredContainerId
 				s.containerInstances.Set(containerId, containerInstance)
 			}
