@@ -543,6 +543,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			if exists {
 				containerInstance.Id = restoredContainerId
 				s.containerInstances.Set(containerId, containerInstance)
+				containerId = restoredContainerId
 			}
 		}
 	}
