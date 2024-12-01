@@ -25,7 +25,7 @@ const (
 	specBaseName              string        = "config.json"
 	initialSpecBaseName       string        = "initial_config.json"
 	runcEventsInterval        time.Duration = 5 * time.Second
-	containerInnerPort        int           = 8001 // XXX: Use fixed port in the container namespace for restores
+	containerInnerPort        int           = 8001 // Use a fixed port inside the container
 	exitCodeSigterm           int           = 143  // Means the container received a SIGTERM by the underlying operating system
 	exitCodeSigkill           int           = 137  // Means the container received a SIGKILL by the underlying operating system
 )
@@ -343,6 +343,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				"nodev",
 			},
 		}
+
 		spec.Mounts = append(spec.Mounts, checkpointMount)
 	}
 
@@ -366,7 +367,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	spec.Mounts = append(spec.Mounts, resolvMount)
-
 	return spec, nil
 }
 
