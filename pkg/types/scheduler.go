@@ -98,7 +98,7 @@ type ContainerRequest struct {
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
-	return len(c.GpuRequest) > 0
+	return len(c.GpuRequest) > 0 || c.Gpu != ""
 }
 
 const ContainerExitCodeTtlS int = 300

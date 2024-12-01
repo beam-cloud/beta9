@@ -13,12 +13,17 @@ import (
 	"github.com/beam-cloud/go-runc"
 )
 
-func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, consoleWriter *ConsoleWriter, pidChan chan int, configPath string) (bool, error) {
+func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, consoleWriter *ConsoleWriter, pidChan chan int, configPath string) (bool, string, error) {
 	state, createCheckpoint := s.shouldCreateCheckpoint(request)
 
 	// If checkpointing is enabled, attempt to create a checkpoint
 	if createCheckpoint {
-		go s.createCheckpoint(ctx, request)
+		go func() {
+			err := s.createCheckpoint(ctx, request)
+			if err != nil {
+				log.Printf("<%s> - failed to create checkpoint: %v\n", request.ContainerId, err)
+			}
+		}()
 	} else if state.Status == types.CheckpointStatusAvailable {
 		checkpointPath := filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, state.RemoteKey)
 		processState, err := s.cedanaClient.Restore(ctx, state.ContainerId, request.ContainerId, checkpointPath, &runc.CreateOpts{
@@ -37,14 +42,14 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 				StubId:      request.StubId,
 			})
 
-			return false, err
+			return false, "", err
 		} else {
 			log.Printf("<%s> - checkpoint found and restored, process state: %+v\n", request.ContainerId, processState)
-			return true, nil
+			return true, state.ContainerId, nil
 		}
 	}
 
-	return false, nil
+	return false, "", nil
 }
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
@@ -54,7 +59,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 
 	timeout := defaultCheckpointDeadline
 	managing := false
-	gpuEnabled := request.Gpu != ""
+	gpuEnabled := request.RequiresGPU()
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -82,16 +87,17 @@ waitForReady:
 				} else {
 					log.Printf("<%s> - cedana manage failed, container may not be started yet: %+v\n", instance.Id, err)
 				}
+
 				continue
 			}
 
-			// Check if the endpoint is ready for checkpoint by verifying the existence of the file
+			// Check if the container is ready for checkpoint by verifying the existence of a certain file
 			readyFilePath := fmt.Sprintf("/tmp/%s/cedana/READY_FOR_CHECKPOINT", instance.Id)
 			if _, err := os.Stat(readyFilePath); err == nil {
-				log.Printf("<%s> - endpoint is ready for checkpoint.\n", instance.Id)
+				log.Printf("<%s> - container ready for checkpoint.\n", instance.Id)
 				break waitForReady
 			} else {
-				log.Printf("<%s> - endpoint not ready for checkpoint.\n", instance.Id)
+				log.Printf("<%s> - container not ready for checkpoint.\n", instance.Id)
 			}
 
 		}
@@ -100,7 +106,6 @@ waitForReady:
 	// Proceed to create the checkpoint
 	checkpointPath, err := s.cedanaClient.Checkpoint(ctx, request.ContainerId)
 	if err != nil {
-		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
 		s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
 			Status:      types.CheckpointStatusCheckpointFailed,
 			ContainerId: request.ContainerId,
@@ -113,11 +118,13 @@ waitForReady:
 	remoteKey := filepath.Join(request.Workspace.Name, filepath.Base(checkpointPath))
 	err = copyFile(checkpointPath, filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, remoteKey))
 	if err != nil {
-		log.Printf("<%s> - failed to copy checkpoint to storage: %v\n", request.ContainerId, err)
 		return err
 	}
 
-	// TODO: Delete checkpoint files from local disk in /tmp
+	err = os.Remove(checkpointPath)
+	if err != nil {
+		log.Printf("<%s> - failed to delete temporary checkpoint file: %v\n", request.ContainerId, err)
+	}
 
 	log.Printf("<%s> - checkpoint created successfully\n", request.ContainerId)
 	return s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{

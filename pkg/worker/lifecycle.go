@@ -529,10 +529,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Handle checkpoint creation & restore if applicable
 	var restored bool = false
+	var restoredContainerId string = ""
 	if s.checkpointingAvailable && request.CheckpointEnabled {
-		restored, err = s.attemptCheckpointOrRestore(ctx, request, consoleWriter, pidChan, configPath)
+		restored, restoredContainerId, err = s.attemptCheckpointOrRestore(ctx, request, consoleWriter, pidChan, configPath)
 		if err != nil {
 			log.Printf("<%s> - C/R failed: %v\n", containerId, err)
+		}
+
+		// XXX: If we restored from a checkpoint, we need to use the container ID of the restored container
+		// instead of the original container ID
+		if restored {
+			containerId = restoredContainerId
 		}
 	}
 
