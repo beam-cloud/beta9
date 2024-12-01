@@ -532,6 +532,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		// Wait for runc to start the container
 		pid = <-pidChan
 
+		log.Printf("<%s> - container pid: %d\n", containerId, pid)
+
 		// Capture resource usage (cpu/mem/gpu)
 		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
 
@@ -540,22 +542,26 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}()
 
 	// Handle checkpoint creation & restore if applicable
+	var restored bool = false
 	if s.checkpointingAvailable && request.CheckpointEnabled {
-		if err := s.attemptCheckpointOrRestore(ctx, request, consoleWriter, pidChan, configPath); err != nil {
+		restored, err = s.attemptCheckpointOrRestore(ctx, request, consoleWriter, pidChan, configPath)
+		if err != nil {
 			log.Printf("<%s> - C/R failed: %v\n", containerId, err)
 		}
 	}
 
-	// Launch the container
-	exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
-		Detach:        true,
-		ConsoleSocket: consoleWriter,
-		ConfigPath:    configPath,
-		Started:       pidChan,
-	})
-	if err != nil {
-		log.Printf("<%s> - failed to run container: %v\n", containerId, err)
-		return
+	if !restored {
+		// Launch the container
+		exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
+			Detach:        true,
+			ConsoleSocket: consoleWriter,
+			ConfigPath:    configPath,
+			Started:       pidChan,
+		})
+		if err != nil {
+			log.Printf("<%s> - failed to run container: %v\n", containerId, err)
+			return
+		}
 	}
 
 	if err := s.wait(containerId); err != nil {

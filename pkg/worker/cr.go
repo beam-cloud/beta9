@@ -13,7 +13,7 @@ import (
 	"github.com/beam-cloud/go-runc"
 )
 
-func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, consoleWriter *ConsoleWriter, pidChan chan int, configPath string) error {
+func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, consoleWriter *ConsoleWriter, pidChan chan int, configPath string) (bool, error) {
 	state, createCheckpoint := s.shouldCreateCheckpoint(request)
 
 	// If checkpointing is enabled, attempt to create a checkpoint
@@ -27,23 +27,24 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			ConfigPath:    configPath,
 			Started:       pidChan,
 		})
+
 		if err != nil {
 			log.Printf("<%s> - failed to restore checkpoint: %v\n", request.ContainerId, err)
 
-			// TODO: if restore fails, update checkpoint state to restore_failed
+			s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
+				Status:      types.CheckpointStatusRestoreFailed,
+				ContainerId: request.ContainerId,
+				StubId:      request.StubId,
+			})
 
-			return err
+			return false, err
 		} else {
 			log.Printf("<%s> - checkpoint found and restored, process state: %+v\n", request.ContainerId, processState)
-
-			err = s.wait(state.ContainerId)
-			if err != nil {
-				return err
-			}
+			return true, nil
 		}
 	}
 
-	return nil
+	return false, nil
 }
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
@@ -100,7 +101,6 @@ waitForReady:
 	checkpointPath, err := s.cedanaClient.Checkpoint(ctx, request.ContainerId)
 	if err != nil {
 		log.Printf("<%s> - cedana checkpoint failed: %+v\n", request.ContainerId, err)
-
 		s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
 			Status:      types.CheckpointStatusCheckpointFailed,
 			ContainerId: request.ContainerId,
