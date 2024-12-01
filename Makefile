@@ -2,7 +2,6 @@ SHELL := /bin/bash
 tag := latest
 workerTag := latest
 runnerTag := latest
-cedanaTag := 0.9.233
 
 setup:
 	bash bin/setup.sh
@@ -33,7 +32,7 @@ gateway:
 	docker push localhost:5001/beta9-gateway:$(tag)
 
 worker:
-	docker build . --build-arg CEDANA_VERSION=$(cedanaTag) --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	bin/delete_workers.sh
 
