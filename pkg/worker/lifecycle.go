@@ -589,7 +589,7 @@ func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int,
 				return err
 			}
 
-			if state.Status != "running" {
+			if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
 				log.Printf("<%s> - container has exited with status: %s\n", containerId, state.Status)
 				goto cleanup
 			}
