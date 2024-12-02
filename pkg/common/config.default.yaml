@@ -106,7 +106,7 @@ worker:
       priority: 1
       jobSpec:
         nodeSelector: {}
-      criuEnabled: true
+      criuEnabled: false
       poolSizing:
         defaultWorkerCpu: 1000m
         defaultWorkerGpuType: ""
