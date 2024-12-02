@@ -201,7 +201,7 @@ type WorkerConfig struct {
 	AddWorkerTimeout           time.Duration               `key:"addWorkerTimeout" json:"add_worker_timeout"`
 	TerminationGracePeriod     int64                       `key:"terminationGracePeriod"`
 	BlobCacheEnabled           bool                        `key:"blobCacheEnabled" json:"blob_cache_enabled"`
-	Checkpointing              CheckpointingConfig         `key:"checkpointing" json:"checkpointing"`
+	CRIU                       CRIUConfig                  `key:"checkpointing" json:"checkpointing"`
 }
 
 type PoolMode string
@@ -223,6 +223,7 @@ type WorkerPoolConfig struct {
 	Priority             int32                             `key:"priority" json:"priority"`
 	Preemptable          bool                              `key:"preemptable" json:"preemptable"`
 	UserData             string                            `key:"userData" json:"user_data"`
+	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
 }
 
 type WorkerPoolJobSpecConfig struct {
@@ -406,8 +407,7 @@ type FluentBitEventConfig struct {
 	Mapping         []FluentBitEventMapping `key:"mapping" json:"mapping"`
 }
 
-type CheckpointingConfig struct {
-	Enabled bool                    `key:"enabled" json:"enabled"`
+type CRIUConfig struct {
 	Storage CheckpointStorageConfig `key:"storage" json:"storage"`
 	Cedana  cedana.Config           `key:"cedana" json:"cedana"`
 }

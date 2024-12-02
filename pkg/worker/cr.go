@@ -25,7 +25,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			}
 		}()
 	} else if state.Status == types.CheckpointStatusAvailable {
-		checkpointPath := filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, state.RemoteKey)
+		checkpointPath := filepath.Join(s.config.Worker.CRIU.Storage.MountPath, state.RemoteKey)
 		processState, err := s.cedanaClient.Restore(ctx, cedanaRestoreOpts{
 			checkpointPath: checkpointPath,
 			jobId:          state.ContainerId,
@@ -60,7 +60,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
 func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest) error {
-	os.MkdirAll(filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, request.Workspace.Name), os.ModePerm)
+	os.MkdirAll(filepath.Join(s.config.Worker.CRIU.Storage.MountPath, request.Workspace.Name), os.ModePerm)
 
 	timeout := defaultCheckpointDeadline
 	managing := false
@@ -121,7 +121,7 @@ waitForReady:
 
 	// Move compressed checkpoint file to long-term storage directory
 	remoteKey := filepath.Join(request.Workspace.Name, filepath.Base(checkpointPath))
-	err = copyFile(checkpointPath, filepath.Join(s.config.Worker.Checkpointing.Storage.MountPath, remoteKey))
+	err = copyFile(checkpointPath, filepath.Join(s.config.Worker.CRIU.Storage.MountPath, remoteKey))
 	if err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ waitForReady:
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container
 // NOTE: this currently only works for deployments since functions can run multiple containers
 func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.CheckpointState, bool) {
-	if !s.crAvailable || !request.CheckpointEnabled {
+	if !s.IsCRIUAvailable() || !request.CheckpointEnabled {
 		return types.CheckpointState{}, false
 	}
 
