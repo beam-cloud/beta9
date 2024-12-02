@@ -17,6 +17,7 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/shirou/gopsutil/process"
 )
 
 const (
@@ -509,91 +510,97 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	pidChan := make(chan int, 1)
 
 	// Handle checkpoint creation & restore if applicable
-	var restored bool = false
-	var restoredContainerId string = ""
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		restored, restoredContainerId, err = s.attemptCheckpointOrRestore(ctx, request, consoleWriter, pidChan, configPath)
+		restored, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, consoleWriter, pidChan, configPath)
 		if err != nil {
 			log.Printf("<%s> - C/R failed: %v\n", containerId, err)
 		}
 
-		// HOTFIX: If we restored from a checkpoint, we need to use the container ID of the restored container
-		// instead of the original container ID
 		if restored {
+
+			// HOTFIX: If we restored from a checkpoint, we need to use the container ID of the restored container
+			// instead of the original container ID
 			containerInstance, exists := s.containerInstances.Get(request.ContainerId)
 			if exists {
 				containerInstance.Id = restoredContainerId
 				s.containerInstances.Set(containerId, containerInstance)
 				containerId = restoredContainerId
 			}
-		}
-	}
 
-	if !restored {
-		// Launch the container
-		// TODO: if we run with detach=true, what is the exit code here? should we even capture it? or just do it in wait()?
-		exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
-			Detach:        true,
-			ConsoleSocket: consoleWriter,
-			ConfigPath:    configPath,
-			Started:       pidChan,
-		})
-		if err != nil {
-			log.Printf("<%s> - failed to run container: %v\n", containerId, err)
+			exitCode = s.wait(ctx, containerId, pidChan, outputChan, request, spec)
 			return
 		}
 	}
 
-	if exitCode, err = s.wait(ctx, containerId, pidChan, outputChan, request, spec); err != nil {
-		log.Printf("<%s> - failed to wait for container exit: %v\n", containerId, err)
+	// Invoke runc process (launch the container)
+	_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
+		Detach:        true,
+		ConsoleSocket: consoleWriter,
+		ConfigPath:    configPath,
+		Started:       pidChan,
+	})
+	if err != nil {
+		log.Printf("<%s> - failed to run container: %v\n", containerId, err)
+		return
 	}
 
-	outputChan <- common.OutputMsg{
-		Msg:     "",
-		Done:    true,
-		Success: err == nil,
-	}
+	exitCode = s.wait(ctx, containerId, pidChan, outputChan, request, spec)
 }
 
-// Wait for container to exit
-func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int, outputChan chan common.OutputMsg, request *types.ContainerRequest, spec *specs.Spec) (int, error) {
+// Wait for a container to exit and return the exit code
+func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int, outputChan chan common.OutputMsg, request *types.ContainerRequest, spec *specs.Spec) int {
 	pid := <-pidChan
 
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
 	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
 
+	// Clean up runc container state and send final output message
+	cleanup := func(pid int, err error) int {
+		exitCode := -1
+
+		proc, err := process.NewProcess(int32(pid))
+		if err == nil {
+			status, err := proc.Status()
+			log.Printf("<%s> - container status: %+v\n", containerId, status)
+			if err == nil && len(status) > 0 {
+				exitCode = int(status[len(status)-1]) // Assume the last status is the exit code
+			}
+		}
+
+		log.Printf("<%s> - container exited with code: %d\n", containerId, exitCode)
+
+		outputChan <- common.OutputMsg{
+			Msg:     "",
+			Done:    true,
+			Success: err == nil, // TODO: do we need to check the error here? or just the exit code
+		}
+
+		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
+		if err != nil {
+			log.Printf("<%s> - failed to delete container: %v\n", containerId, err)
+		}
+
+		return exitCode
+	}
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
-
-	var exitCode int = 0 // TODO: figure out how to get the actual exit code
 
 	for {
 		select {
 		case <-ctx.Done():
-			return -1, ctx.Err()
+			return cleanup(pid, ctx.Err())
 		case <-ticker.C:
 			state, err := s.runcHandle.State(ctx, containerId)
 			if err != nil {
-				log.Printf("<%s> - error getting container state: %v\n", containerId, err)
-				return -1, err
+				return cleanup(pid, err)
 			}
 
 			if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
-				log.Printf("<%s> - container has exited with status: %s\n", containerId, state.Status)
-				goto cleanup
+				return cleanup(pid, nil)
 			}
 		}
 	}
-
-cleanup:
-	err := s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
-	if err != nil {
-		log.Printf("<%s> - failed to delete container: %v\n", containerId, err)
-		return -1, err
-	}
-
-	log.Printf("<%s> - container exited with code: %d\n", containerId, exitCode)
-	return exitCode, nil
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
