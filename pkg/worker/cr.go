@@ -26,7 +26,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		}()
 	} else if state.Status == types.CheckpointStatusAvailable {
 		checkpointPath := filepath.Join(s.config.Worker.CRIU.Storage.MountPath, state.RemoteKey)
-		processState, err := s.cedanaClient.Restore(ctx, cedanaRestoreOpts{
+		_, err := s.cedanaClient.Restore(ctx, cedanaRestoreOpts{
 			checkpointPath: checkpointPath,
 			jobId:          state.ContainerId,
 			containerId:    request.ContainerId,
@@ -49,7 +49,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 
 			return false, "", err
 		} else {
-			log.Printf("<%s> - checkpoint found and restored, process state: %+v\n", request.ContainerId, processState)
+			log.Printf("<%s> - checkpoint found and restored \n", request.ContainerId)
 			return true, state.ContainerId, nil
 		}
 	}

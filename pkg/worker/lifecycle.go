@@ -17,7 +17,6 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/shirou/gopsutil/process"
 )
 
 const (
@@ -517,7 +516,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 
 		if restored {
-
 			// HOTFIX: If we restored from a checkpoint, we need to use the container ID of the restored container
 			// instead of the original container ID
 			containerInstance, exists := s.containerInstances.Get(request.ContainerId)
@@ -555,18 +553,7 @@ func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int,
 	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
 
 	// Clean up runc container state and send final output message
-	cleanup := func(pid int, err error) int {
-		exitCode := -1
-
-		proc, err := process.NewProcess(int32(pid))
-		if err == nil {
-			status, err := proc.Status()
-			log.Printf("<%s> - container status: %+v\n", containerId, status)
-			if err == nil && len(status) > 0 {
-				exitCode = int(status[len(status)-1]) // Assume the last status is the exit code
-			}
-		}
-
+	cleanup := func(exitCode int, err error) int {
 		log.Printf("<%s> - container exited with code: %d\n", containerId, exitCode)
 
 		outputChan <- common.OutputMsg{
@@ -589,16 +576,27 @@ func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int,
 	for {
 		select {
 		case <-ctx.Done():
-			return cleanup(pid, ctx.Err())
+			return cleanup(-1, ctx.Err())
 		case <-ticker.C:
-			state, err := s.runcHandle.State(ctx, containerId)
+			process, err := os.FindProcess(pid)
 			if err != nil {
-				return cleanup(pid, err)
+				return cleanup(-1, err)
 			}
 
-			if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
-				return cleanup(pid, nil)
+			// Wait for the process to exit
+			state, err := process.Wait()
+			if err != nil {
+				return cleanup(state.ExitCode(), err)
 			}
+
+			// state, err := s.runcHandle.State(ctx, containerId)
+			// if err != nil {
+			// 	return cleanup(pid, err)
+			// }
+
+			// if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
+			// 	return cleanup(pid, nil)
+			// }
 		}
 	}
 }
