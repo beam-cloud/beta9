@@ -273,9 +273,9 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart = nil
 	}
 
-	// We need to modify the spec to support Cedana C/R if checkpointing is enabled
+	// We need to modify the spec to support Cedana C/R if enabled
 	if s.crAvailable && request.CheckpointEnabled {
-		s.cedanaClient.PrepareContainerSpec(spec, request.ContainerId, request.Gpu != "")
+		s.cedanaClient.PrepareContainerSpec(spec, request.ContainerId, request.RequiresGPU())
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
@@ -330,11 +330,11 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	if s.crAvailable && request.CheckpointEnabled {
-		os.MkdirAll(checkpointDir(request.ContainerId), os.ModePerm)
+		os.MkdirAll(checkpointSignalDir(request.ContainerId), os.ModePerm)
 
 		checkpointMount := specs.Mount{
 			Type:        "bind",
-			Source:      checkpointDir(request.ContainerId),
+			Source:      checkpointSignalDir(request.ContainerId),
 			Destination: "/cedana",
 			Options: []string{
 				"rbind",

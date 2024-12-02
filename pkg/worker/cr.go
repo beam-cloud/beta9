@@ -91,8 +91,8 @@ waitForReady:
 				continue
 			}
 
-			// Check if the container is ready for checkpoint by verifying the existence of a certain file
-			readyFilePath := fmt.Sprintf("/tmp/%s/cedana/READY_FOR_CHECKPOINT", instance.Id)
+			// Check if the container is ready for checkpoint by verifying the existence of a signal file
+			readyFilePath := filepath.Join(checkpointSignalDir(instance.Id), checkpointSignalFileName)
 			if _, err := os.Stat(readyFilePath); err == nil {
 				log.Printf("<%s> - container ready for checkpoint.\n", instance.Id)
 				break waitForReady
@@ -127,6 +127,7 @@ waitForReady:
 	}
 
 	log.Printf("<%s> - checkpoint created successfully\n", request.ContainerId)
+
 	return s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
 		Status:      types.CheckpointStatusAvailable,
 		ContainerId: request.ContainerId, // We store this as a reference to the container that we initially checkpointed

@@ -246,6 +246,17 @@ func (c *CedanaClient) Restore(
 	// NOTE: Cedana uses bundle path to find the config.json
 	bundle := strings.TrimRight(opts.ConfigPath, filepath.Base(opts.ConfigPath))
 
+	// // Cache the checkpoint nearby for faster subsequent restores
+	// if c.fileCacheManager.CacheAvailable() {
+	// 	log.Printf("<%s> - caching checkpoint nearby\n", containerId)
+
+	// 	client := c.fileCacheManager.GetClient()
+	// 	_, err := client.StoreContentFromSource("checkpoints/"+remoteKey, 0) // TODO: fix this path
+	// 	if err != nil {
+	// 		log.Printf("<%s> - failed to cache checkpoint nearby: %v\n", containerId, err)
+	// 	}
+	// }
+
 	args := &cedanaproto.JobRestoreArgs{
 		JID: jobId,
 		RuncOpts: &cedanaproto.RuncOpts{
