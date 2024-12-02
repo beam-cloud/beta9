@@ -43,7 +43,6 @@ type Worker struct {
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
 	cedanaClient            *CedanaClient
-	crAvailable             bool
 	fileCacheManager        *FileCacheManager
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
@@ -99,6 +98,7 @@ func NewWorker() (*Worker, error) {
 
 	gpuType := os.Getenv("GPU_TYPE")
 	workerId := os.Getenv("WORKER_ID")
+	workerPoolName := os.Getenv("WORKER_POOL_NAME")
 	podHostName := os.Getenv("HOSTNAME")
 
 	podAddr, err := GetPodAddr()
@@ -161,26 +161,26 @@ func NewWorker() (*Worker, error) {
 
 	var cedanaClient *CedanaClient = nil
 	var checkpointStorage storage.Storage = nil
-	if config.Worker.Checkpointing.Enabled {
-		cedanaClient, err = NewCedanaClient(context.Background(), config.Worker.Checkpointing.Cedana, gpuType != "")
+	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
+		cedanaClient, err = NewCedanaClient(context.Background(), config.Worker.CRIU.Cedana, gpuType != "")
 		if err != nil {
 			log.Printf("[WARNING] C/R unavailable, failed to create cedana client: %v\n", err)
 		}
 
-		os.MkdirAll(config.Worker.Checkpointing.Storage.MountPath, os.ModePerm)
+		os.MkdirAll(config.Worker.CRIU.Storage.MountPath, os.ModePerm)
 
 		// If storage mode is S3, mount the checkpoint storage as a FUSE filesystem
-		if config.Worker.Checkpointing.Storage.Mode == string(types.CheckpointStorageModeS3) {
+		if config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeS3) {
 			checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
-				S3Bucket:    config.Worker.Checkpointing.Storage.ObjectStore.BucketName,
-				AccessKey:   config.Worker.Checkpointing.Storage.ObjectStore.AccessKey,
-				SecretKey:   config.Worker.Checkpointing.Storage.ObjectStore.SecretKey,
-				EndpointURL: config.Worker.Checkpointing.Storage.ObjectStore.EndpointURL,
-				Region:      config.Worker.Checkpointing.Storage.ObjectStore.Region,
+				S3Bucket:    config.Worker.CRIU.Storage.ObjectStore.BucketName,
+				AccessKey:   config.Worker.CRIU.Storage.ObjectStore.AccessKey,
+				SecretKey:   config.Worker.CRIU.Storage.ObjectStore.SecretKey,
+				EndpointURL: config.Worker.CRIU.Storage.ObjectStore.EndpointURL,
+				Region:      config.Worker.CRIU.Storage.ObjectStore.Region,
 				ReadOnly:    false,
 			})
 
-			err := checkpointStorage.Mount(config.Worker.Checkpointing.Storage.MountPath)
+			err := checkpointStorage.Mount(config.Worker.CRIU.Storage.MountPath)
 			if err != nil {
 				log.Printf("[WARNING] C/R unavailable, unable to mount checkpoint storage: %v\n", err)
 				cedanaClient = nil
@@ -230,7 +230,6 @@ func NewWorker() (*Worker, error) {
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
 		cedanaClient:            cedanaClient,
-		crAvailable:             cedanaClient != nil,
 		podHostName:             podHostName,
 		eventBus:                nil,
 		workerId:                workerId,
@@ -501,7 +500,7 @@ func (s *Worker) shutdown() error {
 	}
 
 	if s.checkpointStorage != nil {
-		err = s.checkpointStorage.Unmount(s.config.Worker.Checkpointing.Storage.MountPath)
+		err = s.checkpointStorage.Unmount(s.config.Worker.CRIU.Storage.MountPath)
 		if err != nil {
 			errs = errors.Join(errs, fmt.Errorf("failed to unmount checkpoint storage: %v", err))
 		}

@@ -106,6 +106,7 @@ worker:
       priority: 1
       jobSpec:
         nodeSelector: {}
+      criuEnabled: false
       poolSizing:
         defaultWorkerCpu: 1000m
         defaultWorkerGpuType: ""
@@ -160,8 +161,7 @@ worker:
   terminationGracePeriod: 30
   addWorkerTimeout: 10m
   blobCacheEnabled: false
-  checkpointing:
-    enabled: false
+  criu:
     storage:
       mountPath: /data/checkpoints
       mode: local
