@@ -268,7 +268,7 @@ func (c *CedanaClient) Restore(
 	if restoreOpts.cacheFunc != nil {
 		checkpointPath, err := restoreOpts.cacheFunc(restoreOpts.containerId, restoreOpts.checkpointPath)
 		if err == nil {
-			log.Printf("<%s> - cached checkpoint nearby at %s\n", restoreOpts.containerId, checkpointPath)
+			log.Printf("<%s> - using cached checkpoint located at: %s\n", restoreOpts.containerId, checkpointPath)
 			restoreOpts.checkpointPath = checkpointPath
 		} else {
 			log.Printf("<%s> - failed to cache checkpoint nearby: %v\n", restoreOpts.containerId, err)

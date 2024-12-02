@@ -169,8 +169,7 @@ func (s *Worker) cacheCheckpoint(containerId, checkpointPath string) (string, er
 
 		// If the checkpoint is already cached, we can use that path without the extra grpc call
 		if _, err := os.Stat(cachedCheckpointPath); err == nil {
-			checkpointPath = cachedCheckpointPath
-			return checkpointPath, nil
+			return cachedCheckpointPath, nil
 		}
 
 		log.Printf("<%s> - caching checkpoint nearby: %s\n", containerId, checkpointPath)
