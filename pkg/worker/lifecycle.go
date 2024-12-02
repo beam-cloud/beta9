@@ -578,12 +578,12 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
 	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
 
-	// Wait for the container to exit
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return cleanup(-1, err)
 	}
 
+	// Wait for the container to exit
 	processState, err := process.Wait()
 	if err != nil {
 		return cleanup(-1, err)
