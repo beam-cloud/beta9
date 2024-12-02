@@ -256,13 +256,13 @@ type cedanaRestoreOpts struct {
 func (c *CedanaClient) Restore(
 	ctx context.Context,
 	restoreOpts cedanaRestoreOpts,
-	opts *runc.CreateOpts,
+	runcOpts *runc.CreateOpts,
 ) (*cedanaproto.ProcessState, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCheckpointDeadline)
 	defer cancel()
 
 	// NOTE: Cedana uses bundle path to find the config.json
-	bundle := strings.TrimRight(opts.ConfigPath, filepath.Base(opts.ConfigPath))
+	bundle := strings.TrimRight(runcOpts.ConfigPath, filepath.Base(runcOpts.ConfigPath))
 
 	// If a cache function is provided, attempt to cache the checkpoint nearby
 	if restoreOpts.cacheFunc != nil {
@@ -281,7 +281,7 @@ func (c *CedanaClient) Restore(
 			Root:          runcRoot,
 			Bundle:        bundle,
 			Detach:        true,
-			ConsoleSocket: opts.ConsoleSocket.Path(),
+			ConsoleSocket: runcOpts.ConsoleSocket.Path(),
 			ContainerID:   restoreOpts.containerId,
 		},
 		CriuOpts:       &cedanaproto.CriuOpts{TcpClose: true, TcpEstablished: true},
@@ -291,8 +291,8 @@ func (c *CedanaClient) Restore(
 	if err != nil {
 		return nil, err
 	}
-	if opts.Started != nil {
-		opts.Started <- int(res.GetState().GetPID())
+	if runcOpts.Started != nil {
+		runcOpts.Started <- int(res.GetState().GetPID())
 	}
 
 	return res.State, nil

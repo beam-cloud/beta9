@@ -163,7 +163,15 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 
 // Caches a checkpoint nearby if the file cache is available
 func (s *Worker) cacheCheckpoint(checkpointPath string) (string, error) {
+	cachedCheckpointPath := filepath.Join(baseFileCachePath, checkpointPath)
+
 	if s.fileCacheManager.CacheAvailable() {
+		// If the checkpoint is already cached, we can use that path without the extra grpc call
+		if _, err := os.Stat(cachedCheckpointPath); err == nil {
+			checkpointPath = cachedCheckpointPath
+			return checkpointPath, nil
+		}
+
 		log.Printf("<%s> - caching checkpoint nearby\n", checkpointPath)
 
 		client := s.fileCacheManager.GetClient()
@@ -174,7 +182,7 @@ func (s *Worker) cacheCheckpoint(checkpointPath string) (string, error) {
 			return "", err
 		}
 
-		checkpointPath = filepath.Join(baseFileCachePath, checkpointPath)
+		checkpointPath = cachedCheckpointPath
 	}
 
 	return checkpointPath, nil
