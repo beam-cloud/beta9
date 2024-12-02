@@ -250,24 +250,6 @@ func NewWorker() (*Worker, error) {
 	}, nil
 }
 
-func (s *Worker) IsCRIUAvailable() bool {
-	if s.cedanaClient == nil {
-		return false
-	}
-
-	poolName := os.Getenv("WORKER_POOL_NAME")
-	if poolName == "" {
-		return false
-	}
-
-	pool, ok := s.config.Worker.Pools[poolName]
-	if !ok {
-		return false
-	}
-
-	return pool.CRIUEnabled
-}
-
 func (s *Worker) Run() error {
 	err := s.startup()
 	if err != nil {

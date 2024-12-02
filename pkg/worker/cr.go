@@ -187,3 +187,21 @@ func (s *Worker) cacheCheckpoint(containerId, checkpointPath string) (string, er
 
 	return checkpointPath, nil
 }
+
+func (s *Worker) IsCRIUAvailable() bool {
+	if s.cedanaClient == nil {
+		return false
+	}
+
+	poolName := os.Getenv("WORKER_POOL_NAME")
+	if poolName == "" {
+		return false
+	}
+
+	pool, ok := s.config.Worker.Pools[poolName]
+	if !ok {
+		return false
+	}
+
+	return pool.CRIUEnabled
+}
