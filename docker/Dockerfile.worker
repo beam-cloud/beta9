@@ -96,19 +96,23 @@ RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev
 # XXX: Remove once cedana starts shipping with a compatible binary
 RUN <<EOT
 set -eux
-apt-get install -y python3-protobuf libnet1 libnftables1 libnl-3-200 libprotobuf-c1 iptables
-curl -L -o criu.deb https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_22.04/amd64/criu_4.0-3_amd64.deb
-dpkg -i criu.deb
-rm criu.deb
+if [ "$(uname -m)" = "x86_64" ]; then
+    apt-get install -y python3-protobuf libnet1 libnftables1 libnl-3-200 libprotobuf-c1 iptables
+    curl -L -o criu.deb https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_22.04/amd64/criu_4.0-3_amd64.deb
+    dpkg -i criu.deb
+    rm criu.deb
+fi
 EOT
 
 ARG CEDANA_VERSION=0.9.233
 RUN <<EOT
 set -eux
-apt-get install -y libgpgme11
-curl -L -o cedana_amd64.deb https://github.com/cedana/cedana/releases/download/v${CEDANA_VERSION}/cedana_${CEDANA_VERSION}_amd64.deb
-dpkg -i cedana_amd64.deb
-rm cedana_amd64.deb
+if [ "$(uname -m)" = "x86_64" ]; then
+    apt-get install -y libgpgme11
+    curl -L -o cedana_amd64.deb https://github.com/cedana/cedana/releases/download/v${CEDANA_VERSION}/cedana_${CEDANA_VERSION}_amd64.deb
+    dpkg -i cedana_amd64.deb
+    rm cedana_amd64.deb
+fi
 EOT
 
 
