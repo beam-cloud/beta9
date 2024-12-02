@@ -132,7 +132,7 @@ func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, containerId string
 	spec.Mounts = append(spec.Mounts, specs.Mount{
 		Type:        "bind",
 		Source:      checkpointSignalDir(containerId),
-		Destination: "`/cedana",
+		Destination: "/cedana",
 		Options: []string{
 			"rbind",
 			"rprivate",
