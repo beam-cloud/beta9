@@ -452,7 +452,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			}
 		}
 
-		log.Printf("<%s> - updating container status to running\n", containerId)
 		// Update container status to running
 		err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
 		if err != nil {
@@ -518,7 +517,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			log.Printf("<%s> - C/R failed: %v\n", containerId, err)
 		}
 
-		// XXX: If we restored from a checkpoint, we need to use the container ID of the restored container
+		// HOTFIX: If we restored from a checkpoint, we need to use the container ID of the restored container
 		// instead of the original container ID
 		if restored {
 			containerInstance, exists := s.containerInstances.Get(request.ContainerId)
@@ -532,6 +531,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	if !restored {
 		// Launch the container
+		// TODO: if we run with detach=true, what is the exit code here? should we even capture it? or just do it in wait()?
 		exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
 			Detach:        true,
 			ConsoleSocket: consoleWriter,
@@ -544,7 +544,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
-	if err := s.wait(ctx, containerId, pidChan, outputChan, request, spec); err != nil {
+	if exitCode, err = s.wait(ctx, containerId, pidChan, outputChan, request, spec); err != nil {
 		log.Printf("<%s> - failed to wait for container exit: %v\n", containerId, err)
 	}
 
@@ -556,7 +556,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 }
 
 // Wait for container to exit
-func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int, outputChan chan common.OutputMsg, request *types.ContainerRequest, spec *specs.Spec) error {
+func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int, outputChan chan common.OutputMsg, request *types.ContainerRequest, spec *specs.Spec) (int, error) {
 	pid := <-pidChan
 
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
@@ -570,12 +570,12 @@ func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int,
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return -1, ctx.Err()
 		case <-ticker.C:
 			state, err := s.runcHandle.State(ctx, containerId)
 			if err != nil {
 				log.Printf("<%s> - error getting container state: %v\n", containerId, err)
-				return err
+				return -1, err
 			}
 
 			if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
@@ -589,11 +589,11 @@ cleanup:
 	err := s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
 	if err != nil {
 		log.Printf("<%s> - failed to delete container: %v\n", containerId, err)
-		return err
+		return -1, err
 	}
 
 	log.Printf("<%s> - container exited with code: %d\n", containerId, exitCode)
-	return nil
+	return exitCode, nil
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {

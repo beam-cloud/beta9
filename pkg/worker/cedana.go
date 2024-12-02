@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -243,13 +244,18 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) (stri
 	return res.GetState().GetCheckpointPath(), nil
 }
 
+type cedanaRestoreOpts struct {
+	jobId          string
+	containerId    string
+	checkpointPath string
+	cacheFunc      func(string) (string, error)
+}
+
 // Restore a runc container. If a checkpoint path is provided, it will be used as the checkpoint.
 // If empty path is provided, the latest checkpoint path from DB will be used.
 func (c *CedanaClient) Restore(
 	ctx context.Context,
-	jobId string,
-	containerId string,
-	checkpointPath string,
+	restoreOpts cedanaRestoreOpts,
 	opts *runc.CreateOpts,
 ) (*cedanaproto.ProcessState, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCheckpointDeadline)
@@ -258,28 +264,27 @@ func (c *CedanaClient) Restore(
 	// NOTE: Cedana uses bundle path to find the config.json
 	bundle := strings.TrimRight(opts.ConfigPath, filepath.Base(opts.ConfigPath))
 
-	// // Cache the checkpoint nearby for faster subsequent restores
-	// if c.fileCacheManager.CacheAvailable() {
-	// 	log.Printf("<%s> - caching checkpoint nearby\n", containerId)
-
-	// 	client := c.fileCacheManager.GetClient()
-	// 	_, err := client.StoreContentFromSource("checkpoints/"+remoteKey, 0) // TODO: fix this path
-	// 	if err != nil {
-	// 		log.Printf("<%s> - failed to cache checkpoint nearby: %v\n", containerId, err)
-	// 	}
-	// }
+	// If a cache function is provided, attempt to cache the checkpoint nearby
+	if restoreOpts.cacheFunc != nil {
+		checkpointPath, err := restoreOpts.cacheFunc(restoreOpts.checkpointPath)
+		if err == nil {
+			restoreOpts.checkpointPath = checkpointPath
+		} else {
+			log.Printf("<%s> - failed to cache checkpoint nearby: %v\n", restoreOpts.containerId, err)
+		}
+	}
 
 	args := &cedanaproto.JobRestoreArgs{
-		JID: jobId,
+		JID: restoreOpts.jobId,
 		RuncOpts: &cedanaproto.RuncOpts{
 			Root:          runcRoot,
 			Bundle:        bundle,
 			Detach:        true,
 			ConsoleSocket: opts.ConsoleSocket.Path(),
-			ContainerID:   containerId,
+			ContainerID:   restoreOpts.containerId,
 		},
 		CriuOpts:       &cedanaproto.CriuOpts{TcpClose: true, TcpEstablished: true},
-		CheckpointPath: checkpointPath,
+		CheckpointPath: restoreOpts.checkpointPath,
 	}
 	res, err := c.service.JobRestore(ctx, args)
 	if err != nil {

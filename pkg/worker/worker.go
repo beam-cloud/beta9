@@ -364,7 +364,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				continue
 			}
 
-			log.Printf("<%s> - container still running\n", request.ContainerId)
+			log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
 
 			// TODO: remove this hotfix
 			if state.Status == types.ContainerStatusPending {
