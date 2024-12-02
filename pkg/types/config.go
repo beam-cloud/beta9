@@ -201,7 +201,7 @@ type WorkerConfig struct {
 	AddWorkerTimeout           time.Duration               `key:"addWorkerTimeout" json:"add_worker_timeout"`
 	TerminationGracePeriod     int64                       `key:"terminationGracePeriod"`
 	BlobCacheEnabled           bool                        `key:"blobCacheEnabled" json:"blob_cache_enabled"`
-	CRIU                       CRIUConfig                  `key:"checkpointing" json:"checkpointing"`
+	CRIU                       CRIUConfig                  `key:"criu" json:"criu"`
 }
 
 type PoolMode string
