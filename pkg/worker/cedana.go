@@ -248,7 +248,7 @@ type cedanaRestoreOpts struct {
 	jobId          string
 	containerId    string
 	checkpointPath string
-	cacheFunc      func(string) (string, error)
+	cacheFunc      func(string, string) (string, error)
 }
 
 // Restore a runc container. If a checkpoint path is provided, it will be used as the checkpoint.
@@ -266,7 +266,7 @@ func (c *CedanaClient) Restore(
 
 	// If a cache function is provided, attempt to cache the checkpoint nearby
 	if restoreOpts.cacheFunc != nil {
-		checkpointPath, err := restoreOpts.cacheFunc(restoreOpts.checkpointPath)
+		checkpointPath, err := restoreOpts.cacheFunc(restoreOpts.containerId, restoreOpts.checkpointPath)
 		if err == nil {
 			log.Printf("<%s> - cached checkpoint nearby at %s\n", restoreOpts.containerId, checkpointPath)
 			restoreOpts.checkpointPath = checkpointPath
