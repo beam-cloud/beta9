@@ -329,24 +329,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		}
 	}
 
-	if s.crAvailable && request.CheckpointEnabled {
-		os.MkdirAll(checkpointSignalDir(request.ContainerId), os.ModePerm)
-
-		checkpointMount := specs.Mount{
-			Type:        "bind",
-			Source:      checkpointSignalDir(request.ContainerId),
-			Destination: "/cedana",
-			Options: []string{
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"nodev",
-			},
-		}
-
-		spec.Mounts = append(spec.Mounts, checkpointMount)
-	}
-
 	// Configure resolv.conf
 	resolvMount := specs.Mount{
 		Type:        "none",

@@ -127,8 +127,22 @@ func (c *CedanaClient) Close() {
 // Updates the runc container spec to make the shared library available
 // as well as the shared memory that is used for communication
 func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, containerId string, gpuEnabled bool) error {
+	os.MkdirAll(checkpointSignalDir(containerId), os.ModePerm) // Add a mount point for the checkpoint signal file
+
+	spec.Mounts = append(spec.Mounts, specs.Mount{
+		Type:        "bind",
+		Source:      checkpointSignalDir(containerId),
+		Destination: "`/cedana",
+		Options: []string{
+			"rbind",
+			"rprivate",
+			"nosuid",
+			"nodev",
+		},
+	})
+
 	if !gpuEnabled {
-		return nil // no need to do anything
+		return nil // No need to do anything else if GPU is not enabled
 	}
 
 	// First check if shared library is on worker
@@ -142,8 +156,6 @@ func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, containerId string
 	// Remove nvidia prestart hook as we don't need actual device mounts
 	spec.Hooks.Prestart = nil
 
-	// TODO: will this causes issues on multi-gpu nodes...?
-
 	// Add shared memory mount from worker instead, remove existing /dev/shm mount
 	for i, m := range spec.Mounts {
 		if m.Destination == "/dev/shm" {
@@ -152,6 +164,7 @@ func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, containerId string
 		}
 	}
 
+	// Add shared memory mount from worker
 	spec.Mounts = append(spec.Mounts, specs.Mount{
 		Destination: "/dev/shm",
 		Source:      "/dev/shm",
