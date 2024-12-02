@@ -506,11 +506,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
 
-	pidChan := make(chan int, 1)
+	startedChan := make(chan int, 1)
 
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		restored, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, consoleWriter, pidChan, configPath)
+		restored, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, consoleWriter, startedChan, configPath)
 		if err != nil {
 			log.Printf("<%s> - C/R failed: %v\n", containerId, err)
 		}
@@ -525,7 +525,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				containerId = restoredContainerId
 			}
 
-			exitCode = s.wait(ctx, containerId, pidChan, outputChan, request, spec)
+			exitCode = s.wait(ctx, containerId, startedChan, outputChan, request, spec)
 			return
 		}
 	}
@@ -535,22 +535,19 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		Detach:        true,
 		ConsoleSocket: consoleWriter,
 		ConfigPath:    configPath,
-		Started:       pidChan,
+		Started:       startedChan,
 	})
 	if err != nil {
 		log.Printf("<%s> - failed to run container: %v\n", containerId, err)
 		return
 	}
 
-	exitCode = s.wait(ctx, containerId, pidChan, outputChan, request, spec)
+	exitCode = s.wait(ctx, containerId, startedChan, outputChan, request, spec)
 }
 
 // Wait for a container to exit and return the exit code
-func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int, outputChan chan common.OutputMsg, request *types.ContainerRequest, spec *specs.Spec) int {
-	pid := <-pidChan
-
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
-	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
+func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, outputChan chan common.OutputMsg, request *types.ContainerRequest, spec *specs.Spec) int {
+	<-startedChan
 
 	// Clean up runc container state and send final output message
 	cleanup := func(exitCode int, err error) int {
@@ -570,35 +567,29 @@ func (s *Worker) wait(ctx context.Context, containerId string, pidChan chan int,
 		return exitCode
 	}
 
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return cleanup(-1, ctx.Err())
-		case <-ticker.C:
-			process, err := os.FindProcess(pid)
-			if err != nil {
-				return cleanup(-1, err)
-			}
-
-			// Wait for the process to exit
-			state, err := process.Wait()
-			if err != nil {
-				return cleanup(state.ExitCode(), err)
-			}
-
-			// state, err := s.runcHandle.State(ctx, containerId)
-			// if err != nil {
-			// 	return cleanup(pid, err)
-			// }
-
-			// if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
-			// 	return cleanup(pid, nil)
-			// }
-		}
+	// Look up the PID of the container
+	state, err := s.runcHandle.State(ctx, containerId)
+	if err != nil {
+		return cleanup(-1, err)
 	}
+	pid := state.Pid
+
+	// Start monitoring the container
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
+	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
+
+	// Wait for the container to exit
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return cleanup(-1, err)
+	}
+
+	processState, err := process.Wait()
+	if err != nil {
+		return cleanup(-1, err)
+	}
+
+	return cleanup(processState.ExitCode(), nil)
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
