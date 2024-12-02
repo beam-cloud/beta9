@@ -167,7 +167,9 @@ func (s *Worker) cacheCheckpoint(checkpointPath string) (string, error) {
 		log.Printf("<%s> - caching checkpoint nearby\n", checkpointPath)
 
 		client := s.fileCacheManager.GetClient()
-		_, err := client.StoreContentFromSource("checkpoints/"+checkpointPath, 0) // TODO: fix this path
+
+		// Remove the leading "/" from the checkpoint path
+		_, err := client.StoreContentFromSource(checkpointPath[1:], 0)
 		if err != nil {
 			return "", err
 		}
