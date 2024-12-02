@@ -88,6 +88,9 @@ RUN apt-get update && \
     apt-get install psmisc
 
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
+RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/cedana-gpu-controller -o /usr/local/bin/cedana-gpu-controller && chmod +x /usr/local/bin/cedana-gpu-controller
+RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/libcedana-gpu.so -o /usr/local/lib/libcedana-gpu.so && chmod +x /usr/local/lib/libcedana-gpu.so
+
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvidia-container-toolkit
 
