@@ -161,7 +161,7 @@ worker:
   addWorkerTimeout: 10m
   blobCacheEnabled: false
   checkpointing:
-    enabled: true
+    enabled: false
     storage:
       mountPath: /data/checkpoints
       mode: local
