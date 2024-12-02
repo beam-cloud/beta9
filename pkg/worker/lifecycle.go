@@ -556,7 +556,7 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 		outputChan <- common.OutputMsg{
 			Msg:     "",
 			Done:    true,
-			Success: err == nil, // TODO: do we need to check the error here? or just the exit code
+			Success: exitCode == 0,
 		}
 
 		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
