@@ -275,7 +275,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	// We need to modify the spec to support Cedana C/R if enabled
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		s.cedanaClient.PrepareContainerSpec(spec, request.ContainerId, request.RequiresGPU())
+		containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)
+		s.cedanaClient.PrepareContainerSpec(spec, request.ContainerId, containerHostname, request.RequiresGPU())
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)

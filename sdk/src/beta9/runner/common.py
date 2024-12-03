@@ -386,6 +386,8 @@ class ThreadPoolExecutorOverride(ThreadPoolExecutor):
 
 CHECKPOINT_SIGNAL_FILE = "/cedana/READY_FOR_CHECKPOINT"
 CHECKPOINT_COMPLETE_FILE = "/cedana/CHECKPOINT_COMPLETE"
+CHECKPOINT_CONTAINER_ID_FILE = "/cedana/CONTAINER_ID"
+CHECKPOINT_CONTAINER_HOSTNAME_FILE = "/cedana/CONTAINER_HOSTNAME"
 
 
 def wait_for_checkpoint():
@@ -395,8 +397,8 @@ def wait_for_checkpoint():
             time.sleep(1)
 
         # Reload config that may have changed during restore
-        config.container_id = "MOCK_CONTAINER_ID"
-        config.container_hostname = "MOCK_CONTAINER_HOSTNAME"
+        config.container_id = Path(CHECKPOINT_CONTAINER_ID_FILE).read_text()
+        config.container_hostname = Path(CHECKPOINT_CONTAINER_HOSTNAME_FILE).read_text()
 
     with workers_ready.get_lock():
         workers_ready.value += 1

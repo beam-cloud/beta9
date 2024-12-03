@@ -127,7 +127,7 @@ func (c *CedanaClient) Close() {
 
 // Updates the runc container spec to make the shared library available
 // as well as the shared memory that is used for communication
-func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, containerId string, gpuEnabled bool) error {
+func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, containerId string, containerHostname string, gpuEnabled bool) error {
 	os.MkdirAll(checkpointSignalDir(containerId), os.ModePerm) // Add a mount point for the checkpoint signal file
 
 	spec.Mounts = append(spec.Mounts, specs.Mount{
@@ -141,6 +141,18 @@ func (c *CedanaClient) PrepareContainerSpec(spec *specs.Spec, containerId string
 			"nodev",
 		},
 	})
+
+	containerIdPath := filepath.Join(checkpointSignalDir(containerId), checkpointContainerIdFileName)
+	err := os.WriteFile(containerIdPath, []byte(containerId), 0644)
+	if err != nil {
+		return err
+	}
+
+	containerHostnamePath := filepath.Join(checkpointSignalDir(containerId), checkpointContainerHostnameFileName)
+	err = os.WriteFile(containerHostnamePath, []byte(containerHostname), 0644)
+	if err != nil {
+		return err
+	}
 
 	if !gpuEnabled {
 		return nil // No need to do anything else if GPU is not enabled
