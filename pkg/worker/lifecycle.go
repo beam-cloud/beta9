@@ -551,7 +551,7 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 
 	// Clean up runc container state and send final output message
 	cleanup := func(exitCode int, err error) int {
-		log.Printf("<%s> - container has exited with code: %s\n", containerId, exitCode)
+		log.Printf("<%s> - container has exited with code: %d\n", containerId, exitCode)
 
 		outputChan <- common.OutputMsg{
 			Msg:     "",
