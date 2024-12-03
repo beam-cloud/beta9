@@ -112,6 +112,14 @@ func (c *RunCClient) Kill(containerId string) (*pb.RunCKillResponse, error) {
 	return resp, nil
 }
 
+func (c *RunCClient) ExposePort(containerId string, port uint32) (*pb.RunCExposePortResponse, error) {
+	resp, err := c.client.RunCExposePort(context.TODO(), &pb.RunCExposePortRequest{ContainerId: containerId, Port: port})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
 func (c *RunCClient) StreamLogs(ctx context.Context, containerId string, outputChan chan OutputMsg) error {
 	stream, err := c.client.RunCStreamLogs(ctx, &pb.RunCStreamLogsRequest{ContainerId: containerId})
 	if err != nil {

@@ -1,6 +1,8 @@
+import asyncio
 import os
 import sys
 from abc import ABC
+from asyncio import AbstractEventLoop
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -56,6 +58,12 @@ def get_channel() -> Channel:
 
 
 class BaseAbstraction(ABC):
+    def __init__(self) -> None:
+        try:
+            self.loop: AbstractEventLoop = asyncio.get_event_loop()
+        except RuntimeError:
+            self.loop: AbstractEventLoop = asyncio.new_event_loop()
+
     @property
     def channel(self) -> Channel:
         return get_channel()

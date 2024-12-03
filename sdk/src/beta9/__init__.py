@@ -1,6 +1,7 @@
 from . import env
-from .abstractions import experimental
-from .abstractions.container import Container
+from .abstractions import container, experimental
+from .abstractions.container import App as app
+from .abstractions.container import AppConfig
 from .abstractions.endpoint import ASGI as asgi
 from .abstractions.endpoint import Endpoint as endpoint
 from .abstractions.endpoint import RealtimeASGI as realtime
@@ -27,6 +28,9 @@ __all__ = [
     "function",
     "endpoint",
     "asgi",
+    "app",
+    "AppConfig",
+    "container",
     "realtime",
     "Container",
     "env",

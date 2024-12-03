@@ -10,6 +10,7 @@ service RunCService {
   rpc RunCStatus(RunCStatusRequest) returns (RunCStatusResponse) {}
   rpc RunCStreamLogs(RunCStreamLogsRequest) returns (stream RunCLogEntry) {}
   rpc RunCArchive(RunCArchiveRequest) returns (stream RunCArchiveResponse) {}
+  rpc RunCExposePort(RunCExposePortRequest) returns (RunCExposePortResponse) {}
 }
 
 message RunCKillRequest { string container_id = 1; }
@@ -42,3 +43,10 @@ message RunCArchiveResponse {
   int32 progress = 3;
   string error_msg = 4;
 }
+
+message RunCExposePortRequest {
+  string container_id = 1;
+  uint32 port = 2;
+}
+
+message RunCExposePortResponse { bool ok = 1; }
