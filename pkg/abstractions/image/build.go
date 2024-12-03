@@ -360,6 +360,11 @@ func (b *Builder) genContainerId() string {
 }
 
 func (b *Builder) extractPackageName(pkg string) string {
+	// For now we let this go through and let the pip install command fail if the package is not found
+	if len(pkg) == 0 {
+		return ""
+	}
+
 	// Handle Git URLs
 	if strings.HasPrefix(pkg, "git+") || strings.HasPrefix(pkg, "-e git+") {
 		if eggTag := strings.Split(pkg, "#egg="); len(eggTag) > 1 {
