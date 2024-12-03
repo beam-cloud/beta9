@@ -439,18 +439,26 @@ class RealtimeASGI(ASGI):
 
                         internal_asgi_app.input_queue.put(data)
 
-                        while not internal_asgi_app.input_queue.empty():
-                            output = internal_asgi_app.handler(
-                                context=internal_asgi_app.context,
-                                event=internal_asgi_app.input_queue.get(),
-                            )
-
+                        async def _handle_output(output):
                             if isinstance(output, str):
                                 await websocket.send_text(output)
                             elif isinstance(output, dict) or isinstance(output, list):
                                 await websocket.send_json(output)
                             else:
-                                await websocket.send_bytes(output)
+                                await websocket.send(output)
+
+                        while not internal_asgi_app.input_queue.empty():
+                            output = internal_asgi_app.handler(
+                                context=internal_asgi_app.context,
+                                event=internal_asgi_app.input_queue.get(),
+                            )
+                            import types
+
+                            if isinstance(output, types.GeneratorType):
+                                for o in output:
+                                    await _handle_output(o)
+                            else:
+                                await _handle_output(output)
 
                         await asyncio.sleep(REALTIME_ASGI_SLEEP_INTERVAL_SECONDS)
                     except (
