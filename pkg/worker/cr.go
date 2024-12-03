@@ -169,6 +169,8 @@ func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId strin
 
 	// Clean up runc container state and send final output message
 	cleanup := func(exitCode int, err error) int {
+		log.Printf("<%s> - container has exited with code: %s\n", containerId, exitCode)
+
 		outputChan <- common.OutputMsg{
 			Msg:     "",
 			Done:    true,
@@ -200,7 +202,6 @@ func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId strin
 			}
 
 			if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
-				log.Printf("<%s> - container has exited with status: %s\n", containerId, state.Status)
 				return cleanup(0, nil)
 			}
 		}
