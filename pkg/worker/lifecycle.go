@@ -577,32 +577,35 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 
 	log.Printf("<%s> - container PID: %d\n", containerId, pid)
 
-	var process *os.Process
-
-	process, err = os.FindProcess(pid)
+	// Attempt to find and wait for the process to exit
+	exitCode, err := s.findAndWaitForProcess(pid)
 	if err != nil {
-		log.Printf("<%s> - failed to find process: %v\n", containerId, err)
-		pid = initialPid
-
-		log.Printf("<%s> - retrying with initial PID: %d\n", containerId, pid)
-		process, err = os.FindProcess(pid)
-
+		log.Printf("<%s> - failed to wait for process with PID: %d, retrying with initial PID: %d\n", containerId, pid, initialPid)
+		exitCode, err = s.findAndWaitForProcess(initialPid)
 		if err != nil {
 			return cleanup(-1, err)
 		}
-	}
-
-	// Wait for the container to exit
-	processState, err := process.Wait()
-	if err != nil {
-		return cleanup(-1, err)
 	}
 
 	// Start monitoring the container
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
 	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
 
-	return cleanup(processState.ExitCode(), nil)
+	return cleanup(exitCode, nil)
+}
+
+func (s *Worker) findAndWaitForProcess(pid int) (int, error) {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return -1, fmt.Errorf("failed to find process: %v", err)
+	}
+
+	processState, err := process.Wait()
+	if err != nil {
+		return -1, fmt.Errorf("failed to wait for process: %v", err)
+	}
+
+	return processState.ExitCode(), nil
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
