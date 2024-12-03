@@ -1,6 +1,7 @@
 import os
 import threading
 import traceback
+import types
 from typing import Any, Callable, List, Optional, Union
 
 from uvicorn.protocols.utils import ClientDisconnected
@@ -452,7 +453,6 @@ class RealtimeASGI(ASGI):
                                 context=internal_asgi_app.context,
                                 event=internal_asgi_app.input_queue.get(),
                             )
-                            import types
 
                             if isinstance(output, types.GeneratorType):
                                 for o in output:
