@@ -28,6 +28,9 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		}()
 	} else if state.Status == types.CheckpointStatusAvailable {
 		checkpointPath := filepath.Join(s.config.Worker.CRIU.Storage.MountPath, state.RemoteKey)
+
+		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
+
 		_, err := s.cedanaClient.Restore(ctx, cedanaRestoreOpts{
 			checkpointPath: checkpointPath,
 			jobId:          state.ContainerId,
