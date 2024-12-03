@@ -96,6 +96,7 @@ func tempUserCodeDir(containerId string) string {
 }
 
 const checkpointSignalFileName = "READY_FOR_CHECKPOINT"
+const checkpointCompleteFileName = "CHECKPOINT_COMPLETE"
 
 func checkpointSignalDir(containerId string) string {
 	return fmt.Sprintf("/tmp/%s/cedana", containerId)
