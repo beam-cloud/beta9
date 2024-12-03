@@ -163,7 +163,7 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 	return *state, false
 }
 
-// Wait for container to exit
+// Wait for a restored container to exit
 func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId string, startedChan chan int, outputChan chan common.OutputMsg, request *types.ContainerRequest, spec *specs.Spec) int {
 	pid := <-startedChan
 
