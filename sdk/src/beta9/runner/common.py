@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
+from multiprocessing import Value
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
 
 import requests
@@ -45,6 +47,7 @@ class Config:
     callback_url: str
     task_id: str
     bind_port: int
+    checkpoint_enabled: bool
     volume_cache_map: Dict
 
     @classmethod
@@ -62,6 +65,7 @@ class Config:
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
+        checkpoint_enabled = os.getenv("CHECKPOINT_ENABLED", "false").lower() == "true"
         volume_cache_map = json.loads(os.getenv("VOLUME_CACHE_MAP", "{}"))
 
         if workers <= 0:
@@ -84,6 +88,7 @@ class Config:
             task_id=task_id,
             bind_port=bind_port,
             timeout=timeout,
+            checkpoint_enabled=checkpoint_enabled,
             volume_cache_map=volume_cache_map,
         )
 
@@ -155,6 +160,9 @@ class FunctionContext:
             timeout=config.timeout,
             on_start_value=on_start_value,
         )
+
+
+workers_ready = Value("i", 0)
 
 
 class FunctionHandler:
@@ -374,3 +382,35 @@ class ThreadPoolExecutorOverride(ThreadPoolExecutor):
             self.shutdown(cancel_futures=True)
         except Exception:
             pass
+
+
+CHECKPOINT_SIGNAL_FILE = "/cedana/READY_FOR_CHECKPOINT"
+CHECKPOINT_COMPLETE_FILE = "/cedana/CHECKPOINT_COMPLETE"
+CHECKPOINT_CONTAINER_ID_FILE = "/cedana/CONTAINER_ID"
+CHECKPOINT_CONTAINER_HOSTNAME_FILE = "/cedana/CONTAINER_HOSTNAME"
+
+
+def wait_for_checkpoint():
+    def _reload_config():
+        # Once we have set the checkpoint signal file, wait for checkpoint to be complete before reloading the config
+        while not Path(CHECKPOINT_COMPLETE_FILE).exists():
+            time.sleep(1)
+
+        # Reload config that may have changed during restore
+        config.container_id = Path(CHECKPOINT_CONTAINER_ID_FILE).read_text()
+        config.container_hostname = Path(CHECKPOINT_CONTAINER_HOSTNAME_FILE).read_text()
+
+    with workers_ready.get_lock():
+        workers_ready.value += 1
+
+    if workers_ready.value == config.workers:
+        Path(CHECKPOINT_SIGNAL_FILE).touch(exist_ok=True)
+        return _reload_config()
+
+    while True:
+        with workers_ready.get_lock():
+            if workers_ready.value == config.workers:
+                break
+        time.sleep(1)
+
+    return _reload_config()

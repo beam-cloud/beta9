@@ -349,6 +349,10 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Value: workerId,
 		},
 		{
+			Name:  "WORKER_POOL_NAME",
+			Value: wpc.name,
+		},
+		{
 			Name:  "CPU_LIMIT",
 			Value: strconv.FormatInt(cpu, 10),
 		},

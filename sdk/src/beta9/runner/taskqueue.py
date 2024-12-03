@@ -33,7 +33,9 @@ from ..runner.common import (
     config,
     execute_lifecycle_method,
     send_callback,
+    wait_for_checkpoint,
 )
+from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
@@ -272,6 +274,11 @@ class TaskQueueWorker:
         on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
 
         print(f"Worker[{self.worker_index}] ready")
+
+        # If checkpointing is enabled, wait for all workers to be ready before creating a checkpoint
+        if cfg.checkpoint_enabled:
+            wait_for_checkpoint()
+
         with ThreadPoolExecutorOverride() as thread_pool:
             while True:
                 task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)

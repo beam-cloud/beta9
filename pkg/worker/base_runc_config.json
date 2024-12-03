@@ -81,7 +81,8 @@
 		{
 			"destination": "/proc",
 			"type": "proc",
-			"source": "proc"
+			"source": "proc",
+      "options": ["rw", "nosuid", "noexec", "nodev"]
 		},
 		{
 			"destination": "/root",
@@ -108,6 +109,7 @@
 			"type": "tmpfs",
 			"source": "tmpfs",
 			"options": [
+        "rw",
 				"nosuid",
 				"strictatime",
 				"mode=755",
@@ -154,10 +156,10 @@
 			"type": "sysfs",
 			"source": "sysfs",
 			"options": [
+        "rw",
 				"nosuid",
 				"noexec",
-				"nodev",
-				"ro"
+				"nodev"
 			]
 		},
 		{
@@ -168,8 +170,7 @@
 				"nosuid",
 				"noexec",
 				"nodev",
-				"relatime",
-				"ro"
+				"relatime"
 			]
 		},
 		{
@@ -434,37 +435,11 @@
 			]
 		},
 		"namespaces": [
-			{
-				"type": "pid"
-			},
-			{
-				"type": "ipc"
-			},
-			{
-				"type": "uts"
-			},
-			{
-				"type": "mount"
-			}
-		],
-		"maskedPaths": [
-			"/proc/acpi",
-			"/proc/asound",
-			"/proc/kcore",
-			"/proc/keys",
-			"/proc/latency_stats",
-			"/proc/timer_list",
-			"/proc/timer_stats",
-			"/proc/sched_debug",
-			"/sys/firmware",
-			"/proc/scsi"
-		],
-		"readonlyPaths": [
-			"/proc/bus",
-			"/proc/fs",
-			"/proc/irq",
-			"/proc/sys",
-			"/proc/sysrq-trigger"
+      { "type": "mount" },
+      { "type": "uts" },
+      { "type": "pid" },
+      { "type": "ipc" },
+      { "type": "cgroup" }
 		]
 	}
 }

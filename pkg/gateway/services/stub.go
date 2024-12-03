@@ -104,6 +104,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Authorized:         in.Authorized,
 		Autoscaler:         autoscaler,
 		Extra:              json.RawMessage(in.Extra),
+		CheckpointEnabled:  in.CheckpointEnabled,
 	}
 
 	// Get secrets

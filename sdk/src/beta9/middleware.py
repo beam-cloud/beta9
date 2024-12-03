@@ -33,13 +33,21 @@ async def run_task(request, func, func_args):
     os.environ["TASK_ID"] = task_id
     with StdoutJsonInterceptor(task_id=task_id):
         print(f"Received task <{task_id}>")
-        start_response = request.app.state.gateway_stub.start_task(
-            StartTaskRequest(task_id=task_id, container_id=cfg.container_id)
-        )
-        if not start_response.ok:
-            raise HTTPException(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to start task"
-            )
+
+        for attempt in range(3):
+            try:
+                start_response = request.app.state.gateway_stub.start_task(
+                    StartTaskRequest(task_id=task_id, container_id=cfg.container_id)
+                )
+                if start_response.ok:
+                    break
+                else:
+                    raise HTTPException(
+                        status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail="Failed to start task"
+                    )
+            except BaseException:
+                if attempt == 2:
+                    raise
 
         task_lifecycle_data = TaskLifecycleData(
             status=TaskStatus.Complete, result=None, override_callback_url=None

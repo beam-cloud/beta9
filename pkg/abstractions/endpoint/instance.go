@@ -77,19 +77,20 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 		containerId := i.genContainerId()
 
 		runRequest := &types.ContainerRequest{
-			ContainerId: containerId,
-			Env:         env,
-			Cpu:         i.StubConfig.Runtime.Cpu,
-			Memory:      i.StubConfig.Runtime.Memory,
-			GpuRequest:  gpuRequest,
-			GpuCount:    uint32(gpuCount),
-			ImageId:     i.StubConfig.Runtime.ImageId,
-			StubId:      i.Stub.ExternalId,
-			WorkspaceId: i.Workspace.ExternalId,
-			Workspace:   *i.Workspace,
-			EntryPoint:  i.EntryPoint,
-			Mounts:      mounts,
-			Stub:        *i.Stub,
+			ContainerId:       containerId,
+			Env:               env,
+			Cpu:               i.StubConfig.Runtime.Cpu,
+			Memory:            i.StubConfig.Runtime.Memory,
+			GpuRequest:        gpuRequest,
+			GpuCount:          uint32(gpuCount),
+			ImageId:           i.StubConfig.Runtime.ImageId,
+			StubId:            i.Stub.ExternalId,
+			WorkspaceId:       i.Workspace.ExternalId,
+			Workspace:         *i.Workspace,
+			EntryPoint:        i.EntryPoint,
+			Mounts:            mounts,
+			Stub:              *i.Stub,
+			CheckpointEnabled: i.StubConfig.CheckpointEnabled,
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers
