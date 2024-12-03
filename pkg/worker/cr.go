@@ -13,7 +13,7 @@ import (
 	"github.com/beam-cloud/go-runc"
 )
 
-func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, consoleWriter *ConsoleWriter, pidChan chan int, configPath string) (bool, string, error) {
+func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, consoleWriter *ConsoleWriter, startedChan chan int, configPath string) (bool, string, error) {
 	state, createCheckpoint := s.shouldCreateCheckpoint(request)
 
 	// If checkpointing is enabled, attempt to create a checkpoint
@@ -35,7 +35,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			Detach:        true,
 			ConsoleSocket: consoleWriter,
 			ConfigPath:    configPath,
-			Started:       pidChan,
+			Started:       startedChan,
 		})
 
 		if err != nil {

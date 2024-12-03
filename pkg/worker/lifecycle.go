@@ -551,8 +551,10 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 
 	// Clean up runc container state and send final output message
 	cleanup := func(exitCode int, err error) int {
+		log.Printf("<%s> - error: %v", containerId, err)
 		log.Printf("<%s> - container exited with code: %d\n", containerId, exitCode)
 
+		time.Sleep(time.Second * 60)
 		outputChan <- common.OutputMsg{
 			Msg:     "",
 			Done:    true,
@@ -573,6 +575,8 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 		return cleanup(-1, err)
 	}
 	pid := state.Pid
+
+	log.Printf("<%s> - container PID: %d\n", containerId, pid)
 
 	// Start monitoring the container
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
