@@ -26,7 +26,7 @@ const (
 	cedanaBinPath              = "/usr/bin/cedana"
 	cedanaSharedLibPath        = "/usr/local/lib/libcedana-gpu.so"
 	runcRoot                   = "/run/runc"
-	cedanaLogLevel             = "debug"
+	cedanaLogLevel             = "info"
 	checkpointPathBase         = "/tmp/checkpoints"
 	defaultManageDeadline      = 10 * time.Second
 	defaultCheckpointDeadline  = 10 * time.Minute
@@ -291,6 +291,7 @@ func (c *CedanaClient) Restore(
 	if err != nil {
 		return nil, err
 	}
+
 	if runcOpts.Started != nil {
 		runcOpts.Started <- int(res.GetState().GetPID())
 	}

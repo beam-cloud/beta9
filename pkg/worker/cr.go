@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"time"
 
+	common "github.com/beam-cloud/beta9/pkg/common"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/go-runc"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, consoleWriter *ConsoleWriter, startedChan chan int, configPath string) (bool, string, error) {
@@ -159,6 +161,50 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 	}
 
 	return *state, false
+}
+
+// Wait for container to exit
+func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId string, startedChan chan int, outputChan chan common.OutputMsg, request *types.ContainerRequest, spec *specs.Spec) int {
+	pid := <-startedChan
+
+	// Clean up runc container state and send final output message
+	cleanup := func(exitCode int, err error) int {
+		outputChan <- common.OutputMsg{
+			Msg:     "",
+			Done:    true,
+			Success: exitCode == 0,
+		}
+
+		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
+		if err != nil {
+			log.Printf("<%s> - failed to delete container: %v\n", containerId, err)
+		}
+
+		return exitCode
+	}
+
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
+	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return cleanup(0, nil)
+		case <-ticker.C:
+			state, err := s.runcHandle.State(ctx, containerId)
+			if err != nil {
+				return cleanup(-1, err)
+			}
+
+			if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
+				log.Printf("<%s> - container has exited with status: %s\n", containerId, state.Status)
+				return cleanup(0, nil)
+			}
+		}
+	}
 }
 
 // Caches a checkpoint nearby if the file cache is available

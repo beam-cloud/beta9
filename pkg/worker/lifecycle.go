@@ -525,7 +525,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				containerId = restoredContainerId
 			}
 
-			exitCode = s.wait(ctx, containerId, startedChan, outputChan, request, spec)
+			exitCode = s.waitForRestoredContainer(ctx, containerId, startedChan, outputChan, request, spec)
 			return
 		}
 	}
@@ -551,9 +551,6 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 
 	// Clean up runc container state and send final output message
 	cleanup := func(exitCode int, err error) int {
-		log.Printf("<%s> - error: %v", containerId, err)
-		log.Printf("<%s> - container exited with code: %d\n", containerId, exitCode)
-
 		outputChan <- common.OutputMsg{
 			Msg:     "",
 			Done:    true,
@@ -579,8 +576,6 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
 	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
 
-	log.Printf("<%s> - container PID: %d\n", containerId, pid)
-
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return cleanup(-1, err)
@@ -589,7 +584,6 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 	// Wait for the container to exit
 	processState, err := process.Wait()
 	if err != nil {
-		time.Sleep(time.Second * 300)
 		return cleanup(-1, err)
 	}
 
