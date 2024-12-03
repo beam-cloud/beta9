@@ -589,6 +589,7 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 	// Wait for the container to exit
 	processState, err := process.Wait()
 	if err != nil {
+		time.Sleep(time.Second * 300)
 		return cleanup(-1, err)
 	}
 
