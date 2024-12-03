@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
@@ -28,7 +29,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		}()
 	} else if state.Status == types.CheckpointStatusAvailable {
 		checkpointPath := filepath.Join(s.config.Worker.CRIU.Storage.MountPath, state.RemoteKey)
-		_, err := s.cedanaClient.Restore(ctx, cedanaRestoreOpts{
+		processState, err := s.cedanaClient.Restore(ctx, cedanaRestoreOpts{
 			checkpointPath: checkpointPath,
 			jobId:          state.ContainerId,
 			containerId:    request.ContainerId,
@@ -52,6 +53,13 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			return false, "", err
 		} else {
 			log.Printf("<%s> - checkpoint found and restored \n", request.ContainerId)
+			pid := processState.PID
+
+			if err := syscall.Kill(int(pid), syscall.SIGUSR2); err != nil {
+				log.Printf("<%s> - failed to send SIGUSR2 to process: %v\n", request.ContainerId, err)
+				return false, "", err
+			}
+
 			return true, state.ContainerId, nil
 		}
 	}

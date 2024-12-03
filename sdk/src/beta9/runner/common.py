@@ -3,6 +3,7 @@ import importlib
 import inspect
 import json
 import os
+import signal
 import sys
 import time
 import traceback
@@ -388,16 +389,37 @@ CHECKPOINT_SIGNAL_FILE = "/cedana/READY_FOR_CHECKPOINT"
 
 
 def wait_for_checkpoint():
+    signal_received = False
+
+    def _signal_handler(signum, frame):
+        nonlocal signal_received
+        print(f"Received signal: {signum}, proceeding with execution.")
+        signal_received = True
+
+    def _wait_for_signal():
+        print("Waiting for signal to proceed...")
+
+        while not signal_received:
+            signal.pause()  # This will block until a signal is received
+
+        # Reload the config object
+        config.container_id = "MOCK_CONTAINER_ID"
+        config.container_hostname = "MOCK_CONTAINER_HOSTNAME"
+
+    signal.signal(signal.SIGUSR2, _signal_handler)
+
     with workers_ready.get_lock():
         workers_ready.value += 1
 
     if workers_ready.value == config.workers:
         Path(CHECKPOINT_SIGNAL_FILE).touch(exist_ok=True)
-        return
+        return _wait_for_signal()
 
-    # TODO: add timeout
     while True:
         with workers_ready.get_lock():
             if workers_ready.value == config.workers:
                 break
+
         time.sleep(1)
+
+    return _wait_for_signal()

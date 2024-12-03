@@ -22,10 +22,10 @@ import (
 )
 
 const (
+	runcRoot                   = "/run/runc"
 	cedanaHost                 = "0.0.0.0"
 	cedanaBinPath              = "/usr/bin/cedana"
 	cedanaSharedLibPath        = "/usr/local/lib/libcedana-gpu.so"
-	runcRoot                   = "/run/runc"
 	cedanaLogLevel             = "info"
 	checkpointPathBase         = "/tmp/checkpoints"
 	defaultManageDeadline      = 10 * time.Second
