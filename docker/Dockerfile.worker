@@ -88,9 +88,6 @@ RUN apt-get update && \
     apt-get install psmisc
 
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
-RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/cedana-gpu-controller -o /usr/local/bin/cedana-gpu-controller && chmod +x /usr/local/bin/cedana-gpu-controller
-RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/libcedana-gpu.so -o /usr/local/lib/libcedana-gpu.so && chmod +x /usr/local/lib/libcedana-gpu.so
-
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvidia-container-toolkit
 
@@ -107,7 +104,7 @@ if [ "$(uname -m)" = "x86_64" ]; then
 fi
 EOT
 
-ARG CEDANA_VERSION=0.9.233
+ARG CEDANA_VERSION=0.9.234
 RUN <<EOT
 set -eux
 if [ "$(uname -m)" = "x86_64" ]; then
@@ -117,6 +114,16 @@ if [ "$(uname -m)" = "x86_64" ]; then
     rm cedana_amd64.deb
 fi
 EOT
+
+ARG CEDANA_TOKEN
+ARG CEDANA_BASE_URL
+
+RUN if [ -n "${CEDANA_TOKEN}" ]; then \
+    curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/gpucontroller -o /usr/local/bin/cedana-gpu-controller && \
+    chmod +x /usr/local/bin/cedana-gpu-controller && \
+    curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/libcedana -o /usr/local/lib/libcedana-gpu.so && \
+    chmod +x /usr/local/lib/libcedana-gpu.so; \
+    fi
 
 
 ARG TARGETARCH
