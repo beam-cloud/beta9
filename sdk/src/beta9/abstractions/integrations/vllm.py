@@ -37,6 +37,10 @@ class VLLMArgs:
     prompt_adapters: Optional[List[str]] = None
     chat_template: Optional[str] = None
     chat_template_url: Optional[str] = None
+    chat_template_text_format: str = "string"
+    allowed_local_media_path: str = ""
+    hf_overrides: Optional[Union[Dict[str, Any], Callable[[Any], Any]]] = None
+    enable_lora_bias: bool = False
     return_tokens_as_token_ids: bool = False
     enable_auto_tool_choice: bool = False
     tool_call_parser: Optional[str] = None
@@ -74,7 +78,6 @@ class VLLMArgs:
     max_num_batched_tokens: Optional[int] = None
     max_num_seqs: int = 256
     max_logprobs: int = 20
-    disable_log_stats: bool = False
     revision: Optional[str] = None
     code_revision: Optional[str] = None
     rope_scaling: Optional[dict] = None
@@ -209,7 +212,9 @@ class VLLM(ASGI):
             # Add default vllm cache volume to preserve it if custom volumes are specified for chat templates
             volumes.append(Volume(name="vllm_cache", mount_path=DEFAULT_VLLM_CACHE_DIR))
 
-        image = image.add_python_packages(["fastapi", "vllm", "huggingface_hub"])
+        image = image.add_python_packages(
+            ["fastapi", "vllm==0.6.4.post1", "huggingface_hub==0.26.3"]
+        )
 
         super().__init__(
             cpu=cpu,
