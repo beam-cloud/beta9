@@ -5,8 +5,8 @@ go 1.22.0
 toolchain go1.22.4
 
 require (
-	buf.build/gen/go/cedana/task/grpc/go v1.5.1-20241120213244-f9aa09c7b23a.1
-	buf.build/gen/go/cedana/task/protocolbuffers/go v1.35.2-20241120213244-f9aa09c7b23a.1
+	buf.build/gen/go/cedana/task/grpc/go v1.5.1-20241203191352-12c25eb032cd.1
+	buf.build/gen/go/cedana/task/protocolbuffers/go v1.35.2-20241203191352-12c25eb032cd.1
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/alicebob/miniredis/v2 v2.30.5
@@ -21,7 +21,7 @@ require (
 	github.com/beam-cloud/clip v0.0.0-20240826223025-899feb184e88
 	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
 	github.com/bsm/redislock v0.9.4
-	github.com/cedana/cedana v0.9.233
+	github.com/cedana/cedana v0.9.234
 	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/cloudevents/sdk-go/v2 v2.15.1
 	github.com/containerd/console v1.0.4
@@ -88,7 +88,7 @@ require (
 )
 
 require (
-	buf.build/gen/go/cedana/gpu/protocolbuffers/go v1.35.2-20241120213244-06763032c670.1 // indirect
+	buf.build/gen/go/cedana/gpu/protocolbuffers/go v1.35.2-20241203191352-2167379de17d.1 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/AdamKorcz/go-fuzz-headers v0.0.0-20210312213058-32f4d319f0d2 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
