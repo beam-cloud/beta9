@@ -615,15 +615,24 @@ func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 }
 
 func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output chan common.OutputMsg) {
-	seenEvents := make(map[string]struct{})
+	var (
+		seenEvents = make(map[string]struct{})
+		ch         <-chan *runc.Event
+		err        error
+		ticker     = time.NewTicker(time.Second)
+	)
 
-	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
-	ch, err := s.runcHandle.Events(ctx, containerId, time.Second)
-	if err != nil {
-		log.Printf("<%s> failed to open runc events channel: %v", containerId, err)
+	select {
+	case <-ctx.Done():
 		return
+	default:
+		ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
+		if err != nil {
+			log.Printf("<%s> failed to open runc events channel: %v", containerId, err)
+			return
+		}
 	}
 
 	maxTries, tries := 5, 0 // Used for re-opening the channel if it's closed
