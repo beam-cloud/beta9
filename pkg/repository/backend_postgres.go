@@ -550,7 +550,7 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 	if len(filters.StubIds) > 0 {
 		// Subquery to get the stub ids from the external ids
 		stubIdsSubquery := squirrel.Select("id").From("stub").Where(squirrel.Eq{"external_id": filters.StubIds})
-		qb = qb.Where(squirrel.Eq{"s.id": stubIdsSubquery})
+		qb = qb.Where(squirrel.Expr("s.id in (?)", stubIdsSubquery))
 	}
 
 	if len(filters.StubNames) > 0 {
