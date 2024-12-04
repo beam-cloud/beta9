@@ -680,7 +680,21 @@ func flushPipCommand(commands []string, pipStart int, pipGroup []string, pythonV
 }
 
 func containsFlag(s string) bool {
-	flags := []string{"--", "-"}
+	flags := []string{
+		"--no-deps",
+		"--only-binary",
+		"--no-binary",
+		"--prefer-binary",
+		"--require-hashes",
+		"--pre",
+		"--ignore-requires-python",
+		"--no-pin",
+		"--force-reinstall",
+		"--freeze-installed",
+		"--update-deps",
+		"--no-update-deps",
+	}
+
 	for _, flag := range flags {
 		if strings.Contains(s, flag) {
 			return true

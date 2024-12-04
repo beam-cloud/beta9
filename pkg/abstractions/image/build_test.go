@@ -241,6 +241,19 @@ func TestParseBuildSteps(t *testing.T) {
 				"micromamba3.10 -m pip install --root-user-action=ignore \"unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git\"",
 			},
 		},
+		{
+			steps: []BuildStep{
+				{Type: micromambaCommandType, Command: "pytorch-cuda=12.1"},
+				{Type: micromambaCommandType, Command: "-c pytorch"},
+				{Type: pipCommandType, Command: "--no-deps trl peft accelerate bitsandbytes"},
+				{Type: pipCommandType, Command: "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"},
+			},
+			want: []string{
+				"micromamba install -y -n beta9 -c pytorch \"pytorch-cuda=12.1\"",
+				"micromamba3.10 -m pip install --root-user-action=ignore --no-deps trl peft accelerate bitsandbytes",
+				"micromamba3.10 -m pip install --root-user-action=ignore \"unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git\"",
+			},
+		},
 	}
 
 	for _, tc := range testCases {
