@@ -457,6 +457,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 	for {
 		select {
 		case <-stream.Context().Done():
+			tq.rdb.Del(context.Background(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId))
 			return nil
 
 		case <-cancelFlag:
@@ -488,7 +489,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				return err
 			}
 
-			err = tq.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(1)*time.Second).Err()
+			err = tq.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(5)*time.Second).Err()
 			if err != nil {
 				return err
 			}
