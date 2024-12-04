@@ -511,12 +511,21 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		restored, _, err := s.attemptCheckpointOrRestore(ctx, request, consoleWriter, startedChan, configPath)
+		restored, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, consoleWriter, startedChan, configPath)
 		if err != nil {
 			log.Printf("<%s> - C/R failed: %v\n", containerId, err)
 		}
 
 		if restored {
+			// HOTFIX: If we restored from a checkpoint, we need to use the container ID of the restored container
+			// instead of the original container ID
+			containerInstance, exists := s.containerInstances.Get(request.ContainerId)
+			if exists {
+				containerInstance.Id = restoredContainerId
+				s.containerInstances.Set(containerId, containerInstance)
+				containerId = restoredContainerId
+			}
+
 			exitCode = s.waitForRestoredContainer(ctx, containerId, startedChan, outputChan, request, spec)
 			return
 		}
