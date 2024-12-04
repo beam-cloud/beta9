@@ -622,12 +622,27 @@ func parseBuildSteps(buildSteps []BuildStep, pythonVersion string) []string {
 			commands = append(commands, step.Command)
 		}
 
+		flagCmd := containsFlag(step.Command)
+
+		// Flush any pending pip or mamba groups
+		if pipStart != -1 && (step.Type != pipCommandType || flagCmd) {
+			pipStart, pipGroup = flushPipCommand(commands, pipStart, pipGroup, pythonVersion)
+		}
+
+		if mambaStart != -1 && (step.Type != micromambaCommandType || flagCmd) {
+			mambaStart, mambaGroup = flushMambaCommand(commands, mambaStart, mambaGroup)
+		}
+
 		if step.Type == pipCommandType {
 			if pipStart == -1 {
 				pipStart = len(commands)
 				commands = append(commands, "")
 			}
 			pipGroup = append(pipGroup, step.Command)
+
+			if flagCmd {
+				pipStart, pipGroup = flushPipCommand(commands, pipStart, pipGroup, pythonVersion)
+			}
 		}
 
 		if step.Type == micromambaCommandType {
@@ -636,19 +651,10 @@ func parseBuildSteps(buildSteps []BuildStep, pythonVersion string) []string {
 				commands = append(commands, "")
 			}
 			mambaGroup = append(mambaGroup, step.Command)
-		}
 
-		// Flush any pending pip or mamba groups
-		if pipStart != -1 && step.Type != pipCommandType {
-			commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion)
-			pipStart = -1
-			pipGroup = nil
-		}
-
-		if mambaStart != -1 && step.Type != micromambaCommandType {
-			commands[mambaStart] = generateMicromambaInstallCommand(mambaGroup)
-			mambaStart = -1
-			mambaGroup = nil
+			if flagCmd {
+				mambaStart, mambaGroup = flushMambaCommand(commands, mambaStart, mambaGroup)
+			}
 		}
 	}
 
@@ -661,4 +667,24 @@ func parseBuildSteps(buildSteps []BuildStep, pythonVersion string) []string {
 	}
 
 	return commands
+}
+
+func flushMambaCommand(commands []string, mambaStart int, mambaGroup []string) (int, []string) {
+	commands[mambaStart] = generateMicromambaInstallCommand(mambaGroup)
+	return -1, nil
+}
+
+func flushPipCommand(commands []string, pipStart int, pipGroup []string, pythonVersion string) (int, []string) {
+	commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion)
+	return -1, nil
+}
+
+func containsFlag(s string) bool {
+	flags := []string{"--", "-"}
+	for _, flag := range flags {
+		if strings.Contains(s, flag) {
+			return true
+		}
+	}
+	return false
 }

@@ -217,6 +217,18 @@ func TestParseBuildSteps(t *testing.T) {
 			},
 			want: []string{"echo 'hello'", "micromamba3.10 -m pip install --root-user-action=ignore \"numpy\" \"pandas\"", "micromamba install -y -n beta9 \"torch\" \"vllm\"", "apt install -y ffmpeg", "micromamba install -y -n beta9 \"ffmpeg\""},
 		},
+		{
+			steps: []BuildStep{
+				{Type: micromambaCommandType, Command: "torch"},
+				{Type: pipCommandType, Command: "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"},
+				{Type: pipCommandType, Command: "--no-deps trl peft accelerate bitsandbytes"},
+			},
+			want: []string{
+				"micromamba install -y -n beta9 \"torch\"",
+				"micromamba3.10 -m pip install --root-user-action=ignore \"unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git\"",
+				"micromamba3.10 -m pip install --root-user-action=ignore --no-deps trl peft accelerate bitsandbytes",
+			},
+		},
 	}
 
 	for _, tc := range testCases {
