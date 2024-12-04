@@ -73,6 +73,11 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 		gpuCount = 1
 	}
 
+	checkpointEnabled := i.StubConfig.CheckpointEnabled
+	if i.Stub.Type.IsServe() {
+		checkpointEnabled = false
+	}
+
 	for c := 0; c < containersToRun; c++ {
 		containerId := i.genContainerId()
 
@@ -90,7 +95,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			EntryPoint:        i.EntryPoint,
 			Mounts:            mounts,
 			Stub:              *i.Stub,
-			CheckpointEnabled: i.StubConfig.CheckpointEnabled,
+			CheckpointEnabled: checkpointEnabled,
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers

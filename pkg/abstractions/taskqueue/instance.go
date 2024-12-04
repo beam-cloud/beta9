@@ -70,6 +70,11 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		gpuCount = 1
 	}
 
+	checkpointEnabled := i.StubConfig.CheckpointEnabled
+	if i.Stub.Type.IsServe() {
+		checkpointEnabled = false
+	}
+
 	for c := 0; c < containersToRun; c++ {
 		runRequest := &types.ContainerRequest{
 			ContainerId:       i.genContainerId(),
@@ -85,7 +90,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			EntryPoint:        i.EntryPoint,
 			Mounts:            mounts,
 			Stub:              *i.Stub,
-			CheckpointEnabled: i.StubConfig.CheckpointEnabled,
+			CheckpointEnabled: checkpointEnabled,
 		}
 
 		err := i.Scheduler.Run(runRequest)
