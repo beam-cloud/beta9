@@ -151,6 +151,12 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerId := request.ContainerId
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
+	// hard code a dockerfile to test building with buildah
+	dockerfile := `FROM ubuntu:22.04 
+	RUN apt-get update`
+
+	s.imageClient.BuildAndArchiveImage(context.TODO(), dockerfile)
+
 	// Pull image
 	log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
 	err := s.imageClient.PullLazy(request)

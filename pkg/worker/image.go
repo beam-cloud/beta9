@@ -18,6 +18,10 @@ import (
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/beam-cloud/clip/pkg/storage"
 	runc "github.com/beam-cloud/go-runc"
+	"github.com/containers/buildah"
+	"github.com/containers/buildah/imagebuildah"
+	bstorage "github.com/containers/storage"
+	"github.com/containers/storage/pkg/unshare"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
@@ -254,6 +258,40 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 	}
 
 	return nil
+}
+
+func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile string) error {
+	ociBundlePath := filepath.Join(c.imageBundlePath, "oci")
+
+	if buildah.InitReexec() {
+		return nil
+	}
+	unshare.MaybeReexecUsingUserNamespace(false)
+
+	storeOpts := bstorage.StoreOptions{
+		GraphDriverName: "overlay",
+		GraphRoot:       "/var/tmp/containers/storage",
+		RunRoot:         "/var/tmp/containers/runs",
+	}
+
+	buildStore, err := bstorage.GetStore(storeOpts)
+	if err != nil {
+		return err
+	}
+	defer buildStore.Shutdown(false)
+
+	buildOpts := imagebuildah.BuildOptions{
+		Output: ociBundlePath, // Output image name
+	}
+
+	id, _, err := imagebuildah.BuildDockerfiles(ctx, buildStore, buildOpts, dockerfile)
+	if err != nil {
+		return err
+	}
+	log.Println("Built image:", id)
+
+	defer os.RemoveAll(ociBundlePath)
+	return c.Archive(ctx, filepath.Join(ociBundlePath, id), id, nil)
 }
 
 func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds string) error {

@@ -64,6 +64,9 @@ FROM golang AS worker
 
 WORKDIR /workspace
 
+# Required for buildah
+RUN apt-get install -y libbtrfs-dev libgpgme-dev pkg-config
+
 COPY go.mod go.sum ./
 RUN go mod download
 COPY --exclude=sdk . .
@@ -124,7 +127,6 @@ RUN if [ -n "${CEDANA_TOKEN}" ]; then \
     curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/libcedana -o /usr/local/lib/libcedana-gpu.so && \
     chmod +x /usr/local/lib/libcedana-gpu.so; \
     fi
-
 
 ARG TARGETARCH
 
