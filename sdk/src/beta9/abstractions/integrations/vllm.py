@@ -32,6 +32,7 @@ class VLLMArgs:
     Each of these arguments corresponds to a command line argument for the vllm server.
     """
 
+    # Args for init_app_state
     response_role: Optional[str] = "assistant"
     lora_modules: Optional[List[str]] = None
     prompt_adapters: Optional[List[str]] = None
@@ -42,6 +43,7 @@ class VLLMArgs:
     hf_overrides: Optional[Union[Dict[str, Any], Callable[[Any], Any]]] = None
     enable_lora_bias: bool = False
     return_tokens_as_token_ids: bool = False
+    enable_prompt_tokens_details: bool = False
     enable_auto_tool_choice: bool = False
     tool_call_parser: Optional[str] = None
     tool_parser_plugin: Optional[str] = None
@@ -51,6 +53,8 @@ class VLLMArgs:
     model: str = "facebook/opt-125m"
     served_model_name: Optional[Union[str, List[str]]] = None
     tokenizer: Optional[str] = None
+
+    # Args for AsyncEngineArgs
     skip_tokenizer_init: bool = False
     tokenizer_mode: str = "auto"
     task: str = "auto"
@@ -133,6 +137,7 @@ class VLLMArgs:
     collect_detailed_traces: Optional[str] = None
     disable_async_output_proc: bool = False
     override_neuron_config: Optional[Dict[str, Any]] = None
+    override_pooler_config: Optional[Any] = None
     mm_processor_kwargs: Optional[Dict[str, Any]] = None
     scheduling_policy: Literal["fcfs", "priority"] = "fcfs"
     disable_log_requests: bool = False
@@ -213,7 +218,7 @@ class VLLM(ASGI):
             volumes.append(Volume(name="vllm_cache", mount_path=DEFAULT_VLLM_CACHE_DIR))
 
         image = image.add_python_packages(
-            ["fastapi", "vllm==0.6.4.post1", "huggingface_hub==0.26.3"]
+            ["fastapi", "numpy", "vllm==0.6.4.post1", "huggingface_hub==0.26.3"]
         )
 
         super().__init__(
