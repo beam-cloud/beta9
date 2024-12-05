@@ -65,7 +65,7 @@ FROM golang AS worker
 WORKDIR /workspace
 
 # Required for buildah
-RUN apt-get install -y libbtrfs-dev libgpgme-dev
+RUN apt-get install -y libbtrfs-dev libgpgme11-dev
 
 COPY go.mod go.sum ./
 RUN go mod download
@@ -95,6 +95,8 @@ RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvidia-container-toolkit
 
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
+
+RUN apt-get install -y libbtrfs-dev libgpgme11-dev
 
 # XXX: Remove once cedana starts shipping with a compatible binary
 RUN <<EOT
