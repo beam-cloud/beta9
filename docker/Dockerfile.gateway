@@ -1,4 +1,4 @@
-FROM golang:1.22-bullseye AS base
+FROM golang:1.23.4-bullseye AS base
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends fuse3
@@ -25,7 +25,7 @@ FROM base AS build
 
 WORKDIR /workspace
 
-RUN apt-get install -y libfuse3-dev libbtrfs-dev libgpgme-dev pkg-config && \
+RUN apt-get install -y libfuse3-dev libbtrfs-dev libgpgme-dev && \
     go install github.com/cosmtrek/air@v1.49.0
 
 COPY go.mod go.sum ./

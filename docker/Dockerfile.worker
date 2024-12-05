@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7-labs
 ARG BASE_STAGE=dev
 
-FROM golang:1.22-bullseye AS golang
+FROM golang:1.23.4-bullseye AS golang
 
 RUN apt-get update && apt-get install -y curl git
 
@@ -65,7 +65,7 @@ FROM golang AS worker
 WORKDIR /workspace
 
 # Required for buildah
-RUN apt-get install -y libbtrfs-dev libgpgme-dev pkg-config
+RUN apt-get install -y libbtrfs-dev libgpgme-dev
 
 COPY go.mod go.sum ./
 RUN go mod download
