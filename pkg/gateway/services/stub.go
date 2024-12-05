@@ -59,6 +59,13 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
+	if in.GpuCount > 1 && !authInfo.Workspace.MultiGpuEnabled {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: "Multi-GPU containers are not enabled for this workspace.",
+		}, nil
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:      in.Cpu,
