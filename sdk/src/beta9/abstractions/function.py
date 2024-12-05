@@ -44,6 +44,9 @@ class Function(RunnerAbstraction):
             applicable or no GPU required, leave it empty.
             You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
             the scheduler prioritizes their selection based on their order in the list.
+        gpu_count (int):
+            The number of GPUs allocated to the container. Default is 0. If a GPU is
+            specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         timeout (Optional[int]):
@@ -89,6 +92,7 @@ class Function(RunnerAbstraction):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
+        gpu_count: int = 0,
         image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,
@@ -103,6 +107,7 @@ class Function(RunnerAbstraction):
             cpu=cpu,
             memory=memory,
             gpu=gpu,
+            gpu_count=gpu_count,
             image=image,
             timeout=timeout,
             retries=retries,
@@ -287,6 +292,9 @@ class Schedule(Function):
         gpu (Union[GpuType, str]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
+        gpu_count (int):
+            The number of GPUs allocated to the container. Default is 0. If a GPU is
+            specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         timeout (Optional[int]):
@@ -330,6 +338,7 @@ class Schedule(Function):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
+        gpu_count: int = 0,
         image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,

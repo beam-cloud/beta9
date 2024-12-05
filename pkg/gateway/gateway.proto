@@ -258,6 +258,7 @@ message GetOrCreateStubRequest {
   uint32 concurrent_requests = 24;
   string extra = 25;
   bool checkpoint_enabled = 26;
+  uint32 gpu_count = 27;
 }
 
 message GetOrCreateStubResponse {
