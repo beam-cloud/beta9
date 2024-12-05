@@ -299,9 +299,7 @@ type AgentRedisConfig struct {
 }
 
 type RootAgentConfig struct {
-	ControlPlaneRedis AgentRedisConfig `key:"controlPlaneRedis" json:"control_plane_redis"`
-	JuicefsRedis      AgentRedisConfig `key:"juicefsRedis" json:"juicefs_redis"`
-	BlobcacheRedis    AgentRedisConfig `key:"blobcacheRedis" json:"blobcache_redis"`
+	DynamicServiceHosts bool `key:"dynamicServiceHosts" json:"dynamic_service_hosts"`
 }
 
 type OCIProviderConfig struct {

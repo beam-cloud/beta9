@@ -27,15 +27,13 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 	}
 
 	var redisHostname string
-	if remoteConfig.Agent.ControlPlaneRedis.Hostname != "" {
-		redisHostname = remoteConfig.Agent.ControlPlaneRedis.Hostname
-	} else {
+	if remoteConfig.Agent.DynamicServiceHosts {
 		redisHostname, err = tailscale.ResolveService("control-plane-redis", connectTimeout)
 		if err != nil {
 			return nil, err
 		}
+		remoteConfig.Database.Redis.Addrs[0] = fmt.Sprintf("%s:%d", redisHostname, 6379)
 	}
-	remoteConfig.Database.Redis.Addrs[0] = fmt.Sprintf("%s:%d", redisHostname, 6379)
 	remoteConfig.Database.Redis.InsecureSkipVerify = true
 
 	if baseConfig.Storage.Mode == storage.StorageModeJuiceFS {
@@ -47,10 +45,7 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 		juicefsRedisPassword, _ := parsedUrl.User.Password()
 		scheme := parsedUrl.Scheme
 
-		if remoteConfig.Agent.JuicefsRedis.Hostname != "" {
-			juiceFsRedisHostname := remoteConfig.Agent.JuicefsRedis.Hostname
-			remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("%s://:%s@%s", scheme, juicefsRedisPassword, juiceFsRedisHostname)
-		} else {
+		if remoteConfig.Agent.DynamicServiceHosts {
 			juiceFsRedisHostname, err := tailscale.ResolveService("juicefs-redis", connectTimeout)
 			if err != nil {
 				return nil, err
@@ -61,9 +56,7 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 
 	if baseConfig.Worker.BlobCacheEnabled {
 		var blobcacheRedisHostname string
-		if remoteConfig.Agent.BlobcacheRedis.Hostname != "" {
-			blobcacheRedisHostname = remoteConfig.Agent.BlobcacheRedis.Hostname
-		} else {
+		if remoteConfig.Agent.DynamicServiceHosts {
 			blobcacheRedisHostname, err = tailscale.ResolveService("blobcache-redis", connectTimeout)
 			if err != nil {
 				return nil, err

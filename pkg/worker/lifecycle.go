@@ -371,11 +371,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
-<<<<<<< HEAD
-		fmt.Sprintf("BETA9_GATEWAY_TLS=%s", os.Getenv("BETA9_GATEWAY_TLS")),
-=======
 		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable()),
->>>>>>> d295b27da64feaf0c31d79ff1be9192c7b94fb0b
 		"PYTHONUNBUFFERED=1",
 	}
 

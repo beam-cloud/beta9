@@ -371,11 +371,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		podHostname = fmt.Sprintf("machine-%s.%s.%s", machineId, wpc.config.Tailscale.User, wpc.config.Tailscale.HostName)
 	}
 
-	grpcPort := 443
-	if wpc.config.GatewayService.GRPC.ExternalPort != 0 {
-		grpcPort = wpc.config.GatewayService.GRPC.ExternalPort
-	}
-
 	envVars := []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
@@ -411,7 +406,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "BETA9_GATEWAY_PORT",
-			Value: strconv.Itoa(grpcPort),
+			Value: strconv.Itoa(wpc.config.GatewayService.GRPC.ExternalPort),
 		},
 		{
 			Name:  "BETA9_GATEWAY_TLS",

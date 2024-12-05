@@ -236,12 +236,7 @@ monitoring:
     serverUrl: ""
     apiKey: ""
 agent:
-  controlPlaneRedis:
-    hostname: ""
-  juicefsRedis:
-    hostname: ""
-  blobcacheRedis:
-    hostname: ""
+  dynamicServiceHosts: false
 abstractions:
   bot:
     systemPrompt: ""

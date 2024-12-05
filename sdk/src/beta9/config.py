@@ -4,6 +4,7 @@ import inspect
 import ipaddress
 import os
 import socket
+import ssl
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Optional, Tuple, Union
@@ -144,8 +145,8 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
 
     gateway_host = os.getenv("BETA9_GATEWAY_HOST", None)
     gateway_port = os.getenv("BETA9_GATEWAY_PORT", None)
-    tls = os.getenv("BETA9_GATEWAY_TLS", None)
     token = os.getenv("BETA9_TOKEN", None)
+    tls = is_tls_enabled(gateway_host)
 
     if gateway_host and gateway_port and token:
         return ConfigContext(
@@ -243,3 +244,18 @@ def validate_port(value: Any) -> bool:
         pass
 
     return False
+
+
+def is_tls_enabled(url: str) -> bool:
+    try:
+        # Extract hostname and default to port 443 for HTTPS
+        hostname = url.split("//")[-1].split("/")[0]
+        port = 443
+
+        # Create SSL context and test the connection
+        context = ssl.create_default_context()
+        with socket.create_connection((hostname, port), timeout=5) as sock:
+            with context.wrap_socket(sock, server_hostname=hostname):
+                return True
+    except (ssl.SSLError, socket.error):
+        return False
