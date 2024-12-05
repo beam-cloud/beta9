@@ -75,6 +75,10 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		checkpointEnabled = false
 	}
 
+	if gpuCount > 1 {
+		checkpointEnabled = false
+	}
+
 	for c := 0; c < containersToRun; c++ {
 		runRequest := &types.ContainerRequest{
 			ContainerId:       i.genContainerId(),
