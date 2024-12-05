@@ -94,6 +94,7 @@ class RunnerAbstraction(BaseAbstraction):
         name: Optional[str] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
+        checkpoint_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -128,6 +129,7 @@ class RunnerAbstraction(BaseAbstraction):
             timeout=task_policy.timeout or timeout,
             ttl=task_policy.ttl,
         )
+        self.checkpoint_enabled = checkpoint_enabled
         self.extra: dict = {}
 
         if on_start is not None:
@@ -423,6 +425,7 @@ class RunnerAbstraction(BaseAbstraction):
                     ttl=self.task_policy.ttl,
                 ),
                 concurrent_requests=self.concurrent_requests,
+                checkpoint_enabled=self.checkpoint_enabled,
                 extra=json.dumps(self.extra),
             )
             if _is_stub_created_for_workspace():

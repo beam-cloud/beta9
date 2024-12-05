@@ -183,6 +183,7 @@ type StubConfigV1 struct {
 	Secrets            []Secret        `json:"secrets,omitempty"`
 	Autoscaler         *Autoscaler     `json:"autoscaler"`
 	Extra              json.RawMessage `json:"extra"`
+	CheckpointEnabled  bool            `json:"checkpoint_enabled"`
 }
 
 type AutoscalerType string

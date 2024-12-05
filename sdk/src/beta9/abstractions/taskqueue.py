@@ -77,7 +77,7 @@ class TaskQueue(RunnerAbstraction):
         name (Optional[str]):
             An optional name for this task_queue, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
-        authorized (Optional[str]):
+        authorized (bool):
             If false, allows the endpoint to be invoked without an auth token.
             Default is True.
         autoscaler (Autoscaler):
@@ -86,6 +86,13 @@ class TaskQueue(RunnerAbstraction):
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
+        retry_for (Optional[List[BaseException]]):
+            A list of exceptions that will trigger a retry if raised by your handler.
+        checkpoint_enabled (bool):
+            (experimental) Whether to enable checkpointing for the task queue. Default is False.
+            If enabled, the app will be checkpointed after the on_start function has completed.
+            On next invocation, each container will restore from a checkpoint and resume execution instead of
+            booting up from cold.
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -119,6 +126,8 @@ class TaskQueue(RunnerAbstraction):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
+        checkpoint_enabled: bool = False,
+        retry_for: Optional[List[BaseException]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -138,8 +147,10 @@ class TaskQueue(RunnerAbstraction):
             authorized=authorized,
             autoscaler=autoscaler,
             task_policy=task_policy,
+            checkpoint_enabled=checkpoint_enabled,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
+        self.retry_for = retry_for
 
     @property
     def taskqueue_stub(self) -> TaskQueueServiceStub:

@@ -73,23 +73,29 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 		gpuCount = 1
 	}
 
+	checkpointEnabled := i.StubConfig.CheckpointEnabled
+	if i.Stub.Type.IsServe() {
+		checkpointEnabled = false
+	}
+
 	for c := 0; c < containersToRun; c++ {
 		containerId := i.genContainerId()
 
 		runRequest := &types.ContainerRequest{
-			ContainerId: containerId,
-			Env:         env,
-			Cpu:         i.StubConfig.Runtime.Cpu,
-			Memory:      i.StubConfig.Runtime.Memory,
-			GpuRequest:  gpuRequest,
-			GpuCount:    uint32(gpuCount),
-			ImageId:     i.StubConfig.Runtime.ImageId,
-			StubId:      i.Stub.ExternalId,
-			WorkspaceId: i.Workspace.ExternalId,
-			Workspace:   *i.Workspace,
-			EntryPoint:  i.EntryPoint,
-			Mounts:      mounts,
-			Stub:        *i.Stub,
+			ContainerId:       containerId,
+			Env:               env,
+			Cpu:               i.StubConfig.Runtime.Cpu,
+			Memory:            i.StubConfig.Runtime.Memory,
+			GpuRequest:        gpuRequest,
+			GpuCount:          uint32(gpuCount),
+			ImageId:           i.StubConfig.Runtime.ImageId,
+			StubId:            i.Stub.ExternalId,
+			WorkspaceId:       i.Workspace.ExternalId,
+			Workspace:         *i.Workspace,
+			EntryPoint:        i.EntryPoint,
+			Mounts:            mounts,
+			Stub:              *i.Stub,
+			CheckpointEnabled: checkpointEnabled,
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers

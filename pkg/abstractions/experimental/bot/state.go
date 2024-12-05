@@ -89,6 +89,7 @@ func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string)
 	stateKey := Keys.botSessionState(workspaceName, stubId, sessionId)
 	indexKey := Keys.botSessionIndex(workspaceName, stubId)
 	taskIndexKey := Keys.botTaskIndex(workspaceName, stubId, sessionId)
+	historyKey := Keys.botEventHistory(workspaceName, stubId, sessionId)
 
 	err := m.rdb.Del(ctx, stateKey).Err()
 	if err != nil {
@@ -108,6 +109,11 @@ func (m *botStateManager) deleteSession(workspaceName, stubId, sessionId string)
 	}
 
 	err = m.rdb.Del(ctx, taskIndexKey).Err()
+	if err != nil {
+		return err
+	}
+
+	err = m.rdb.Del(ctx, historyKey).Err()
 	if err != nil {
 		return err
 	}
@@ -145,6 +151,24 @@ func (m *botStateManager) getSession(workspaceName, stubId, sessionId string) (*
 		return nil, err
 	}
 
+	historyKey := Keys.botEventHistory(workspaceName, stubId, sessionId)
+	history, err := m.rdb.LRange(context.TODO(), historyKey, 0, -1)
+	if err != nil {
+		return nil, err
+	}
+
+	events := []*BotEvent{}
+	for _, jsonData := range history {
+		event := &BotEvent{}
+		err = json.Unmarshal([]byte(jsonData), event)
+		if err != nil {
+			return nil, err
+		}
+
+		events = append(events, event)
+	}
+
+	session.EventHistory = events
 	return session, nil
 }
 
@@ -240,6 +264,12 @@ func (m *botStateManager) pushUserEvent(workspaceName, stubId, sessionId string,
 		return err
 	}
 
+	historyKey := Keys.botEventHistory(workspaceName, stubId, sessionId)
+	err = m.rdb.RPush(context.TODO(), historyKey, jsonData).Err()
+	if err != nil {
+		return err
+	}
+
 	messageKey := Keys.botInputBuffer(workspaceName, stubId, sessionId)
 	return m.rdb.RPush(context.TODO(), messageKey, jsonData).Err()
 }
@@ -266,6 +296,15 @@ func (m *botStateManager) pushEvent(workspaceName, stubId, sessionId string, eve
 	}
 
 	messageKey := Keys.botEventBuffer(workspaceName, stubId, sessionId)
+	historyKey := Keys.botEventHistory(workspaceName, stubId, sessionId)
+
+	if event.Type != BotEventTypeNetworkState {
+		err = m.rdb.RPush(context.TODO(), historyKey, jsonData).Err()
+		if err != nil {
+			return err
+		}
+	}
+
 	return m.rdb.RPush(context.TODO(), messageKey, jsonData).Err()
 }
 
@@ -286,10 +325,7 @@ func (m *botStateManager) pushEventPair(workspaceName, stubId, sessionId, pairId
 	return m.rdb.Set(context.TODO(), eventPairKey, jsonData, eventPairTtlS).Err()
 }
 
-func (m *botStateManager) waitForEventPair(workspaceName, stubId, sessionId, pairId string, timeout time.Duration) (*BotEventPair, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
+func (m *botStateManager) waitForEventPair(ctx context.Context, workspaceName, stubId, sessionId, pairId string) (*BotEventPair, error) {
 	for {
 		select {
 		case <-ctx.Done():

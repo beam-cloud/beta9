@@ -58,7 +58,10 @@ message TaskQueueCompleteRequest {
   float keep_warm_seconds = 7;
 }
 
-message TaskQueueCompleteResponse { bool ok = 1; }
+message TaskQueueCompleteResponse { 
+  bool ok = 1; 
+  string message = 2;
+}
 
 message TaskQueueMonitorRequest {
   string task_id = 1;

@@ -6,14 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 )
 
@@ -37,7 +42,9 @@ type botInstance struct {
 	taskDispatcher  *task.Dispatcher
 	authInfo        *auth.AuthInfo
 	containerRepo   repository.ContainerRepository
+	backendRepo     repository.BackendRepository
 	eventChan       chan *BotEvent
+	botInputsVolume *types.Volume
 }
 
 type botInstanceOpts struct {
@@ -50,6 +57,7 @@ type botInstanceOpts struct {
 	StateManager   *botStateManager
 	TaskDispatcher *task.Dispatcher
 	ContainerRepo  repository.ContainerRepository
+	BackendRepo    repository.BackendRepository
 }
 
 func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, error) {
@@ -62,6 +70,12 @@ func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, er
 		Workspace:    &opts.Stub.Workspace,
 		Stub:         opts.Stub,
 	})
+	if err != nil {
+		cancelFunc()
+		return nil, err
+	}
+
+	botInputsVolume, err := opts.BackendRepo.GetOrCreateVolume(ctx, opts.Stub.Workspace.Id, botVolumeName)
 	if err != nil {
 		cancelFunc()
 		return nil, err
@@ -84,8 +98,10 @@ func newBotInstance(ctx context.Context, opts botInstanceOpts) (*botInstance, er
 			Workspace: &opts.Stub.Workspace,
 			Token:     opts.Token,
 		},
-		containerRepo: opts.ContainerRepo,
-		eventChan:     make(chan *BotEvent),
+		containerRepo:   opts.ContainerRepo,
+		backendRepo:     opts.BackendRepo,
+		eventChan:       make(chan *BotEvent),
+		botInputsVolume: botInputsVolume,
 	}
 
 	go instance.monitorEvents()
@@ -344,6 +360,23 @@ func (i *botInstance) monitorEvents() error {
 				i.botInterface.SendPrompt(sessionId, PromptTypeTransition, event)
 			case BotEventTypeMemoryMessage:
 				i.botInterface.SendPrompt(sessionId, PromptTypeMemory, event)
+			case BotEventTypeInputFileRequest:
+				go i.waitForInputFile(sessionId, event)
+			case BotEventTypeConfirmResponse:
+				if event.PairId == "" {
+					continue
+				}
+
+				i.botStateManager.pushEventPair(i.workspace.Name, i.stub.ExternalId, sessionId, event.PairId, &BotEvent{
+					Type:  BotEventTypeConfirmRequest,
+					Value: event.Value,
+					Metadata: map[string]string{
+						string(MetadataSessionId):      sessionId,
+						string(MetadataTransitionName): event.Metadata[string(MetadataTransitionName)],
+						string(MetadataTaskId):         event.Metadata[string(MetadataTaskId)],
+					},
+					PairId: event.PairId,
+				}, event)
 			case BotEventTypeAcceptTransition, BotEventTypeRejectTransition:
 				taskId := event.Metadata[string(MetadataTaskId)]
 				transitionName := event.Metadata[string(MetadataTransitionName)]
@@ -366,6 +399,71 @@ func (i *botInstance) monitorEvents() error {
 	}
 }
 
+func (i *botInstance) waitForInputFile(sessionId string, event *BotEvent) {
+	eventValue := map[string]string{}
+	err := json.Unmarshal([]byte(event.Value), &eventValue)
+	if err != nil {
+		return
+	}
+
+	fileId := eventValue["file_id"]
+	if fileId == "" {
+		return
+	}
+
+	timeout, err := strconv.Atoi(eventValue["timeout_seconds"])
+	if err != nil {
+		timeout = -1
+	}
+
+	filePath := filepath.Join(types.DefaultVolumesPath, i.authInfo.Workspace.Name, i.botInputsVolume.ExternalId, sessionId, fileId)
+	log.Printf("<bot %s> Waiting on input file for session %s: %s", i.stub.ExternalId, sessionId, filePath)
+
+	ctx, cancel := common.GetTimeoutContext(i.ctx, timeout)
+	defer cancel()
+
+	// Check for the existence of the file
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("<bot %s> Input file upload timeout for session %s: %s", i.stub.ExternalId, sessionId, fileId)
+			return
+		case <-time.After(time.Second):
+			if _, err := os.Stat(filePath); err != nil {
+				continue
+			}
+
+			log.Printf("<bot %s> Input file <%s> received", i.stub.ExternalId, filePath)
+			containerFilePath := filepath.Join(botVolumeMountPath, sessionId, fileId)
+			response := &BotEvent{
+				PairId: event.PairId,
+				Type:   BotEventTypeInputFileResponse,
+				Value:  containerFilePath,
+				Metadata: map[string]string{
+					string(MetadataSessionId):      sessionId,
+					string(MetadataTransitionName): event.Metadata[string(MetadataTransitionName)],
+					string(MetadataTaskId):         event.Metadata[string(MetadataTaskId)],
+				},
+			}
+
+			err = i.botStateManager.pushEventPair(i.workspace.Name, i.stub.ExternalId, sessionId, event.PairId, event, response)
+			if err != nil {
+				log.Printf("<bot %s> Error pushing input file event pair: %s", i.stub.ExternalId, err)
+				return
+			}
+
+			err = i.botStateManager.pushEvent(i.workspace.Name, i.stub.ExternalId, sessionId, response)
+			if err != nil {
+				log.Printf("<bot %s> Error pushing input file event: %s", i.stub.ExternalId, err)
+				return
+			}
+
+			return
+		}
+	}
+
+}
+
 func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 	transitionConfig, ok := i.botConfig.Transitions[transitionName]
 	if !ok {
@@ -383,6 +481,11 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		fmt.Sprintf("SESSION_ID=%s", sessionId),
 		fmt.Sprintf("TASK_ID=%s", taskId),
 	}
+
+	i.stubConfig.Volumes = append(i.stubConfig.Volumes, &pb.Volume{
+		Id:        i.botInputsVolume.ExternalId,
+		MountPath: botVolumeMountPath,
+	})
 
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		i.stub.Object.ExternalId,

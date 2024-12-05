@@ -28,7 +28,12 @@ from ..middleware import (
     TaskLifecycleMiddleware,
     WebsocketTaskLifecycleMiddleware,
 )
-from ..runner.common import FunctionContext, FunctionHandler, execute_lifecycle_method
+from ..runner.common import (
+    FunctionContext,
+    FunctionHandler,
+    execute_lifecycle_method,
+    wait_for_checkpoint,
+)
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
 from .common import is_asgi3
@@ -88,6 +93,11 @@ class GunicornApplication(BaseApplication):
 
             # Override the default starlette app
             worker.app.callable = asgi_app
+
+            # If checkpointing is enabled, wait for all workers to be ready before creating a checkpoint
+            if cfg.checkpoint_enabled:
+                wait_for_checkpoint()
+
         except EOFError:
             return
         except BaseException:

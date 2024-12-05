@@ -9,12 +9,18 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+const (
+	botVolumeName      = "beta9-bot-inputs"
+	botVolumeMountPath = "./bot-input-files"
+)
+
 var ErrBotSessionNotFound = fmt.Errorf("bot session not found")
 
 type BotSession struct {
-	Id        string                     `json:"id" redis:"id"`
-	Messages  []BotChatCompletionMessage `json:"messages" redis:"messages"`
-	CreatedAt int64                      `json:"created_at" redis:"created_at"`
+	Id           string                     `json:"id" redis:"id"`
+	Messages     []BotChatCompletionMessage `json:"messages" redis:"messages"`
+	CreatedAt    int64                      `json:"created_at" redis:"created_at"`
+	EventHistory []*BotEvent                `json:"event_history" redis:"event_history"`
 }
 
 type botContainer struct {
@@ -87,7 +93,11 @@ const (
 	BotEventTypeConfirmTransition   BotEventType = "confirm_transition"
 	BotEventTypeAcceptTransition    BotEventType = "accept_transition"
 	BotEventTypeRejectTransition    BotEventType = "reject_transition"
+	BotEventTypeInputFileRequest    BotEventType = "input_file_request"
+	BotEventTypeInputFileResponse   BotEventType = "input_file_response"
 	BotEventTypeOutputFile          BotEventType = "output_file"
+	BotEventTypeConfirmRequest      BotEventType = "confirm_request"
+	BotEventTypeConfirmResponse     BotEventType = "confirm_response"
 )
 
 const PromptTypeUser = "user_message"
@@ -143,10 +153,12 @@ type MarkerField struct {
 
 // BotConfig holds the overall config for the bot
 type BotConfig struct {
-	Model       string                         `json:"model" redis:"model"`
-	Locations   map[string]BotLocationConfig   `json:"locations" redis:"locations"`
-	Transitions map[string]BotTransitionConfig `json:"transitions" redis:"transitions"`
-	ApiKey      string                         `json:"api_key" redis:"api_key"`
+	Model          string                         `json:"model" redis:"model"`
+	Locations      map[string]BotLocationConfig   `json:"locations" redis:"locations"`
+	Transitions    map[string]BotTransitionConfig `json:"transitions" redis:"transitions"`
+	ApiKey         string                         `json:"api_key" redis:"api_key"`
+	Authorized     bool                           `json:"authorized" redis:"authorized"`
+	WelcomeMessage string                         `json:"welcome_message" redis:"welcome_message"`
 }
 
 func (b *BotConfig) FormatLocations() string {

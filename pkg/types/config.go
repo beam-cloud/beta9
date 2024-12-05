@@ -4,6 +4,7 @@ import (
 	"time"
 
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
+	cedana "github.com/cedana/cedana/pkg/types"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -202,6 +203,7 @@ type WorkerConfig struct {
 	AddWorkerTimeout           time.Duration               `key:"addWorkerTimeout" json:"add_worker_timeout"`
 	TerminationGracePeriod     int64                       `key:"terminationGracePeriod"`
 	BlobCacheEnabled           bool                        `key:"blobCacheEnabled" json:"blob_cache_enabled"`
+	CRIU                       CRIUConfig                  `key:"criu" json:"criu"`
 }
 
 type PoolMode string
@@ -223,6 +225,7 @@ type WorkerPoolConfig struct {
 	Priority             int32                             `key:"priority" json:"priority"`
 	Preemptable          bool                              `key:"preemptable" json:"preemptable"`
 	UserData             string                            `key:"userData" json:"user_data"`
+	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
 }
 
 type WorkerPoolJobSpecConfig struct {
@@ -397,6 +400,15 @@ type FluentBitEventMapping struct {
 	Tag  string `key:"tag" json:"tag"`
 }
 
+type ObjectStoreConfig struct {
+	BucketName  string `key:"bucketName" json:"bucket_name"`
+	AccessKey   string `key:"accessKey" json:"access_key"`
+	SecretKey   string `key:"secretKey" json:"secret_key"`
+	EndpointURL string `key:"endpointURL" json:"bucket_url"`
+	Region      string `key:"region" json:"region"`
+	ReadOnly    bool   `key:"readOnly" json:"read_only"`
+}
+
 type FluentBitEventConfig struct {
 	Endpoint        string                  `key:"endpoint" json:"endpoint"`
 	MaxConns        int                     `key:"maxConns" json:"max_conns"`
@@ -406,6 +418,24 @@ type FluentBitEventConfig struct {
 	KeepAlive       time.Duration           `key:"keepAlive" json:"keep_alive"`
 	Mapping         []FluentBitEventMapping `key:"mapping" json:"mapping"`
 }
+
+type CRIUConfig struct {
+	Storage CheckpointStorageConfig `key:"storage" json:"storage"`
+	Cedana  cedana.Config           `key:"cedana" json:"cedana"`
+}
+
+type CheckpointStorageConfig struct {
+	MountPath   string            `key:"mountPath" json:"mount_path"`
+	Mode        string            `key:"mode" json:"mode"`
+	ObjectStore ObjectStoreConfig `key:"objectStoreConfig" json:"object_store_config"`
+}
+
+type CheckpointStorageMode string
+
+var (
+	CheckpointStorageModeLocal CheckpointStorageMode = "local"
+	CheckpointStorageModeS3    CheckpointStorageMode = "s3"
+)
 
 type AbstractionConfig struct {
 	Bot BotConfig `key:"bot" json:"bot"`

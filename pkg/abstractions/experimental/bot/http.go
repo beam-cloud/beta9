@@ -43,6 +43,10 @@ func registerBotRoutes(g *echo.Group, pbs *PetriBotService) *botGroup {
 	g.GET("/:stubId/:sessionId", auth.WithAuth(group.BotGetSession))
 	g.GET("/:stubId/sessions", auth.WithAuth(group.BotListSessions))
 
+	// Public endpoints
+	g.GET("/public/:stubId", auth.WithAssumedStubAuth(group.BotOpenSession, group.pbs.isPublic))
+	g.GET("/public/:stubId/:sessionId", auth.WithAssumedStubAuth(group.BotGetSession, group.pbs.isPublic))
+
 	return group
 }
 
@@ -133,6 +137,20 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 		})
 		if err != nil {
 			return err
+		}
+
+		if instance.botConfig.WelcomeMessage != "" {
+			err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, sessionId, &BotEvent{
+				Type:  BotEventTypeAgentMessage,
+				Value: instance.botConfig.WelcomeMessage,
+				Metadata: map[string]string{
+					string(MetadataSessionId): sessionId,
+				},
+			})
+
+			if err != nil {
+				return err
+			}
 		}
 	}
 

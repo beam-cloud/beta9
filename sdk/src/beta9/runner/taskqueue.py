@@ -33,7 +33,9 @@ from ..runner.common import (
     config,
     execute_lifecycle_method,
     send_callback,
+    wait_for_checkpoint,
 )
+from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
@@ -272,6 +274,11 @@ class TaskQueueWorker:
         on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
 
         print(f"Worker[{self.worker_index}] ready")
+
+        # If checkpointing is enabled, wait for all workers to be ready before creating a checkpoint
+        if cfg.checkpoint_enabled:
+            wait_for_checkpoint()
+
         with ThreadPoolExecutorOverride() as thread_pool:
             while True:
                 task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)
@@ -304,14 +311,21 @@ class TaskQueueWorker:
                     result = None
                     duration = None
 
+                    caught_exception = ""
+
                     try:
                         args = task.args or []
                         kwargs = task.kwargs or {}
 
                         result = handler(context, *args, **kwargs)
-                    except BaseException:
+                    except BaseException as e:
                         print(traceback.format_exc())
-                        task_status = TaskStatus.Error
+
+                        if type(e) in handler.parent_abstraction.retry_for:
+                            caught_exception = e.__class__.__name__
+                            task_status = TaskStatus.Retry
+                        else:
+                            task_status = TaskStatus.Error
                     finally:
                         duration = time.time() - start_time
 
@@ -333,15 +347,22 @@ class TaskQueueWorker:
                             if not complete_task_response.ok:
                                 raise RunnerException("Unable to end task")
 
-                            print(f"Task completed <{task.id}>, took {duration}s")
+                            if task_status == TaskStatus.Retry:
+                                print(
+                                    complete_task_response.message
+                                    or f"Retrying task <{task.id}> after {caught_exception} exception"
+                                )
+                                continue
 
+                            print(f"Task completed <{task.id}>, took {duration}s")
                             send_callback(
                                 gateway_stub=gateway_stub,
                                 context=context,
                                 payload=result or {},
                                 task_status=task_status,
                                 override_callback_url=kwargs.get("callback_url"),
-                            )  # Send callback to callback_url, if defined
+                            )
+
                         except BaseException:
                             print(traceback.format_exc())
                         finally:

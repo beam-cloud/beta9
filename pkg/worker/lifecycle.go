@@ -20,19 +20,18 @@ import (
 )
 
 const (
-	baseConfigPath            string = "/tmp"
-	defaultContainerDirectory string = "/mnt/code"
-	specBaseName              string = "config.json"
-	initialSpecBaseName       string = "initial_config.json"
-
-	exitCodeSigterm int = 143 // Means the container received a SIGTERM by the underlying operating system
-	exitCodeSigkill int = 137 // Means the container received a SIGKILL by the underlying operating system
+	baseConfigPath            string        = "/tmp"
+	defaultContainerDirectory string        = "/mnt/code"
+	specBaseName              string        = "config.json"
+	initialSpecBaseName       string        = "initial_config.json"
+	runcEventsInterval        time.Duration = 5 * time.Second
+	containerInnerPort        int           = 8001 // Use a fixed port inside the container
+	exitCodeSigterm           int           = 143  // Means the container received a SIGTERM by the underlying operating system
+	exitCodeSigkill           int           = 137  // Means the container received a SIGKILL by the underlying operating system
 )
 
-var (
-	//go:embed base_runc_config.json
-	baseRuncConfigRaw string
-)
+//go:embed base_runc_config.json
+var baseRuncConfigRaw string
 
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
@@ -58,7 +57,7 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 func (s *Worker) stopContainer(containerId string, kill bool) error {
 	log.Printf("<%s> - stopping container.\n", containerId)
 
-	_, exists := s.containerInstances.Get(containerId)
+	instance, exists := s.containerInstances.Get(containerId)
 	if !exists {
 		log.Printf("<%s> - container not found.\n", containerId)
 		return nil
@@ -69,7 +68,7 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 		signal = int(syscall.SIGKILL)
 	}
 
-	err := s.runcHandle.Kill(context.Background(), containerId, signal, &runc.KillOpts{All: true})
+	err := s.runcHandle.Kill(context.Background(), instance.Id, signal, &runc.KillOpts{All: true})
 	if err != nil {
 		log.Printf("<%s> - error stopping container: %v\n", containerId, err)
 		s.containerNetworkManager.TearDown(containerId)
@@ -243,6 +242,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
+	spec.Process.Terminal = true // NOTE: This is since we are using a console writer for logging
 
 	if s.config.Worker.RunCResourcesEnforced {
 		spec.Linux.Resources.CPU = getLinuxCPU(request)
@@ -271,6 +271,12 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	} else {
 		spec.Hooks.Prestart = nil
+	}
+
+	// We need to modify the spec to support Cedana C/R if enabled
+	if s.IsCRIUAvailable() && request.CheckpointEnabled {
+		containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)
+		s.cedanaClient.PrepareContainerSpec(spec, request.ContainerId, containerHostname, request.RequiresGPU())
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
@@ -329,12 +335,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		Type:        "none",
 		Source:      "/workspace/resolv.conf",
 		Destination: "/etc/resolv.conf",
-		Options: []string{"ro",
+		Options: []string{
+			"ro",
 			"rbind",
 			"rprivate",
 			"nosuid",
 			"noexec",
-			"nodev"},
+			"nodev",
+		},
 	}
 
 	if s.config.Worker.UseHostResolvConf {
@@ -342,7 +350,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	spec.Mounts = append(spec.Mounts, resolvMount)
-
 	return spec, nil
 }
 
@@ -359,12 +366,16 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
 	// Most of these env vars are required to communicate with the gateway and vice versa
 	env := []string{
-		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
+		fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
+<<<<<<< HEAD
 		fmt.Sprintf("BETA9_GATEWAY_TLS=%s", os.Getenv("BETA9_GATEWAY_TLS")),
+=======
+		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable()),
+>>>>>>> d295b27da64feaf0c31d79ff1be9192c7b94fb0b
 		"PYTHONUNBUFFERED=1",
 	}
 
@@ -447,7 +458,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 
 		// Update container status to running
-		s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
+		err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
+		if err != nil {
+			log.Printf("<%s> failed to update container status to running: %v", containerId, err)
+		}
 	}()
 
 	// Setup container overlay filesystem
@@ -457,6 +471,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 	defer containerInstance.Overlay.Cleanup()
+
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
 	// Setup container network namespace / devices
@@ -467,7 +482,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Expose the bind port
-	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
+	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, containerInnerPort)
 	if err != nil {
 		log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
 		return
@@ -485,38 +500,101 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
+	consoleWriter, err := NewConsoleWriter(containerInstance.OutputWriter)
+	if err != nil {
+		log.Printf("<%s> - failed to create console writer: %v\n", containerId, err)
+		return
+	}
+
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(ctx, request)
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
 
-	pid := 0
-	pidChan := make(chan int, 1)
+	startedChan := make(chan int, 1)
 
-	go func() {
-		// Wait for runc to start the container
-		pid = <-pidChan
+	// Handle checkpoint creation & restore if applicable
+	if s.IsCRIUAvailable() && request.CheckpointEnabled {
+		restored, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, consoleWriter, startedChan, configPath)
+		if err != nil {
+			log.Printf("<%s> - C/R failed: %v\n", containerId, err)
+		}
 
-		// Capture resource usage (cpu/mem/gpu)
-		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
+		if restored {
+			// HOTFIX: If we restored from a checkpoint, we need to use the container ID of the restored container
+			// instead of the original container ID
+			containerInstance, exists := s.containerInstances.Get(request.ContainerId)
+			if exists {
+				containerInstance.Id = restoredContainerId
+				s.containerInstances.Set(containerId, containerInstance)
+				containerId = restoredContainerId
+			}
 
-		// Watch for OOM events
-		go s.watchOOMEvents(ctx, containerId, outputChan)
-	}()
+			exitCode = s.waitForRestoredContainer(ctx, containerId, startedChan, outputChan, request, spec)
+			return
+		}
+	}
 
 	// Invoke runc process (launch the container)
-	exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
-		OutputWriter: containerInstance.OutputWriter,
-		ConfigPath:   configPath,
-		Started:      pidChan,
+	_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
+		Detach:        true,
+		ConsoleSocket: consoleWriter,
+		ConfigPath:    configPath,
+		Started:       startedChan,
 	})
-
-	// Send last log message since the container has exited
-	outputChan <- common.OutputMsg{
-		Msg:     "",
-		Done:    true,
-		Success: err == nil,
+	if err != nil {
+		log.Printf("<%s> - failed to run container: %v\n", containerId, err)
+		return
 	}
+
+	exitCode = s.wait(ctx, containerId, startedChan, outputChan, request, spec)
+}
+
+// Wait for a container to exit and return the exit code
+func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, outputChan chan common.OutputMsg, request *types.ContainerRequest, spec *specs.Spec) int {
+	<-startedChan
+
+	// Clean up runc container state and send final output message
+	cleanup := func(exitCode int, err error) int {
+		log.Printf("<%s> - container has exited with code: %d\n", containerId, exitCode)
+
+		outputChan <- common.OutputMsg{
+			Msg:     "",
+			Done:    true,
+			Success: exitCode == 0,
+		}
+
+		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
+		if err != nil {
+			log.Printf("<%s> - failed to delete container: %v\n", containerId, err)
+		}
+
+		return exitCode
+	}
+
+	// Look up the PID of the container
+	state, err := s.runcHandle.State(ctx, containerId)
+	if err != nil {
+		return cleanup(-1, err)
+	}
+	pid := state.Pid
+
+	// Start monitoring the container
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
+	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return cleanup(-1, err)
+	}
+
+	// Wait for the container to exit
+	processState, err := process.Wait()
+	if err != nil {
+		return cleanup(-1, err)
+	}
+
+	return cleanup(processState.ExitCode(), nil)
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
@@ -541,15 +619,24 @@ func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 }
 
 func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output chan common.OutputMsg) {
-	seenEvents := make(map[string]struct{})
+	var (
+		seenEvents = make(map[string]struct{})
+		ch         <-chan *runc.Event
+		err        error
+		ticker     = time.NewTicker(time.Second)
+	)
 
-	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
-	ch, err := s.runcHandle.Events(ctx, containerId, time.Second)
-	if err != nil {
-		log.Printf("<%s> failed to open runc events channel: %v", containerId, err)
+	select {
+	case <-ctx.Done():
 		return
+	default:
+		ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
+		if err != nil {
+			log.Printf("<%s> failed to open runc events channel: %v", containerId, err)
+			return
+		}
 	}
 
 	maxTries, tries := 5, 0 // Used for re-opening the channel if it's closed

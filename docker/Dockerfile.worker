@@ -72,7 +72,7 @@ RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 
 # final image
 # ========================
-FROM nvidia/cuda:12.3.1-base-ubuntu20.04 AS release
+FROM nvidia/cuda:12.3.1-base-ubuntu22.04 AS release
 FROM release AS dev
 
 FROM ${BASE_STAGE} AS final
@@ -81,19 +81,50 @@ WORKDIR /workspace
 
 RUN apt-get update && \
     apt-get install -y curl gpg && \
-    curl -fsSL https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04/Release.key | gpg --dearmor -o /usr/share/keyrings/criu.gpg && \
-    echo 'deb [signed-by=/usr/share/keyrings/criu.gpg] https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04 /' > /etc/apt/sources.list.d/criu.list && \
     curl -fsSL https://nvidia.github.io/nvidia-container-runtime/gpgkey | apt-key add - && \
-    curl -s -L https://nvidia.github.io/nvidia-docker/ubuntu20.04/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list \
-    curl -fsSL https://nvidia.github.io/nvidia-container-runtime/ubuntu20.04/nvidia-container-runtime.list | tee /etc/apt/sources.list.d/nvidia-container-runtime.list && \
+    curl -s -L https://nvidia.github.io/nvidia-docker/ubuntu22.04/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list \
+    curl -fsSL https://nvidia.github.io/nvidia-container-runtime/ubuntu22.04/nvidia-container-runtime.list | tee /etc/apt/sources.list.d/nvidia-container-runtime.list && \
     apt-get update && \
     apt-get install psmisc
 
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
-RUN apt-get install -y --no-install-recommends criu nvidia-container-toolkit-base nvidia-container-toolkit
+RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvidia-container-toolkit
 
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
+
+# XXX: Remove once cedana starts shipping with a compatible binary
+RUN <<EOT
+set -eux
+if [ "$(uname -m)" = "x86_64" ]; then
+    apt-get install -y python3-protobuf libnet1 libnftables1 libnl-3-200 libprotobuf-c1 iptables
+    curl -L -o criu.deb https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_22.04/amd64/criu_4.0-3_amd64.deb
+    dpkg -i criu.deb
+    rm criu.deb
+fi
+EOT
+
+ARG CEDANA_VERSION=0.9.234
+RUN <<EOT
+set -eux
+if [ "$(uname -m)" = "x86_64" ]; then
+    apt-get install -y libgpgme11
+    curl -L -o cedana_amd64.deb https://github.com/cedana/cedana/releases/download/v${CEDANA_VERSION}/cedana_${CEDANA_VERSION}_amd64.deb
+    dpkg -i cedana_amd64.deb
+    rm cedana_amd64.deb
+fi
+EOT
+
+ARG CEDANA_TOKEN
+ARG CEDANA_BASE_URL
+
+RUN if [ -n "${CEDANA_TOKEN}" ]; then \
+    curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/gpucontroller -o /usr/local/bin/cedana-gpu-controller && \
+    chmod +x /usr/local/bin/cedana-gpu-controller && \
+    curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/libcedana -o /usr/local/lib/libcedana-gpu.so && \
+    chmod +x /usr/local/lib/libcedana-gpu.so; \
+    fi
+
 
 ARG TARGETARCH
 
@@ -114,7 +145,7 @@ RUN if [ "$(uname -m)" = "x86_64" ]; then \
     apt-get install -y /tmp/cuno_1.2.6_amd64_glibc.deb && rm /tmp/cuno_1.2.6_amd64_glibc.deb; \
     fi
 
-RUN apt-get remove -y curl gpg && \
+RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
     rm -rf /var/lib/apt/lists/* /var/log/*
 
