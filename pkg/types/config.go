@@ -21,7 +21,7 @@ type AppConfig struct {
 	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
 	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
-	Agent          RootAgentConfig           `key:"agent" json:"agent"`
+	Agent          AgentConfig               `key:"agent" json:"agent"`
 	Abstractions   AbstractionConfig         `key:"abstractions" json:"abstractions"`
 }
 
@@ -298,7 +298,7 @@ type AgentRedisConfig struct {
 	Hostname string `key:"hostname" json:"hostname"`
 }
 
-type RootAgentConfig struct {
+type AgentConfig struct {
 	DynamicServiceHosts bool `key:"dynamicServiceHosts" json:"dynamic_service_hosts"`
 }
 
