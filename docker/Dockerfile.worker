@@ -96,7 +96,7 @@ RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvi
 
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
 
-RUN apt-get install -y libbtrfs-dev libgpgme11-dev
+RUN apt-get install -y libbtrfs-dev libgpgme11-dev buildah bats btrfs-progs libapparmor-dev libglib2.0-dev libseccomp-dev libselinux1-dev slirp4netns
 
 # XXX: Remove once cedana starts shipping with a compatible binary
 RUN <<EOT

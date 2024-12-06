@@ -155,11 +155,15 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	dockerfile := `FROM ubuntu:22.04 
 	RUN apt-get update`
 
-	s.imageClient.BuildAndArchiveImage(context.TODO(), dockerfile)
+	err, loc := s.imageClient.BuildAndArchiveImage(context.TODO(), dockerfile)
+	if err != nil {
+		log.Printf("<%s> - failed to build test image: %v location: %s\n", containerId, err, loc)
+		return err
+	}
 
 	// Pull image
 	log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
-	err := s.imageClient.PullLazy(request)
+	err = s.imageClient.PullLazy(request)
 	if err != nil && request.SourceImage != nil {
 		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
 		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)

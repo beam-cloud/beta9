@@ -19,10 +19,12 @@ import (
 	"github.com/beam-cloud/clip/pkg/storage"
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/containers/buildah"
+	"github.com/containers/buildah/define"
 	"github.com/containers/buildah/imagebuildah"
 	bstorage "github.com/containers/storage"
 	"github.com/containers/storage/pkg/unshare"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
 	"github.com/opencontainers/umoci/oci/casext"
@@ -260,38 +262,77 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 	return nil
 }
 
-func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile string) error {
+func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile string) (error, string) {
 	ociBundlePath := filepath.Join(c.imageBundlePath, "oci")
 
 	if buildah.InitReexec() {
-		return nil
+		return nil, "buildah reexec"
 	}
 	unshare.MaybeReexecUsingUserNamespace(false)
 
 	storeOpts := bstorage.StoreOptions{
-		GraphDriverName: "overlay",
-		GraphRoot:       "/var/tmp/containers/storage",
-		RunRoot:         "/var/tmp/containers/runs",
+		GraphDriverName: "vfs",
+		GraphRoot:       "/var/lib/containers/storage",
+		RunRoot:         "/run/containers/storage",
 	}
 
 	buildStore, err := bstorage.GetStore(storeOpts)
 	if err != nil {
-		return err
+		return err, "get store"
 	}
 	defer buildStore.Shutdown(false)
 
-	buildOpts := imagebuildah.BuildOptions{
-		Output: ociBundlePath, // Output image name
+	buildOpts := define.BuildOptions{
+		ContextDirectory: c.imageBundlePath,
+		NamespaceOptions: []define.NamespaceOption{
+			{Name: string(specs.NetworkNamespace), Host: true},
+		},
+		ReportWriter: os.Stdout,
+		Isolation:    define.IsolationChroot,
 	}
 
-	id, _, err := imagebuildah.BuildDockerfiles(ctx, buildStore, buildOpts, dockerfile)
+	d, err := os.MkdirTemp("", "")
 	if err != nil {
-		return err
+		return err, "mktemp"
+	}
+	defer os.RemoveAll(d)
+	dockerfilep := filepath.Join(d, "Dockerfile")
+	f, err := os.Create(dockerfilep)
+	if err != nil {
+		return err, "create dockerfile"
+	}
+	fmt.Fprintf(f, "FROM quay.io/libpod/alpine\nRUN echo CUT START; find /sys/fs/cgroup -print | sort ; echo CUT END")
+	f.Close()
+
+	// cmd := exec.Command("buildah", "info", "--storage-driver=vfs")
+	// cmd.Stdout = os.Stdout
+	// cmd.Stderr = os.Stderr
+	// err = cmd.Run()
+	// if err != nil {
+	// 	return err, "buildah info"
+	// }
+
+	// // run using the file we created
+	// cmd = exec.Command("buildah", "build", "--storage-driver=vfs", "--format=docker", "--output="+ociBundlePath, "-f", dockerfilep, ".")
+	// cmd.Stdout = os.Stdout
+	// cmd.Stderr = os.Stderr
+	// err = cmd.Run()
+	// if err != nil {
+	// 	return err, "buildah build"
+	// }
+
+	// time.Sleep(120 * time.Second)
+
+	id, _, err := imagebuildah.BuildDockerfiles(ctx, buildStore, buildOpts, dockerfilep)
+	if err != nil {
+		return err, "build dockerfiles"
 	}
 	log.Println("Built image:", id)
 
 	defer os.RemoveAll(ociBundlePath)
-	return c.Archive(ctx, filepath.Join(ociBundlePath, id), id, nil)
+	err = c.Archive(ctx, filepath.Join(ociBundlePath, id), id, nil)
+
+	return err, "archive"
 }
 
 func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds string) error {
