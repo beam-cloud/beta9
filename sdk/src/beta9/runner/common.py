@@ -163,12 +163,8 @@ class FunctionContext:
 
 
 workers_ready = None
-
-
-def initialize_workers_ready():
-    global workers_ready
-    if workers_ready is None:
-        workers_ready = Value("i", 0)
+if is_remote():
+    workers_ready = Value("i", 0)
 
 
 class FunctionHandler:
@@ -397,8 +393,6 @@ CHECKPOINT_CONTAINER_HOSTNAME_FILE = "/cedana/CONTAINER_HOSTNAME"
 
 
 def wait_for_checkpoint():
-    initialize_workers_ready()
-
     def _reload_config():
         # Once we have set the checkpoint signal file, wait for checkpoint to be complete before reloading the config
         while not Path(CHECKPOINT_COMPLETE_FILE).exists():
