@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7-labs
 ARG BASE_STAGE=dev
 
-FROM golang:1.23.4-bullseye AS golang
+FROM golang:1.23.4-bookworm AS golang
 
 RUN apt-get update && apt-get install -y curl git
 
@@ -58,6 +58,29 @@ make binaries
 EOT
 
 
+# Add a buildah build stage
+FROM golang AS buildah
+
+WORKDIR /workspace
+RUN apt-get update && apt-get install -y \
+    make \
+    bats \
+    btrfs-progs \
+    git \
+    go-md2man \
+    iptables \
+    libapparmor-dev \
+    libglib2.0-dev \
+    libgpgme11-dev \
+    libseccomp-dev \
+    libselinux1-dev \
+    libbtrfs-dev \
+    pkg-config
+
+RUN git clone https://github.com/containers/buildah.git . && \
+    make TAGS="cni" && \
+    make install
+
 # beta9 worker
 # ========================
 FROM golang AS worker
@@ -96,7 +119,7 @@ RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvi
 
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
 
-RUN apt-get install -y libbtrfs-dev libgpgme11-dev buildah bats btrfs-progs libapparmor-dev libglib2.0-dev libseccomp-dev libselinux1-dev slirp4netns
+RUN apt-get install -y libbtrfs-dev libgpgme11-dev bats btrfs-progs libapparmor-dev libglib2.0-dev libseccomp-dev libselinux1-dev slirp4netns podman
 
 # XXX: Remove once cedana starts shipping with a compatible binary
 RUN <<EOT
@@ -161,6 +184,7 @@ COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/b
 COPY ./bin/volume_cache.so /usr/local/lib/volume_cache.so
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
 COPY ./sdk/src/beta9 /workspace/sdk
+COPY --from=buildah /usr/local/bin/buildah /usr/local/bin/buildah
 
 VOLUME "/usr/lib/x86_64-linux-gnu"
 VOLUME "/usr/lib/aarch64-linux-gnu"
