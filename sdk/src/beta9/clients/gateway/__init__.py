@@ -283,6 +283,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     concurrent_requests: int = betterproto.uint32_field(24)
     extra: str = betterproto.string_field(25)
     checkpoint_enabled: bool = betterproto.bool_field(26)
+    gpu_count: int = betterproto.uint32_field(27)
 
 
 @dataclass(eq=False, repr=False)
