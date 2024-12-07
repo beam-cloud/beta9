@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -289,6 +290,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 		}
 	}
 
+	log.Printf("instance.EntryPoint: %v", instance.EntryPoint)
 	if len(instance.EntryPoint) == 0 {
 		instance.EntryPoint = []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.endpoint"}
 	}

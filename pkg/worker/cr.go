@@ -183,7 +183,7 @@ func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId strin
 			Success: exitCode == 0,
 		}
 
-		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
+		err = s.runcHandle.Delete(context.Background(), containerId, &runc.DeleteOpts{Force: true})
 		if err != nil {
 			log.Printf("<%s> - failed to delete container: %v\n", containerId, err)
 		}
