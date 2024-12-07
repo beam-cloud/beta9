@@ -153,26 +153,28 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 	// hard code a dockerfile to test building with buildah
 	dockerfile := `FROM ubuntu:22.04 
-	RUN apt-get update`
+	RUN echo hi`
 
-	err, loc := s.imageClient.BuildAndArchiveImage(context.TODO(), dockerfile)
+	err := s.imageClient.BuildAndArchiveImage(context.TODO(), dockerfile, bundlePath, request.ImageId)
 	if err != nil {
-		log.Printf("<%s> - failed to build test image: %v location: %s\n", containerId, err, loc)
+		log.Printf("<%s> - failed to build test image: %v\n", containerId, err)
 		return err
 	}
 
 	// Pull image
-	log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
-	err = s.imageClient.PullLazy(request)
-	if err != nil && request.SourceImage != nil {
-		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
-		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
-		if err == nil {
-			err = s.imageClient.PullLazy(request)
+	if false {
+		log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
+		err = s.imageClient.PullLazy(request)
+		if err != nil && request.SourceImage != nil {
+			log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
+			err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
+			if err == nil {
+				err = s.imageClient.PullLazy(request)
+			}
 		}
-	}
-	if err != nil {
-		return err
+		if err != nil {
+			return err
+		}
 	}
 
 	bindPort, err := getRandomFreePort()

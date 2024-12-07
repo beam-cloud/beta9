@@ -262,77 +262,78 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 	return nil
 }
 
-func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile string) (error, string) {
-	ociBundlePath := filepath.Join(c.imageBundlePath, "oci")
-
-	if buildah.InitReexec() {
-		return nil, "buildah reexec"
-	}
-	unshare.MaybeReexecUsingUserNamespace(false)
-
-	storeOpts := bstorage.StoreOptions{
-		GraphDriverName: "vfs",
-		GraphRoot:       "/var/lib/containers/storage",
-		RunRoot:         "/run/containers/storage",
-	}
-
-	buildStore, err := bstorage.GetStore(storeOpts)
-	if err != nil {
-		return err, "get store"
-	}
-	defer buildStore.Shutdown(false)
-
-	buildOpts := define.BuildOptions{
-		ContextDirectory: c.imageBundlePath,
-		NamespaceOptions: []define.NamespaceOption{
-			{Name: string(specs.NetworkNamespace), Host: true},
-		},
-		ReportWriter: os.Stdout,
-		Isolation:    define.IsolationChroot,
-	}
-
+func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile string, bundlePath string, imageId string) error {
 	d, err := os.MkdirTemp("", "")
 	if err != nil {
-		return err, "mktemp"
+		return err
 	}
 	defer os.RemoveAll(d)
-	dockerfilep := filepath.Join(d, "Dockerfile")
-	f, err := os.Create(dockerfilep)
+	tempDockerFile := filepath.Join(d, "Dockerfile")
+	f, err := os.Create(tempDockerFile)
 	if err != nil {
-		return err, "create dockerfile"
+		return err
 	}
-	fmt.Fprintf(f, "FROM quay.io/libpod/alpine\nRUN echo CUT START; find /sys/fs/cgroup -print | sort ; echo CUT END")
+	fmt.Fprintf(f, dockerfile)
 	f.Close()
 
-	// cmd := exec.Command("buildah", "info", "--storage-driver=vfs")
-	// cmd.Stdout = os.Stdout
-	// cmd.Stderr = os.Stderr
-	// err = cmd.Run()
-	// if err != nil {
-	// 	return err, "buildah info"
-	// }
+	tempBundlePath := filepath.Join(bundlePath, "rootfs")
+	os.MkdirAll(tempBundlePath, 0755)
 
 	// // run using the file we created
-	// cmd = exec.Command("buildah", "build", "--storage-driver=vfs", "--format=docker", "--output="+ociBundlePath, "-f", dockerfilep, ".")
-	// cmd.Stdout = os.Stdout
-	// cmd.Stderr = os.Stderr
-	// err = cmd.Run()
-	// if err != nil {
-	// 	return err, "buildah build"
-	// }
-
-	// time.Sleep(120 * time.Second)
-
-	id, _, err := imagebuildah.BuildDockerfiles(ctx, buildStore, buildOpts, dockerfilep)
+	cmd := exec.Command("buildah", "build", "--format=oci", "--output=type=local,dest="+tempBundlePath, "--tag=latest", "-f", tempDockerFile, ".")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
 	if err != nil {
-		return err, "build dockerfiles"
+		return err
 	}
-	log.Println("Built image:", id)
 
-	defer os.RemoveAll(ociBundlePath)
-	err = c.Archive(ctx, filepath.Join(ociBundlePath, id), id, nil)
+	for _, dir := range requiredContainerDirectories {
+		fullPath := filepath.Join(tempBundlePath, dir)
+		err := os.MkdirAll(fullPath, 0755)
+		if err != nil {
+			errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
+			return err
+		}
+	}
 
-	return err, "archive"
+	// TODO: Figure out how to get this to work
+	if false {
+		if buildah.InitReexec() {
+			return err
+		}
+		unshare.MaybeReexecUsingUserNamespace(false)
+
+		storeOpts := bstorage.StoreOptions{
+			GraphDriverName: "vfs",
+			GraphRoot:       "/var/lib/containers/storage",
+			RunRoot:         "/run/containers/storage",
+		}
+
+		buildStore, err := bstorage.GetStore(storeOpts)
+		if err != nil {
+			return err
+		}
+		defer buildStore.Shutdown(false)
+
+		buildOpts := define.BuildOptions{
+			NamespaceOptions: []define.NamespaceOption{
+				{Name: string(specs.NetworkNamespace), Host: true},
+			},
+			ReportWriter: os.Stdout,
+			BuildOutput:  tempBundlePath,
+			Isolation:    define.IsolationChroot,
+		}
+
+		_, _, err = imagebuildah.BuildDockerfiles(ctx, buildStore, buildOpts, tempDockerFile)
+		if err != nil {
+			return err
+		}
+	}
+
+	// TODO: Not sure if we need this or not?
+	// defer os.RemoveAll(bundlePath)
+	return c.Archive(ctx, tempBundlePath, imageId, nil)
 }
 
 func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds string) error {
@@ -446,7 +447,7 @@ func (c *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePa
 	baseImagePath := fmt.Sprintf("%s/%s", c.imageBundlePath, baseImageName)
 	engine, err := dir.Open(baseImagePath)
 	if err != nil {
-		return errors.Wrap(err, "open CAS")
+		return errors.Wrap(err, "open CAS "+baseImagePath)
 	}
 	defer engine.Close()
 
