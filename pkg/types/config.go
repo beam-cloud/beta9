@@ -4,6 +4,7 @@ import (
 	"time"
 
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
+	cedana "github.com/cedana/cedana/pkg/types"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -20,6 +21,7 @@ type AppConfig struct {
 	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
 	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
+	Abstractions   AbstractionConfig         `key:"abstractions" json:"abstractions"`
 }
 
 type DatabaseConfig struct {
@@ -84,7 +86,9 @@ type CORSConfig struct {
 }
 
 type StubLimits struct {
-	Memory uint64 `key:"memory" json:"memory"`
+	Memory      uint64 `key:"memory" json:"memory"`
+	MaxReplicas uint64 `key:"maxReplicas" json:"max_replicas"`
+	MaxGpuCount uint32 `key:"maxGpuCount" json:"max_gpu_count"`
 }
 
 type GatewayServiceConfig struct {
@@ -100,7 +104,6 @@ type GatewayServiceConfig struct {
 
 type ImageServiceConfig struct {
 	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
-	BlobCacheEnabled               bool                  `key:"blobCacheEnabled" json:"blob_cache_enabled"` // TODO: remove this once all workers cycle with the new config
 	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
 	RegistryCredentialProviderName string                `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
 	Registries                     ImageRegistriesConfig `key:"registries" json:"registries"`
@@ -130,9 +133,15 @@ type S3ImageRegistryConfig struct {
 }
 
 type RunnerConfig struct {
-	BaseImageName     string            `key:"baseImageName" json:"base_image_name"`
-	BaseImageRegistry string            `key:"baseImageRegistry" json:"base_image_registry"`
-	Tags              map[string]string `key:"tags" json:"tags"`
+	BaseImageName     string                 `key:"baseImageName" json:"base_image_name"`
+	BaseImageRegistry string                 `key:"baseImageRegistry" json:"base_image_registry"`
+	Tags              map[string]string      `key:"tags" json:"tags"`
+	PythonStandalone  PythonStandaloneConfig `key:"pythonStandalone" json:"python_standalone"`
+}
+
+type PythonStandaloneConfig struct {
+	Versions              map[string]string `key:"versions" json:"versions"`
+	InstallScriptTemplate string            `key:"installScriptTemplate" json:"install_script_template"`
 }
 
 type StorageConfig struct {
@@ -193,6 +202,7 @@ type WorkerConfig struct {
 	AddWorkerTimeout           time.Duration               `key:"addWorkerTimeout" json:"add_worker_timeout"`
 	TerminationGracePeriod     int64                       `key:"terminationGracePeriod"`
 	BlobCacheEnabled           bool                        `key:"blobCacheEnabled" json:"blob_cache_enabled"`
+	CRIU                       CRIUConfig                  `key:"criu" json:"criu"`
 }
 
 type PoolMode string
@@ -212,6 +222,9 @@ type WorkerPoolConfig struct {
 	DefaultMachineCost   float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
 	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
 	Priority             int32                             `key:"priority" json:"priority"`
+	Preemptable          bool                              `key:"preemptable" json:"preemptable"`
+	UserData             string                            `key:"userData" json:"user_data"`
+	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
 }
 
 type WorkerPoolJobSpecConfig struct {
@@ -376,6 +389,15 @@ type FluentBitEventMapping struct {
 	Tag  string `key:"tag" json:"tag"`
 }
 
+type ObjectStoreConfig struct {
+	BucketName  string `key:"bucketName" json:"bucket_name"`
+	AccessKey   string `key:"accessKey" json:"access_key"`
+	SecretKey   string `key:"secretKey" json:"secret_key"`
+	EndpointURL string `key:"endpointURL" json:"bucket_url"`
+	Region      string `key:"region" json:"region"`
+	ReadOnly    bool   `key:"readOnly" json:"read_only"`
+}
+
 type FluentBitEventConfig struct {
 	Endpoint        string                  `key:"endpoint" json:"endpoint"`
 	MaxConns        int                     `key:"maxConns" json:"max_conns"`
@@ -384,4 +406,32 @@ type FluentBitEventConfig struct {
 	DialTimeout     time.Duration           `key:"dialTimeout" json:"dial_timeout"`
 	KeepAlive       time.Duration           `key:"keepAlive" json:"keep_alive"`
 	Mapping         []FluentBitEventMapping `key:"mapping" json:"mapping"`
+}
+
+type CRIUConfig struct {
+	Storage CheckpointStorageConfig `key:"storage" json:"storage"`
+	Cedana  cedana.Config           `key:"cedana" json:"cedana"`
+}
+
+type CheckpointStorageConfig struct {
+	MountPath   string            `key:"mountPath" json:"mount_path"`
+	Mode        string            `key:"mode" json:"mode"`
+	ObjectStore ObjectStoreConfig `key:"objectStoreConfig" json:"object_store_config"`
+}
+
+type CheckpointStorageMode string
+
+var (
+	CheckpointStorageModeLocal CheckpointStorageMode = "local"
+	CheckpointStorageModeS3    CheckpointStorageMode = "s3"
+)
+
+type AbstractionConfig struct {
+	Bot BotConfig `key:"bot" json:"bot"`
+}
+
+type BotConfig struct {
+	SystemPrompt              string `key:"systemPrompt" json:"system_prompt"`
+	StepIntervalS             uint   `key:"stepIntervalS" json:"step_interval_s"`
+	SessionInactivityTimeoutS uint   `key:"sessionInactivityTimeoutS" json:"session_inactivity_timeout_s"`
 }

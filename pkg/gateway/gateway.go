@@ -15,11 +15,14 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/container"
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
+	bot "github.com/beam-cloud/beta9/pkg/abstractions/experimental/bot"
 	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
+
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	dmap "github.com/beam-cloud/beta9/pkg/abstractions/map"
@@ -352,6 +355,26 @@ func (g *Gateway) registerServices() error {
 	}
 	pb.RegisterSignalServiceServer(g.grpcServer, signalService)
 
+	// Register Bot service
+	botService, err := bot.NewPetriBotService(g.ctx,
+		bot.BotServiceOpts{
+			Config:         g.Config,
+			ContainerRepo:  g.ContainerRepo,
+			BackendRepo:    g.BackendRepo,
+			WorkspaceRepo:  g.WorkspaceRepo,
+			TaskRepo:       g.TaskRepo,
+			RedisClient:    g.RedisClient,
+			Scheduler:      g.Scheduler,
+			RouteGroup:     g.rootRouteGroup,
+			Tailscale:      g.Tailscale,
+			TaskDispatcher: g.TaskDispatcher,
+			EventRepo:      g.EventRepo,
+		})
+	if err != nil {
+		return err
+	}
+	pb.RegisterBotServiceServer(g.grpcServer, botService)
+
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService(g.Scheduler)
 	if err != nil {
@@ -432,18 +455,45 @@ func (g *Gateway) Start() error {
 	log.Println("Gateway grpc server running @", g.Config.GatewayService.GRPC.Port)
 
 	terminationSignal := make(chan os.Signal, 1)
-	defer close(terminationSignal)
-
 	signal.Notify(terminationSignal, os.Interrupt, syscall.SIGTERM)
-
 	<-terminationSignal
 	log.Println("Termination signal received. Shutting down...")
-
-	ctx, cancel := context.WithTimeout(g.ctx, g.Config.GatewayService.ShutdownTimeout)
-	defer cancel()
-	g.httpServer.Shutdown(ctx)
-	g.grpcServer.GracefulStop()
-	g.cancelFunc()
+	g.shutdown()
 
 	return nil
+}
+
+// Shutdown gracefully shuts down the gateway.
+// This function is blocking and will only return when the gateway has been shut down.
+func (g *Gateway) shutdown() {
+	ctx, cancel := context.WithTimeout(context.Background(), g.Config.GatewayService.ShutdownTimeout)
+	defer cancel()
+
+	eg, ctx := errgroup.WithContext(ctx)
+
+	eg.Go(func() error {
+		return g.httpServer.Shutdown(ctx)
+	})
+
+	eg.Go(func() error {
+		done := make(chan struct{})
+		go func() {
+			g.grpcServer.GracefulStop()
+			close(done)
+		}()
+
+		select {
+		case <-ctx.Done():
+			g.grpcServer.Stop()
+			return ctx.Err()
+		case <-done:
+			return nil
+		}
+	})
+
+	g.cancelFunc()
+
+	if err := eg.Wait(); err != nil {
+		log.Fatalf("Failed to shutdown gateway: %v", err)
+	}
 }

@@ -1,6 +1,7 @@
 import os
 import threading
 import traceback
+import types
 from typing import Any, Callable, List, Optional, Union
 
 from uvicorn.protocols.utils import ClientDisconnected
@@ -44,8 +45,11 @@ class Endpoint(RunnerAbstraction):
         gpu (Union[GpuTypeAlias, List[GpuTypeAlias]]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty.
-            You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify multiple
-            GPUs, the container will load balance across them with equal priority.
+            You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
+            the scheduler prioritizes their selection based on their order in the list.
+        gpu_count (int):
+            The number of GPUs allocated to the container. Default is 0. If a GPU is
+            specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Volume]]):
@@ -74,7 +78,7 @@ class Endpoint(RunnerAbstraction):
         name (Optional[str]):
             An optional name for this endpoint, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
-        authorized (Optional[str]):
+        authorized (bool):
             If false, allows the endpoint to be invoked without an auth token.
             Default is True.
         autoscaler (Optional[Autoscaler]):
@@ -85,6 +89,11 @@ class Endpoint(RunnerAbstraction):
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
+        checkpoint_enabled (bool):
+            (experimental) Whether to enable checkpointing for the endpoint. Default is False.
+            If enabled, the app will be checkpointed after the on_start function has completed.
+            On next invocation, each container will restore from a checkpoint and resume execution instead of
+            booting up from cold.
     Example:
         ```python
         from beta9 import endpoint, Image
@@ -110,6 +119,7 @@ class Endpoint(RunnerAbstraction):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
+        gpu_count: int = 0,
         image: Image = Image(),
         timeout: int = 180,
         workers: int = 1,
@@ -123,11 +133,13 @@ class Endpoint(RunnerAbstraction):
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
         task_policy: TaskPolicy = TaskPolicy(),
+        checkpoint_enabled: bool = False,
     ):
         super().__init__(
             cpu=cpu,
             memory=memory,
             gpu=gpu,
+            gpu_count=gpu_count,
             image=image,
             workers=workers,
             timeout=timeout,
@@ -143,6 +155,7 @@ class Endpoint(RunnerAbstraction):
             callback_url=callback_url,
             task_policy=task_policy,
             concurrent_requests=self.concurrent_requests,
+            checkpoint_enabled=checkpoint_enabled,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
@@ -170,6 +183,9 @@ class ASGI(Endpoint):
         gpu (Union[GpuType, str]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
+        gpu_count (int):
+            The number of GPUs allocated to the container. Default is 0. If a GPU is
+            specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Volume]]):
@@ -205,7 +221,7 @@ class ASGI(Endpoint):
         name (Optional[str]):
             An optional name for this ASGI application, used during deployment. If not specified, you must
             specify the name at deploy time with the --name argument
-        authorized (Optional[str]):
+        authorized (bool):
             If false, allows the ASGI application to be invoked without an auth token.
             Default is True.
         autoscaler (Optional[Autoscaler]):
@@ -216,6 +232,11 @@ class ASGI(Endpoint):
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
+        checkpoint_enabled (bool):
+            (experimental) Whether to enable checkpointing for the endpoint. Default is False.
+            If enabled, the app will be checkpointed after the on_start function has completed.
+            On next invocation, each container will restore from a checkpoint and resume execution instead of
+            booting up from cold.
     Example:
         ```python
         from beta9 import asgi, Image
@@ -237,6 +258,8 @@ class ASGI(Endpoint):
             @app.post("/warmup")
             async def warmup():
                 return {"status": "warm"}
+
+            return app
         ```
     """
 
@@ -245,6 +268,7 @@ class ASGI(Endpoint):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
+        gpu_count: int = 0,
         image: Image = Image(),
         timeout: int = 180,
         workers: int = 1,
@@ -258,12 +282,14 @@ class ASGI(Endpoint):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
+        checkpoint_enabled: bool = False,
     ):
         self.concurrent_requests = concurrent_requests
         super().__init__(
             cpu=cpu,
             memory=memory,
             gpu=gpu,
+            gpu_count=gpu_count,
             image=image,
             timeout=timeout,
             workers=workers,
@@ -276,6 +302,7 @@ class ASGI(Endpoint):
             authorized=authorized,
             autoscaler=autoscaler,
             callback_url=callback_url,
+            checkpoint_enabled=checkpoint_enabled,
         )
 
         self.is_asgi = True
@@ -299,6 +326,9 @@ class RealtimeASGI(ASGI):
         gpu (Union[GpuType, str]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
+        gpu_count (int):
+            The number of GPUs allocated to the container. Default is 0. If a GPU is
+            specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Volume]]):
@@ -332,7 +362,7 @@ class RealtimeASGI(ASGI):
         name (Optional[str]):
             An optional name for this ASGI application, used during deployment. If not specified, you must
             specify the name at deploy time with the --name argument
-        authorized (Optional[str]):
+        authorized (bool):
             If false, allows the ASGI application to be invoked without an auth token.
             Default is True.
         autoscaler (Optional[Autoscaler]):
@@ -340,6 +370,11 @@ class RealtimeASGI(ASGI):
             various autoscaling strategies (Defaults to QueueDepthAutoscaler())
         callback_url (Optional[str]):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
+        checkpoint_enabled (bool):
+            (experimental) Whether to enable checkpointing for the endpoint. Default is False.
+            If enabled, the app will be checkpointed after the on_start function has completed.
+            On next invocation, each container will restore from a checkpoint and resume execution instead of
+            booting up from cold.
     Example:
         ```python
         from beta9 import realtime
@@ -362,6 +397,7 @@ class RealtimeASGI(ASGI):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
+        gpu_count: int = 0,
         image: Image = Image(),
         timeout: int = 180,
         workers: int = 1,
@@ -375,11 +411,13 @@ class RealtimeASGI(ASGI):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
+        checkpoint_enabled: bool = False,
     ):
         super().__init__(
             cpu=cpu,
             memory=memory,
             gpu=gpu,
+            gpu_count=gpu_count,
             image=image,
             timeout=timeout,
             workers=workers,
@@ -393,7 +431,9 @@ class RealtimeASGI(ASGI):
             autoscaler=autoscaler,
             callback_url=callback_url,
             concurrent_requests=concurrent_requests,
+            checkpoint_enabled=checkpoint_enabled,
         )
+        self.is_websocket = True
 
     def __call__(self, func):
         import asyncio
@@ -436,18 +476,25 @@ class RealtimeASGI(ASGI):
 
                         internal_asgi_app.input_queue.put(data)
 
-                        while not internal_asgi_app.input_queue.empty():
-                            output = internal_asgi_app.handler(
-                                context=internal_asgi_app.context,
-                                input=internal_asgi_app.input_queue.get(),
-                            )
-
+                        async def _handle_output(output):
                             if isinstance(output, str):
                                 await websocket.send_text(output)
                             elif isinstance(output, dict) or isinstance(output, list):
                                 await websocket.send_json(output)
                             else:
-                                await websocket.send_bytes(output)
+                                await websocket.send(output)
+
+                        while not internal_asgi_app.input_queue.empty():
+                            output = internal_asgi_app.handler(
+                                context=internal_asgi_app.context,
+                                event=internal_asgi_app.input_queue.get(),
+                            )
+
+                            if isinstance(output, types.GeneratorType):
+                                for o in output:
+                                    await _handle_output(o)
+                            else:
+                                await _handle_output(output)
 
                         await asyncio.sleep(REALTIME_ASGI_SLEEP_INTERVAL_SECONDS)
                     except (

@@ -93,9 +93,17 @@ func NewExternalWorkerPoolController(
 	}
 
 	// Reconcile nodes with state
-	go provider.Reconcile(context.Background(), wpc.name)
+	go provider.Reconcile(ctx, wpc.name)
 
 	return wpc, nil
+}
+
+func (wpc *ExternalWorkerPoolController) Context() context.Context {
+	return wpc.ctx
+}
+
+func (wpc *ExternalWorkerPoolController) IsPreemptable() bool {
+	return wpc.workerPool.Preemptable
 }
 
 func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
@@ -351,6 +359,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		Status:        types.WorkerStatusPending,
 		Priority:      wpc.workerPool.Priority,
 		BuildVersion:  wpc.config.Worker.ImageTag,
+		Preemptable:   wpc.workerPool.Preemptable,
 	}, nil
 }
 
@@ -365,6 +374,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		{
 			Name:  "WORKER_ID",
 			Value: workerId,
+		},
+		{
+			Name:  "WORKER_POOL_NAME",
+			Value: wpc.name,
 		},
 		{
 			Name:  "CPU_LIMIT",
@@ -405,6 +418,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		{
 			Name:  "NETWORK_PREFIX",
 			Value: machineId,
+		},
+		{
+			Name:  "PREEMPTABLE",
+			Value: strconv.FormatBool(wpc.workerPool.Preemptable),
 		},
 	}
 

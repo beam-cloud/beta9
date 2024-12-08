@@ -188,6 +188,9 @@ func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionSer
 		return err
 	}
 
+	ctx, cancel := common.MergeContexts(fs.ctx, ctx)
+	defer cancel()
+
 	return logStream.Stream(ctx, authInfo, containerId)
 }
 
@@ -303,6 +306,9 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 						return
 					}
 
+				case <-fs.ctx.Done():
+					return
+
 				case <-ctx.Done():
 					return
 
@@ -318,6 +324,9 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 
 	for {
 		select {
+		case <-fs.ctx.Done():
+			return nil
+
 		case <-stream.Context().Done():
 			return nil
 

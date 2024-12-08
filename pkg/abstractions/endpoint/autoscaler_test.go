@@ -17,6 +17,12 @@ func TestDeploymentScaleFuncWithDefaults(t *testing.T) {
 				ExternalId: "test",
 			},
 		},
+		AppConfig: types.AppConfig{},
+	}
+	autoscaledInstance.AppConfig.GatewayService = types.GatewayServiceConfig{
+		StubLimits: types.StubLimits{
+			MaxReplicas: 10,
+		},
 	}
 	autoscaledInstance.StubConfig = &types.StubConfigV1{}
 	autoscaledInstance.StubConfig.Autoscaler = &types.Autoscaler{
@@ -63,6 +69,13 @@ func TestDeploymentScaleFuncWithMaxTasksPerContainer(t *testing.T) {
 			Stub: types.Stub{
 				ExternalId: "test",
 			},
+		},
+		AppConfig: types.AppConfig{},
+	}
+
+	autoscaledInstance.AppConfig.GatewayService = types.GatewayServiceConfig{
+		StubLimits: types.StubLimits{
+			MaxReplicas: 10,
 		},
 	}
 	autoscaledInstance.StubConfig = &types.StubConfigV1{}

@@ -20,6 +20,7 @@ var (
 	schedulerWorkerAddress           string = "scheduler:container:worker_addr:%s"
 	schedulerContainerLock           string = "scheduler:container:lock:%s"
 	schedulerContainerExitCode       string = "scheduler:container:exit_code:%s"
+	schedulerCheckpointState         string = "scheduler:checkpoint_state:%s:%s"
 )
 
 var (
@@ -36,6 +37,7 @@ var (
 	workerNetworkLock            string = "worker:network:%s:lock"
 	workerNetworkIpIndex         string = "worker:network:%s:ip_index"
 	workerNetworkContainerIp     string = "worker:network:%s:container_ip:%s"
+	workerPoolSizerLock          string = "worker:pool_sizer:%s:lock"
 )
 
 var (
@@ -47,11 +49,6 @@ var (
 	taskClaim       string = "task:%s:%s:%s:claim"
 	taskCancel      string = "task:%s:%s:%s:cancel"
 	taskRetryLock   string = "task:%s:%s:%s:retry_lock"
-)
-
-var (
-	workerPoolLock  string = "workerpool:lock:%s"
-	workerPoolState string = "workerpool:state:%s"
 )
 
 var (
@@ -143,6 +140,10 @@ func (rk *redisKeys) SchedulerWorkerAddress(containerId string) string {
 
 func (rk *redisKeys) SchedulerContainerExitCode(containerId string) string {
 	return fmt.Sprintf(schedulerContainerExitCode, containerId)
+}
+
+func (rk *redisKeys) SchedulerCheckpointState(workspaceName, checkpointId string) string {
+	return fmt.Sprintf(schedulerCheckpointState, workspaceName, checkpointId)
 }
 
 // Gateway keys
@@ -242,12 +243,8 @@ func (rl *redisKeys) WorkspaceAuthorizedToken(token string) string {
 }
 
 // WorkerPool keys
-func (rk *redisKeys) WorkerPoolLock(poolName string) string {
-	return fmt.Sprintf(workerPoolLock, poolName)
-}
-
-func (rk *redisKeys) WorkerPoolState(poolName string) string {
-	return fmt.Sprintf(workerPoolState, poolName)
+func (rk *redisKeys) WorkerPoolSizerLock(poolName string) string {
+	return fmt.Sprintf(workerPoolSizerLock, poolName)
 }
 
 // Tailscale keys

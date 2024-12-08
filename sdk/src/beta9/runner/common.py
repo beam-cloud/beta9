@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
+from multiprocessing import Value
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
 
 import requests
@@ -22,6 +24,7 @@ from ..clients.gateway import (
     SignPayloadRequest,
     SignPayloadResponse,
 )
+from ..env import is_remote
 from ..exceptions import RunnerException
 
 USER_CODE_DIR = "/mnt/code"
@@ -44,6 +47,7 @@ class Config:
     callback_url: str
     task_id: str
     bind_port: int
+    checkpoint_enabled: bool
     volume_cache_map: Dict
 
     @classmethod
@@ -61,6 +65,7 @@ class Config:
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
+        checkpoint_enabled = os.getenv("CHECKPOINT_ENABLED", "false").lower() == "true"
         volume_cache_map = json.loads(os.getenv("VOLUME_CACHE_MAP", "{}"))
 
         if workers <= 0:
@@ -83,11 +88,38 @@ class Config:
             task_id=task_id,
             bind_port=bind_port,
             timeout=timeout,
+            checkpoint_enabled=checkpoint_enabled,
             volume_cache_map=volume_cache_map,
         )
 
 
-config: Config = Config.load_from_env()
+config: Union[Config, None] = None
+if is_remote():
+    config: Config = Config.load_from_env()
+
+
+class ParentAbstractionProxy:
+    """
+    Class to allow handlers to access parent class variables through attribute or dictionary access
+    """
+
+    def __init__(self, parent):
+        self._parent = parent
+
+    def __getitem__(self, key):
+        return getattr(self._parent, key)
+
+    def __setitem__(self, key, value):
+        setattr(self._parent, key, value)
+
+    def __getattr__(self, key):
+        return getattr(self._parent, key)
+
+    def __setattr__(self, key, value):
+        if key == "_parent":
+            super().__setattr__(key, value)
+        else:
+            setattr(self._parent, key, value)
 
 
 @dataclass
@@ -130,13 +162,19 @@ class FunctionContext:
         )
 
 
+workers_ready = None
+if is_remote():
+    workers_ready = Value("i", 0)
+
+
 class FunctionHandler:
     """
     Helper class for loading user entry point functions
     """
 
-    def __init__(self) -> None:
+    def __init__(self, handler_path: Optional[str] = None) -> None:
         self.pass_context: bool = False
+        self.handler_path: Optional[str] = handler_path
         self.handler: Optional[Callable] = None
         self.is_async: bool = False
         self._load()
@@ -152,17 +190,23 @@ class FunctionHandler:
             sys.path.insert(0, USER_CODE_DIR)
 
         try:
-            module, func = config.handler.split(":")
+            module = None
+            func = None
+
+            if self.handler_path is not None:
+                module, func = self.handler_path.split(":")
+            else:
+                module, func = config.handler.split(":")
 
             with self.importing_user_code():
                 target_module = importlib.import_module(module)
 
             self.handler = getattr(target_module, func)
-            sig = inspect.signature(self.handler.func)
-            self.pass_context = "context" in sig.parameters
+            self.signature = inspect.signature(self.handler.func)
+            self.pass_context = "context" in self.signature.parameters
             self.is_async = asyncio.iscoroutinefunction(self.handler.func)
         except BaseException:
-            raise RunnerException()
+            raise RunnerException(f"Error loading handler: {traceback.format_exc()}")
 
     def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
         if self.handler is None:
@@ -172,8 +216,13 @@ class FunctionHandler:
             kwargs["context"] = context
 
         os.environ["TASK_ID"] = context.task_id or ""
-
         return self.handler(*args, **kwargs)
+
+    @property
+    def parent_abstraction(self) -> ParentAbstractionProxy:
+        if not hasattr(self, "_parent_abstraction"):
+            self._parent_abstraction = ParentAbstractionProxy(self.handler.parent)
+        return self._parent_abstraction
 
 
 def execute_lifecycle_method(name: str) -> Union[Any, None]:
@@ -330,5 +379,40 @@ def is_asgi3(app: Any) -> bool:
 
 class ThreadPoolExecutorOverride(ThreadPoolExecutor):
     def __exit__(self, *_, **__):
-        # cancel_futures added in 3.9
-        self.shutdown(cancel_futures=True)
+        try:
+            # cancel_futures added in 3.9
+            self.shutdown(cancel_futures=True)
+        except Exception:
+            pass
+
+
+CHECKPOINT_SIGNAL_FILE = "/cedana/READY_FOR_CHECKPOINT"
+CHECKPOINT_COMPLETE_FILE = "/cedana/CHECKPOINT_COMPLETE"
+CHECKPOINT_CONTAINER_ID_FILE = "/cedana/CONTAINER_ID"
+CHECKPOINT_CONTAINER_HOSTNAME_FILE = "/cedana/CONTAINER_HOSTNAME"
+
+
+def wait_for_checkpoint():
+    def _reload_config():
+        # Once we have set the checkpoint signal file, wait for checkpoint to be complete before reloading the config
+        while not Path(CHECKPOINT_COMPLETE_FILE).exists():
+            time.sleep(1)
+
+        # Reload config that may have changed during restore
+        config.container_id = Path(CHECKPOINT_CONTAINER_ID_FILE).read_text()
+        config.container_hostname = Path(CHECKPOINT_CONTAINER_HOSTNAME_FILE).read_text()
+
+    with workers_ready.get_lock():
+        workers_ready.value += 1
+
+    if workers_ready.value == config.workers:
+        Path(CHECKPOINT_SIGNAL_FILE).touch(exist_ok=True)
+        return _reload_config()
+
+    while True:
+        with workers_ready.get_lock():
+            if workers_ready.value == config.workers:
+                break
+        time.sleep(1)
+
+    return _reload_config()

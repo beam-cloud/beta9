@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -142,6 +143,8 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 			_, err := c.cacheClient.StoreContentFromSource(sourcePath, sourceOffset)
 			if err == nil {
 				localCachePath = baseBlobFsContentPath
+			} else {
+				c.logger.Log(request.ContainerId, request.StubId, "unable to cache image nearby <%s>: %v\n", imageId, err)
 			}
 		}
 	}
@@ -206,7 +209,8 @@ func (c *ImageClient) Cleanup() error {
 		return true // Continue iteration
 	})
 
-	if c.config.BlobCache.BlobFs.Enabled {
+	log.Println("Cleaning up blobfs image cache:", c.imageCachePath)
+	if c.config.BlobCache.BlobFs.Enabled && c.cacheClient != nil {
 		err := c.cacheClient.Cleanup()
 		if err != nil {
 			return err
@@ -237,13 +241,13 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 		return err
 	}
 
-	if imageInfo["Architecture"] != "amd64" {
+	if imageInfo["Architecture"] != runtime.GOARCH {
 		return &types.ExitCodeError{
 			ExitCode: types.WorkerContainerExitCodeIncorrectImageArch,
 		}
 	}
 
-	if imageInfo["Os"] != "linux" {
+	if imageInfo["Os"] != runtime.GOOS {
 		return &types.ExitCodeError{
 			ExitCode: types.WorkerContainerExitCodeIncorrectImageOs,
 		}

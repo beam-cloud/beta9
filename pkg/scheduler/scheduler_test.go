@@ -52,6 +52,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	workerPoolManager := NewWorkerPoolManager()
 	for name, pool := range config.Worker.Pools {
 		workerPoolManager.SetPool(name, pool, &LocalWorkerPoolControllerForTest{
+			ctx:        context.Background(),
 			name:       name,
 			config:     config,
 			workerRepo: workerRepo,
@@ -59,6 +60,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	}
 
 	return &Scheduler{
+		ctx:               context.Background(),
 		eventBus:          eventBus,
 		workerRepo:        workerRepo,
 		workerPoolManager: workerPoolManager,
@@ -71,9 +73,18 @@ func NewSchedulerForTest() (*Scheduler, error) {
 }
 
 type LocalWorkerPoolControllerForTest struct {
+	ctx        context.Context
 	name       string
 	config     types.AppConfig
 	workerRepo repo.WorkerRepository
+}
+
+func (wpc *LocalWorkerPoolControllerForTest) Context() context.Context {
+	return wpc.ctx
+}
+
+func (wpc *LocalWorkerPoolControllerForTest) IsPreemptable() bool {
+	return false
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
@@ -113,11 +124,20 @@ func (wpc *LocalWorkerPoolControllerForTest) FreeCapacity() (*WorkerPoolCapacity
 }
 
 type ExternalWorkerPoolControllerForTest struct {
+	ctx          context.Context
 	name         string
 	workerRepo   repo.WorkerRepository
 	providerRepo repository.ProviderRepository
 	poolName     string
 	providerName string
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) Context() context.Context {
+	return wpc.ctx
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) IsPreemptable() bool {
+	return false
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {
@@ -385,17 +405,29 @@ func TestSelectGPUWorker(t *testing.T) {
 	err = wb.workerRepo.AddWorker(newWorker)
 	assert.Nil(t, err)
 
-	firstRequest := &types.ContainerRequest{
+	cpuRequest := &types.ContainerRequest{
 		Cpu:    1000,
 		Memory: 1000,
-		Gpu:    "A10G",
+	}
+
+	firstRequest := &types.ContainerRequest{
+		Cpu:        1000,
+		Memory:     1000,
+		GpuRequest: []string{"A10G"},
 	}
 
 	secondRequest := &types.ContainerRequest{
-		Cpu:    1000,
-		Memory: 1000,
-		Gpu:    "A10G",
+		Cpu:        1000,
+		Memory:     1000,
+		GpuRequest: []string{"T4"},
 	}
+
+	// CPU request should not be able to select a GPU worker
+	_, err = wb.selectWorker(cpuRequest)
+	assert.Error(t, err)
+
+	_, ok := err.(*types.ErrNoSuitableWorkerFound)
+	assert.True(t, ok)
 
 	// Select a worker for the request
 	worker, err := wb.selectWorker(firstRequest)
@@ -413,7 +445,7 @@ func TestSelectGPUWorker(t *testing.T) {
 	_, err = wb.selectWorker(secondRequest)
 	assert.Error(t, err)
 
-	_, ok := err.(*types.ErrNoSuitableWorkerFound)
+	_, ok = err.(*types.ErrNoSuitableWorkerFound)
 	assert.True(t, ok)
 }
 
@@ -423,15 +455,33 @@ func TestSelectCPUWorker(t *testing.T) {
 	assert.NotNil(t, wb)
 
 	newWorker := &types.Worker{
+		Id:         uuid.New().String(),
 		Status:     types.WorkerStatusPending,
 		FreeCpu:    2000,
 		FreeMemory: 2000,
 		Gpu:        "",
 	}
 
+	newWorker2 := &types.Worker{
+		Id:         uuid.New().String(),
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Gpu:        "",
+	}
+
 	// Create a new worker
 	err = wb.workerRepo.AddWorker(newWorker)
 	assert.Nil(t, err)
+
+	err = wb.workerRepo.AddWorker(newWorker2)
+	assert.Nil(t, err)
+
+	gpuRequest := &types.ContainerRequest{
+		Cpu:        1000,
+		Memory:     1000,
+		GpuRequest: []string{"A10G"},
+	}
 
 	firstRequest := &types.ContainerRequest{
 		Cpu:    1000,
@@ -445,6 +495,31 @@ func TestSelectCPUWorker(t *testing.T) {
 		Gpu:    "",
 	}
 
+	thirdRequest := &types.ContainerRequest{
+		Cpu:    1000,
+		Memory: 1000,
+		Gpu:    "",
+	}
+
+	// GPU request should not be able to select a CPU worker
+	_, err = wb.selectWorker(gpuRequest)
+	assert.Error(t, err)
+
+	_, ok := err.(*types.ErrNoSuitableWorkerFound)
+	assert.True(t, ok)
+
+	// Add GPU worker to test that CPU workers won't select it
+	gpuWorker := &types.Worker{
+		Id:         uuid.New().String(),
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Gpu:        "A10G",
+	}
+
+	err = wb.workerRepo.AddWorker(gpuWorker)
+	assert.Nil(t, err)
+
 	// Select a worker for the request
 	worker, err := wb.selectWorker(firstRequest)
 	assert.Nil(t, err)
@@ -455,9 +530,16 @@ func TestSelectCPUWorker(t *testing.T) {
 
 	worker, err = wb.selectWorker(secondRequest)
 	assert.Nil(t, err)
-	assert.Equal(t, newWorker.Gpu, worker.Gpu)
+	assert.Equal(t, "", worker.Gpu)
 
 	err = wb.scheduleRequest(worker, secondRequest)
+	assert.Nil(t, err)
+
+	worker, err = wb.selectWorker(thirdRequest)
+	assert.Nil(t, err)
+	assert.Equal(t, newWorker.Gpu, worker.Gpu)
+
+	err = wb.scheduleRequest(worker, thirdRequest)
 	assert.Nil(t, err)
 
 	updatedWorker, err := wb.workerRepo.GetWorkerById(newWorker.Id)
@@ -467,25 +549,6 @@ func TestSelectCPUWorker(t *testing.T) {
 	assert.Equal(t, "", updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusPending, updatedWorker.Status)
 
-	newWorker2 := &types.Worker{
-		Status:     types.WorkerStatusPending,
-		FreeCpu:    1000,
-		FreeMemory: 1000,
-		Gpu:        "",
-	}
-
-	thirdRequest := &types.ContainerRequest{
-		Cpu:    1000,
-		Memory: 1000,
-	}
-
-	// Create a new worker
-	err = wb.workerRepo.AddWorker(newWorker2)
-	assert.Nil(t, err)
-
-	worker, err = wb.selectWorker(thirdRequest)
-	assert.Nil(t, err)
-	assert.Equal(t, "", worker.Gpu)
 }
 
 func stringInSlice(a string, list []string) bool {
@@ -693,6 +756,65 @@ func TestRequiresPoolSelectorWorker(t *testing.T) {
 	assert.Equal(t, int64(1000), updatedWorker.FreeMemory)
 	assert.Equal(t, "", updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusAvailable, updatedWorker.Status)
+}
+
+func TestPreemptableWorker(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	assert.NotNil(t, wb)
+
+	newPreemptableWorker := &types.Worker{
+		Id:          "worker1",
+		Status:      types.WorkerStatusAvailable,
+		FreeCpu:     2000,
+		FreeMemory:  2000,
+		Gpu:         "",
+		PoolName:    "cpu",
+		Preemptable: true,
+	}
+
+	// Create a new worker that is preemptable
+	err = wb.workerRepo.AddWorker(newPreemptableWorker)
+	assert.Nil(t, err)
+
+	nonPreemptableRequest := &types.ContainerRequest{
+		Cpu:    1000,
+		Memory: 1000,
+		Gpu:    "",
+	}
+
+	// Select a worker for the request, this one should not succeed since the only available worker is preemptable
+	_, err = wb.selectWorker(nonPreemptableRequest)
+	assert.Equal(t, &types.ErrNoSuitableWorkerFound{}, err)
+
+	preemptableRequest := &types.ContainerRequest{
+		Cpu:         1000,
+		Memory:      1000,
+		Gpu:         "",
+		Preemptable: true,
+	}
+
+	// Select a worker for the request, this one should succeed since there is an available preemptable worker
+	_, err = wb.selectWorker(preemptableRequest)
+	assert.Nil(t, err)
+
+	newNonPreemptableWorker := &types.Worker{
+		Id:         "worker2",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    2000,
+		FreeMemory: 2000,
+		Gpu:        "",
+		PoolName:   "cpu2",
+	}
+
+	// Create a new worker that is non preemptable
+	err = wb.workerRepo.AddWorker(newNonPreemptableWorker)
+	assert.Nil(t, err)
+
+	// Select a worker for the request, this one should succeed since there is an available preemptable worker
+	worker, err := wb.selectWorker(nonPreemptableRequest)
+	assert.Nil(t, err)
+	assert.Equal(t, worker.Id, newNonPreemptableWorker.Id)
 }
 
 func TestPoolPriority(t *testing.T) {

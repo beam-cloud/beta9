@@ -283,7 +283,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 
 	err = tq.taskDispatcher.Claim(ctx, authInfo.Workspace.Name, task.Stub.ExternalId, task.ExternalId, in.ContainerId)
 	if err != nil {
-		return nil, err
+		return &pb.TaskQueuePopResponse{Ok: false}, nil
 	}
 
 	task.ContainerId = in.ContainerId
@@ -344,6 +344,10 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 
 	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatus(in.TaskStatus)
+
+	if task.Status == types.TaskStatusRetry {
+		return tq.retryTask(ctx, authInfo, in), nil
+	}
 
 	err = tq.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
 	if err != nil {
@@ -406,7 +410,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 	} else if leftoverTimeoutSeconds <= 0 {
 		err := timeoutCallback()
 		if err != nil {
-			log.Printf("error timing out task: %v", err)
+			log.Printf("Error timing out task: %v\n", err)
 			return err
 		}
 
@@ -426,7 +430,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				case <-timeoutChan:
 					err := timeoutCallback()
 					if err != nil {
-						log.Printf("task timeout err: %v", err)
+						log.Printf("Task timeout err: %v\n", err)
 					}
 					timeoutFlag <- true
 					return
@@ -442,7 +446,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 
 				case err := <-errs:
 					if err != nil {
-						log.Printf("monitor task subscription err: %v", err)
+						log.Printf("Monitor task subscription err: %v\n", err)
 						break retry
 					}
 				}
@@ -453,6 +457,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 	for {
 		select {
 		case <-stream.Context().Done():
+			tq.rdb.Del(context.Background(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId))
 			return nil
 
 		case <-cancelFlag:
@@ -484,7 +489,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				return err
 			}
 
-			err = tq.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(1)*time.Second).Err()
+			err = tq.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId), 1, time.Duration(5)*time.Second).Err()
 			if err != nil {
 				return err
 			}
@@ -603,55 +608,28 @@ func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...fun
 	return instance, nil
 }
 
-// Redis keys
-var (
-	taskQueueList                string = "taskqueue:%s:%s"
-	taskQueueServeLock           string = "taskqueue:%s:%s:serve_lock"
-	taskQueueInstanceLock        string = "taskqueue:%s:%s:instance_lock"
-	taskQueueTaskDuration        string = "taskqueue:%s:%s:task_duration"
-	taskQueueAverageTaskDuration string = "taskqueue:%s:%s:avg_task_duration"
-	taskQueueTaskHeartbeat       string = "taskqueue:%s:%s:task:heartbeat:%s"
-	taskQueueProcessingLock      string = "taskqueue:%s:%s:processing_lock:%s"
-	taskQueueKeepWarmLock        string = "taskqueue:%s:%s:keep_warm_lock:%s"
-	taskQueueTaskRunningLock     string = "taskqueue:%s:%s:task_running:%s:%s"
-)
+func (tq *RedisTaskQueue) retryTask(ctx context.Context, authInfo *auth.AuthInfo, in *pb.TaskQueueCompleteRequest) *pb.TaskQueueCompleteResponse {
+	task, err := tq.taskDispatcher.Retrieve(ctx, authInfo.Workspace.Name, in.StubId, in.TaskId)
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{
+			Ok: false,
+		}
+	}
 
-var Keys = &keys{}
+	msg := ""
+	if task.Message().Retries >= task.Message().Policy.MaxRetries {
+		msg = fmt.Sprintf("Exceeded retry limit of %d for task <%s>", task.Message().Policy.MaxRetries, task.Message().TaskId)
+	}
 
-type keys struct{}
+	err = tq.taskDispatcher.RetryTask(ctx, task)
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{
+			Ok: false,
+		}
+	}
 
-func (k *keys) taskQueueInstanceLock(workspaceName, stubId string) string {
-	return fmt.Sprintf(taskQueueInstanceLock, workspaceName, stubId)
-}
-
-func (k *keys) taskQueueServeLock(workspaceName, stubId string) string {
-	return fmt.Sprintf(taskQueueServeLock, workspaceName, stubId)
-}
-
-func (k *keys) taskQueueList(workspaceName, stubId string) string {
-	return fmt.Sprintf(taskQueueList, workspaceName, stubId)
-}
-
-func (k *keys) taskQueueTaskHeartbeat(workspaceName, stubId, taskId string) string {
-	return fmt.Sprintf(taskQueueTaskHeartbeat, workspaceName, stubId, taskId)
-}
-
-func (k *keys) taskQueueTaskDuration(workspaceName, stubId string) string {
-	return fmt.Sprintf(taskQueueTaskDuration, workspaceName, stubId)
-}
-
-func (k *keys) taskQueueAverageTaskDuration(workspaceName, stubId string) string {
-	return fmt.Sprintf(taskQueueAverageTaskDuration, workspaceName, stubId)
-}
-
-func (k *keys) taskQueueTaskRunningLock(workspaceName, stubId, containerId, taskId string) string {
-	return fmt.Sprintf(taskQueueTaskRunningLock, workspaceName, stubId, containerId, taskId)
-}
-
-func (k *keys) taskQueueProcessingLock(workspaceName, stubId, containerId string) string {
-	return fmt.Sprintf(taskQueueProcessingLock, workspaceName, stubId, containerId)
-}
-
-func (k *keys) taskQueueKeepWarmLock(workspaceName, stubId, containerId string) string {
-	return fmt.Sprintf(taskQueueKeepWarmLock, workspaceName, stubId, containerId)
+	return &pb.TaskQueueCompleteResponse{
+		Ok:      true,
+		Message: msg,
+	}
 }

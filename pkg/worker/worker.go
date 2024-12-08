@@ -27,8 +27,9 @@ const (
 	requestProcessingInterval     time.Duration = 100 * time.Millisecond
 	containerStatusUpdateInterval time.Duration = 30 * time.Second
 
-	containerLogsPath          string  = "/var/log/worker"
-	defaultWorkerSpindownTimeS float64 = 300 // 5 minutes
+	containerLogsPath          string        = "/var/log/worker"
+	defaultWorkerSpindownTimeS float64       = 300 // 5 minutes
+	defaultCacheWaitTime       time.Duration = 30 * time.Second
 )
 
 type Worker struct {
@@ -41,6 +42,7 @@ type Worker struct {
 	imageMountPath          string
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
+	cedanaClient            *CedanaClient
 	fileCacheManager        *FileCacheManager
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
@@ -59,7 +61,8 @@ type Worker struct {
 	stopContainerChan       chan stopContainerEvent
 	workerRepo              repo.WorkerRepository
 	eventRepo               repo.EventRepository
-	storage                 storage.Storage
+	userDataStorage         storage.Storage
+	checkpointStorage       storage.Storage
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
@@ -76,6 +79,7 @@ type ContainerInstance struct {
 	Port         int
 	OutputWriter *common.OutputWriter
 	LogBuffer    *common.LogBuffer
+	Request      *types.ContainerRequest
 }
 
 type ContainerOptions struct {
@@ -94,6 +98,7 @@ func NewWorker() (*Worker, error) {
 
 	gpuType := os.Getenv("GPU_TYPE")
 	workerId := os.Getenv("WORKER_ID")
+	workerPoolName := os.Getenv("WORKER_POOL_NAME")
 	podHostName := os.Getenv("HOSTNAME")
 
 	podAddr, err := GetPodAddr()
@@ -131,7 +136,7 @@ func NewWorker() (*Worker, error) {
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
-	storage, err := storage.NewStorage(config.Storage)
+	userDataStorage, err := storage.NewStorage(config.Storage)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +144,10 @@ func NewWorker() (*Worker, error) {
 	var cacheClient *blobcache.BlobCacheClient = nil
 	if config.Worker.BlobCacheEnabled {
 		cacheClient, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
+		if err == nil {
+			err = cacheClient.WaitForHosts(defaultCacheWaitTime)
+		}
+
 		if err != nil {
 			log.Printf("[WARNING] Cache unavailable, performance may be degraded: %+v\n", err)
 		}
@@ -148,6 +157,35 @@ func NewWorker() (*Worker, error) {
 	imageClient, err := NewImageClient(config, workerId, workerRepo, fileCacheManager)
 	if err != nil {
 		return nil, err
+	}
+
+	var cedanaClient *CedanaClient = nil
+	var checkpointStorage storage.Storage = nil
+	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
+		cedanaClient, err = NewCedanaClient(context.Background(), config.Worker.CRIU.Cedana, gpuType != "")
+		if err != nil {
+			log.Printf("[WARNING] C/R unavailable, failed to create cedana client: %v\n", err)
+		}
+
+		os.MkdirAll(config.Worker.CRIU.Storage.MountPath, os.ModePerm)
+
+		// If storage mode is S3, mount the checkpoint storage as a FUSE filesystem
+		if config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeS3) {
+			checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
+				S3Bucket:    config.Worker.CRIU.Storage.ObjectStore.BucketName,
+				AccessKey:   config.Worker.CRIU.Storage.ObjectStore.AccessKey,
+				SecretKey:   config.Worker.CRIU.Storage.ObjectStore.SecretKey,
+				EndpointURL: config.Worker.CRIU.Storage.ObjectStore.EndpointURL,
+				Region:      config.Worker.CRIU.Storage.ObjectStore.Region,
+				ReadOnly:    false,
+			})
+
+			err := checkpointStorage.Mount(config.Worker.CRIU.Storage.MountPath)
+			if err != nil {
+				log.Printf("[WARNING] C/R unavailable, unable to mount checkpoint storage: %v\n", err)
+				cedanaClient = nil
+			}
+		}
 	}
 
 	runcServer, err := NewRunCServer(containerInstances, imageClient)
@@ -182,7 +220,7 @@ func NewWorker() (*Worker, error) {
 		memoryLimit:             memoryLimit,
 		gpuType:                 gpuType,
 		gpuCount:                uint32(gpuCount),
-		runcHandle:              runc.Runc{},
+		runcHandle:              runc.Runc{Debug: config.DebugMode},
 		runcServer:              runcServer,
 		fileCacheManager:        fileCacheManager,
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
@@ -191,6 +229,7 @@ func NewWorker() (*Worker, error) {
 		containerMountManager:   NewContainerMountManager(config),
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
+		cedanaClient:            cedanaClient,
 		podHostName:             podHostName,
 		eventBus:                nil,
 		workerId:                workerId,
@@ -206,7 +245,8 @@ func NewWorker() (*Worker, error) {
 		eventRepo:         eventRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
 		stopContainerChan: make(chan stopContainerEvent, 1000),
-		storage:           storage,
+		userDataStorage:   userDataStorage,
+		checkpointStorage: checkpointStorage,
 	}, nil
 }
 
@@ -251,7 +291,7 @@ func (s *Worker) Run() error {
 					}
 
 					s.containerLock.Unlock()
-					s.clearContainer(containerId, request, time.Duration(0), exitCode)
+					s.clearContainer(containerId, request, exitCode)
 					continue
 				}
 			}
@@ -311,8 +351,6 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				return nil
 			}
 
-			log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
-
 			// Stop container if it is "orphaned" - meaning it's running but has no associated state
 			state, err := s.containerRepo.GetContainerState(request.ContainerId)
 			if err != nil {
@@ -323,6 +361,14 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				}
 
 				continue
+			}
+
+			log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
+
+			// TODO: remove this hotfix
+			if state.Status == types.ContainerStatusPending {
+				log.Printf("<%s> - forcing container status to running\n", request.ContainerId)
+				state.Status = types.ContainerStatusRunning
 			}
 
 			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
@@ -360,7 +406,6 @@ func (s *Worker) processStopContainerEvents() {
 		default:
 			err := s.stopContainer(event.ContainerId, event.Kill)
 			if err != nil {
-				s.stopContainerChan <- event
 				time.Sleep(time.Second)
 			}
 		}
@@ -440,27 +485,25 @@ func (s *Worker) shutdown() error {
 	// Stops goroutines
 	s.cancel()
 
-	// Stop all running containers forcefully
-	s.containerInstances.Range(func(containerId string, _ *ContainerInstance) bool {
-		if err := s.stopContainer(containerId, true); err != nil {
-			log.Printf("Failed to stop container: %v\n", err)
-		}
-		return true // continue iterating
-	})
-
 	var errs error
 	if worker, err := s.workerRepo.GetWorkerById(s.workerId); err != nil {
 		errs = errors.Join(errs, err)
 	} else if worker != nil {
-		err = s.workerRepo.RemoveWorker(worker)
-		if err != nil {
+		if err := s.workerRepo.RemoveWorker(worker); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
 
-	err := s.storage.Unmount(s.config.Storage.FilesystemPath)
+	err := s.userDataStorage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
-		errs = errors.Join(errs, fmt.Errorf("failed to unmount storage: %v", err))
+		errs = errors.Join(errs, fmt.Errorf("failed to unmount data storage: %v", err))
+	}
+
+	if s.checkpointStorage != nil {
+		err = s.checkpointStorage.Unmount(s.config.Worker.CRIU.Storage.MountPath)
+		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to unmount checkpoint storage: %v", err))
+		}
 	}
 
 	err = s.imageClient.Cleanup()
