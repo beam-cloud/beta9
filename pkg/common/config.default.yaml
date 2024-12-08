@@ -236,6 +236,8 @@ monitoring:
   openmeter:
     serverUrl: ""
     apiKey: ""
+agent:
+  dynamicServiceHosts: false
 abstractions:
   bot:
     systemPrompt: ""

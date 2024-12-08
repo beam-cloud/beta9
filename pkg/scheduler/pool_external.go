@@ -274,7 +274,8 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	workerImage := fmt.Sprintf("%s/%s:%s",
 		wpc.config.Worker.ImageRegistry,
 		wpc.config.Worker.ImageName,
-		wpc.config.Worker.ImageTag,
+		// wpc.config.Worker.ImageTag,
+		"devel1",
 	)
 
 	resources := corev1.ResourceRequirements{}
@@ -405,7 +406,11 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "BETA9_GATEWAY_PORT",
-			Value: "443",
+			Value: strconv.Itoa(wpc.config.GatewayService.GRPC.ExternalPort),
+		},
+		{
+			Name:  "BETA9_GATEWAY_TLS",
+			Value: "true",
 		},
 		{
 			Name:  "POD_HOSTNAME",

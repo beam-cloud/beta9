@@ -26,34 +26,41 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 		return nil, err
 	}
 
-	redisHostname, err := tailscale.ResolveService("control-plane-redis", connectTimeout)
-	if err != nil {
-		return nil, err
-	}
-	remoteConfig.Database.Redis.Addrs[0] = fmt.Sprintf("%s:%d", redisHostname, 6379)
-	remoteConfig.Database.Redis.InsecureSkipVerify = true
-
-	if baseConfig.Storage.Mode == storage.StorageModeJuiceFS {
-		juiceFsRedisHostname, err := tailscale.ResolveService("juicefs-redis", connectTimeout)
+	var redisHostname string
+	if remoteConfig.Agent.DynamicServiceHosts {
+		redisHostname, err = tailscale.ResolveService("control-plane-redis", connectTimeout)
 		if err != nil {
 			return nil, err
 		}
+		remoteConfig.Database.Redis.Addrs[0] = fmt.Sprintf("%s:%d", redisHostname, 6379)
+	}
+	remoteConfig.Database.Redis.InsecureSkipVerify = true
 
-		juiceFsRedisHostname = fmt.Sprintf("%s:%d", juiceFsRedisHostname, 6379)
-
+	if baseConfig.Storage.Mode == storage.StorageModeJuiceFS {
 		parsedUrl, err := url.Parse(remoteConfig.Storage.JuiceFS.RedisURI)
 		if err != nil {
 			return nil, err
 		}
 
 		juicefsRedisPassword, _ := parsedUrl.User.Password()
-		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("rediss://:%s@%s/0", juicefsRedisPassword, juiceFsRedisHostname)
+		scheme := parsedUrl.Scheme
+
+		if remoteConfig.Agent.DynamicServiceHosts {
+			juiceFsRedisHostname, err := tailscale.ResolveService("juicefs-redis", connectTimeout)
+			if err != nil {
+				return nil, err
+			}
+			remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("%s://:%s@%s/0", scheme, juicefsRedisPassword, juiceFsRedisHostname)
+		}
 	}
 
 	if baseConfig.Worker.BlobCacheEnabled {
-		blobcacheRedisHostname, err := tailscale.ResolveService("blobcache-redis", connectTimeout)
-		if err != nil {
-			return nil, err
+		var blobcacheRedisHostname string
+		if remoteConfig.Agent.DynamicServiceHosts {
+			blobcacheRedisHostname, err = tailscale.ResolveService("blobcache-redis", connectTimeout)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		remoteConfig.BlobCache.Metadata.RedisAddr = fmt.Sprintf("%s:%d", blobcacheRedisHostname, 6379)

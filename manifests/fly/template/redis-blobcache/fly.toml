@@ -1,0 +1,37 @@
+# fly.toml app configuration file generated for blobcache-redis on 2024-11-18T16:43:08-07:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'blobcache-redis'
+primary_region = 'ewr'
+
+[build]
+  image = 'redis'
+
+[[mounts]]
+  source = 'redis_server'
+  destination = '/data'
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 6379
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 6379
+
+  [[services.tcp_checks]]
+    interval = '10s'
+    timeout = '2s'
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[[metrics]]
+  port = 9091
+  path = '/metrics'
+  https = false
