@@ -170,8 +170,7 @@ def create_machine(service: ServiceClient, pool: str):
         f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
     )
 
-    text = textwrap.dedent(
-        f"""\
+    cmd_text = f"""\
         # -- Agent setup
         sudo curl -L -o agent https://release.beam.cloud/agent/agent && \\
         sudo chmod +x agent && \\
@@ -180,10 +179,14 @@ def create_machine(service: ServiceClient, pool: str):
             --tailscale-url "{res.machine.tailscale_url}" \\
             --tailscale-auth "{res.machine.tailscale_auth}" \\
             --pool-name "{res.machine.pool_name}" \\
-            --provider-name "{res.machine.provider_name}" \\
-            --gateway-url "https://{service._config.gateway_host}"
+            --provider-name "{res.machine.provider_name}\""""
+
+    if not service._config.gateway_host.endswith("beam.cloud"):
+        cmd_text += f""" \\
+            --gateway-url "{service._config.gateway_host}"
         """
-    )
+
+    text = textwrap.dedent(cmd_text + "\n")
 
     if res.machine.user_data:
         text = f"""# -- User data\n{res.machine.user_data}\n{text}"""
