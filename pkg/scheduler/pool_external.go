@@ -191,7 +191,7 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		return nil, err
 	}
 
-	if machine.State.Status != types.MachineStatusRegistered {
+	if machine.State.Status != types.MachineStatusReady {
 		return nil, errors.New("machine not registered")
 	}
 

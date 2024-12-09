@@ -251,7 +251,7 @@ func TestOccupyAvailableMachines(t *testing.T) {
 		AutoConsolidate: false,
 		Cpu:             30000,
 		Memory:          16000,
-		Status:          types.MachineStatusRegistered,
+		Status:          types.MachineStatusReady,
 	})
 	assert.NoError(t, err)
 
@@ -261,7 +261,7 @@ func TestOccupyAvailableMachines(t *testing.T) {
 		AutoConsolidate: false,
 		Cpu:             30000,
 		Memory:          16000,
-		Status:          types.MachineStatusRegistered,
+		Status:          types.MachineStatusReady,
 	})
 	assert.NoError(t, err)
 
@@ -271,7 +271,7 @@ func TestOccupyAvailableMachines(t *testing.T) {
 		AutoConsolidate: false,
 		Cpu:             30000,
 		Memory:          10000,
-		Status:          types.MachineStatusRegistered,
+		Status:          types.MachineStatusReady,
 	})
 	assert.NoError(t, err)
 
@@ -281,7 +281,7 @@ func TestOccupyAvailableMachines(t *testing.T) {
 		AutoConsolidate: false,
 		Cpu:             30000,
 		Memory:          16000,
-		Status:          types.MachineStatusRegistered,
+		Status:          types.MachineStatusReady,
 	})
 	assert.NoError(t, err)
 	assert.NoError(t, err)
@@ -401,7 +401,7 @@ func TestOccupyAvailableMachinesConcurrency(t *testing.T) {
 			AutoConsolidate: false,
 			Cpu:             10000,
 			Memory:          10000,
-			Status:          types.MachineStatusRegistered,
+			Status:          types.MachineStatusReady,
 		}
 		err = providerRepo.AddMachine(string(types.ProviderGeneric), poolName, machineName, machineState)
 		assert.NoError(t, err)

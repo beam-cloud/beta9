@@ -309,7 +309,7 @@ func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machin
 
 	machineInfo.HostName = newMachineInfo.HostName
 	machineInfo.Token = newMachineInfo.Token
-	machineInfo.Status = types.MachineStatusRegistered
+	machineInfo.Status = types.MachineStatusReady
 	machineInfo.Cpu = newMachineInfo.Cpu
 	machineInfo.Memory = newMachineInfo.Memory
 	machineInfo.GpuCount = newMachineInfo.GpuCount

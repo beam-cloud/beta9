@@ -183,7 +183,7 @@ func TestCopyStruct(t *testing.T) {
 			src: &types.ProviderMachineState{
 				MachineId:         "123",
 				PoolName:          "pool1",
-				Status:            types.MachineStatusRegistered,
+				Status:            types.MachineStatusReady,
 				HostName:          "host1",
 				Token:             "token1",
 				Cpu:               10,
@@ -217,7 +217,7 @@ func TestCopyStruct(t *testing.T) {
 			expected: &types.ProviderMachineState{
 				MachineId:         "123",
 				PoolName:          "pool1",
-				Status:            types.MachineStatusRegistered,
+				Status:            types.MachineStatusReady,
 				HostName:          "host1",
 				Token:             "token1",
 				Cpu:               10,
