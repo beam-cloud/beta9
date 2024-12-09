@@ -153,8 +153,10 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 	// hard code a dockerfile to test building with buildah
 	dockerfile := `FROM ubuntu:22.04 
-	RUN echo hi`
+	RUN echo hi
+	ENV BLAH=hi`
 
+	log.Printf("<%s> - building test image to %s/rootfs\n", containerId, bundlePath)
 	err := s.imageClient.BuildAndArchiveImage(context.TODO(), dockerfile, bundlePath, request.ImageId)
 	if err != nil {
 		log.Printf("<%s> - failed to build test image: %v\n", containerId, err)
@@ -502,7 +504,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
+	// FIXME: something about baseConfigPath is wrong for df-built images?
 	configPath := filepath.Join(baseConfigPath, containerId, specBaseName)
+	log.Printf("<%s> - writing config to %s\n", containerId, configPath)
 	err = os.WriteFile(configPath, configContents, 0644)
 	if err != nil {
 		return
@@ -623,6 +627,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 
 // isBuildRequest checks if the sourceImage field is not-nil, which means the container request is for a build container
 func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
+	// return true
 	return request.SourceImage != nil
 }
 

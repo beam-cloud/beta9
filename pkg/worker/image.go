@@ -24,6 +24,7 @@ import (
 	bstorage "github.com/containers/storage"
 	"github.com/containers/storage/pkg/unshare"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
@@ -263,12 +264,12 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 }
 
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile string, bundlePath string, imageId string) error {
-	d, err := os.MkdirTemp("", "")
+	buildDir, err := os.MkdirTemp("", "")
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(d)
-	tempDockerFile := filepath.Join(d, "Dockerfile")
+	defer os.RemoveAll(buildDir)
+	tempDockerFile := filepath.Join(buildDir, "Dockerfile")
 	f, err := os.Create(tempDockerFile)
 	if err != nil {
 		return err
@@ -276,11 +277,10 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 	fmt.Fprintf(f, dockerfile)
 	f.Close()
 
-	tempBundlePath := filepath.Join(bundlePath, "rootfs")
-	os.MkdirAll(tempBundlePath, 0755)
+	rootfsPath := filepath.Join(bundlePath, "rootfs")
+	os.MkdirAll(rootfsPath, 0755)
 
-	// // run using the file we created
-	cmd := exec.Command("buildah", "build", "--format=oci", "--output=type=local,dest="+tempBundlePath, "--tag=latest", "-f", tempDockerFile, ".")
+	cmd := exec.Command("buildah", "build", "--format=oci", "--output="+rootfsPath, "--tag="+imageId+":latest", "-f", tempDockerFile, ".")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err = cmd.Run()
@@ -288,8 +288,33 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 		return err
 	}
 
+	// Run the push command to get the config.json and then write it to the bundle path
+	cmd = exec.Command("buildah", "push", imageId+":latest", "oci:"+buildDir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
+	if err != nil {
+		return err
+	}
+
+	manifestDigest, err := getManifest(buildDir)
+	if err != nil {
+		return err
+	}
+
+	configContent, err := getConfig(buildDir, manifestDigest)
+	if err != nil {
+		return err
+	}
+
+	configPath := filepath.Join(bundlePath, specBaseName)
+	err = os.WriteFile(configPath, []byte(configContent), 0644)
+	if err != nil {
+		return err
+	}
+
 	for _, dir := range requiredContainerDirectories {
-		fullPath := filepath.Join(tempBundlePath, dir)
+		fullPath := filepath.Join(rootfsPath, dir)
 		err := os.MkdirAll(fullPath, 0755)
 		if err != nil {
 			errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
@@ -321,7 +346,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 				{Name: string(specs.NetworkNamespace), Host: true},
 			},
 			ReportWriter: os.Stdout,
-			BuildOutput:  tempBundlePath,
+			BuildOutput:  rootfsPath,
 			Isolation:    define.IsolationChroot,
 		}
 
@@ -332,8 +357,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 	}
 
 	// TODO: Not sure if we need this or not?
-	// defer os.RemoveAll(bundlePath)
-	return c.Archive(ctx, tempBundlePath, imageId, nil)
+	// defer os.RemoveAll(bundlePath) (we do this in pull and archive but that is because it immediately pulls after the pullandarchive call succeeds)
+	return c.Archive(ctx, bundlePath, imageId, nil)
 }
 
 func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds string) error {
@@ -524,5 +549,95 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}
 
 	log.Printf("Image <%v> push took %v\n", imageId, time.Since(startTime))
+	return nil
+}
+
+func getManifest(buildDir string) (map[string]interface{}, error) {
+	indexPath := filepath.Join(buildDir, "index.json")
+	index, err := os.ReadFile(indexPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var indexData map[string]interface{}
+	err = json.Unmarshal(index, &indexData)
+	if err != nil {
+		return nil, err
+	}
+
+	manifests := indexData["manifests"].([]interface{})
+
+	if len(manifests) == 0 {
+		return nil, errors.New("no manifests found in index.json")
+	}
+
+	manifestEntry := manifests[0].(map[string]interface{})
+	digest, ok := manifestEntry["digest"].(string)
+	if !ok {
+		return nil, errors.New("digest not found in manifest")
+	}
+
+	if strings.HasPrefix(digest, "sha256:") {
+		digest = strings.TrimPrefix(digest, "sha256:")
+	}
+
+	manifestPath := filepath.Join(buildDir, "blobs", "sha256", digest)
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var manifestData map[string]interface{}
+	err = json.Unmarshal(manifest, &manifestData)
+	if err != nil {
+		return nil, err
+	}
+
+	err = checkMediaType(v1.MediaTypeImageManifest, manifestData)
+	if err != nil {
+		return nil, err
+	}
+
+	return manifestData, nil
+}
+
+func getConfig(buildDir string, manifestData map[string]interface{}) ([]byte, error) {
+	config, ok := manifestData["config"].(map[string]interface{})
+	if !ok {
+		return nil, errors.New("config not found in manifest")
+	}
+
+	err := checkMediaType(v1.MediaTypeImageConfig, config)
+	if err != nil {
+		return nil, err
+	}
+
+	digest, ok := config["digest"].(string)
+	if !ok {
+		return nil, errors.New("digest not found in config")
+	}
+
+	if strings.HasPrefix(digest, "sha256:") {
+		digest = strings.TrimPrefix(digest, "sha256:")
+	}
+
+	configPath := filepath.Join(buildDir, "blobs", "sha256", digest)
+	configContent, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return configContent, nil
+}
+
+func checkMediaType(expectedMediaType string, config map[string]interface{}) error {
+	mediaType, ok := config["mediaType"].(string)
+	if !ok {
+		return errors.New("media type not found in config")
+	}
+
+	if mediaType != expectedMediaType {
+		return errors.New(fmt.Sprintf("media type %s is not %s", mediaType, expectedMediaType))
+	}
 	return nil
 }
