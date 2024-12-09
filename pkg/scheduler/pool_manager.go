@@ -1,6 +1,9 @@
 package scheduler
 
 import (
+	"cmp"
+	"slices"
+
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -47,7 +50,8 @@ func (m *WorkerPoolManager) GetPoolByGPU(gpuType string) (*WorkerPool, bool) {
 }
 
 // GetPoolsByGPU retrieves all WorkerPools by their GPU type.
-// It returns a slice of matching WorkerPools.
+// It returns a slice of matching WorkerPools. The results are sorted by
+// WorkerPoolConfig.Priority in descending order.
 func (m *WorkerPoolManager) GetPoolsByGPU(gpuType string) []*WorkerPool {
 	var pools []*WorkerPool
 
@@ -56,6 +60,10 @@ func (m *WorkerPoolManager) GetPoolsByGPU(gpuType string) []*WorkerPool {
 			pools = append(pools, value)
 		}
 		return true
+	})
+
+	slices.SortFunc(pools, func(a, b *WorkerPool) int {
+		return cmp.Compare(b.Config.Priority, a.Config.Priority)
 	})
 
 	return pools
