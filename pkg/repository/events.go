@@ -281,12 +281,13 @@ func (t *TCPEventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
 	)
 }
 
-func (t *TCPEventClientRepo) PushStubStateNotHealthy(stub string, currentState string, previousState string, reason string, failedContainers []string) {
+func (t *TCPEventClientRepo) PushStubStateNotHealthy(workspaceId string, stubId string, currentState string, previousState string, reason string, failedContainers []string) {
 	t.pushEvent(
 		fmt.Sprintf("stub.state.%s", strings.ToLower(currentState)),
 		types.EventStubStateSchemaVersion,
 		types.EventStubStateSchema{
-			ID:               stub,
+			ID:               stubId,
+			WorkspaceID:      workspaceId,
 			State:            currentState,
 			Reason:           reason,
 			PreviousState:    previousState,
@@ -295,12 +296,13 @@ func (t *TCPEventClientRepo) PushStubStateNotHealthy(stub string, currentState s
 	)
 }
 
-func (t *TCPEventClientRepo) PushStubStateHealthy(stub string, previousState string) {
+func (t *TCPEventClientRepo) PushStubStateHealthy(workspaceId string, stubId string, previousState string) {
 	t.pushEvent(
 		fmt.Sprintf("stub.state.%s", types.StubStateHealthy),
 		types.EventStubStateSchemaVersion,
 		types.EventStubStateSchema{
-			ID:               stub,
+			ID:               stubId,
+			WorkspaceID:      workspaceId,
 			State:            types.StubStateHealthy,
 			PreviousState:    previousState,
 			FailedContainers: []string{},

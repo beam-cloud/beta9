@@ -136,6 +136,7 @@ var EventStubStateSchemaVersion = "1.0"
 
 type EventStubStateSchema struct {
 	ID               string   `json:"id"`
+	WorkspaceID      string   `json:"workspace_id"`
 	State            string   `json:"state"`
 	PreviousState    string   `json:"previous_state"`
 	Reason           string   `json:"reason"`

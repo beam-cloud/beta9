@@ -319,7 +319,7 @@ func (i *AutoscaledInstance) HandleDeploymentNotHealthy(stubId, currentState, re
 		return
 	}
 
-	go i.EventRepo.PushStubStateNotHealthy(stubId, currentState, state, reason, containers)
+	go i.EventRepo.PushStubStateNotHealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
 }
 
 func (i *AutoscaledInstance) HandleDeploymentHealthy(stubId string) {
@@ -338,5 +338,5 @@ func (i *AutoscaledInstance) HandleDeploymentHealthy(stubId string) {
 		return
 	}
 
-	go i.EventRepo.PushStubStateHealthy(stubId, state)
+	go i.EventRepo.PushStubStateHealthy(i.Workspace.ExternalId, stubId, state)
 }

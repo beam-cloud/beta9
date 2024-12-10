@@ -183,8 +183,8 @@ type EventRepository interface {
 	PushRunStubEvent(workspaceId string, stub *types.Stub)
 	PushTaskUpdatedEvent(task *types.TaskWithRelated)
 	PushTaskCreatedEvent(task *types.TaskWithRelated)
-	PushStubStateNotHealthy(stub string, currentState, previousState string, reason string, failedContainers []string)
-	PushStubStateHealthy(stub string, previousState string)
+	PushStubStateNotHealthy(workspaceId string, stubId string, currentState, previousState string, reason string, failedContainers []string)
+	PushStubStateHealthy(workspaceId string, stubId string, previousState string)
 }
 
 type MetricsRepository interface {
