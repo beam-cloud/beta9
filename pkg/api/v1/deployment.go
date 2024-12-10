@@ -89,29 +89,14 @@ func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 	}
 
 	deploymentId := ctx.Param("deploymentId")
-	deployment, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), workspace.Id, deploymentId)
-	if err != nil {
+	if deployment, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), workspace.Id, deploymentId); err != nil {
 		return HTTPInternalServerError("Failed to get deployment")
 	} else if deployment == nil {
 		return HTTPNotFound()
+	} else {
+		deployment.Stub.SanitizeConfig()
+		return ctx.JSON(http.StatusOK, deployment)
 	}
-
-	deployment.Stub.SanitizeConfig()
-	state, err := g.containerRepo.GetStubUnhealthyState(deployment.Stub.ExternalId)
-	if err != nil {
-		return HTTPInternalServerError("Failed to get deployment state")
-	}
-	deployment.State = state
-
-	if state != types.StubStateHealthy {
-		failedContainers, err := g.containerRepo.GetFailedContainersByStubId(deployment.Stub.ExternalId)
-		if err != nil {
-			return HTTPInternalServerError("Failed to get failed containers")
-		}
-		deployment.RecentlyFailedContainers = failedContainers
-	}
-
-	return ctx.JSON(http.StatusOK, deployment)
 }
 
 func (g *DeploymentGroup) StopDeployment(ctx echo.Context) error {
