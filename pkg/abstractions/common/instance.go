@@ -10,7 +10,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/redis/go-redis/v9"
 )
 
 const IgnoreScalingEventInterval = 10 * time.Second
@@ -301,12 +300,8 @@ func (i *AutoscaledInstance) HandleDeploymentNotHealthy(stubId, currentState, re
 	var state string
 	state, err := i.ContainerRepo.GetStubUnhealthyState(stubId)
 	if err != nil {
-		if err != redis.Nil {
-			log.Printf("<%s> failed to get unhealthy state\n", i.Name)
-			return
-		}
-
-		state = types.StubStateHealthy
+		log.Printf("<%s> failed to get unhealthy state\n", i.Name)
+		return
 	}
 
 	if state == currentState {
@@ -325,10 +320,7 @@ func (i *AutoscaledInstance) HandleDeploymentNotHealthy(stubId, currentState, re
 func (i *AutoscaledInstance) HandleDeploymentHealthy(stubId string) {
 	var state string
 	state, err := i.ContainerRepo.GetStubUnhealthyState(stubId)
-	if err != nil {
-		if err != redis.Nil {
-			log.Printf("<%s> failed to get unhealthy state\n", i.Name)
-		}
+	if err != nil || state == types.StubStateHealthy {
 		return
 	}
 
