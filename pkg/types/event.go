@@ -18,10 +18,9 @@ var (
 		1.	<resource>: This indicates the type of object or resource that the event pertains to, such as payment_intent, invoice, customer, subscription, etc.
 		2.	<action>: This indicates the specific action or change that occurred with that resource, such as created, updated, deleted, succeeded, etc.
 	*/
-	EventTaskUpdated       = "task.updated"
-	EventTaskCreated       = "task.created"
-	EventStubStateDegraded = "stub.state.degraded"
-	EventStubStateHealthy  = "stub.state.healthy"
+	EventTaskUpdated = "task.updated"
+	EventTaskCreated = "task.created"
+	EventStubState   = "stub.state.%s" // healthy, degraded, warning
 
 	/*
 		TODO: Requires updates
