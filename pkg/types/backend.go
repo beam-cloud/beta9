@@ -78,8 +78,10 @@ type Deployment struct {
 
 type DeploymentWithRelated struct {
 	Deployment
-	Workspace Workspace `db:"workspace" json:"workspace"`
-	Stub      Stub      `db:"stub" json:"stub"`
+	Workspace                Workspace `db:"workspace" json:"workspace"`
+	Stub                     Stub      `db:"stub" json:"stub"`
+	State                    string    `db:"state" json:"state"`
+	RecentlyFailedContainers []string  `json:"recently_failed_containers"`
 }
 
 type Object struct {
