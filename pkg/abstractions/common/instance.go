@@ -24,9 +24,7 @@ type AutoscaledInstanceState struct {
 	RunningContainers  int
 	PendingContainers  int
 	StoppingContainers int
-
-	// TODO: We can potentially store the strings for RUNNING, PENDING, STOPPING, containers as well
-	FailedContainers []string
+	FailedContainers   []string
 }
 
 type AutoscaledInstanceConfig struct {
