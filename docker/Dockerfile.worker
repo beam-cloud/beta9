@@ -93,7 +93,7 @@ RUN apt-get install -y libbtrfs-dev libgpgme11-dev
 COPY go.mod go.sum ./
 RUN go mod download
 COPY --exclude=sdk . .
-RUN go build -tags "cni" -o /usr/local/bin/worker ./cmd/worker/main.go
+RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 
 
 # final image
@@ -119,8 +119,7 @@ RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvi
 
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
 
-# TODO: PRUNE DEPS WE DON'T NEED
-RUN apt-get install -y libbtrfs-dev libgpgme11-dev bats btrfs-progs libapparmor-dev libglib2.0-dev libseccomp-dev libselinux1-dev slirp4netns podman
+RUN apt-get install -y libbtrfs-dev libgpgme11-dev podman
 
 # XXX: Remove once cedana starts shipping with a compatible binary
 RUN <<EOT
@@ -177,7 +176,6 @@ RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
     rm -rf /var/lib/apt/lists/* /var/log/*
 
-# TODO: REMOVE THE CLI BUILD IF THE PKG WORKS/PRUNE DEPS WE DON'T NEED ABOVE
 ENV BUILDAH_RUNTIME=/usr/local/sbin/runc
 RUN echo "nameserver 8.8.8.8" > /workspace/resolv.conf
 COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
