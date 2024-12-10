@@ -95,6 +95,48 @@ func (o *BuildOpts) String() string {
 	return b.String()
 }
 
+func (o *BuildOpts) setCustomImageBuildOptions() error {
+	baseImage, err := ExtractImageNameAndTag(o.ExistingImageUri)
+	if err != nil {
+		return err
+	}
+
+	if len(o.ExistingImageCreds) > 0 && o.ExistingImageUri != "" {
+		token, err := GetRegistryToken(o)
+		if err != nil {
+			return err
+		}
+		o.BaseImageCreds = token
+	}
+
+	o.BaseImageRegistry = baseImage.Registry
+	o.BaseImageName = baseImage.Repo
+	o.BaseImageTag = baseImage.Tag
+
+	return nil
+}
+
+func (o *BuildOpts) addPythonRequirements() {
+	// Override any specified python packages with base requirements (to ensure we have what need in the image)
+	baseRequirementsSlice := strings.Split(strings.TrimSpace(basePythonRequirements), "\n")
+
+	// Create a map to track package names in baseRequirementsSlice
+	baseNames := make(map[string]bool)
+	for _, basePkg := range baseRequirementsSlice {
+		baseNames[extractPackageName(basePkg)] = true
+	}
+
+	// Filter out existing packages from opts.PythonPackages
+	filteredPythonPackages := make([]string, 0)
+	for _, optPkg := range o.PythonPackages {
+		if !baseNames[extractPackageName(optPkg)] {
+			filteredPythonPackages = append(filteredPythonPackages, optPkg)
+		}
+	}
+
+	o.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
+}
+
 func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository) (*Builder, error) {
 	return &Builder{
 		config:        config,
@@ -176,9 +218,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		opts.BaseImageRegistry = authInfo.Workspace.ExternalId
 		opts.BaseImageName = opts.Dockerfile
 		opts.BaseImageTag = "latest"
+		opts.addPythonRequirements()
 	case opts.ExistingImageUri != "":
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
+			// FIXME: Why do we pass another message here? Should we just remove this since we already pass the error in the handleCustomBaseImage method?
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
 			return err
 		}
@@ -380,35 +424,13 @@ func (b *Builder) genContainerId() string {
 	return fmt.Sprintf("%s%s", types.BuildContainerPrefix, uuid.New().String()[:8])
 }
 
-func (b *Builder) extractPackageName(pkg string) string {
-	// For now we let this go through and let the pip install command fail if the package is not found
-	if len(pkg) == 0 {
-		return ""
-	}
-
-	// Handle Git URLs
-	if strings.HasPrefix(pkg, "git+") || strings.HasPrefix(pkg, "-e git+") {
-		if eggTag := strings.Split(pkg, "#egg="); len(eggTag) > 1 {
-			return eggTag[1]
-		}
-	}
-
-	// Handle packages with index URLs
-	if strings.HasPrefix(pkg, "-i ") || strings.HasPrefix(pkg, "--index-url ") {
-		return ""
-	}
-
-	// Handle regular packages
-	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
-}
-
 // handleCustomBaseImage validates the custom base image and parses its details into build options
 func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.OutputMsg) error {
 	if outputChan != nil {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Using custom base image: %s\n", opts.ExistingImageUri)}
 	}
 
-	baseImage, err := ExtractImageNameAndTag(opts.ExistingImageUri)
+	err := opts.setCustomImageBuildOptions()
 	if err != nil {
 		if outputChan != nil {
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
@@ -416,40 +438,7 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 		return err
 	}
 
-	if len(opts.ExistingImageCreds) > 0 && opts.ExistingImageUri != "" {
-		token, err := GetRegistryToken(opts)
-		if err != nil {
-			if outputChan != nil {
-				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
-			}
-			return err
-		}
-		opts.BaseImageCreds = token
-	}
-
-	opts.BaseImageRegistry = baseImage.Registry
-	opts.BaseImageName = baseImage.Repo
-	opts.BaseImageTag = baseImage.Tag
-
-	// Override any specified python packages with base requirements (to ensure we have what need in the image)
-	baseRequirementsSlice := strings.Split(strings.TrimSpace(basePythonRequirements), "\n")
-
-	// Create a map to track package names in baseRequirementsSlice
-	baseNames := make(map[string]bool)
-	for _, basePkg := range baseRequirementsSlice {
-		baseNames[b.extractPackageName(basePkg)] = true
-	}
-
-	// Filter out existing packages from opts.PythonPackages
-	filteredPythonPackages := make([]string, 0)
-	for _, optPkg := range opts.PythonPackages {
-		if !baseNames[b.extractPackageName(optPkg)] {
-			filteredPythonPackages = append(filteredPythonPackages, optPkg)
-		}
-	}
-
-	opts.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
-
+	opts.addPythonRequirements()
 	if outputChan != nil {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Custom base image is valid.\n"}
 	}
@@ -722,4 +711,26 @@ func containsFlag(s string) bool {
 		}
 	}
 	return false
+}
+
+func extractPackageName(pkg string) string {
+	// For now we let this go through and let the pip install command fail if the package is not found
+	if len(pkg) == 0 {
+		return ""
+	}
+
+	// Handle Git URLs
+	if strings.HasPrefix(pkg, "git+") || strings.HasPrefix(pkg, "-e git+") {
+		if eggTag := strings.Split(pkg, "#egg="); len(eggTag) > 1 {
+			return eggTag[1]
+		}
+	}
+
+	// Handle packages with index URLs
+	if strings.HasPrefix(pkg, "-i ") || strings.HasPrefix(pkg, "--index-url ") {
+		return ""
+	}
+
+	// Handle regular packages
+	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
 }

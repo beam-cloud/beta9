@@ -181,7 +181,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
 	// Read spec from bundle
-	initialBundleSpec, _ := s.readBundleConfig(containerId, request.ImageId)
+	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
 
 	opts := &ContainerOptions{
 		BundlePath:  bundlePath,
@@ -220,27 +220,22 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	return nil
 }
 
-func (s *Worker) readBundleConfig(containerId string, imageId string) (*specs.Spec, error) {
+func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
 	imageConfigPath := filepath.Join(s.imageMountPath, imageId, initialSpecBaseName)
 
-	log.Printf("<%s> - reading bundle config from %s\n", containerId, imageConfigPath)
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Printf("<%s> - successfully read bundle config, data: %s\n", containerId, string(data))
-
 	specTemplate := strings.TrimSpace(string(data))
 	var spec specs.Spec
 
-	log.Printf("<%s> - unmarshalling bundle config\n", containerId)
 	err = json.Unmarshal([]byte(specTemplate), &spec)
 	if err != nil {
 		return nil, err
 	}
 
-	log.Printf("<%s> - successfully unmarshalled bundle config\n", containerId)
 	return &spec, nil
 }
 
