@@ -470,9 +470,11 @@ func (cr *ContainerRedisRepository) GetStubUnhealthyState(stubId string) (string
 	return state, nil
 }
 
+var unhealthyStateTTL = 10 * time.Minute
+
 func (cr *ContainerRedisRepository) SetStubUnhealthyState(stubId, state string) error {
 	stateKey := common.RedisKeys.SchedulerStubUnhealthyState(stubId)
-	return cr.rdb.Set(context.TODO(), stateKey, state, 0).Err()
+	return cr.rdb.SetEx(context.TODO(), stateKey, state, unhealthyStateTTL).Err()
 }
 
 func (cr *ContainerRedisRepository) DeleteStubUnhealthyState(stubId string) error {
