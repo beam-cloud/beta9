@@ -301,7 +301,7 @@ func (t *TCPEventClientRepo) PushStubStateHealthy(stub string, previousState str
 		types.EventStubStateSchemaVersion,
 		types.EventStubStateSchema{
 			ID:               stub,
-			State:            "healthy",
+			State:            types.StubStateHealthy,
 			PreviousState:    previousState,
 			FailedContainers: []string{},
 		},

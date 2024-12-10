@@ -462,7 +462,7 @@ func (cr *ContainerRedisRepository) GetStubUnhealthyState(stubId string) (string
 	state, err := cr.rdb.Get(context.TODO(), stateKey).Result()
 	if err != nil {
 		if err == redis.Nil {
-			return "healthy", nil
+			return types.StubStateHealthy, nil
 		}
 		return "", err
 	}

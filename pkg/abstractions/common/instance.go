@@ -308,7 +308,7 @@ func (i *AutoscaledInstance) HandleDeploymentNotHealthy(stubId, currentState, re
 			return
 		}
 
-		state = "healthy"
+		state = types.StubStateHealthy
 	}
 
 	if state == currentState {
