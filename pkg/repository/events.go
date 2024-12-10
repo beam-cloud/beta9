@@ -280,27 +280,13 @@ func (t *TCPEventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
 	)
 }
 
-func (t *TCPEventClientRepo) PushStubStateDegraded(stub string, reason string, previousState string, failedContainers []string) {
+func (t *TCPEventClientRepo) PushStubStateNotHealthy(stub string, currentState string, previousState string, reason string, failedContainers []string) {
 	t.pushEvent(
-		types.EventStubStateDegraded,
+		"stub.state."+currentState,
 		types.EventStubStateSchemaVersion,
 		types.EventStubStateSchema{
 			ID:               stub,
-			State:            "degraded",
-			Reason:           reason,
-			PreviousState:    previousState,
-			FailedContainers: failedContainers,
-		},
-	)
-}
-
-func (t *TCPEventClientRepo) PushStubStateWarning(stub string, reason string, previousState string, failedContainers []string) {
-	t.pushEvent(
-		types.EventStubStateDegraded,
-		types.EventStubStateSchemaVersion,
-		types.EventStubStateSchema{
-			ID:               stub,
-			State:            "warning",
+			State:            currentState,
 			Reason:           reason,
 			PreviousState:    previousState,
 			FailedContainers: failedContainers,

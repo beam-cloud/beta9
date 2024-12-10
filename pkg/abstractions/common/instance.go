@@ -245,9 +245,9 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	if len(state.FailedContainers) >= i.FailedContainerThreshold {
 		log.Printf("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
 		desiredContainers = 0
-		go i.HandleDeploymentDegraded(i.Stub.ExternalId, state.FailedContainers)
+		go i.HandleDeploymentNotHealthy(i.Stub.ExternalId, types.StubStateDegraded, "failed container threshold", state.FailedContainers)
 	} else if len(state.FailedContainers) > 0 {
-		go i.HandleDeploymentWarning(i.Stub.ExternalId, state.FailedContainers)
+		go i.HandleDeploymentNotHealthy(i.Stub.ExternalId, types.StubStateWarning, "one or more containers failed", state.FailedContainers)
 	} else if len(state.FailedContainers) == 0 {
 		go i.HandleDeploymentHealthy(i.Stub.ExternalId)
 	}
@@ -299,7 +299,7 @@ func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 	return &state, nil
 }
 
-func (i *AutoscaledInstance) HandleDeploymentDegraded(stubId string, containers []string) {
+func (i *AutoscaledInstance) HandleDeploymentNotHealthy(stubId, currentState, reason string, containers []string) {
 	var state string
 	state, err := i.ContainerRepo.GetStubUnhealthyState(stubId)
 	if err != nil {
@@ -311,42 +311,17 @@ func (i *AutoscaledInstance) HandleDeploymentDegraded(stubId string, containers 
 		state = "healthy"
 	}
 
-	if state == "degraded" {
+	if state == currentState {
 		return
 	}
 
-	err = i.ContainerRepo.SetStubUnhealthyState(stubId, "degraded")
+	err = i.ContainerRepo.SetStubUnhealthyState(stubId, currentState)
 	if err != nil {
 		log.Printf("<%s> failed to set unhealthy state\n", i.Name)
 		return
 	}
 
-	go i.EventRepo.PushStubStateDegraded(stubId, state, "failed container retry threshold", containers)
-}
-
-func (i *AutoscaledInstance) HandleDeploymentWarning(stubId string, containers []string) {
-	var state string
-	state, err := i.ContainerRepo.GetStubUnhealthyState(stubId)
-	if err != nil {
-		if err != redis.Nil {
-			log.Printf("<%s> failed to get unhealthy state\n", i.Name)
-			return
-		}
-
-		state = "healthy"
-	}
-
-	if state == "warning" {
-		return
-	}
-
-	err = i.ContainerRepo.SetStubUnhealthyState(stubId, "warning")
-	if err != nil {
-		log.Printf("<%s> failed to set unhealthy state\n", i.Name)
-		return
-	}
-
-	i.EventRepo.PushStubStateWarning(stubId, state, "one or more containers recently failed", containers)
+	go i.EventRepo.PushStubStateNotHealthy(stubId, currentState, state, reason, containers)
 }
 
 func (i *AutoscaledInstance) HandleDeploymentHealthy(stubId string) {

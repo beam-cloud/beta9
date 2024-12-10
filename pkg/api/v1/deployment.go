@@ -103,7 +103,7 @@ func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 	}
 	deployment.State = state
 
-	if state != "healthy" {
+	if state != types.StubStateHealthy {
 		failedContainers, err := g.containerRepo.GetFailedContainersByStubId(deployment.Stub.ExternalId)
 		if err != nil {
 			return HTTPInternalServerError("Failed to get failed containers")
