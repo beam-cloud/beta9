@@ -256,7 +256,7 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 	return nil
 }
 
-func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile string, imageId string) error {
+func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile string, imageId string, buildCtxPath string) error {
 	buildPath, err := os.MkdirTemp("", "")
 	if err != nil {
 		return errors.Wrap(err, "create temp dir")
@@ -276,7 +276,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 	os.MkdirAll(imagePath, 0755)
 	os.MkdirAll(ociPath, 0755)
 
-	cmd := exec.Command("buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", imageId+":latest", ".")
+	cmd := exec.Command("buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", imageId+":latest", buildCtxPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err = cmd.Run()
@@ -312,14 +312,17 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 		fullPath := filepath.Join(tempBundlePath, "rootfs", dir)
 		err := os.MkdirAll(fullPath, 0755)
 		if err != nil {
-			errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
-			return err
+			return errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
 		}
 	}
 
-	// TODO: Not sure if we need this or not?
 	defer os.RemoveAll(tempBundlePath)
-	return c.Archive(ctx, tempBundlePath, imageId, nil)
+	err = c.Archive(ctx, tempBundlePath, imageId, nil)
+	if err != nil {
+		return errors.Wrap(err, "archive image")
+	}
+
+	return nil
 }
 
 func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds string) error {
@@ -492,7 +495,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 
 	if err != nil {
 		log.Printf("Unable to create archive: %v\n", err)
-		return err
+		return errors.Wrap(err, "create archive")
 	}
 	log.Printf("Container <%v> archive took %v\n", imageId, time.Since(startTime))
 
@@ -501,7 +504,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	err = c.registry.Push(ctx, archivePath, imageId)
 	if err != nil {
 		log.Printf("Failed to push image <%v>: %v\n", imageId, err)
-		return err
+		return errors.Wrap(err, "push image")
 	}
 
 	log.Printf("Image <%v> push took %v\n", imageId, time.Since(startTime))

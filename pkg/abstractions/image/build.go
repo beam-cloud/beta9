@@ -58,6 +58,7 @@ type BuildOpts struct {
 	ExistingImageUri   string
 	ExistingImageCreds map[string]string
 	Dockerfile         string
+	BuildCtxObject     string
 	PythonVersion      string
 	PythonPackages     []string
 	Commands           []string
@@ -73,12 +74,14 @@ func (o *BuildOpts) String() string {
 	fmt.Fprintf(&b, "  \"BaseImageName\": %q,", o.BaseImageName)
 	fmt.Fprintf(&b, "  \"BaseImageTag\": %q,", o.BaseImageTag)
 	fmt.Fprintf(&b, "  \"BaseImageCreds\": %q,", o.BaseImageCreds)
+	fmt.Fprintf(&b, "  \"ExistingImageUri\": %q,", o.ExistingImageUri)
+	fmt.Fprintf(&b, "  \"ExistingImageCreds\": %#v,", o.ExistingImageCreds)
+	fmt.Fprintf(&b, "  \"Dockerfile\": %q,", o.Dockerfile)
+	fmt.Fprintf(&b, "  \"BuildCtxObject\": %q,", o.BuildCtxObject)
 	fmt.Fprintf(&b, "  \"PythonVersion\": %q,", o.PythonVersion)
 	fmt.Fprintf(&b, "  \"PythonPackages\": %#v,", o.PythonPackages)
 	fmt.Fprintf(&b, "  \"Commands\": %#v,", o.Commands)
 	fmt.Fprintf(&b, "  \"BuildSteps\": %#v,", o.BuildSteps)
-	fmt.Fprintf(&b, "  \"ExistingImageUri\": %q,", o.ExistingImageUri)
-	fmt.Fprintf(&b, "  \"ExistingImageCreds\": %#v,", o.ExistingImageCreds)
 	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
 	fmt.Fprintf(&b, "}")
 	return b.String()
@@ -257,6 +260,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		SourceImage:      &sourceImage,
 		SourceImageCreds: opts.BaseImageCreds,
 		Dockerfile:       dockerfile,
+		BuildCtxObject:   &opts.BuildCtxObject,
 		WorkspaceId:      authInfo.Workspace.ExternalId,
 		Workspace:        *authInfo.Workspace,
 		EntryPoint:       []string{"tail", "-f", "/dev/null"},

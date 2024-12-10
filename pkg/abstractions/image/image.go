@@ -112,6 +112,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		ExistingImageCreds: in.ExistingImageCreds,
 		EnvVars:            in.EnvVars,
 		Dockerfile:         in.Dockerfile,
+		BuildCtxObject:     in.BuildCtxObject,
 	}
 
 	ctx := stream.Context()

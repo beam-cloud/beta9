@@ -158,18 +158,22 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		switch request.ImageSourceType() {
 		case types.ImageSourceTypeBuild:
 			log.Printf("<%s> - lazy-pull failed, building image: %s\n", containerId, *request.Dockerfile)
-			err = s.imageClient.BuildAndArchiveImage(context.TODO(), *request.Dockerfile, request.ImageId)
+			buildCtxPath, err := getBuildContext(request)
+			if err != nil {
+				return err
+			}
+			if err := s.imageClient.BuildAndArchiveImage(context.TODO(), *request.Dockerfile, request.ImageId, buildCtxPath); err != nil {
+				return err
+			}
 		case types.ImageSourceTypePull:
 			log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
-			err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
-		}
-		if err != nil {
-			return err
+			if err := s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds); err != nil {
+				return err
+			}
 		}
 
 		// Try pull again after building or pulling the source image
-		err = s.imageClient.PullLazy(request)
-		if err != nil {
+		if err = s.imageClient.PullLazy(request); err != nil {
 			return err
 		}
 	}
@@ -218,6 +222,18 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 	log.Printf("<%s> - spawned successfully.\n", containerId)
 	return nil
+}
+
+func getBuildContext(request *types.ContainerRequest) (string, error) {
+	buildCtxPath := "."
+	if request.BuildCtxObject != nil {
+		err := common.ExtractObjectFile(context.TODO(), *request.BuildCtxObject, request.Workspace.Name)
+		if err != nil {
+			return "", err
+		}
+		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildCtxObject)
+	}
+	return buildCtxPath, nil
 }
 
 func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
