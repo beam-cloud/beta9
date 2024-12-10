@@ -328,33 +328,33 @@ func (cr *ContainerRedisRepository) GetActiveContainersByWorkerId(workerId strin
 	return cr.listContainerStateByIndex(indexKey, keys)
 }
 
-func (cr *ContainerRedisRepository) GetFailedContainerCountByStubId(stubId string) (int, error) {
+func (cr *ContainerRedisRepository) GetFailedContainersByStubId(stubId string) ([]string, error) {
 	indexKey := common.RedisKeys.SchedulerContainerIndex(stubId)
 	keys, err := cr.rdb.SMembers(context.TODO(), indexKey).Result()
 	if err != nil {
-		return -1, err
+		return nil, fmt.Errorf("failed to retrieve container state keys: %v", err)
 	}
 
 	// Retrieve the value (exit code) for each key
-	failedCount := 0
+	failedContainerIds := make([]string, 0)
 	for _, key := range keys {
 		containerId := strings.Split(key, ":")[len(strings.Split(key, ":"))-1]
 		exitCodeKey := common.RedisKeys.SchedulerContainerExitCode(containerId)
 
 		exitCode, err := cr.rdb.Get(context.Background(), exitCodeKey).Int()
 		if err != nil && err != redis.Nil {
-			return -1, fmt.Errorf("failed to get value for key <%v>: %w", key, err)
+			return nil, fmt.Errorf("failed to get value for key <%v>: %w", key, err)
 		} else if err == redis.Nil {
 			continue
 		}
 
 		// Check if the exit code is non-zero
 		if exitCode != 0 {
-			failedCount++
+			failedContainerIds = append(failedContainerIds, containerId)
 		}
 	}
 
-	return failedCount, nil
+	return failedContainerIds, nil
 }
 
 func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
@@ -428,7 +428,7 @@ func (cr *ContainerRedisRepository) UpdateCheckpointState(workspaceName, checkpo
 		"stub_id", checkpointState.StubId,
 		"container_id", checkpointState.ContainerId,
 		"status", string(checkpointState.Status),
-    "remote_key", checkpointState.RemoteKey,
+		"remote_key", checkpointState.RemoteKey,
 	).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set checkpoint state <%v>: %w", stateKey, err)
@@ -455,4 +455,27 @@ func (cr *ContainerRedisRepository) GetCheckpointState(workspaceName, checkpoint
 	}
 
 	return state, nil
+}
+
+func (cr *ContainerRedisRepository) GetStubUnhealthyState(stubId string) (string, error) {
+	stateKey := common.RedisKeys.SchedulerStubUnhealthyState(stubId)
+	state, err := cr.rdb.Get(context.TODO(), stateKey).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return "healthy", nil
+		}
+		return "", err
+	}
+
+	return state, nil
+}
+
+func (cr *ContainerRedisRepository) SetStubUnhealthyState(stubId, state string) error {
+	stateKey := common.RedisKeys.SchedulerStubUnhealthyState(stubId)
+	return cr.rdb.Set(context.TODO(), stateKey, state, 0).Err()
+}
+
+func (cr *ContainerRedisRepository) DeleteStubUnhealthyState(stubId string) error {
+	stateKey := common.RedisKeys.SchedulerStubUnhealthyState(stubId)
+	return cr.rdb.Del(context.TODO(), stateKey).Err()
 }

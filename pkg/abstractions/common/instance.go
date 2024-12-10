@@ -10,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/redis/go-redis/v9"
 )
 
 const IgnoreScalingEventInterval = 10 * time.Second
@@ -23,7 +24,9 @@ type AutoscaledInstanceState struct {
 	RunningContainers  int
 	PendingContainers  int
 	StoppingContainers int
-	FailedContainers   int
+
+	// TODO: We can potentially store the strings for RUNNING, PENDING, STOPPING, containers as well
+	FailedContainers []string
 }
 
 type AutoscaledInstanceConfig struct {
@@ -39,6 +42,7 @@ type AutoscaledInstanceConfig struct {
 	InstanceLockKey     string
 	ContainerRepo       repository.ContainerRepository
 	BackendRepo         repository.BackendRepository
+	EventRepo           repository.EventRepository
 	TaskRepo            repository.TaskRepository
 	StartContainersFunc func(containersToRun int) error
 	StopContainersFunc  func(containersToStop int) error
@@ -73,6 +77,7 @@ type AutoscaledInstance struct {
 	ContainerRepo repository.ContainerRepository
 	BackendRepo   repository.BackendRepository
 	TaskRepo      repository.TaskRepository
+	EventRepo     repository.EventRepository
 
 	// Keys
 	InstanceLockKey string
@@ -109,6 +114,7 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		ContainerRepo:            cfg.ContainerRepo,
 		BackendRepo:              cfg.BackendRepo,
 		TaskRepo:                 cfg.TaskRepo,
+		EventRepo:                cfg.EventRepo,
 		Containers:               make(map[string]bool),
 		ContainerEventChan:       make(chan types.ContainerEvent, 1),
 		ScaleEventChan:           make(chan int, 1),
@@ -236,9 +242,14 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		return err
 	}
 
-	if state.FailedContainers >= i.FailedContainerThreshold {
+	if len(state.FailedContainers) >= i.FailedContainerThreshold {
 		log.Printf("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
 		desiredContainers = 0
+		go i.HandleDeploymentDegraded(i.Stub.ExternalId, state.FailedContainers)
+	} else if len(state.FailedContainers) > 0 {
+		go i.HandleDeploymentWarning(i.Stub.ExternalId, state.FailedContainers)
+	} else if len(state.FailedContainers) == 0 {
+		go i.HandleDeploymentHealthy(i.Stub.ExternalId)
 	}
 
 	if !i.IsActive {
@@ -267,7 +278,7 @@ func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 		return nil, err
 	}
 
-	failedContainers, err := i.ContainerRepo.GetFailedContainerCountByStubId(i.Stub.ExternalId)
+	failedContainers, err := i.ContainerRepo.GetFailedContainersByStubId(i.Stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}
@@ -286,4 +297,73 @@ func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 
 	state.FailedContainers = failedContainers
 	return &state, nil
+}
+
+func (i *AutoscaledInstance) HandleDeploymentDegraded(stubId string, containers []string) {
+	var state string
+	state, err := i.ContainerRepo.GetStubUnhealthyState(stubId)
+	if err != nil {
+		if err != redis.Nil {
+			log.Printf("<%s> failed to get unhealthy state\n", i.Name)
+			return
+		}
+
+		state = "healthy"
+	}
+
+	if state == "degraded" {
+		return
+	}
+
+	err = i.ContainerRepo.SetStubUnhealthyState(stubId, "degraded")
+	if err != nil {
+		log.Printf("<%s> failed to set unhealthy state\n", i.Name)
+		return
+	}
+
+	go i.EventRepo.PushStubStateDegraded(stubId, state, "failed container retry threshold", containers)
+}
+
+func (i *AutoscaledInstance) HandleDeploymentWarning(stubId string, containers []string) {
+	var state string
+	state, err := i.ContainerRepo.GetStubUnhealthyState(stubId)
+	if err != nil {
+		if err != redis.Nil {
+			log.Printf("<%s> failed to get unhealthy state\n", i.Name)
+			return
+		}
+
+		state = "healthy"
+	}
+
+	if state == "warning" {
+		return
+	}
+
+	err = i.ContainerRepo.SetStubUnhealthyState(stubId, "warning")
+	if err != nil {
+		log.Printf("<%s> failed to set unhealthy state\n", i.Name)
+		return
+	}
+
+	i.EventRepo.PushStubStateWarning(stubId, state, "one or more containers recently failed", containers)
+}
+
+func (i *AutoscaledInstance) HandleDeploymentHealthy(stubId string) {
+	var state string
+	state, err := i.ContainerRepo.GetStubUnhealthyState(stubId)
+	if err != nil {
+		if err != redis.Nil {
+			log.Printf("<%s> failed to get unhealthy state\n", i.Name)
+		}
+		return
+	}
+
+	err = i.ContainerRepo.DeleteStubUnhealthyState(stubId)
+	if err != nil {
+		log.Printf("<%s> failed to set unhealthy state\n", i.Name)
+		return
+	}
+
+	go i.EventRepo.PushStubStateHealthy(stubId, state)
 }

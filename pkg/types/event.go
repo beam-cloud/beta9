@@ -18,8 +18,10 @@ var (
 		1.	<resource>: This indicates the type of object or resource that the event pertains to, such as payment_intent, invoice, customer, subscription, etc.
 		2.	<action>: This indicates the specific action or change that occurred with that resource, such as created, updated, deleted, succeeded, etc.
 	*/
-	EventTaskUpdated = "task.updated"
-	EventTaskCreated = "task.created"
+	EventTaskUpdated       = "task.updated"
+	EventTaskCreated       = "task.created"
+	EventStubStateDegraded = "stub.state.degraded"
+	EventStubStateHealthy  = "stub.state.healthy"
 
 	/*
 		TODO: Requires updates
@@ -129,4 +131,14 @@ type EventTaskSchema struct {
 	WorkspaceID string     `json:"workspace_id"`
 	StubID      string     `json:"stub_id"`
 	CreatedAt   time.Time  `json:"created_at"`
+}
+
+var EventStubStateSchemaVersion = "1.0"
+
+type EventStubStateSchema struct {
+	ID               string   `json:"id"`
+	State            string   `json:"state"`
+	PreviousState    string   `json:"previous_state"`
+	Reason           string   `json:"reason"`
+	FailedContainers []string `json:"failed_containers"`
 }

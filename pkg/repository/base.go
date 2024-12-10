@@ -55,9 +55,12 @@ type ContainerRepository interface {
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
-	GetFailedContainerCountByStubId(stubId string) (int, error)
+	GetFailedContainersByStubId(stubId string) ([]string, error)
 	UpdateCheckpointState(workspaceName, checkpointId string, checkpointState *types.CheckpointState) error
 	GetCheckpointState(workspaceName, checkpointId string) (*types.CheckpointState, error)
+	GetStubUnhealthyState(stubId string) (string, error)
+	SetStubUnhealthyState(stubId, state string) error
+	DeleteStubUnhealthyState(stubId string) error
 }
 
 type WorkspaceRepository interface {
@@ -180,6 +183,9 @@ type EventRepository interface {
 	PushRunStubEvent(workspaceId string, stub *types.Stub)
 	PushTaskUpdatedEvent(task *types.TaskWithRelated)
 	PushTaskCreatedEvent(task *types.TaskWithRelated)
+	PushStubStateDegraded(stub string, reason string, previousState string, failedContainers []string)
+	PushStubStateWarning(stub string, reason string, previousState string, failedContainers []string)
+	PushStubStateHealthy(stub string, previousState string)
 }
 
 type MetricsRepository interface {
