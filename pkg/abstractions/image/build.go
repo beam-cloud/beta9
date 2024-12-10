@@ -55,14 +55,26 @@ type BuildOpts struct {
 	BaseImageName      string
 	BaseImageTag       string
 	BaseImageCreds     string
+	ExistingImageUri   string
+	ExistingImageCreds map[string]string
+	Dockerfile         string
 	PythonVersion      string
 	PythonPackages     []string
 	Commands           []string
 	BuildSteps         []BuildStep
-	ExistingImageUri   string
-	ExistingImageCreds map[string]string
 	ForceRebuild       bool
 	EnvVars            []string
+}
+
+// TODO: use this instead of having everything in BuildOpts?
+type ImageOpts struct {
+	BaseImageRegistry  string
+	BaseImageName      string
+	BaseImageTag       string
+	BaseImageCreds     string
+	ExistingImageUri   string
+	ExistingImageCreds map[string]string
+	Dockerfile         string
 }
 
 func (o *BuildOpts) String() string {
@@ -158,7 +170,13 @@ func (i *BaseImage) String() string {
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if opts.ExistingImageUri != "" {
+	switch {
+	case opts.Dockerfile != "":
+		// Need to set base image registry, name, and tag to something that will be unique
+		opts.BaseImageRegistry = authInfo.Workspace.ExternalId
+		opts.BaseImageName = opts.Dockerfile
+		opts.BaseImageTag = "latest"
+	case opts.ExistingImageUri != "":
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
@@ -193,7 +211,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		memory = b.config.ImageService.BuildContainerMemory
 	}
 
-	err = b.scheduler.Run(&types.ContainerRequest{
+	containerRequest := &types.ContainerRequest{
 		ContainerId:      containerId,
 		Env:              opts.EnvVars,
 		Cpu:              cpu,
@@ -201,11 +219,14 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		ImageId:          baseImageId,
 		SourceImage:      &sourceImage,
 		SourceImageCreds: opts.BaseImageCreds,
+		Dockerfile:       &opts.Dockerfile,
 		WorkspaceId:      authInfo.Workspace.ExternalId,
 		Workspace:        *authInfo.Workspace,
 		EntryPoint:       []string{"tail", "-f", "/dev/null"},
 		PoolSelector:     b.config.ImageService.BuildContainerPoolSelector,
-	})
+	}
+
+	err = b.scheduler.Run(containerRequest)
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
 		return err

@@ -228,6 +228,7 @@ class Image(BaseAbstraction):
         self.base_image_creds = base_image_creds or {}
         self.env_vars = []
         self._stub: Optional[ImageServiceStub] = None
+        self.dockerfile = ""
 
         self.with_envs(env_vars or [])
 
@@ -283,6 +284,7 @@ class Image(BaseAbstraction):
                 force_rebuild=False,
                 existing_image_uri=self.base_image,
                 env_vars=self.env_vars,
+                dockerfile=self.dockerfile,
             )
         )
 
@@ -307,6 +309,7 @@ class Image(BaseAbstraction):
                     existing_image_uri=self.base_image,
                     existing_image_creds=self.get_credentials_from_env(),
                     env_vars=self.env_vars,
+                    dockerfile=self.dockerfile,
                 )
             ):
                 if r.msg != "":
@@ -465,3 +468,12 @@ class Image(BaseAbstraction):
                 raise ValueError(
                     f"Environment variable cannot contain multiple '=' characters: {env_var}"
                 )
+
+    def from_dockerfile(self, path: str) -> "Image":
+        if self.base_image != "":
+            raise ValueError("Cannot use from_dockerfile and provide a custom base image.")
+
+        with open(path, "r") as f:
+            dockerfile = f.read()
+        self.dockerfile = dockerfile
+        return self

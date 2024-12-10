@@ -151,29 +151,24 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerId := request.ContainerId
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
-	// hard code a dockerfile to test building with buildah
-	dockerfile := `FROM ubuntu:22.04 
-	RUN echo hi
-	ENV BLAH=hi`
-
-	log.Printf("<%s> - building test image to %s/rootfs\n", containerId, bundlePath)
-	err := s.imageClient.BuildAndArchiveImage(context.TODO(), dockerfile, bundlePath, request.ImageId)
+	// Attempt to pull image
+	log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
+	err := s.imageClient.PullLazy(request)
 	if err != nil {
-		log.Printf("<%s> - failed to build test image: %v\n", containerId, err)
-		return err
-	}
-
-	// Pull image
-	if false {
-		log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
-		err = s.imageClient.PullLazy(request)
-		if err != nil && request.SourceImage != nil {
+		switch request.ImageSourceType() {
+		case types.ImageSourceTypeBuild:
+			log.Printf("<%s> - lazy-pull failed, building image: %s\n", containerId, *request.Dockerfile)
+			err = s.imageClient.BuildAndArchiveImage(context.TODO(), *request.Dockerfile, bundlePath, request.ImageId)
+		case types.ImageSourceTypePull:
 			log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
 			err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
-			if err == nil {
-				err = s.imageClient.PullLazy(request)
-			}
 		}
+		if err != nil {
+			return err
+		}
+
+		// Try pull again after building or pulling the source image
+		err = s.imageClient.PullLazy(request)
 		if err != nil {
 			return err
 		}
@@ -186,7 +181,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
 	// Read spec from bundle
-	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
+	initialBundleSpec, _ := s.readBundleConfig(containerId, request.ImageId)
 
 	opts := &ContainerOptions{
 		BundlePath:  bundlePath,
@@ -225,22 +220,27 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	return nil
 }
 
-func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
+func (s *Worker) readBundleConfig(containerId string, imageId string) (*specs.Spec, error) {
 	imageConfigPath := filepath.Join(s.imageMountPath, imageId, initialSpecBaseName)
 
+	log.Printf("<%s> - reading bundle config from %s\n", containerId, imageConfigPath)
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
 		return nil, err
 	}
 
+	log.Printf("<%s> - successfully read bundle config, data: %s\n", containerId, string(data))
+
 	specTemplate := strings.TrimSpace(string(data))
 	var spec specs.Spec
 
+	log.Printf("<%s> - unmarshalling bundle config\n", containerId)
 	err = json.Unmarshal([]byte(specTemplate), &spec)
 	if err != nil {
 		return nil, err
 	}
 
+	log.Printf("<%s> - successfully unmarshalled bundle config\n", containerId)
 	return &spec, nil
 }
 
@@ -504,7 +504,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
-	// FIXME: something about baseConfigPath is wrong for df-built images?
 	configPath := filepath.Join(baseConfigPath, containerId, specBaseName)
 	log.Printf("<%s> - writing config to %s\n", containerId, configPath)
 	err = os.WriteFile(configPath, configContents, 0644)
@@ -627,8 +626,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 
 // isBuildRequest checks if the sourceImage field is not-nil, which means the container request is for a build container
 func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
-	// return true
-	return request.SourceImage != nil
+	return request.SourceImage != nil || request.Dockerfile != nil
 }
 
 func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output chan common.OutputMsg) {

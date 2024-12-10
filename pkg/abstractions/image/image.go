@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -53,6 +54,7 @@ func NewRuncImageService(
 }
 
 func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	var valid bool = true
 
 	baseImageTag, ok := is.config.ImageService.Runner.Tags[in.PythonVersion]
@@ -74,6 +76,13 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 
 	if in.ExistingImageUri != "" {
 		is.builder.handleCustomBaseImage(opts, nil)
+	}
+
+	if in.Dockerfile != "" {
+		opts.Dockerfile = in.Dockerfile
+		opts.BaseImageRegistry = authInfo.Workspace.ExternalId
+		opts.BaseImageName = in.Dockerfile
+		opts.BaseImageTag = "latest"
 	}
 
 	imageId, err := is.builder.GetImageId(opts)
@@ -102,6 +111,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		ExistingImageUri:   in.ExistingImageUri,
 		ExistingImageCreds: in.ExistingImageCreds,
 		EnvVars:            in.EnvVars,
+		Dockerfile:         in.Dockerfile,
 	}
 
 	ctx := stream.Context()

@@ -18,14 +18,8 @@ import (
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/beam-cloud/clip/pkg/storage"
 	runc "github.com/beam-cloud/go-runc"
-	"github.com/containers/buildah"
-	"github.com/containers/buildah/define"
-	"github.com/containers/buildah/imagebuildah"
-	bstorage "github.com/containers/storage"
-	"github.com/containers/storage/pkg/unshare"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
 	"github.com/opencontainers/umoci/oci/casext"
@@ -280,7 +274,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 	rootfsPath := filepath.Join(bundlePath, "rootfs")
 	os.MkdirAll(rootfsPath, 0755)
 
-	cmd := exec.Command("buildah", "build", "--format=oci", "--output="+rootfsPath, "--tag="+imageId+":latest", "-f", tempDockerFile, ".")
+	cmd := exec.Command("buildah", "build", "--format=oci", "--output="+buildDir, "--tag="+imageId+":latest", "-f", tempDockerFile, ".")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err = cmd.Run()
@@ -288,7 +282,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 		return err
 	}
 
-	// Run the push command to get the config.json and then write it to the bundle path
 	cmd = exec.Command("buildah", "push", imageId+":latest", "oci:"+buildDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -297,19 +290,10 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 		return err
 	}
 
-	manifestDigest, err := getManifest(buildDir)
-	if err != nil {
-		return err
-	}
-
-	configContent, err := getConfig(buildDir, manifestDigest)
-	if err != nil {
-		return err
-	}
-
-	configPath := filepath.Join(bundlePath, specBaseName)
-	err = os.WriteFile(configPath, []byte(configContent), 0644)
-	if err != nil {
+	cmd = exec.Command("skopeo", "copy", "oci:"+buildDir, "oci:"+bundlePath+":latest")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
 		return err
 	}
 
@@ -318,40 +302,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 		err := os.MkdirAll(fullPath, 0755)
 		if err != nil {
 			errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
-			return err
-		}
-	}
-
-	// TODO: Figure out how to get this to work
-	if false {
-		if buildah.InitReexec() {
-			return err
-		}
-		unshare.MaybeReexecUsingUserNamespace(false)
-
-		storeOpts := bstorage.StoreOptions{
-			GraphDriverName: "vfs",
-			GraphRoot:       "/var/lib/containers/storage",
-			RunRoot:         "/run/containers/storage",
-		}
-
-		buildStore, err := bstorage.GetStore(storeOpts)
-		if err != nil {
-			return err
-		}
-		defer buildStore.Shutdown(false)
-
-		buildOpts := define.BuildOptions{
-			NamespaceOptions: []define.NamespaceOption{
-				{Name: string(specs.NetworkNamespace), Host: true},
-			},
-			ReportWriter: os.Stdout,
-			BuildOutput:  rootfsPath,
-			Isolation:    define.IsolationChroot,
-		}
-
-		_, _, err = imagebuildah.BuildDockerfiles(ctx, buildStore, buildOpts, tempDockerFile)
-		if err != nil {
 			return err
 		}
 	}
