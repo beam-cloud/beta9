@@ -158,7 +158,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 		switch request.ImageSourceType() {
 		case types.ImageSourceTypeBuild:
 			log.Printf("<%s> - lazy-pull failed, building image: %s\n", containerId, *request.Dockerfile)
-			err = s.imageClient.BuildAndArchiveImage(context.TODO(), *request.Dockerfile, bundlePath, request.ImageId)
+			err = s.imageClient.BuildAndArchiveImage(context.TODO(), *request.Dockerfile, request.ImageId)
 		case types.ImageSourceTypePull:
 			log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
 			err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)

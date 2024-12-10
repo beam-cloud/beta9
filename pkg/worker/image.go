@@ -19,7 +19,6 @@ import (
 	"github.com/beam-cloud/clip/pkg/storage"
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/hanwen/go-fuse/v2/fuse"
-	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
 	"github.com/opencontainers/umoci/oci/casext"
@@ -257,48 +256,60 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 	return nil
 }
 
-func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile string, bundlePath string, imageId string) error {
-	buildDir, err := os.MkdirTemp("", "")
+func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile string, imageId string) error {
+	buildPath, err := os.MkdirTemp("", "")
 	if err != nil {
-		return err
+		return errors.Wrap(err, "create temp dir")
 	}
-	defer os.RemoveAll(buildDir)
-	tempDockerFile := filepath.Join(buildDir, "Dockerfile")
+	defer os.RemoveAll(buildPath)
+	tempDockerFile := filepath.Join(buildPath, "Dockerfile")
 	f, err := os.Create(tempDockerFile)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "create temp dockerfile")
 	}
 	fmt.Fprintf(f, dockerfile)
 	f.Close()
 
-	rootfsPath := filepath.Join(bundlePath, "rootfs")
-	os.MkdirAll(rootfsPath, 0755)
+	imagePath := filepath.Join(buildPath, "image")
+	ociPath := filepath.Join(buildPath, "oci")
+	tempBundlePath := filepath.Join(c.imageBundlePath, imageId)
+	os.MkdirAll(imagePath, 0755)
+	os.MkdirAll(ociPath, 0755)
 
-	cmd := exec.Command("buildah", "build", "--format=oci", "--output="+buildDir, "--tag="+imageId+":latest", "-f", tempDockerFile, ".")
+	cmd := exec.Command("buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", imageId+":latest", ".")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err = cmd.Run()
 	if err != nil {
-		return err
+		return errors.Wrap(err, "buildah bud")
 	}
 
-	cmd = exec.Command("buildah", "push", imageId+":latest", "oci:"+buildDir)
+	cmd = exec.Command("buildah", "--root", imagePath, "push", imageId+":latest", "oci:"+ociPath+":latest")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err = cmd.Run()
 	if err != nil {
-		return err
+		return errors.Wrap(err, "buildah push")
 	}
 
-	cmd = exec.Command("skopeo", "copy", "oci:"+buildDir, "oci:"+bundlePath+":latest")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return err
+	engine, err := dir.Open(ociPath)
+	if err != nil {
+		return errors.Wrap(err, "open CAS "+ociPath)
+	}
+	defer engine.Close()
+
+	unpackOptions := umociUnpackOptions()
+
+	engineExt := casext.NewEngine(engine)
+	defer engineExt.Close()
+
+	err = umoci.Unpack(engineExt, "latest", tempBundlePath, unpackOptions)
+	if err != nil {
+		return errors.Wrap(err, "unpack image")
 	}
 
 	for _, dir := range requiredContainerDirectories {
-		fullPath := filepath.Join(rootfsPath, dir)
+		fullPath := filepath.Join(tempBundlePath, "rootfs", dir)
 		err := os.MkdirAll(fullPath, 0755)
 		if err != nil {
 			errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
@@ -307,8 +318,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 	}
 
 	// TODO: Not sure if we need this or not?
-	// defer os.RemoveAll(bundlePath) (we do this in pull and archive but that is because it immediately pulls after the pullandarchive call succeeds)
-	return c.Archive(ctx, bundlePath, imageId, nil)
+	defer os.RemoveAll(tempBundlePath)
+	return c.Archive(ctx, tempBundlePath, imageId, nil)
 }
 
 func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds string) error {
@@ -411,12 +422,7 @@ func (c *ImageClient) inspectArgs(creds string) (out []string) {
 }
 
 func (c *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePath string) error {
-	var unpackOptions layer.UnpackOptions
-	var meta umoci.Meta
-	meta.Version = umoci.MetaVersion
-
-	unpackOptions.KeepDirlinks = true
-	unpackOptions.MapOptions = meta.MapOptions
+	unpackOptions := umociUnpackOptions()
 
 	// Get a reference to the CAS.
 	baseImagePath := fmt.Sprintf("%s/%s", c.imageBundlePath, baseImageName)
@@ -502,92 +508,11 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	return nil
 }
 
-func getManifest(buildDir string) (map[string]interface{}, error) {
-	indexPath := filepath.Join(buildDir, "index.json")
-	index, err := os.ReadFile(indexPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var indexData map[string]interface{}
-	err = json.Unmarshal(index, &indexData)
-	if err != nil {
-		return nil, err
-	}
-
-	manifests := indexData["manifests"].([]interface{})
-
-	if len(manifests) == 0 {
-		return nil, errors.New("no manifests found in index.json")
-	}
-
-	manifestEntry := manifests[0].(map[string]interface{})
-	digest, ok := manifestEntry["digest"].(string)
-	if !ok {
-		return nil, errors.New("digest not found in manifest")
-	}
-
-	if strings.HasPrefix(digest, "sha256:") {
-		digest = strings.TrimPrefix(digest, "sha256:")
-	}
-
-	manifestPath := filepath.Join(buildDir, "blobs", "sha256", digest)
-	manifest, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var manifestData map[string]interface{}
-	err = json.Unmarshal(manifest, &manifestData)
-	if err != nil {
-		return nil, err
-	}
-
-	err = checkMediaType(v1.MediaTypeImageManifest, manifestData)
-	if err != nil {
-		return nil, err
-	}
-
-	return manifestData, nil
-}
-
-func getConfig(buildDir string, manifestData map[string]interface{}) ([]byte, error) {
-	config, ok := manifestData["config"].(map[string]interface{})
-	if !ok {
-		return nil, errors.New("config not found in manifest")
-	}
-
-	err := checkMediaType(v1.MediaTypeImageConfig, config)
-	if err != nil {
-		return nil, err
-	}
-
-	digest, ok := config["digest"].(string)
-	if !ok {
-		return nil, errors.New("digest not found in config")
-	}
-
-	if strings.HasPrefix(digest, "sha256:") {
-		digest = strings.TrimPrefix(digest, "sha256:")
-	}
-
-	configPath := filepath.Join(buildDir, "blobs", "sha256", digest)
-	configContent, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, err
-	}
-
-	return configContent, nil
-}
-
-func checkMediaType(expectedMediaType string, config map[string]interface{}) error {
-	mediaType, ok := config["mediaType"].(string)
-	if !ok {
-		return errors.New("media type not found in config")
-	}
-
-	if mediaType != expectedMediaType {
-		return errors.New(fmt.Sprintf("media type %s is not %s", mediaType, expectedMediaType))
-	}
-	return nil
+func umociUnpackOptions() layer.UnpackOptions {
+	var unpackOptions layer.UnpackOptions
+	var meta umoci.Meta
+	meta.Version = umoci.MetaVersion
+	unpackOptions.KeepDirlinks = true
+	unpackOptions.MapOptions = meta.MapOptions
+	return unpackOptions
 }
