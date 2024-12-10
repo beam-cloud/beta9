@@ -162,7 +162,9 @@ class FunctionContext:
         )
 
 
-workers_ready = Value("i", 0)
+workers_ready = None
+if is_remote():
+    workers_ready = Value("i", 0)
 
 
 class FunctionHandler:

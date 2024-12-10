@@ -68,13 +68,17 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 		gpuRequest = append(gpuRequest, i.StubConfig.Runtime.Gpu.String())
 	}
 
-	gpuCount := 0
-	if len(gpuRequest) > 0 {
+	gpuCount := i.StubConfig.Runtime.GpuCount
+	if i.StubConfig.RequiresGPU() && gpuCount == 0 {
 		gpuCount = 1
 	}
 
 	checkpointEnabled := i.StubConfig.CheckpointEnabled
 	if i.Stub.Type.IsServe() {
+		checkpointEnabled = false
+	}
+
+	if gpuCount > 1 {
 		checkpointEnabled = false
 	}
 

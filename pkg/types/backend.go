@@ -19,6 +19,7 @@ type Workspace struct {
 	UpdatedAt          time.Time         `db:"updated_at" json:"updated_at,omitempty"`
 	SigningKey         *string           `db:"signing_key" json:"signing_key"`
 	VolumeCacheEnabled bool              `db:"volume_cache_enabled" json:"volume_cache_enabled"`
+	MultiGpuEnabled    bool              `db:"multi_gpu_enabled" json:"multi_gpu_enabled"`
 	ConcurrencyLimitId *uint             `db:"concurrency_limit_id" json:"concurrency_limit_id,omitempty"`
 	ConcurrencyLimit   *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit"`
 }
@@ -186,6 +187,10 @@ type StubConfigV1 struct {
 	CheckpointEnabled  bool            `json:"checkpoint_enabled"`
 }
 
+func (c *StubConfigV1) RequiresGPU() bool {
+	return len(c.Runtime.Gpus) > 0 || c.Runtime.Gpu != ""
+}
+
 type AutoscalerType string
 
 const (
@@ -291,11 +296,12 @@ type Image struct {
 }
 
 type Runtime struct {
-	Cpu     int64     `json:"cpu"`
-	Gpu     GpuType   `json:"gpu"`
-	Memory  int64     `json:"memory"`
-	ImageId string    `json:"image_id"`
-	Gpus    []GpuType `json:"gpus"`
+	Cpu      int64     `json:"cpu"`
+	Gpu      GpuType   `json:"gpu"`
+	GpuCount uint32    `json:"gpu_count"`
+	Memory   int64     `json:"memory"`
+	ImageId  string    `json:"image_id"`
+	Gpus     []GpuType `json:"gpus"`
 }
 
 type GpuType string
