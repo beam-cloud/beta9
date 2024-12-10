@@ -428,7 +428,7 @@ func (c *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePa
 	baseImagePath := fmt.Sprintf("%s/%s", c.imageBundlePath, baseImageName)
 	engine, err := dir.Open(baseImagePath)
 	if err != nil {
-		return errors.Wrap(err, "open CAS "+baseImagePath)
+		return errors.Wrap(err, "open CAS")
 	}
 	defer engine.Close()
 

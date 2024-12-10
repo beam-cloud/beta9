@@ -87,9 +87,6 @@ FROM golang AS worker
 
 WORKDIR /workspace
 
-# Required for buildah
-RUN apt-get install -y libbtrfs-dev libgpgme11-dev
-
 COPY go.mod go.sum ./
 RUN go mod download
 COPY --exclude=sdk . .

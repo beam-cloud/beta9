@@ -66,17 +66,6 @@ type BuildOpts struct {
 	EnvVars            []string
 }
 
-// TODO: use this instead of having everything in BuildOpts?
-type ImageOpts struct {
-	BaseImageRegistry  string
-	BaseImageName      string
-	BaseImageTag       string
-	BaseImageCreds     string
-	ExistingImageUri   string
-	ExistingImageCreds map[string]string
-	Dockerfile         string
-}
-
 func (o *BuildOpts) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "{")
@@ -210,7 +199,10 @@ func (i *BaseImage) String() string {
 
 // Build user image
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	var (
+		dockerfile  *string
+		authInfo, _ = auth.AuthInfoFromContext(ctx)
+	)
 
 	switch {
 	case opts.Dockerfile != "":
@@ -219,6 +211,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		opts.BaseImageName = opts.Dockerfile
 		opts.BaseImageTag = "latest"
 		opts.addPythonRequirements()
+		dockerfile = &opts.Dockerfile
 	case opts.ExistingImageUri != "":
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
@@ -255,7 +248,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		memory = b.config.ImageService.BuildContainerMemory
 	}
 
-	containerRequest := &types.ContainerRequest{
+	err = b.scheduler.Run(&types.ContainerRequest{
 		ContainerId:      containerId,
 		Env:              opts.EnvVars,
 		Cpu:              cpu,
@@ -263,14 +256,12 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		ImageId:          baseImageId,
 		SourceImage:      &sourceImage,
 		SourceImageCreds: opts.BaseImageCreds,
-		Dockerfile:       &opts.Dockerfile,
+		Dockerfile:       dockerfile,
 		WorkspaceId:      authInfo.Workspace.ExternalId,
 		Workspace:        *authInfo.Workspace,
 		EntryPoint:       []string{"tail", "-f", "/dev/null"},
 		PoolSelector:     b.config.ImageService.BuildContainerPoolSelector,
-	}
-
-	err = b.scheduler.Run(containerRequest)
+	})
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
 		return err

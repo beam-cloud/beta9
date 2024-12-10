@@ -500,7 +500,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	configPath := filepath.Join(baseConfigPath, containerId, specBaseName)
-	log.Printf("<%s> - writing config to %s\n", containerId, configPath)
 	err = os.WriteFile(configPath, configContents, 0644)
 	if err != nil {
 		return
