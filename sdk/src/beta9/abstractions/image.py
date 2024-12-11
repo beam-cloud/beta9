@@ -2,6 +2,9 @@ import os
 from pathlib import Path
 from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
 
+from beta9.clients.gateway import GatewayServiceStub
+from beta9.sync import FileSyncer
+
 from .. import env, terminal
 from ..abstractions.base import BaseAbstraction
 from ..clients.image import (
@@ -216,6 +219,7 @@ class Image(BaseAbstraction):
             ```
         """
         super().__init__()
+        self._gateway_stub: Optional[GatewayServiceStub] = None
 
         if isinstance(python_packages, str):
             python_packages = self._load_requirements_file(python_packages)
@@ -228,8 +232,20 @@ class Image(BaseAbstraction):
         self.base_image_creds = base_image_creds or {}
         self.env_vars = []
         self._stub: Optional[ImageServiceStub] = None
+        self.dockerfile = ""
+        self.build_ctx_object = ""
 
         self.with_envs(env_vars or [])
+
+    @property
+    def gateway_stub(self) -> GatewayServiceStub:
+        if not self._gateway_stub:
+            self._gateway_stub = GatewayServiceStub(self.channel)
+        return self._gateway_stub
+
+    @gateway_stub.setter
+    def gateway_stub(self, value) -> None:
+        self._gateway_stub = value
 
     @property
     def stub(self) -> ImageServiceStub:
@@ -283,6 +299,8 @@ class Image(BaseAbstraction):
                 force_rebuild=False,
                 existing_image_uri=self.base_image,
                 env_vars=self.env_vars,
+                dockerfile=self.dockerfile,
+                build_ctx_object=self.build_ctx_object,
             )
         )
 
@@ -307,6 +325,8 @@ class Image(BaseAbstraction):
                     existing_image_uri=self.base_image,
                     existing_image_creds=self.get_credentials_from_env(),
                     env_vars=self.env_vars,
+                    dockerfile=self.dockerfile,
+                    build_ctx_object=self.build_ctx_object,
                 )
             ):
                 if r.msg != "":
@@ -465,3 +485,38 @@ class Image(BaseAbstraction):
                 raise ValueError(
                     f"Environment variable cannot contain multiple '=' characters: {env_var}"
                 )
+
+    def from_dockerfile(self, path: str, context_dir: Optional[str] = None) -> "Image":
+        """
+        Build the base image based on a Dockerfile.
+
+        This method will sync the context directory and use the Dockerfile at the provided path to
+        build the base image.
+
+        Parameters:
+            path: The path to the Dockerfile.
+            context_dir: The directory to sync. If not provided, the directory of the Dockerfile will be used.
+
+        Returns:
+            Image: The Image object.
+        """
+        if env.is_remote():
+            return self
+
+        if self.base_image != "":
+            raise ValueError("Cannot use from_dockerfile and provide a custom base image.")
+
+        if not context_dir:
+            context_dir = os.path.dirname(path)
+
+        syncer = FileSyncer(gateway_stub=self.gateway_stub, root_dir=context_dir)
+        result = syncer.sync()
+        if not result.success:
+            raise ValueError("Failed to sync context directory.")
+
+        self.build_ctx_object = result.object_id
+
+        with open(path, "r") as f:
+            dockerfile = f.read()
+        self.dockerfile = dockerfile
+        return self

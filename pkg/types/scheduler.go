@@ -79,6 +79,14 @@ type ContainerState struct {
 	Memory      int64           `redis:"memory" json:"memory"`
 }
 
+type ImageSourceType string
+
+const (
+	ImageSourceTypeBuild   ImageSourceType = "build"
+	ImageSourceTypePull    ImageSourceType = "pull"
+	ImageSourceTypeUnknown ImageSourceType = "unknown"
+)
+
 type ContainerRequest struct {
 	ContainerId       string          `json:"container_id"`
 	EntryPoint        []string        `json:"entry_point"`
@@ -89,6 +97,8 @@ type ContainerRequest struct {
 	GpuRequest        []string        `json:"gpu_request"`
 	GpuCount          uint32          `json:"gpu_count"`
 	SourceImage       *string         `json:"source_image"`
+	Dockerfile        *string         `json:"dockerfile"`
+	BuildCtxObject    *string         `json:"build_context"`
 	SourceImageCreds  string          `json:"source_image_creds"`
 	ImageId           string          `json:"image_id"`
 	StubId            string          `json:"stub_id"`
@@ -105,6 +115,16 @@ type ContainerRequest struct {
 
 func (c *ContainerRequest) RequiresGPU() bool {
 	return len(c.GpuRequest) > 0 || c.Gpu != ""
+}
+
+func (c *ContainerRequest) ImageSourceType() ImageSourceType {
+	if c.Dockerfile != nil {
+		return ImageSourceTypeBuild
+	} else if c.SourceImage != nil {
+		return ImageSourceTypePull
+	}
+
+	return ImageSourceTypeUnknown
 }
 
 const ContainerExitCodeTtlS int = 300

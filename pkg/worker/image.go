@@ -256,6 +256,75 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 	return nil
 }
 
+func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile string, imageId string, buildCtxPath string) error {
+	buildPath, err := os.MkdirTemp("", "")
+	if err != nil {
+		return errors.Wrap(err, "create temp dir")
+	}
+	defer os.RemoveAll(buildPath)
+	tempDockerFile := filepath.Join(buildPath, "Dockerfile")
+	f, err := os.Create(tempDockerFile)
+	if err != nil {
+		return errors.Wrap(err, "create temp dockerfile")
+	}
+	fmt.Fprintf(f, dockerfile)
+	f.Close()
+
+	imagePath := filepath.Join(buildPath, "image")
+	ociPath := filepath.Join(buildPath, "oci")
+	tempBundlePath := filepath.Join(c.imageBundlePath, imageId)
+	defer os.RemoveAll(tempBundlePath)
+	os.MkdirAll(imagePath, 0755)
+	os.MkdirAll(ociPath, 0755)
+
+	cmd := exec.Command("buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", imageId+":latest", buildCtxPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
+	if err != nil {
+		return errors.Wrap(err, "buildah bud")
+	}
+
+	cmd = exec.Command("buildah", "--root", imagePath, "push", imageId+":latest", "oci:"+ociPath+":latest")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
+	if err != nil {
+		return errors.Wrap(err, "buildah push")
+	}
+
+	engine, err := dir.Open(ociPath)
+	if err != nil {
+		return errors.Wrap(err, "open CAS "+ociPath)
+	}
+	defer engine.Close()
+
+	unpackOptions := umociUnpackOptions()
+
+	engineExt := casext.NewEngine(engine)
+	defer engineExt.Close()
+
+	err = umoci.Unpack(engineExt, "latest", tempBundlePath, unpackOptions)
+	if err != nil {
+		return errors.Wrap(err, "unpack image")
+	}
+
+	for _, dir := range requiredContainerDirectories {
+		fullPath := filepath.Join(tempBundlePath, "rootfs", dir)
+		err := os.MkdirAll(fullPath, 0755)
+		if err != nil {
+			return errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
+		}
+	}
+
+	err = c.Archive(ctx, tempBundlePath, imageId, nil)
+	if err != nil {
+		return errors.Wrap(err, "archive image")
+	}
+
+	return nil
+}
+
 func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds string) error {
 	baseImage, err := image.ExtractImageNameAndTag(sourceImage)
 	if err != nil {
@@ -356,12 +425,7 @@ func (c *ImageClient) inspectArgs(creds string) (out []string) {
 }
 
 func (c *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePath string) error {
-	var unpackOptions layer.UnpackOptions
-	var meta umoci.Meta
-	meta.Version = umoci.MetaVersion
-
-	unpackOptions.KeepDirlinks = true
-	unpackOptions.MapOptions = meta.MapOptions
+	unpackOptions := umociUnpackOptions()
 
 	// Get a reference to the CAS.
 	baseImagePath := fmt.Sprintf("%s/%s", c.imageBundlePath, baseImageName)
@@ -431,7 +495,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 
 	if err != nil {
 		log.Printf("Unable to create archive: %v\n", err)
-		return err
+		return errors.Wrap(err, "create archive")
 	}
 	log.Printf("Container <%v> archive took %v\n", imageId, time.Since(startTime))
 
@@ -440,9 +504,18 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	err = c.registry.Push(ctx, archivePath, imageId)
 	if err != nil {
 		log.Printf("Failed to push image <%v>: %v\n", imageId, err)
-		return err
+		return errors.Wrap(err, "push image")
 	}
 
 	log.Printf("Image <%v> push took %v\n", imageId, time.Since(startTime))
 	return nil
+}
+
+func umociUnpackOptions() layer.UnpackOptions {
+	var unpackOptions layer.UnpackOptions
+	var meta umoci.Meta
+	meta.Version = umoci.MetaVersion
+	unpackOptions.KeepDirlinks = true
+	unpackOptions.MapOptions = meta.MapOptions
+	return unpackOptions
 }

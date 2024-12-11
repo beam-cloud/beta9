@@ -151,18 +151,31 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerId := request.ContainerId
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
-	// Pull image
+	// Attempt to pull image
 	log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
 	err := s.imageClient.PullLazy(request)
-	if err != nil && request.SourceImage != nil {
-		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
-		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
-		if err == nil {
-			err = s.imageClient.PullLazy(request)
-		}
-	}
 	if err != nil {
-		return err
+		switch request.ImageSourceType() {
+		case types.ImageSourceTypeBuild:
+			log.Printf("<%s> - lazy-pull failed, building image: %s\n", containerId, *request.Dockerfile)
+			buildCtxPath, err := getBuildContext(request)
+			if err != nil {
+				return err
+			}
+			if err := s.imageClient.BuildAndArchiveImage(context.TODO(), *request.Dockerfile, request.ImageId, buildCtxPath); err != nil {
+				return err
+			}
+		case types.ImageSourceTypePull:
+			log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
+			if err := s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds); err != nil {
+				return err
+			}
+		}
+
+		// Try pull again after building or pulling the source image
+		if err = s.imageClient.PullLazy(request); err != nil {
+			return err
+		}
 	}
 
 	bindPort, err := getRandomFreePort()
@@ -209,6 +222,18 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 	log.Printf("<%s> - spawned successfully.\n", containerId)
 	return nil
+}
+
+func getBuildContext(request *types.ContainerRequest) (string, error) {
+	buildCtxPath := "."
+	if request.BuildCtxObject != nil {
+		err := common.ExtractObjectFile(context.TODO(), *request.BuildCtxObject, request.Workspace.Name)
+		if err != nil {
+			return "", err
+		}
+		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildCtxObject)
+	}
+	return buildCtxPath, nil
 }
 
 func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
@@ -611,7 +636,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 
 // isBuildRequest checks if the sourceImage field is not-nil, which means the container request is for a build container
 func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
-	return request.SourceImage != nil
+	return request.SourceImage != nil || request.Dockerfile != nil
 }
 
 func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output chan common.OutputMsg) {
