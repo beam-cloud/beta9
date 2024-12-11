@@ -167,6 +167,12 @@ func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 			fmt.Fprint(h, envVar)
 		}
 	}
+	if opts.Dockerfile != "" {
+		fmt.Fprint(h, opts.Dockerfile)
+	}
+	if opts.BuildCtxObject != "" {
+		fmt.Fprint(h, opts.BuildCtxObject)
+	}
 	commandListHash := hex.EncodeToString(h.Sum(nil))
 
 	bodyToHash := &ImageIdHash{
@@ -209,10 +215,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	switch {
 	case opts.Dockerfile != "":
-		// Need to set base image registry, name, and tag to something that will be unique
-		opts.BaseImageRegistry = authInfo.Workspace.ExternalId
-		opts.BaseImageName = opts.Dockerfile + opts.BuildCtxObject
-		opts.BaseImageTag = "latest"
 		opts.addPythonRequirements()
 		dockerfile = &opts.Dockerfile
 	case opts.ExistingImageUri != "":
@@ -230,6 +232,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		BaseImageTag:      opts.BaseImageTag,
 		ExistingImageUri:  opts.ExistingImageUri,
 		EnvVars:           opts.EnvVars,
+		Dockerfile:        opts.Dockerfile,
+		BuildCtxObject:    opts.BuildCtxObject,
 	})
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
