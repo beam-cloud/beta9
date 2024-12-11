@@ -281,7 +281,7 @@ func (t *TCPEventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
 	)
 }
 
-func (t *TCPEventClientRepo) PushStubStateNotHealthy(workspaceId string, stubId string, currentState string, previousState string, reason string, failedContainers []string) {
+func (t *TCPEventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId string, currentState string, previousState string, reason string, failedContainers []string) {
 	t.pushEvent(
 		fmt.Sprintf("stub.state.%s", strings.ToLower(currentState)),
 		types.EventStubStateSchemaVersion,

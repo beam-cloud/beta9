@@ -457,8 +457,8 @@ func (cr *ContainerRedisRepository) GetCheckpointState(workspaceName, checkpoint
 	return state, nil
 }
 
-func (cr *ContainerRedisRepository) GetStubUnhealthyState(stubId string) (string, error) {
-	stateKey := common.RedisKeys.SchedulerStubUnhealthyState(stubId)
+func (cr *ContainerRedisRepository) GetStubState(stubId string) (string, error) {
+	stateKey := common.RedisKeys.SchedulerStubState(stubId)
 	state, err := cr.rdb.Get(context.TODO(), stateKey).Result()
 	if err != nil {
 		if err == redis.Nil {
@@ -472,12 +472,12 @@ func (cr *ContainerRedisRepository) GetStubUnhealthyState(stubId string) (string
 
 var unhealthyStateTTL = 10 * time.Minute
 
-func (cr *ContainerRedisRepository) SetStubUnhealthyState(stubId, state string) error {
-	stateKey := common.RedisKeys.SchedulerStubUnhealthyState(stubId)
+func (cr *ContainerRedisRepository) SetStubState(stubId, state string) error {
+	stateKey := common.RedisKeys.SchedulerStubState(stubId)
 	return cr.rdb.SetEx(context.TODO(), stateKey, state, unhealthyStateTTL).Err()
 }
 
-func (cr *ContainerRedisRepository) DeleteStubUnhealthyState(stubId string) error {
-	stateKey := common.RedisKeys.SchedulerStubUnhealthyState(stubId)
+func (cr *ContainerRedisRepository) DeleteStubState(stubId string) error {
+	stateKey := common.RedisKeys.SchedulerStubState(stubId)
 	return cr.rdb.Del(context.TODO(), stateKey).Err()
 }

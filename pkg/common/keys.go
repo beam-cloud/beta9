@@ -21,7 +21,7 @@ var (
 	schedulerContainerLock           string = "scheduler:container:lock:%s"
 	schedulerContainerExitCode       string = "scheduler:container:exit_code:%s"
 	schedulerCheckpointState         string = "scheduler:checkpoint_state:%s:%s"
-	schedulerStubUnhealthyState      string = "scheduler:stub:unhealthy_state:%s"
+	schedulerStubState               string = "scheduler:stub:state:%s"
 )
 
 var (
@@ -147,8 +147,8 @@ func (rk *redisKeys) SchedulerCheckpointState(workspaceName, checkpointId string
 	return fmt.Sprintf(schedulerCheckpointState, workspaceName, checkpointId)
 }
 
-func (rk *redisKeys) SchedulerStubUnhealthyState(stubId string) string {
-	return fmt.Sprintf(schedulerStubUnhealthyState, stubId)
+func (rk *redisKeys) SchedulerStubState(stubId string) string {
+	return fmt.Sprintf(schedulerStubState, stubId)
 }
 
 // Gateway keys

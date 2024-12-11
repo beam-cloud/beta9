@@ -298,9 +298,8 @@ func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 
 func (i *AutoscaledInstance) HandleDeploymentNotHealthy(stubId, currentState, reason string, containers []string) {
 	var state string
-	state, err := i.ContainerRepo.GetStubUnhealthyState(stubId)
+	state, err := i.ContainerRepo.GetStubState(stubId)
 	if err != nil {
-		log.Printf("<%s> failed to get unhealthy state\n", i.Name)
 		return
 	}
 
@@ -308,25 +307,23 @@ func (i *AutoscaledInstance) HandleDeploymentNotHealthy(stubId, currentState, re
 		return
 	}
 
-	err = i.ContainerRepo.SetStubUnhealthyState(stubId, currentState)
+	err = i.ContainerRepo.SetStubState(stubId, currentState)
 	if err != nil {
-		log.Printf("<%s> failed to set unhealthy state\n", i.Name)
 		return
 	}
 
-	go i.EventRepo.PushStubStateNotHealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
+	go i.EventRepo.PushStubStateUnhealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
 }
 
 func (i *AutoscaledInstance) HandleDeploymentHealthy(stubId string) {
 	var state string
-	state, err := i.ContainerRepo.GetStubUnhealthyState(stubId)
+	state, err := i.ContainerRepo.GetStubState(stubId)
 	if err != nil || state == types.StubStateHealthy {
 		return
 	}
 
-	err = i.ContainerRepo.DeleteStubUnhealthyState(stubId)
+	err = i.ContainerRepo.DeleteStubState(stubId)
 	if err != nil {
-		log.Printf("<%s> failed to set unhealthy state\n", i.Name)
 		return
 	}
 
