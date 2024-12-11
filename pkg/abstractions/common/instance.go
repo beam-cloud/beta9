@@ -242,11 +242,6 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	if len(state.FailedContainers) >= i.FailedContainerThreshold {
 		log.Printf("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
 		desiredContainers = 0
-		go i.HandleDeploymentNotHealthy(i.Stub.ExternalId, types.StubStateDegraded, "failed container threshold", state.FailedContainers)
-	} else if len(state.FailedContainers) > 0 {
-		go i.HandleDeploymentNotHealthy(i.Stub.ExternalId, types.StubStateWarning, "one or more containers failed", state.FailedContainers)
-	} else if len(state.FailedContainers) == 0 {
-		go i.HandleDeploymentHealthy(i.Stub.ExternalId)
 	}
 
 	if !i.IsActive {
@@ -265,6 +260,8 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	} else if containerDelta < 0 {
 		err = i.StopContainersFunc(-containerDelta)
 	}
+
+	go i.handleUnhealthyDeploymentEvents(state.FailedContainers)
 
 	return err
 }
@@ -296,7 +293,17 @@ func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 	return &state, nil
 }
 
-func (i *AutoscaledInstance) HandleDeploymentNotHealthy(stubId, currentState, reason string, containers []string) {
+func (i *AutoscaledInstance) handleUnhealthyDeploymentEvents(failedContainers []string) {
+	if len(failedContainers) >= i.FailedContainerThreshold {
+		i.HandleDeploymentUnhealthy(i.Stub.ExternalId, types.StubStateDegraded, "failed container threshold", failedContainers)
+	} else if len(failedContainers) > 0 {
+		i.HandleDeploymentUnhealthy(i.Stub.ExternalId, types.StubStateWarning, "one or more containers failed", failedContainers)
+	} else if len(failedContainers) == 0 {
+		i.HandleDeploymentHealthy(i.Stub.ExternalId)
+	}
+}
+
+func (i *AutoscaledInstance) HandleDeploymentUnhealthy(stubId, currentState, reason string, containers []string) {
 	var state string
 	state, err := i.ContainerRepo.GetStubState(stubId)
 	if err != nil {
