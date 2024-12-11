@@ -11,8 +11,10 @@ import (
 
 	cedanagrpc "buf.build/gen/go/cedana/task/grpc/go/_gogrpc"
 	cedanaproto "buf.build/gen/go/cedana/task/protocolbuffers/go"
+	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/go-runc"
 	types "github.com/cedana/cedana/pkg/types"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -68,8 +70,8 @@ func NewCedanaClient(
 		fmt.Sprintf("--port=%d", port),
 		fmt.Sprintf("--gpu-enabled=%t", gpuEnabled))
 
-	daemon.Stdout = os.Stdout
-	daemon.Stderr = os.Stderr
+	daemon.Stdout = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", "cedana daemon start") }}
+	daemon.Stderr = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", "cedana daemon start") }}
 
 	// XXX: Set config using env until config JSON parsing is fixed
 	daemon.Env = append(os.Environ(),
@@ -253,6 +255,8 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) (stri
 	if err != nil {
 		return "", err
 	}
+
+	log.Info().Str("container_id", containerId).Interface("dump_stats", res.GetDumpStats()).Msg("dump stats")
 	return res.GetState().GetCheckpointPath(), nil
 }
 
@@ -303,6 +307,8 @@ func (c *CedanaClient) Restore(
 	if err != nil {
 		return nil, err
 	}
+
+	log.Info().Str("container_id", restoreOpts.containerId).Interface("restore_stats", res.GetRestoreStats()).Msg("restore stats")
 
 	if runcOpts.Started != nil {
 		runcOpts.Started <- int(res.GetState().GetPID())

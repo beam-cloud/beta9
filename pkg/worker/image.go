@@ -27,6 +27,7 @@ import (
 	"github.com/opencontainers/umoci/oci/casext"
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -224,8 +225,8 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 
 	args = append(args, c.inspectArgs(creds)...)
 	cmd := exec.CommandContext(ctx, c.pullCommand, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s inspect", c.pullCommand)) }}
+	cmd.Stderr = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s inspect", c.pullCommand)) }}
 
 	output, err := exec.CommandContext(ctx, c.pullCommand, args...).Output()
 	if err != nil {
@@ -275,8 +276,8 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 	cmd := exec.CommandContext(ctx, c.pullCommand, args...)
 	cmd.Env = os.Environ()
 	cmd.Dir = c.imageBundlePath
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s copy", c.pullCommand)) }}
+	cmd.Stderr = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s copy", c.pullCommand)) }}
 
 	ec, err := c.startCommand(cmd)
 	if err != nil {
