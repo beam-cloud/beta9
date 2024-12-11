@@ -3,6 +3,9 @@ package common
 import (
 	"context"
 	"log/slog"
+	"strings"
+
+	"github.com/rs/zerolog"
 )
 
 type OutputMsg struct {
@@ -79,4 +82,13 @@ func (h *ChannelHandler) WithGroup(name string) slog.Handler {
 
 func (h *ChannelHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return true
+}
+
+type ZerologIOWriter struct {
+	LogFn func() *zerolog.Event
+}
+
+func (w *ZerologIOWriter) Write(p []byte) (n int, err error) {
+	w.LogFn().Msg(strings.TrimSpace(string(p)))
+	return len(p), nil
 }
