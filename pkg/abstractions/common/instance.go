@@ -295,15 +295,13 @@ func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 
 func (i *AutoscaledInstance) handleStubEvents(failedContainers []string) {
 	if len(failedContainers) >= i.FailedContainerThreshold {
-		i.handleStubUnhealthy(i.Stub.ExternalId, types.StubStateDegraded, "failed container threshold", failedContainers)
+		i.emitUnhealthyEvent(i.Stub.ExternalId, types.StubStateDegraded, "reached max failed container threshold", failedContainers)
 	} else if len(failedContainers) > 0 {
-		i.handleStubUnhealthy(i.Stub.ExternalId, types.StubStateWarning, "one or more containers failed", failedContainers)
-	} else if len(failedContainers) == 0 {
-		i.handleStubHealthy(i.Stub.ExternalId)
+		i.emitUnhealthyEvent(i.Stub.ExternalId, types.StubStateWarning, "one or more containers failed", failedContainers)
 	}
 }
 
-func (i *AutoscaledInstance) handleStubUnhealthy(stubId, currentState, reason string, containers []string) {
+func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason string, containers []string) {
 	var state string
 	state, err := i.ContainerRepo.GetStubState(stubId)
 	if err != nil {
@@ -320,19 +318,4 @@ func (i *AutoscaledInstance) handleStubUnhealthy(stubId, currentState, reason st
 	}
 
 	go i.EventRepo.PushStubStateUnhealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
-}
-
-func (i *AutoscaledInstance) handleStubHealthy(stubId string) {
-	var state string
-	state, err := i.ContainerRepo.GetStubState(stubId)
-	if err != nil || state == types.StubStateHealthy {
-		return
-	}
-
-	err = i.ContainerRepo.DeleteStubState(stubId)
-	if err != nil {
-		return
-	}
-
-	go i.EventRepo.PushStubStateHealthy(i.Workspace.ExternalId, stubId, state)
 }

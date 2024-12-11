@@ -295,17 +295,3 @@ func (t *TCPEventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId s
 		},
 	)
 }
-
-func (t *TCPEventClientRepo) PushStubStateHealthy(workspaceId string, stubId string, previousState string) {
-	t.pushEvent(
-		fmt.Sprintf("stub.state.%s", types.StubStateHealthy),
-		types.EventStubStateSchemaVersion,
-		types.EventStubStateSchema{
-			ID:               stubId,
-			WorkspaceID:      workspaceId,
-			State:            types.StubStateHealthy,
-			PreviousState:    previousState,
-			FailedContainers: []string{},
-		},
-	)
-}
