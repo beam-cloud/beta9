@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/rs/zerolog/log"
 )
 
 func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, consoleWriter *ConsoleWriter, startedChan chan int, configPath string) (bool, string, error) {
@@ -24,7 +24,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		go func() {
 			err := s.createCheckpoint(ctx, request)
 			if err != nil {
-				log.Printf("<%s> - failed to create checkpoint: %v\n", request.ContainerId, err)
+				log.Error().Str("container_id", request.ContainerId).Msgf("failed to create checkpoint: %v", err)
 			}
 		}()
 	} else if state.Status == types.CheckpointStatusAvailable {
@@ -45,7 +45,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		})
 
 		if err != nil {
-			log.Printf("<%s> - failed to restore checkpoint: %v\n", request.ContainerId, err)
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to restore checkpoint: %v", err)
 
 			s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
 				Status:      types.CheckpointStatusRestoreFailed,
@@ -55,7 +55,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 
 			return false, "", err
 		} else {
-			log.Printf("<%s> - checkpoint found and restored \n", request.ContainerId)
+			log.Info().Str("container_id", request.ContainerId).Msg("checkpoint found and restored")
 			return true, state.ContainerId, nil
 		}
 	}
@@ -86,7 +86,7 @@ waitForReady:
 		case <-ticker.C:
 			instance, exists := s.containerInstances.Get(request.ContainerId)
 			if !exists {
-				log.Printf("<%s> - container instance not found yet\n", request.ContainerId)
+				log.Info().Str("container_id", request.ContainerId).Msg("container instance not found yet")
 				continue
 			}
 
@@ -96,7 +96,7 @@ waitForReady:
 				if err == nil {
 					managing = true
 				} else {
-					log.Printf("<%s> - cedana manage failed, container may not be started yet: %+v\n", instance.Id, err)
+					log.Error().Str("container_id", instance.Id).Msgf("cedana manage failed, container may not be started yet: %+v", err)
 				}
 
 				continue
@@ -105,10 +105,10 @@ waitForReady:
 			// Check if the container is ready for checkpoint by verifying the existence of a signal file
 			readyFilePath := filepath.Join(checkpointSignalDir(instance.Id), checkpointSignalFileName)
 			if _, err := os.Stat(readyFilePath); err == nil {
-				log.Printf("<%s> - container ready for checkpoint.\n", instance.Id)
+				log.Info().Str("container_id", instance.Id).Msg("container ready for checkpoint")
 				break waitForReady
 			} else {
-				log.Printf("<%s> - container not ready for checkpoint.\n", instance.Id)
+				log.Info().Str("container_id", instance.Id).Msg("container not ready for checkpoint")
 			}
 
 		}
@@ -137,10 +137,10 @@ waitForReady:
 
 	err = os.Remove(checkpointPath)
 	if err != nil {
-		log.Printf("<%s> - failed to delete temporary checkpoint file: %v\n", request.ContainerId, err)
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to delete temporary checkpoint file: %v", err)
 	}
 
-	log.Printf("<%s> - checkpoint created successfully\n", request.ContainerId)
+	log.Info().Str("container_id", request.ContainerId).Msg("checkpoint created successfully")
 
 	return s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
 		Status:      types.CheckpointStatusAvailable,
@@ -177,13 +177,13 @@ func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId strin
 
 	// Clean up runc container state and send final output message
 	cleanup := func(exitCode int, err error) int {
-		log.Printf("<%s> - container has exited with code: %d\n", containerId, exitCode)
+		log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d", exitCode)
 
 		outputLogger.Info("", "done", true, "success", exitCode == 0)
 
 		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
 		if err != nil {
-			log.Printf("<%s> - failed to delete container: %v\n", containerId, err)
+			log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
 		}
 
 		return exitCode
@@ -223,7 +223,7 @@ func (s *Worker) cacheCheckpoint(containerId, checkpointPath string) (string, er
 			return cachedCheckpointPath, nil
 		}
 
-		log.Printf("<%s> - caching checkpoint nearby: %s\n", containerId, checkpointPath)
+		log.Info().Str("container_id", containerId).Msgf("caching checkpoint nearby: %s", checkpointPath)
 		client := s.fileCacheManager.GetClient()
 
 		// Remove the leading "/" from the checkpoint path

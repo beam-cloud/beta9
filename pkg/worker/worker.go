@@ -163,7 +163,7 @@ func NewWorker() (*Worker, error) {
 	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
 		cedanaClient, err = NewCedanaClient(context.Background(), config.Worker.CRIU.Cedana, gpuType != "")
 		if err != nil {
-			log.Printf("[WARNING] C/R unavailable, failed to create cedana client: %v\n", err)
+			log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, failed to create cedana client: %v", err)
 		}
 
 		os.MkdirAll(config.Worker.CRIU.Storage.MountPath, os.ModePerm)
@@ -181,7 +181,7 @@ func NewWorker() (*Worker, error) {
 
 			err := checkpointStorage.Mount(config.Worker.CRIU.Storage.MountPath)
 			if err != nil {
-				log.Printf("[WARNING] C/R unavailable, unable to mount checkpoint storage: %v\n", err)
+				log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, unable to mount checkpoint storage: %v", err)
 				cedanaClient = nil
 			}
 		}
@@ -366,7 +366,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 
 			// TODO: remove this hotfix
 			if state.Status == types.ContainerStatusPending {
-				log.Printf("<%s> - forcing container status to running\n", request.ContainerId)
+				log.Info().Str("container_id", request.ContainerId).Msg("forcing container status to running")
 				state.Status = types.ContainerStatusRunning
 			}
 

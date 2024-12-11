@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 	cedanaproto "buf.build/gen/go/cedana/task/protocolbuffers/go"
 	"github.com/beam-cloud/go-runc"
 	types "github.com/cedana/cedana/pkg/types"
+	"github.com/rs/zerolog/log"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 
@@ -280,10 +280,10 @@ func (c *CedanaClient) Restore(
 	if restoreOpts.cacheFunc != nil {
 		checkpointPath, err := restoreOpts.cacheFunc(restoreOpts.containerId, restoreOpts.checkpointPath)
 		if err == nil {
-			log.Printf("<%s> - using cached checkpoint located at: %s\n", restoreOpts.containerId, checkpointPath)
+			log.Info().Str("container_id", restoreOpts.containerId).Msgf("using cached checkpoint located at: %s", checkpointPath)
 			restoreOpts.checkpointPath = checkpointPath
 		} else {
-			log.Printf("<%s> - failed to cache checkpoint nearby: %v\n", restoreOpts.containerId, err)
+			log.Error().Str("container_id", restoreOpts.containerId).Msgf("failed to cache checkpoint nearby: %v", err)
 		}
 	}
 
