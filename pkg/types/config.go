@@ -21,6 +21,7 @@ type AppConfig struct {
 	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
 	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
+	Agent          AgentConfig               `key:"agent" json:"agent"`
 	Abstractions   AbstractionConfig         `key:"abstractions" json:"abstractions"`
 }
 
@@ -69,6 +70,7 @@ type PostgresConfig struct {
 
 type GRPCConfig struct {
 	Port           int `key:"port" json:"port"`
+	ExternalPort   int `key:"externalPort" json:"external_port"`
 	MaxRecvMsgSize int `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
 	MaxSendMsgSize int `key:"maxSendMsgSize" json:"max_send_msg_size"`
 }
@@ -291,6 +293,14 @@ type EC2ProviderConfig struct {
 	AMI          string              `key:"ami" json:"ami"`
 	SubnetId     *string             `key:"subnetId" json:"subnet_id"`
 	Agent        ProviderAgentConfig `key:"agent" json:"agent"`
+}
+
+type AgentRedisConfig struct {
+	Hostname string `key:"hostname" json:"hostname"`
+}
+
+type AgentConfig struct {
+	DynamicServiceHosts bool `key:"dynamicServiceHosts" json:"dynamic_service_hosts"`
 }
 
 type OCIProviderConfig struct {
