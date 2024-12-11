@@ -220,8 +220,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	case opts.ExistingImageUri != "":
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
-			// FIXME: Why do we pass another message here? Should we just remove this since we already pass the error in the handleCustomBaseImage method?
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
 			return err
 		}
 	}
