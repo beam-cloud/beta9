@@ -20,6 +20,7 @@ var (
 	*/
 	EventTaskUpdated = "task.updated"
 	EventTaskCreated = "task.created"
+	EventStubState   = "stub.state.%s" // healthy, degraded, warning
 
 	/*
 		TODO: Requires updates
@@ -129,4 +130,15 @@ type EventTaskSchema struct {
 	WorkspaceID string     `json:"workspace_id"`
 	StubID      string     `json:"stub_id"`
 	CreatedAt   time.Time  `json:"created_at"`
+}
+
+var EventStubStateSchemaVersion = "1.0"
+
+type EventStubStateSchema struct {
+	ID               string   `json:"id"`
+	WorkspaceID      string   `json:"workspace_id"`
+	State            string   `json:"state"`
+	PreviousState    string   `json:"previous_state"`
+	Reason           string   `json:"reason"`
+	FailedContainers []string `json:"failed_containers"`
 }
