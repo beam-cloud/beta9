@@ -78,7 +78,7 @@ RUN apt-get update && apt-get install -y \
     pkg-config
 
 RUN git clone https://github.com/containers/buildah.git . && \
-    make TAGS="cni" && \
+    CGO_ENABLED=0 make BUILDTAGS="containers_image_ostree_stub exclude_graphdriver_devicemapper exclude_graphdriver_btrfs containers_image_openpgp cni" && \
     make install
 
 # beta9 worker
@@ -115,8 +115,6 @@ RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvidia-container-toolkit
 
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
-
-RUN apt-get install -y libbtrfs-dev libgpgme11-dev podman
 
 # XXX: Remove once cedana starts shipping with a compatible binary
 RUN <<EOT
