@@ -261,7 +261,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		err = i.StopContainersFunc(-containerDelta)
 	}
 
-	go i.handleDeploymentEvents(state.FailedContainers)
+	go i.handleStubEvents(state.FailedContainers)
 
 	return err
 }
@@ -293,17 +293,17 @@ func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 	return &state, nil
 }
 
-func (i *AutoscaledInstance) handleDeploymentEvents(failedContainers []string) {
+func (i *AutoscaledInstance) handleStubEvents(failedContainers []string) {
 	if len(failedContainers) >= i.FailedContainerThreshold {
-		i.handleDeploymentUnhealthy(i.Stub.ExternalId, types.StubStateDegraded, "failed container threshold", failedContainers)
+		i.handleStubUnhealthy(i.Stub.ExternalId, types.StubStateDegraded, "failed container threshold", failedContainers)
 	} else if len(failedContainers) > 0 {
-		i.handleDeploymentUnhealthy(i.Stub.ExternalId, types.StubStateWarning, "one or more containers failed", failedContainers)
+		i.handleStubUnhealthy(i.Stub.ExternalId, types.StubStateWarning, "one or more containers failed", failedContainers)
 	} else if len(failedContainers) == 0 {
-		i.handleDeploymentHealthy(i.Stub.ExternalId)
+		i.handleStubHealthy(i.Stub.ExternalId)
 	}
 }
 
-func (i *AutoscaledInstance) handleDeploymentUnhealthy(stubId, currentState, reason string, containers []string) {
+func (i *AutoscaledInstance) handleStubUnhealthy(stubId, currentState, reason string, containers []string) {
 	var state string
 	state, err := i.ContainerRepo.GetStubState(stubId)
 	if err != nil {
@@ -322,7 +322,7 @@ func (i *AutoscaledInstance) handleDeploymentUnhealthy(stubId, currentState, rea
 	go i.EventRepo.PushStubStateUnhealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
 }
 
-func (i *AutoscaledInstance) handleDeploymentHealthy(stubId string) {
+func (i *AutoscaledInstance) handleStubHealthy(stubId string) {
 	var state string
 	state, err := i.ContainerRepo.GetStubState(stubId)
 	if err != nil || state == types.StubStateHealthy {
