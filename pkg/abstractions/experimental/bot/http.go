@@ -138,6 +138,20 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 		if err != nil {
 			return err
 		}
+
+		if instance.botConfig.WelcomeMessage != "" {
+			err = instance.botStateManager.pushEvent(instance.workspace.Name, instance.stub.ExternalId, sessionId, &BotEvent{
+				Type:  BotEventTypeAgentMessage,
+				Value: instance.botConfig.WelcomeMessage,
+				Metadata: map[string]string{
+					string(MetadataSessionId): sessionId,
+				},
+			})
+
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	stubType = types.StubType(instance.stub.Type)

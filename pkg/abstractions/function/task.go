@@ -145,8 +145,8 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		gpuRequest = append(gpuRequest, stubConfig.Runtime.Gpu.String())
 	}
 
-	gpuCount := 0
-	if len(gpuRequest) > 0 {
+	gpuCount := stubConfig.Runtime.GpuCount
+	if stubConfig.RequiresGPU() && gpuCount == 0 {
 		gpuCount = 1
 	}
 
@@ -211,4 +211,8 @@ func (t *FunctionTask) Metadata() types.TaskMetadata {
 		TaskId:        t.msg.TaskId,
 		ContainerId:   t.containerId,
 	}
+}
+
+func (t *FunctionTask) Message() *types.TaskMessage {
+	return t.msg
 }

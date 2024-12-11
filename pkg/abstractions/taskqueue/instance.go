@@ -65,26 +65,36 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		gpuRequest = append(gpuRequest, i.StubConfig.Runtime.Gpu.String())
 	}
 
-	gpuCount := 0
-	if len(gpuRequest) > 0 {
+	gpuCount := i.StubConfig.Runtime.GpuCount
+	if i.StubConfig.RequiresGPU() && gpuCount == 0 {
 		gpuCount = 1
+	}
+
+	checkpointEnabled := i.StubConfig.CheckpointEnabled
+	if i.Stub.Type.IsServe() {
+		checkpointEnabled = false
+	}
+
+	if gpuCount > 1 {
+		checkpointEnabled = false
 	}
 
 	for c := 0; c < containersToRun; c++ {
 		runRequest := &types.ContainerRequest{
-			ContainerId: i.genContainerId(),
-			Env:         env,
-			Cpu:         i.StubConfig.Runtime.Cpu,
-			Memory:      i.StubConfig.Runtime.Memory,
-			GpuRequest:  gpuRequest,
-			GpuCount:    uint32(gpuCount),
-			ImageId:     i.StubConfig.Runtime.ImageId,
-			StubId:      i.Stub.ExternalId,
-			WorkspaceId: i.Workspace.ExternalId,
-			Workspace:   *i.Workspace,
-			EntryPoint:  i.EntryPoint,
-			Mounts:      mounts,
-			Stub:        *i.Stub,
+			ContainerId:       i.genContainerId(),
+			Env:               env,
+			Cpu:               i.StubConfig.Runtime.Cpu,
+			Memory:            i.StubConfig.Runtime.Memory,
+			GpuRequest:        gpuRequest,
+			GpuCount:          uint32(gpuCount),
+			ImageId:           i.StubConfig.Runtime.ImageId,
+			StubId:            i.Stub.ExternalId,
+			WorkspaceId:       i.Workspace.ExternalId,
+			Workspace:         *i.Workspace,
+			EntryPoint:        i.EntryPoint,
+			Mounts:            mounts,
+			Stub:              *i.Stub,
+			CheckpointEnabled: checkpointEnabled,
 		}
 
 		err := i.Scheduler.Run(runRequest)

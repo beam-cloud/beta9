@@ -95,3 +95,14 @@ func (c *ContainerMountManager) setupMountPointS3(containerId string, m types.Mo
 func tempUserCodeDir(containerId string) string {
 	return fmt.Sprintf("/tmp/%s/code", containerId)
 }
+
+const (
+	checkpointSignalFileName            = "READY_FOR_CHECKPOINT"
+	checkpointCompleteFileName          = "CHECKPOINT_COMPLETE"
+	checkpointContainerIdFileName       = "CONTAINER_ID"
+	checkpointContainerHostnameFileName = "CONTAINER_HOSTNAME"
+)
+
+func checkpointSignalDir(containerId string) string {
+	return fmt.Sprintf("/tmp/%s/cedana", containerId)
+}

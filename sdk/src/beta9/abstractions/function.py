@@ -44,6 +44,9 @@ class Function(RunnerAbstraction):
             applicable or no GPU required, leave it empty.
             You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
             the scheduler prioritizes their selection based on their order in the list.
+        gpu_count (int):
+            The number of GPUs allocated to the container. Default is 0. If a GPU is
+            specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         timeout (Optional[int]):
@@ -63,6 +66,8 @@ class Function(RunnerAbstraction):
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
+        retry_for (Optional[List[BaseException]]):
+            A list of exceptions that will trigger a retry.
     Example:
         ```python
         from beta9 import function, Image
@@ -87,6 +92,7 @@ class Function(RunnerAbstraction):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
+        gpu_count: int = 0,
         image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,
@@ -95,11 +101,13 @@ class Function(RunnerAbstraction):
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
         task_policy: TaskPolicy = TaskPolicy(),
+        retry_for: Optional[List[Exception]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
             memory=memory,
             gpu=gpu,
+            gpu_count=gpu_count,
             image=image,
             timeout=timeout,
             retries=retries,
@@ -112,6 +120,7 @@ class Function(RunnerAbstraction):
 
         self._function_stub: Optional[FunctionServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
+        self.retry_for = retry_for
 
     def __call__(self, func):
         return _CallableWrapper(func, self)
@@ -283,6 +292,9 @@ class Schedule(Function):
         gpu (Union[GpuType, str]):
             The type or name of the GPU device to be used for GPU-accelerated tasks. If not
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
+        gpu_count (int):
+            The number of GPUs allocated to the container. Default is 0. If a GPU is
+            specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         timeout (Optional[int]):
@@ -326,6 +338,7 @@ class Schedule(Function):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
+        gpu_count: int = 0,
         image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,

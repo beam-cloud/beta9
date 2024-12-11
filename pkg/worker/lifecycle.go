@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -17,23 +18,21 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/rs/zerolog/log"
 )
 
 const (
-	baseConfigPath            string = "/tmp"
-	defaultContainerDirectory string = "/mnt/code"
-	specBaseName              string = "config.json"
-	initialSpecBaseName       string = "initial_config.json"
-
-	exitCodeSigterm int = 143 // Means the container received a SIGTERM by the underlying operating system
-	exitCodeSigkill int = 137 // Means the container received a SIGKILL by the underlying operating system
+	baseConfigPath            string        = "/tmp"
+	defaultContainerDirectory string        = "/mnt/code"
+	specBaseName              string        = "config.json"
+	initialSpecBaseName       string        = "initial_config.json"
+	runcEventsInterval        time.Duration = 5 * time.Second
+	containerInnerPort        int           = 8001 // Use a fixed port inside the container
+	exitCodeSigterm           int           = 143  // Means the container received a SIGTERM by the underlying operating system
+	exitCodeSigkill           int           = 137  // Means the container received a SIGKILL by the underlying operating system
 )
 
-var (
-	//go:embed base_runc_config.json
-	baseRuncConfigRaw string
-)
+//go:embed base_runc_config.json
+var baseRuncConfigRaw string
 
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
@@ -43,12 +42,12 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 
 	stopArgs, err := types.ToStopContainerArgs(event.Args)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to parse stop container args")
+		log.Printf("failed to parse stop container args: %v\n", err)
 		return false
 	}
 
 	if _, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
-		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
+		log.Printf("<%s> - received stop container event.\n", stopArgs.ContainerId)
 		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
@@ -57,11 +56,11 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 
 // stopContainer stops a runc container. When force is true, a SIGKILL signal is sent to the container.
 func (s *Worker) stopContainer(containerId string, kill bool) error {
-	log.Info().Str("container_id", containerId).Msg("stopping container")
+	log.Printf("<%s> - stopping container.\n", containerId)
 
-	_, exists := s.containerInstances.Get(containerId)
+	instance, exists := s.containerInstances.Get(containerId)
 	if !exists {
-		log.Info().Str("container_id", containerId).Msg("container not found")
+		log.Printf("<%s> - container not found.\n", containerId)
 		return nil
 	}
 
@@ -70,14 +69,14 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 		signal = int(syscall.SIGKILL)
 	}
 
-	err := s.runcHandle.Kill(context.Background(), containerId, signal, &runc.KillOpts{All: true})
+	err := s.runcHandle.Kill(context.Background(), instance.Id, signal, &runc.KillOpts{All: true})
 	if err != nil {
-		log.Info().Str("container_id", containerId).Msgf("error stopping container: %v", err)
+		log.Printf("<%s> - error stopping container: %v\n", containerId, err)
 		s.containerNetworkManager.TearDown(containerId)
 		return nil
 	}
 
-	log.Info().Str("container_id", containerId).Msg("container stopped")
+	log.Printf("<%s> - container stopped.\n", containerId)
 	return nil
 }
 
@@ -92,7 +91,7 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 
 	err := s.containerRepo.SetContainerExitCode(containerId, *exitCode)
 	if err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
+		log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
 	}
 
 	s.clearContainer(containerId, request, *exitCode)
@@ -109,7 +108,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	// Tear down container network components
 	err := s.containerNetworkManager.TearDown(request.ContainerId)
 	if err != nil {
-		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to clean up container network")
+		log.Printf("<%s> - failed to clean up container network: %v\n", request.ContainerId, err)
 	}
 
 	s.completedRequests <- request
@@ -134,17 +133,17 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		container, err := s.runcHandle.State(context.TODO(), containerId)
 		if err == nil && container.Status == types.RuncContainerStatusRunning {
 			if err := s.stopContainer(containerId, true); err != nil {
-				log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop container")
+				log.Printf("<%s> - failed to stop container: %v\n", containerId, err)
 			}
 		}
 
 		s.containerInstances.Delete(containerId)
 		err = s.containerRepo.DeleteContainerState(containerId)
 		if err != nil {
-			log.Error().Str("container_id", containerId).Err(err).Msg("failed to remove container state")
+			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
 		}
 
-		log.Info().Str("container_id", containerId).Msg("finalized container shutdown")
+		log.Printf("<%s> - finalized container shutdown.\n", containerId)
 	}()
 }
 
@@ -154,10 +153,10 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Pull image
-	log.Info().Str("container_id", containerId).Str("image_id", request.ImageId).Msg("lazy-pulling image")
+	log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
 	err := s.imageClient.PullLazy(request)
 	if err != nil && request.SourceImage != nil {
-		log.Info().Str("container_id", containerId).Str("image_id", *request.SourceImage).Msg("lazy-pull failed, pulling source image")
+		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
 		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
 		if err == nil {
 			err = s.imageClient.PullLazy(request)
@@ -171,7 +170,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	log.Info().Str("container_id", containerId).Int("port", bindPort).Msg("acquired port")
+	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
 
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
@@ -192,7 +191,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	log.Info().Str("container_id", containerId).Msg("successfully created spec from request")
+	log.Printf("<%s> - successfully created spec from request.\n", containerId)
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
@@ -201,7 +200,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	log.Info().Str("container_id", containerId).Msg("set container address")
+	log.Printf("<%s> - set container address.\n", containerId)
 
 	logChan := make(chan common.LogRecord)
 	go s.containerWg.Add(1)
@@ -209,7 +208,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	// Start the container
 	go s.spawn(request, spec, logChan, opts)
 
-	log.Info().Str("container_id", containerId).Msg("spawned container")
+	log.Printf("<%s> - spawned successfully.\n", containerId)
 	return nil
 }
 
@@ -244,6 +243,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
+	spec.Process.Terminal = true // NOTE: This is since we are using a console writer for logging
 
 	if s.config.Worker.RunCResourcesEnforced {
 		spec.Linux.Resources.CPU = getLinuxCPU(request)
@@ -274,6 +274,12 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart = nil
 	}
 
+	// We need to modify the spec to support Cedana C/R if enabled
+	if s.IsCRIUAvailable() && request.CheckpointEnabled {
+		containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)
+		s.cedanaClient.PrepareContainerSpec(spec, request.ContainerId, containerHostname, request.RequiresGPU())
+	}
+
 	spec.Process.Env = append(spec.Process.Env, env...)
 	spec.Root.Readonly = false
 
@@ -292,7 +298,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
 				err := os.MkdirAll(m.LocalPath, 0755)
 				if err != nil {
-					log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to create mount directory")
+					log.Printf("<%s> - failed to create mount directory: %v\n", request.ContainerId, err)
 				}
 			}
 		}
@@ -305,7 +311,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		if m.LinkPath != "" {
 			err = forceSymlink(m.MountPath, m.LinkPath)
 			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to symlink volume")
+				log.Printf("<%s> - unable to symlink volume: %v", request.ContainerId, err)
 			}
 		}
 
@@ -321,7 +327,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if s.fileCacheManager.CacheAvailable() && request.Workspace.VolumeCacheEnabled {
 		err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
 		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to setup volume caching")
+			log.Printf("<%s> - failed to setup volume caching: %v", request.ContainerId, err)
 		}
 	}
 
@@ -330,12 +336,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		Type:        "none",
 		Source:      "/workspace/resolv.conf",
 		Destination: "/etc/resolv.conf",
-		Options: []string{"ro",
+		Options: []string{
+			"ro",
 			"rbind",
 			"rprivate",
 			"nosuid",
 			"noexec",
-			"nodev"},
+			"nodev",
+		},
 	}
 
 	if s.config.Worker.UseHostResolvConf {
@@ -343,7 +351,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	spec.Mounts = append(spec.Mounts, resolvMount)
-
 	return spec, nil
 }
 
@@ -360,11 +367,12 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
 	// Most of these env vars are required to communicate with the gateway and vice versa
 	env := []string{
-		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
+		fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
+		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable()),
 		"PYTHONUNBUFFERED=1",
 	}
 
@@ -438,35 +446,39 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, logCha
 
 		if _, err := s.containerRepo.GetContainerState(containerId); err != nil {
 			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-				log.Info().Str("container_id", containerId).Msg("container state not found, returning")
+				log.Printf("<%s> - container state not found, returning\n", containerId)
 				return
 			}
 		}
 
 		// Update container status to running
-		s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
+		err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
+		if err != nil {
+			log.Printf("<%s> failed to update container status to running: %v", containerId, err)
+		}
 	}()
 
 	// Setup container overlay filesystem
 	err := containerInstance.Overlay.Setup()
 	if err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to setup overlay")
+		log.Printf("<%s> failed to setup overlay: %v", containerId, err)
 		return
 	}
 	defer containerInstance.Overlay.Cleanup()
+
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
 	// Setup container network namespace / devices
 	err = s.containerNetworkManager.Setup(containerId, spec)
 	if err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to setup container network")
+		log.Printf("<%s> failed to setup container network: %v", containerId, err)
 		return
 	}
 
 	// Expose the bind port
-	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
+	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, containerInnerPort)
 	if err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to expose container bind port")
+		log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
 		return
 	}
 
@@ -482,34 +494,97 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, logCha
 		return
 	}
 
+	consoleWriter, err := NewConsoleWriter(containerInstance.OutputWriter)
+	if err != nil {
+		log.Printf("<%s> - failed to create console writer: %v\n", containerId, err)
+		return
+	}
+
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(ctx, request)
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
 
-	pid := 0
-	pidChan := make(chan int, 1)
+	startedChan := make(chan int, 1)
 
-	go func() {
-		// Wait for runc to start the container
-		pid = <-pidChan
+	// Handle checkpoint creation & restore if applicable
+	if s.IsCRIUAvailable() && request.CheckpointEnabled {
+		restored, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, consoleWriter, startedChan, configPath)
+		if err != nil {
+			log.Printf("<%s> - C/R failed: %v\n", containerId, err)
+		}
 
-		// Capture resource usage (cpu/mem/gpu)
-		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
+		if restored {
+			// HOTFIX: If we restored from a checkpoint, we need to use the container ID of the restored container
+			// instead of the original container ID
+			containerInstance, exists := s.containerInstances.Get(request.ContainerId)
+			if exists {
+				containerInstance.Id = restoredContainerId
+				s.containerInstances.Set(containerId, containerInstance)
+				containerId = restoredContainerId
+			}
 
-		// Watch for OOM events
-		go s.watchOOMEvents(ctx, containerId, outputLogger)
-	}()
+			exitCode = s.waitForRestoredContainer(ctx, containerId, startedChan, logChan, request, spec)
+			return
+		}
+	}
 
 	// Invoke runc process (launch the container)
-	exitCode, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
-		OutputWriter: containerInstance.OutputWriter,
-		ConfigPath:   configPath,
-		Started:      pidChan,
+	_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
+		Detach:        true,
+		ConsoleSocket: consoleWriter,
+		ConfigPath:    configPath,
+		Started:       startedChan,
 	})
+	if err != nil {
+		log.Printf("<%s> - failed to run container: %v\n", containerId, err)
+		return
+	}
 
-	// Send last log message since the container has exited
-	outputLogger.Info("", "done", true, "success", err == nil)
+	exitCode = s.wait(ctx, containerId, startedChan, outputLogger, request, spec)
+}
+
+// Wait for a container to exit and return the exit code
+func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, outputLogger *slog.Logger, request *types.ContainerRequest, spec *specs.Spec) int {
+	<-startedChan
+
+	// Clean up runc container state and send final output message
+	cleanup := func(exitCode int, err error) int {
+		log.Printf("<%s> - container has exited with code: %d\n", containerId, exitCode)
+
+		outputLogger.Info("", "done", true, "success", exitCode == 0)
+
+		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
+		if err != nil {
+			log.Printf("<%s> - failed to delete container: %v\n", containerId, err)
+		}
+
+		return exitCode
+	}
+
+	// Look up the PID of the container
+	state, err := s.runcHandle.State(ctx, containerId)
+	if err != nil {
+		return cleanup(-1, err)
+	}
+	pid := state.Pid
+
+	// Start monitoring the container
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
+	go s.watchOOMEvents(ctx, containerId, outputLogger)          // Watch for OOM events
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return cleanup(-1, err)
+	}
+
+	// Wait for the container to exit
+	processState, err := process.Wait()
+	if err != nil {
+		return cleanup(-1, err)
+	}
+
+	return cleanup(processState.ExitCode(), nil)
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
@@ -534,15 +609,24 @@ func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 }
 
 func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, outputLogger *slog.Logger) {
-	seenEvents := make(map[string]struct{})
+	var (
+		seenEvents = make(map[string]struct{})
+		ch         <-chan *runc.Event
+		err        error
+		ticker     = time.NewTicker(time.Second)
+	)
 
-	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
-	ch, err := s.runcHandle.Events(ctx, containerId, time.Second)
-	if err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to open runc events channel")
+	select {
+	case <-ctx.Done():
 		return
+	default:
+		ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
+		if err != nil {
+			log.Printf("<%s> failed to open runc events channel: %v", containerId, err)
+			return
+		}
 	}
 
 	maxTries, tries := 5, 0 // Used for re-opening the channel if it's closed
@@ -555,7 +639,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, outputL
 		case event, ok := <-ch:
 			if !ok { // If the channel is closed, try to re-open it
 				if tries == maxTries-1 {
-					log.Error().Str("container_id", containerId).Msg("failed to watch for OOM events")
+					log.Printf("<%s> failed to watch for OOM events.", containerId)
 					return
 				}
 
@@ -566,7 +650,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, outputL
 				case <-time.After(time.Second):
 					ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
 					if err != nil {
-						log.Error().Str("container_id", containerId).Err(err).Msg("failed to open runc events channel")
+						log.Printf("<%s> failed to open runc events channel: %v", containerId, err)
 					}
 				}
 				continue

@@ -377,6 +377,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 			Value: workerId,
 		},
 		{
+			Name:  "WORKER_POOL_NAME",
+			Value: wpc.name,
+		},
+		{
 			Name:  "CPU_LIMIT",
 			Value: strconv.FormatInt(cpu, 10),
 		},

@@ -44,6 +44,9 @@ class TaskQueue(RunnerAbstraction):
             applicable or no GPU required, leave it empty.
             You can specify multiple GPUs by providing a list of GpuTypeAlias. If you specify several GPUs,
             the scheduler prioritizes their selection based on their order in the list.
+        gpu_count (int):
+            The number of GPUs allocated to the container. Default is 0. If a GPU is
+            specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         timeout (Optional[int]):
@@ -86,6 +89,13 @@ class TaskQueue(RunnerAbstraction):
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
+        retry_for (Optional[List[BaseException]]):
+            A list of exceptions that will trigger a retry if raised by your handler.
+        checkpoint_enabled (bool):
+            (experimental) Whether to enable checkpointing for the task queue. Default is False.
+            If enabled, the app will be checkpointed after the on_start function has completed.
+            On next invocation, each container will restore from a checkpoint and resume execution instead of
+            booting up from cold.
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -105,6 +115,7 @@ class TaskQueue(RunnerAbstraction):
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
+        gpu_count: int = 0,
         image: Image = Image(),
         timeout: int = 3600,
         retries: int = 3,
@@ -119,11 +130,14 @@ class TaskQueue(RunnerAbstraction):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
+        checkpoint_enabled: bool = False,
+        retry_for: Optional[List[BaseException]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
             memory=memory,
             gpu=gpu,
+            gpu_count=gpu_count,
             image=image,
             workers=workers,
             timeout=timeout,
@@ -138,8 +152,10 @@ class TaskQueue(RunnerAbstraction):
             authorized=authorized,
             autoscaler=autoscaler,
             task_policy=task_policy,
+            checkpoint_enabled=checkpoint_enabled,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
+        self.retry_for = retry_for
 
     @property
     def taskqueue_stub(self) -> TaskQueueServiceStub:

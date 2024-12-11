@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1.6
-FROM ubuntu:20.04 as base
+FROM ubuntu:22.04 as base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN <<EOT
 echo 'Acquire::ForceIPv4 "true";' | tee /etc/apt/apt.conf.d/1000-force-ipv4-transport
 apt-get update
-apt-get install -y software-properties-common curl git gcc python3-dev
+apt-get install -y software-properties-common curl git gcc python3-dev bzip2
 add-apt-repository ppa:deadsnakes/ppa
 apt-get update
 EOT
@@ -27,7 +27,7 @@ RUN <<EOT
 set -eux
 
 # Install python and dependencies
-apt-get install -y python3.12 python3.12-dev python3.12-distutils
+apt-get install -y python3.12 python3.12-dev
 
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12

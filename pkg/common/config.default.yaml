@@ -12,7 +12,7 @@ database:
   redis:
     mode: single
     addrs:
-    - redis-master:6379
+      - redis-master:6379
     password:
     enableTLS: false
     insecureSkipVerify: false
@@ -50,6 +50,7 @@ gateway:
   stubLimits:
     memory: 32768
     maxReplicas: 10
+    maxGpuCount: 2
 imageService:
   localCacheEnabled: true
   registryStore: local
@@ -107,6 +108,7 @@ worker:
       priority: 1
       jobSpec:
         nodeSelector: {}
+      criuEnabled: false
       poolSizing:
         defaultWorkerCpu: 1000m
         defaultWorkerGpuType: ""
@@ -129,17 +131,19 @@ worker:
         sharedMemoryLimitPct: 100%
     # example gpu worker pool
     # nvidia:
-    #   gpuType: A40
+    #   mode: local
+    #   gpuType: any
     #   runtime: nvidia
     #   jobSpec:
     #     nodeSelector: {}
     #   poolSizing:
-    #     defaultWorkerCpu: 1000m
+    #     defaultWorkerCpu:
     #     defaultWorkerGpuType: ""
-    #     defaultWorkerMemory: 1Gi
+    #     defaultWorkerMemory:
     #     minFreeCpu:
     #     minFreeGpu:
     #     minFreeMemory:
+    #     sharedMemoryLimitPct: 100%
   # global pool attributes
   useHostResolvConf: true
   hostNetwork: false
@@ -159,6 +163,24 @@ worker:
   terminationGracePeriod: 30
   addWorkerTimeout: 10m
   blobCacheEnabled: false
+  criu:
+    storage:
+      mountPath: /data/checkpoints
+      mode: local
+      objectStoreConfig:
+        bucketName: beta9-checkpoints
+        accessKey: test
+        secretKey: test
+        endpointURL: http://localstack:4566
+    cedana: # defaults
+      client:
+        leaveRunning: true
+      sharedStorage:
+        dumpStorageDir: /tmp/dump
+      connection:
+        cedanaUrl:
+        cedanaAuthToken:
+
 providers:
   ec2:
     accessKey:
@@ -177,18 +199,18 @@ tailscale:
 proxy:
   httpPort: 1989
   services:
-  - name: redis
-    localPort: 6379
-    destination: redis-master:6379
-  - name: juicefs-redis
-    localPort: 6380
-    destination: juicefs-redis-master:6379
-  - name: gateway-http
-    localPort: 1994
-    destination: beta9-gateway:1994
-  - name: gateway-grpc
-    localPort: 1993
-    destination: beta9-gateway:1993
+    - name: redis
+      localPort: 6379
+      destination: redis-master:6379
+    - name: juicefs-redis
+      localPort: 6380
+      destination: juicefs-redis-master:6379
+    - name: gateway-http
+      localPort: 1994
+      destination: beta9-gateway:1994
+    - name: gateway-grpc
+      localPort: 1993
+      destination: beta9-gateway:1993
 monitoring:
   containerMetricsInterval: 3s
   metricsCollector: prometheus
