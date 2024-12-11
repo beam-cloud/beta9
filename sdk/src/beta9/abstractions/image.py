@@ -487,6 +487,19 @@ class Image(BaseAbstraction):
                 )
 
     def from_dockerfile(self, path: str, context_dir: Optional[str] = None) -> "Image":
+        """
+        Build the base image based on a Dockerfile.
+
+        This method will sync the context directory and use the Dockerfile at the provided path to
+        build the base image.
+
+        Parameters:
+            path: The path to the Dockerfile.
+            context_dir: The directory to sync. If not provided, the directory of the Dockerfile will be used.
+
+        Returns:
+            Image: The Image object.
+        """
         if env.is_remote():
             return self
 
