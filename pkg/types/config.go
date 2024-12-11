@@ -11,6 +11,7 @@ import (
 type AppConfig struct {
 	ClusterName    string                    `key:"clusterName" json:"cluster_name"`
 	DebugMode      bool                      `key:"debugMode" json:"debug_mode"`
+	PrettyLogs     bool                      `key:"prettyLogs" json:"pretty_logs"`
 	Database       DatabaseConfig            `key:"database" json:"database"`
 	GatewayService GatewayServiceConfig      `key:"gateway" json:"gateway_service"`
 	ImageService   ImageServiceConfig        `key:"imageservice" json:"image_service"`

@@ -2,13 +2,13 @@ package storage
 
 import (
 	"fmt"
-	"log"
 	"os/exec"
 	"strconv"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/cenkalti/backoff"
+	"github.com/rs/zerolog/log"
 )
 
 const juiceFsMountTimeout time.Duration = 30 * time.Second
@@ -25,7 +25,7 @@ func NewJuiceFsStorage(config types.JuiceFSConfig) (Storage, error) {
 }
 
 func (s *JuiceFsStorage) Mount(localPath string) error {
-	log.Printf("JuiceFS filesystem mounting to: '%s'\n", localPath)
+	log.Info().Str("local_path", localPath).Msg("juicefs filesystem mounting")
 
 	cacheSize := strconv.FormatInt(s.config.CacheSize, 10)
 
@@ -56,7 +56,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 	go func() {
 		output, err := s.mountCmd.CombinedOutput()
 		if err != nil {
-			log.Fatalf("error executing juicefs mount: %v, output: %s", err, string(output))
+			log.Error().Err(err).Str("output", string(output)).Msg("error executing juicefs mount")
 		}
 	}()
 
@@ -84,7 +84,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		return fmt.Errorf("failed to mount JuiceFS filesystem to: '%s'", localPath)
 	}
 
-	log.Printf("JuiceFS filesystem mounted to: '%s'", localPath)
+	log.Info().Str("local_path", localPath).Msg("juicefs filesystem mounted")
 	return nil
 }
 
@@ -127,11 +127,11 @@ func (s *JuiceFsStorage) Unmount(localPath string) error {
 
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			log.Printf("error executing juicefs umount: %v, output: %s", err, string(output))
+			log.Error().Err(err).Str("output", string(output)).Msg("error executing juicefs umount")
 			return err
 		}
 
-		log.Printf("JuiceFS filesystem unmounted from: '%s'\n", localPath)
+		log.Info().Str("local_path", localPath).Msg("juicefs filesystem unmounted")
 		return nil
 	}
 

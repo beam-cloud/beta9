@@ -5,7 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +17,7 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -41,12 +42,12 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 
 	stopArgs, err := types.ToStopContainerArgs(event.Args)
 	if err != nil {
-		log.Printf("failed to parse stop container args: %v\n", err)
+		log.Error().Str("worker_id", s.workerId).Msgf("failed to parse stop container args: %v", err)
 		return false
 	}
 
 	if _, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
-		log.Printf("<%s> - received stop container event.\n", stopArgs.ContainerId)
+		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
 		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
@@ -55,11 +56,11 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 
 // stopContainer stops a runc container. When force is true, a SIGKILL signal is sent to the container.
 func (s *Worker) stopContainer(containerId string, kill bool) error {
-	log.Printf("<%s> - stopping container.\n", containerId)
+	log.Info().Str("container_id", containerId).Msg("stopping container")
 
 	instance, exists := s.containerInstances.Get(containerId)
 	if !exists {
-		log.Printf("<%s> - container not found.\n", containerId)
+		log.Info().Str("container_id", containerId).Msg("container not found")
 		return nil
 	}
 
@@ -70,12 +71,12 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 
 	err := s.runcHandle.Kill(context.Background(), instance.Id, signal, &runc.KillOpts{All: true})
 	if err != nil {
-		log.Printf("<%s> - error stopping container: %v\n", containerId, err)
+		log.Error().Str("container_id", containerId).Msgf("error stopping container: %v", err)
 		s.containerNetworkManager.TearDown(containerId)
 		return nil
 	}
 
-	log.Printf("<%s> - container stopped.\n", containerId)
+	log.Info().Str("container_id", containerId).Msg("container stopped")
 	return nil
 }
 
@@ -90,7 +91,7 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 
 	err := s.containerRepo.SetContainerExitCode(containerId, *exitCode)
 	if err != nil {
-		log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
+		log.Error().Str("container_id", containerId).Msgf("failed to set exit code: %v", err)
 	}
 
 	s.clearContainer(containerId, request, *exitCode)
@@ -107,7 +108,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	// Tear down container network components
 	err := s.containerNetworkManager.TearDown(request.ContainerId)
 	if err != nil {
-		log.Printf("<%s> - failed to clean up container network: %v\n", request.ContainerId, err)
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to clean up container network: %v", err)
 	}
 
 	s.completedRequests <- request
@@ -132,17 +133,17 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		container, err := s.runcHandle.State(context.TODO(), containerId)
 		if err == nil && container.Status == types.RuncContainerStatusRunning {
 			if err := s.stopContainer(containerId, true); err != nil {
-				log.Printf("<%s> - failed to stop container: %v\n", containerId, err)
+				log.Error().Str("container_id", containerId).Msgf("failed to stop container: %v", err)
 			}
 		}
 
 		s.containerInstances.Delete(containerId)
 		err = s.containerRepo.DeleteContainerState(containerId)
 		if err != nil {
-			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
+			log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
 		}
 
-		log.Printf("<%s> - finalized container shutdown.\n", containerId)
+		log.Info().Str("container_id", containerId).Msg("finalized container shutdown")
 	}()
 }
 
@@ -152,10 +153,10 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Pull image
-	log.Printf("<%s> - lazy-pulling image: %s\n", containerId, request.ImageId)
+	log.Info().Str("container_id", containerId).Msgf("lazy-pulling image: %s", request.ImageId)
 	err := s.imageClient.PullLazy(request)
 	if err != nil && request.SourceImage != nil {
-		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
+		log.Info().Str("container_id", containerId).Msgf("lazy-pull failed, pulling source image: %s", *request.SourceImage)
 		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
 		if err == nil {
 			err = s.imageClient.PullLazy(request)
@@ -169,7 +170,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("<%s> - acquired port: %d\n", containerId, bindPort)
+	log.Info().Str("container_id", containerId).Msgf("acquired port: %d", bindPort)
 
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
@@ -190,7 +191,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("<%s> - successfully created spec from request.\n", containerId)
+	log.Info().Str("container_id", containerId).Msg("successfully created spec from request")
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
@@ -199,15 +200,15 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("<%s> - set container address.\n", containerId)
+	log.Info().Str("container_id", containerId).Msg("set container address")
 
-	outputChan := make(chan common.OutputMsg)
+	logChan := make(chan common.LogRecord)
 	go s.containerWg.Add(1)
 
 	// Start the container
-	go s.spawn(request, spec, outputChan, opts)
+	go s.spawn(request, spec, logChan, opts)
 
-	log.Printf("<%s> - spawned successfully.\n", containerId)
+	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	return nil
 }
 
@@ -297,7 +298,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
 				err := os.MkdirAll(m.LocalPath, 0755)
 				if err != nil {
-					log.Printf("<%s> - failed to create mount directory: %v\n", request.ContainerId, err)
+					log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
 				}
 			}
 		}
@@ -310,7 +311,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		if m.LinkPath != "" {
 			err = forceSymlink(m.MountPath, m.LinkPath)
 			if err != nil {
-				log.Printf("<%s> - unable to symlink volume: %v", request.ContainerId, err)
+				log.Error().Str("container_id", request.ContainerId).Msgf("unable to symlink volume: %v", err)
 			}
 		}
 
@@ -326,7 +327,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if s.fileCacheManager.CacheAvailable() && request.Workspace.VolumeCacheEnabled {
 		err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
 		if err != nil {
-			log.Printf("<%s> - failed to setup volume caching: %v", request.ContainerId, err)
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to setup volume caching: %v", err)
 		}
 	}
 
@@ -387,8 +388,9 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 }
 
 // spawn a container using runc binary
-func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputChan chan common.OutputMsg, opts *ContainerOptions) {
+func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, logChan chan common.LogRecord, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
+	outputLogger := slog.New(common.NewChannelHandler(logChan))
 
 	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
 	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
@@ -414,11 +416,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		Spec:       spec,
 		ExitCode:   -1,
 		OutputWriter: common.NewOutputWriter(func(s string) {
-			outputChan <- common.OutputMsg{
-				Msg:     string(s),
-				Done:    false,
-				Success: false,
-			}
+			outputLogger.Info(s, "done", false, "success", false)
 		}),
 		LogBuffer: common.NewLogBuffer(),
 		Request:   request,
@@ -433,7 +431,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	s.containerRepo.SetWorkerAddress(containerId, hostname)
 
 	// Handle stdout/stderr from spawned container
-	go s.containerLogger.CaptureLogs(containerId, outputChan)
+	go s.containerLogger.CaptureLogs(containerId, logChan)
 
 	go func() {
 		time.Sleep(time.Second)
@@ -448,7 +446,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 		if _, err := s.containerRepo.GetContainerState(containerId); err != nil {
 			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-				log.Printf("<%s> - container state not found, returning\n", containerId)
+				log.Info().Str("container_id", containerId).Msg("container state not found, returning")
 				return
 			}
 		}
@@ -456,14 +454,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		// Update container status to running
 		err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
 		if err != nil {
-			log.Printf("<%s> failed to update container status to running: %v", containerId, err)
+			log.Error().Str("container_id", containerId).Msgf("failed to update container status to running: %v", err)
 		}
 	}()
 
 	// Setup container overlay filesystem
 	err := containerInstance.Overlay.Setup()
 	if err != nil {
-		log.Printf("<%s> failed to setup overlay: %v", containerId, err)
+		log.Error().Str("container_id", containerId).Msgf("failed to setup overlay: %v", err)
 		return
 	}
 	defer containerInstance.Overlay.Cleanup()
@@ -473,14 +471,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Setup container network namespace / devices
 	err = s.containerNetworkManager.Setup(containerId, spec)
 	if err != nil {
-		log.Printf("<%s> failed to setup container network: %v", containerId, err)
+		log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
 		return
 	}
 
 	// Expose the bind port
 	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, containerInnerPort)
 	if err != nil {
-		log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
+		log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
 		return
 	}
 
@@ -498,7 +496,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	consoleWriter, err := NewConsoleWriter(containerInstance.OutputWriter)
 	if err != nil {
-		log.Printf("<%s> - failed to create console writer: %v\n", containerId, err)
+		log.Error().Str("container_id", containerId).Msgf("failed to create console writer: %v", err)
 		return
 	}
 
@@ -513,7 +511,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
 		restored, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, consoleWriter, startedChan, configPath)
 		if err != nil {
-			log.Printf("<%s> - C/R failed: %v\n", containerId, err)
+			log.Error().Str("container_id", containerId).Msgf("C/R failed: %v", err)
 		}
 
 		if restored {
@@ -526,7 +524,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				containerId = restoredContainerId
 			}
 
-			exitCode = s.waitForRestoredContainer(ctx, containerId, startedChan, outputChan, request, spec)
+			exitCode = s.waitForRestoredContainer(ctx, containerId, startedChan, logChan, request, spec)
 			return
 		}
 	}
@@ -539,30 +537,26 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		Started:       startedChan,
 	})
 	if err != nil {
-		log.Printf("<%s> - failed to run container: %v\n", containerId, err)
+		log.Error().Str("container_id", containerId).Msgf("failed to run container: %v", err)
 		return
 	}
 
-	exitCode = s.wait(ctx, containerId, startedChan, outputChan, request, spec)
+	exitCode = s.wait(ctx, containerId, startedChan, outputLogger, request, spec)
 }
 
 // Wait for a container to exit and return the exit code
-func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, outputChan chan common.OutputMsg, request *types.ContainerRequest, spec *specs.Spec) int {
+func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, outputLogger *slog.Logger, request *types.ContainerRequest, spec *specs.Spec) int {
 	<-startedChan
 
 	// Clean up runc container state and send final output message
 	cleanup := func(exitCode int, err error) int {
-		log.Printf("<%s> - container has exited with code: %d\n", containerId, exitCode)
+		log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d", exitCode)
 
-		outputChan <- common.OutputMsg{
-			Msg:     "",
-			Done:    true,
-			Success: exitCode == 0,
-		}
+		outputLogger.Info("", "done", true, "success", exitCode == 0)
 
 		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
 		if err != nil {
-			log.Printf("<%s> - failed to delete container: %v\n", containerId, err)
+			log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
 		}
 
 		return exitCode
@@ -577,7 +571,7 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 
 	// Start monitoring the container
 	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
-	go s.watchOOMEvents(ctx, containerId, outputChan)            // Watch for OOM events
+	go s.watchOOMEvents(ctx, containerId, outputLogger)          // Watch for OOM events
 
 	process, err := os.FindProcess(pid)
 	if err != nil {
@@ -614,7 +608,7 @@ func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
 	return request.SourceImage != nil
 }
 
-func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output chan common.OutputMsg) {
+func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, outputLogger *slog.Logger) {
 	var (
 		seenEvents = make(map[string]struct{})
 		ch         <-chan *runc.Event
@@ -630,7 +624,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 	default:
 		ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
 		if err != nil {
-			log.Printf("<%s> failed to open runc events channel: %v", containerId, err)
+			log.Error().Str("container_id", containerId).Msgf("failed to open runc events channel: %v", err)
 			return
 		}
 	}
@@ -645,7 +639,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 		case event, ok := <-ch:
 			if !ok { // If the channel is closed, try to re-open it
 				if tries == maxTries-1 {
-					log.Printf("<%s> failed to watch for OOM events.", containerId)
+					log.Error().Str("container_id", containerId).Msg("failed to watch for OOM events")
 					return
 				}
 
@@ -656,7 +650,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 				case <-time.After(time.Second):
 					ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
 					if err != nil {
-						log.Printf("<%s> failed to open runc events channel: %v", containerId, err)
+						log.Error().Str("container_id", containerId).Msgf("failed to open runc events channel: %v", err)
 					}
 				}
 				continue
@@ -669,9 +663,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 			seenEvents[event.Type] = struct{}{}
 
 			if event.Type == "oom" {
-				output <- common.OutputMsg{
-					Msg: fmt.Sprintln("[ERROR] A process in the container was killed due to out-of-memory conditions."),
-				}
+				outputLogger.Error("A process in the container was killed due to out-of-memory conditions.")
 			}
 		}
 	}

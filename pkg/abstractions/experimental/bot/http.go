@@ -2,7 +2,6 @@ package bot
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 )
 
 type botGroup struct {
@@ -165,7 +165,7 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			for _, containerId := range containersBySessionId[sessionId] {
 				err := instance.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
 				if err != nil {
-					log.Println("<bot> Failed to stop bot container", containerId, err)
+					log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop bot container")
 				}
 			}
 		}

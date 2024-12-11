@@ -3,10 +3,11 @@ package worker
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
@@ -39,7 +40,7 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 		if !info.IsDir() {
 			_, err := cm.client.StoreContentFromSource(path, 0)
 			if err != nil {
-				log.Printf("Failed to cache file<%s>: %v\n", path, err)
+				log.Error().Str("path", path).Err(err).Msg("failed to cache file")
 			}
 		}
 

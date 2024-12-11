@@ -3,13 +3,14 @@ package abstractions
 import (
 	"context"
 	"errors"
-	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 const IgnoreScalingEventInterval = 10 * time.Second
@@ -82,6 +83,9 @@ type AutoscaledInstance struct {
 	// Callbacks
 	StartContainersFunc func(containersToRun int) error
 	StopContainersFunc  func(containersToStop int) error
+
+	// Sampled logger
+	sampledLogger *zerolog.Logger
 }
 
 func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (*AutoscaledInstance, error) {
@@ -92,6 +96,14 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 	if cfg.Stub.Type.IsDeployment() {
 		failedContainerThreshold = types.FailedDeploymentContainerThreshold
 	}
+
+	// This allows a maximum of 1 log per second. If more than 1 log is generated in a second,
+	// it will start logging every 100th log.
+	sampledLogger := log.Sample(&zerolog.BurstSampler{
+		Burst:       1,
+		Period:      1 * time.Second,
+		NextSampler: &zerolog.BasicSampler{N: 100},
+	})
 
 	instance := &AutoscaledInstance{
 		Lock:                     lock,
@@ -118,6 +130,7 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		StartContainersFunc:      cfg.StartContainersFunc,
 		StopContainersFunc:       cfg.StopContainersFunc,
 		FailedContainerThreshold: failedContainerThreshold,
+		sampledLogger:            &sampledLogger,
 	}
 
 	if instance.StubConfig.Autoscaler == nil {
@@ -204,7 +217,7 @@ func (i *AutoscaledInstance) Monitor() error {
 			}
 
 			if initialContainerCount != len(i.Containers) {
-				log.Printf("<%s> scaled from %d->%d", i.Name, initialContainerCount, len(i.Containers))
+				log.Info().Str("instance_name", i.Name).Int("initial_count", initialContainerCount).Int("current_count", len(i.Containers)).Msg("scaled")
 			}
 
 		case desiredContainers := <-i.ScaleEventChan:
@@ -216,7 +229,7 @@ func (i *AutoscaledInstance) Monitor() error {
 			if err := i.HandleScalingEvent(desiredContainers); err != nil {
 				if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 					if time.Now().After(ignoreScalingEventWindow) {
-						log.Printf("<%s> throttled by concurrency limit\n", i.Name)
+						log.Info().Str("instance_name", i.Name).Msg("throttled by concurrency limit")
 						ignoreScalingEventWindow = time.Now().Add(IgnoreScalingEventInterval)
 					}
 				}
@@ -240,7 +253,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	}
 
 	if len(state.FailedContainers) >= i.FailedContainerThreshold {
-		log.Printf("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
+		i.sampledLogger.Info().Str("instance_name", i.Name).Msg("reached failed container threshold, scaling to zero")
 		desiredContainers = 0
 	}
 

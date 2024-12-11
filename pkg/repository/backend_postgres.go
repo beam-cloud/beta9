@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -23,6 +22,8 @@ import (
 	_ "github.com/beam-cloud/beta9/pkg/repository/backend_postgres_migrations"
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -73,7 +74,16 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 	}, nil
 }
 
+type GooseLogger struct {
+	zerolog.Logger
+}
+
+func (l *GooseLogger) Fatalf(format string, v ...any) {
+	l.Logger.Fatal().Msgf(format, v...)
+}
+
 func (r *PostgresBackendRepository) Migrate() error {
+	goose.SetLogger(&GooseLogger{log.Logger.Level(zerolog.InfoLevel)})
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
@@ -1007,7 +1017,7 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 	)
 
 	if err != nil {
-		log.Println(err)
+		log.Error().Err(err).Msg("error paginating deployments")
 		return common.CursorPaginationInfo[types.DeploymentWithRelated]{}, err
 	}
 
@@ -1565,7 +1575,7 @@ func (r *PostgresBackendRepository) ListenToChannel(ctx context.Context, channel
 
 	listener := pq.NewListener(dsn, listenToChannelMinReconnectInterval, listenToChannelMaxReconnectInterval, func(ev pq.ListenerEventType, err error) {
 		if err != nil {
-			log.Println("failed to create new listener:", err)
+			log.Error().Err(err).Msg("failed to create new listener")
 		}
 	})
 
