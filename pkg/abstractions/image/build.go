@@ -254,19 +254,21 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	err = b.scheduler.Run(&types.ContainerRequest{
-		ContainerId:      containerId,
-		Env:              opts.EnvVars,
-		Cpu:              cpu,
-		Memory:           memory,
-		ImageId:          baseImageId,
-		SourceImage:      &sourceImage,
-		SourceImageCreds: opts.BaseImageCreds,
-		Dockerfile:       dockerfile,
-		BuildCtxObject:   &opts.BuildCtxObject,
-		WorkspaceId:      authInfo.Workspace.ExternalId,
-		Workspace:        *authInfo.Workspace,
-		EntryPoint:       []string{"tail", "-f", "/dev/null"},
-		PoolSelector:     b.config.ImageService.BuildContainerPoolSelector,
+		BuildRequestOptions: types.BuildRequestOptions{
+			SourceImage:      &sourceImage,
+			SourceImageCreds: opts.BaseImageCreds,
+			Dockerfile:       dockerfile,
+			BuildCtxObject:   &opts.BuildCtxObject,
+		},
+		ContainerId:  containerId,
+		Env:          opts.EnvVars,
+		Cpu:          cpu,
+		Memory:       memory,
+		ImageId:      baseImageId,
+		WorkspaceId:  authInfo.Workspace.ExternalId,
+		Workspace:    *authInfo.Workspace,
+		EntryPoint:   []string{"tail", "-f", "/dev/null"},
+		PoolSelector: b.config.ImageService.BuildContainerPoolSelector,
 	})
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}

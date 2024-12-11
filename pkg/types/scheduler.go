@@ -75,7 +75,15 @@ type ContainerState struct {
 
 type ImageSourceType string
 
+type BuildRequestOptions struct {
+	SourceImage      *string `json:"source_image"`
+	Dockerfile       *string `json:"dockerfile"`
+	BuildCtxObject   *string `json:"build_context"`
+	SourceImageCreds string  `json:"source_image_creds"`
+}
+
 type ContainerRequest struct {
+	BuildRequestOptions
 	ContainerId       string          `json:"container_id"`
 	EntryPoint        []string        `json:"entry_point"`
 	Env               []string        `json:"env"`
@@ -84,10 +92,6 @@ type ContainerRequest struct {
 	Gpu               string          `json:"gpu"`
 	GpuRequest        []string        `json:"gpu_request"`
 	GpuCount          uint32          `json:"gpu_count"`
-	SourceImage       *string         `json:"source_image"`
-	Dockerfile        *string         `json:"dockerfile"`
-	BuildCtxObject    *string         `json:"build_context"`
-	SourceImageCreds  string          `json:"source_image_creds"`
 	ImageId           string          `json:"image_id"`
 	StubId            string          `json:"stub_id"`
 	WorkspaceId       string          `json:"workspace_id"`
