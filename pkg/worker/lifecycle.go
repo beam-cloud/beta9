@@ -217,7 +217,7 @@ func (s *Worker) buildOrPullImage(request *types.ContainerRequest, containerId s
 		if err != nil {
 			return err
 		}
-		if err := s.imageClient.BuildAndArchiveImage(context.TODO(), *request.Dockerfile, request.ImageId, buildCtxPath); err != nil {
+		if err := s.imageClient.BuildAndArchiveImage(context.TODO(), containerId, *request.Dockerfile, request.ImageId, buildCtxPath); err != nil {
 			return err
 		}
 	case request.SourceImage != nil:

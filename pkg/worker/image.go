@@ -256,16 +256,26 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 	return nil
 }
 
-func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile string, imageId string, buildCtxPath string) error {
+// Will be replaced when structured logging is merged
+type ExecWriter struct {
+	containerId string
+}
+
+func (c *ExecWriter) Write(p []byte) (n int, err error) {
+	log.Printf("<%s> - %s", c.containerId, string(p))
+	return len(p), nil
+}
+
+func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, containerId string, dockerfile string, imageId string, buildCtxPath string) error {
 	buildPath, err := os.MkdirTemp("", "")
 	if err != nil {
-		return errors.Wrap(err, "create temp dir")
+		return err
 	}
 	defer os.RemoveAll(buildPath)
 	tempDockerFile := filepath.Join(buildPath, "Dockerfile")
 	f, err := os.Create(tempDockerFile)
 	if err != nil {
-		return errors.Wrap(err, "create temp dockerfile")
+		return err
 	}
 	fmt.Fprintf(f, dockerfile)
 	f.Close()
@@ -278,24 +288,24 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 	os.MkdirAll(ociPath, 0755)
 
 	cmd := exec.Command("buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", imageId+":latest", buildCtxPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = &ExecWriter{containerId: containerId}
+	cmd.Stderr = &ExecWriter{containerId: containerId}
 	err = cmd.Run()
 	if err != nil {
-		return errors.Wrap(err, "buildah bud")
+		return err
 	}
 
 	cmd = exec.Command("buildah", "--root", imagePath, "push", imageId+":latest", "oci:"+ociPath+":latest")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = &ExecWriter{containerId: containerId}
+	cmd.Stderr = &ExecWriter{containerId: containerId}
 	err = cmd.Run()
 	if err != nil {
-		return errors.Wrap(err, "buildah push")
+		return err
 	}
 
 	engine, err := dir.Open(ociPath)
 	if err != nil {
-		return errors.Wrap(err, "open CAS "+ociPath)
+		return err
 	}
 	defer engine.Close()
 
@@ -306,20 +316,20 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 
 	err = umoci.Unpack(engineExt, "latest", tempBundlePath, unpackOptions)
 	if err != nil {
-		return errors.Wrap(err, "unpack image")
+		return err
 	}
 
 	for _, dir := range requiredContainerDirectories {
 		fullPath := filepath.Join(tempBundlePath, "rootfs", dir)
 		err := os.MkdirAll(fullPath, 0755)
 		if err != nil {
-			return errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
+			return err
 		}
 	}
 
 	err = c.Archive(ctx, tempBundlePath, imageId, nil)
 	if err != nil {
-		return errors.Wrap(err, "archive image")
+		return err
 	}
 
 	return nil
