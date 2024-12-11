@@ -261,7 +261,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		err = i.StopContainersFunc(-containerDelta)
 	}
 
-	go i.handleUnhealthyDeploymentEvents(state.FailedContainers)
+	go i.handleDeploymentEvents(state.FailedContainers)
 
 	return err
 }
@@ -293,17 +293,17 @@ func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 	return &state, nil
 }
 
-func (i *AutoscaledInstance) handleUnhealthyDeploymentEvents(failedContainers []string) {
+func (i *AutoscaledInstance) handleDeploymentEvents(failedContainers []string) {
 	if len(failedContainers) >= i.FailedContainerThreshold {
-		i.HandleDeploymentUnhealthy(i.Stub.ExternalId, types.StubStateDegraded, "failed container threshold", failedContainers)
+		i.handleDeploymentUnhealthy(i.Stub.ExternalId, types.StubStateDegraded, "failed container threshold", failedContainers)
 	} else if len(failedContainers) > 0 {
-		i.HandleDeploymentUnhealthy(i.Stub.ExternalId, types.StubStateWarning, "one or more containers failed", failedContainers)
+		i.handleDeploymentUnhealthy(i.Stub.ExternalId, types.StubStateWarning, "one or more containers failed", failedContainers)
 	} else if len(failedContainers) == 0 {
-		i.HandleDeploymentHealthy(i.Stub.ExternalId)
+		i.handleDeploymentHealthy(i.Stub.ExternalId)
 	}
 }
 
-func (i *AutoscaledInstance) HandleDeploymentUnhealthy(stubId, currentState, reason string, containers []string) {
+func (i *AutoscaledInstance) handleDeploymentUnhealthy(stubId, currentState, reason string, containers []string) {
 	var state string
 	state, err := i.ContainerRepo.GetStubState(stubId)
 	if err != nil {
@@ -322,7 +322,7 @@ func (i *AutoscaledInstance) HandleDeploymentUnhealthy(stubId, currentState, rea
 	go i.EventRepo.PushStubStateUnhealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
 }
 
-func (i *AutoscaledInstance) HandleDeploymentHealthy(stubId string) {
+func (i *AutoscaledInstance) handleDeploymentHealthy(stubId string) {
 	var state string
 	state, err := i.ContainerRepo.GetStubState(stubId)
 	if err != nil || state == types.StubStateHealthy {
