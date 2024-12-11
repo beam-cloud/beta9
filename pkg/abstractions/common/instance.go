@@ -24,7 +24,7 @@ type AutoscaledInstanceState struct {
 	RunningContainers  int
 	PendingContainers  int
 	StoppingContainers int
-	FailedContainers   int
+	FailedContainers   []string
 }
 
 type AutoscaledInstanceConfig struct {
@@ -40,6 +40,7 @@ type AutoscaledInstanceConfig struct {
 	InstanceLockKey     string
 	ContainerRepo       repository.ContainerRepository
 	BackendRepo         repository.BackendRepository
+	EventRepo           repository.EventRepository
 	TaskRepo            repository.TaskRepository
 	StartContainersFunc func(containersToRun int) error
 	StopContainersFunc  func(containersToStop int) error
@@ -74,6 +75,7 @@ type AutoscaledInstance struct {
 	ContainerRepo repository.ContainerRepository
 	BackendRepo   repository.BackendRepository
 	TaskRepo      repository.TaskRepository
+	EventRepo     repository.EventRepository
 
 	// Keys
 	InstanceLockKey string
@@ -121,6 +123,7 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		ContainerRepo:            cfg.ContainerRepo,
 		BackendRepo:              cfg.BackendRepo,
 		TaskRepo:                 cfg.TaskRepo,
+		EventRepo:                cfg.EventRepo,
 		Containers:               make(map[string]bool),
 		ContainerEventChan:       make(chan types.ContainerEvent, 1),
 		ScaleEventChan:           make(chan int, 1),
@@ -249,7 +252,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		return err
 	}
 
-	if state.FailedContainers >= i.FailedContainerThreshold {
+	if len(state.FailedContainers) >= i.FailedContainerThreshold {
 		i.sampledLogger.Info().Str("instance_name", i.Name).Msg("reached failed container threshold, scaling to zero")
 		desiredContainers = 0
 	}
@@ -271,6 +274,8 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		err = i.StopContainersFunc(-containerDelta)
 	}
 
+	go i.handleStubEvents(state.FailedContainers)
+
 	return err
 }
 
@@ -280,7 +285,7 @@ func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 		return nil, err
 	}
 
-	failedContainers, err := i.ContainerRepo.GetFailedContainerCountByStubId(i.Stub.ExternalId)
+	failedContainers, err := i.ContainerRepo.GetFailedContainersByStubId(i.Stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}
@@ -299,4 +304,31 @@ func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 
 	state.FailedContainers = failedContainers
 	return &state, nil
+}
+
+func (i *AutoscaledInstance) handleStubEvents(failedContainers []string) {
+	if len(failedContainers) >= i.FailedContainerThreshold {
+		i.emitUnhealthyEvent(i.Stub.ExternalId, types.StubStateDegraded, "reached max failed container threshold", failedContainers)
+	} else if len(failedContainers) > 0 {
+		i.emitUnhealthyEvent(i.Stub.ExternalId, types.StubStateWarning, "one or more containers failed", failedContainers)
+	}
+}
+
+func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason string, containers []string) {
+	var state string
+	state, err := i.ContainerRepo.GetStubState(stubId)
+	if err != nil {
+		return
+	}
+
+	if state == currentState {
+		return
+	}
+
+	err = i.ContainerRepo.SetStubState(stubId, currentState)
+	if err != nil {
+		return
+	}
+
+	go i.EventRepo.PushStubStateUnhealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
 }

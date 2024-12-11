@@ -3,6 +3,7 @@ package repository
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -277,5 +278,20 @@ func (t *TCPEventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
 		types.EventTaskCreated,
 		types.EventTaskSchemaVersion,
 		event,
+	)
+}
+
+func (t *TCPEventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId string, currentState string, previousState string, reason string, failedContainers []string) {
+	t.pushEvent(
+		fmt.Sprintf("stub.state.%s", strings.ToLower(currentState)),
+		types.EventStubStateSchemaVersion,
+		types.EventStubStateSchema{
+			ID:               stubId,
+			WorkspaceID:      workspaceId,
+			State:            currentState,
+			Reason:           reason,
+			PreviousState:    previousState,
+			FailedContainers: failedContainers,
+		},
 	)
 }
