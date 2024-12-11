@@ -273,6 +273,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 	imagePath := filepath.Join(buildPath, "image")
 	ociPath := filepath.Join(buildPath, "oci")
 	tempBundlePath := filepath.Join(c.imageBundlePath, imageId)
+	defer os.RemoveAll(tempBundlePath)
 	os.MkdirAll(imagePath, 0755)
 	os.MkdirAll(ociPath, 0755)
 
@@ -316,7 +317,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, dockerfile strin
 		}
 	}
 
-	defer os.RemoveAll(tempBundlePath)
 	err = c.Archive(ctx, tempBundlePath, imageId, nil)
 	if err != nil {
 		return errors.Wrap(err, "archive image")
