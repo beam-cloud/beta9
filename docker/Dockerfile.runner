@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN <<EOT
 echo 'Acquire::ForceIPv4 "true";' | tee /etc/apt/apt.conf.d/1000-force-ipv4-transport
 apt-get update
-apt-get install -y software-properties-common curl git gcc python3-dev
+apt-get install -y software-properties-common curl git gcc python3-dev bzip2
 add-apt-repository ppa:deadsnakes/ppa
 apt-get update
 EOT
@@ -27,7 +27,7 @@ RUN <<EOT
 set -eux
 
 # Install python and dependencies
-apt-get install -y python3.12 python3.12-dev python3.12-distutils
+apt-get install -y python3.12 python3.12-dev
 
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
@@ -68,7 +68,8 @@ apt-get install -y python3.11 python3.11-dev python3.11-distutils
 
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
-python3.11 -m pip install --upgrade distlib setuptools pip
+python3.11 -m pip install setuptools==70.3.0
+python3.11 -m pip install --upgrade distlib pip
 python3.11 -m pip install -r /workspace/requirements.txt
 
 # Set default python
@@ -105,7 +106,8 @@ apt-get install -y python3.10 python3.10-dev python3.10-distutils
 
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
-python3.10 -m pip install --upgrade distlib setuptools pip
+python3.10 -m pip install setuptools==70.3.0
+python3.10 -m pip install --upgrade distlib pip
 python3.10 -m pip install -r /workspace/requirements.txt
 
 # Set default python
@@ -142,7 +144,8 @@ apt-get install -y python3.9 python3.9-dev python3.9-distutils
 
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.9
-python3.9 -m pip install --upgrade distlib setuptools pip
+python3.9 -m pip install setuptools==70.3.0
+python3.9 -m pip install --upgrade distlib pip
 python3.9 -m pip install -r /workspace/requirements.txt
 
 # Set default python
@@ -179,7 +182,8 @@ apt-get install -y python3.8 python3.8-dev python3.8-distutils
 
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.8
-python3.8 -m pip install --upgrade distlib setuptools pip
+python3.8 -m pip install setuptools==70.3.0
+python3.8 -m pip install --upgrade distlib pip
 python3.8 -m pip install -r /workspace/requirements.txt
 
 # Set default python

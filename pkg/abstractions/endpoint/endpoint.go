@@ -258,6 +258,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 		Scheduler:           es.scheduler,
 		ContainerRepo:       es.containerRepo,
 		BackendRepo:         es.backendRepo,
+		EventRepo:           es.eventRepo,
 		TaskRepo:            es.taskRepo,
 		InstanceLockKey:     Keys.endpointInstanceLock(stub.Workspace.Name, stubId),
 		StartContainersFunc: instance.startContainers,
@@ -271,7 +272,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 		instance.isASGI = true
 	}
 
-	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, stubConfig, es.tailscale, es.config.Tailscale, instance.isASGI)
+	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, es.keyEventManager, stubConfig, es.tailscale, es.config.Tailscale, instance.isASGI)
 
 	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance
@@ -313,7 +314,7 @@ var (
 	endpointKeepWarmLock     string = "endpoint:%s:%s:keep_warm_lock:%s"
 	endpointInstanceLock     string = "endpoint:%s:%s:instance_lock"
 	endpointRequestTokens    string = "endpoint:%s:%s:request_tokens:%s"
-	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s"
+	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s:%s"
 	endpointServeLock        string = "endpoint:%s:%s:serve_lock"
 )
 
@@ -329,8 +330,8 @@ func (k *keys) endpointRequestTokens(workspaceName, stubId, containerId string) 
 	return fmt.Sprintf(endpointRequestTokens, workspaceName, stubId, containerId)
 }
 
-func (k *keys) endpointRequestHeartbeat(workspaceName, stubId, taskId string) string {
-	return fmt.Sprintf(endpointRequestHeartbeat, workspaceName, stubId, taskId)
+func (k *keys) endpointRequestHeartbeat(workspaceName, stubId, taskId, containerId string) string {
+	return fmt.Sprintf(endpointRequestHeartbeat, workspaceName, stubId, taskId, containerId)
 }
 
 func (k *keys) endpointServeLock(workspaceName, stubId string) string {

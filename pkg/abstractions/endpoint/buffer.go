@@ -58,6 +58,8 @@ type RequestBuffer struct {
 	availableContainersLock sync.RWMutex
 	maxTokens               int
 	isASGI                  bool
+	keyEventManager         *common.KeyEventManager
+	keyEventChan            chan common.KeyEvent
 }
 
 func NewRequestBuffer(
@@ -67,12 +69,13 @@ func NewRequestBuffer(
 	stubId string,
 	size int,
 	containerRepo repository.ContainerRepository,
+	keyEventManager *common.KeyEventManager,
 	stubConfig *types.StubConfigV1,
 	tailscale *network.Tailscale,
 	tsConfig types.TailscaleConfig,
 	isASGI bool,
 ) *RequestBuffer {
-	b := &RequestBuffer{
+	rb := &RequestBuffer{
 		ctx:                     ctx,
 		rdb:                     rdb,
 		workspace:               workspace,
@@ -82,6 +85,8 @@ func NewRequestBuffer(
 		availableContainers:     []container{},
 		availableContainersLock: sync.RWMutex{},
 		containerRepo:           containerRepo,
+		keyEventManager:         keyEventManager,
+		keyEventChan:            make(chan common.KeyEvent),
 		httpClient:              &http.Client{},
 		tailscale:               tailscale,
 		tsConfig:                tsConfig,
@@ -91,13 +96,38 @@ func NewRequestBuffer(
 
 	if stubConfig.ConcurrentRequests > 1 && isASGI {
 		// Floor is set to the number of workers
-		b.maxTokens = max(int(stubConfig.ConcurrentRequests), b.maxTokens)
+		rb.maxTokens = max(int(stubConfig.ConcurrentRequests), rb.maxTokens)
 	}
 
-	go b.discoverContainers()
-	go b.processRequests()
+	go rb.discoverContainers()
+	go rb.processRequests()
 
-	return b
+	// Listen for heartbeat key events
+	go rb.keyEventManager.ListenForPattern(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, "*", "*"), rb.keyEventChan)
+	go rb.handleHeartbeatEvents()
+
+	return rb
+}
+
+func (rb *RequestBuffer) handleHeartbeatEvents() {
+	for {
+		select {
+		case event := <-rb.keyEventChan:
+			operation := event.Operation
+
+			switch operation {
+			case common.KeyOperationSet, common.KeyOperationHSet, common.KeyOperationDel, common.KeyOperationExpire:
+				// Do nothing
+			case common.KeyOperationExpired:
+				if parts := strings.Split(event.Key, ":"); len(parts) >= 2 {
+					taskId, containerId := parts[len(parts)-2], parts[len(parts)-1]
+					rb.releaseRequestToken(containerId, taskId)
+				}
+			}
+		case <-rb.ctx.Done():
+			return
+		}
+	}
 }
 
 func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
@@ -294,12 +324,7 @@ func (rb *RequestBuffer) acquireRequestToken(containerId string) error {
 	return nil
 }
 
-func (rb *RequestBuffer) releaseRequestToken(containerId string) error {
-	// TODO: if a gateway crashes before releasing the token, it could lead to a drift
-	// in the count of available request tokens for a particular container. To handle this
-	// we could move the release logic to the task implementation (e.g. task.Complete), so that
-	// it handles the release of the token and is not tied to a specific gateway
-
+func (rb *RequestBuffer) releaseRequestToken(containerId, taskId string) error {
 	tokenKey := Keys.endpointRequestTokens(rb.workspace.Name, rb.stubId, containerId)
 
 	err := rb.rdb.Incr(rb.ctx, tokenKey).Err()
@@ -312,7 +337,7 @@ func (rb *RequestBuffer) releaseRequestToken(containerId string) error {
 		return err
 	}
 
-	return nil
+	return rb.rdb.Del(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, taskId, containerId)).Err()
 }
 
 func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
@@ -492,7 +517,7 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 	ticker := time.NewTicker(endpointRequestHeartbeatInterval)
 	defer ticker.Stop()
 
-	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId), containerId, endpointRequestHeartbeatInterval)
+	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId, containerId), 1, endpointRequestHeartbeatInterval)
 	for {
 		select {
 		case <-ctx.Done():
@@ -500,7 +525,7 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 		case <-rb.ctx.Done():
 			return
 		case <-ticker.C:
-			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId), containerId, endpointRequestHeartbeatInterval)
+			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId, containerId), 1, endpointRequestHeartbeatInterval)
 		}
 	}
 }
@@ -510,7 +535,7 @@ func (rb *RequestBuffer) afterRequest(req *request, containerId string) {
 		req.done <- true
 	}()
 
-	defer rb.releaseRequestToken(containerId)
+	defer rb.releaseRequestToken(containerId, req.task.msg.TaskId)
 
 	// Set keep warm lock
 	if rb.stubConfig.KeepWarmSeconds == 0 {
