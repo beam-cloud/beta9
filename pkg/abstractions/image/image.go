@@ -80,9 +80,11 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 
 	if in.Dockerfile != "" {
 		opts.Dockerfile = in.Dockerfile
+		opts.BuildCtxObject = in.BuildCtxObject
 		opts.BaseImageRegistry = authInfo.Workspace.ExternalId
-		opts.BaseImageName = in.Dockerfile
+		opts.BaseImageName = in.Dockerfile + in.BuildCtxObject
 		opts.BaseImageTag = "latest"
+		opts.addPythonRequirements()
 	}
 
 	imageId, err := is.builder.GetImageId(opts)

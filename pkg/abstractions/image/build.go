@@ -211,7 +211,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	case opts.Dockerfile != "":
 		// Need to set base image registry, name, and tag to something that will be unique
 		opts.BaseImageRegistry = authInfo.Workspace.ExternalId
-		opts.BaseImageName = opts.Dockerfile
+		opts.BaseImageName = opts.Dockerfile + opts.BuildCtxObject
 		opts.BaseImageTag = "latest"
 		opts.addPythonRequirements()
 		dockerfile = &opts.Dockerfile
