@@ -68,7 +68,8 @@ apt-get install -y python3.11 python3.11-dev python3.11-distutils
 
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
-python3.11 -m pip install --upgrade distlib setuptools pip
+python3.11 -m pip install setuptools==70.3.0
+python3.11 -m pip install --upgrade distlib pip
 python3.11 -m pip install -r /workspace/requirements.txt
 
 # Set default python
@@ -105,7 +106,8 @@ apt-get install -y python3.10 python3.10-dev python3.10-distutils
 
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
-python3.10 -m pip install --upgrade distlib setuptools pip
+python3.10 -m pip install setuptools==70.3.0
+python3.10 -m pip install --upgrade distlib pip
 python3.10 -m pip install -r /workspace/requirements.txt
 
 # Set default python
@@ -142,7 +144,8 @@ apt-get install -y python3.9 python3.9-dev python3.9-distutils
 
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.9
-python3.9 -m pip install --upgrade distlib setuptools pip
+python3.9 -m pip install setuptools==70.3.0
+python3.9 -m pip install --upgrade distlib pip
 python3.9 -m pip install -r /workspace/requirements.txt
 
 # Set default python
@@ -179,7 +182,8 @@ apt-get install -y python3.8 python3.8-dev python3.8-distutils
 
 # Get the latest pip version
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.8
-python3.8 -m pip install --upgrade distlib setuptools pip
+python3.8 -m pip install setuptools==70.3.0
+python3.8 -m pip install --upgrade distlib pip
 python3.8 -m pip install -r /workspace/requirements.txt
 
 # Set default python
