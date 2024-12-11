@@ -116,6 +116,8 @@ RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvi
 
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
 
+RUN apt-get install -y libbtrfs-dev libgpgme11-dev podman
+
 # XXX: Remove once cedana starts shipping with a compatible binary
 RUN <<EOT
 set -eux
@@ -170,6 +172,7 @@ RUN if [ "$(uname -m)" = "x86_64" ]; then \
 RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
     rm -rf /var/lib/apt/lists/* /var/log/*
+
 
 ENV BUILDAH_RUNTIME=/usr/local/sbin/runc
 RUN echo "nameserver 8.8.8.8" > /workspace/resolv.conf
