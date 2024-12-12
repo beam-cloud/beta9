@@ -77,7 +77,7 @@ type LocalWorkerPoolControllerForTest struct {
 	name        string
 	config      types.AppConfig
 	workerRepo  repo.WorkerRepository
-	preemptible bool
+	preemptable bool
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) Context() context.Context {
@@ -85,7 +85,7 @@ func (wpc *LocalWorkerPoolControllerForTest) Context() context.Context {
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) IsPreemptable() bool {
-	return wpc.preemptible
+	return wpc.preemptable
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {

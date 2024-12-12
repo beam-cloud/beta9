@@ -61,7 +61,7 @@ func TestWorkerPoolManager_GetPoolByFilters(t *testing.T) {
 	manager := NewWorkerPoolManager()
 
 	controller := &LocalWorkerPoolControllerForTest{
-		preemptible: true,
+		preemptable: true,
 	}
 
 	// Set up test pools with different configurations

@@ -34,8 +34,8 @@ func (m *WorkerPoolManager) GetPool(name string) (*WorkerPool, bool) {
 
 type poolFilters struct {
 	GPUType string
-	// Preemptible *bool
-	// TODO: add preemptible filter back once we have better ways of handling pool state
+	// Preemptable *bool
+	// TODO: add preemptable filter back once we have better ways of handling pool state
 	// (i.e. if a worker is not appearing in a certain pool)
 }
 
