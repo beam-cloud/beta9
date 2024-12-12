@@ -307,14 +307,11 @@ func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason str
 		return
 	}
 
-	if state == types.StubStateDegraded {
-		log.Printf("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
-	}
-
 	err = i.ContainerRepo.SetStubState(stubId, currentState)
 	if err != nil {
 		return
 	}
 
+	log.Printf("<%s> %s\n", i.Name, reason)
 	go i.EventRepo.PushStubStateUnhealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
 }
