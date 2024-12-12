@@ -165,12 +165,3 @@ func TestWorkerPoolManager_GetPoolByFilters(t *testing.T) {
 		})
 	}
 }
-
-// Mock pool controller for testing
-type mockPoolController struct {
-	preemptible bool
-}
-
-func (m *mockPoolController) IsPreemptable() bool {
-	return m.preemptible
-}
