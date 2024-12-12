@@ -239,12 +239,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		return err
 	}
 
-	if len(state.FailedContainers) >= i.FailedContainerThreshold {
-		log.Printf("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
-		desiredContainers = 0
-	}
-
-	if !i.IsActive {
+	if (len(state.FailedContainers) >= i.FailedContainerThreshold) || !i.IsActive {
 		desiredContainers = 0
 	}
 
@@ -310,6 +305,10 @@ func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason str
 
 	if state == currentState {
 		return
+	}
+
+	if state == types.StubStateDegraded {
+		log.Printf("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
 	}
 
 	err = i.ContainerRepo.SetStubState(stubId, currentState)
