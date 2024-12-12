@@ -45,13 +45,12 @@ func (m *WorkerPoolManager) GetPoolByFilters(filters poolFilters) []*WorkerPool 
 
 	m.poolMap.Range(func(key string, value *WorkerPool) bool {
 		gpuMatches := value.Config.GPUType == filters.GPUType
-
-		preemptibleMatches := filters.Preemptible == nil ||
-			value.Controller.IsPreemptable() == *filters.Preemptible
+		preemptibleMatches := isPreemptibleCompatible(filters.Preemptible, value.Controller.IsPreemptable())
 
 		if gpuMatches && preemptibleMatches {
 			pools = append(pools, value)
 		}
+
 		return true
 	})
 
@@ -60,6 +59,23 @@ func (m *WorkerPoolManager) GetPoolByFilters(filters poolFilters) []*WorkerPool 
 	})
 
 	return pools
+}
+
+// isPreemptibleCompatible determines if a worker pool's preemptibility is compatible
+// with the workload's requirements:
+// - If preemptible is nil, all pools are compatible
+// - Preemptible workloads (preemptible == true) can run on any pool
+// - Non-preemptible workloads (preemptible == false) can only run on non-preemptible pools
+func isPreemptibleCompatible(preemptable *bool, isPoolPreemptible bool) bool {
+	if preemptable == nil {
+		return true
+	}
+
+	if *preemptable {
+		return true // preemptible workloads can run anywhere
+	}
+
+	return !isPoolPreemptible // non-preemptible workloads need non-preemptible pools
 }
 
 // GetPoolByGPU retrieves a WorkerPool by its GPU type.

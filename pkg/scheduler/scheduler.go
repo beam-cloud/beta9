@@ -177,7 +177,7 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 	} else if !request.RequiresGPU() {
 		pools := s.workerPoolManager.GetPoolByFilters(poolFilters{
 			GPUType:     "",
-			Preemptible: nil,
+			Preemptible: &request.Preemptable,
 		})
 		for _, pool := range pools {
 			controllers = append(controllers, pool.Controller)
