@@ -6,7 +6,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/assert"
-	"k8s.io/utils/ptr"
 )
 
 func TestGetPoolsByGPU(t *testing.T) {
@@ -61,10 +60,9 @@ func TestGetPoolsByGPU(t *testing.T) {
 func TestWorkerPoolManager_GetPoolByFilters(t *testing.T) {
 	manager := NewWorkerPoolManager()
 
-	preemptibleCtrl := &LocalWorkerPoolControllerForTest{
+	controller := &LocalWorkerPoolControllerForTest{
 		preemptible: true,
 	}
-	nonPreemptibleCtrl := &LocalWorkerPoolControllerForTest{}
 
 	// Set up test pools with different configurations
 	testPools := []struct {
@@ -78,7 +76,7 @@ func TestWorkerPoolManager_GetPoolByFilters(t *testing.T) {
 				GPUType:  "",
 				Priority: 100,
 			},
-			controller: preemptibleCtrl,
+			controller: controller,
 		},
 		{
 			name: "pool2",
@@ -86,7 +84,7 @@ func TestWorkerPoolManager_GetPoolByFilters(t *testing.T) {
 				GPUType:  "",
 				Priority: 200,
 			},
-			controller: nonPreemptibleCtrl,
+			controller: controller,
 		},
 		{
 			name: "pool3",
@@ -94,7 +92,7 @@ func TestWorkerPoolManager_GetPoolByFilters(t *testing.T) {
 				GPUType:  "A100-40",
 				Priority: 150,
 			},
-			controller: preemptibleCtrl,
+			controller: controller,
 		},
 	}
 
@@ -119,7 +117,7 @@ func TestWorkerPoolManager_GetPoolByFilters(t *testing.T) {
 			wantLen: 1,
 		},
 		{
-			name: "filter by all CPU pools (either preemptible or not)",
+			name: "filter by all CPU pools",
 			filters: poolFilters{
 				GPUType: "",
 			},
@@ -127,10 +125,9 @@ func TestWorkerPoolManager_GetPoolByFilters(t *testing.T) {
 			wantLen: 2,
 		},
 		{
-			name: "filter by GPU type and preemptible",
+			name: "filter by GPU type",
 			filters: poolFilters{
-				GPUType:     "A100-40",
-				Preemptible: ptr.To(true),
+				GPUType: "A100-40",
 			},
 			want:    []string{"pool3"},
 			wantLen: 1,
