@@ -187,9 +187,8 @@ class FileSyncer:
 
             terminal.header("Uploading")
             put_response = self.gateway_stub.put_object_stream(stream_requests())
-            if put_response.ok:
-                global _workspace_object_id
-                _workspace_object_id = put_response.object_id
+            if put_response.ok and self.is_workspace_dir:
+                set_workspace_object_id(put_response.object_id)
 
         elif head_response.exists and head_response.ok:
             terminal.header("Files already synced")
