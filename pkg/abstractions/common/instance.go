@@ -239,7 +239,11 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		return err
 	}
 
-	if (len(state.FailedContainers) >= i.FailedContainerThreshold) || !i.IsActive {
+	if len(state.FailedContainers) >= i.FailedContainerThreshold {
+		desiredContainers = 0
+	}
+
+	if !i.IsActive {
 		desiredContainers = 0
 	}
 
