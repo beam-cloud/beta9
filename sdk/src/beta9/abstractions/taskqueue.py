@@ -1,7 +1,7 @@
 import json
 import os
 import threading
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, List, Optional, Type, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
@@ -131,7 +131,7 @@ class TaskQueue(RunnerAbstraction):
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
         checkpoint_enabled: bool = False,
-        retry_for: Optional[List[BaseException]] = None,
+        retry_for: Optional[List[Type[Exception]]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -155,7 +155,7 @@ class TaskQueue(RunnerAbstraction):
             checkpoint_enabled=checkpoint_enabled,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
-        self.retry_for = retry_for
+        self.retry_for = retry_for or []
 
     @property
     def taskqueue_stub(self) -> TaskQueueServiceStub:
