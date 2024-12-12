@@ -258,15 +258,18 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 
 // Will be replaced when structured logging is merged
 type ExecWriter struct {
-	containerId string
+	outputChan chan common.OutputMsg
 }
 
 func (c *ExecWriter) Write(p []byte) (n int, err error) {
-	log.Printf("<%s> - %s", c.containerId, string(p))
+	c.outputChan <- common.OutputMsg{
+		Msg: string(p),
+	}
 	return len(p), nil
 }
 
-func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, containerId string, dockerfile string, imageId string, buildCtxPath string) error {
+func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputChan chan common.OutputMsg, dockerfile string, imageId string, buildCtxPath string) error {
+	outputChan <- common.OutputMsg{Msg: "Building image from Dockerfile\n"}
 	buildPath, err := os.MkdirTemp("", "")
 	if err != nil {
 		return err
@@ -288,16 +291,16 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, containerId stri
 	os.MkdirAll(ociPath, 0755)
 
 	cmd := exec.Command("buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", imageId+":latest", buildCtxPath)
-	cmd.Stdout = &ExecWriter{containerId: containerId}
-	cmd.Stderr = &ExecWriter{containerId: containerId}
+	cmd.Stdout = &ExecWriter{outputChan: outputChan}
+	cmd.Stderr = &ExecWriter{outputChan: outputChan}
 	err = cmd.Run()
 	if err != nil {
 		return err
 	}
 
 	cmd = exec.Command("buildah", "--root", imagePath, "push", imageId+":latest", "oci:"+ociPath+":latest")
-	cmd.Stdout = &ExecWriter{containerId: containerId}
-	cmd.Stderr = &ExecWriter{containerId: containerId}
+	cmd.Stdout = &ExecWriter{outputChan: outputChan}
+	cmd.Stderr = &ExecWriter{outputChan: outputChan}
 	err = cmd.Run()
 	if err != nil {
 		return err

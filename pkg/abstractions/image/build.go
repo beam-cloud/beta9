@@ -275,11 +275,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	mctx, mcancel := context.WithCancel(ctx)
-	go b.monitorContainerForPreloadErrors(mctx, containerId, outputChan)
-
 	hostname, err := b.containerRepo.GetWorkerAddress(ctx, containerId)
-	mcancel()
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
@@ -296,6 +292,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
 	}
+	go client.StreamLogs(ctx, containerId, outputChan)
 
 	go func() {
 		<-ctx.Done() // If user cancels the build, kill the container
@@ -318,6 +315,18 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			break
 		}
 
+		exitCode, err := b.containerRepo.GetContainerExitCode(containerId)
+		if err == nil && exitCode != 0 {
+			msg, ok := types.WorkerContainerExitCodes[exitCode]
+			if !ok {
+				msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+			}
+			// Wait for any final logs to get sent before returning
+			time.Sleep(200 * time.Millisecond)
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
+			return errors.New(fmt.Sprintf("container exited with error: %s\n", msg))
+		}
+
 		if time.Since(start) > defaultContainerSpinupTimeout {
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Timeout: container not running after 180 seconds.\n"}
 			return errors.New("timeout: container not running after 180 seconds")
@@ -336,8 +345,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to connect to build container.\n"}
 		return errors.New("container not running")
 	}
-
-	go client.StreamLogs(ctx, containerId, outputChan)
 
 	// Generate the pip install command and prepend it to the commands list
 	if len(opts.PythonPackages) > 0 {
@@ -396,27 +403,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: true, ImageId: imageId}
 	return nil
-}
-
-func (b *Builder) monitorContainerForPreloadErrors(ctx context.Context, containerId string, outputChan chan common.OutputMsg) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(1 * time.Second):
-			if exitCode, err := b.containerRepo.GetContainerExitCode(containerId); err == nil {
-				if exitCode != 0 {
-					msg, ok := types.WorkerContainerExitCodes[exitCode]
-					if !ok {
-						msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
-					}
-
-					outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
-				}
-				return
-			}
-		}
-	}
 }
 
 func (b *Builder) genContainerId() string {
