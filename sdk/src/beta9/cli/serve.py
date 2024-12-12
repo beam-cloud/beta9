@@ -16,7 +16,6 @@ from .extraclick import ClickCommonGroup
 def common(**_):
     pass
 
-
 @common.command(
     name="serve",
     help="""

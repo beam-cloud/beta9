@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beta9/proto";
+
+package shell;
+
+service ShellService {
+  rpc StartShell(stream ShellRequest) returns (stream ShellResponse) {}
+}
+
+message ShellRequest {
+  string stub_id = 1;
+  string command = 2;
+}
+
+message ShellResponse {
+  string output = 1;
+  int32 exit_code = 2;
+}
+
