@@ -260,7 +260,9 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		err = i.StopContainersFunc(-containerDelta)
 	}
 
-	go i.handleStubEvents(state.FailedContainers)
+	if len(state.FailedContainers) > 0 {
+		go i.handleStubEvents(state.FailedContainers)
+	}
 
 	return err
 }

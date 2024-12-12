@@ -32,6 +32,36 @@ func (m *WorkerPoolManager) GetPool(name string) (*WorkerPool, bool) {
 	return m.poolMap.Get(name)
 }
 
+type poolFilters struct {
+	GPUType     string
+	Preemptible *bool
+}
+
+// GetPoolByFilters retrieves all WorkerPools that match the specified filters.
+// It returns a slice of WorkerPools that match all specified filters (GPU type and preemptibility),
+// sorted by WorkerPoolConfig.Priority in descending order.
+func (m *WorkerPoolManager) GetPoolByFilters(filters poolFilters) []*WorkerPool {
+	var pools []*WorkerPool
+
+	m.poolMap.Range(func(key string, value *WorkerPool) bool {
+		gpuMatches := value.Config.GPUType == filters.GPUType
+
+		preemptibleMatches := filters.Preemptible == nil ||
+			value.Controller.IsPreemptable() == *filters.Preemptible
+
+		if gpuMatches && preemptibleMatches {
+			pools = append(pools, value)
+		}
+		return true
+	})
+
+	slices.SortFunc(pools, func(a, b *WorkerPool) int {
+		return cmp.Compare(b.Config.Priority, a.Config.Priority)
+	})
+
+	return pools
+}
+
 // GetPoolByGPU retrieves a WorkerPool by its GPU type.
 // It returns the first matching WorkerPool found.
 func (m *WorkerPoolManager) GetPoolByGPU(gpuType string) (*WorkerPool, bool) {
