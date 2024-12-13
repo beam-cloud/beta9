@@ -170,6 +170,10 @@ class Output(BaseAbstraction):
             path = self.zip_dir(self.path)
 
         def stream_request(p: Path) -> Generator[OutputSaveRequest, None, None]:
+            if p.stat().st_size == 0:
+                yield OutputSaveRequest(self.task_id, p.name, b"")
+                return
+
             with open(p, mode="rb") as file:
                 while chunk := file.read(CHUNK_SIZE):
                     yield OutputSaveRequest(self.task_id, p.name, chunk)

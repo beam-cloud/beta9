@@ -240,7 +240,6 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	}
 
 	if len(state.FailedContainers) >= i.FailedContainerThreshold {
-		log.Printf("<%s> reached failed container threshold, scaling to zero.\n", i.Name)
 		desiredContainers = 0
 	}
 
@@ -261,7 +260,9 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		err = i.StopContainersFunc(-containerDelta)
 	}
 
-	go i.handleStubEvents(state.FailedContainers)
+	if len(state.FailedContainers) > 0 {
+		go i.handleStubEvents(state.FailedContainers)
+	}
 
 	return err
 }
@@ -317,5 +318,6 @@ func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason str
 		return
 	}
 
+	log.Printf("<%s> %s\n", i.Name, reason)
 	go i.EventRepo.PushStubStateUnhealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
 }
