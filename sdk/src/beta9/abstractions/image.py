@@ -289,6 +289,40 @@ class Image(BaseAbstraction):
         else:
             raise FileNotFoundError
 
+    @classmethod
+    def from_dockerfile(cls, path: str, context_dir: Optional[str] = None) -> "Image":
+        """
+        Build the base image based on a Dockerfile.
+
+        This method will sync the context directory and use the Dockerfile at the provided path to
+        build the base image.
+
+        Parameters:
+            path: The path to the Dockerfile.
+            context_dir: The directory to sync. If not provided, the directory of the Dockerfile will be used.
+
+        Returns:
+            Image: The Image object.
+        """
+        image = cls()
+        if env.is_remote():
+            return image
+
+        if not context_dir:
+            context_dir = os.path.dirname(path)
+
+        syncer = FileSyncer(gateway_stub=image.gateway_stub, root_dir=context_dir)
+        result = syncer.sync()
+        if not result.success:
+            raise ValueError("Failed to sync context directory.")
+
+        image.build_ctx_object = result.object_id
+
+        with open(path, "r") as f:
+            dockerfile = f.read()
+        image.dockerfile = dockerfile
+        return image
+
     def exists(self) -> Tuple[bool, ImageBuildResult]:
         r: VerifyImageBuildResponse = self.stub.verify_image_build(
             VerifyImageBuildRequest(
@@ -308,6 +342,9 @@ class Image(BaseAbstraction):
 
     def build(self) -> ImageBuildResult:
         terminal.header("Building image")
+
+        if self.base_image != "" and self.dockerfile != "":
+            raise ValueError("Cannot use from_dockerfile and provide a custom base image.")
 
         exists, exists_response = self.exists()
         if exists:
@@ -485,38 +522,3 @@ class Image(BaseAbstraction):
                 raise ValueError(
                     f"Environment variable cannot contain multiple '=' characters: {env_var}"
                 )
-
-    def from_dockerfile(self, path: str, context_dir: Optional[str] = None) -> "Image":
-        """
-        Build the base image based on a Dockerfile.
-
-        This method will sync the context directory and use the Dockerfile at the provided path to
-        build the base image.
-
-        Parameters:
-            path: The path to the Dockerfile.
-            context_dir: The directory to sync. If not provided, the directory of the Dockerfile will be used.
-
-        Returns:
-            Image: The Image object.
-        """
-        if env.is_remote():
-            return self
-
-        if self.base_image != "":
-            raise ValueError("Cannot use from_dockerfile and provide a custom base image.")
-
-        if not context_dir:
-            context_dir = os.path.dirname(path)
-
-        syncer = FileSyncer(gateway_stub=self.gateway_stub, root_dir=context_dir)
-        result = syncer.sync()
-        if not result.success:
-            raise ValueError("Failed to sync context directory.")
-
-        self.build_ctx_object = result.object_id
-
-        with open(path, "r") as f:
-            dockerfile = f.read()
-        self.dockerfile = dockerfile
-        return self
