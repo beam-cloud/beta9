@@ -74,7 +74,12 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 }
 
 func (t *EndpointTask) HeartBeat(ctx context.Context) (bool, error) {
-	heartbeatKey := Keys.endpointRequestHeartbeat(t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
+	task, err := t.es.backendRepo.GetTask(ctx, t.msg.TaskId)
+	if err != nil {
+		return false, err
+	}
+
+	heartbeatKey := Keys.endpointRequestHeartbeat(t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId, task.ContainerId)
 	exists, err := t.es.rdb.Exists(ctx, heartbeatKey).Result()
 	if err != nil {
 		return false, fmt.Errorf("failed to retrieve endpoint heartbeat key <%v>: %w", heartbeatKey, err)

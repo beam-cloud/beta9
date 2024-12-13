@@ -5,9 +5,9 @@
 
 ---
 
-### The Cloud Platform for Generative AI
+### AI Infrastructure for Developers
 
-Run serverless GPU workloads with fast cold starts on bare-metal servers, anywhere in the world
+Run AI workloads anywhere with zero complexity. One line of Python, global GPUs, full control.
 
 <p align="center">
   <a href="https://github.com/beam-cloud/beta9/stargazers">
