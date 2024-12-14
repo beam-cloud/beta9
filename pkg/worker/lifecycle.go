@@ -226,15 +226,18 @@ func (s *Worker) buildOrPullImage(request *types.ContainerRequest, containerId s
 	switch {
 	case request.BuildOptions.Dockerfile != nil:
 		log.Printf("<%s> - lazy-pull failed, building image from Dockerfile\n", containerId)
+
 		buildCtxPath, err := s.getBuildContext(request)
 		if err != nil {
 			return err
 		}
+
 		if err := s.imageClient.BuildAndArchiveImage(s.ctx, outputChan, *request.BuildOptions.Dockerfile, request.ImageId, buildCtxPath); err != nil {
 			return err
 		}
 	case request.BuildOptions.SourceImage != nil:
 		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.BuildOptions.SourceImage)
+
 		if err := s.imageClient.PullAndArchiveImage(s.ctx, *request.BuildOptions.SourceImage, request.ImageId, request.BuildOptions.SourceImageCreds); err != nil {
 			return err
 		}
