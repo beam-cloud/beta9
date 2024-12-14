@@ -366,7 +366,7 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
 	// Most of these env vars are required to communicate with the gateway and vice versa
 	env := []string{
-		fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
+		fmt.Sprintf("BIND_PORT=%d", options.BindPort),
 		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
@@ -478,7 +478,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Expose the bind port
-	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, containerInnerPort)
+	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, opts.BindPort)
 	if err != nil {
 		log.Printf("<%s> failed to expose container bind port: %v", containerId, err)
 		return
