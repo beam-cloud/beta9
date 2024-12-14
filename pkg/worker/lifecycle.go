@@ -136,19 +136,30 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 			}
 		}
 
-		s.containerInstances.Delete(containerId)
-		err = s.containerRepo.DeleteContainerState(containerId)
-		if err != nil {
-			log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
-		}
+		s.deleteContainer(containerId, err)
 
 		log.Printf("<%s> - finalized container shutdown.\n", containerId)
 	}()
 }
 
+func (s *Worker) deleteContainer(containerId string, err error) {
+	s.containerInstances.Delete(containerId)
+	err = s.containerRepo.DeleteContainerState(containerId)
+	if err != nil {
+		log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
+	}
+}
+
 // Spawn a single container and stream output to stdout/stderr
-func (s *Worker) RunContainer(request *types.ContainerRequest) error {
+func (s *Worker) RunContainer(request *types.ContainerRequest) (err error) {
 	containerId := request.ContainerId
+
+	defer func() {
+		if err != nil {
+			s.deleteContainer(containerId, err)
+		}
+	}()
+
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 	outputChan := make(chan common.OutputMsg, 100)
 	s.containerInstances.Set(containerId, &ContainerInstance{
