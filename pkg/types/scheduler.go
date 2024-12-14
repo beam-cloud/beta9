@@ -79,9 +79,7 @@ type ContainerState struct {
 	Memory      int64           `redis:"memory" json:"memory"`
 }
 
-type ImageSourceType string
-
-type BuildRequestOptions struct {
+type BuildOptions struct {
 	SourceImage      *string `json:"source_image"`
 	Dockerfile       *string `json:"dockerfile"`
 	BuildCtxObject   *string `json:"build_context"`
@@ -89,7 +87,7 @@ type BuildRequestOptions struct {
 }
 
 type ContainerRequest struct {
-	BuildRequestOptions
+	BuildOptions      BuildOptions    `json:"build_options"`
 	ContainerId       string          `json:"container_id"`
 	EntryPoint        []string        `json:"entry_point"`
 	Env               []string        `json:"env"`

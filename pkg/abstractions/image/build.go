@@ -254,7 +254,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	err = b.scheduler.Run(&types.ContainerRequest{
-		BuildRequestOptions: types.BuildRequestOptions{
+		BuildOptions: types.BuildOptions{
 			SourceImage:      &sourceImage,
 			SourceImageCreds: opts.BaseImageCreds,
 			Dockerfile:       dockerfile,

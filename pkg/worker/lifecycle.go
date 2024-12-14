@@ -224,18 +224,18 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 func (s *Worker) buildOrPullImage(request *types.ContainerRequest, containerId string, outputChan chan common.OutputMsg) error {
 	switch {
-	case request.Dockerfile != nil:
+	case request.BuildOptions.Dockerfile != nil:
 		log.Printf("<%s> - lazy-pull failed, building image from Dockerfile\n", containerId)
 		buildCtxPath, err := getBuildContext(request)
 		if err != nil {
 			return err
 		}
-		if err := s.imageClient.BuildAndArchiveImage(context.TODO(), outputChan, *request.Dockerfile, request.ImageId, buildCtxPath); err != nil {
+		if err := s.imageClient.BuildAndArchiveImage(context.TODO(), outputChan, *request.BuildOptions.Dockerfile, request.ImageId, buildCtxPath); err != nil {
 			return err
 		}
-	case request.SourceImage != nil:
-		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.SourceImage)
-		if err := s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds); err != nil {
+	case request.BuildOptions.SourceImage != nil:
+		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.BuildOptions.SourceImage)
+		if err := s.imageClient.PullAndArchiveImage(context.TODO(), *request.BuildOptions.SourceImage, request.ImageId, request.BuildOptions.SourceImageCreds); err != nil {
 			return err
 		}
 	}
@@ -698,17 +698,17 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, output 
 
 func getBuildContext(request *types.ContainerRequest) (string, error) {
 	buildCtxPath := "."
-	if request.BuildCtxObject != nil {
-		err := common.ExtractObjectFile(context.TODO(), *request.BuildCtxObject, request.Workspace.Name)
+	if request.BuildOptions.BuildCtxObject != nil {
+		err := common.ExtractObjectFile(context.TODO(), *request.BuildOptions.BuildCtxObject, request.Workspace.Name)
 		if err != nil {
 			return "", err
 		}
-		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildCtxObject)
+		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
 	}
 	return buildCtxPath, nil
 }
 
 // isBuildRequest checks if the sourceImage or Dockerfile field is not-nil, which means the container request is for a build container
 func isBuildRequest(request *types.ContainerRequest) bool {
-	return request.SourceImage != nil || request.Dockerfile != nil
+	return request.BuildOptions.SourceImage != nil || request.BuildOptions.Dockerfile != nil
 }
