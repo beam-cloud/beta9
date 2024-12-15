@@ -151,14 +151,8 @@ func (s *Worker) deleteContainer(containerId string, err error) {
 }
 
 // Spawn a single container and stream output to stdout/stderr
-func (s *Worker) RunContainer(request *types.ContainerRequest) (err error) {
+func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerId := request.ContainerId
-
-	defer func() {
-		if err != nil {
-			s.deleteContainer(containerId, err)
-		}
-	}()
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 	outputChan := make(chan common.OutputMsg, 100)
