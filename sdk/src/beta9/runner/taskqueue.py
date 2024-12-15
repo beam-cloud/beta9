@@ -9,7 +9,7 @@ from concurrent import futures
 from concurrent.futures import CancelledError
 from multiprocessing import Event, Process, set_start_method
 from multiprocessing.synchronize import Event as TEvent
-from typing import Any, List, NamedTuple, Union
+from typing import Any, List, NamedTuple, Type, Union
 
 import grpc
 
@@ -312,20 +312,21 @@ class TaskQueueWorker:
                     duration = None
 
                     caught_exception = ""
+                    args = task.args or []
+                    kwargs = task.kwargs or {}
 
                     try:
-                        args = task.args or []
-                        kwargs = task.kwargs or {}
-
                         result = handler(context, *args, **kwargs)
                     except BaseException as e:
                         print(traceback.format_exc())
 
-                        if type(e) in handler.parent_abstraction.retry_for:
+                        task_status = TaskStatus.Error
+
+                        if retry_on_errors(handler.parent_abstraction.retry_for, e):
+                            print(f"retry_for error caught: {e!r}")
                             caught_exception = e.__class__.__name__
                             task_status = TaskStatus.Retry
-                        else:
-                            task_status = TaskStatus.Error
+
                     finally:
                         duration = time.time() - start_time
 
@@ -367,6 +368,10 @@ class TaskQueueWorker:
                             print(traceback.format_exc())
                         finally:
                             monitor_task.cancel()
+
+
+def retry_on_errors(errors: List[Type[Exception]], e: BaseException) -> bool:
+    return any([err for err in errors if type(e) is err])
 
 
 if __name__ == "__main__":

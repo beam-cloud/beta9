@@ -175,12 +175,12 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 		controllers = append(controllers, wp.Controller)
 
 	} else if !request.RequiresGPU() {
-		wp, ok := s.workerPoolManager.GetPool(types.DefaultCPUWorkerPoolName)
-		if !ok {
-			return nil, errors.New("no controller found for request")
+		pools := s.workerPoolManager.GetPoolByFilters(poolFilters{
+			GPUType: "",
+		})
+		for _, pool := range pools {
+			controllers = append(controllers, pool.Controller)
 		}
-		controllers = append(controllers, wp.Controller)
-
 	} else {
 		for _, gpu := range request.GpuRequest {
 			pools := s.workerPoolManager.GetPoolsByGPU(gpu)

@@ -19,6 +19,12 @@ const (
 	WorkerStateTtlS       int          = 60
 )
 
+const (
+	StubStateDegraded = "degraded"
+	StubStateWarning  = "warning"
+	StubStateHealthy  = "healthy"
+)
+
 type Worker struct {
 	Id                   string       `json:"id" redis:"id"`
 	Status               WorkerStatus `json:"status" redis:"status"`

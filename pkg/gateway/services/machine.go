@@ -166,6 +166,13 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 		}, nil
 	}
 
+	if pool.Provider == nil {
+		return &pb.CreateMachineResponse{
+			Ok:     false,
+			ErrMsg: "This pool does not currently support machine creation",
+		}, nil
+	}
+
 	machineId := providers.MachineId()
 	err = gws.providerRepo.AddMachine(string(*pool.Provider), in.PoolName, machineId, &types.ProviderMachineState{
 		PoolName:          in.PoolName,

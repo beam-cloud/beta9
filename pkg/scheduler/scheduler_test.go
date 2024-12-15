@@ -73,10 +73,11 @@ func NewSchedulerForTest() (*Scheduler, error) {
 }
 
 type LocalWorkerPoolControllerForTest struct {
-	ctx        context.Context
-	name       string
-	config     types.AppConfig
-	workerRepo repo.WorkerRepository
+	ctx         context.Context
+	name        string
+	config      types.AppConfig
+	workerRepo  repo.WorkerRepository
+	preemptable bool
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) Context() context.Context {
@@ -84,7 +85,7 @@ func (wpc *LocalWorkerPoolControllerForTest) Context() context.Context {
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) IsPreemptable() bool {
-	return false
+	return wpc.preemptable
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {

@@ -1,5 +1,5 @@
 from . import env
-from .abstractions import experimental
+from .abstractions import experimental, integrations
 from .abstractions.container import Container
 from .abstractions.endpoint import ASGI as asgi
 from .abstractions.endpoint import Endpoint as endpoint
