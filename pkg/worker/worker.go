@@ -45,7 +45,7 @@ type Worker struct {
 	cedanaClient            *CedanaClient
 	fileCacheManager        *FileCacheManager
 	containerNetworkManager *ContainerNetworkManager
-	containerCudaManager    GPUManager
+	containerGPUManager     GPUManager
 	containerMountManager   *ContainerMountManager
 	redisClient             *common.RedisClient
 	imageClient             *ImageClient
@@ -223,7 +223,7 @@ func NewWorker() (*Worker, error) {
 		runcHandle:              runc.Runc{Debug: config.DebugMode},
 		runcServer:              runcServer,
 		fileCacheManager:        fileCacheManager,
-		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
+		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		redisClient:             redisClient,
 		containerMountManager:   NewContainerMountManager(config),

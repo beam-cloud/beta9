@@ -101,7 +101,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	// De-allocate GPU devices so they are available for new containers
 	if request.Gpu != "" {
-		s.containerCudaManager.UnassignGPUDevices(containerId)
+		s.containerGPUManager.UnassignGPUDevices(containerId)
 	}
 
 	// Tear down container network components
@@ -254,14 +254,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart[0].Args = append(spec.Hooks.Prestart[0].Args, configPath, "prestart")
 
 		existingCudaFound := false
-		env, existingCudaFound = s.containerCudaManager.InjectEnvVars(env, options)
+		env, existingCudaFound = s.containerGPUManager.InjectEnvVars(env, options)
 		if !existingCudaFound {
 			// If the container image does not have cuda libraries installed, mount cuda libs from the host
-			spec.Mounts = s.containerCudaManager.InjectMounts(spec.Mounts)
+			spec.Mounts = s.containerGPUManager.InjectMounts(spec.Mounts)
 		}
 
 		// Assign n-number of GPUs to a container
-		assignedGpus, err := s.containerCudaManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
+		assignedGpus, err := s.containerGPUManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
 		if err != nil {
 			return nil, err
 		}
