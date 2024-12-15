@@ -87,7 +87,6 @@ type BuildOptions struct {
 }
 
 type ContainerRequest struct {
-	BuildOptions      BuildOptions    `json:"build_options"`
 	ContainerId       string          `json:"container_id"`
 	EntryPoint        []string        `json:"entry_point"`
 	Env               []string        `json:"env"`
@@ -107,6 +106,7 @@ type ContainerRequest struct {
 	PoolSelector      string          `json:"pool_selector"`
 	Preemptable       bool            `json:"preemptable"`
 	CheckpointEnabled bool            `json:"checkpoint_enabled"`
+	BuildOptions      BuildOptions    `json:"build_options"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
