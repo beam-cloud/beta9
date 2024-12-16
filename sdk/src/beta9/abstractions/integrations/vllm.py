@@ -253,6 +253,7 @@ class VLLM(ASGI):
             enable_auto_tool_choice=vllm_args.enable_auto_tool_choice,
             tool_call_parser=vllm_args.tool_call_parser,
             disable_log_stats=vllm_args.disable_log_stats,
+            enable_prompt_tokens_details=vllm_args.enable_prompt_tokens_details,
         )
 
     def __name__(self) -> str:

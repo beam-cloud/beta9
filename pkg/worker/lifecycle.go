@@ -137,33 +137,52 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 			}
 		}
 
-		s.containerInstances.Delete(containerId)
-		err = s.containerRepo.DeleteContainerState(containerId)
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
-		}
+		s.deleteContainer(containerId, err)
 
 		log.Info().Str("container_id", containerId).Msg("finalized container shutdown")
 	}()
 }
 
+func (s *Worker) deleteContainer(containerId string, err error) {
+	s.containerInstances.Delete(containerId)
+	err = s.containerRepo.DeleteContainerState(containerId)
+	if err != nil {
+		log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
+	}
+}
+
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerId := request.ContainerId
-	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
-	// Pull image
+	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
+	outputChan := make(chan common.OutputMsg, 100)
+	s.containerInstances.Set(containerId, &ContainerInstance{
+		Id:        containerId,
+		StubId:    request.StubId,
+		LogBuffer: common.NewLogBuffer(),
+		Request:   request,
+	})
+
+	// Set worker hostname
+	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
+	s.containerRepo.SetWorkerAddress(containerId, hostname)
+
+	logChan := make(chan common.LogRecord)
+
+	// Handle stdout/stderr
+	go s.containerLogger.CaptureLogs(containerId, logChan)
+
+	// Attempt to pull image
 	log.Info().Str("container_id", containerId).Msgf("lazy-pulling image: %s", request.ImageId)
-	err := s.imageClient.PullLazy(request)
-	if err != nil && request.SourceImage != nil {
-		log.Info().Str("container_id", containerId).Msgf("lazy-pull failed, pulling source image: %s", *request.SourceImage)
-		err = s.imageClient.PullAndArchiveImage(context.TODO(), *request.SourceImage, request.ImageId, request.SourceImageCreds)
-		if err == nil {
-			err = s.imageClient.PullLazy(request)
+	if err := s.imageClient.PullLazy(request); err != nil {
+		if !isBuildRequest(request) {
+			return err
 		}
-	}
-	if err != nil {
-		return err
+
+		if err := s.buildOrPullImage(request, containerId, outputChan); err != nil {
+			return err
+		}
 	}
 
 	bindPort, err := getRandomFreePort()
@@ -202,7 +221,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	}
 	log.Info().Str("container_id", containerId).Msg("set container address")
 
-	logChan := make(chan common.LogRecord)
 	go s.containerWg.Add(1)
 
 	// Start the container
@@ -210,6 +228,31 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	return nil
+}
+
+func (s *Worker) buildOrPullImage(request *types.ContainerRequest, containerId string, outputChan chan common.OutputMsg) error {
+	switch {
+	case request.BuildOptions.Dockerfile != nil:
+		log.Printf("<%s> - lazy-pull failed, building image from Dockerfile\n", containerId)
+
+		buildCtxPath, err := s.getBuildContext(request)
+		if err != nil {
+			return err
+		}
+
+		if err := s.imageClient.BuildAndArchiveImage(context.TODO(), outputChan, *request.BuildOptions.Dockerfile, request.ImageId, buildCtxPath); err != nil {
+			return err
+		}
+	case request.BuildOptions.SourceImage != nil:
+		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.BuildOptions.SourceImage)
+
+		if err := s.imageClient.PullAndArchiveImage(context.TODO(), *request.BuildOptions.SourceImage, request.ImageId, request.BuildOptions.SourceImageCreds); err != nil {
+			return err
+		}
+	}
+
+	// Try pull again after building or pulling the source image
+	return s.imageClient.PullLazy(request)
 }
 
 func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
@@ -408,30 +451,21 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, logCha
 	// Create overlayfs for container
 	overlay := s.createOverlay(request, opts.BundlePath)
 
-	containerInstance := &ContainerInstance{
-		Id:         containerId,
-		StubId:     request.StubId,
-		BundlePath: opts.BundlePath,
-		Overlay:    overlay,
-		Spec:       spec,
-		ExitCode:   -1,
-		OutputWriter: common.NewOutputWriter(func(s string) {
-			outputLogger.Info(s, "done", false, "success", false)
-		}),
-		LogBuffer: common.NewLogBuffer(),
-		Request:   request,
+	containerInstance, exists := s.containerInstances.Get(containerId)
+	if !exists {
+		return
 	}
+	containerInstance.BundlePath = opts.BundlePath
+	containerInstance.Overlay = overlay
+	containerInstance.Spec = spec
+	containerInstance.ExitCode = -1
+	containerInstance.OutputWriter = common.NewOutputWriter(func(s string) {
+		outputLogger.Info(s, "done", false, "success", false)
+	})
 	s.containerInstances.Set(containerId, containerInstance)
 
 	// Every 30 seconds, update container status
 	go s.updateContainerStatus(request)
-
-	// Set worker hostname
-	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
-	s.containerRepo.SetWorkerAddress(containerId, hostname)
-
-	// Handle stdout/stderr from spawned container
-	go s.containerLogger.CaptureLogs(containerId, logChan)
 
 	go func() {
 		time.Sleep(time.Second)
@@ -596,16 +630,11 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	}
 
 	overlayPath := baseConfigPath
-	if s.isBuildRequest(request) {
+	if isBuildRequest(request) {
 		overlayPath = "/dev/shm"
 	}
 
 	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
-}
-
-// isBuildRequest checks if the sourceImage field is not-nil, which means the container request is for a build container
-func (s *Worker) isBuildRequest(request *types.ContainerRequest) bool {
-	return request.SourceImage != nil
 }
 
 func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, outputLogger *slog.Logger) {
@@ -667,4 +696,21 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, outputL
 			}
 		}
 	}
+}
+
+func (s *Worker) getBuildContext(request *types.ContainerRequest) (string, error) {
+	buildCtxPath := "."
+	if request.BuildOptions.BuildCtxObject != nil {
+		err := common.ExtractObjectFile(context.TODO(), *request.BuildOptions.BuildCtxObject, request.Workspace.Name)
+		if err != nil {
+			return "", err
+		}
+		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
+	}
+	return buildCtxPath, nil
+}
+
+// isBuildRequest checks if the sourceImage or Dockerfile field is not-nil, which means the container request is for a build container
+func isBuildRequest(request *types.ContainerRequest) bool {
+	return request.BuildOptions.SourceImage != nil || request.BuildOptions.Dockerfile != nil
 }

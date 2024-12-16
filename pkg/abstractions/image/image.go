@@ -70,10 +70,16 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		BuildSteps:        convertBuildSteps(in.BuildSteps),
 		ExistingImageUri:  in.ExistingImageUri,
 		EnvVars:           in.EnvVars,
+		Dockerfile:        in.Dockerfile,
+		BuildCtxObject:    in.BuildCtxObject,
 	}
 
 	if in.ExistingImageUri != "" {
 		is.builder.handleCustomBaseImage(opts, nil)
+	}
+
+	if in.Dockerfile != "" {
+		opts.addPythonRequirements()
 	}
 
 	imageId, err := is.builder.GetImageId(opts)
@@ -102,6 +108,8 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		ExistingImageUri:   in.ExistingImageUri,
 		ExistingImageCreds: in.ExistingImageCreds,
 		EnvVars:            in.EnvVars,
+		Dockerfile:         in.Dockerfile,
+		BuildCtxObject:     in.BuildCtxObject,
 	}
 
 	ctx := stream.Context()

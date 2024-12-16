@@ -276,6 +276,7 @@ type ProviderConfig struct {
 
 type ProviderAgentConfig struct {
 	ElasticSearch ElasticSearchConfig `key:"elasticSearch" json:"elastic_search"`
+	VictoriaLogs  VictoriaLogsConfig  `key:"victoriaLogs" json:"victoria_logs"`
 }
 
 type ElasticSearchConfig struct {
@@ -283,6 +284,13 @@ type ElasticSearchConfig struct {
 	Port       string `key:"port" json:"port"`
 	HttpUser   string `key:"httpUser" json:"http_user"`
 	HttpPasswd string `key:"httpPasswd" json:"http_passwd"`
+}
+
+type VictoriaLogsConfig struct {
+	Host     string `key:"host" json:"host"`
+	Port     string `key:"port" json:"port"`
+	Username string `key:"username" json:"username"`
+	Password string `key:"password" json:"password"`
 }
 
 type EC2ProviderConfig struct {

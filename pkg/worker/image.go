@@ -256,6 +256,88 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 	return nil
 }
 
+// Will be replaced when structured logging is merged
+type ExecWriter struct {
+	outputChan chan common.OutputMsg
+}
+
+func (c *ExecWriter) Write(p []byte) (n int, err error) {
+	c.outputChan <- common.OutputMsg{
+		Msg: string(p),
+	}
+	return len(p), nil
+}
+
+func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputChan chan common.OutputMsg, dockerfile string, imageId string, buildCtxPath string) error {
+	outputChan <- common.OutputMsg{Msg: "Building image from Dockerfile\n"}
+	buildPath, err := os.MkdirTemp("", "")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(buildPath)
+	tempDockerFile := filepath.Join(buildPath, "Dockerfile")
+	f, err := os.Create(tempDockerFile)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(f, dockerfile)
+	f.Close()
+
+	imagePath := filepath.Join(buildPath, "image")
+	ociPath := filepath.Join(buildPath, "oci")
+	tempBundlePath := filepath.Join(c.imageBundlePath, imageId)
+	defer os.RemoveAll(tempBundlePath)
+	os.MkdirAll(imagePath, 0755)
+	os.MkdirAll(ociPath, 0755)
+
+	cmd := exec.Command("buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", imageId+":latest", buildCtxPath)
+	cmd.Stdout = &ExecWriter{outputChan: outputChan}
+	cmd.Stderr = &ExecWriter{outputChan: outputChan}
+	err = cmd.Run()
+	if err != nil {
+		return err
+	}
+
+	cmd = exec.Command("buildah", "--root", imagePath, "push", imageId+":latest", "oci:"+ociPath+":latest")
+	cmd.Stdout = &ExecWriter{outputChan: outputChan}
+	cmd.Stderr = &ExecWriter{outputChan: outputChan}
+	err = cmd.Run()
+	if err != nil {
+		return err
+	}
+
+	engine, err := dir.Open(ociPath)
+	if err != nil {
+		return err
+	}
+	defer engine.Close()
+
+	unpackOptions := umociUnpackOptions()
+
+	engineExt := casext.NewEngine(engine)
+	defer engineExt.Close()
+
+	err = umoci.Unpack(engineExt, "latest", tempBundlePath, unpackOptions)
+	if err != nil {
+		return err
+	}
+
+	for _, dir := range requiredContainerDirectories {
+		fullPath := filepath.Join(tempBundlePath, "rootfs", dir)
+		err := os.MkdirAll(fullPath, 0755)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = c.Archive(ctx, tempBundlePath, imageId, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds string) error {
 	baseImage, err := image.ExtractImageNameAndTag(sourceImage)
 	if err != nil {
@@ -356,12 +438,7 @@ func (c *ImageClient) inspectArgs(creds string) (out []string) {
 }
 
 func (c *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePath string) error {
-	var unpackOptions layer.UnpackOptions
-	var meta umoci.Meta
-	meta.Version = umoci.MetaVersion
-
-	unpackOptions.KeepDirlinks = true
-	unpackOptions.MapOptions = meta.MapOptions
+	unpackOptions := umociUnpackOptions()
 
 	// Get a reference to the CAS.
 	baseImagePath := fmt.Sprintf("%s/%s", c.imageBundlePath, baseImageName)
@@ -445,4 +522,13 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 
 	log.Info().Str("image_id", imageId).Dur("duration", time.Since(startTime)).Msg("image push took")
 	return nil
+}
+
+func umociUnpackOptions() layer.UnpackOptions {
+	var unpackOptions layer.UnpackOptions
+	var meta umoci.Meta
+	meta.Version = umoci.MetaVersion
+	unpackOptions.KeepDirlinks = true
+	unpackOptions.MapOptions = meta.MapOptions
+	return unpackOptions
 }

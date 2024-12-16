@@ -55,12 +55,14 @@ type BuildOpts struct {
 	BaseImageName      string
 	BaseImageTag       string
 	BaseImageCreds     string
+	ExistingImageUri   string
+	ExistingImageCreds map[string]string
+	Dockerfile         string
+	BuildCtxObject     string
 	PythonVersion      string
 	PythonPackages     []string
 	Commands           []string
 	BuildSteps         []BuildStep
-	ExistingImageUri   string
-	ExistingImageCreds map[string]string
 	ForceRebuild       bool
 	EnvVars            []string
 }
@@ -72,15 +74,59 @@ func (o *BuildOpts) String() string {
 	fmt.Fprintf(&b, "  \"BaseImageName\": %q,", o.BaseImageName)
 	fmt.Fprintf(&b, "  \"BaseImageTag\": %q,", o.BaseImageTag)
 	fmt.Fprintf(&b, "  \"BaseImageCreds\": %q,", o.BaseImageCreds)
+	fmt.Fprintf(&b, "  \"ExistingImageUri\": %q,", o.ExistingImageUri)
+	fmt.Fprintf(&b, "  \"ExistingImageCreds\": %#v,", o.ExistingImageCreds)
+	fmt.Fprintf(&b, "  \"Dockerfile\": %q,", o.Dockerfile)
+	fmt.Fprintf(&b, "  \"BuildCtxObject\": %q,", o.BuildCtxObject)
 	fmt.Fprintf(&b, "  \"PythonVersion\": %q,", o.PythonVersion)
 	fmt.Fprintf(&b, "  \"PythonPackages\": %#v,", o.PythonPackages)
 	fmt.Fprintf(&b, "  \"Commands\": %#v,", o.Commands)
 	fmt.Fprintf(&b, "  \"BuildSteps\": %#v,", o.BuildSteps)
-	fmt.Fprintf(&b, "  \"ExistingImageUri\": %q,", o.ExistingImageUri)
-	fmt.Fprintf(&b, "  \"ExistingImageCreds\": %#v,", o.ExistingImageCreds)
 	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
 	fmt.Fprintf(&b, "}")
 	return b.String()
+}
+
+func (o *BuildOpts) setCustomImageBuildOptions() error {
+	baseImage, err := ExtractImageNameAndTag(o.ExistingImageUri)
+	if err != nil {
+		return err
+	}
+
+	if len(o.ExistingImageCreds) > 0 && o.ExistingImageUri != "" {
+		token, err := GetRegistryToken(o)
+		if err != nil {
+			return err
+		}
+		o.BaseImageCreds = token
+	}
+
+	o.BaseImageRegistry = baseImage.Registry
+	o.BaseImageName = baseImage.Repo
+	o.BaseImageTag = baseImage.Tag
+
+	return nil
+}
+
+func (o *BuildOpts) addPythonRequirements() {
+	// Override any specified python packages with base requirements (to ensure we have what need in the image)
+	baseRequirementsSlice := strings.Split(strings.TrimSpace(basePythonRequirements), "\n")
+
+	// Create a map to track package names in baseRequirementsSlice
+	baseNames := make(map[string]bool)
+	for _, basePkg := range baseRequirementsSlice {
+		baseNames[extractPackageName(basePkg)] = true
+	}
+
+	// Filter out existing packages from opts.PythonPackages
+	filteredPythonPackages := make([]string, 0)
+	for _, optPkg := range o.PythonPackages {
+		if !baseNames[extractPackageName(optPkg)] {
+			filteredPythonPackages = append(filteredPythonPackages, optPkg)
+		}
+	}
+
+	o.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
 }
 
 func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository) (*Builder, error) {
@@ -121,6 +167,12 @@ func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 			fmt.Fprint(h, envVar)
 		}
 	}
+	if opts.Dockerfile != "" {
+		fmt.Fprint(h, opts.Dockerfile)
+	}
+	if opts.BuildCtxObject != "" {
+		fmt.Fprint(h, opts.BuildCtxObject)
+	}
 	commandListHash := hex.EncodeToString(h.Sum(nil))
 
 	bodyToHash := &ImageIdHash{
@@ -156,12 +208,18 @@ func (i *BaseImage) String() string {
 
 // Build user image
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	var (
+		dockerfile  *string
+		authInfo, _ = auth.AuthInfoFromContext(ctx)
+	)
 
-	if opts.ExistingImageUri != "" {
+	switch {
+	case opts.Dockerfile != "":
+		opts.addPythonRequirements()
+		dockerfile = &opts.Dockerfile
+	case opts.ExistingImageUri != "":
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
 			return err
 		}
 	}
@@ -172,6 +230,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		BaseImageTag:      opts.BaseImageTag,
 		ExistingImageUri:  opts.ExistingImageUri,
 		EnvVars:           opts.EnvVars,
+		Dockerfile:        opts.Dockerfile,
+		BuildCtxObject:    opts.BuildCtxObject,
 	})
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
@@ -194,28 +254,28 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	err = b.scheduler.Run(&types.ContainerRequest{
-		ContainerId:      containerId,
-		Env:              opts.EnvVars,
-		Cpu:              cpu,
-		Memory:           memory,
-		ImageId:          baseImageId,
-		SourceImage:      &sourceImage,
-		SourceImageCreds: opts.BaseImageCreds,
-		WorkspaceId:      authInfo.Workspace.ExternalId,
-		Workspace:        *authInfo.Workspace,
-		EntryPoint:       []string{"tail", "-f", "/dev/null"},
-		PoolSelector:     b.config.ImageService.BuildContainerPoolSelector,
+		BuildOptions: types.BuildOptions{
+			SourceImage:      &sourceImage,
+			SourceImageCreds: opts.BaseImageCreds,
+			Dockerfile:       dockerfile,
+			BuildCtxObject:   &opts.BuildCtxObject,
+		},
+		ContainerId:  containerId,
+		Env:          opts.EnvVars,
+		Cpu:          cpu,
+		Memory:       memory,
+		ImageId:      baseImageId,
+		WorkspaceId:  authInfo.Workspace.ExternalId,
+		Workspace:    *authInfo.Workspace,
+		EntryPoint:   []string{"tail", "-f", "/dev/null"},
+		PoolSelector: b.config.ImageService.BuildContainerPoolSelector,
 	})
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
 		return err
 	}
 
-	mctx, mcancel := context.WithCancel(ctx)
-	go b.monitorContainerForPreloadErrors(mctx, containerId, outputChan)
-
 	hostname, err := b.containerRepo.GetWorkerAddress(ctx, containerId)
-	mcancel()
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
@@ -232,6 +292,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
 	}
+	go client.StreamLogs(ctx, containerId, outputChan)
 
 	go func() {
 		<-ctx.Done() // If user cancels the build, kill the container
@@ -254,6 +315,18 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			break
 		}
 
+		exitCode, err := b.containerRepo.GetContainerExitCode(containerId)
+		if err == nil && exitCode != 0 {
+			msg, ok := types.WorkerContainerExitCodes[exitCode]
+			if !ok {
+				msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+			}
+			// Wait for any final logs to get sent before returning
+			time.Sleep(200 * time.Millisecond)
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
+			return errors.New(fmt.Sprintf("container exited with error: %s\n", msg))
+		}
+
 		if time.Since(start) > defaultContainerSpinupTimeout {
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Timeout: container not running after 180 seconds.\n"}
 			return errors.New("timeout: container not running after 180 seconds")
@@ -272,8 +345,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to connect to build container.\n"}
 		return errors.New("container not running")
 	}
-
-	go client.StreamLogs(ctx, containerId, outputChan)
 
 	// Generate the pip install command and prepend it to the commands list
 	if len(opts.PythonPackages) > 0 {
@@ -334,51 +405,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	return nil
 }
 
-func (b *Builder) monitorContainerForPreloadErrors(ctx context.Context, containerId string, outputChan chan common.OutputMsg) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(1 * time.Second):
-			if exitCode, err := b.containerRepo.GetContainerExitCode(containerId); err == nil {
-				if exitCode != 0 {
-					msg, ok := types.WorkerContainerExitCodes[exitCode]
-					if !ok {
-						msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
-					}
-
-					outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
-				}
-				return
-			}
-		}
-	}
-}
-
 func (b *Builder) genContainerId() string {
 	return fmt.Sprintf("%s%s", types.BuildContainerPrefix, uuid.New().String()[:8])
-}
-
-func (b *Builder) extractPackageName(pkg string) string {
-	// For now we let this go through and let the pip install command fail if the package is not found
-	if len(pkg) == 0 {
-		return ""
-	}
-
-	// Handle Git URLs
-	if strings.HasPrefix(pkg, "git+") || strings.HasPrefix(pkg, "-e git+") {
-		if eggTag := strings.Split(pkg, "#egg="); len(eggTag) > 1 {
-			return eggTag[1]
-		}
-	}
-
-	// Handle packages with index URLs
-	if strings.HasPrefix(pkg, "-i ") || strings.HasPrefix(pkg, "--index-url ") {
-		return ""
-	}
-
-	// Handle regular packages
-	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
 }
 
 // handleCustomBaseImage validates the custom base image and parses its details into build options
@@ -387,7 +415,7 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Using custom base image: %s\n", opts.ExistingImageUri)}
 	}
 
-	baseImage, err := ExtractImageNameAndTag(opts.ExistingImageUri)
+	err := opts.setCustomImageBuildOptions()
 	if err != nil {
 		if outputChan != nil {
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
@@ -395,40 +423,7 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 		return err
 	}
 
-	if len(opts.ExistingImageCreds) > 0 && opts.ExistingImageUri != "" {
-		token, err := GetRegistryToken(opts)
-		if err != nil {
-			if outputChan != nil {
-				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
-			}
-			return err
-		}
-		opts.BaseImageCreds = token
-	}
-
-	opts.BaseImageRegistry = baseImage.Registry
-	opts.BaseImageName = baseImage.Repo
-	opts.BaseImageTag = baseImage.Tag
-
-	// Override any specified python packages with base requirements (to ensure we have what need in the image)
-	baseRequirementsSlice := strings.Split(strings.TrimSpace(basePythonRequirements), "\n")
-
-	// Create a map to track package names in baseRequirementsSlice
-	baseNames := make(map[string]bool)
-	for _, basePkg := range baseRequirementsSlice {
-		baseNames[b.extractPackageName(basePkg)] = true
-	}
-
-	// Filter out existing packages from opts.PythonPackages
-	filteredPythonPackages := make([]string, 0)
-	for _, optPkg := range opts.PythonPackages {
-		if !baseNames[b.extractPackageName(optPkg)] {
-			filteredPythonPackages = append(filteredPythonPackages, optPkg)
-		}
-	}
-
-	opts.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
-
+	opts.addPythonRequirements()
 	if outputChan != nil {
 		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Custom base image is valid.\n"}
 	}
@@ -701,4 +696,26 @@ func containsFlag(s string) bool {
 		}
 	}
 	return false
+}
+
+func extractPackageName(pkg string) string {
+	// For now we let this go through and let the pip install command fail if the package is not found
+	if len(pkg) == 0 {
+		return ""
+	}
+
+	// Handle Git URLs
+	if strings.HasPrefix(pkg, "git+") || strings.HasPrefix(pkg, "-e git+") {
+		if eggTag := strings.Split(pkg, "#egg="); len(eggTag) > 1 {
+			return eggTag[1]
+		}
+	}
+
+	// Handle packages with index URLs
+	if strings.HasPrefix(pkg, "-i ") || strings.HasPrefix(pkg, "--index-url ") {
+		return ""
+	}
+
+	// Handle regular packages
+	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
 }
