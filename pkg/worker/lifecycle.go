@@ -156,7 +156,6 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	containerId := request.ContainerId
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
-	outputChan := make(chan common.OutputMsg, 100)
 	s.containerInstances.Set(containerId, &ContainerInstance{
 		Id:        containerId,
 		StubId:    request.StubId,
@@ -169,6 +168,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	s.containerRepo.SetWorkerAddress(containerId, hostname)
 
 	logChan := make(chan common.LogRecord)
+	outputLogger := slog.New(common.NewChannelHandler(logChan))
 
 	// Handle stdout/stderr
 	go s.containerLogger.CaptureLogs(containerId, logChan)
@@ -180,7 +180,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 			return err
 		}
 
-		if err := s.buildOrPullImage(request, containerId, outputChan); err != nil {
+		if err := s.buildOrPullImage(request, containerId, outputLogger); err != nil {
 			return err
 		}
 	}
@@ -224,13 +224,13 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	go s.containerWg.Add(1)
 
 	// Start the container
-	go s.spawn(request, spec, logChan, opts)
+	go s.spawn(request, spec, outputLogger, opts)
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	return nil
 }
 
-func (s *Worker) buildOrPullImage(request *types.ContainerRequest, containerId string, outputChan chan common.OutputMsg) error {
+func (s *Worker) buildOrPullImage(request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
 	switch {
 	case request.BuildOptions.Dockerfile != nil:
 		log.Info().Str("container_id", containerId).Msg("lazy-pull failed, building image from Dockerfile")
@@ -240,7 +240,7 @@ func (s *Worker) buildOrPullImage(request *types.ContainerRequest, containerId s
 			return err
 		}
 
-		if err := s.imageClient.BuildAndArchiveImage(context.TODO(), outputChan, *request.BuildOptions.Dockerfile, request.ImageId, buildCtxPath); err != nil {
+		if err := s.imageClient.BuildAndArchiveImage(context.TODO(), outputLogger, *request.BuildOptions.Dockerfile, request.ImageId, buildCtxPath); err != nil {
 			return err
 		}
 	case request.BuildOptions.SourceImage != nil:
@@ -431,9 +431,8 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 }
 
 // spawn a container using runc binary
-func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, logChan chan common.LogRecord, opts *ContainerOptions) {
+func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
-	outputLogger := slog.New(common.NewChannelHandler(logChan))
 
 	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
 	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
@@ -558,7 +557,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, logCha
 				containerId = restoredContainerId
 			}
 
-			exitCode = s.waitForRestoredContainer(ctx, containerId, startedChan, logChan, request, spec)
+			exitCode = s.waitForRestoredContainer(ctx, containerId, startedChan, outputLogger, request, spec)
 			return
 		}
 	}

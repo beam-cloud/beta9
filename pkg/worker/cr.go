@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"time"
 
-	common "github.com/beam-cloud/beta9/pkg/common"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -171,9 +170,8 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 }
 
 // Wait for a restored container to exit
-func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId string, startedChan chan int, logChan chan common.LogRecord, request *types.ContainerRequest, spec *specs.Spec) int {
+func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId string, startedChan chan int, outputLogger *slog.Logger, request *types.ContainerRequest, spec *specs.Spec) int {
 	pid := <-startedChan
-	outputLogger := slog.New(common.NewChannelHandler(logChan))
 
 	// Clean up runc container state and send final output message
 	cleanup := func(exitCode int, err error) int {
