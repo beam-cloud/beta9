@@ -14,7 +14,6 @@ import (
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
@@ -66,7 +65,6 @@ type Worker struct {
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
-	sampledLogger           *zerolog.Logger
 }
 
 type ContainerInstance struct {
@@ -212,12 +210,6 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	sampledLogger := log.Sample(&zerolog.BurstSampler{
-		Burst:       1,
-		Period:      1 * time.Second,
-		NextSampler: &zerolog.BasicSampler{N: 100},
-	})
-
 	return &Worker{
 		ctx:                     ctx,
 		cancel:                  cancel,
@@ -254,7 +246,6 @@ func NewWorker() (*Worker, error) {
 		stopContainerChan: make(chan stopContainerEvent, 1000),
 		userDataStorage:   userDataStorage,
 		checkpointStorage: checkpointStorage,
-		sampledLogger:     &sampledLogger,
 	}, nil
 }
 

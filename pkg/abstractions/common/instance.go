@@ -9,7 +9,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -83,9 +82,6 @@ type AutoscaledInstance struct {
 	// Callbacks
 	StartContainersFunc func(containersToRun int) error
 	StopContainersFunc  func(containersToStop int) error
-
-	// Sampled logger
-	sampledLogger *zerolog.Logger
 }
 
 func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (*AutoscaledInstance, error) {
@@ -96,14 +92,6 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 	if cfg.Stub.Type.IsDeployment() {
 		failedContainerThreshold = types.FailedDeploymentContainerThreshold
 	}
-
-	// This allows a maximum of 1 log per second. If more than 1 log is generated in a second,
-	// it will start logging every 100th log.
-	sampledLogger := log.Sample(&zerolog.BurstSampler{
-		Burst:       1,
-		Period:      1 * time.Second,
-		NextSampler: &zerolog.BasicSampler{N: 100},
-	})
 
 	instance := &AutoscaledInstance{
 		Lock:                     lock,
@@ -130,7 +118,6 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		StartContainersFunc:      cfg.StartContainersFunc,
 		StopContainersFunc:       cfg.StopContainersFunc,
 		FailedContainerThreshold: failedContainerThreshold,
-		sampledLogger:            &sampledLogger,
 	}
 
 	if instance.StubConfig.Autoscaler == nil {
@@ -253,7 +240,6 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	}
 
 	if len(state.FailedContainers) >= i.FailedContainerThreshold {
-		i.sampledLogger.Info().Str("instance_name", i.Name).Msg("reached failed container threshold, scaling to zero")
 		desiredContainers = 0
 	}
 

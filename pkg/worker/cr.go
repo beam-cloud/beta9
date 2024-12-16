@@ -105,10 +105,10 @@ waitForReady:
 			// Check if the container is ready for checkpoint by verifying the existence of a signal file
 			readyFilePath := filepath.Join(checkpointSignalDir(instance.Id), checkpointSignalFileName)
 			if _, err := os.Stat(readyFilePath); err == nil {
-				s.sampledLogger.Info().Str("container_id", instance.Id).Msg("container ready for checkpoint")
+				log.Info().Str("container_id", instance.Id).Msg("container ready for checkpoint")
 				break waitForReady
 			} else {
-				s.sampledLogger.Info().Str("container_id", instance.Id).Msg("container not ready for checkpoint")
+				log.Info().Str("container_id", instance.Id).Msg("container not ready for checkpoint")
 			}
 
 		}
