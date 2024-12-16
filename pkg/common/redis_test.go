@@ -278,7 +278,9 @@ func TestCopyStruct(t *testing.T) {
 				Workspace: types.Workspace{
 					Id: 5,
 				},
-				SourceImage: nil,
+				BuildOptions: types.BuildOptions{
+					SourceImage: nil,
+				},
 			},
 		},
 	}

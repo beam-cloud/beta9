@@ -110,8 +110,6 @@ func TestExtractImageNameAndTag(t *testing.T) {
 }
 
 func TestExtractPackageName(t *testing.T) {
-	b := &Builder{}
-
 	testCases := []struct {
 		input    string
 		expected string
@@ -130,7 +128,7 @@ func TestExtractPackageName(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		output := b.extractPackageName(tc.input)
+		output := extractPackageName(tc.input)
 		if output != tc.expected {
 			t.Errorf("extractPackageName(%q) = %q; expected %q", tc.input, output, tc.expected)
 		}

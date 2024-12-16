@@ -2,6 +2,9 @@ import os
 from pathlib import Path
 from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
 
+from beta9.clients.gateway import GatewayServiceStub
+from beta9.sync import FileSyncer
+
 from .. import env, terminal
 from ..abstractions.base import BaseAbstraction
 from ..clients.image import (
@@ -214,8 +217,37 @@ class Image(BaseAbstraction):
             def handler():
                 pass
             ```
+
+            Custom Dockerfile
+
+            To use a custom Dockerfile, you can use the `from_dockerfile` class method.
+            This will build the image using your Dockerfile. You can set the docker build's
+            context directory using the `context_dir` parameter.
+
+            ```python
+            # Basic usage - uses Dockerfile's directory as context
+            image = Image.from_dockerfile("path/to/Dockerfile")
+
+            # Specify a different context directory
+            image = Image.from_dockerfile(
+                "path/to/Dockerfile",
+                context_dir="path/to/context"
+            )
+
+            # You can still chain additional commands and python packages
+            image.add_commands(["echo 'Hello, World!'"]).add_python_packages(["numpy"])
+
+            @endpoint(image=image)
+            def handler():
+                pass
+            ```
+
+            The context directory should contain all files referenced in your Dockerfile
+            (like files being COPYed). If no context_dir is specified, the directory
+            containing the Dockerfile will be used as the context.
         """
         super().__init__()
+        self._gateway_stub: Optional[GatewayServiceStub] = None
 
         if isinstance(python_packages, str):
             python_packages = self._load_requirements_file(python_packages)
@@ -228,8 +260,20 @@ class Image(BaseAbstraction):
         self.base_image_creds = base_image_creds or {}
         self.env_vars = []
         self._stub: Optional[ImageServiceStub] = None
+        self.dockerfile = ""
+        self.build_ctx_object = ""
 
         self.with_envs(env_vars or [])
+
+    @property
+    def gateway_stub(self) -> GatewayServiceStub:
+        if not self._gateway_stub:
+            self._gateway_stub = GatewayServiceStub(self.channel)
+        return self._gateway_stub
+
+    @gateway_stub.setter
+    def gateway_stub(self, value) -> None:
+        self._gateway_stub = value
 
     @property
     def stub(self) -> ImageServiceStub:
@@ -273,6 +317,40 @@ class Image(BaseAbstraction):
         else:
             raise FileNotFoundError
 
+    @classmethod
+    def from_dockerfile(cls, path: str, context_dir: Optional[str] = None) -> "Image":
+        """
+        Build the base image based on a Dockerfile.
+
+        This method will sync the context directory and use the Dockerfile at the provided path to
+        build the base image.
+
+        Parameters:
+            path: The path to the Dockerfile.
+            context_dir: The directory to sync. If not provided, the directory of the Dockerfile will be used.
+
+        Returns:
+            Image: The Image object.
+        """
+        image = cls()
+        if env.is_remote():
+            return image
+
+        if not context_dir:
+            context_dir = os.path.dirname(path)
+
+        syncer = FileSyncer(gateway_stub=image.gateway_stub, root_dir=context_dir)
+        result = syncer.sync()
+        if not result.success:
+            raise ValueError("Failed to sync context directory.")
+
+        image.build_ctx_object = result.object_id
+
+        with open(path, "r") as f:
+            dockerfile = f.read()
+        image.dockerfile = dockerfile
+        return image
+
     def exists(self) -> Tuple[bool, ImageBuildResult]:
         r: VerifyImageBuildResponse = self.stub.verify_image_build(
             VerifyImageBuildRequest(
@@ -283,6 +361,8 @@ class Image(BaseAbstraction):
                 force_rebuild=False,
                 existing_image_uri=self.base_image,
                 env_vars=self.env_vars,
+                dockerfile=self.dockerfile,
+                build_ctx_object=self.build_ctx_object,
             )
         )
 
@@ -290,6 +370,9 @@ class Image(BaseAbstraction):
 
     def build(self) -> ImageBuildResult:
         terminal.header("Building image")
+
+        if self.base_image != "" and self.dockerfile != "":
+            raise ValueError("Cannot use from_dockerfile and provide a custom base image.")
 
         exists, exists_response = self.exists()
         if exists:
@@ -307,6 +390,8 @@ class Image(BaseAbstraction):
                     existing_image_uri=self.base_image,
                     existing_image_creds=self.get_credentials_from_env(),
                     env_vars=self.env_vars,
+                    dockerfile=self.dockerfile,
+                    build_ctx_object=self.build_ctx_object,
                 )
             ):
                 if r.msg != "":

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7-labs
 ARG BASE_STAGE=dev
 
-FROM golang:1.22-bullseye AS golang
+FROM golang:1.23.4-bookworm AS golang
 
 RUN apt-get update && apt-get install -y curl git
 
@@ -58,6 +58,28 @@ make binaries
 EOT
 
 
+# buildah build stage
+FROM golang AS buildah
+
+WORKDIR /workspace
+RUN apt-get update && apt-get install -y \
+    make \
+    btrfs-progs \
+    git \
+    go-md2man \
+    iptables \
+    libapparmor-dev \
+    libglib2.0-dev \
+    libgpgme11-dev \
+    libseccomp-dev \
+    libselinux1-dev \
+    libbtrfs-dev \
+    pkg-config
+
+RUN git clone https://github.com/containers/buildah.git . && \
+    make BUILDTAGS="cni" && \
+    make install
+
 # beta9 worker
 # ========================
 FROM golang AS worker
@@ -93,6 +115,11 @@ RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvi
 
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
 
+RUN apt-get install -y libbtrfs-dev libgpgme11-dev
+RUN mkdir -p /etc/containers/registries.conf.d
+RUN curl -L https://raw.githubusercontent.com/containers/shortnames/refs/heads/main/shortnames.conf \
+    -o /etc/containers/registries.conf.d/shortnames.conf
+
 # XXX: Remove once cedana starts shipping with a compatible binary
 RUN <<EOT
 set -eux
@@ -125,7 +152,6 @@ RUN if [ -n "${CEDANA_TOKEN}" ]; then \
     chmod +x /usr/local/lib/libcedana-gpu.so; \
     fi
 
-
 ARG TARGETARCH
 
 ENV MOUNT_S3_URL_ARM64="https://s3.amazonaws.com/mountpoint-s3-release/1.8.0/arm64/mount-s3-1.8.0-arm64.tar.gz"
@@ -149,6 +175,8 @@ RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
     rm -rf /var/lib/apt/lists/* /var/log/*
 
+
+ENV BUILDAH_RUNTIME=/usr/local/sbin/runc
 RUN echo "nameserver 8.8.8.8" > /workspace/resolv.conf
 COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
 COPY --from=skopeo /usr/local/bin/skopeo /usr/local/bin/skopeo
@@ -157,6 +185,10 @@ COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/b
 COPY ./bin/volume_cache.so /usr/local/lib/volume_cache.so
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
 COPY ./sdk/src/beta9 /workspace/sdk
+COPY --from=buildah /usr/local/bin/buildah /usr/local/bin/buildah
 
 VOLUME "/usr/lib/x86_64-linux-gnu"
 VOLUME "/usr/lib/aarch64-linux-gnu"
+
+ENV _BUILDAH_STARTED_IN_USERNS="" \
+    BUILDAH_ISOLATION=chroot

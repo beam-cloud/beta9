@@ -89,6 +89,7 @@ class FileSyncer:
     ):
         self.root_dir = Path(root_dir).absolute()
         self.gateway_stub: GatewayServiceStub = gateway_stub
+        self.is_workspace_dir = root_dir == "."
 
     @property
     def ignore_file_path(self) -> Path:
@@ -146,7 +147,7 @@ class FileSyncer:
 
     def sync(self) -> FileSyncResult:
         with _sync_lock:
-            if get_workspace_object_id() != "":
+            if self.is_workspace_dir and get_workspace_object_id() != "":
                 terminal.header("Files already synced")
                 return FileSyncResult(success=True, object_id=get_workspace_object_id())
             return self._sync()
@@ -186,13 +187,13 @@ class FileSyncer:
 
             terminal.header("Uploading")
             put_response = self.gateway_stub.put_object_stream(stream_requests())
-            if put_response.ok:
-                global _workspace_object_id
-                _workspace_object_id = put_response.object_id
+            if put_response.ok and self.is_workspace_dir:
+                set_workspace_object_id(put_response.object_id)
 
         elif head_response.exists and head_response.ok:
             terminal.header("Files already synced")
-            set_workspace_object_id(head_response.object_id)
+            if self.is_workspace_dir:
+                set_workspace_object_id(head_response.object_id)
             return FileSyncResult(success=True, object_id=head_response.object_id)
 
         os.remove(temp_zip_name)

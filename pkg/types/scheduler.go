@@ -79,6 +79,13 @@ type ContainerState struct {
 	Memory      int64           `redis:"memory" json:"memory"`
 }
 
+type BuildOptions struct {
+	SourceImage      *string `json:"source_image"`
+	Dockerfile       *string `json:"dockerfile"`
+	BuildCtxObject   *string `json:"build_context"`
+	SourceImageCreds string  `json:"source_image_creds"`
+}
+
 type ContainerRequest struct {
 	ContainerId       string          `json:"container_id"`
 	EntryPoint        []string        `json:"entry_point"`
@@ -88,8 +95,6 @@ type ContainerRequest struct {
 	Gpu               string          `json:"gpu"`
 	GpuRequest        []string        `json:"gpu_request"`
 	GpuCount          uint32          `json:"gpu_count"`
-	SourceImage       *string         `json:"source_image"`
-	SourceImageCreds  string          `json:"source_image_creds"`
 	ImageId           string          `json:"image_id"`
 	StubId            string          `json:"stub_id"`
 	WorkspaceId       string          `json:"workspace_id"`
@@ -101,6 +106,7 @@ type ContainerRequest struct {
 	PoolSelector      string          `json:"pool_selector"`
 	Preemptable       bool            `json:"preemptable"`
 	CheckpointEnabled bool            `json:"checkpoint_enabled"`
+	BuildOptions      BuildOptions    `json:"build_options"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
