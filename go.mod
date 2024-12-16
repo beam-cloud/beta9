@@ -62,7 +62,7 @@ require (
 	github.com/tj/assert v0.0.3
 	github.com/vishvananda/netlink v1.3.0
 	github.com/vishvananda/netns v0.0.4
-	go.opentelemetry.io/otel v1.31.0
+	go.opentelemetry.io/otel v1.32.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.29.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.27.0
 	go.opentelemetry.io/otel/exporters/stdout/stdoutlog v0.7.0
@@ -71,7 +71,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.31.0
 	go.opentelemetry.io/otel/sdk/log v0.7.0
 	go.opentelemetry.io/otel/sdk/metric v1.31.0
-	go.opentelemetry.io/otel/trace v1.31.0
+	go.opentelemetry.io/otel/trace v1.32.0
 	golang.org/x/exp v0.0.0-20241009180824-f66d83c29e7c
 	golang.org/x/net v0.30.0
 	golang.org/x/sync v0.9.0
@@ -84,7 +84,7 @@ require (
 	k8s.io/apimachinery v0.30.3
 	k8s.io/client-go v0.30.3
 	k8s.io/utils v0.0.0-20240711033017-18e509b52bc8
-	tailscale.com v1.76.6
+	tailscale.com v1.78.3
 )
 
 require (
@@ -230,7 +230,7 @@ require (
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7 // indirect
 	github.com/tailscale/peercred v0.0.0-20240214030740-b535050b2aa4 // indirect
 	github.com/tailscale/web-client-prebuilt v0.0.0-20240226180453-5db17b287bf1 // indirect
-	github.com/tailscale/wireguard-go v0.0.0-20240905161824-799c1978fafc // indirect
+	github.com/tailscale/wireguard-go v0.0.0-20241113014420-4e883d38c8d3 // indirect
 	github.com/tchap/go-patricia v2.3.0+incompatible // indirect
 	github.com/tcnksm/go-httpstat v0.2.0 // indirect
 	github.com/tidwall/btree v1.6.0 // indirect
@@ -246,7 +246,7 @@ require (
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	github.com/yuin/gopher-lua v1.1.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	go.opentelemetry.io/otel/metric v1.31.0 // indirect
+	go.opentelemetry.io/otel/metric v1.32.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
