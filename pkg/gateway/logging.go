@@ -1,21 +1,13 @@
 package gateway
 
 import (
-	"os"
-
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 func configureEchoLogger(e *echo.Echo, debug bool) {
 	if debug {
-		// Configure logger with better UI for debugging purposes (less efficient than the default logger)
-		logger := zerolog.New(zerolog.ConsoleWriter{
-			Out:        os.Stdout,
-			TimeFormat: "2006-01-02T15:04:05",
-		}).With().Timestamp().Logger()
-
 		e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 			LogStatus:    true,
 			LogRoutePath: true,
@@ -23,17 +15,9 @@ func configureEchoLogger(e *echo.Echo, debug bool) {
 			LogError:     true,
 			LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
 				if v.Error != nil {
-					logger.Err(v.Error).
-						Str("method", c.Request().Method).
-						Str("URI", v.URIPath).
-						Int("status", v.Status).
-						Msg("")
+					log.Error().Str("error", v.Error.Error()).Str("method", c.Request().Method).Str("uri", v.URIPath).Int("status", v.Status).Msg("request error")
 				} else {
-					logger.Info().
-						Str("method", c.Request().Method).
-						Str("URI", v.URIPath).
-						Int("status", v.Status).
-						Msg("")
+					log.Info().Str("method", c.Request().Method).Str("uri", v.URIPath).Int("status", v.Status).Msg("request")
 				}
 				return nil
 			},

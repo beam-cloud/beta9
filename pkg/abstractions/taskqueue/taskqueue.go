@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -19,6 +18,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 )
 
 type TaskQueueService interface {
@@ -410,7 +410,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 	} else if leftoverTimeoutSeconds <= 0 {
 		err := timeoutCallback()
 		if err != nil {
-			log.Printf("Error timing out task: %v\n", err)
+			log.Error().Err(err).Msg("error timing out task")
 			return err
 		}
 
@@ -430,7 +430,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 				case <-timeoutChan:
 					err := timeoutCallback()
 					if err != nil {
-						log.Printf("Task timeout err: %v\n", err)
+						log.Error().Err(err).Msg("task timeout err")
 					}
 					timeoutFlag <- true
 					return
@@ -446,7 +446,7 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 
 				case err := <-errs:
 					if err != nil {
-						log.Printf("Monitor task subscription err: %v\n", err)
+						log.Error().Err(err).Msg("monitor task subscription err")
 						break retry
 					}
 				}

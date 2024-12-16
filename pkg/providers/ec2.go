@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	awsTypes "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -114,7 +114,7 @@ func (p *EC2Provider) ProvisionMachine(ctx context.Context, poolName, token stri
 		return "", err
 	}
 
-	log.Printf("<provider %s>: Selected instance type <%s> for compute request: %+v\n", p.Name, instance.Type, compute)
+	log.Info().Str("provider", p.Name).Str("instance_type", instance.Type).Str("compute_request", fmt.Sprintf("%+v", compute)).Msg("selected instance type")
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String(p.providerConfig.AMI),
 		InstanceType: awsTypes.InstanceType(instance.Type),
@@ -194,11 +194,11 @@ func (p *EC2Provider) TerminateMachine(ctx context.Context, poolName, instanceId
 
 	err = p.ProviderRepo.RemoveMachine(p.Name, poolName, machineId)
 	if err != nil {
-		log.Printf("<provider %s>: Unable to remove machine state <machineId: %s>: %+v\n", p.Name, machineId, err)
+		log.Error().Str("provider", p.Name).Str("machine_id", machineId).Err(err).Msg("unable to remove machine state")
 		return err
 	}
 
-	log.Printf("<provider %s>: Terminated machine <machineId: %s> due to inactivity\n", p.Name, machineId)
+	log.Info().Str("provider", p.Name).Str("machine_id", machineId).Msg("terminated machine")
 	return nil
 }
 

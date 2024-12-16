@@ -3,13 +3,13 @@ package abstractions
 import (
 	"context"
 	"errors"
-	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 const IgnoreScalingEventInterval = 10 * time.Second
@@ -204,7 +204,7 @@ func (i *AutoscaledInstance) Monitor() error {
 			}
 
 			if initialContainerCount != len(i.Containers) {
-				log.Printf("<%s> scaled from %d->%d", i.Name, initialContainerCount, len(i.Containers))
+				log.Info().Str("instance_name", i.Name).Int("initial_count", initialContainerCount).Int("current_count", len(i.Containers)).Msg("scaled")
 			}
 
 		case desiredContainers := <-i.ScaleEventChan:
@@ -216,7 +216,7 @@ func (i *AutoscaledInstance) Monitor() error {
 			if err := i.HandleScalingEvent(desiredContainers); err != nil {
 				if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 					if time.Now().After(ignoreScalingEventWindow) {
-						log.Printf("<%s> throttled by concurrency limit\n", i.Name)
+						log.Info().Str("instance_name", i.Name).Msg("throttled by concurrency limit")
 						ignoreScalingEventWindow = time.Now().Add(IgnoreScalingEventInterval)
 					}
 				}
@@ -318,6 +318,6 @@ func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason str
 		return
 	}
 
-	log.Printf("<%s> %s\n", i.Name, reason)
+	log.Info().Str("instance_name", i.Name).Msgf("%s\n", reason)
 	go i.EventRepo.PushStubStateUnhealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
 }

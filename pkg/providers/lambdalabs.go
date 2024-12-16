@@ -6,9 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -121,10 +122,10 @@ func (p *LambdaLabsProvider) TerminateMachine(ctx context.Context, poolName, ins
 
 	err = p.ProviderRepo.RemoveMachine(p.Name, poolName, machineId)
 	if err != nil {
-		log.Printf("<provider %s>: Unable to remove machine state <machineId: %s>: %+v\n", p.Name, machineId, err)
+		log.Error().Str("provider", p.Name).Str("machine_id", machineId).Err(err).Msg("unable to remove machine state")
 		return err
 	}
 
-	log.Printf("<provider %s>: Terminated machine <machineId: %s> due to inactivity\n", p.Name, machineId)
+	log.Info().Str("provider", p.Name).Str("machine_id", machineId).Msg("terminated machine")
 	return nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/abstractions/image"
+	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
+	types "github.com/beam-cloud/beta9/pkg/types"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
@@ -24,11 +27,8 @@ import (
 	"github.com/opencontainers/umoci/oci/casext"
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
-
-	"github.com/beam-cloud/beta9/pkg/abstractions/image"
-	common "github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/repository"
-	types "github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -204,12 +204,12 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 
 func (c *ImageClient) Cleanup() error {
 	c.mountedFuseServers.Range(func(imageId string, server *fuse.Server) bool {
-		log.Printf("Un-mounting image: %s\n", imageId)
+		log.Info().Str("image_id", imageId).Msg("un-mounting image")
 		server.Unmount()
 		return true // Continue iteration
 	})
 
-	log.Println("Cleaning up blobfs image cache:", c.imageCachePath)
+	log.Info().Str("path", c.imageCachePath).Msg("cleaning up blobfs image cache")
 	if c.config.BlobCache.BlobFs.Enabled && c.cacheClient != nil {
 		err := c.cacheClient.Cleanup()
 		if err != nil {
@@ -225,8 +225,8 @@ func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage str
 
 	args = append(args, c.inspectArgs(creds)...)
 	cmd := exec.CommandContext(ctx, c.pullCommand, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s inspect", c.pullCommand)) }}
+	cmd.Stderr = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s inspect", c.pullCommand)) }}
 
 	output, err := exec.CommandContext(ctx, c.pullCommand, args...).Output()
 	if err != nil {
@@ -358,8 +358,8 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 	cmd := exec.CommandContext(ctx, c.pullCommand, args...)
 	cmd.Env = os.Environ()
 	cmd.Dir = c.imageBundlePath
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s copy", c.pullCommand)) }}
+	cmd.Stderr = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s copy", c.pullCommand)) }}
 
 	ec, err := c.startCommand(cmd)
 	if err != nil {
@@ -507,20 +507,20 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}
 
 	if err != nil {
-		log.Printf("Unable to create archive: %v\n", err)
-		return errors.Wrap(err, "create archive")
+		log.Error().Err(err).Msg("unable to create archive")
+		return err
 	}
-	log.Printf("Container <%v> archive took %v\n", imageId, time.Since(startTime))
+	log.Info().Str("container_id", imageId).Dur("duration", time.Since(startTime)).Msg("container archive took")
 
 	// Push the archive to a registry
 	startTime = time.Now()
 	err = c.registry.Push(ctx, archivePath, imageId)
 	if err != nil {
-		log.Printf("Failed to push image <%v>: %v\n", imageId, err)
-		return errors.Wrap(err, "push image")
+		log.Error().Str("image_id", imageId).Err(err).Msg("failed to push image")
+		return err
 	}
 
-	log.Printf("Image <%v> push took %v\n", imageId, time.Since(startTime))
+	log.Info().Str("image_id", imageId).Dur("duration", time.Since(startTime)).Msg("image push took")
 	return nil
 }
 

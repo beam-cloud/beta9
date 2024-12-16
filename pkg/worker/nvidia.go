@@ -2,10 +2,11 @@ package worker
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"syscall"
+
+	"github.com/rs/zerolog/log"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -232,7 +233,7 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string, options *ContainerO
 
 			formattedVersion := major + "." + minor
 
-			log.Printf("found existing cuda version in container image: %s (formatted: %s)\n", existingCudaVersion, formattedVersion)
+			log.Info().Str("cuda_version", existingCudaVersion).Str("formatted_version", formattedVersion).Msg("found existing cuda version in container image")
 
 			cudaVersion = formattedVersion
 			existingCudaFound = true

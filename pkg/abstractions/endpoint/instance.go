@@ -3,12 +3,12 @@ package endpoint
 import (
 	"context"
 	"fmt"
-	"log"
 	"math/rand"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -113,7 +113,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 
 		err := i.Scheduler.Run(runRequest)
 		if err != nil {
-			log.Printf("<%s> unable to run container: %v", i.Name, err)
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to run container")
 			return err
 		}
 
@@ -138,7 +138,7 @@ func (i *endpointInstance) stopContainers(containersToStop int) error {
 
 		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
 		if err != nil {
-			log.Printf("<%s> unable to stop container: %v", i.Name, err)
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to stop container")
 			return err
 		}
 
@@ -172,7 +172,7 @@ func (i *endpointInstance) stoppableContainers() ([]string, error) {
 		// Skip containers with keep warm locks
 		keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.endpointKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
 		if err != nil && err != redis.Nil {
-			log.Printf("<%s> error getting keep warm lock for container: %v\n", i.Name, err)
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting keep warm lock for container")
 			continue
 		}
 

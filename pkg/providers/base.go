@@ -2,9 +2,10 @@ package providers
 
 import (
 	"context"
-	"log"
 	"strconv"
 	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -66,7 +67,7 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 				if _, ok := err.(*types.ProviderNotImplemented); ok {
 					return
 				} else {
-					log.Printf("<provider %s>: unable to list machines - %v\n", p.Name, err)
+					log.Error().Str("provider", p.Name).Err(err).Msg("unable to list machines")
 					continue
 				}
 			}
@@ -81,14 +82,14 @@ func (p *ExternalProvider) Reconcile(ctx context.Context, poolName string) {
 
 					machine, err := p.ProviderRepo.GetMachine(p.Name, poolName, machineId)
 					if err != nil {
-						log.Printf("<provider %s>: unable to retrieve machine <machineId: %s> - %v\n", p.Name, machineId, err)
+						log.Error().Str("provider", p.Name).Str("machine_id", machineId).Err(err).Msg("unable to retrieve machine")
 						p.TerminateMachineFunc(ctx, poolName, instanceId, machineId)
 						return
 					}
 
 					workers, err := p.WorkerRepo.GetAllWorkersOnMachine(machineId)
 					if err != nil {
-						log.Printf("<provider %s>: unable to retrieve workers for machine <machineId: %s> - %v\n", p.Name, machineId, err)
+						log.Error().Str("provider", p.Name).Str("machine_id", machineId).Err(err).Msg("unable to retrieve workers")
 						return
 					}
 

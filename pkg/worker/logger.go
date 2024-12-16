@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path"
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/sirupsen/logrus"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -43,7 +43,7 @@ func (r *ContainerLogger) Log(containerId, stubId string, format string, args ..
 		TimestampFormat: time.RFC3339Nano,
 	})
 
-	log.Print(fmt.Sprintf("<%s> - ", containerId) + fmt.Sprintf(format, args...))
+	log.Info().Str("container_id", containerId).Msg(fmt.Sprintf(format, args...))
 	f.WithFields(logrus.Fields{
 		"container_id": containerId,
 		"stub_id":      stubId,
@@ -53,7 +53,7 @@ func (r *ContainerLogger) Log(containerId, stubId string, format string, args ..
 	return nil
 }
 
-func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common.OutputMsg) error {
+func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.LogRecord) error {
 	logFile, err := openLogFile(containerId)
 	if err != nil {
 		return err
@@ -72,8 +72,8 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 		return errors.New("container not found")
 	}
 
-	for o := range outputChan {
-		dec := json.NewDecoder(strings.NewReader(o.Msg))
+	for o := range logChan {
+		dec := json.NewDecoder(strings.NewReader(o.Message))
 		msgDecoded := false
 
 		for {
@@ -109,33 +109,33 @@ func (r *ContainerLogger) CaptureLogs(containerId string, outputChan chan common
 				}
 
 				if msg.TaskID != nil {
-					log.Printf("<%s>:<%s> - %s\n", containerId, *msg.TaskID, line)
+					log.Info().Str("container_id", containerId).Str("task_id", *msg.TaskID).Msg(line)
 				} else {
-					log.Printf("<%s> - %s\n", containerId, line)
+					log.Info().Str("container_id", containerId).Msg(line)
 				}
 			}
 		}
 
 		// Fallback in case the message was not JSON
-		if !msgDecoded && o.Msg != "" {
+		if !msgDecoded && o.Message != "" {
 			f.WithFields(logrus.Fields{
 				"container_id": containerId,
 				"stub_id":      instance.StubId,
-			}).Info(o.Msg)
+			}).Info(o.Message)
 
-			for _, line := range strings.Split(o.Msg, "\n") {
+			for _, line := range strings.Split(o.Message, "\n") {
 				if line == "" {
 					continue
 				}
 
-				log.Printf("<%s> - %s\n", containerId, line)
+				log.Info().Str("container_id", containerId).Msg(line)
 			}
 
 			// Write logs to in-memory log buffer as well
-			instance.LogBuffer.Write([]byte(o.Msg))
+			instance.LogBuffer.Write([]byte(o.Message))
 		}
 
-		if o.Done {
+		if done, ok := o.Attrs["done"].(bool); ok && done {
 			break
 		}
 	}

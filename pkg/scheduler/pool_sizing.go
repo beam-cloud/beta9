@@ -2,12 +2,12 @@ package scheduler
 
 import (
 	"errors"
-	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/bsm/redislock"
+	"github.com/rs/zerolog/log"
 )
 
 const poolMonitoringInterval = 1 * time.Second
@@ -53,23 +53,23 @@ func (s *WorkerPoolSizer) Start() {
 		func() {
 			freeCapacity, err := s.controller.FreeCapacity()
 			if err != nil {
-				log.Printf("<pool %s> Error getting free capacity: %v\n", s.controller.Name(), err)
+				log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to get free capacity")
 				return
 			}
 
 			// Handle case where pool sizing says we want to keep a buffer
 			newWorker, err := s.addWorkerIfNeeded(freeCapacity)
 			if err != nil {
-				log.Printf("<pool %s> Error adding new worker: %v\n", s.controller.Name(), err)
+				log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to add worker")
 			} else if newWorker != nil {
-				log.Printf("<pool %s> Added new worker to maintain pool size: %+v\n", s.controller.Name(), newWorker)
+				log.Info().Str("pool_name", s.controller.Name()).Interface("worker", newWorker).Msg("added new worker to maintain pool size")
 			}
 
 			// Handle case where we want to make sure all available manually provisioned nodes have available workers
 			if s.workerPoolConfig.Mode == types.PoolModeExternal {
 				err := s.occupyAvailableMachines()
 				if err != nil && !errors.Is(err, redislock.ErrNotObtained) {
-					log.Printf("<pool %s> Failed to list machines in external pool: %+v\n", s.controller.Name(), err)
+					log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to list machines in external pool")
 				}
 			}
 		}()
@@ -105,7 +105,7 @@ func (s *WorkerPoolSizer) occupyAvailableMachines() error {
 			continue
 		}
 
-		log.Printf("<pool %s> Added new worker to occupy existing machine: %+v\n", s.controller.Name(), worker)
+		log.Info().Str("pool_name", s.controller.Name()).Interface("worker", worker).Msg("added new worker to occupy existing machine")
 	}
 
 	return nil

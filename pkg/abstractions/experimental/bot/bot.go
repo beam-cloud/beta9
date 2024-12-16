@@ -4,21 +4,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 
 	"context"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/types"
-
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/task"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -200,7 +199,7 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 		return nil, err
 	}
 
-	log.Printf("<bot %s> Created bot instance: %+v", instance.stub.ExternalId, instance.botConfig)
+	log.Info().Str("stub_id", instance.stub.ExternalId).Interface("bot_config", instance.botConfig).Msg("created bot instance")
 	pbs.botInstances.Set(stubId, instance)
 
 	// Monitor and then clean up the instance once it's done
@@ -287,7 +286,7 @@ func (s *PetriBotService) PushBotMarkers(ctx context.Context, in *pb.PushBotMark
 
 			err = s.botStateManager.pushMarker(instance.workspace.Name, instance.stub.ExternalId, in.SessionId, locationName, marker)
 			if err != nil {
-				log.Printf("<bot %s> Failed to push marker: %s", instance.stub.ExternalId, err)
+				log.Error().Str("stub_id", instance.stub.ExternalId).Err(err).Msg("failed to push marker")
 				continue
 			}
 		}

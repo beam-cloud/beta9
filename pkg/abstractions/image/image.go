@@ -2,7 +2,6 @@ package image
 
 import (
 	"context"
-	"log"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -11,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog/log"
 )
 
 type ImageService interface {
@@ -95,7 +95,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 }
 
 func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
-	log.Printf("incoming image build request: %+v", in)
+	log.Info().Interface("request", in).Msg("incoming image build request")
 
 	buildOptions := &BuildOpts{
 		BaseImageTag:       is.config.ImageService.Runner.Tags[in.PythonVersion],
@@ -126,7 +126,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		}
 
 		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId}); err != nil {
-			log.Println("failed to complete build: ", err)
+			log.Error().Err(err).Msg("failed to complete build")
 			lastMessage = o
 			break
 		}
@@ -145,7 +145,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		return errors.New("build failed")
 	}
 
-	log.Println("build completed successfully")
+	log.Info().Msg("build completed successfully")
 	return nil
 }
 

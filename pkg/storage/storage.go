@@ -2,9 +2,9 @@ package storage
 
 import (
 	"errors"
-	"log"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/unix"
 )
 
@@ -44,13 +44,13 @@ func NewStorage(config types.StorageConfig) (Storage, error) {
 		// NOTE: this is a no-op if already formatted
 		err = s.Format(config.FilesystemName)
 		if err != nil {
-			log.Fatalf("Unable to format filesystem: %+v\n", err)
+			log.Fatal().Err(err).Msg("unable to format filesystem")
 		}
 
 		// Mount filesystem
 		err = s.Mount(config.FilesystemPath)
 		if err != nil {
-			log.Fatalf("Unable to mount filesystem: %+v\n", err)
+			log.Fatal().Err(err).Msg("unable to mount filesystem")
 		}
 
 		return s, nil
@@ -63,13 +63,13 @@ func NewStorage(config types.StorageConfig) (Storage, error) {
 		// Setup credentials and load buckets
 		err = s.Format(config.FilesystemName)
 		if err != nil {
-			log.Fatalf("Unable to format filesystem: %+v\n", err)
+			log.Fatal().Err(err).Msg("unable to format filesystem")
 		}
 
 		// Mount filesystem
 		err = s.Mount(config.FilesystemPath)
 		if err != nil {
-			log.Fatalf("Unable to mount filesystem: %+v\n", err)
+			log.Fatal().Err(err).Msg("unable to mount filesystem")
 		}
 
 		return s, nil
@@ -82,7 +82,7 @@ func NewStorage(config types.StorageConfig) (Storage, error) {
 		// Mount filesystem
 		err = s.Mount(config.FilesystemPath)
 		if err != nil {
-			log.Fatalf("Unable to mount filesystem: %+v\n", err)
+			log.Fatal().Err(err).Msg("unable to mount filesystem")
 		}
 
 		return s, nil

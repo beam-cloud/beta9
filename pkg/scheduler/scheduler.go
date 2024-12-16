@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log"
 	"math"
 	"sort"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/network"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -54,17 +54,17 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		case types.PoolModeExternal:
 			controller, err = NewExternalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, providerRepo, tailscale, pool.Provider)
 		default:
-			log.Printf("no valid controller found for pool <%s> with mode: %s\n", name, pool.Mode)
+			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")
 			continue
 		}
 
 		if err != nil {
-			log.Printf("unable to load controller <%s>: %+v\n", name, err)
+			log.Error().Str("pool_name", name).Err(err).Msg("unable to load controller")
 			continue
 		}
 
 		workerPoolManager.SetPool(name, pool, controller)
-		log.Printf("loaded controller for pool <%s> with mode: %s and GPU type: %s\n", name, pool.Mode, pool.GPUType)
+		log.Info().Str("pool_name", name).Str("mode", string(pool.Mode)).Str("gpu_type", pool.GPUType).Msg("loaded controller")
 	}
 
 	return &Scheduler{
@@ -82,7 +82,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 }
 
 func (s *Scheduler) Run(request *types.ContainerRequest) error {
-	log.Printf("Received RUN request: %+v\n", request)
+	log.Info().Interface("request", request).Msg("received run request")
 
 	request.Timestamp = time.Now()
 
@@ -139,7 +139,7 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 }
 
 func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
-	log.Printf("Received STOP request: %+v\n", stopArgs)
+	log.Info().Interface("stop_args", stopArgs).Msg("received stop request")
 
 	err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	if err != nil {
@@ -157,7 +157,7 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 		LockAndDelete: false,
 	})
 	if err != nil {
-		log.Printf("Could not stop container: %+v\n", err)
+		log.Error().Err(err).Msg("could not stop container")
 		return err
 	}
 
@@ -228,7 +228,7 @@ func (s *Scheduler) StartProcessingRequests() {
 
 			controllers, err := s.getControllers(request)
 			if err != nil {
-				log.Printf("No controller found for request: %+v, error: %v\n", request, err)
+				log.Error().Interface("request", request).Err(err).Msg("no controller found for request")
 				continue
 			}
 
@@ -243,11 +243,11 @@ func (s *Scheduler) StartProcessingRequests() {
 					var newWorker *types.Worker
 					newWorker, err = c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
 					if err == nil {
-						log.Printf("Added new worker <%s> for container %s\n", newWorker.Id, request.ContainerId)
+						log.Info().Str("worker_id", newWorker.Id).Str("container_id", request.ContainerId).Msg("added new worker")
 
 						err = s.scheduleRequest(newWorker, request)
 						if err != nil {
-							log.Printf("Unable to schedule request for container<%s>: %v\n", request.ContainerId, err)
+							log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request")
 							s.addRequestToBacklog(request)
 						}
 
@@ -255,7 +255,7 @@ func (s *Scheduler) StartProcessingRequests() {
 					}
 				}
 
-				log.Printf("Unable to add worker for container<%s>: %v\n", request.ContainerId, err)
+				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to add worker")
 				s.addRequestToBacklog(request)
 			}()
 
@@ -434,7 +434,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 			return
 		}
 
-		log.Printf("Giving up on request <%s> after %d attempts or due to max retry duration exceeded\n", request.ContainerId, request.RetryCount)
+		log.Error().Str("container_id", request.ContainerId).Int("retry_count", request.RetryCount).Msg("giving up on request")
 		s.containerRepo.DeleteContainerState(request.ContainerId)
 	}()
 

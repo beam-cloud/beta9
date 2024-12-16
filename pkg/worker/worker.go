@@ -2,10 +2,8 @@ package worker
 
 import (
 	"context"
-
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strconv"
@@ -16,6 +14,7 @@ import (
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/rs/zerolog/log"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -149,7 +148,7 @@ func NewWorker() (*Worker, error) {
 		}
 
 		if err != nil {
-			log.Printf("[WARNING] Cache unavailable, performance may be degraded: %+v\n", err)
+			log.Warn().Err(err).Msg("cache unavailable, performance may be degraded")
 		}
 	}
 
@@ -164,7 +163,7 @@ func NewWorker() (*Worker, error) {
 	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
 		cedanaClient, err = NewCedanaClient(context.Background(), config.Worker.CRIU.Cedana, gpuType != "")
 		if err != nil {
-			log.Printf("[WARNING] C/R unavailable, failed to create cedana client: %v\n", err)
+			log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, failed to create cedana client: %v", err)
 		}
 
 		os.MkdirAll(config.Worker.CRIU.Storage.MountPath, os.ModePerm)
@@ -182,7 +181,7 @@ func NewWorker() (*Worker, error) {
 
 			err := checkpointStorage.Mount(config.Worker.CRIU.Storage.MountPath)
 			if err != nil {
-				log.Printf("[WARNING] C/R unavailable, unable to mount checkpoint storage: %v\n", err)
+				log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, unable to mount checkpoint storage: %v", err)
 				cedanaClient = nil
 			}
 		}
@@ -271,11 +270,11 @@ func (s *Worker) Run() error {
 
 			_, exists := s.containerInstances.Get(containerId)
 			if !exists {
-				log.Printf("<%s> - running container.\n", containerId)
+				log.Info().Str("container_id", containerId).Msg("running container")
 
 				err := s.RunContainer(request)
 				if err != nil {
-					log.Printf("Unable to run container <%s>: %v\n", containerId, err)
+					log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
 
 					// Set a non-zero exit code for the container (both in memory, and in repo)
 					exitCode := 1
@@ -287,7 +286,7 @@ func (s *Worker) Run() error {
 
 					err := s.containerRepo.SetContainerExitCode(containerId, exitCode)
 					if err != nil {
-						log.Printf("<%s> - failed to set exit code: %v\n", containerId, err)
+						log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
 					}
 
 					s.containerLock.Unlock()
@@ -315,7 +314,7 @@ func (s *Worker) listenForShutdown() {
 	signal.Notify(terminate, syscall.SIGINT, syscall.SIGTERM)
 
 	<-terminate
-	log.Println("Shutdown signal received.")
+	log.Info().Msg("shutdown signal received")
 
 	s.cancel()
 }
@@ -355,7 +354,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			state, err := s.containerRepo.GetContainerState(request.ContainerId)
 			if err != nil {
 				if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-					log.Printf("<%s> - container state not found, stopping container\n", request.ContainerId)
+					log.Info().Str("container_id", request.ContainerId).Msg("container state not found, stopping container")
 					s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
 					return nil
 				}
@@ -363,17 +362,17 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				continue
 			}
 
-			log.Printf("<%s> - container still running: %s\n", request.ContainerId, request.ImageId)
+			log.Info().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
 
 			// TODO: remove this hotfix
 			if state.Status == types.ContainerStatusPending {
-				log.Printf("<%s> - forcing container status to running\n", request.ContainerId)
+				log.Info().Str("container_id", request.ContainerId).Msg("forcing container status to running")
 				state.Status = types.ContainerStatusRunning
 			}
 
 			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
 			if err != nil {
-				log.Printf("<%s> - unable to update container state: %v\n", request.ContainerId, err)
+				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
 			}
 
 			// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
@@ -387,7 +386,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 						return
 					}
 
-					log.Printf("<%s> - container still running after stop event %ds ago - force killing\n", request.ContainerId, s.config.Worker.TerminationGracePeriod)
+					log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
 					s.stopContainerChan <- stopContainerEvent{
 						ContainerId: request.ContainerId,
 						Kill:        true,
@@ -421,7 +420,7 @@ func (s *Worker) manageWorkerCapacity() {
 				return
 			}
 
-			log.Printf("Unable to process completed request: %v\n", err)
+			log.Error().Err(err).Msg("unable to process completed request")
 			s.completedRequests <- request
 			continue
 		}
@@ -452,7 +451,7 @@ func (s *Worker) keepalive() {
 }
 
 func (s *Worker) startup() error {
-	log.Println("Worker starting up.")
+	log.Info().Msg("worker starting up")
 
 	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
 	if err != nil {
@@ -479,7 +478,7 @@ func (s *Worker) startup() error {
 }
 
 func (s *Worker) shutdown() error {
-	log.Println("Shutting down...")
+	log.Info().Msg("shutting down")
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
 	// Stops goroutines

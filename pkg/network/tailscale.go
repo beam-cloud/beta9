@@ -3,7 +3,6 @@ package network
 import (
 	"context"
 	"fmt"
-	"log"
 	"math/rand"
 	"net"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 	"tailscale.com/tsnet"
 )
 
@@ -56,7 +56,7 @@ type Tailscale struct {
 
 func (t *Tailscale) logF(format string, v ...interface{}) {
 	if t.debug {
-		log.Printf(format, v...)
+		log.Info().Msgf(format, v...)
 	}
 }
 
@@ -84,7 +84,7 @@ func newTailscale(cfg TailscaleConfig, tailscaleRepo repository.TailscaleReposit
 
 // Serve connects to a tailnet and serves a local service
 func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (net.Listener, error) {
-	log.Println("Connecting to tailnet @", t.server.ControlURL)
+	log.Info().Str("url", t.server.ControlURL).Msg("connecting to tailnet")
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -100,7 +100,7 @@ func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (n
 		return nil, err
 	}
 
-	log.Printf("Connected to tailnet - listening on %s\n", addr)
+	log.Info().Str("addr", addr).Msg("connected to tailnet")
 	return listener, nil
 }
 

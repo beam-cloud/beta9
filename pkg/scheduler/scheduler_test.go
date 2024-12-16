@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"log"
 	"testing"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
@@ -105,7 +105,7 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, 
 	// Add the worker state
 	err := wpc.workerRepo.AddWorker(worker)
 	if err != nil {
-		log.Printf("Unable to create worker: %+v\n", err)
+		log.Error().Err(err).Msg("unable to create worker")
 		return nil, err
 	}
 
@@ -159,7 +159,7 @@ func (wpc *ExternalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int6
 	// Add the worker state
 	err := wpc.workerRepo.AddWorker(worker)
 	if err != nil {
-		log.Printf("Unable to create worker: %+v\n", err)
+		log.Error().Err(err).Msg("unable to create worker")
 		return nil, err
 	}
 
@@ -227,7 +227,7 @@ func (wpc *ExternalWorkerPoolControllerForTest) AddWorkerToMachine(cpu int64, me
 
 	// Add the worker state
 	if err := wpc.workerRepo.AddWorker(worker); err != nil {
-		log.Printf("Unable to create worker: %+v\n", err)
+		log.Error().Err(err).Msg("unable to create worker")
 		return nil, err
 	}
 

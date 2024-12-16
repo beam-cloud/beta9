@@ -3,7 +3,6 @@ package task
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/gofrs/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 func NewDispatcher(ctx context.Context, taskRepo repository.TaskRepository) (*Dispatcher, error) {
@@ -171,7 +171,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 					if time.Now().After(taskMessage.Policy.Expires) {
 						err = task.Cancel(ctx, types.TaskExpired)
 						if err != nil {
-							log.Printf("<dispatcher> unable to cancel task: %s, %v\n", task.Metadata().TaskId, err)
+							log.Error().Str("task_id", task.Metadata().TaskId).Err(err).Msg("dispatcher unable to cancel task")
 						}
 
 						d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
@@ -208,12 +208,12 @@ func (d *Dispatcher) RetryTask(ctx context.Context, task types.TaskInterface) er
 
 		// Don't bother logging it if the retry limit is set to 0, it's just noise
 		if taskMessage.Policy.MaxRetries != 0 {
-			log.Printf("<dispatcher> hit retry limit, not reinserting task <%s> into queue: %s\n", taskMessage.TaskId, taskMessage.StubId)
+			log.Info().Str("task_id", taskMessage.TaskId).Str("stub_id", taskMessage.StubId).Msg("dispatcher hit retry limit, not reinserting task")
 		}
 
 		err = task.Cancel(ctx, types.TaskExceededRetryLimit)
 		if err != nil {
-			log.Printf("<dispatcher> unable to cancel task: %s, %v\n", task.Metadata().TaskId, err)
+			log.Error().Str("task_id", task.Metadata().TaskId).Err(err).Msg("dispatcher unable to cancel task")
 			return err
 		}
 
@@ -223,13 +223,12 @@ func (d *Dispatcher) RetryTask(ctx context.Context, task types.TaskInterface) er
 	// Remove task claim so other replicas of Dispatcher don't try to retry the same task
 	err = d.taskRepo.RemoveTaskClaim(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 	if err != nil {
-		log.Printf("<dispatcher> failed to remove task claim: %s, %v\n", task.Metadata().TaskId, err)
+		log.Error().Str("task_id", task.Metadata().TaskId).Err(err).Msg("dispatcher failed to remove task claim")
 		return err
 	}
 
 	// Retry task
-	log.Printf("<dispatcher> missing heartbeat, reinserting task<%s:%s> into queue: %s\n",
-		taskMessage.WorkspaceName, taskMessage.TaskId, taskMessage.StubId)
+	log.Info().Str("workspace_name", taskMessage.WorkspaceName).Str("task_id", taskMessage.TaskId).Str("stub_id", taskMessage.StubId).Msg("dispatcher missing heartbeat, reinserting task")
 
 	taskMessage.Retries += 1
 	taskMessage.Timestamp = time.Now().Unix()
@@ -246,7 +245,7 @@ func (d *Dispatcher) RetryTask(ctx context.Context, task types.TaskInterface) er
 
 	err = task.Retry(ctx)
 	if err != nil {
-		log.Printf("<dispatcher> retry failed: %+v\n", err)
+		log.Error().Err(err).Msg("dispatcher retry failed")
 		return err
 	}
 

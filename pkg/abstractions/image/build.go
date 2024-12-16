@@ -7,7 +7,6 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"regexp"
 	"runtime"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mitchellh/hashstructure/v2"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -352,7 +352,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
 	}
 
-	log.Printf("container <%v> building with options: %s\n", containerId, opts)
+	log.Info().Str("container_id", containerId).Interface("options", opts).Msg("container building")
 	startTime := time.Now()
 
 	micromambaEnv := strings.Contains(opts.PythonVersion, "micromamba")
@@ -381,7 +381,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 
 		if r, err := client.Exec(containerId, cmd); err != nil || !r.Ok {
-			log.Printf("failed to execute command for container <%v>: \"%v\" - %v\n", containerId, cmd, err)
+			log.Error().Str("container_id", containerId).Str("command", cmd).Err(err).Msg("failed to execute command for container")
 
 			errMsg := ""
 			if err != nil {
@@ -393,7 +393,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			return err
 		}
 	}
-	log.Printf("container <%v> build took %v\n", containerId, time.Since(startTime))
+	log.Info().Str("container_id", containerId).Dur("duration", time.Since(startTime)).Msg("container build took")
 
 	err = client.Archive(ctx, containerId, imageId, outputChan)
 	if err != nil {
