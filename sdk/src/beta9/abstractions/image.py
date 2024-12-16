@@ -217,6 +217,34 @@ class Image(BaseAbstraction):
             def handler():
                 pass
             ```
+
+            Custom Dockerfile
+
+            To use a custom Dockerfile, you can use the `from_dockerfile` class method.
+            This will build the image using your Dockerfile. You can set the docker build's
+            context directory using the `context_dir` parameter.
+
+            ```python
+            # Basic usage - uses Dockerfile's directory as context
+            image = Image.from_dockerfile("path/to/Dockerfile")
+
+            # Specify a different context directory
+            image = Image.from_dockerfile(
+                "path/to/Dockerfile",
+                context_dir="path/to/context"
+            )
+
+            # You can still chain additional commands and python packages
+            image.add_commands(["echo 'Hello, World!'"]).add_python_packages(["numpy"])
+
+            @endpoint(image=image)
+            def handler():
+                pass
+            ```
+
+            The context directory should contain all files referenced in your Dockerfile
+            (like files being COPYed). If no context_dir is specified, the directory
+            containing the Dockerfile will be used as the context.
         """
         super().__init__()
         self._gateway_stub: Optional[GatewayServiceStub] = None
