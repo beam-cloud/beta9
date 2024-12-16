@@ -147,7 +147,7 @@ func (s *Worker) deleteContainer(containerId string, err error) {
 	s.containerInstances.Delete(containerId)
 	err = s.containerRepo.DeleteContainerState(containerId)
 	if err != nil {
-		log.Printf("<%s> - failed to remove container state: %v\n", containerId, err)
+		log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
 	}
 }
 
@@ -233,7 +233,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 func (s *Worker) buildOrPullImage(request *types.ContainerRequest, containerId string, outputChan chan common.OutputMsg) error {
 	switch {
 	case request.BuildOptions.Dockerfile != nil:
-		log.Printf("<%s> - lazy-pull failed, building image from Dockerfile\n", containerId)
+		log.Info().Str("container_id", containerId).Msg("lazy-pull failed, building image from Dockerfile")
 
 		buildCtxPath, err := s.getBuildContext(request)
 		if err != nil {
@@ -244,7 +244,7 @@ func (s *Worker) buildOrPullImage(request *types.ContainerRequest, containerId s
 			return err
 		}
 	case request.BuildOptions.SourceImage != nil:
-		log.Printf("<%s> - lazy-pull failed, pulling source image: %s\n", containerId, *request.BuildOptions.SourceImage)
+		log.Info().Str("container_id", containerId).Msgf("lazy-pull failed, pulling source image: %s", *request.BuildOptions.SourceImage)
 
 		if err := s.imageClient.PullAndArchiveImage(context.TODO(), *request.BuildOptions.SourceImage, request.ImageId, request.BuildOptions.SourceImageCreds); err != nil {
 			return err

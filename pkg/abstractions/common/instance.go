@@ -332,6 +332,6 @@ func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason str
 		return
 	}
 
-	log.Printf("<%s> %s\n", i.Name, reason)
+	log.Info().Str("instance_name", i.Name).Msgf("%s\n", reason)
 	go i.EventRepo.PushStubStateUnhealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
 }
