@@ -27,6 +27,7 @@ import (
 
 const (
 	requestProcessingInterval time.Duration = time.Millisecond * 100
+	httpConnectionTimeout     time.Duration = 2 * time.Second
 )
 
 type request struct {
@@ -186,7 +187,7 @@ func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
 		return false
 	}
 
-	ctx, cancel := context.WithTimeout(rb.ctx, 1*time.Second)
+	ctx, cancel := context.WithTimeout(rb.ctx, httpConnectionTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://%s/health", address), nil)
