@@ -115,7 +115,7 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 
 	// Get URL for Serves
 	if stub.Type.IsServe() {
-		invokeUrl := common.BuildServeURL(g.config.GatewayService.ExternalURL, filter.URLType, stub)
+		invokeUrl := common.BuildServeURL(g.config.GatewayService.HTTP.GetExternalURL(), filter.URLType, stub)
 		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 	}
 
@@ -134,6 +134,6 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to lookup deployment")
 	}
 
-	invokeUrl := common.BuildDeploymentURL(g.config.GatewayService.ExternalURL, filter.URLType, stub, &deployment.Deployment)
+	invokeUrl := common.BuildDeploymentURL(g.config.GatewayService.HTTP.GetExternalURL(), filter.URLType, stub, &deployment.Deployment)
 	return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 }

@@ -222,7 +222,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	}
 
 	// TODO: Remove this field once `pkg/api/v1/stub.go:GetURL()` is used by frontend and SDK version can be force upgraded
-	invokeUrl := common.BuildDeploymentURL(gws.appConfig.GatewayService.ExternalURL, common.InvokeUrlTypePath, stub, deployment)
+	invokeUrl := common.BuildDeploymentURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), common.InvokeUrlTypePath, stub, deployment)
 
 	go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
 
@@ -257,7 +257,7 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 
 	// Get URL for Serves
 	if stub.Type.IsServe() {
-		invokeUrl := common.BuildServeURL(gws.appConfig.GatewayService.ExternalURL, in.UrlType, stub)
+		invokeUrl := common.BuildServeURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub)
 		return &pb.GetURLResponse{
 			Ok:  true,
 			Url: invokeUrl,
@@ -280,7 +280,7 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 		}, nil
 	}
 
-	invokeUrl := common.BuildDeploymentURL(gws.appConfig.GatewayService.ExternalURL, in.UrlType, stub, &deployment.Deployment)
+	invokeUrl := common.BuildDeploymentURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub, &deployment.Deployment)
 	return &pb.GetURLResponse{
 		Ok:  true,
 		Url: invokeUrl,

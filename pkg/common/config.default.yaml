@@ -33,13 +33,18 @@ storage:
     bufferSize: 300
 gateway:
   host: beta9-gateway
-  externalURL: http://localhost:1994
   invokeURLType: path
   grpc:
+    externalHost: localhost
+    externalPort: 1993
+    tls: false
     port: 1993
     maxRecvMsgSize: 1024
     maxSendMsgSize: 1024
   http:
+    externalHost: localhost
+    externalPort: 1994
+    tls: false
     port: 1994
     enablePrettyLogs: true
     cors:
