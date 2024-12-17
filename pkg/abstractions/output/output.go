@@ -215,7 +215,7 @@ func SetPublicURL(ctx context.Context, config types.AppConfig, backendRepo repos
 		return "", err
 	}
 
-	return fmt.Sprintf("%v/output/id/%v", config.GatewayService.ExternalURL, outputId), nil
+	return fmt.Sprintf("%v/output/id/%v", config.GatewayService.HTTP.GetExternalURL(), outputId), nil
 }
 
 func GetTaskOutputRootPath(workspaceName string, task *types.TaskWithRelated) string {

@@ -409,7 +409,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		envVars = append(envVars, []corev1.EnvVar{
 			{
 				Name:  "BETA9_GATEWAY_HOST",
-				Value: wpc.config.GatewayService.ExternalHost,
+				Value: wpc.config.GatewayService.GRPC.ExternalHost,
 			},
 			{
 				Name:  "BETA9_GATEWAY_PORT",

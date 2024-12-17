@@ -1,6 +1,8 @@
 package types
 
 import (
+	"fmt"
+	"log"
 	"time"
 
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
@@ -69,15 +71,37 @@ type PostgresConfig struct {
 }
 
 type GRPCConfig struct {
-	Port           int `key:"port" json:"port"`
-	MaxRecvMsgSize int `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
-	MaxSendMsgSize int `key:"maxSendMsgSize" json:"max_send_msg_size"`
+	ExternalPort   int    `key:"externalPort" json:"external_port"`
+	ExternalHost   string `key:"externalHost" json:"external_host"`
+	TLS            bool   `key:"tls" json:"tls"`
+	Port           int    `key:"port" json:"port"`
+	MaxRecvMsgSize int    `key:"maxRecvMsgSize" json:"max_recv_msg_size"`
+	MaxSendMsgSize int    `key:"maxSendMsgSize" json:"max_send_msg_size"`
 }
 
 type HTTPConfig struct {
+	ExternalPort     int        `key:"externalPort" json:"external_port"`
+	ExternalHost     string     `key:"externalHost" json:"external_host"`
+	TLS              bool       `key:"tls" json:"tls"`
+	Port             int        `key:"port" json:"port"`
 	EnablePrettyLogs bool       `key:"enablePrettyLogs" json:"enable_pretty_logs"`
 	CORS             CORSConfig `key:"cors" json:"cors"`
-	Port             int        `key:"port" json:"port"`
+}
+
+func (h *HTTPConfig) GetExternalURL() string {
+	baseUrl := "http"
+	if h.TLS {
+		baseUrl += "s"
+	}
+	baseUrl += "://" + h.ExternalHost
+
+	if h.Port != 80 && h.Port != 443 {
+		baseUrl += fmt.Sprintf(":%d", h.Port)
+	}
+
+	log.Printf("External URL: %s", baseUrl)
+
+	return baseUrl
 }
 
 type CORSConfig struct {
@@ -94,8 +118,6 @@ type StubLimits struct {
 
 type GatewayServiceConfig struct {
 	Host            string        `key:"host" json:"host"`
-	ExternalHost    string        `key:"externalHost" json:"external_host"`
-	ExternalURL     string        `key:"externalURL" json:"external_url"`
 	InvokeURLType   string        `key:"invokeURLType" json:"invoke_url_type"`
 	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
 	HTTP            HTTPConfig    `key:"http" json:"http"`
