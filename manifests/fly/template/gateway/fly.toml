@@ -1,0 +1,37 @@
+app = 'control-plane-gateway'
+primary_region = 'lax'
+
+[build]
+  image = 'public.ecr.aws/n4e0e1y0/beta9-gateway:0.1.277'
+
+[processes]
+  gateway = '/usr/local/bin/gateway'
+
+[[services]]
+    internal_port = 1994
+    protocol = 'tcp'
+    processes = ["gateway"]
+
+    [[services.ports]]
+        handlers = ['http', 'tls']
+        tls_options = { "alpn" = ["http/1.1"] }
+        port = 443
+
+[[services]]
+    internal_port = 1993
+    protocol = 'tcp'
+    processes = ["gateway"]
+    
+    [[services.ports]]
+        handlers = ['tls']
+        tls_options = { "alpn" = ["h2"] }
+        port = 1993
+
+    [services.ports.http_options]
+        h2_backend = true
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  

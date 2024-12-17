@@ -31,10 +31,11 @@ class Channel(InterceptorChannel):
         addr: str,
         token: Optional[str] = None,
         credentials: Optional[ChannelCredentials] = None,
+        tls: bool = False,
     ):
         if credentials is not None:
             channel = grpc.secure_channel(addr, credentials)
-        elif addr.endswith("443"):
+        elif addr.endswith("443") or tls:
             channel = grpc.secure_channel(addr, grpc.ssl_channel_credentials())
         else:
             channel = grpc.insecure_channel(addr)
@@ -136,6 +137,7 @@ def get_channel(context: Optional[ConfigContext] = None) -> Channel:
     return Channel(
         addr=f"{context.gateway_host}:{context.gateway_port}",
         token=context.token,
+        tls=context.tls,
     )
 
 
@@ -152,6 +154,7 @@ def prompt_first_auth(settings: SDKSettings) -> None:
     channel = Channel(
         addr=f"{context.gateway_host}:{context.gateway_port}",
         token=context.token,
+        tls=context.tls,
     )
 
     terminal.header("Authorizing with gateway")
