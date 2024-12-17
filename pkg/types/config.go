@@ -2,7 +2,6 @@ package types
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
@@ -98,8 +97,6 @@ func (h *HTTPConfig) GetExternalURL() string {
 	if h.Port != 80 && h.Port != 443 {
 		baseUrl += fmt.Sprintf(":%d", h.Port)
 	}
-
-	log.Printf("External URL: %s", baseUrl)
 
 	return baseUrl
 }
