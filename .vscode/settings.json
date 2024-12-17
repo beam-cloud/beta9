@@ -10,7 +10,5 @@
     "[proto3]": {
         "editor.defaultFormatter": "xaver.clang-format",
         "editor.formatOnSave": true
-    },
-    "python.defaultInterpreterPath": "sdk/.venv/bin/python",
-    "makefile.configureOnOpen": true
+    }
 }
