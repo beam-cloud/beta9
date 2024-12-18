@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "beta9"
-version = "0.1.138"
+version = "0.1.139"
 description = ""
 authors = ["beam.cloud <support@beam.cloud>"]
 packages = [
