@@ -66,7 +66,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 	}
 
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	buildSecrets, err := is.parseBuildSecrets(ctx, in.Secrets, authInfo)
+	buildSecrets, err := is.retrieveBuildSecrets(ctx, in.Secrets, authInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 
-	buildSecrets, err := is.parseBuildSecrets(stream.Context(), in.Secrets, authInfo)
+	buildSecrets, err := is.retrieveBuildSecrets(stream.Context(), in.Secrets, authInfo)
 	if err != nil {
 		return err
 	}
@@ -169,7 +169,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	return nil
 }
 
-func (is *RuncImageService) parseBuildSecrets(ctx context.Context, secrets []string, authInfo *auth.AuthInfo) ([]string, error) {
+func (is *RuncImageService) retrieveBuildSecrets(ctx context.Context, secrets []string, authInfo *auth.AuthInfo) ([]string, error) {
 	var buildSecrets []string
 	if secrets != nil {
 		secrets, err := is.backendRepo.GetSecretsByNameDecrypted(ctx, authInfo.Workspace, secrets)
