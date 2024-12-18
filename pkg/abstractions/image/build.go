@@ -65,6 +65,7 @@ type BuildOpts struct {
 	BuildSteps         []BuildStep
 	ForceRebuild       bool
 	EnvVars            []string
+	BuildSecrets       []string
 }
 
 func (o *BuildOpts) String() string {
@@ -259,6 +260,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			SourceImageCreds: opts.BaseImageCreds,
 			Dockerfile:       dockerfile,
 			BuildCtxObject:   &opts.BuildCtxObject,
+			BuildSecrets:     opts.BuildSecrets,
 		},
 		ContainerId:  containerId,
 		Env:          opts.EnvVars,

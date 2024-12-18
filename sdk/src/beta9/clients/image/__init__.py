@@ -42,6 +42,7 @@ class VerifyImageBuildRequest(betterproto.Message):
     env_vars: List[str] = betterproto.string_field(7)
     dockerfile: str = betterproto.string_field(8)
     build_ctx_object: str = betterproto.string_field(9)
+    secrets: List[str] = betterproto.string_field(10)
 
 
 @dataclass(eq=False, repr=False)
@@ -68,6 +69,7 @@ class BuildImageRequest(betterproto.Message):
     env_vars: List[str] = betterproto.string_field(7)
     dockerfile: str = betterproto.string_field(8)
     build_ctx_object: str = betterproto.string_field(9)
+    secrets: List[str] = betterproto.string_field(10)
 
 
 @dataclass(eq=False, repr=False)

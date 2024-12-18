@@ -80,10 +80,11 @@ type ContainerState struct {
 }
 
 type BuildOptions struct {
-	SourceImage      *string `json:"source_image"`
-	Dockerfile       *string `json:"dockerfile"`
-	BuildCtxObject   *string `json:"build_context"`
-	SourceImageCreds string  `json:"source_image_creds"`
+	SourceImage      *string  `json:"source_image"`
+	Dockerfile       *string  `json:"dockerfile"`
+	BuildCtxObject   *string  `json:"build_context"`
+	SourceImageCreds string   `json:"source_image_creds"`
+	BuildSecrets     []string `json:"build_secrets"`
 }
 
 type ContainerRequest struct {
@@ -111,6 +112,11 @@ type ContainerRequest struct {
 
 func (c *ContainerRequest) RequiresGPU() bool {
 	return len(c.GpuRequest) > 0 || c.Gpu != ""
+}
+
+// IsBuildRequest checks if the sourceImage or Dockerfile field is not-nil, which means the container request is for a build container
+func (c *ContainerRequest) IsBuildRequest() bool {
+	return c.BuildOptions.SourceImage != nil || c.BuildOptions.Dockerfile != nil
 }
 
 const ContainerExitCodeTtlS int = 300

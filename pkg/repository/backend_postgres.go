@@ -1416,6 +1416,18 @@ func (r *PostgresBackendRepository) GetSecretByName(ctx context.Context, workspa
 	return &secret, nil
 }
 
+func (r *PostgresBackendRepository) GetSecretsByName(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error) {
+	query := `SELECT id, external_id, name, value, workspace_id, last_updated_by, created_at, updated_at FROM workspace_secret WHERE name = ANY($1) AND workspace_id = $2;`
+
+	var secrets []types.Secret
+	err := r.client.SelectContext(ctx, &secrets, query, pq.Array(names), workspace.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	return secrets, nil
+}
+
 func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
 	secret, err := r.GetSecretByName(ctx, workspace, name)
 	if err != nil {
@@ -1435,6 +1447,28 @@ func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context
 	secret.Value = string(decryptedSecret)
 
 	return secret, nil
+}
+
+func (r *PostgresBackendRepository) GetSecretsByNameDecrypted(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error) {
+	secrets, err := r.GetSecretsByName(ctx, workspace, names)
+	if err != nil {
+		return nil, err
+	}
+
+	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	if err != nil {
+		return nil, err
+	}
+
+	for i, secret := range secrets {
+		decryptedSecret, err := pkgCommon.Decrypt(signingKey, secret.Value)
+		if err != nil {
+			return nil, err
+		}
+		secrets[i].Value = string(decryptedSecret)
+	}
+
+	return secrets, nil
 }
 
 func (r *PostgresBackendRepository) ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error) {
