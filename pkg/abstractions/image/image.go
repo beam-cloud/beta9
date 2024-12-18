@@ -2,7 +2,9 @@ package image
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -21,13 +23,15 @@ type ImageService interface {
 
 type RuncImageService struct {
 	pb.UnimplementedImageServiceServer
-	builder *Builder
-	config  types.AppConfig
+	builder     *Builder
+	config      types.AppConfig
+	backendRepo repository.BackendRepository
 }
 
 type ImageServiceOpts struct {
 	Config        types.AppConfig
 	ContainerRepo repository.ContainerRepository
+	BackendRepo   repository.BackendRepository
 	Scheduler     *scheduler.Scheduler
 	Tailscale     *network.Tailscale
 }
@@ -47,8 +51,9 @@ func NewRuncImageService(
 	}
 
 	return &RuncImageService{
-		builder: builder,
-		config:  opts.Config,
+		builder:     builder,
+		config:      opts.Config,
+		backendRepo: opts.BackendRepo,
 	}, nil
 }
 
@@ -58,6 +63,12 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 	baseImageTag, ok := is.config.ImageService.Runner.Tags[in.PythonVersion]
 	if !ok {
 		return nil, errors.Errorf("Python version not supportted: %s", in.PythonVersion)
+	}
+
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	buildSecrets, err := is.parseBuildSecrets(ctx, in.Secrets, authInfo)
+	if err != nil {
+		return nil, err
 	}
 
 	opts := &BuildOpts{
@@ -72,6 +83,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		EnvVars:           in.EnvVars,
 		Dockerfile:        in.Dockerfile,
 		BuildCtxObject:    in.BuildCtxObject,
+		BuildSecrets:      buildSecrets,
 	}
 
 	if in.ExistingImageUri != "" {
@@ -97,6 +109,13 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
 	log.Info().Interface("request", in).Msg("incoming image build request")
 
+	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
+
+	buildSecrets, err := is.parseBuildSecrets(stream.Context(), in.Secrets, authInfo)
+	if err != nil {
+		return err
+	}
+
 	buildOptions := &BuildOpts{
 		BaseImageTag:       is.config.ImageService.Runner.Tags[in.PythonVersion],
 		BaseImageName:      is.config.ImageService.Runner.BaseImageName,
@@ -110,6 +129,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		EnvVars:            in.EnvVars,
 		Dockerfile:         in.Dockerfile,
 		BuildCtxObject:     in.BuildCtxObject,
+		BuildSecrets:       buildSecrets,
 	}
 
 	ctx := stream.Context()
@@ -147,6 +167,21 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 	log.Info().Msg("build completed successfully")
 	return nil
+}
+
+func (is *RuncImageService) parseBuildSecrets(ctx context.Context, secrets []string, authInfo *auth.AuthInfo) ([]string, error) {
+	var buildSecrets []string
+	if secrets != nil {
+		secrets, err := is.backendRepo.GetSecretsByNameDecrypted(ctx, authInfo.Workspace, secrets)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, secret := range secrets {
+			buildSecrets = append(buildSecrets, fmt.Sprintf("%s=%s", secret.Name, secret.Value))
+		}
+	}
+	return buildSecrets, nil
 }
 
 func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
