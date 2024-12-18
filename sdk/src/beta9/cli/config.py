@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Any
 
@@ -212,4 +213,4 @@ def export_config(
         "token": context.token,
     }
 
-    terminal.print(config)
+    terminal.print(json.dumps(config, indent=2))
