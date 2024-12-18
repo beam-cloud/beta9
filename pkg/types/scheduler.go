@@ -114,6 +114,11 @@ func (c *ContainerRequest) RequiresGPU() bool {
 	return len(c.GpuRequest) > 0 || c.Gpu != ""
 }
 
+// IsBuildRequest checks if the sourceImage or Dockerfile field is not-nil, which means the container request is for a build container
+func (c *ContainerRequest) IsBuildRequest() bool {
+	return c.BuildOptions.SourceImage != nil || c.BuildOptions.Dockerfile != nil
+}
+
 const ContainerExitCodeTtlS int = 300
 
 const (

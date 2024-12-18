@@ -176,7 +176,7 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 	// Attempt to pull image
 	log.Info().Str("container_id", containerId).Msgf("lazy-pulling image: %s", request.ImageId)
 	if err := s.imageClient.PullLazy(request); err != nil {
-		if !isBuildRequest(request) {
+		if !request.IsBuildRequest() {
 			return err
 		}
 
@@ -629,7 +629,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	}
 
 	overlayPath := baseConfigPath
-	if isBuildRequest(request) {
+	if request.IsBuildRequest() {
 		overlayPath = "/dev/shm"
 	}
 
@@ -707,9 +707,4 @@ func (s *Worker) getBuildContext(request *types.ContainerRequest) (string, error
 		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
 	}
 	return buildCtxPath, nil
-}
-
-// isBuildRequest checks if the sourceImage or Dockerfile field is not-nil, which means the container request is for a build container
-func isBuildRequest(request *types.ContainerRequest) bool {
-	return request.BuildOptions.SourceImage != nil || request.BuildOptions.Dockerfile != nil
 }
