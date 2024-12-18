@@ -556,10 +556,10 @@ class Image(BaseAbstraction):
 
     def with_secrets(self, secrets: List[str]) -> "Image":
         """
-        Adds beta9 secrets to the build environment.
+        Adds secrets stored in the platform to the build environment.
 
         Parameters:
-            secrets: The beta9 secrets to add.
+            secrets: The secrets to add.
 
         Returns:
             Image: The Image object.
