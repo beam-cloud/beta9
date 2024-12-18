@@ -25,6 +25,7 @@ message VerifyImageBuildRequest {
   repeated string env_vars = 7;
   string dockerfile = 8;
   string build_ctx_object = 9;
+  repeated string secrets = 10;
 }
 
 message VerifyImageBuildResponse {
@@ -48,6 +49,7 @@ message BuildImageRequest {
   repeated string env_vars = 7;
   string dockerfile = 8;
   string build_ctx_object = 9;
+  repeated string secrets = 10;
 }
 
 message BuildImageResponse {

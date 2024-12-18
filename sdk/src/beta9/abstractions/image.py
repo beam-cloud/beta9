@@ -259,6 +259,7 @@ class Image(BaseAbstraction):
         self.base_image = base_image or ""
         self.base_image_creds = base_image_creds or {}
         self.env_vars = []
+        self.secrets = []
         self._stub: Optional[ImageServiceStub] = None
         self.dockerfile = ""
         self.build_ctx_object = ""
@@ -363,6 +364,7 @@ class Image(BaseAbstraction):
                 env_vars=self.env_vars,
                 dockerfile=self.dockerfile,
                 build_ctx_object=self.build_ctx_object,
+                secrets=self.secrets,
             )
         )
 
@@ -392,6 +394,7 @@ class Image(BaseAbstraction):
                     env_vars=self.env_vars,
                     dockerfile=self.dockerfile,
                     build_ctx_object=self.build_ctx_object,
+                    secrets=self.secrets,
                 )
             ):
                 if r.msg != "":
@@ -550,3 +553,16 @@ class Image(BaseAbstraction):
                 raise ValueError(
                     f"Environment variable cannot contain multiple '=' characters: {env_var}"
                 )
+
+    def with_secrets(self, secrets: List[str]) -> "Image":
+        """
+        Adds beta9 secrets to the build environment.
+
+        Parameters:
+            secrets: The beta9 secrets to add.
+
+        Returns:
+            Image: The Image object.
+        """
+        self.secrets.extend(secrets)
+        return self

@@ -249,6 +249,7 @@ func (g *Gateway) registerServices() error {
 		ContainerRepo: g.ContainerRepo,
 		Scheduler:     g.Scheduler,
 		Tailscale:     g.Tailscale,
+		BackendRepo:   g.BackendRepo,
 	})
 	if err != nil {
 		return err

@@ -80,10 +80,11 @@ type ContainerState struct {
 }
 
 type BuildOptions struct {
-	SourceImage      *string `json:"source_image"`
-	Dockerfile       *string `json:"dockerfile"`
-	BuildCtxObject   *string `json:"build_context"`
-	SourceImageCreds string  `json:"source_image_creds"`
+	SourceImage      *string  `json:"source_image"`
+	Dockerfile       *string  `json:"dockerfile"`
+	BuildCtxObject   *string  `json:"build_context"`
+	SourceImageCreds string   `json:"source_image_creds"`
+	BuildSecrets     []string `json:"build_secrets"`
 }
 
 type ContainerRequest struct {

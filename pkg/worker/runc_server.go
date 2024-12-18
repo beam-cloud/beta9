@@ -111,6 +111,8 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 	if !exists {
 		return &pb.RunCExecResponse{Ok: false}, nil
 	}
+	process.Env = append(process.Env, instance.Spec.Process.Env...)
+	process.Env = append(process.Env, instance.Request.BuildOptions.BuildSecrets...)
 
 	err = s.runcHandle.Exec(ctx, in.ContainerId, *process, &runc.ExecOpts{
 		OutputWriter: instance.OutputWriter,
