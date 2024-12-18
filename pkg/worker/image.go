@@ -268,7 +268,7 @@ func (c *ExecWriter) Write(p []byte) (n int, err error) {
 }
 
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, dockerfile string, imageId string, buildCtxPath string) error {
-	outputLogger.Info("Building image from Dockerfile")
+	outputLogger.Info("Building image from Dockerfile\n")
 	buildPath, err := os.MkdirTemp("", "")
 	if err != nil {
 		return err
