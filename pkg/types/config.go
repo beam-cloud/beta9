@@ -94,8 +94,8 @@ func (h *HTTPConfig) GetExternalURL() string {
 	}
 	baseUrl += "://" + h.ExternalHost
 
-	if h.Port != 80 && h.Port != 443 {
-		baseUrl += fmt.Sprintf(":%d", h.Port)
+	if h.ExternalPort != 80 && h.ExternalPort != 443 {
+		baseUrl += fmt.Sprintf(":%d", h.ExternalPort)
 	}
 
 	return baseUrl
