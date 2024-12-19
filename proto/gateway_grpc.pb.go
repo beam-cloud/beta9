@@ -19,36 +19,37 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	GatewayService_Authorize_FullMethodName            = "/gateway.GatewayService/Authorize"
-	GatewayService_SignPayload_FullMethodName          = "/gateway.GatewayService/SignPayload"
-	GatewayService_HeadObject_FullMethodName           = "/gateway.GatewayService/HeadObject"
-	GatewayService_PutObject_FullMethodName            = "/gateway.GatewayService/PutObject"
-	GatewayService_PutObjectStream_FullMethodName      = "/gateway.GatewayService/PutObjectStream"
-	GatewayService_ReplaceObjectContent_FullMethodName = "/gateway.GatewayService/ReplaceObjectContent"
-	GatewayService_ListContainers_FullMethodName       = "/gateway.GatewayService/ListContainers"
-	GatewayService_StopContainer_FullMethodName        = "/gateway.GatewayService/StopContainer"
-	GatewayService_StartTask_FullMethodName            = "/gateway.GatewayService/StartTask"
-	GatewayService_EndTask_FullMethodName              = "/gateway.GatewayService/EndTask"
-	GatewayService_StopTasks_FullMethodName            = "/gateway.GatewayService/StopTasks"
-	GatewayService_ListTasks_FullMethodName            = "/gateway.GatewayService/ListTasks"
-	GatewayService_GetOrCreateStub_FullMethodName      = "/gateway.GatewayService/GetOrCreateStub"
-	GatewayService_DeployStub_FullMethodName           = "/gateway.GatewayService/DeployStub"
-	GatewayService_GetURL_FullMethodName               = "/gateway.GatewayService/GetURL"
-	GatewayService_ListDeployments_FullMethodName      = "/gateway.GatewayService/ListDeployments"
-	GatewayService_StopDeployment_FullMethodName       = "/gateway.GatewayService/StopDeployment"
-	GatewayService_DeleteDeployment_FullMethodName     = "/gateway.GatewayService/DeleteDeployment"
-	GatewayService_ListPools_FullMethodName            = "/gateway.GatewayService/ListPools"
-	GatewayService_ListMachines_FullMethodName         = "/gateway.GatewayService/ListMachines"
-	GatewayService_CreateMachine_FullMethodName        = "/gateway.GatewayService/CreateMachine"
-	GatewayService_DeleteMachine_FullMethodName        = "/gateway.GatewayService/DeleteMachine"
-	GatewayService_ListTokens_FullMethodName           = "/gateway.GatewayService/ListTokens"
-	GatewayService_CreateToken_FullMethodName          = "/gateway.GatewayService/CreateToken"
-	GatewayService_ToggleToken_FullMethodName          = "/gateway.GatewayService/ToggleToken"
-	GatewayService_DeleteToken_FullMethodName          = "/gateway.GatewayService/DeleteToken"
-	GatewayService_ListWorkers_FullMethodName          = "/gateway.GatewayService/ListWorkers"
-	GatewayService_CordonWorker_FullMethodName         = "/gateway.GatewayService/CordonWorker"
-	GatewayService_UncordonWorker_FullMethodName       = "/gateway.GatewayService/UncordonWorker"
-	GatewayService_DrainWorker_FullMethodName          = "/gateway.GatewayService/DrainWorker"
+	GatewayService_Authorize_FullMethodName             = "/gateway.GatewayService/Authorize"
+	GatewayService_SignPayload_FullMethodName           = "/gateway.GatewayService/SignPayload"
+	GatewayService_HeadObject_FullMethodName            = "/gateway.GatewayService/HeadObject"
+	GatewayService_PutObject_FullMethodName             = "/gateway.GatewayService/PutObject"
+	GatewayService_PutObjectStream_FullMethodName       = "/gateway.GatewayService/PutObjectStream"
+	GatewayService_ReplaceObjectContent_FullMethodName  = "/gateway.GatewayService/ReplaceObjectContent"
+	GatewayService_ListContainers_FullMethodName        = "/gateway.GatewayService/ListContainers"
+	GatewayService_StopContainer_FullMethodName         = "/gateway.GatewayService/StopContainer"
+	GatewayService_StartTask_FullMethodName             = "/gateway.GatewayService/StartTask"
+	GatewayService_EndTask_FullMethodName               = "/gateway.GatewayService/EndTask"
+	GatewayService_StopTasks_FullMethodName             = "/gateway.GatewayService/StopTasks"
+	GatewayService_ListTasks_FullMethodName             = "/gateway.GatewayService/ListTasks"
+	GatewayService_GetOrCreateStub_FullMethodName       = "/gateway.GatewayService/GetOrCreateStub"
+	GatewayService_DeployStub_FullMethodName            = "/gateway.GatewayService/DeployStub"
+	GatewayService_GetURL_FullMethodName                = "/gateway.GatewayService/GetURL"
+	GatewayService_ListDeployments_FullMethodName       = "/gateway.GatewayService/ListDeployments"
+	GatewayService_StopDeployment_FullMethodName        = "/gateway.GatewayService/StopDeployment"
+	GatewayService_DeleteDeployment_FullMethodName      = "/gateway.GatewayService/DeleteDeployment"
+	GatewayService_ListPools_FullMethodName             = "/gateway.GatewayService/ListPools"
+	GatewayService_ListMachines_FullMethodName          = "/gateway.GatewayService/ListMachines"
+	GatewayService_CreateMachine_FullMethodName         = "/gateway.GatewayService/CreateMachine"
+	GatewayService_DeleteMachine_FullMethodName         = "/gateway.GatewayService/DeleteMachine"
+	GatewayService_ListTokens_FullMethodName            = "/gateway.GatewayService/ListTokens"
+	GatewayService_CreateToken_FullMethodName           = "/gateway.GatewayService/CreateToken"
+	GatewayService_ToggleToken_FullMethodName           = "/gateway.GatewayService/ToggleToken"
+	GatewayService_DeleteToken_FullMethodName           = "/gateway.GatewayService/DeleteToken"
+	GatewayService_ListWorkers_FullMethodName           = "/gateway.GatewayService/ListWorkers"
+	GatewayService_CordonWorker_FullMethodName          = "/gateway.GatewayService/CordonWorker"
+	GatewayService_UncordonWorker_FullMethodName        = "/gateway.GatewayService/UncordonWorker"
+	GatewayService_DrainWorker_FullMethodName           = "/gateway.GatewayService/DrainWorker"
+	GatewayService_ExportWorkspaceConfig_FullMethodName = "/gateway.GatewayService/ExportWorkspaceConfig"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -95,6 +96,8 @@ type GatewayServiceClient interface {
 	CordonWorker(ctx context.Context, in *CordonWorkerRequest, opts ...grpc.CallOption) (*CordonWorkerResponse, error)
 	UncordonWorker(ctx context.Context, in *UncordonWorkerRequest, opts ...grpc.CallOption) (*UncordonWorkerResponse, error)
 	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error)
+	// Workspace
+	ExportWorkspaceConfig(ctx context.Context, in *ExportWorkspaceConfigRequest, opts ...grpc.CallOption) (*ExportWorkspaceConfigResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -400,6 +403,15 @@ func (c *gatewayServiceClient) DrainWorker(ctx context.Context, in *DrainWorkerR
 	return out, nil
 }
 
+func (c *gatewayServiceClient) ExportWorkspaceConfig(ctx context.Context, in *ExportWorkspaceConfigRequest, opts ...grpc.CallOption) (*ExportWorkspaceConfigResponse, error) {
+	out := new(ExportWorkspaceConfigResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ExportWorkspaceConfig_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility
@@ -444,6 +456,8 @@ type GatewayServiceServer interface {
 	CordonWorker(context.Context, *CordonWorkerRequest) (*CordonWorkerResponse, error)
 	UncordonWorker(context.Context, *UncordonWorkerRequest) (*UncordonWorkerResponse, error)
 	DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error)
+	// Workspace
+	ExportWorkspaceConfig(context.Context, *ExportWorkspaceConfigRequest) (*ExportWorkspaceConfigResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -540,6 +554,9 @@ func (UnimplementedGatewayServiceServer) UncordonWorker(context.Context, *Uncord
 }
 func (UnimplementedGatewayServiceServer) DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DrainWorker not implemented")
+}
+func (UnimplementedGatewayServiceServer) ExportWorkspaceConfig(context.Context, *ExportWorkspaceConfigRequest) (*ExportWorkspaceConfigResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ExportWorkspaceConfig not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 
@@ -1102,6 +1119,24 @@ func _GatewayService_DrainWorker_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_ExportWorkspaceConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExportWorkspaceConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ExportWorkspaceConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ExportWorkspaceConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ExportWorkspaceConfig(ctx, req.(*ExportWorkspaceConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1224,6 +1259,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DrainWorker",
 			Handler:    _GatewayService_DrainWorker_Handler,
+		},
+		{
+			MethodName: "ExportWorkspaceConfig",
+			Handler:    _GatewayService_ExportWorkspaceConfig_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
