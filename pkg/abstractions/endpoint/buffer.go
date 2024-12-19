@@ -449,11 +449,7 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	}
 
 	// Copy headers to new request
-	for key, values := range request.Header {
-		for _, val := range values {
-			httpReq.Header.Add(key, val)
-		}
-	}
+	httpReq.Header = request.Header.Clone()
 
 	httpReq.Header.Add("X-TASK-ID", req.task.msg.TaskId) // Add task ID to header
 	go rb.heartBeat(req, c.id)                           // Send heartbeat via redis for duration of request
@@ -468,17 +464,10 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 
 	defer resp.Body.Close()
 
-	responseHeaders := make(http.Header)
-	for key, values := range resp.Header {
-		for _, value := range values {
-			responseHeaders.Add(key, value)
-		}
-	}
-
 	// Write response headers
-	for key, values := range responseHeaders {
+	for key, values := range resp.Header.Clone() {
 		for _, value := range values {
-			req.ctx.Response().Writer.Header().Add(key, value)
+			req.ctx.Response().Header().Add(key, value)
 		}
 	}
 
