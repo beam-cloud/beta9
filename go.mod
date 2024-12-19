@@ -84,7 +84,7 @@ require (
 	k8s.io/apimachinery v0.30.3
 	k8s.io/client-go v0.30.3
 	k8s.io/utils v0.0.0-20240711033017-18e509b52bc8
-	tailscale.com v1.78.3
+	tailscale.com v1.72.1
 )
 
 require (
@@ -163,7 +163,7 @@ require (
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
-	github.com/illarion/gonotify/v2 v2.0.3 // indirect
+	github.com/illarion/gonotify v1.0.1 // indirect
 	github.com/insomniacslk/dhcp v0.0.0-20231206064809-8c70d406f6d2 // indirect
 	github.com/invopop/yaml v0.3.1 // indirect
 	github.com/jellydator/ttlcache/v3 v3.2.0 // indirect
