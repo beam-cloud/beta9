@@ -88,7 +88,7 @@ class ServeGateway:
                 preexec_fn=os.setsid,
                 env={
                     **os.environ,
-                    "no_wait": "true",
+                    "GUNICORN_NO_WAIT": "true",
                 },
                 stdout=sys.stdout,
                 stderr=sys.stdout,

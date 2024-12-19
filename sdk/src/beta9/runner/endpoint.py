@@ -277,7 +277,7 @@ if __name__ == "__main__":
         "timeout": cfg.timeout,
     }
 
-    if os.environ.get("no_wait") == "true":
+    if os.environ.get("GUNICORN_NO_WAIT") == "true":
         options["graceful_timeout"] = 0
 
     GunicornApplication(Starlette(), options).run()
