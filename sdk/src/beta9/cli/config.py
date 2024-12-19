@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Any
 
@@ -6,6 +7,9 @@ from rich.style import Style
 from rich.table import Column, Table, box
 
 from .. import terminal
+from ..channel import ServiceClient
+from ..cli import extraclick
+from ..clients.gateway import ExportWorkspaceConfigRequest
 from ..config import (
     DEFAULT_CONTEXT_NAME,
     ConfigContext,
@@ -175,3 +179,29 @@ def select_context(name: str, config_path: Path):
     save_config(contexts=contexts, path=config_path)
 
     terminal.success(f"Default context updated with '{name}'.")
+
+
+@management.command(
+    name="export",
+    help="Export the current workspace configuration",
+)
+@click.argument(
+    "name",
+    type=click.STRING,
+    default=DEFAULT_CONTEXT_NAME,
+    required=False,
+)
+@extraclick.pass_service_client
+def export_config(
+    service: ServiceClient,
+    name: str,
+):
+    contexts = load_config()
+    context = contexts.get(name)
+
+    if not context:
+        terminal.error(f"Context '{name}' does not exist.")
+
+    config = service.gateway.export_workspace_config(ExportWorkspaceConfigRequest()).to_dict()
+    config["token"] = context.token
+    terminal.print(json.dumps(config, indent=2))

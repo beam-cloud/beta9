@@ -599,6 +599,20 @@ class DrainWorkerResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
 
 
+@dataclass(eq=False, repr=False)
+class ExportWorkspaceConfigRequest(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class ExportWorkspaceConfigResponse(betterproto.Message):
+    gateway_http_url: str = betterproto.string_field(1)
+    gateway_http_port: int = betterproto.int32_field(2)
+    gateway_grpc_url: str = betterproto.string_field(3)
+    gateway_grpc_port: int = betterproto.int32_field(4)
+    workspace_id: str = betterproto.string_field(5)
+
+
 class GatewayServiceStub(SyncServiceStub):
     def authorize(self, authorize_request: "AuthorizeRequest") -> "AuthorizeResponse":
         return self._unary_unary(
@@ -857,3 +871,12 @@ class GatewayServiceStub(SyncServiceStub):
             DrainWorkerRequest,
             DrainWorkerResponse,
         )(drain_worker_request)
+
+    def export_workspace_config(
+        self, export_workspace_config_request: "ExportWorkspaceConfigRequest"
+    ) -> "ExportWorkspaceConfigResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ExportWorkspaceConfig",
+            ExportWorkspaceConfigRequest,
+            ExportWorkspaceConfigResponse,
+        )(export_workspace_config_request)
