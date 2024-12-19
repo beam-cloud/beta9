@@ -86,7 +86,10 @@ class ServeGateway:
                 " ".join(command),
                 shell=True,
                 preexec_fn=os.setsid,
-                env=os.environ,
+                env={
+                    **os.environ,
+                    "no_wait": "true",
+                },
                 stdout=sys.stdout,
                 stderr=sys.stdout,
             )
