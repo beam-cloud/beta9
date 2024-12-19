@@ -57,6 +57,10 @@ service GatewayService {
   rpc CordonWorker(CordonWorkerRequest) returns (CordonWorkerResponse);
   rpc UncordonWorker(UncordonWorkerRequest) returns (UncordonWorkerResponse);
   rpc DrainWorker(DrainWorkerRequest) returns (DrainWorkerResponse);
+
+  // Workspace
+  rpc ExportWorkspaceConfig(ExportWorkspaceConfigRequest)
+      returns (ExportWorkspaceConfigResponse);
 }
 
 message AuthorizeRequest {}
@@ -503,4 +507,14 @@ message DrainWorkerRequest { string worker_id = 1; }
 message DrainWorkerResponse {
   bool ok = 1;
   string err_msg = 2;
+}
+
+message ExportWorkspaceConfigRequest {}
+
+message ExportWorkspaceConfigResponse {
+  string gateway_http_url = 1;
+  int32 gateway_http_port = 2;
+  string gateway_grpc_url = 3;
+  int32 gateway_grpc_port = 4;
+  string workspace_id = 5;
 }

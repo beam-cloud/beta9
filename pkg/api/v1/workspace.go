@@ -23,6 +23,7 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 
 	g.POST("", group.CreateWorkspace)
 	g.GET("/current", auth.WithAuth(group.CurrentWorkspace))
+	g.GET("/:workspaceId/export", auth.WithWorkspaceAuth(group.ExportWorkspaceConfig))
 
 	return group
 }
@@ -55,4 +56,27 @@ func (g *WorkspaceGroup) CurrentWorkspace(ctx echo.Context) error {
 	authContext, _ := ctx.(*auth.HttpAuthContext)
 
 	return ctx.JSON(http.StatusOK, authContext.AuthInfo.Workspace)
+}
+
+type WorkspaceConfigExport struct {
+	GatewayHTTPURL  string `json:"gateway_http_url"`
+	GatewayHTTPPort int    `json:"gateway_http_port"`
+	GatewayGRPCURL  string `json:"gateway_grpc_url"`
+	GatewayGRPCPort int    `json:"gateway_grpc_port"`
+	WorkspaceID     string `json:"workspace_id"`
+	Token           string `json:"token"`
+}
+
+func (g *WorkspaceGroup) ExportWorkspaceConfig(ctx echo.Context) error {
+	workspaceId := ctx.Param("workspaceId")
+
+	config := WorkspaceConfigExport{
+		GatewayHTTPURL:  g.config.GatewayService.HTTP.ExternalHost,
+		GatewayHTTPPort: g.config.GatewayService.HTTP.Port,
+		GatewayGRPCURL:  g.config.GatewayService.GRPC.ExternalHost,
+		GatewayGRPCPort: g.config.GatewayService.GRPC.Port,
+		WorkspaceID:     workspaceId,
+	}
+
+	return ctx.JSON(http.StatusOK, config)
 }
