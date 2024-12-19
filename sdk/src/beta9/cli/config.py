@@ -182,13 +182,12 @@ def select_context(name: str, config_path: Path):
 
 
 @management.command(
-    name="export-config",
+    name="export",
     help="Export the current workspace configuration",
 )
-@click.option(
-    "--name",
+@click.argument(
+    "name",
     type=click.STRING,
-    help="Name of the config cntext to export. Default is the `default` context.",
     default=DEFAULT_CONTEXT_NAME,
     required=False,
 )
