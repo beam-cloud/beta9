@@ -468,8 +468,15 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 
 	defer resp.Body.Close()
 
-	// Write response headers
+	responseHeaders := make(http.Header)
 	for key, values := range resp.Header {
+		for _, value := range values {
+			responseHeaders.Add(key, value)
+		}
+	}
+
+	// Write response headers
+	for key, values := range responseHeaders {
 		for _, value := range values {
 			req.ctx.Response().Writer.Header().Add(key, value)
 		}
