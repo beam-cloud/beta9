@@ -202,14 +202,6 @@ def export_config(
     if not context:
         terminal.error(f"Context '{name}' does not exist.")
 
-    resp = service.gateway.export_workspace_config(ExportWorkspaceConfigRequest())
-    config = {
-        "gateway_http_url": resp.gateway_http_url,
-        "gateway_http_port": resp.gateway_http_port,
-        "gateway_grpc_url": resp.gateway_grpc_url,
-        "gateway_grpc_port": resp.gateway_grpc_port,
-        "workspace_id": resp.workspace_id,
-        "token": context.token,
-    }
-
+    config = service.gateway.export_workspace_config(ExportWorkspaceConfigRequest()).to_dict()
+    config["token"] = context.token
     terminal.print(json.dumps(config, indent=2))
