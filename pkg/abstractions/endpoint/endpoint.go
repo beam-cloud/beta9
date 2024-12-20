@@ -53,7 +53,8 @@ var (
 	endpointRoutePrefix                     string        = "/endpoint"
 	endpointServeContainerTimeout           time.Duration = 10 * time.Minute
 	endpointServeContainerKeepaliveInterval time.Duration = 30 * time.Second
-	endpointRequestHeartbeatInterval        time.Duration = 30 * time.Second
+	endpointRequestHeartbeatInterval        time.Duration = 5 * time.Second
+	endpointRequestHeartbeatKeepAlive       time.Duration = 30 * time.Second
 	endpointMinRequestBufferSize            int           = 10
 )
 
